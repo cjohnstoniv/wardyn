@@ -26,9 +26,10 @@ import (
 //
 // A run lost to a reboot or a control-plane outage is still extendable, even
 // past its end (F1, long-holds design rev 4 §2.3): extending is how it
-// becomes revivable again. Only a run whose OWN lease ended (LostEnded) is
-// refused below — its end is what put it in the kept state, so moving it
-// would contradict why the run is being kept at all.
+// becomes revivable again. So is a run whose OWN lease ended (LostEnded), but
+// only while its files are kept (#1061, design rev 4 "Extend + Revive"): it
+// stays ended and stopped until someone revives it, and its grace stays
+// counted from when it ended, so extending never keeps its files longer.
 
 // runEndWaitRequest is the PATCH body. An absent field is left alone; an
 // explicit "ends_at": null is No end.
@@ -98,8 +99,8 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	case isTerminalRunState(run.State):
 		writeError(w, http.StatusConflict, "run has already finished (state="+string(run.State)+")")
 		return
-	case run.LostReason == types.LostEnded:
-		writeError(w, http.StatusConflict, "run has ended and is kept; its end cannot be moved")
+	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
+		writeError(w, http.StatusConflict, "run has ended and its files are no longer kept; its end cannot be moved")
 		return
 	}
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
@@ -128,8 +129,8 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged || p.waitChanged {
-		applied, err := leaser.SetRunEndAndWait(r.Context(), run.ID, run.EndsAt, run.WaitBudgetSec,
-			p.resp.EndsAt, p.resp.WaitBudgetSec)
+		applied, err := leaser.SetRunEndAndWait(r.Context(), run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
+			p.resp.EndsAt, p.resp.WaitBudgetSec, s.endedKept(run, s.cfg.Now()))
 		if err != nil {
 			writeServerError(w, r, "set run end and wait", err)
 			return

@@ -35,6 +35,11 @@ regexes = [
     # Was fingerprinted per-commit before this rule; regex-scoped here instead
     # so no future value churns a fresh .gitleaksignore entry (SF-15).
     '''wardyn/secret/v1''',
+    # internal/api/delegation_exchange.go's audit actor for the token
+    # exchange's client-authentication boundary (delegationAuthActor): a
+    # constant label shaped like generic-api-key, not a secret. Its sibling
+    # deviceAuthActor ("wardyn/deviceAuth") does not trip the rule.
+    '''wardyn/delegation''',
     # scripts/test-install-sh-trust.sh's install fixtures (also in
     # deploy/helm/wardyn/ci/all-on-values.yaml and cmd/wardynd/main_test.go):
     # a STUB age key — "STUB" cannot follow the separator in a real one, since

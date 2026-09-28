@@ -82,6 +82,27 @@ func TestVaultKV_Conformance(t *testing.T) {
 	secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return storeMode(t, pool, ext, nil) })
 }
 
+// A value removed at Vault behind a pointer row is a refusal, never
+// not-found, for the operator's row and a person's alike.
+func TestVaultKV_TamperConformance(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	ext := newFakeStore(t, f)
+	secretstoretest.RunTamperConformance(t, func(t *testing.T) secretstore.Store { return storeMode(t, pool, ext, nil) },
+		func(t *testing.T, owner, name string) {
+			rel, err := ext.rel(owner, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.kv[rel] == nil {
+				t.Fatalf("no value at %s to remove", rel)
+			}
+			delete(f.kv, rel)
+		})
+}
+
 func TestStoreMode_RowIsAPointerAndHoldsNoValue(t *testing.T) {
 	pool := throwawayDB(t)
 	f := newFakeVault(t)
@@ -837,4 +858,22 @@ func TestStoreMode_DeleteEverywhereWaitsForAPutWithoutDeadlock(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("Vault after DeleteEverywhere = (%+v, %v), want empty", entries, err)
 	}
+}
+
+// drift is what -reconcile finds wrong: values no row points to, and rows
+// whose value is gone.
+func drift(t *testing.T, s *secretstorepg.Store) int {
+	t.Helper()
+	rep, err := s.Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return len(rep.Orphans) + len(rep.Dangling)
+}
+
+// T-18: rule 8's purge by provider UID and CS-5's erase by owner remove the
+// value from Vault, not just the row.
+func TestVaultKV_PurgeConformance(t *testing.T) {
+	s := storeMode(t, throwawayDB(t), newFakeStore(t, newFakeVault(t)), nil)
+	secretstoretest.RunPurgeConformance(t, func(*testing.T) secretstore.Store { return s }, func(t *testing.T) int { return drift(t, s) })
 }

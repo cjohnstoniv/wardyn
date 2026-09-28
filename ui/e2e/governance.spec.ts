@@ -10,13 +10,24 @@ import {
   ADMIN_TOKEN,
   gotoConsole,
   mockMemberRole,
-  mockSecurityAdminRole,
+  asRealSecurityAdmin,
+  consoleAPI,
   navTo,
   navToRoute,
   sidebarLink,
   sql,
 } from "./fixtures";
-import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER, PEOPLE, PERM, PREVIEW, RUBRIC } from "../src/app/lib/governance-copy";
+import {
+  GOVERNANCE as GOV,
+  LIMITS_CHIP,
+  MEMBER,
+  PEOPLE,
+  PERM,
+  PREVIEW,
+  RUBRIC,
+  RUN_LIMITS as RL,
+  runLimitsChip,
+} from "../src/app/lib/governance-copy";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
@@ -44,13 +55,9 @@ import type { Page } from "@playwright/test";
 //
 //   1. A RUN BOUND BY A PROFILE. effectiveCeiling (internal/api/governance.go)
 //      short-circuits at step 1: "OPERATOR ⇒ DefaultPolicy, with NO store
-//      read". isOperator (internal/api/http.go:472) returns true for ANY
-//      caller with no OIDC human session — which is exactly this harness's
-//      bearer token. So no run created through this backend can ever resolve a
-//      governance profile, and GET /policies/default never emits
-//      governance_profile_name for it (verified live against :8288 with an
-//      `all`-tier assignment in place: the key stays absent). There is no IdP
-//      in this harness, so the §E "yolo" LIVE RUN is not achievable here; the
+//      read". The operator token used by this authoring walk takes that arm,
+//      so its GET /policies/default omits governance_profile_name. The none
+//      runner cannot dispatch a profile-bound sandbox; the
 //      walls are asserted at the API level instead (the resolver, the stored
 //      ceiling, the two write refusals), and the run-level enforcement is
 //      proven in Go — TestGovernanceProfileNonEscape's 16-row escape table on
@@ -64,11 +71,8 @@ import type { Page } from "@playwright/test";
 //      is proven against the real, unmodified response shape. The absent-row
 //      half needs no splice and is asserted unmocked.
 //
-//   3. THE THREE ROLES. mockMemberRole / mockSecurityAdminRole splice /me
-//      only, so these prove RENDER behaviour — server-side authorization is
-//      pinned in Go (the chi.Walk classSecurity route matrix, authz_test.go).
-//      That split is fixtures.ts's own documented ceiling, not a shortcut
-//      taken here.
+//   3. The member display cases splice role and policy for rendering. The
+//      security-admin block uses a real restricted token and server refusals.
 //
 // Serial: one backend, one profiles table. The walk builds state the later
 // blocks read, and a mutating test must never run beside an assertion about
@@ -439,12 +443,12 @@ test.describe("governance — a ceiling that would MINT credential eligibility i
 });
 
 // ---------------------------------------------------------------------------
-// 4. The three roles. /me is spliced; server-side authorization is Go's.
+// 4. Security-admin authorization, with member policy rendering below.
 // ---------------------------------------------------------------------------
 
-test.describe("governance — the security admin's console (mocked /me role)", () => {
+test.describe("governance — the security admin's console (real per-person token)", () => {
   test.beforeEach(async ({ page }) => {
-    await mockSecurityAdminRole(page);
+    await asRealSecurityAdmin(page);
   });
 
   test("Governance, Permissions and Audit are offered — and Governance is ACTIONABLE", async ({ page }) => {
@@ -523,7 +527,26 @@ test.describe("governance — the security admin's console (mocked /me role)", (
     // Purely operator-gated (secrets.tsx:81,115) — the one chokepoint every
     // secret-write caller routes through.
     await expect(page.getByRole("button", { name: "Add secret" })).toBeDisabled();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
+    await expect(page.getByText(OPERATOR_ONLY_REASON, { exact: true })).toBeVisible();
+  });
+
+  test("real security admin receives a server refusal on secret writes", async ({ page }) => {
+    // Ordinary secrets are self-service; resident AWS credentials are operator-only.
+    const path = "/api/v1/secrets/aws-access-key-id";
+    const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const accepted = await page.request.put(path, { headers, data: { value: "e2e-synthetic-resident-credential" } });
+    try {
+      expect(accepted.status()).toBe(204);
+      const before = sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'");
+      expect(before).not.toBe("");
+      const refused = await consoleAPI(page, "PUT", path, { value: "e2e-replacement-must-not-be-stored" });
+      expect(refused.status, refused.text).toBe(403);
+      expect(JSON.parse(refused.text)).toEqual({ error: "secret name is reserved for platform internals" });
+      expect(sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'")).toBe(before);
+      expect(sql("SELECT count(*) FROM secrets WHERE name = 'aws-access-key-id'")).toBe("1");
+    } finally {
+      expect((await page.request.delete(path, { headers })).status()).toBe(204);
+    }
   });
 
   test("nor reaching INTO a run they do not own: attach is not offered", async ({ page }) => {
@@ -640,6 +663,89 @@ test.describe("governance — the member is told which ceiling bounds them", () 
     await navToRoute(page, "/runs/new");
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
     await expect(page.getByText(/the governance profile your admin assigned you/)).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. #1200 — the shared TierPicker on the member's own New Run page: the
+// installed ∧ allowed filter, the decided state it collapses to with exactly
+// one tier left, and T-9's requirement card when the floor and the host
+// disagree. mockAssignedCeiling above only ever named a PROFILE; this splices
+// the floor itself (min_confinement_class) the same documented way, plus
+// /setup/status's confinement_classes — this harness's own runner (`-runner
+// none`) advertises none at all, so "what this host has installed" has to be
+// spliced too, or every tier would read as unknown rather than as a real
+// install fact.
+// ---------------------------------------------------------------------------
+
+async function mockGovernanceFloor(page: Page, floor: string, profileName: string): Promise<void> {
+  await page.route("**/api/v1/policies/default", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.min_confinement_class = floor;
+    json.governance_profile_name = profileName;
+    await route.fulfill({ response, json });
+  });
+}
+
+async function mockInstalledTiers(page: Page, classes: string[]): Promise<void> {
+  await page.route("**/api/v1/setup/status", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.runner = { ...json.runner, driver: "docker", confinement_classes: classes };
+    await route.fulfill({ response, json });
+  });
+}
+
+test.describe("governance — the member's own picker obeys the floor (T-9)", () => {
+  test("a Vault floor, with Vault installed, leaves no picker at all — 'Vault' decided", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockGovernanceFloor(page, "CC3", "vault-required");
+    await mockInstalledTiers(page, ["CC1", "CC2", "CC3"]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByText("Vault · set by your admin")).toBeVisible();
+    // No control at all — not Fence/Wall disabled, not present. (The
+    // authored-policy spec's OWN floor chip, unrelated to this governance
+    // floor, legitimately renders "Fence" elsewhere on this page — the
+    // radiogroup is what actually proves "no picker".)
+    await expect(page.getByRole("radio", { name: "Fence" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
+  });
+
+  test("a Vault floor the host cannot build shows the requirement, never a silent fallback", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockGovernanceFloor(page, "CC3", "vault-required");
+    // This host only has Fence/Wall — the floor and the host disagree.
+    await mockInstalledTiers(page, ["CC1", "CC2"]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    // Review P2-6: the governance-sourced wording, not the generic one —
+    // this member's floor IS the governance ceiling's doing.
+    await expect(
+      page.getByText(/Your admin requires Vault, and this host can't run it/),
+    ).toBeVisible();
+    // Never the false claim that Wall (the strongest tier this host DOES
+    // have) is what the member gets.
+    await expect(page.getByText("Wall · set by your admin")).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
+  });
+
+  test("a tier the host hasn't installed never shows on the member's page, floor or not", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockInstalledTiers(page, ["CC1", "CC2"]); // no Vault, no floor spliced
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Fence" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Wall" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
   });
 });
 
@@ -850,6 +956,92 @@ test.describe("governance — the two storage ceilings round-trip through the ed
     const cleared = snap2.profiles.find((p: { name: string }) => p.name === name);
     expect(cleared.limits.max_ephemeral_disk_mib ?? 0).toBe(0);
     expect(cleared.limits.max_drive_size_mib ?? 0).toBe(0);
+  });
+});
+
+// RL-14 (0.8, #579): the seven run limits. The editor shows days, hours and
+// minutes and the wire is seconds, so only a real save and a real read-back
+// prove the conversion — and the default-past-max refusal is the SERVER's
+// (runLimitsRefusal), so only this backend proves an admin is shown it.
+test.describe("governance — the run limits round-trip through the editor (RL-14)", () => {
+  test("durations save as seconds, reopen in their units, and a default past its max is refused", async ({
+    page,
+  }) => {
+    const name = `run-limits-${randomUUID().slice(0, 8)}`;
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const stored = async () => {
+      const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+      const p = snap.profiles.find((x: { name: string }) => x.name === name);
+      expect(p, `profile ${name} missing — did the save land?`).toBeTruthy();
+      return p.limits;
+    };
+    const unitPicker = (label: string) =>
+      page.getByRole("combobox", { name: RL.UNIT_PICKER_LABEL(label), exact: true });
+
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+    const editor = page.getByTestId("governance-profile-editor");
+    await page.locator("#governance-profile-name").fill(name);
+
+    await page.locator("#governance-limit-max-end").fill("14");
+    await page.locator("#governance-limit-default-end").fill("1");
+    await page.locator("#governance-limit-max-wait").fill("8");
+    // A sub-hour wait in the hours row: the number, then the unit.
+    await page.locator("#governance-limit-default-wait").fill("30");
+    await unitPicker(RL.DEFAULT_WAIT_LABEL).click();
+    await page.getByRole("option", { name: "minutes", exact: true }).click();
+    await page.locator("#governance-limit-pause-idle").fill("30");
+    await editor.getByRole("switch", { name: RL.ALLOW_NO_END_LABEL, exact: true }).click();
+    await editor.getByRole("switch", { name: RL.USER_CHANGES_LABEL, exact: true }).click();
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(editor).toHaveCount(0);
+
+    const limits = await stored();
+    expect(limits.max_end_ahead_sec).toBe(1209600);
+    expect(limits.default_end_sec).toBe(86400);
+    expect(limits.max_wait_sec).toBe(28800);
+    expect(limits.default_wait_sec).toBe(1800);
+    expect(limits.pause_idle_after_sec).toBe(1800);
+    expect(limits.allow_no_end).toBe(true);
+    expect(limits.user_changes_limits).toBe(true);
+
+    // The list names what was stored, and no longer reads None.
+    const row = profilesTable(page).getByRole("row").filter({ hasText: name });
+    await expect(row.getByText(runLimitsChip(limits)!, { exact: true })).toBeVisible();
+    await expect(row.getByText(GOV.LIMITS_NONE, { exact: true })).toHaveCount(0);
+
+    // Reopened from the stored row: each value in its unit — 1800s in the
+    // hours row reads 30 minutes, never 1 hour or blank.
+    await page.getByRole("button", { name: `${GOV.EDIT} ${name}` }).click();
+    for (const [id, label, value, unit] of [
+      ["#governance-limit-max-end", RL.MAX_END_LABEL, "14", "days"],
+      ["#governance-limit-default-end", RL.DEFAULT_END_LABEL, "1", "days"],
+      ["#governance-limit-max-wait", RL.MAX_WAIT_LABEL, "8", "hours"],
+      ["#governance-limit-default-wait", RL.DEFAULT_WAIT_LABEL, "30", "minutes"],
+      ["#governance-limit-pause-idle", RL.PAUSE_IDLE_LABEL, "30", "minutes"],
+    ] as const) {
+      await expect(page.locator(id)).toHaveValue(value);
+      await expect(unitPicker(label)).toHaveText(unit);
+    }
+    await expect(editor.getByRole("switch", { name: RL.ALLOW_NO_END_LABEL, exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(editor.getByRole("switch", { name: RL.USER_CHANGES_LABEL, exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    // A default end past the longest end: the server refuses the write, the
+    // editor stays open showing its message, and the stored row is unchanged.
+    await page.locator("#governance-limit-default-end").fill("30");
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(editor.getByRole("alert")).toContainText(
+      "limits.default_end_sec: 2592000 is past limits.max_end_ahead_sec (1209600)",
+    );
+    await expect(editor).toBeVisible();
+    expect((await stored()).default_end_sec).toBe(86400);
   });
 });
 

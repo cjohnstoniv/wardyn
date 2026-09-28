@@ -19,11 +19,9 @@ const prSetDumpable = 4
 // Disable sets RLIMIT_CORE to zero and marks the process non-dumpable.
 //
 // The rlimit alone is not enough: when core_pattern pipes to a handler
-// (systemd-coredump, apport) the kernel ignores it. A non-dumpable process
-// gets no core at all (unless fs.suid_dumpable is 2, when the core goes to the
-// handler readable by root only), and another process of the same uid can no
-// longer ptrace it or read its /proc/<pid>/mem and /proc/<pid>/environ. A child
-// it execs is dumpable again.
+// (systemd-coredump, apport) the kernel ignores it. Non-dumpable also stops
+// another process of the same uid from ptracing it or reading its
+// /proc/<pid>/mem and /proc/<pid>/environ. A child it execs is dumpable again.
 func Disable() error {
 	if err := syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{}); err != nil {
 		return fmt.Errorf("set RLIMIT_CORE to 0: %w", err)

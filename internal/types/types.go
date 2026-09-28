@@ -113,21 +113,16 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
-// LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
-type LostReason string
+// PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
+type PauseReason string
 
 const (
-	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-	// and kept for the ended-run grace.
-	LostEnded LostReason = "ended"
-	// LostReboot is an interactive run whose agent container exited under it
-	// (a host reboot, a Docker Desktop restart, a long suspend) but still
-	// exists: kept with its files and its proxy stopped.
-	LostReboot LostReason = "reboot"
-	// LostOutage is an interactive run whose run token lapsed because the
-	// control plane was unreachable past the token's life: its proxy is stopped
-	// so it has no egress, and its agent is left running.
-	LostOutage LostReason = "outage"
+	// PauseWaiting is a run parked on an open request that nobody has
+	// answered, with no one at it.
+	PauseWaiting PauseReason = "waiting"
+	// PauseIdle is a run nobody has used for its profile's
+	// pause_idle_after_sec, whose CPU is quiet.
+	PauseIdle PauseReason = "idle"
 )
 
 // ActorType distinguishes who performed an action in the audit stream.
@@ -284,6 +279,36 @@ type AgentRun struct {
 	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// ContainmentError is set while a kept run's stop could not be confirmed
+	// (its proxy, or its agent, may still be up): the latest stop error, and
+	// ContainmentErrorAt the first failure. The lease sweep retries the stop
+	// every pass and clears both once it lands (#1060, migration 0088).
+	ContainmentError   string     `json:"containment_error,omitempty"`
+	ContainmentErrorAt *time.Time `json:"containment_error_at,omitempty"`
+	// EndedAt is stamped by the three state writers that can move a run to a
+	// terminal RunState, at the same transition, never touched otherwise (a
+	// terminal->live transition does not exist, so it is never cleared). Nil
+	// for a live run and for a legacy row the backfill could not date exactly
+	// (migration 0092 backfills from updated_at, approximate for history). A
+	// lease-ended run (LostReason ended) stays RUNNING until the ended-run
+	// grace makes it terminal, so ITS end time is LostAt, not EndedAt — the
+	// landing page's end-time reader always picks between the two on
+	// LostReason, never reads EndedAt alone.
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
+	EndTightenedAt *time.Time `json:"end_tightened_at,omitempty"` // profile re-clamp (RL-8) shortened the end; migration 0095
+	// PausedAt / PausedReason mark a run whose agent container is frozen in
+	// place because nobody is there (long-holds §3). It keeps its RunState,
+	// memory, files and proxy; a person typing, an exec, the request it waits
+	// on closing, or POST /runs/{id}/resume thaws it. A paused run is not
+	// contained: kill still is. Nil / "" is a run that is not paused.
+	// Migration 0097.
+	PausedAt     *time.Time  `json:"paused_at,omitempty"`
+	PausedReason PauseReason `json:"paused_reason,omitempty"`
+	// ActiveAt is the presence clock: the last input a person typed into the
+	// run, the agent's last egress decision, or the last bytes the proxy moved
+	// for it. Keepalives never move it. Nil (a run from before migration 0097,
+	// or one nothing has happened in yet) reads as CreatedAt.
+	ActiveAt *time.Time `json:"active_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and
@@ -300,6 +325,18 @@ type AgentRun struct {
 	// one otherwise. Empty for a run with no human creator (admin token, local
 	// mode) or created before migration 0080.
 	UserType string `json:"user_type,omitempty"`
+	// Preset and PresetVersion name the launch preset (and the version of it)
+	// this run was expanded from. Empty / 0 for a run sent as an explicit spec
+	// and for every run created before migration 0087.
+	Preset        string `json:"preset,omitempty"`
+	PresetVersion int    `json:"preset_version,omitempty"`
+	// OperatorOwned is identity.Claims.OperatorOwned, stored (migration 0089)
+	// so dispatch and a revive's re-mint read what create decided.
+	OperatorOwned bool `json:"-"`
+	// CreatedVia is the registered portal (types.Delegate) this run was
+	// launched through on the person's behalf (migration 0094, #1142); nil for
+	// a run its creator launched themselves. The owner is still the person.
+	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -319,6 +356,15 @@ type AgentRun struct {
 	HasRecording         bool    `json:"has_recording"`
 	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
+	DiskMiB              int     `json:"disk_mib,omitempty"` // effective ephemeral disk cap MiB, set by SetRunDiskMiB at dispatch (RL-13); 0 = no cap resolved
+	// Attention is #1197's projection: what this LIVE run is waiting on,
+	// and who (in the caller's own view) can clear it. DERIVED, never stored,
+	// like the three recording fields above — projected only by the
+	// GET /runs?view=/GET /me/attention read paths, and only onto a live
+	// (non-terminal, non-lease-ended) row. Nil everywhere else: an ended run,
+	// a live run this lane's rule has nothing to say about, and every read
+	// path that does not opt into `view`.
+	Attention *RunAttention `json:"attention,omitempty"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.
@@ -374,72 +420,6 @@ const (
 	GrantEnvSecret GrantKind = "env_secret"
 )
 
-// SubscriptionOAuthSecret is a SENTINEL secret name (NOT a stored secret). An
-// api_key injection grant carrying it resolves at inject time to the operator's
-// LIVE Anthropic subscription OAuth token (from the resident ~/.claude), not a
-// value in the secret store — so subscription runs are credentialed proxy-side
-// like api-key runs, the sandbox holding only the inert sentinel. It also serves
-// as the durable "this profile uses subscription LLM auth" marker on a recorded
-// profile (the resident ~/.claude mount that would otherwise signal subscription
-// is never synthesized). Shared here so api + recordmode + UI agree on the name.
-const SubscriptionOAuthSecret = "anthropic-subscription-oauth"
-
-// ManagedOAuthSecret is a SENTINEL secret name (NOT a stored secret) that works
-// exactly like SubscriptionOAuthSecret at the injection sink (host-pinned to
-// api.anthropic.com, forced Authorization: Bearer, value masked), but resolves
-// to the Wardyn-MANAGED subscription token: a long-lived `claude setup-token`
-// OAuth token the operator captured via the container-login flow and Wardyn
-// persisted (see internal/api/harnesscred.go). This is what lets a COMPOSE/
-// containerized deployment — whose distroless wardynd has no host ~/.claude to
-// read — credential a subscription run proxy-side without ever making the token
-// resident in the sandbox. Distinct from SubscriptionOAuthSecret only in its
-// SOURCE (managed store vs resident host ~/.claude), so the audit trail names
-// which one credentialed a run.
-const ManagedOAuthSecret = "anthropic-managed-oauth"
-
-// AWSSSOAccessTokenSecret is a SENTINEL secret name (NOT a stored secret) that
-// works exactly like the two OAuth sentinels above at the injection sink
-// (host-pinned, forced header, masked), and resolves to the run's OWN captured
-// AWS IAM Identity Center access token -- the credential an `aws sso login`
-// captured into wardynd's secret store as a whole blob, not as a value under
-// this name.
-//
-// It is what makes Phase B (0.7.6) possible: portal.sso.<region>
-// GetRoleCredentials is `authtype:none`, so the proxy can carry the session as
-// the x-amz-sso_bearer_token HEADER and the sandbox never holds the token. The
-// resolver is internal/api's resolveAWSSSOInjection, which additionally
-// re-derives the credential's scope from the roster and refuses any drift from
-// the snapshot the grant was authored with.
-//
-// Deliberately NOT in sinkReservedSecret. That guard refuses names an api_key
-// grant must never resolve; this name's ENTIRE purpose is to be resolved
-// through that sink, host-pinned, exactly as bedrock-api-key is (see
-// internal/api/secrets.go, which explains why that one is excluded too). And
-// nothing is stored under it: a secrets-API Put of this name would be a value
-// the sentinel arm never reads.
-const AWSSSOAccessTokenSecret = "aws-sso-access-token"
-
-// ADOEntraAccessTokenSecret is a SENTINEL secret name (NOT a stored secret),
-// the fourth of them, and it resolves to an Azure DevOps access token minted
-// from the RUN OWNER's own captured Entra sign-in (internal/api's
-// resolveADOInjection). Nothing is stored under this name: the credential in
-// the store is the person's refresh token, held in the reserved
-// `wardyn-harness-ado-<row>-oauth` blob, and the access token exists only for
-// the moment it is handed to the run's proxy sidecar.
-//
-// THE TOKEN DOES NOT BOUND THE RUN, and no reader of this name may assume it
-// does. Measured against a real tenant, Entra issues an Azure DevOps token
-// carrying EVERY scope the person consented to whatever subset is requested,
-// so what holds a run to its granted capabilities is Wardyn's own capability
-// check in front of the resource — the proxy — not the credential. The
-// granted scope string the authority reports is recorded on the audit row
-// because a token is opaque and that string is the only honest evidence of
-// what the credential can do.
-//
-// Deliberately NOT in sinkReservedSecret, for AWSSSOAccessTokenSecret's
-// reason: being resolved at that sink, host-pinned, is the whole point.
-const ADOEntraAccessTokenSecret = "azure-devops-entra-access-token"
-
 // GrantSpec is a credential scope description. The broker enforces the
 // invariant: a minted credential's scope is exactly the approved scope —
 // never wider (no scope-widening between request and mint).
@@ -460,6 +440,7 @@ type GrantSpec struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 	// RequiresApproval forces a human approval to mint (vs auto-mint on policy).
 	RequiresApproval bool `json:"requires_approval"`
+	OwnerOnly        bool `json:"owner_only,omitempty"` // stored secret from the run owner's own row only, never the operator's
 }
 
 // CredentialGrant records what a run is ELIGIBLE for. Eligibility is not
@@ -696,6 +677,15 @@ type ApprovalRequest struct {
 	// when the run has neither (a run created before migration 0072); the
 	// deployment's approval expiry still applies to every row.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Held / HeldUntil are #1197's projection of approval.Hold(this, now)
+	// — computed at response time, never stored. Held is set on every row;
+	// HeldUntil only on a row whose hold is bounded (egress wait_for_review,
+	// an Azure DevOps capability escalation, push_content), nil for an
+	// unconditional hold (tool_call, credential_reauth) and for any row that
+	// is not held at all. Both are zero-valued (false / nil) on a DECIDED
+	// row — a decision already answered the question a hold was asking.
+	Held      bool       `json:"held,omitempty"`
+	HeldUntil *time.Time `json:"held_until,omitempty"`
 }
 
 // ApprovalDecision is what a human — or the sweeper, for a stale-PENDING
@@ -896,104 +886,18 @@ type APIToken struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	Token           string     `json:"token,omitempty"` // plaintext, create response ONLY
+	// MintedBy is the admin who minted this token for its owner
+	// (POST /people/{principal}/tokens); empty when the owner minted it.
+	MintedBy string `json:"minted_by,omitempty"`
+	Token    string `json:"token,omitempty"` // plaintext, create response ONLY
 }
 
-// CapabilitySubjectType names WHO a capability grant is written against
-// (migration 0042). Closed and complete — its DB CHECK is pinned against these
-// constants by internal/db's TestClosedEnumChecksMatchConstants.
-type CapabilitySubjectType string
-
-const (
-	// CapabilitySubjectUser is one human, named by either their lowercased OIDC
-	// "sub" or their email — a grant on EITHER matches, so an admin can write
-	// down the identity they actually know rather than the one the IdP prefers.
-	CapabilitySubjectUser CapabilitySubjectType = "user"
-	// CapabilitySubjectGroup is one entry of the login-time union of the ID
-	// token's roles+groups claims (see oidc.Session.Groups). Entra App Roles are
-	// grantable through this without any extra configuration.
-	CapabilitySubjectGroup CapabilitySubjectType = "group"
-	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
-	// that emits no usable groups claim. Subject is "" for this type.
-	CapabilitySubjectAll CapabilitySubjectType = "all"
-	// CapabilitySubjectUserType is everyone of one user type, named by the
-	// type's id (UserType.ID). A person holds exactly one type, stamped at
-	// sign-in. For the governance ceiling and drives it is a tier between
-	// group and all; for capability grants it is one more subject, so a DENY
-	// written against a type is a wall no user or group allow lifts.
-	CapabilitySubjectUserType CapabilitySubjectType = "user_type"
-)
-
-// Valid reports whether t is one of the four subject types. Used to reject a
-// garbage value at the API write boundary, mirroring ApprovalScope.Valid.
-func (t CapabilitySubjectType) Valid() bool {
-	switch t {
-	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll, CapabilitySubjectUserType:
-		return true
-	default:
-		return false
-	}
-}
-
-// CapabilityEffect is a grant's direction. Closed and complete; DENY BEATS
-// ALLOW at resolution time, with no user-vs-group precedence — "Bob's user
-// allow overrode the group deny" is a breach report, not a feature.
-type CapabilityEffect string
-
-const (
-	CapabilityAllow CapabilityEffect = "allow"
-	CapabilityDeny  CapabilityEffect = "deny"
-)
-
-// Valid reports whether e is allow or deny.
-func (e CapabilityEffect) Valid() bool {
-	return e == CapabilityAllow || e == CapabilityDeny
-}
-
-// CapabilityGrant is one row of the permissioning grant list (migration 0042):
-// "subject S may (or may not) use capability C at value V".
-//
-// Capability is a PLAIN STRING here, not a typed enum, and that is deliberate:
-// the closed kind set lives in exactly one Go slice in internal/api
-// (capabilityKinds) and is validated at the write boundary, so a fifth kind is
-// a constant plus a call site with no schema change. A stored kind this binary
-// does not know is inert — no resolver ever asks for it.
-//
-// Value's meaning is per kind: a host or "*.suffix" for egress_host, an exact
-// secret name / workspace uuid / image ref for the others, and "*" is the
-// per-kind wildcard everywhere.
-type CapabilityGrant struct {
-	ID          uuid.UUID             `json:"id"`
-	SubjectType CapabilitySubjectType `json:"subject_type"`
-	Subject     string                `json:"subject"`
-	Capability  string                `json:"capability"`
-	Value       string                `json:"value"`
-	Effect      CapabilityEffect      `json:"effect"`
-	CreatedAt   time.Time             `json:"created_at"`
-	CreatedBy   string                `json:"created_by,omitempty"`
-}
-
-// RoleMapping is one console-managed (Getting Started -> People) row of
-// migration 0051's role_mappings table: "value maps to role". This is the
-// STORE'S wire type, carrying id/timestamps/provenance — distinct on purpose
-// from internal/auth/oidc's own RoleMapping (just Value/Role), which stays
-// dependency-free of this package (see that type's doc comment) the same way
-// oidc.SessionRevocations keeps oidc dependency-free of store; the API layer
-// converts between the two, mirroring however SessionRevocations bridges
-// store -> oidc today.
-//
-// Value is expected already canonical (trimmed, lowercased, ASCII) by the API
-// write boundary that owns writes to this table — see the migration comment.
-//
-// UserType is the row's user type when Role is the user tier (migration
-// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
-// row, and on a user row written before types existed, which reads as the
-// built-in "standard".
-type RoleMapping struct {
-	ID        uuid.UUID `json:"id"`
-	Value     string    `json:"value"`
-	Role      string    `json:"role"`
-	UserType  string    `json:"user_type,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by,omitempty"`
+// Person is an identity an admin created or confirmed before its first sign-in
+// (migration 0090), keyed by the identity provider's subject.
+type Person struct {
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	CreatedBy       string     `json:"created_by"`
+	CreatedAt       time.Time  `json:"created_at"`
+	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
 }

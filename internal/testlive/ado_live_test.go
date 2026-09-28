@@ -38,7 +38,9 @@ func TestLiveADO(t *testing.T) {
 	}
 	member := ids["member"]
 	if member.APIToken == "" {
-		Skipf(t, "live: the identities file has no member api_token. Sign in to the console once as the member, "+
+		// Missing once WARDYN_LIVE_ADO=1 has been opted into is a broken
+		// fixture, not an absence of intent (#463): Fatalf, not Skipf.
+		Fatalf(t, "live: the identities file has no member api_token. Sign in to the console once as the member, "+
 			"connect Azure DevOps when asked, create an API token under Settings, and add it as member.api_token (docs/LIVE-TESTS.md, LL2)")
 	}
 	org := os.Getenv(EnvADOOrg)

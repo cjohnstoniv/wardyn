@@ -153,6 +153,9 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.refuseAdminViewLaunch(w, r) {
+		return
+	}
 	req, ceiling, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		return
@@ -285,6 +288,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Host capacity, the last refusal and before the mint, the same siting as
+	// the autonomy gate: a refusal leaves no identity and no run row.
+	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", true)) {
+		return
+	}
+
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
@@ -292,7 +301,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
 	// which no request header can move.
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience)
+	operatorOwned := operatorOwnedRequest(ctx)
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience, operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return
@@ -328,6 +338,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
 		ModelProviderID: mpChoice.provider.ID,
 		UserType:        runCreatorUserType(ctx),
+		Preset:          req.Preset,
+		PresetVersion:   req.PresetVersion,
+		OperatorOwned:   operatorOwned,
+		CreatedVia:      createdVia(ctx),
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
@@ -443,7 +457,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The split point: the run row exists and every refusal above has answered.
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
-	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
+	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
@@ -624,6 +638,12 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
+	}
+	if req.Preset != "" {
+		// The preset stamp is also on the run row, but the chained audit row
+		// outlives it: this ties the run to the preset version it came from.
+		data["preset"] = req.Preset
+		data["preset_version"] = req.PresetVersion
 	}
 	if req.TaskMode == "exec" {
 		// The run row doesn't store task_mode (request-scoped), so the audit

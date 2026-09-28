@@ -63,6 +63,13 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: (...a: unknown[]) => directorySearchMock(...a) } };
 });
 
+// UT-7a: the assignment form's "User type" branch — permissions.tsx's shared
+// UserTypeSubjectSelect, a closed picker rather than the DirectoryCombobox.
+const listUserTypesMock = vi.fn();
+vi.mock("../../../lib/api/user-types", () => ({
+  userTypes: { listUserTypes: () => listUserTypesMock() },
+}));
+
 import { HttpError } from "../../../lib/api/core";
 import type { DirectoryEntry } from "../../../lib/api/directory";
 import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/governance";
@@ -146,6 +153,9 @@ beforeEach(() => {
   previewGovernanceMock.mockResolvedValue({});
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
+  listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+  ]);
 });
 
 describe("GovernanceScreen — states", () => {
@@ -440,6 +450,39 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     });
   });
 
+  // UT-7a: a user type is a bounded, admin-authored set — no directory search,
+  // a closed picker of the org's types instead.
+  it("an assignment for a user type reads by the type's name, not its id", async () => {
+    renderScreen(
+      snapshot({
+        assignments: [
+          { id: "a2", subject_type: "user_type", subject: "portfolio-manager", profile_id: PLATFORM.id, priority: 0, created_at: aheadByHours(-1) },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.queryByText("portfolio-manager")).toBeNull();
+  });
+
+  it("User type swaps the Who field for UserTypeSubjectSelect", async () => {
+    upsertAssignmentMock.mockResolvedValue(undefined);
+    renderScreen();
+    await screen.findByText(GOV.ASSIGN_TITLE);
+
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    expect(screen.queryByRole("textbox", { name: PERM.FIELD_WHO })).toBeNull();
+    await userEvent.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE }));
+    await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
+
+    expect(upsertAssignmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", profile_id: PLATFORM.id }),
+    );
+  });
+
   it("the preview takes CLAIMS (the People step's own field) and names the matching row's tier", async () => {
     previewGovernanceMock.mockResolvedValue({
       profile_id: PLATFORM.id,
@@ -609,7 +652,8 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
 
     const editor = await screen.findByTestId("governance-profile-editor");
-    expect(within(editor).getAllByRole("switch")).toHaveLength(3);
+    // 3 doors + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
+    expect(within(editor).getAllByRole("switch")).toHaveLength(5);
     const door = within(editor).getByRole("switch", { name: GOV.LIMIT_DRIVE_LABEL });
     expect(door).toHaveAttribute("aria-checked", "false");
     expect(within(editor).getByText(GOV.LIMIT_DRIVE_HINT)).toBeInTheDocument();
@@ -696,6 +740,45 @@ describe("GovernanceScreen — the autonomy rubric's strictest-cap chip", () => 
     expect(screen.queryByText(/^Autonomy:/)).toBeNull();
     const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
     const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
+  });
+});
+
+// RL-14 (0.8, #579) — the run-limits summary chip, the packet's "Summary
+// chip" line.
+describe("GovernanceScreen — the run-limits summary chip", () => {
+  it("a profile with run limits set carries the chip, and drops off LIMITS_NONE", async () => {
+    renderScreen(
+      snapshot({
+        profiles: [
+          profile({ limits: { max_end_ahead_sec: 30 * 86400, max_wait_sec: 8 * 3600, user_changes_limits: true } }),
+          PLATFORM,
+        ],
+      }),
+    );
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.getByText("Ends within 30 days · waits up to 8 hours · people may change these")).toBeInTheDocument();
+    expect(row.queryByText(GOV.LIMITS_NONE)).toBeNull();
+  });
+
+  // The chip names three of the seven fields; "None" must read all seven. A
+  // default-only profile still ends every run after a day (R4/F032's class).
+  it("a profile that sets only a default end does not read None", async () => {
+    renderScreen(snapshot({ profiles: [profile({ limits: { default_end_sec: 86400 } }), PLATFORM] }));
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.queryByText(GOV.LIMITS_NONE)).toBeNull();
+  });
+
+  it("a profile with no run limits shows no chip and still reads None", async () => {
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.queryByText(/^Ends within/)).toBeNull();
     expect(row.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
   });
 });

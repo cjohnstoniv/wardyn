@@ -15,12 +15,8 @@ import (
 )
 
 // githubPermissionCeiling is the branch-confinement maximum for github_token
-// grants: a Wardyn-governed agent may at most write file contents and open
-// pull requests. Anything stronger (administration, workflows, secrets, ...)
-// is structurally refused — minted permissions are intersected DOWN to this.
-//
-// "write" is the strongest level we will hand out; a requested "admin" is
-// clamped to "write", and a requested "read" is preserved (narrowing is fine).
+// grants: contents and pull_requests up to "write", nothing stronger.
+// Requested permissions are intersected DOWN to this; narrowing is fine.
 var githubPermissionCeiling = map[string]string{
 	"contents":      "write",
 	"pull_requests": "write",
@@ -80,11 +76,8 @@ func ttlFor(spec types.GrantSpec) time.Duration {
 
 // gitPATUsername resolves the git username to pair with a brokered PAT for a
 // non-GitHub host. An explicit override always wins; otherwise Azure DevOps
-// (dev.azure.com and *.visualstudio.com) uses "pat" and everything else (GitLab
-// and other PAT hosts) uses "oauth2".
-//
-// this two-row table covers the ADO/GitLab conventions Wardyn brokers
-// today; extend it if another host needs a different username convention.
+// (dev.azure.com and *.visualstudio.com) uses "pat" and everything else uses
+// "oauth2".
 func gitPATUsername(host, override string) string {
 	if override != "" {
 		return override

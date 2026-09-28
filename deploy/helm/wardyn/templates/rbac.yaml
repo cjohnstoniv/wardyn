@@ -12,7 +12,21 @@ canary,driver}.go. In particular:
   - ephemeral-storage: NO new verbs. A run's disk cap is a FIELD on the pod this
     substrate already creates (naming.go's resourceRequirements), and the
     kubelet's eviction verdict comes back through pods: get (lifecycle.go's
-    statusFromPod) — never the Events API, so no "events" verb belongs here.
+    statusFromPod), not through the Events API.
+  - events: list ONLY, namespaced (#807). The kubelet reports an image pull as
+    ContainerCreating; only the pod's Events say "Pulling", and that is what
+    lights the sign-in door's download step (pull_events.go). list, not get or
+    watch: the read is one field-selected list per second while a container is
+    being created. Nothing an Event says is shown to anyone — it only picks
+    between two sentences Wardyn wrote — and a Role without this verb (an
+    operator-written one under k8s.rbac.create=false) makes the read fail
+    closed: pulls read as ContainerCreating, as before. Never in the
+    ClusterRole: that would be every namespace's Events. Under
+    k8s.allowRunsInReleaseNamespace=true this verb reads every co-tenant
+    workload's Events in that namespace (a fieldSelector is not something RBAC
+    enforces); that is accepted as part of the same namespace blast radius the
+    render-time fail below already names (exec into and delete any pod, create
+    or delete any Secret there).
   - pods/exec: BOTH create and get. session.go's newExecutor builds a
     FallbackExecutor that tries the websocket transport FIRST (SPDY only on
     upgrade failure) — and the websocket leg issues an HTTP GET against the
@@ -54,9 +68,11 @@ canary,driver}.go. In particular:
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
-  - persistentvolumeclaims: get + create, and ONLY when userDrives.enabled —
+  - persistentvolumeclaims: get + create, and ONLY when drives.enabled —
     drives.go's ensureDrivePVC. Absent from a stock install: a deployment that
-    allocates no user drive never touches a claim.
+    allocates no drive never touches a claim. `delete` is a THIRD switch
+    (drives.reclaim.enabled, default false) and nothing else on this Role
+    is switched twice; see the rule itself for why.
 
 Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
 per-sandbox object the substrate creates/tears down (pods, ephemeral
@@ -88,7 +104,7 @@ all) would be told about namespace hygiene instead of about the thing that stops
 it working. Fix what breaks the install, then what widens its blast radius.
 */}}
 {{- if and .Values.serviceAccount.automount .Values.k8s.proxyImage (not .Values.k8s.runsNamespace) (not .Values.k8s.allowRunsInReleaseNamespace) -}}
-{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, and create or delete any Secret and NetworkPolicy there — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
+{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, create or delete any Secret and NetworkPolicy there, and list every other workload's Events there (#807) — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
 {{- end -}}
 {{/*
 k8s.rbac.create=false skips the four objects below — for a platform team
@@ -102,13 +118,37 @@ through to true.
 */}}
 {{- $rbac := .Values.k8s.rbac | default dict -}}
 {{/*
-Same shape for userDrives: a `helm upgrade --reuse-values` from a release that
-PREDATES this block hands the templates a values map with no userDrives key at
-all, and a bare .Values.userDrives.enabled would kill that upgrade at render
-with a nil pointer (the failure mode the Makefile's own predates-the-0.6-blocks
-render exists to catch). `| default dict` makes an absent block read as off.
+Same shape for drives (renamed from userDrives in 0.8, issue #658). A
+`helm upgrade --reuse-values` swaps THIS chart's values.yaml for the previous
+release's coalesced values (Helm's action.Upgrade.reuseValues sets
+chart.Values = oldVals), so from a pre-0.8 release the map has no `drives` key
+at all and a bare .Values.drives.enabled would kill that upgrade at render with
+a nil pointer. `| default dict` makes the absent block read as off.
+
+The old key is a clean break, not an alias (docs/sdk.md "Renamed in 0.8"), but
+not a silent one: userDrives.enabled=true is refused, because nothing reads it
+and every drive run would otherwise fail at dispatch on a 403. Only a TRUE
+value is refused, and `userDrives.enabled=false` is the way past. Refusing the
+bare key would refuse every pre-0.8 --reuse-values upgrade, since each one
+carries the old default userDrives.enabled=false. Where the operator had set
+it true, `--set userDrives=null` cannot remove it under --reuse-values: the
+null is spent against the old release's own values, and the old chart's then
+layer it back in.
 */}}
-{{- $userDrives := .Values.userDrives | default dict -}}
+{{- if (.Values.userDrives | default dict).enabled -}}
+{{- fail "wardyn: userDrives was renamed to drives in 0.8 (#658) and the old key is no longer read. Set drives.enabled=true instead, and set userDrives.enabled=false (or delete the userDrives block from your values file)." -}}
+{{- end -}}
+{{- $drives := .Values.drives | default dict -}}
+{{/*
+The nested reclaim block, off by default: `--reuse-values` from a release that
+predates it, or a values file carrying `drives.reclaim` as an explicit null,
+both hand the template a drives map with no usable reclaim key. `| default
+dict` makes either read as OFF — the only direction this default may ever fail
+in. No old-key refusal here (unlike drives.enabled above): drives.reclaim was
+never released under the userDrives name, so there is no prior install to
+break.
+*/}}
+{{- $driveReclaim := $drives.reclaim | default dict -}}
 {{- if or (not (hasKey $rbac "create")) $rbac.create -}}
 {{- if not .Values.k8s.runsNamespace }}
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,22 +188,52 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "list", "delete", "deletecollection"]
-{{- if $userDrives.enabled }}
-  # User drives (drives.go's ensureDrivePVC), each verb justified:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+{{- if $drives.enabled }}
+  # Drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a
   #            k8s_pvc_static (share) drive is ONLY ever looked up: an admin
   #            provisioned that claim, so a missing one fails the run instead of
   #            being invented as an empty volume.
   #   create — a k8s_pvc (managed) drive provisions one claim per person, once,
   #            on the first run that mounts it.
-  # NOT granted, deliberately:
-  #   delete/deletecollection — a drive outlives every run that mounts it.
-  #            Reclaiming a departed person's claim is an operator command (see
-  #            this chart's README), never something wardynd can do on its own.
+  #
+  # WHAT CHANGED, AND WHY. This block used to refuse `delete` outright, by the
+  # argument that a drive outlives every run that mounts it, so reclaiming a
+  # departed person's claim is an operator's `kubectl delete pvc` and never
+  # something wardynd can do on its own. The first half of that argument still
+  # holds and is still enforced — no run path, no teardown and no sweep may
+  # reach a claim (lifecycle.go's SweepOrphanedSandboxes reaps by wardyn.run-id,
+  # which a drive object deliberately never carries).
+  #
+  # What was wrong with the second half is that it left the storage with NO
+  # reclaim path inside the product at all: deleting a drive removed its row and
+  # left the claim behind, and once the row was gone nothing could even name the
+  # object. So the capability exists now, and every part of it is opt-in:
+  #   * the verb is granted only under drives.reclaim.enabled, DEFAULT FALSE
+  #     — leave it off and this Role is byte-for-byte the one it always was, and
+  #     the apiserver's own 403 is the backstop under everything above it;
+  #   * its only caller is the operator's explicit POST /drives/{id}/reclaim
+  #     (internal/api/user_drives_reclaim.go), super-admin only, refused 409
+  #     while a pod still mounts the claim, and audited as drive.reclaim on
+  #     every attempt that reaches the substrate, 409 refusals included;
+  #   * the driver re-reads the claim and re-checks its wardyn.drive /
+  #     wardyn.home / wardyn.subject labels before issuing the delete
+  #     (drives_reclaim.go), so a colliding minted name cannot destroy another
+  #     member's storage.
+  # Turn it on when your offboarding runbook calls the API; leave it off and
+  # keep reclaiming by hand. Both are supported; only one is the default.
+  #
+  # STILL NOT granted, deliberately:
+  #   deletecollection — a label-scoped collection delete would reclaim EVERY
+  #            claim matching a selector in one call. Reclaim is one person's
+  #            object at a time, by name, or it is not reviewable.
   #   list/watch — nothing enumerates claims; the name is derived, not searched.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "create"]
+    verbs: [{{ if $driveReclaim.enabled }}"get", "create", "delete"{{ else }}"get", "create"{{ end }}]
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

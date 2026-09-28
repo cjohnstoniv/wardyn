@@ -24,7 +24,7 @@ import (
 // preview name the type, and /me reports the session's type.
 
 var accessOrgTypes = []types.UserType{
-	{ID: "portfolio-manager", Name: "Portfolio manager", Priority: 10},
+	{ID: "portfolio-manager", Name: "Portfolio manager", Description: "Runs an agent over one portfolio at a time", Priority: 10},
 	{ID: "analyst", Name: "Analyst", Priority: 10},
 }
 
@@ -296,8 +296,16 @@ func TestMe_ReportsTheSessionUserType(t *testing.T) {
 		return body
 	}
 	body := read(doSSO(t, srv, http.MethodGet, "/api/v1/me", accessSessionOfType(t, "sub-pm", "pat@corp.example", oidc.RoleUser, "portfolio-manager", []string{}), ""))
-	if ut, _ := body["user_type"].(map[string]any); ut["id"] != "portfolio-manager" || ut["name"] != "Portfolio manager" {
-		t.Errorf("user_type = %v, want portfolio-manager / Portfolio manager", body["user_type"])
+	if ut, _ := body["user_type"].(map[string]any); ut["id"] != "portfolio-manager" || ut["name"] != "Portfolio manager" ||
+		ut["description"] != "Runs an agent over one portfolio at a time" {
+		t.Errorf("user_type = %v, want portfolio-manager / Portfolio manager with its description", body["user_type"])
+	}
+	// A type with no description omits the key rather than sending "".
+	body = read(doSSO(t, srv, http.MethodGet, "/api/v1/me", accessSessionOfType(t, "sub-an", "ann@corp.example", oidc.RoleUser, "analyst", []string{}), ""))
+	if ut, _ := body["user_type"].(map[string]any); ut["name"] != "Analyst" {
+		t.Errorf("user_type = %v, want analyst / Analyst", body["user_type"])
+	} else if _, present := ut["description"]; present {
+		t.Errorf("user_type = %v, want no description key for a type with none", ut)
 	}
 	body = read(doSSO(t, srv, http.MethodGet, "/api/v1/me", accessSessionOfType(t, "sub-gone", "g@corp.example", oidc.RoleUser, "contractor", []string{}), ""))
 	if ut, _ := body["user_type"].(map[string]any); ut["id"] != "contractor" || ut["name"] != "" {
@@ -307,6 +315,48 @@ func TestMe_ReportsTheSessionUserType(t *testing.T) {
 	if v, ok := body["user_type"]; !ok || v != nil {
 		t.Errorf("admin token user_type = %v (present %v), want null", v, ok)
 	}
+}
+
+// TestGetRun_NamesTheRunsUserType: GET /runs/{id} carries the display name of
+// the type the run was launched as, so a user-tier owner (who cannot read
+// GET /user-types) sees "Ran as {type}". A deleted type and a run with none
+// omit the key.
+func TestGetRun_NamesTheRunsUserType(t *testing.T) {
+	st := runTypeStore{newUIMemStore()}
+	cfg := baseTestConfig(newHarness(t), st)
+	cfg.OIDC = newAccessAuth(t, nil, "", nil, nil)
+	srv := New(cfg)
+	owner := accessSessionOfType(t, "sub-pm", "pat@corp.example", oidc.RoleUser, "portfolio-manager", []string{})
+
+	read := func(userType string) map[string]any {
+		t.Helper()
+		run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-pm", State: types.RunRunning, UserType: userType}
+		st.putRun(run)
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String(), owner, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET run (user_type %q) = %d; body=%s", userType, w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body
+	}
+	if got := read("portfolio-manager")["user_type_name"]; got != "Portfolio manager" {
+		t.Errorf("user_type_name = %v, want Portfolio manager", got)
+	}
+	for _, ut := range []string{"contractor", ""} {
+		if got, present := read(ut)["user_type_name"]; present {
+			t.Errorf("user_type %q: user_type_name = %v, want the key omitted", ut, got)
+		}
+	}
+}
+
+// runTypeStore is a run store that also answers user-type reads.
+type runTypeStore struct{ *uiMemStore }
+
+func (runTypeStore) GetUserType(ctx context.Context, id string) (types.UserType, error) {
+	return meTypeStore{}.GetUserType(ctx, id)
 }
 
 // meTypeStore answers /me's reads for a session on a custom type.
@@ -321,12 +371,13 @@ func (meTypeStore) GetUserType(_ context.Context, id string) (types.UserType, er
 	return types.UserType{}, store.ErrNotFound
 }
 
-// TestAuditSignInDenied: the two user-type refusals are auth.fail rows from
-// the callback's own boundary; any other reason writes nothing.
+// TestAuditSignInDenied: the two user-type refusals and the reserved-subject
+// refusal are auth.fail rows from the callback's own boundary; any other
+// reason writes nothing.
 func TestAuditSignInDenied(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, &roleMapStore{}))
-	for _, reason := range []string{oidc.DenialUserTypeAmbiguous, oidc.DenialUserTypeUnknown, oidc.DenialNoRole} {
+	for _, reason := range []string{oidc.DenialUserTypeAmbiguous, oidc.DenialUserTypeUnknown, oidc.DenialReservedPrincipal, oidc.DenialNoRole} {
 		srv.auditSignInDenied(httptest.NewRequest(http.MethodGet, "/auth/callback?reason="+reason, nil), reason)
 	}
 	var got []string
@@ -343,8 +394,8 @@ func TestAuditSignInDenied(t *testing.T) {
 		_ = json.Unmarshal(ev.Data, &data)
 		got = append(got, data.Reason)
 	}
-	if !slices.Equal(got, []string{authFailedUserTypeAmbiguous, authFailedUserTypeUnknown}) {
-		t.Errorf("auth.fail reasons = %v, want the two user-type refusals only", got)
+	if !slices.Equal(got, []string{authFailedUserTypeAmbiguous, authFailedUserTypeUnknown, authFailedReservedPrincipal}) {
+		t.Errorf("auth.fail reasons = %v, want the two user-type refusals and the reserved subject only", got)
 	}
 	if authFailedUserTypeAmbiguous != oidc.DenialUserTypeAmbiguous || authFailedUserTypeUnknown != oidc.DenialUserTypeUnknown {
 		t.Error("the audit reasons drifted from the sign-in denial codes")

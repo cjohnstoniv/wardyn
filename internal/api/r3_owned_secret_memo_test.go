@@ -120,7 +120,7 @@ func r3MemberPreflightBody(t *testing.T, n int) string {
 	return string(body)
 }
 
-// TestOwnedSecretReadsAreFlatInCallerInput is F067's growth law for the half
+// TestOwnedSecretReadsAreFlatInCallerInput is the growth law for the half
 // capBatch did not close.
 //
 // capBatch made the egress loop's store reads flat in len(allowed_domains) and
@@ -174,7 +174,7 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 	}
 }
 
-// TestMemberPipelineOwnedSecretReadsPerSite is F205's pin: the THREE sibling
+// TestMemberPipelineOwnedSecretReadsPerSite pins the THREE sibling
 // per-grant ownsSecret loops capBatch left standing, asserted one at a time.
 //
 // The end-to-end pin above proves the request installs a memo; this proves each
@@ -235,7 +235,7 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 		},
 		"validateInlineSecretRefs": func(t *testing.T, srv *Server, ctx context.Context, n int) {
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
-			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", spec); err != nil {
+			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", "sub-gov-bob", spec); err != nil {
 				t.Fatalf("n=%d: code=%d %v", n, code, err)
 			}
 		},

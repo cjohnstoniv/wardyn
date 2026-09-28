@@ -820,3 +820,15 @@ func TestClamp_ToolRulesNeverWiden(t *testing.T) {
 		}
 	}
 }
+
+// TestClamp_ForcesOwnerOnlyOnFromTheCeiling: an operator's owner_only on a
+// pairing binds a member's proposal for it the way requires_approval does, so
+// dropping the flag cannot take the operator row back (#1106).
+func TestClamp_ForcesOwnerOnlyOnFromTheCeiling(t *testing.T) {
+	scope := mustJSON(t, map[string]any{"host": "dev.azure.com", "secret_name": "ado-pat"})
+	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope, OwnerOnly: true}}}
+	got, _ := Clamp(types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, ceiling, 0)
+	if len(got.EligibleGrants) != 1 || !got.EligibleGrants[0].OwnerOnly {
+		t.Fatalf("clamped grants = %+v, want the pairing kept with owner_only forced on", got.EligibleGrants)
+	}
+}

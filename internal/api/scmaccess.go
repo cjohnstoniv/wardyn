@@ -41,14 +41,12 @@ const (
 	scmAccessSourceSeparate = "separate"
 )
 
-// scmAccessCauseRowIsNewer is the one `not_configured` cause this deployment
-// can actually tell today: the person has never captured a session for this
-// row. §0.1 names three more (consent declined, the connection ended, a
-// different sign-in directory) — each needs a signal nothing upstream of this
-// issue persists yet (a failed redemption, a login-time consent-decline
-// record), so this file reports the one cause it can stand behind rather than
-// guessing at the other three.
-const scmAccessCauseRowIsNewer = "row_is_newer"
+// `not_configured` carries no cause. The one it used to carry, row_is_newer
+// ("the person has never captured a session for this row"), stopped being
+// something this file can stand behind once a dead or erased sign-in is
+// deleted rather than kept (credential-storage design §2.7): no stored
+// sign-in now also means one that was taken away. §0.1's other three causes
+// need signals nothing persists either.
 
 // The two `expired_signin` causes. scmAccessCauseEnded: a renewal found the
 // stored sign-in dead or blocked by Conditional Access (adoEntraBlob.DeadAt).
@@ -74,8 +72,8 @@ type SCMAccess struct {
 	// Source is "org" or "separate" — set for a per-user connection that is
 	// live or expired_signin (which door to go back through).
 	Source string `json:"source,omitempty"`
-	// Cause narrows `not_configured` (scmAccessCauseRowIsNewer) and
-	// `expired_signin` (scmAccessCauseEnded, scmAccessCauseConsentNeeded).
+	// Cause narrows `expired_signin` (scmAccessCauseEnded,
+	// scmAccessCauseConsentNeeded).
 	Cause string `json:"cause,omitempty"`
 	// Org is the Azure DevOps address this row clones from (the row's first
 	// base URL) — the {org} the connect and launch dialogs name.
@@ -221,8 +219,6 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	}
 	out := SCMAccess{State: adoAccessState(isMechanism, found), Org: adoOrgDisplay(row), Kind: string(row.Kind)}
 	switch {
-	case out.State == modelAccessNotConfigured:
-		out.Cause = scmAccessCauseRowIsNewer
 	case out.State != modelAccessLive:
 	case blob.signInEnded():
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded
@@ -359,18 +355,23 @@ type gitCredentialErrorBody struct {
 const gitCredentialRefusalReason = "git_credential"
 
 // gitCredentialNotConnectedRefusal is §7.1's composed sentence, BYTE-EXACT
-// including its "git_credential: " prefix (pinned by
-// TestGitCredentialRefusalMatchesCanon, which parses the canon table the way
-// ado-entra-copy.test.ts parses §7): the person has never captured a session
-// for the row.
-const gitCredentialNotConnectedRefusal = "git_credential: you are not connected to Azure DevOps — connect and start the run again"
+// (pinned by TestGitCredentialRefusalMatchesCanon, which parses the canon
+// table the way ado-entra-copy.test.ts parses §7): the person has never
+// captured a session for the row.
+//
+// #659 Q1 (owner decision, 2026-09-28): the sentence no longer carries a
+// "git_credential: " prefix — the 422 body's own Reason field already sends
+// "git_credential" separately, so the prefix double-encoded the same fact.
+// The owner's approval stands in for the mock round; the canon row
+// (docs/design/ado-entra-prompt.md §7.1) and this test change together.
+const gitCredentialNotConnectedRefusal = "you are not connected to Azure DevOps — connect and start the run again"
 
 // gitCredentialEndedRefusal / gitCredentialConsentRefusal are §7.1's two
 // expired_signin sentences, by cause (scmAccessCauseEnded /
 // scmAccessCauseConsentNeeded) — pinned by the same canon test.
 const (
-	gitCredentialEndedRefusal   = "git_credential: your Azure DevOps connection ended — connect and start the run again"
-	gitCredentialConsentRefusal = "git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
+	gitCredentialEndedRefusal   = "your Azure DevOps connection ended — connect and start the run again"
+	gitCredentialConsentRefusal = "your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —

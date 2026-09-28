@@ -30,18 +30,14 @@ func classifyLLM(channel contentscan.Channel, method, rest string) int {
 	}
 }
 
-// classifyAnthropicLLM decides how a request to the Anthropic route is inspected.
-// count_tokens shares the Messages schema, so it is scanned with the same
-// extractor; every other body-bearing request carries content in a shape we
-// cannot parse yet, so it is marked uninspected rather than silently allowed —
-// see the default arm's note above.
+// classifyAnthropicLLM decides how a request to the Anthropic route is
+// inspected. count_tokens shares the Messages schema, so it uses the same
+// extractor; every other body-bearing request is marked uninspected rather
+// than silently allowed.
 func classifyAnthropicLLM(method, rest string) int {
-	// The quiet answer belongs to methods that carry NO body (GET/HEAD/DELETE/…),
-	// not to "anything that is not a POST" (bodyBearingMethod is the
-	// one definition hasScannableBody uses too). The named arms below stay
-	// POST-only because POST is the only verb the vendor documents for them, so
-	// a PUT/PATCH to the same path is exactly an unrecognised body-bearing
-	// request and falls to the fail-closed default.
+	// Only a bodiless method (GET/HEAD/DELETE/…) is quiet; the named arms below
+	// are POST-only, so a PUT/PATCH to the same path falls to the fail-closed
+	// default rather than being treated as scanned.
 	if !bodyBearingMethod(method) {
 		return scanNone
 	}
@@ -52,37 +48,23 @@ func classifyAnthropicLLM(method, rest string) int {
 	case method == http.MethodPost && strings.HasSuffix(r, "/count_tokens"):
 		return scanMessages
 	default:
-		// Fail-closed default: every OTHER POST on this route is
-		// uninspected, not quiet — the enumerated arms above cannot be trusted to
-		// cover the vendor's whole content-upload surface, because the SANDBOX
-		// picks the whole suffix (handleLocalRoute dispatches on a bare prefix
-		// match and forwards <rest> verbatim) and the VENDOR adds endpoints
-		// without asking us. A default that quietly fell to scanNone for anything
-		// unnamed would forward a multipart upload of arbitrary user bytes (POST
-		// /v1/files, documented 500 MB ceiling) with the operator's brokered
-		// credential, unscanned, carrying NO scan block at all — a row
-		// indistinguishable in audit from GET /v1/models — and would let a strict
-		// operator's block + on_scanner_error=block control be bypassed by
-		// choosing an unnamed suffix (refused as `batches`, forwarded as
-		// `files`). So the default is the honest answer — "prompt-bearing but no
-		// extractor yet" — and a new arm above is what earns silence.
-		//
-		// The same is true of the VERB. `PUT /v1/messages` is
-		// not a documented Anthropic call, so it lands here rather than on the
-		// scanMessages arm — uninspected and refused under fail-closed blocking
-		// rather than silently forwarded.
+		// Fail-closed: the enumerated arms above cannot be trusted to cover the
+		// vendor's whole content-upload surface (the sandbox forwards <rest>
+		// verbatim, and the vendor adds endpoints without asking us), so an
+		// unnamed POST is marked uninspected rather than silently allowed — e.g.
+		// a multipart upload to POST /v1/files would otherwise carry the
+		// brokered credential unscanned with no audit trail.
 		return scanOpaque
 	}
 }
 
 // classifyOpenAILLM decides how a request to the OpenAI route is inspected.
 // chat/completions is scanned with the openai.chat extractor; responses and
-// embeddings carry prompt/input text in shapes we do not parse yet, so they are
-// honestly marked uninspected rather than silently allowed.
+// embeddings carry text in shapes we do not parse yet, so they are honestly
+// marked uninspected rather than silently allowed.
 func classifyOpenAILLM(method, rest string) int {
-	// Same two rules as classifyAnthropicLLM: only a bodiless method is quiet
-	// and the named arm is POST-only so any other body-bearing verb
-	// on the same path is an unrecognised call, not a scanned one.
+	// Same two rules as classifyAnthropicLLM: bodiless is quiet, and the named
+	// arm is POST-only.
 	if !bodyBearingMethod(method) {
 		return scanNone
 	}
@@ -91,26 +73,18 @@ func classifyOpenAILLM(method, rest string) int {
 	case method == http.MethodPost && (r == "chat/completions" || strings.HasSuffix(r, "/chat/completions")):
 		return scanMessages
 	default:
-		// Fail-closed default, same rule as classifyAnthropicLLM: an
-		// enumerated allowlist of endpoints cannot be trusted to cover the
-		// vendor's whole content-upload surface. The vendor's own OpenAPI spec
-		// defines POST /v1/files and the multipart
-		// /v1/audio/{transcriptions,translations} uploads plus /v1/audio/speech
-		// beside /responses, /embeddings and /completions — an enumeration naming
-		// only the chat-adjacent endpoints would stream the rest through with the
-		// brokered credential and no scan block. An enumeration also has to carry
-		// each endpoint's BARE spelling (with no gateway prefix configured,
-		// `rest` for POST /wardyn/llm/openai/responses is exactly "responses",
-		// which a suffix-only arm would miss) — a second way the same list could
-		// silently lose an endpoint. The default answers both.
+		// Fail-closed default, same rule as classifyAnthropicLLM: OpenAI's own
+		// spec has other upload endpoints (/v1/files, /v1/audio/*) an allowlist
+		// could miss, and a suffix-only arm could miss an endpoint's bare
+		// spelling too (no gateway prefix configured), so anything unnamed is
+		// marked uninspected rather than silently forwarded.
 		return scanOpaque
 	}
 }
 
 // isLLMHost reports whether host is a recognised model-API upstream (used to
-// emit honest opaque-tunnel coverage for CONNECT traffic). A method (not a
-// free function) so a configured internal gateway's host — reachable only
-// through THIS proxy's own gatewayVendor table — counts too.
+// emit honest opaque-tunnel coverage for CONNECT traffic). A method, not a
+// free function, so a configured internal gateway's host counts too.
 func (p *Proxy) isLLMHost(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if h == anthropicHost || h == openaiHost {
@@ -123,52 +97,33 @@ func (p *Proxy) isLLMHost(host string) bool {
 }
 
 // awsRegionLabel matches an AWS region label (us-east-1, eu-west-3,
-// us-gov-west-1, ap-southeast-4). It starts with two LETTERS on purpose — that
-// is what separates a region from a virtual-hosted S3 label (s3,
-// s3-website-us-east-1, s3-us-west-2), which is customer-squattable inside
-// amazonaws.com; see isBedrockHost.
+// us-gov-west-1, ap-southeast-4). It starts with two letters on purpose, to
+// separate a region from a customer-squattable S3 label (s3, s3-us-west-2)
+// inside amazonaws.com; see isBedrockHost.
 var awsRegionLabel = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
 
-// isBedrockHost reports whether h (already lowercased, trailing dot trimmed) is
-// an AWS Bedrock data-plane (bedrock-runtime) or control-plane (bedrock)
-// endpoint — the public regional form OR the PrivateLink/VPC-endpoint form
-// `vpce-<id>[-<az>].bedrock-runtime.<region>.vpce.amazonaws.com` (and the
-// hyphen-glued `vpce-<id>-bedrock-runtime.<region>.vpce.amazonaws.com`), which
-// CONTAINS but does not START WITH the service name, so a prefix match alone
-// would drop private-endpoint model traffic out of isLLMHost's opaque-tunnel
-// coverage — the one call an auditor most wants to see.
+// isBedrockHost reports whether h (already lowercased, trailing dot trimmed)
+// is an AWS Bedrock data-plane or control-plane endpoint: the public regional
+// form, or the PrivateLink/VPC-endpoint form
+// `vpce-<id>[-<az>].bedrock-runtime.<region>.vpce.amazonaws.com` (also
+// hyphen-glued), which contains but does not start with the service name, so a
+// prefix match alone would miss private-endpoint model traffic.
 //
-// Security (read before loosening): this is NOT a substring match. Every arm is
-// anchored on AWS-OWNED DNS an attacker cannot register — `<region>.amazonaws.com`
-// for the public form, `.vpce.amazonaws.com` for the private one — because
-// isLLMHost's true weight is in serveMITMRequest, where it picks the inspection
-// path for a tunnel that is ALREADY being TLS-terminated: an LLM classification
-// routes the body through inspectLLM (ChannelGeneric ⇒ unscanned) instead of
-// inspectForwardBody, which honours inspect_forward_egress. A host that could
-// talk its way in here would be an operator's corp artifact host silently
-// opting itself OUT of forward-body inspection. (It buys nothing else: the
-// CONNECT was allowed or denied by policy before isLLMHost is ever consulted,
-// and MITM eligibility is isMITMHost's exact-hostname allowlist, never this.)
-//
-// So `bedrock-runtime.evil.com`, `x-bedrock.attacker.net`,
-// `bedrock-runtime.us-east-1.amazonaws.com.evil.com` and the legacy S3
-// virtual-host `bedrock-runtime.s3.amazonaws.com` (bucket names ARE
-// attacker-chosen) all stay out — the first three fail the AWS suffix, the
-// last fails the region shape. Inside `.vpce.amazonaws.com` the service label
-// is assigned by AWS (a customer-hosted PrivateLink service is named
-// `vpce-svc-<hex>`), so a bedrock component there is genuinely Bedrock's.
+// Security (read before loosening): NOT a substring match — every arm is
+// anchored on AWS-owned DNS an attacker cannot register, since a match here
+// routes the body through the unscanned inspectLLM path instead of
+// inspectForwardBody. A look-alike domain or the legacy S3 virtual-host
+// (attacker-chosen bucket names) must stay out.
 func isBedrockHost(h string) bool {
 	labels := strings.Split(h, ".")
-	// Public: <service>.<region>.amazonaws.com, and the dual-stack
-	// <service>.<region>.api.aws form AWS publishes beside it. Both tails are
-	// AWS-owned zones; the region shape stays the anchor that keeps the
-	// customer-squattable S3 virtual-host labels out.
+	// Public: <service>.<region>.amazonaws.com, plus the dual-stack
+	// <service>.<region>.api.aws form; both are AWS-owned zones.
 	if len(labels) == 4 && bedrockServiceLabel(labels[0]) && awsRegionLabel.MatchString(labels[1]) &&
 		((labels[2] == "amazonaws" && labels[3] == "com") || (labels[2] == "api" && labels[3] == "aws")) {
 		return true
 	}
-	// PrivateLink: the bedrock service rides a MIDDLE label (or the tail of the
-	// vpce label), under AWS's own vpce zone.
+	// PrivateLink: the bedrock service rides a middle label, under AWS's own
+	// vpce zone.
 	if !strings.HasSuffix(h, ".vpce.amazonaws.com") {
 		return false
 	}
@@ -176,8 +131,8 @@ func isBedrockHost(h string) bool {
 		if bedrockServiceLabel(l) {
 			return true
 		}
-		// Hyphen-glued: `vpce-<id>-bedrock-agent-runtime`. The service name must
-		// start at a hyphen boundary — `notbedrock-runtime` is not Bedrock.
+		// Hyphen-glued: `vpce-<id>-bedrock-agent-runtime`; must start at a
+		// hyphen boundary so `notbedrock-runtime` does not match.
 		if i := strings.Index(l, "-bedrock"); i > 0 && bedrockServiceLabel(l[i+1:]) {
 			return true
 		}
@@ -185,30 +140,18 @@ func isBedrockHost(h string) bool {
 	return false
 }
 
-// bedrockServiceLabel reports whether l is one of the Bedrock service labels AWS
-// publishes in its service-endpoint reference
-// (https://docs.aws.amazon.com/general/latest/gr/bedrock.html), with or without
-// the `-fips` variant.
+// bedrockServiceLabel reports whether l is one of the Bedrock service labels
+// AWS publishes in its service-endpoint reference
+// (https://docs.aws.amazon.com/general/latest/gr/bedrock.html), with or
+// without the `-fips` variant.
 //
-// The enumeration must cover every AWS-published label, including each
-// `-fips` variant (a FedRAMP-High workload is generally REQUIRED to use one,
-// and GovCloud publishes
-// `bedrock-runtime-fips.us-gov-{west,east}-1.amazonaws.com`) and the whole
-// agent family, including `bedrock-agent-runtime` — the InvokeAgent DATA
-// plane, i.e. prompt-bearing model traffic. Missing any of them costs
-// honesty, not just coverage: proxy.go emits the one-time `llm.scan.bypass`
-// coverage row only under isLLMHost, so an unrecognised label leaves a
-// CONNECT to that endpoint opaque AND unflagged — an audit trail showing an
-// egress.allow and no bypass row anywhere, which reads as "no model tunnel
-// happened", against a THREAT-MODEL.md that says those tunnels "stay opaque
-// and flagged llm.scan.bypass". It also mislabels the MITM decision row for
-// such a host as corp-artifact rather than model traffic.
-//
-// The enumeration is deliberately exhaustive-by-name rather than a
-// `strings.HasPrefix(l, "bedrock")`: isBedrockHost's callers treat a match as
-// "this is model traffic", and a prefix test would admit any future
-// AWS-adjacent label — and, inside `.vpce.amazonaws.com`, any label an operator
-// happened to name that way — without anyone re-reading the security note above.
+// The enumeration must cover every published label, including each `-fips`
+// variant and the whole agent family: missing one leaves a CONNECT to that
+// endpoint opaque AND unflagged (no `llm.scan.bypass` row), reading as "no
+// model tunnel happened" in the audit trail. It is exhaustive-by-name rather
+// than `strings.HasPrefix(l, "bedrock")`, since a prefix test would admit any
+// future AWS-adjacent label as model traffic without a re-read of the
+// security note on isBedrockHost.
 func bedrockServiceLabel(l string) bool {
 	switch strings.TrimSuffix(l, "-fips") {
 	case "bedrock", // control plane

@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -148,6 +149,35 @@ func TestProviderCredentialOwnNamespace(t *testing.T) {
 			t.Fatalf("DELETE = %d; body=%s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// unavailablePutSecrets forces Put to answer secretstore.ErrUnavailable, as an
+// external store answers while sealed or unreachable — the same failure
+// unavailableSecrets (injection_test.go) forces on a READ. Its own For
+// returns itself so the owner-scoped .For(owner).Put(...) the key door calls
+// keeps the override.
+type unavailablePutSecrets struct{ *memSecrets }
+
+func (unavailablePutSecrets) Put(context.Context, string, []byte) error {
+	return fmt.Errorf("vault PUT wardyn/data/x: 503 sealed: %w", secretstore.ErrUnavailable)
+}
+func (u unavailablePutSecrets) For(string) secretstore.Store { return u }
+
+// TestPutProviderCredential_StoreUnavailable pins design packet F's
+// KEY_DOOR.SAVE_UNAVAILABLE canon: a transient store failure on save is its
+// OWN 503, distinct from mpcNoStore (no store configured at all) and from a
+// generic writeServerError 500. RED with the errors.Is(secretstore.ErrUnavailable)
+// branch dropped from handlePutProviderCredential.
+func TestPutProviderCredential_StoreUnavailable(t *testing.T) {
+	site := credentialSite(keyProvider("anthropic", "claude-code"))
+	srv := modelProvidersStatusSrv(t, site, &capStore{})
+	srv.cfg.Secrets = unavailablePutSecrets{&memSecrets{m: map[string][]byte{}}}
+	srv.router = srv.routes()
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/anthropic/credential", member, `{"value":"sk-ant-member-own-key-0001"}`)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), keyDoorSaveUnavailable) {
+		t.Fatalf("PUT = %d %s, want 503 with the KEY_DOOR.SAVE_UNAVAILABLE canon", w.Code, w.Body.String())
+	}
 }
 
 // TestProviderCredentialRefusals: every refusal writes nothing, anywhere.

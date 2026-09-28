@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -24,7 +25,11 @@ import (
 // would have the proxy try to serve it over a route it does not speak. They are
 // validated together here because they answer one question, not because they
 // share a mechanism.
-func validateModelEndpoints(f *bootFlags) (map[string]string, map[string]api.LLMGatewayAuth, string, string, error) {
+// runnerTarget is buildRunnerFromFlags' resolved substrate ("docker"/"k8s"/
+// "none"), needed only for refuseBedrockOnProxySubnet's per-substrate subnet
+// lookup (#1198, bedrock_subnet_guard.go); ctx bounds that lookup the same
+// way it bounds the rest of boot (run()'s bootCtx).
+func validateModelEndpoints(ctx context.Context, f *bootFlags, runnerTarget string) (map[string]string, map[string]api.LLMGatewayAuth, string, string, error) {
 	llmGateways, llmGatewayAuth, err := api.ValidateLLMGateways(
 		api.LLMGatewayRaw{BaseURL: *f.anthropicBaseURL, Header: *f.anthropicGatewayHeader, Format: *f.anthropicGatewayFormat},
 		api.LLMGatewayRaw{BaseURL: *f.openaiBaseURL, Header: *f.openaiGatewayHeader, Format: *f.openaiGatewayFormat},
@@ -35,6 +40,13 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, map[string]api.LLM
 	// *f.bedrockRegion is already resolved (parseBootFlags folds in AWS_REGION).
 	bedrockBaseURL, err := api.ValidateBedrockBaseURL(*f.bedrockBaseURL, *f.bedrockRegion, *f.allowTestEndpoints)
 	if err != nil {
+		return nil, nil, "", "", err
+	}
+	// #1198: refused HERE (not in run()) for the same reason the AWS SSO
+	// override below is — run()'s cyclomatic budget is full, and this answers
+	// the same class of question this whole function already does: where a
+	// model call actually goes, and whether that is safe to boot with.
+	if err := refuseBedrockOnProxySubnet(ctx, bedrockBaseURL, runnerTarget); err != nil {
 		return nil, nil, "", "", err
 	}
 	// The OTHER relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks, made audible.

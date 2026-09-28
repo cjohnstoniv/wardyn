@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -255,16 +255,28 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # -tags k8s), not the tagless subset alone — measuring only the tagless build
 # reported a number for code that is not what ships. Pulling the excluded
 # packages in moved the honest total from 67.1% (tagless-only) to 66.1%
-# (docker union); the floor sits just under that with a small margin for
-# routine churn. Raise it as coverage climbs.
+# (docker union); the floor sits under that measurement with a margin for
+# routine churn, per the RE-SET RULE below.
 # scripts/cover-union.sh documents exactly what is and is not counted.
-# RATCHET (W6-01, v0.7.4 blind-verify lane): the coordinator's W5 final-tree
-# `make ci` measured the union at 78.3% at tree 532ca5d4 — 3.3 points above the old 75
-# floor, slack wide enough that a real coverage regression could land and
-# still pass. Raised to 78, a margin below that measurement rather than the
-# measurement itself. Never lower it without a coverage regression forcing
-# the call; re-measure at the next release.
-COVER_MIN ?= 78
+#
+# RE-SET RULE (#174): a floor set AT the fresh measurement fails on noise —
+# routine churn (a test reordered, a build-tag combination that shifts a few
+# statements) trips CI for no real regression. A floor set far below it gates
+# nothing — a real regression has room to land and still pass. The rule: run
+# `make cover-check`, read the union total, and set COVER_MIN to the GREATEST
+# INTEGER AT LEAST 1.0 BELOW that measurement (e.g. a 78.5% measurement sets
+# COVER_MIN=77, never 78). Re-run this at every future re-set — do not
+# rediscover the rule, and do not just bump the number up as coverage climbs;
+# recompute it from the fresh measurement, which can also lower the floor when
+# the old one had drifted to too thin a margin (that drift — 78 against a
+# 78.3% measurement, 0.3 points of margin — is what made #174 necessary).
+#
+# HISTORY: W6-01 (v0.7.4 blind-verify lane) set 78 against a 78.3% measurement
+# at tree 532ca5d4 — 3.3 points above the old 75 floor. #174 re-measured the
+# union freshly after merging main (post-merge `make cover-check`: 80.4% —
+# unit 80.7%, docker 80.3%, k8s 80.8%) and re-set the floor to 79 per the rule
+# above.
+COVER_MIN ?= 79
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@$(MAKE) --no-print-directory cover-union
 
@@ -295,8 +307,8 @@ cover-union: ## Enforce COVER_MIN over the unit/docker/k8s profiles already in t
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
-	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
-	  echo "==> Postgres-gated suite under the race detector"; $(MAKE) test-race-pg; \
+	  echo "==> Postgres-gated suite" && $(MAKE) test-report-pg && \
+	  echo "==> Postgres-gated suite under the race detector" && $(MAKE) test-race-pg; \
 	else \
 	  echo ">> SKIPPED test-report-pg + test-race-pg — set WARDYN_TEST_PG=postgres://... to run them (CI always does)"; \
 	fi
@@ -315,9 +327,34 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 # take seconds. The two :local images it needs (wardyn/wardyn-proxy,
 # wardyn/agent-claude-code) are built by ci.yml's `conformance` job right before this
 # runs; locally they come from `make agent-images` / compose.
+# Routed through scripts/test-report.sh (T-08/G9), not a bare `go test`: the
+# must-pass floor there is what turns a capability flip or an unset probe
+# (L0StructuralEgress, CreateStatusStop, ExecStream, ManagedFiles,
+# TestBootEgress_NoFirstUseApproval quietly SKIPping) into a red job instead of
+# a green one with fewer subtests. See test-report.sh's REQUIRE_PASS default
+# for the exact set.
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
-	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 20m ./test/conformance/...
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-docker -tags docker -timeout 20m ./test/conformance/...
+	@echo "Running docker L0 structural-egress negatives (#707: PR-time, not nightly-only)..."
+	@echo "TestL0_MetadataUnreachable / TestL0_ProxyIsSoleEgressPath / TestL0_NoDNSExfil (internal/runner/docker/network_test.go)"
+	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
+	@echo "surface until the next nightly run. Scoped to just these three by -run: the rest of"
+	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
+	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
+
+# The key-service suite against real servers (T-33): the Vault Transit KEK and the
+# Vault KV store on the official hashicorp/vault and openbao/openbao dev images, and
+# the Kubernetes-auth leg on a throwaway kind cluster with Vault's Helm chart. Each
+# script starts and removes everything it needs; the skip floor fails a skipped test.
+test-kek-conformance: ## Live Vault + OpenBao key-service suite (needs docker)
+	./scripts/kek-conformance.sh
+
+test-kek-conformance-kind: ## Live Vault Kubernetes-auth leg on kind (needs docker, kind, kubectl, helm, jq)
+	./scripts/kek-conformance-kind.sh
+
+test-daemon-proxy-secret-kind: ## WARDYN_DAEMON_PROXY_SECRET on kind, 0440 + 0400 (T-59, #719; needs docker, kind, kubectl, helm)
+	./scripts/daemon-proxy-secret-kind.sh
 
 # 30m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
@@ -330,9 +367,12 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 # and a ceiling set to the eviction
 # case alone loses the whole run whenever the pathological case and an ordinary suite land
 # together.
+# Routed through scripts/test-report.sh (T-08/G9) — see test-conformance-docker
+# above for why: AgentCannotReachAPIServer, CreateStatusStop and WaitExitCode
+# must-pass here too.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 30m ./test/conformance/...
+	WARDYN_TEST_K8S=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout 30m ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no
@@ -373,6 +413,11 @@ test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no c
 # WSL/host loopback in any network mode. The tools are staged from the same
 # in-repo sources the agent images ship (cmd/* + deploy/images/*), so the
 # finalize COPY has real binaries to layer, not stubs.
+#
+# Also routed through scripts/test-report.sh (T-08/G9): the "unsupported
+# daemon" skip cases in integration_test.go / agent_tool_integration_test.go
+# have to actually SUCCEED on this target's own provisioned daemon+registry,
+# so a skip here is real news, not a self-skip disguised as green.
 test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs Docker)
 	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
 	@set -eu; \
@@ -390,7 +435,8 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	WARDYN_TEST_DOCKER=1 \
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
-	go test -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI' -timeout 40m -v ./internal/envbuild/
+	WARDYN_TEST_REPORT_COVER=0 \
+	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI' -timeout 40m ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
 # brokered creds, recording). Heavy: stands up the compose stack. Guarded by
@@ -472,6 +518,16 @@ test-e2e-ui-sandbox: ## Live UI-sandbox relay e2e: handoff/audit/403s/header str
 	@echo "Running live UI-sandbox gateway e2e (dedicated compose stack; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ui-sandbox.sh
 
+# The model-providers seeding path a rebuilt kind-sso-walk.sh would need: PUT
+# /model-providers + PUT /agent-providers wiring a roster default, UID-backed
+# (not id-backed) per-person credential capture, no legacy WARDYN_BEDROCK_*
+# env reaching the daemon, and failure propagation on a bad roster/provider
+# write. Headless (WARDYN_RUNNER=none — no kind, no docker sandbox); needs
+# Docker only for a throwaway Postgres. Self-skips without WARDYN_TEST_DOCKER=1.
+test-provider-seed: ## Model-providers seeding path: UID-keyed credential capture (needs Docker)
+	@echo "Running model-providers seeding path test (headless; requires Docker for Postgres)..."
+	WARDYN_TEST_DOCKER=1 ./scripts/test-kind-sso-provider-seed.sh
+
 govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
 	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
@@ -506,6 +562,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-fixture-dates.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
+	./scripts/check-workflow-artifacts.sh
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -535,15 +593,22 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-e2e-lane-kill-tree.sh
+	./scripts/test-e2e-live-base-url.sh
+	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
+	./scripts/test-release-check.sh
+	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
@@ -552,6 +617,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-setup-launch.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
+	./scripts/test-workflow-artifacts.sh
 
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
 # Each target below is the authority for one CI gate: ci.yml runs `make <target>`
@@ -646,6 +712,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
+	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
+	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \
@@ -654,6 +724,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \
 	echo "$$out" | grep -q "secretProviderClass: wardyn-boot" || { echo "extraVolumes did not render (a CSI-mounted WARDYN_*_FILE has no volume)"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render (a CSI-mounted WARDYN_*_FILE path would name nothing)"; exit 1; }; \
+	echo "$$out" | grep -q "secretName: wardyn-daemon-proxy" || { echo "all-on's daemonProxySecret.existingSecret did not render a Secret-sourced volume"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/etc/wardyn/daemon-proxy-secret/proxy-url"' || { echo "all-on's daemonProxySecret.existingSecret did not wire WARDYN_DAEMON_PROXY_SECRET"; exit 1; }; \
 	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
@@ -666,7 +738,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q '^kind: ClusterRole$$' || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'resources: \["persistentvolumeclaims"\]')" = "1" ] || { echo "the render grants persistentvolumeclaims in more than one rule (or none) — a SECOND rule adding delete/deletecollection/list is invisible to a grep that only proves the FIRST rule still says [get, create]"; exit 1; }; \
 	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -q 'resources: \["persistentvolumeclaims"\]' || { echo "the persistentvolumeclaims rule is NOT in the namespaced Role — moving it to the cluster-scoped ClusterRole keeps every verb assertion green while granting those verbs in EVERY namespace"; exit 1; }; \
-	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "userDrives.enabled did not render EXACTLY persistentvolumeclaims verbs [get, create] — a missing rule fails every k8s_pvc drive on a 403, and an extra verb (delete above all) is a verb wardynd must never hold"; exit 1; }; \
+	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "drives.enabled with drives.reclaim.enabled OFF did not render EXACTLY persistentvolumeclaims verbs [get, create] — a missing rule fails every k8s_pvc drive on a 403, and an extra verb (delete above all) would hand a DEFAULT install the one verb that destroys a member's stored bytes. This is the assertion that protects the default: a render test that only proves the Role exists passes whether or not delete is in the list"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
@@ -687,6 +759,52 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
+	@# WARDYN_DAEMON_PROXY_SECRET from an operator Secret (#719): daemonProxySecret.existingSecret
+	@# mounts it read-only and wires WARDYN_DAEMON_PROXY_SECRET at the mounted path; a default
+	@# render (no daemonProxySecret set) touches none of it, and an env.WARDYN_DAEMON_PROXY_SECRET
+	@# override wins over the mount.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	[ "$$(echo "$$out" | grep -c 'daemon-proxy-secret\|WARDYN_DAEMON_PROXY_SECRET')" = "0" ] || { echo "default render (no daemonProxySecret set) rendered part of the daemon-proxy-secret surface"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy); \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/etc/wardyn/daemon-proxy-secret/proxy-url"' || { echo "daemonProxySecret.existingSecret did not wire WARDYN_DAEMON_PROXY_SECRET at the mounted path"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /etc/wardyn/daemon-proxy-secret" || { echo "daemonProxySecret.existingSecret rendered no volumeMount"; exit 1; }; \
+	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "secretName: wardyn-daemon-proxy" || { echo "the daemon-proxy-secret volume does not source the named Secret"; exit 1; }; \
+	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "defaultMode: 288" || { echo "daemonProxySecret defaultMode did not render 0440 (288 decimal)"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set daemonProxySecret.defaultMode=0400); \
+	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "defaultMode: 0400" || { echo "daemonProxySecret.defaultMode=0400 did not render"; exit 1; }
+	@# A NON-default existingSecretKey/mountPath (PR #1245 review F6): the
+	@# assertions above only ever render the defaults, so a template that
+	@# hard-codes "proxy-url" for the ENV path while the volume item correctly
+	@# uses $$dps.existingSecretKey (or vice versa) passes every check above —
+	@# WARDYN_DAEMON_PROXY_SECRET would then name a file the projected volume
+	@# never writes, a boot refusal (missing file) no gate here catches.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set daemonProxySecret.existingSecretKey=url --set daemonProxySecret.mountPath=/mnt/dps); \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/mnt/dps/url"' || { echo "daemonProxySecret.existingSecretKey/mountPath did not reach the WARDYN_DAEMON_PROXY_SECRET env value"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /mnt/dps" || { echo "daemonProxySecret.mountPath did not reach the volumeMount"; exit 1; }; \
+	echo "$$out" | grep -A6 '^        - name: daemon-proxy-secret$$' | grep -A1 "key: url" | grep -q "path: url" || { echo "daemonProxySecret.existingSecretKey did not reach the projected volume's item key/path — the env value above would name a file this volume never writes"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set env.WARDYN_DAEMON_PROXY_SECRET=/mnt/csi/proxy-url); \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/mnt/csi/proxy-url"' || { echo "env.WARDYN_DAEMON_PROXY_SECRET did not override the Secret-backed mount path"; exit 1; }
+	@# T-60/#720's third DSN mode (secret.yaml doc comment "your own file"): a
+	@# Vault-Agent/CSI shape entirely OUTSIDE the chart's own Secrets — postgres.dsn
+	@# left external-empty, WARDYN_PG_DSN_FILE + WARDYN_AGE_KEY_FILE named in env,
+	@# and extraVolumes/extraVolumeMounts the only thing that actually mounts them.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth \
+		--set postgres.dsn.secretRef.name="" \
+		--set env.WARDYN_PG_DSN_FILE=/mnt/secrets-store/pg-dsn \
+		--set env.WARDYN_AGE_KEY_FILE=/mnt/secrets-store/age-key \
+		--set extraVolumes[0].name=boot-secrets-csi \
+		--set extraVolumes[0].csi.driver=secrets-store.csi.k8s.io \
+		--set extraVolumes[0].csi.readOnly=true \
+		--set extraVolumes[0].csi.volumeAttributes.secretProviderClass=wardyn-boot \
+		--set extraVolumeMounts[0].name=boot-secrets-csi \
+		--set extraVolumeMounts[0].mountPath=/mnt/secrets-store \
+		--set extraVolumeMounts[0].readOnly=true) || { echo "the Vault-Agent/CSI DSN+age-key shape no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_PG_DSN_FILE" | grep -q 'value: "/mnt/secrets-store/pg-dsn"' || { echo "env.WARDYN_PG_DSN_FILE did not render"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AGE_KEY_FILE" | grep -q 'value: "/mnt/secrets-store/age-key"' || { echo "env.WARDYN_AGE_KEY_FILE did not render"; exit 1; }; \
+	echo "$$out" | grep -qE '^            - name: WARDYN_PG_DSN$$' && { echo "postgres.dsn.secretRef.name=\"\" still rendered a WARDYN_PG_DSN secretKeyRef — the file mode above would be racing a value the daemon reads first"; exit 1; } || true; \
+	echo "$$out" | grep -qE '^            - name: WARDYN_AGE_KEY$$' && { echo "no age source was named (chart-created or secretRef) yet WARDYN_AGE_KEY still rendered"; exit 1; } || true; \
+	echo "$$out" | grep -q "secretProviderClass: wardyn-boot" || { echo "extraVolumes did not render the CSI volume"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render"; exit 1; }
 	@# The control-plane -> proxy hop (#561): proxies dial https on the internal
 	@# TLS listener, pinned to wardynd's own internal CA. There is deliberately no
 	@# CA Secret to assert: the CA lives in wardynd's secret store (Postgres,
@@ -703,6 +821,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$rules" | grep "^$$ir: " | grep -qE "ingress-nginx|monitoring" && { echo "the internal TLS port rides networkPolicy.ingress.from — the console's ingress controller and scrapers can reach the port proxies resolve credentials on"; exit 1; }; \
 	echo "$$rules" | grep "^$$ir: " | grep -q "podSelector: {}" || { echo "the internal TLS port rule lost its same-namespace peer — run proxies in this namespace lose their control plane"; exit 1; }; \
 	echo "$$rules" | grep "^$$ir: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "the internal TLS port rule lost the runs-namespace peer — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
+	for r in $$(echo "$$rules" | awk -F': ' '/port: http$$/{print $$1}' | sort -u); do \
+	  echo "$$rules" | grep "^$$r: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" && { echo "the runs namespace is granted wardynd's plaintext http port — a run could send its bearer to wardynd in cleartext (#606); it gets the internal TLS port only"; exit 1; }; \
+	done; \
 	true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set service.internalPort=8080 2>&1 | grep -q "service.internalPort 8080 collides" || { echo "chart no longer refuses service.internalPort == service.port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
@@ -726,6 +847,18 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$dep" | grep -qE 'name: WARDYN_(PG_DSN|PG_MIGRATE_DSN|ADMIN_TOKEN|AGE_KEY|OIDC_CLIENT_SECRET|DIRECTORY_CLIENT_SECRET|AUDIT_SINKS|ORG_ENROLMENT_TOKEN|VAULT_TOKEN)$$' && { echo "store mode with secretFiles.enabled renders a secret-carrying var as a value"; exit 1; }; \
 	echo "$$dep" | grep -q "name: WARDYN_AGE_KEY" && { echo "store mode wired an age key (value or _FILE) — it needs none"; exit 1; }; \
 	for v in PG_DSN ADMIN_TOKEN; do echo "$$dep" | grep -A1 "name: WARDYN_$${v}_FILE" | grep -q 'value: "/etc/wardyn/secrets/' || { echo "store mode with secretFiles.enabled did not point WARDYN_$${v}_FILE into the boot-secrets mount"; exit 1; }; done
+	@# B3 (T-60, #720): flipping secretFiles.enabled on an EXISTING pg-mode install
+	@# (external DSN Secret, secrets.ageKeyFromSecret — the shape a real 0.7.11
+	@# install upgrading to file mode has) must keep the SAME age-key Secret and
+	@# key: only the delivery (secretKeyRef vs a projected file) may change, never
+	@# which row is read, or the upgrade decrypts nothing the old boot wrote.
+	@offOut=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	onOut=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set secretFiles.enabled=true); \
+	offSecret=$$(echo "$$offOut" | grep -A4 "name: WARDYN_AGE_KEY$$" | grep "name:" | tail -1 | awk '{print $$2}'); \
+	offKey=$$(echo "$$offOut" | grep -A4 "name: WARDYN_AGE_KEY$$" | grep "key:" | awk '{print $$2}'); \
+	[ -n "$$offSecret" ] && [ "$$offKey" = "age-key" ] || { echo "secretFiles.enabled=false render did not wire WARDYN_AGE_KEY from a secretKeyRef with key age-key — the B3 comparison below would be vacuous"; exit 1; }; \
+	echo "$$onOut" | grep -q "name: $$offSecret$$" || { echo "B3: secretFiles.enabled=true no longer sources its boot-secrets volume from the SAME Secret ($$offSecret) the env-mode age key uses — an upgrade would read a different row"; exit 1; }; \
+	echo "$$onOut" | grep -A20 "^        - name: boot-secrets$$" | grep -A3 "name: $$offSecret$$" | grep -q "path: age-key" || { echo "B3: secretFiles.enabled=true no longer projects that Secret's age-key entry — an upgrade would find no age identity at the _FILE path"; exit 1; }
 	@# Two Vault roles (#646): rolePlatform renders WARDYN_VAULT_ROLE_PLATFORM, and a second role that separates nothing is a render refusal.
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn-credentials --set secretStore.vault.rolePlatform=wardyn-platform | grep -A1 "name: WARDYN_VAULT_ROLE_PLATFORM" | grep -q 'value: "wardyn-platform"' || { echo "secretStore.vault.rolePlatform did not render WARDYN_VAULT_ROLE_PLATFORM"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set secretStore.vault.rolePlatform=wardyn 2>&1 | grep -q "needs secretStore.vault.auth=kubernetes and a role other than" || { echo "chart no longer refuses a platform role equal to the credentials role"; exit 1; }
@@ -766,6 +899,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
 	role=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r'); \
 	echo "$$out" | grep -qE 'resources: \[[^]]*"secrets"' || { echo "the render has no secrets rule — the verb assertions below would be vacuous"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["events"\]' | grep -q 'verbs: \["list"\]$$' || { echo "the k8s-runner Role does not grant events: [list] exactly — without it an image pull on Kubernetes reads as ContainerCreating and the sign-in door's download step never lights (#807); any verb beyond list is more than pull_events.go issues"; exit 1; }; \
+	echo "$$out" | awk '/^---/{c=0} /^kind: ClusterRole$$/{c=1} c' | grep -q '"events"' && { echo "the ClusterRole grants events — that is every namespace's Events; the grant belongs in the namespaced Role only (#807)"; exit 1; } || true; \
 	echo "$$role" | grep -A1 'resources: \["networkpolicies"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant networkpolicies: list — SweepOrphanedSandboxes keys the both-pods-gone reclaim on the run's NetworkPolicy labels, so without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
 	echo "$$out" | grep -EA1 'resources: \[[^]]*"secrets"' | grep -qE '"(get|list|watch)"' && { echo "the k8s-runner Role grants a Secret-BODY read verb (get/list/watch) on secrets — every one of them returns the object's data, RBAC cannot scope them by label, and with runsNamespace unset that is namespace-wide plaintext read of the control plane's own Secrets. wardynd never reads a Secret back: the kubelet mounts the per-run one into the proxy pod, and the sweep finds it by its NetworkPolicy labels (W6-S4)"; exit 1; } || true
 	@# B12b-F7 retired in 0.7.8 (deployment.yaml's guard comment carries the
@@ -785,10 +920,23 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@# EXISTS, or it passes on nothing: `grep -q X && fail || true` is satisfied
 	@# just as well by empty input, so a render that started failing for any
 	@# reason would have retired this assertion silently.
-	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true) || { echo "the k8s.enabled render (userDrives UNSET) no longer renders at all — the persistentvolumeclaims absence check below would then pass on empty input"; exit 1; }; \
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true) || { echo "the k8s.enabled render (drives UNSET) no longer renders at all — the persistentvolumeclaims absence check below would then pass on empty input"; exit 1; }; \
 	echo "$$out" | grep -q '^kind: Role$$' || { echo "that render produced no k8s-runner Role — the persistentvolumeclaims absence check below would be vacuous"; exit 1; }; \
-	echo "$$out" | grep -q 'persistentvolumeclaims' && { echo "the k8s-runner Role grants persistentvolumeclaims with userDrives.enabled UNSET — the switch is not gating anything"; exit 1; } || true
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set userDrives=null >/dev/null 2>&1 || { echo "a values map carrying userDrives as an explicit null no longer renders — `--set userDrives=null` is the null-robustness case (an operator clearing the block), not the --reuse-values one; see docs/OPERATIONS.md's upgrade section"; exit 1; }
+	echo "$$out" | grep -q 'persistentvolumeclaims' && { echo "the k8s-runner Role grants persistentvolumeclaims with drives.enabled UNSET — the switch is not gating anything"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set drives=null >/dev/null 2>&1 || { echo "a values map carrying drives as an explicit null no longer renders — `--set drives=null` is the null-robustness case (an operator clearing the block), not the --reuse-values one; see docs/OPERATIONS.md's upgrade section"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set userDrives.enabled=true 2>&1 | grep -q "userDrives was renamed to drives" || { echo "chart no longer refuses the pre-0.8 userDrives.enabled=true — nothing reads that key, so the render would succeed with drives RBAC off and every drive run would fail at dispatch (#658)"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set userDrives.enabled=false >/dev/null 2>&1 || { echo "userDrives.enabled=false no longer renders — every pre-0.8 --reuse-values map carries that old default, and it is the one way past the userDrives.enabled=true refusal under --reuse-values (--set userDrives=null cannot clear a key the old release set)"; exit 1; }
+	@# The OTHER half of the verb-list assertion above: drives.reclaim.enabled
+	@# ON must render EXACTLY [get, create, delete] — no deletecollection, no
+	@# list — and still in the namespaced Role. Asserting the LIST, both ways, is
+	@# the only form of this test that can fail: "the Role renders" is true
+	@# whether or not delete is in it (#166).
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set drives.enabled=true --set drives.reclaim.enabled=true) || { echo "drives.reclaim.enabled=true no longer renders at all — the verb-list assertions below would pass on empty input"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'resources: \["persistentvolumeclaims"\]')" = "1" ] || { echo "the reclaim render grants persistentvolumeclaims in more than one rule (or none) — a SECOND rule is invisible to a grep that only checks the first"; exit 1; }; \
+	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create", "delete"\]$$' || { echo "drives.reclaim.enabled=true did not render EXACTLY persistentvolumeclaims verbs [get, create, delete] in the namespaced Role — an absent delete makes POST /drives/{id}/reclaim 403 forever, and deletecollection or list appearing here widens one-object-at-a-time reclaim into a sweep"; exit 1; }
+	@# And the value defaults OFF even when drives itself is on: a reclaim
+	@# block that is absent, or explicitly null, must not grant delete.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set drives.enabled=true --set drives.reclaim=null | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "drives.reclaim present-but-null (an operator clearing the block, or --reuse-values from a release that predates it) did not render the DEFAULT verb list — an unguarded .Values.drives.reclaim.enabled either kills the render on a nil pointer or, worse, reads as on"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false 2>&1 | grep -q "would bind the k8s-runner privileges" || { echo "chart no longer refuses k8s.enabled with serviceAccount.create=false and no serviceAccount.name — the RBAC binding would silently fall to the namespace default ServiceAccount"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set serviceAccount.create=false --set serviceAccount.name=my-existing-sa >/dev/null 2>&1 || { echo "serviceAccount.create=false with an explicit serviceAccount.name no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
@@ -936,6 +1084,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#   replicas/allowMultiReplica    — exercised by their own refusal renders below
 	@#     (`--set replicas=5` is refused; `--set allowMultiReplica=true` renders).
 	@#   readinessProbe                — exercised by its own render (`readinessProbe.path=/healthz`).
+	@#   basePath                      — exercised by its own render (`--set basePath=/wardyn`).
 	@#   service                       — exercised by the two port-collision refusals
 	@#     (uiSandbox.port == service.port, ssh.port == service.port).
 	@#   pod/containerSecurityContext  — the DEFAULT render is what pins runAsNonRoot
@@ -943,7 +1092,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#   secretFiles                   — exercised by its own render (#596 block above);
 	@#     in all-on it would turn the env-mode DSN/age-key assertions into _FILE ones.
 	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
-		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
+		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe basePath service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
 		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
 	done; \
 	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }
@@ -988,6 +1137,16 @@ HELM_TEST_NAMESPACE  ?= wardyn-test
 HELM_TEST_RELEASE    ?= wardyn-test
 HELM_TEST_IMAGE_REPO ?= wardyn/wardynd
 HELM_TEST_IMAGE_TAG  ?= kind-test
+# HELM_TEST_SET: extra `--set` flags appended to both the real install and its
+# dry-run twin below, for a second matrix entry over the SAME loaded image and
+# Postgres (T-60, #720) — e.g. `--set secretFiles.enabled=true`, the _FILE
+# delivery this variable exists to prove boots exactly like secretKeyRef mode.
+# HELM_TEST_ASSERT_NO_SECRETKEYREF=1 additionally asserts the installed
+# Deployment carries NO secretKeyRef env at all — the secretFiles entry's own
+# reason for existing (env mode renders at least one; #596/#604's whole point
+# is that file mode renders none).
+HELM_TEST_SET ?=
+HELM_TEST_ASSERT_NO_SECRETKEYREF ?=
 
 helm-install-test: ## kind: postgres + helm install the loaded image + prove /healthz (needs a kind cluster up, see ci.yml)
 	@echo "==> Postgres ($(HELM_TEST_NAMESPACE))"
@@ -1006,13 +1165,23 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		--set image.repository=$(HELM_TEST_IMAGE_REPO) \
 		--set image.tag=$(HELM_TEST_IMAGE_TAG) \
 		--set secrets.ageKeyFromSecret=true \
-		--set auth.adminToken.value="$$(openssl rand -hex 20)"
+		--set auth.adminToken.value="$$(openssl rand -hex 20)" \
+		$(HELM_TEST_SET)
 	kubectl -n $(HELM_TEST_NAMESPACE) rollout status deployment/$(HELM_TEST_RELEASE) --timeout=180s || { \
 		echo "FAIL: wardynd rollout never converged — pod state + logs follow"; \
 		kubectl -n $(HELM_TEST_NAMESPACE) describe pod -l app.kubernetes.io/name=wardyn; \
 		kubectl -n $(HELM_TEST_NAMESPACE) logs -l app.kubernetes.io/name=wardyn --tail=100 --all-containers || true; \
 		exit 1; \
 	}
+	@if [ "$(HELM_TEST_ASSERT_NO_SECRETKEYREF)" = "1" ]; then \
+		echo "==> asserting the installed Deployment carries no secretKeyRef env"; \
+		n=$$(kubectl -n $(HELM_TEST_NAMESPACE) get deployment/$(HELM_TEST_RELEASE) -o yaml | grep -c secretKeyRef); \
+		if [ "$$n" != "0" ]; then \
+			echo "FAIL: installed Deployment still carries $$n secretKeyRef entr(y/ies) — HELM_TEST_SET=$(HELM_TEST_SET) was supposed to deliver every secret as a file"; \
+			exit 1; \
+		fi; \
+		echo "0 secretKeyRef entries, as expected"; \
+	fi
 	@echo "==> asserting /healthz through the Service (kubectl port-forward + curl)"
 	@set -eu; \
 	kubectl -n $(HELM_TEST_NAMESPACE) port-forward svc/$(HELM_TEST_RELEASE) 18080:8080 >/tmp/wardyn-kind-test-portforward.log 2>&1 & \
@@ -1039,6 +1208,7 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		--set auth.adminToken.value=dry-run-only \
 		--set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' \
 		--set-file defaultPolicy=examples/policies/demo.json \
+		$(HELM_TEST_SET) \
 		| kubectl -n $(HELM_TEST_NAMESPACE) apply --dry-run=server -f - >/dev/null
 	@echo "==> teardown"
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
@@ -1107,7 +1277,8 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
 	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
 
-# DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
+# DCO sign-off: every commit, merges included, in DCO_RANGE carries a
+# Signed-off-by. See DCO_ALLOW_GITHUB_MERGES for the one exemption.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
 #
 # git parses trailers itself (%(trailers:...) since 2.13), so there is no
@@ -1120,11 +1291,19 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 # exactly like a missing one. `.+ <.+@.+>` is the whole contract — name, space,
 # angle-bracketed address with an @ — and it also covers the empty case.
 DCO_RANGE ?= origin/main..HEAD
-dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
+# 1 only where GitHub itself makes merge commits (push, merge_group): its
+# "Merge pull request" commits (committer GitHub <noreply@github.com>, 2+
+# parents) carry no Signed-off-by. PR ranges end at the PR head instead and
+# never pass this flag — every commit in a PR's own range, merges included,
+# must carry Signed-off-by, even a GitHub-committed one (e.g. from "Update
+# branch") landed on the branch itself (#1070).
+DCO_ALLOW_GITHUB_MERGES ?= 0
+dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
-	@signoffs=$$(git log --no-merges $(DCO_RANGE) --format='%H%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
+	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
 	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
-	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' '$$2 !~ /.+ <.+@.+>/ {print $$1}'); \
+	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' -v gh=$(DCO_ALLOW_GITHUB_MERGES) \
+	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" {next} $$4 !~ /.+ <.+@.+>/ {print $$1}'); \
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 
@@ -1173,7 +1352,7 @@ npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned
 # green `make ci` != CI is green. This runs the merge-gating checks
 # that need NO Docker daemon and NO live service — it deliberately EXCLUDES
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
-# (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
+# (test-pg), and the Playwright UI e2e (ui-e2e). CI
 # remains the authority; use this locally to catch most failures before pushing.
 #
 # Each target runs in its own sub-make so its elapsed time can be printed, and
@@ -1200,23 +1379,28 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
-	@echo "  Postgres suite (test-pg), the Playwright UI e2e (ui-e2e), and the"
-	@echo "  push-only SBOM stub — confirm CI is green before merging."
+	@echo "  Postgres suite (test-pg), and the Playwright UI e2e (ui-e2e) —"
+	@echo "  confirm CI is green before merging."
 
 ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
 	cd ui && pnpm install --frozen-lockfile && pnpm build
 
-ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live walk's spec files LOAD
+ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/screenshots spec files LOAD
 	@echo "Typechecking web UI (tsc --noEmit)..."
 	cd ui && pnpm install --frozen-lockfile && pnpm typecheck
 	@# tsc never evaluates an import, so a live spec that imports a constant from a
 	@# module reaching a stylesheet (AttachTerminal -> xterm.css) typechecks green and
 	@# then dies under Playwright's Node loader with "No tests found" — on a cluster
 	@# somebody spent ten minutes standing up (0.7.5's first walk). --list loads every
-	@# live spec file without a browser, a cluster or WARDYN_TEST_K8S, in seconds.
+	@# spec file without a browser, a live cluster, WARDYN_TEST_K8S or WARDYN_DEMO, in
+	@# seconds — cheap enough to do it for all three off-chromium projects.
 	@echo "Loading the live walk's spec files (playwright --list)..."
-	cd ui && pnpm exec playwright test --project=live --list >/dev/null
+	cd ui && pnpm exec playwright test --project=walk --list >/dev/null
+	@echo "Loading the demo recording's spec files (playwright --list)..."
+	cd ui && pnpm exec playwright test --project=demo --list >/dev/null
+	@echo "Loading the screenshots' spec files (playwright --list)..."
+	cd ui && pnpm exec playwright test --project=screenshots --list >/dev/null
 
 ui-test: ## Web UI vitest unit/component tests + coverage
 	@echo "Running web UI unit/component tests (vitest + coverage)..."

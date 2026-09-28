@@ -237,6 +237,36 @@ func TestModelProvidersPut(t *testing.T) {
 	})
 }
 
+// TestModelProvidersPutIgnoresAClientSuppliedUID pins the SAME rule
+// TestSiteConfigDoorCarriesModelProviders proves for PUT /site-config
+// ("a named block keeps its stored UID and ignores the body's") to THIS door,
+// PUT /model-providers. assignModelProviderUIDs is the one shared gate both
+// doors call (model_providers.go), so the guarantee already holds — but before
+// this test, only the site-config door had a door-level pin of it. A change
+// that broke only this door's call to assignModelProviderUIDs (or skipped it)
+// would have passed every existing test.
+func TestModelProvidersPutIgnoresAClientSuppliedUID(t *testing.T) {
+	stored := providerBlock(keyProvider("anthropic", "claude-code"))
+	assignModelProviderUIDs(stored, nil)
+	realUID := stored.Providers[0].UID
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{ModelProviders: stored}}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+		`{"providers":[{"id":"anthropic","uid":"forged","kind":"anthropic_api_key"},`+
+			`{"id":"openai","uid":"also-forged","kind":"openai_api_key","disabled":true}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body=%s", w.Code, w.Body.String())
+	}
+	got := fake.putSeen.ModelProviders.Providers
+	if got[0].UID != realUID {
+		t.Errorf("uid = %q, want the stored %q — a submitted uid must never be trusted on this door", got[0].UID, realUID)
+	}
+	if got[1].UID == "" || got[1].UID == "also-forged" {
+		t.Errorf("a new provider's uid = %q, want a server-minted one, never the body's", got[1].UID)
+	}
+}
+
 // TestModelProvidersPutKeepsDefaults: removing a default's provider, or
 // unticking the agent it defaults, is refused (E8); turning it off is not.
 func TestModelProvidersPutKeepsDefaults(t *testing.T) {
@@ -496,13 +526,39 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("an agent the roster turns off is not offered", func(t *testing.T) {
+	// review round 3, R3-1: a caller granted no provider at all is the case
+	// the omitzero fix targets — the block exists (this test's own site
+	// config), so the key is present as `[]`, distinct from no block at all.
+	t.Run("a member granted no provider at all still gets model_providers:[]", func(t *testing.T) {
+		none := &capStore{grants: []types.CapabilityGrant{
+			{SubjectType: types.CapabilitySubjectAll, Capability: capModelProvider, Value: "corp-gateway", Effect: types.CapabilityDeny},
+			{SubjectType: types.CapabilitySubjectAll, Capability: capModelProvider, Value: "bedrock-prod", Effect: types.CapabilityDeny},
+			{SubjectType: types.CapabilitySubjectAll, Capability: capModelProvider, Value: "anthropic", Effect: types.CapabilityDeny},
+		}}
+		w := doSSO(t, modelProvidersStatusSrv(t, site, none), http.MethodGet, "/api/v1/setup/status", member, "")
+		if !strings.Contains(w.Body.String(), `"model_providers":[]`) {
+			t.Errorf("a caller denied every provider should still carry model_providers:[]: %s", w.Body.String())
+		}
+		if got := statusModelProviders(t, w.Body.Bytes()); len(got) != 0 {
+			t.Errorf("a caller denied every provider was offered one: %+v", got)
+		}
+	})
+
+	// review round 3, R3-1: the block EXISTS here (ModelProviders is set), so
+	// model_providers is present as `[]` — never offered, but never absent
+	// either. `json:"model_providers,omitzero"` (setup.go) is what makes this
+	// distinguishable from TestSetupStatusNilBlockIsToday's "no block at all"
+	// case, which stays absent.
+	t.Run("an agent the roster turns off is not offered, but the key is present as []", func(t *testing.T) {
 		off := site
 		off.AgentProviders = agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, Disabled: true})
 		off.ModelProviders = providerBlock(keyProvider("anthropic", "claude-code"))
 		w := do(t, modelProvidersStatusSrv(t, off, &capStore{}), http.MethodGet, "/api/v1/setup/status", adminToken, "")
-		if strings.Contains(w.Body.String(), `"model_providers"`) {
-			t.Errorf("a provider serving only a turned-off agent was offered: %s", w.Body.String())
+		if !strings.Contains(w.Body.String(), `"model_providers":[]`) {
+			t.Errorf("a block with nothing offered should still carry model_providers:[]: %s", w.Body.String())
+		}
+		if got := statusModelProviders(t, w.Body.Bytes()); len(got) != 0 {
+			t.Errorf("a provider serving only a turned-off agent was offered: %+v", got)
 		}
 	})
 }
@@ -526,8 +582,9 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"age_key", "auth", "bedrock", "checks", "checks_redacted", "deployment", "harnesses", "has_runs", "host_proxy",
-		"llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm", "secrets",
+		"age_key", "auth", "bedrock", "checks", "checks_redacted", "credential_storage", "deployment", "harnesses",
+		"has_runs", "host_proxy", "llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm",
+		"secrets",
 	}
 	if got := slices.Sorted(maps.Keys(st)); !slices.Equal(got, want) {
 		t.Errorf("member /setup/status keys = %v\nwant today's %v", got, want)

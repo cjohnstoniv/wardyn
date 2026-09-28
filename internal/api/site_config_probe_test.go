@@ -284,6 +284,7 @@ func TestProbeFailureDetail_LaunchFailureIsNeverRan(t *testing.T) {
 			Data: mustJSON(map[string]any{"error": "create sandbox: no space left on device"})},
 	}
 	srv := New(baseTestConfig(newHarness(t), ps))
+	fastProbeWaits(t)
 
 	res := srv.probeFailureDetail(context.Background(), runID, 0)
 	if res.hasExitCode {
@@ -494,6 +495,7 @@ func (s *probeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) 
 	s.runs[id] = r
 	return nil
 }
+func (s *probeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error { return nil }
 func (s *probeStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -576,12 +578,35 @@ func (s *probeStore) soleRun() types.AgentRun {
 // control plane).
 func newProbeHarness(t *testing.T, siteCfg types.SiteConfig, fr runner.Runner) (*Server, *probeStore) {
 	t.Helper()
+	fastProbeWaits(t)
 	h := newHarness(t)
 	ps := newProbeStore(siteCfg)
 	cfg := baseTestConfig(h, ps)
 	cfg.Audit = ps
 	cfg.Runner = fr
 	return New(cfg), ps
+}
+
+// fastProbeWaits shrinks, for one test, the two cadences every probe through a
+// fake runner otherwise waits out once: waitForRunTerminal's tick and the
+// audit-trail settle (probeFailureDetail). A test that times the settle itself
+// sets its own values after this.
+func fastProbeWaits(t *testing.T) {
+	t.Helper()
+	poll, tries, interval := waitForRunTerminalPollInterval, probeTrailSettleTries, probeTrailSettleInterval
+	waitForRunTerminalPollInterval, probeTrailSettleTries, probeTrailSettleInterval = 5*time.Millisecond, 20, 10*time.Millisecond
+	t.Cleanup(func() {
+		waitForRunTerminalPollInterval, probeTrailSettleTries, probeTrailSettleInterval = poll, tries, interval
+	})
+}
+
+// TestProbePollCadence_ProductionValuesUnchanged pins what fastProbeWaits
+// shrinks: the probe's own cadence is untouched outside a test.
+func TestProbePollCadence_ProductionValuesUnchanged(t *testing.T) {
+	if waitForRunTerminalPollInterval != 500*time.Millisecond || probeTrailSettleTries != 10 || probeTrailSettleInterval != 200*time.Millisecond {
+		t.Fatalf("probe cadence = %v tick, %d x %v settle; want the production 500ms, 10 x 200ms",
+			waitForRunTerminalPollInterval, probeTrailSettleTries, probeTrailSettleInterval)
+	}
 }
 
 func redirectSiteConfig() types.SiteConfig {

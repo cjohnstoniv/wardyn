@@ -62,28 +62,28 @@ import (
 // The widened marker is read with the other three and carries no secret: it is
 // the fact that this redirect asked for more than a login, which is what lets a
 // refusal of the extras be retried without them.
-func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
+func (a *Authenticator) consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
 	stateParam := r.URL.Query().Get("state")
-	stateCookie, err := r.Cookie(stateCookieName)
+	stateCookie, err := r.Cookie(a.cookieName(stateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam != stateCookie.Value {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return "", "", false, false
 	}
-	nonceCookie, err := r.Cookie(nonceCookieName)
+	nonceCookie, err := r.Cookie(a.cookieName(nonceCookieName))
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
 		return "", "", false, false
 	}
-	pkceCookie, err := r.Cookie(pkceCookieName)
+	pkceCookie, err := r.Cookie(a.cookieName(pkceCookieName))
 	if err != nil || pkceCookie.Value == "" {
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
 		return "", "", false, false
 	}
-	widenedCookie, werr := r.Cookie(widenedCookieName)
+	widenedCookie, werr := r.Cookie(a.cookieName(widenedCookieName))
 	widened = werr == nil && widenedCookie.Value != ""
-	clearCookie(w, stateCookieName)
-	clearCookie(w, nonceCookieName)
-	clearCookie(w, pkceCookieName)
+	a.clearCookie(w, stateCookieName)
+	a.clearCookie(w, nonceCookieName)
+	a.clearCookie(w, pkceCookieName)
 	// The widened marker is NOT cleared here: the caller expires it only when
 	// one was presented (expireWidenedMarker), so an unwidened login's callback
 	// writes exactly the Set-Cookie headers it always did.
@@ -205,20 +205,28 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 }
 
 func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
-	a.callback(w, r, nil)
+	a.callback(w, r, nil, nil)
 }
 
-// CallbackHandlerWithDenials is CallbackHandler that also reports each sign-in
-// refused over a user type (DenialUserTypeAmbiguous, DenialUserTypeUnknown) to
-// onDenied, so internal/api can audit it as auth.fail. This package stays
-// store- and audit-agnostic, as it is for OnLogin.
-func (a *Authenticator) CallbackHandlerWithDenials(onDenied func(r *http.Request, reason string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, onDenied) }
+// DenialReservedPrincipal is the reason CallbackHandlerWithDenials reports a
+// sign-in refused because reserved said its subject names an identity that
+// is not a person. Not an auth_error code: the browser gets the generic
+// authErrorSignInRefused, since nothing the person does can clear it.
+const DenialReservedPrincipal = "reserved_principal"
+
+// CallbackHandlerWithDenials is CallbackHandler that refuses any subject
+// reserved reports true for (DenialReservedPrincipal), and reports each
+// sign-in refused over that or over a user type (DenialUserTypeAmbiguous,
+// DenialUserTypeUnknown) to onDenied, so internal/api can audit it as
+// auth.fail. This package stays store- and audit-agnostic, as it is for
+// OnLogin: which principals are reserved is internal/api's to say.
+func (a *Authenticator) CallbackHandlerWithDenials(reserved func(sub string) bool, onDenied func(r *http.Request, reason string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, reserved, onDenied) }
 }
 
-func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserTypeDenied func(*http.Request, string)) {
+func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserved func(string) bool, onDenied func(*http.Request, string)) {
 	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
-	nonce, verifier, widened, ok := consumeCallbackCookies(w, r)
+	nonce, verifier, widened, ok := a.consumeCallbackCookies(w, r)
 	if !ok {
 		return
 	}
@@ -265,9 +273,9 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
 	if exchangeErr != nil {
 		if isTransientOIDCErr(exchangeErr) {
-			redirectAuthError(w, r, authErrorOIDCTransient)
+			a.redirectAuthError(w, r, authErrorOIDCTransient)
 		} else {
-			redirectAuthError(w, r, authErrorOIDCConfig)
+			a.redirectAuthError(w, r, authErrorOIDCConfig)
 		}
 		return
 	}
@@ -294,6 +302,68 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
 		return
 	}
+	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
+	if denied != "" {
+		// L6: a denied login must not leave a PRE-EXISTING session cookie
+		// (from before this re-login attempt) still valid in the browser.
+		a.clearCookie(w, sessionCookieName)
+		a.redirectAuthError(w, r, denied)
+		return
+	}
+
+	// OnLogin fires once the login is APPROVED (past every denial branch
+	// above) but before the session cookie is written — a real login, not a
+	// probe. Best-effort: nil is a no-op, and the integrator's own callback is
+	// responsible for not letting a backend hiccup fail the login (see the
+	// Config.OnLogin doc). groups/groupsTruncated are the SAME values the
+	// session below carries, never re-derived.
+	if a.cfg.OnLogin != nil {
+		a.cfg.OnLogin(r.Context(), sess.Sub, sess.Role, sess.UserType, sess.Groups, sess.GroupsTruncated)
+	}
+	// The login-grant sink, for the same reason and in the same place as
+	// OnLogin: the login is APPROVED here and not before, so a refused login
+	// never yields a downstream credential. It is handed the exchanged grant
+	// and reports nothing — a credential that could not be stored must not
+	// cost this person the session they just earned (login_grant.go).
+	// Session is unchanged by it: no token of any kind rides the cookie.
+	a.captureLoginGrant(r.Context(), idToken.Subject, token)
+
+	// (6) Create a Wardyn session.
+	sess.Expiry = idToken.Expiry
+	sess.IssuedAt = time.Now().UTC() // D16: the cutoff SessionRevocations compares against
+	if sess.Expiry.IsZero() {
+		// Default to 1 hour if the IdP didn't set an expiry.
+		sess.Expiry = time.Now().UTC().Add(time.Hour)
+	}
+	cookie, err := a.encodeSession(sess)
+	if err != nil {
+		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, cookie)
+	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+}
+
+// admit is the sign-in DECISION over a verified token's claims — the reserved
+// subject, the email-domain gate, role and user-type derivation, the overage
+// and unreadable-claim refusals, and the group snapshot — shared by the
+// callback and by a portal's token exchange (VerifySubjectToken) so the two can
+// never admit different people or derive them differently. denied is the
+// auth_error code of a refusal, "" when admitted; the Session carries identity
+// only, and its caller stamps the times.
+func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, reserved func(string) bool, onDenied func(*http.Request, string)) (Session, string) {
+	// (3b) A subject that names a non-person identity (the admin token, the
+	// local operator, a device) would be treated as that identity everywhere
+	// a principal is compared — refused before anything derives from it, so
+	// neither OnLogin nor the login-grant sink ever sees it.
+	if reserved != nil && reserved(sub) {
+		slog.Warn("oidc: login denied — the identity provider's subject is reserved for a non-person Wardyn identity",
+			"sub", sub, "issuer", a.cfg.IssuerURL)
+		if onDenied != nil {
+			onDenied(r, DenialReservedPrincipal)
+		}
+		return Session{}, authErrorSignInRefused
+	}
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		switch {
@@ -307,29 +377,19 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 			// never sends this claim.
 			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
 				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", "WARDYN_OIDC_EMAIL_DOMAINS")
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorEmailVerifiedAbsent)
-			return
+			return Session{}, authErrorEmailVerifiedAbsent
 		case !*cc.emailVerified:
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorEmailUnverified)
-			return
+			return Session{}, authErrorEmailUnverified
 		}
 		if !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorEmailDomain)
-			return
+			return Session{}, authErrorEmailDomain
 		}
 	}
 
 	// (5) Role derivation — deriveLogin. A refusal names its auth_error code.
-	d, denied := a.deriveLogin(r, idToken.Subject, cc, onUserTypeDenied)
+	d, denied := a.deriveLogin(r, sub, cc, onDenied)
 	if denied != "" {
-		// L6: a denied login must not leave a PRE-EXISTING session cookie
-		// (from before this re-login attempt) still valid in the browser.
-		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, denied)
-		return
+		return Session{}, denied
 	}
 	role, matches := d.Role, d.Matches
 	// The overage half of role derivation. deriveRole is a pure function of the
@@ -342,11 +402,9 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	// cannot be read: an unanswerable input never widens a session.
 	if overageWidensRole(cc.claimNames, role, matches) {
 		slog.Warn("oidc: login denied — the IdP omitted a claim role derivation depends on (overage) and the default role would widen this session",
-			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
+			"sub", sub, "default_role", a.cfg.DefaultRole,
 			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(cc.claimNames))
-		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, authErrorClaimsOverage)
-		return
+		return Session{}, authErrorClaimsOverage
 	}
 	// The UNREADABLE half of the same question, kept as its own branch so each
 	// denial logs the cause it actually knows. The IdP sent the claim, so
@@ -358,14 +416,12 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	// token either way.
 	if unanswerableWidensRole(len(cc.unreadable) > 0, role, matches) {
 		slog.Warn("oidc: login denied — the IdP sent a claim role derivation depends on in a shape this build cannot decode, and the default role would widen this session",
-			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
+			"sub", sub, "default_role", a.cfg.DefaultRole,
 			"env", "WARDYN_OIDC_DEFAULT_ROLE", "unreadable_claims", cc.unreadable)
-		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, authErrorClaimsOverage)
-		return
+		return Session{}, authErrorClaimsOverage
 	}
 	if len(matches) > 0 {
-		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
+		slog.Debug("oidc: role derivation matched", "sub", sub, "role", role, "matches", matches)
 	}
 
 	// Groups is stamped from the SAME two tolerantly-decoded claims deriveRole
@@ -388,49 +444,12 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 		// ceiling written for them evaporates silently.
 		groupsTruncated = true
 		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
-			"sub", idToken.Subject, "unreadable_claims", cc.unreadable)
+			"sub", sub, "unreadable_claims", cc.unreadable)
 	}
-
-	// OnLogin fires once the login is APPROVED (past every denial branch
-	// above) but before the session cookie is written — a real login, not a
-	// probe. Best-effort: nil is a no-op, and the integrator's own callback is
-	// responsible for not letting a backend hiccup fail the login (see the
-	// Config.OnLogin doc). groups/groupsTruncated are the SAME values the
-	// session below carries, never re-derived.
-	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), idToken.Subject, role, d.UserType, groups, groupsTruncated)
-	}
-	// The login-grant sink, for the same reason and in the same place as
-	// OnLogin: the login is APPROVED here and not before, so a refused login
-	// never yields a downstream credential. It is handed the exchanged grant
-	// and reports nothing — a credential that could not be stored must not
-	// cost this person the session they just earned (login_grant.go).
-	// Session is unchanged by it: no token of any kind rides the cookie.
-	a.captureLoginGrant(r.Context(), idToken.Subject, token)
-
-	// (6) Create a Wardyn session.
-	sess := Session{
-		Sub:             idToken.Subject,
-		Email:           cc.email,
-		Name:            cc.name,
-		Role:            role,
-		UserType:        d.UserType,
-		Expiry:          idToken.Expiry,
-		IssuedAt:        time.Now().UTC(), // D16: the cutoff SessionRevocations compares against
-		Groups:          groups,
-		GroupsTruncated: groupsTruncated,
-	}
-	if sess.Expiry.IsZero() {
-		// Default to 1 hour if the IdP didn't set an expiry.
-		sess.Expiry = time.Now().UTC().Add(time.Hour)
-	}
-	cookie, err := a.encodeSession(sess)
-	if err != nil {
-		http.Error(w, "failed to create session", http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, cookie)
-	http.Redirect(w, r, "/", http.StatusFound)
+	return Session{
+		Sub: sub, Email: cc.email, Name: cc.name, Role: role, UserType: d.UserType,
+		Groups: groups, GroupsTruncated: groupsTruncated,
+	}, ""
 }
 
 // deriveLogin is CallbackHandler's step (5), role and user-type derivation —

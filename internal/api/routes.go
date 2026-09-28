@@ -50,9 +50,10 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		// A sign-in refused over its user type (ambiguous or unknown) is an
-		// auth.fail row; the oidc package stays audit-agnostic.
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
+		// A sign-in whose subject is a reserved principal is refused; that and
+		// one refused over its user type (ambiguous or unknown) are auth.fail
+		// rows. The oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -96,8 +97,9 @@ func (s *Server) routes() chi.Router {
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
-			//   mountUserDriveRoutes   (user_drives.go) split: 4 operatorOnly,
-			//       3 securityOps (issue #168)
+			//   mountUserDriveFamily   (user_drives_reclaim.go) — wraps
+			//       mountUserDriveRoutes (user_drives.go) split: 4 operatorOnly,
+			//       3 securityOps (issue #168) + the destroy verb, operatorOnly
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -107,7 +109,8 @@ func (s *Server) routes() chi.Router {
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			//   mountSecretRoutes (routes.go) split: the /secrets
-			//       self-service routes on r, the credential erase securityOps
+			//       self-service routes on r, the credential erase and the
+			//       credential inventory securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -196,6 +199,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}", s.handleGetRun)
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
+			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
+			r.Post("/runs/{id}/resume", s.handleResumeRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
@@ -226,6 +231,11 @@ func (s *Server) routes() chi.Router {
 			// may still hold one for a run THEY created (handleAttachTicket's
 			// getRunAuthorized gate; a foreign run 404s, no existence oracle).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
+			// The three lines above are each issue #658's pre-0.8 alias; their
+			// 0.8 names (mounted alongside, same handlers, kept one minor —
+			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
+			// function into mountRenamedRunRoutes, called once, below.
+			s.mountRenamedRunRoutes(r)
 
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
@@ -250,6 +260,11 @@ func (s *Server) routes() chi.Router {
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
 			r.Get("/me", s.handleMe)
+			// #1197: the shell's two nav badges in one small object, replacing
+			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
+			// the caller's own view exactly as GET /runs?view= and GET /approvals
+			// are (handleMeAttention's own doc).
+			r.Get("/me/attention", s.handleMeAttention)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
 			// a member reading only their OWN grants (ListCapabilityGrantsFor,
@@ -326,6 +341,9 @@ func (s *Server) routes() chi.Router {
 			// (mirrors /runs/preflight), not operator-only: a member may see the
 			// risk of a spec they cannot necessarily save.
 			r.Post("/policies/grade", s.handleGradePolicy)
+			// Launch presets (#1143): named bundles of run-create fields. See
+			// presets.go for the read/write split.
+			s.mountPresetRoutes(r, operatorOnly)
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token).
@@ -586,7 +604,9 @@ func (s *Server) routes() chi.Router {
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
 			// nothing to arrange.
-			s.mountUserDriveRoutes(operatorOnly, securityOps)
+			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
+			// (user_drives_reclaim.go) joins the family's two halves.
+			s.mountUserDriveFamily(operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule
@@ -613,56 +633,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach", s.handleAttachWS)
 		})
 
-		// Internal sidecar surface (run-token bearer).
-		r.Group(func(r chi.Router) {
-			r.Use(s.internalAuth)
-			r.Post("/internal/decisions", s.handlePostDecision)
-			r.Post("/internal/approvals", s.handleInternalRequestApproval)
-			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
-			// wardyn-toolgate's own give-up signal (#811): closes the row it
-			// raised instead of leaving it PENDING for the sweep.
-			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
-			r.Post("/internal/credentials/mint", s.handleInternalMint)
-
-			// Token renew: POST /api/v1/internal/token/renew
-			// The per-run proxy re-issues its own (short-TTL) run token before it
-			// lapses, authenticated by the CURRENT token. Without this producer a
-			// run outliving the 1h TTL loses every /internal/* call. NOT forwarded
-			// by any brokered local route — the sandbox cannot reach it.
-			r.Post("/internal/token/renew", s.handleInternalTokenRenew)
-
-			// Injection resolve: returns the formatted secret value for an
-			// api_key grant. SECURITY: this path must NEVER be forwarded by a
-			// wardyn-proxy brokered local route — the proxy calls it directly
-			// at startup; the sandbox has no network path to it (the brokered
-			// routes forward only mint/approvals/recordings, by construction).
-			if s.cfg.Secrets != nil {
-				r.Get("/internal/injection/{grantID}", s.handleInternalInjection)
-			}
-
-			// Recording upload: PUT /api/v1/internal/recordings/{runID}
-			// wardyn-rec POSTs the finished cast from inside the agent container.
-			if s.cfg.RecordingStore != nil {
-				r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
-			}
-
-			// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
-			// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan
-			// run (via the proxy's brokered scan-result route, which injects the
-			// run token). Cross-run uploads are rejected (token run id must match
-			// the path run id).
-			r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
-
-			// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
-			// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the
-			// aws-sso container-login run (via the proxy's brokered sso-token
-			// route, which injects the run token). Same cross-run guard as scan;
-			// the run-kind check is harnessLoginTask + awsSSOAgent instead of a
-			// governed workspace run.
-			if s.cfg.Secrets != nil {
-				r.Put("/internal/sso-token/{runID}", s.handleUploadSSOToken)
-			}
-		})
+		// Internal sidecar surface (run-token bearer) — see mountInternalRoutes.
+		r.Group(s.mountInternalRoutes)
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
 		// SEPARATE auth group from the run-token internal surface above: the
@@ -674,18 +646,36 @@ func (s *Server) routes() chi.Router {
 		// Hybrid enrolment: anonymous enrol, the wdd_ device routes and the admin
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
+		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
+		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)
 	})
 
 	s.mountUI(r)
 	return r
 }
 
-// mountRunLeaseRoutes registers a run's end/wait change, its kill and its
-// revive on r — carved out of routes() purely for funlen.
+// mountRenamedRunRoutes registers the 0.8 names for three routes issue #658
+// renamed for one consistent shape across the attach family and the
+// synthesize-a-profile verb — carved out of routes() purely for funlen. Each
+// is the SAME handler as its pre-0.8 alias (still mounted inline in routes(),
+// right above the r.Group this is called from), kept one minor; see
+// docs/sdk.md's "Renamed in 0.8" table.
+func (s *Server) mountRenamedRunRoutes(r chi.Router) {
+	r.Post("/runs/{id}/profile/synthesize", s.handleSynthesizeProfile)
+	r.Get("/runs/{id}/attach/holder", s.handleAttachHolder)
+	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
+}
+
+// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill
+// and its revive on r — carved out of routes() purely for funlen.
 func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// The run's end and wait (#569): owner or SUPER admin, clamped to the
 	// run's captured limits — handleSetRunEndAndWait.
 	r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+	// The run's title (#1197 L2): OWNER ONLY (ownsRun, no admin bypass), any
+	// run state, unlike the lease PATCH above — see run_title.go's own doc
+	// comment for why this stays a separate route.
+	r.Patch("/runs/{id}/title", s.handleSetRunTitle)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
 }
@@ -714,6 +704,8 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
+	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	s.mountPeopleRoutes(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys
@@ -754,7 +746,9 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 // names (still operator-only). Admin cross-principal reads/deletes go through
 // ?owner=; a PUT refuses it (K7-A). The LIST stays viewer-readable — names
 // only, never values. Erasing a person's credentials is on the security tier:
-// it only removes reach, and returns no credential material.
+// it only removes reach, and returns no credential material; so is the
+// inventory of who holds one for which model provider, its offboarding
+// companion (design K5-A), which returns metadata only.
 func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	if s.cfg.Secrets == nil {
 		return
@@ -763,6 +757,7 @@ func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
 	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the
@@ -790,6 +785,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// The value is the rest of the path: an image ref carries slashes.
 	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
 	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
+	// Explain (K4) reads this same table at a NAMED subject rather than the
+	// caller's own: still securityOps, never wider.
+	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -842,4 +840,58 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// listing reads the whole fleet.
 	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
 	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
+}
+
+// mountInternalRoutes is the internal sidecar surface: every route here is
+// authenticated by a run token (internalAuth), and the run is the token's.
+func (s *Server) mountInternalRoutes(r chi.Router) {
+	r.Use(s.internalAuth)
+	r.Post("/internal/decisions", s.handlePostDecision)
+	// The proxy's "bytes moved" presence signal (#572), run from the token.
+	r.Post("/internal/activity", s.handleInternalActivity)
+	r.Post("/internal/approvals", s.handleInternalRequestApproval)
+	r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+	// wardyn-toolgate's own give-up signal (#811): closes the row it
+	// raised instead of leaving it PENDING for the sweep.
+	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
+	r.Post("/internal/credentials/mint", s.handleInternalMint)
+
+	// Token renew: POST /api/v1/internal/token/renew
+	// The per-run proxy re-issues its own (short-TTL) run token before it
+	// lapses, authenticated by the CURRENT token. Without this producer a
+	// run outliving the 1h TTL loses every /internal/* call. NOT forwarded
+	// by any brokered local route — the sandbox cannot reach it.
+	r.Post("/internal/token/renew", s.handleInternalTokenRenew)
+
+	// Injection resolve: returns the formatted secret value for an
+	// api_key grant. SECURITY: this path must NEVER be forwarded by a
+	// wardyn-proxy brokered local route — the proxy calls it directly
+	// at startup; the sandbox has no network path to it (the brokered
+	// routes forward only mint/approvals/recordings, by construction).
+	if s.cfg.Secrets != nil {
+		r.Get("/internal/injection/{grantID}", s.handleInternalInjection)
+	}
+
+	// Recording upload: PUT /api/v1/internal/recordings/{runID}
+	// wardyn-rec POSTs the finished cast from inside the agent container.
+	if s.cfg.RecordingStore != nil {
+		r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
+	}
+
+	// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
+	// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan
+	// run (via the proxy's brokered scan-result route, which injects the
+	// run token). Cross-run uploads are rejected (token run id must match
+	// the path run id).
+	r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
+
+	// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
+	// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the
+	// aws-sso container-login run (via the proxy's brokered sso-token
+	// route, which injects the run token). Same cross-run guard as scan;
+	// the run-kind check is harnessLoginTask + awsSSOAgent instead of a
+	// governed workspace run.
+	if s.cfg.Secrets != nil {
+		r.Put("/internal/sso-token/{runID}", s.handleUploadSSOToken)
+	}
 }

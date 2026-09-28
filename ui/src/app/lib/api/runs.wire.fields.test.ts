@@ -120,8 +120,9 @@ const expectedWire: Record<string, unknown> = {
 // If the whitelist starts forwarding one of these, or the Go DTO drops one,
 // this list must change in the same commit. model_provider is CLI/API-only
 // until the New Run rail's provider picker lands (multi-provider MP-23), which
-// moves it into runWireBody.
-const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider"]);
+// moves it into runWireBody. preset/preset_version are the launcher API's
+// (#1143); the console sends the explicit spec and has no preset UI.
+const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider", "preset", "preset_version"]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
@@ -334,10 +335,10 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps over AgentRun — the ONE field only GET /runs/{id} sends " +
+  it("RunDetail adds exactly ui_apps and user_type_name over AgentRun — the fields only GET /runs/{id} sends " +
     "(handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
-    expect(runDetailOwnKeys).toEqual(["ui_apps"]);
+    expect(runDetailOwnKeys).toEqual(["ui_apps", "user_type_name"]);
   });
 
   it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {
@@ -359,7 +360,11 @@ describe("source parity — five more flat structs", () => {
   // ticket: F6-F14
   const root = repoRoot();
   const workspaceGo = readFileSync(join(root, "internal/types/workspace.go"), "utf8");
-  const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8");
+  // types.go plus types_capability.go (the CapabilityGrant/RoleMapping split,
+  // #572's merge): concatenated so goJSONTags still finds a struct that moved
+  // file when the split landed.
+  const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8") +
+    "\n" + readFileSync(join(root, "internal/types/types_capability.go"), "utf8");
   const siteConfigGo = readFileSync(join(root, "internal/types/site_config.go"), "utf8");
   const policyGo = readFileSync(join(root, "internal/types/policy.go"), "utf8");
   const workspacesTs = readFileSync(join(root, "ui/src/app/lib/types/workspaces.ts"), "utf8");

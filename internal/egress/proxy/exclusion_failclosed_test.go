@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestOwnSubnetExclusionFailsClosedWhenTheStartupCaptureFails pins F002: the
+// TestOwnSubnetExclusionFailsClosedWhenTheStartupCaptureFails: the
 // own-subnet/control-plane exclusion is a CLAMP on the two admin-authored
 // exceptions to the private-IP guard (the InternalHosts lift and the
 // exact-literal-IP redirect trust), so when its startup capture fails, the

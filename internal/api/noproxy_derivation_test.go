@@ -11,8 +11,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B11a-F13. NO_PROXY hardcoded the literal "wardyn-proxy" while WARDYN_PROXY_URL
-// is operator-overridable (-proxy-url / WARDYN_PROXY_URL_OVERRIDE). With an
+// NO_PROXY hardcoded the literal "wardyn-proxy" while WARDYN_PROXY_URL
+// is operator-overridable (-proxy-url / WARDYN_SANDBOX_PROXY_URL). With an
 // override the sandbox's own HTTP_PROXY names a host that is NOT in its
 // NO_PROXY, so anything inside the sandbox reaching the proxy's local
 // /wardyn/... routes through a proxy-aware client tried to reach the proxy
@@ -55,7 +55,7 @@ func TestBuildBaseSandboxEnv_NoProxyDerivesFromProxyURL(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F13: on the DEFAULT proxy URL the value is
+// NEGATIVE CONTROL for on the DEFAULT proxy URL the value is
 // byte-identical to what shipped, so no deployment's bypass list changes
 // underneath it.
 func TestBuildBaseSandboxEnv_NoProxyDefaultIsUnchanged(t *testing.T) {

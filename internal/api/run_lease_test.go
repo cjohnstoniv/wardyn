@@ -40,6 +40,8 @@ type leaseStore struct {
 	casErr     error // returned once by UpdateRunStateIf or StopKeptRunIf
 	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
 	restricted map[string]map[string]bool
+	// beforeSetEnd, when set, runs at the top of SetRunEndAndWait.
+	beforeSetEnd func()
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -123,13 +125,25 @@ func (s *leaseStore) MarkRunEndingSoon(_ context.Context, _ uuid.UUID, endsAt ti
 	return true, nil
 }
 
-func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error) {
+// SetRunEndAndWait mirrors the PG predicate, EndedKept and the limits compare
+// included. beforeSetEnd runs first, outside the lock: what lands between the
+// handler's decision and this write.
+func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromLimits types.RunLimits, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *store.EndedKept) (bool, error) {
+	if s.beforeSetEnd != nil {
+		s.beforeSetEnd()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.run.EndsAt
-	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
-	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostReason == types.LostEnded || s.state.IsTerminal() {
+	keptOK := s.run.LostReason != types.LostEnded
+	if ended != nil {
+		keptOK = !keptOK && s.run.LostAt.Equal(ended.LostAt) && s.run.LostAt.After(ended.KeptAfter)
+	}
+	if !sameEnd(fromEnd, s.run.EndsAt) || fromWait != s.run.WaitBudgetSec || fromLimits != s.run.RunLimits ||
+		!keptOK || s.state.IsTerminal() {
 		return false, nil
+	}
+	if !sameEnd(toEnd, s.run.EndsAt) {
+		s.run.EndTightenedAt = nil
 	}
 	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
 	return true, nil
@@ -153,6 +167,38 @@ func (s *leaseStore) StopKeptRunIf(_ context.Context, _ uuid.UUID, to types.RunS
 	}
 	s.state = to
 	return true, nil
+}
+
+// SetRunContainmentError / ClearRunContainmentError mirror the PG conditions
+// (#1060): set only on a RUNNING kept run, keeping the first failure's time;
+// clear reports whether it cleared a recorded error.
+func (s *leaseStore) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != types.RunRunning || s.run.LostAt == nil {
+		return nil
+	}
+	s.run.ContainmentError = msg
+	if s.run.ContainmentErrorAt == nil {
+		s.run.ContainmentErrorAt = &now
+	}
+	return nil
+}
+
+func (s *leaseStore) ClearRunContainmentError(context.Context, uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.run.ContainmentError == "" {
+		return false, nil
+	}
+	s.run.ContainmentError, s.run.ContainmentErrorAt = "", nil
+	return true, nil
+}
+
+func (s *leaseStore) containmentError() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.run.ContainmentError
 }
 
 func (s *leaseStore) setEnd(endsAt time.Time) {
@@ -333,12 +379,13 @@ func TestRunLease_EndStopsAndKeepsTheRun(t *testing.T) {
 	}
 }
 
-// TestRunLease_EndFailsClosed: when the sandbox cannot be ended and kept, the
-// run is stopped and torn down outright, with the full revoke cascade — never
-// left running past its end with its proxy up.
+// TestRunLease_EndFailsClosed: when the substrate cannot keep an ended sandbox
+// (ErrEndUnsupported), the run is stopped and torn down outright, with the
+// full revoke cascade — never left running past its end with its proxy up. Any
+// other end error keeps the run (TestRunLease_ATransientEndErrorKeepsTheRun).
 func TestRunLease_EndFailsClosed(t *testing.T) {
 	f := newLeaseFixture(t, -time.Minute)
-	f.rn.endErr = errors.New("docker: remove proxy: boom")
+	f.rn.endErr = runner.ErrEndUnsupported
 	f.sweep(t)
 
 	if got := f.st.State(); got != types.RunStopped {
@@ -362,7 +409,7 @@ func TestRunLease_EndFailsClosed(t *testing.T) {
 // pass must revoke them; it must not read the failed end as already revoked.
 func TestRunLease_AFailedEndIsRevokedOnReassert(t *testing.T) {
 	f := newLeaseFixture(t, -time.Minute)
-	f.rn.endErr = context.DeadlineExceeded
+	f.rn.endErr = runner.ErrEndUnsupported
 	f.st.casErr = context.DeadlineExceeded
 	f.sweep(t)
 	if f.st.State() != types.RunRunning || f.brk.count(f.run.ID) != 0 {
@@ -663,5 +710,82 @@ func TestStopKeptRun_CountsTheTerminalTransitionItself(t *testing.T) {
 	f.srv.stopKeptRun(context.Background(), f.st, f.run, types.RunStopped, "test.reassert", nil)
 	if got := runsTerminalCount(f.srv, types.RunStopped); got != before+1 {
 		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d after a no-op CAS, want unchanged at %d", got, before+1)
+	}
+}
+
+// TestRunLease_ATransientEndErrorKeepsTheRun is endRun's side of #1060 (0.8
+// review F06): an end that fails with anything but ErrEndUnsupported keeps the
+// run (its approvals cancelled and broker credentials revoked all the same),
+// with its containment unresolved — never a teardown on the same failing
+// daemon. Every pass retries the end; a restarted process audits a failure it
+// finds once; the pass that lands the end clears containment_error and audits
+// the resolution once.
+func TestRunLease_ATransientEndErrorKeepsTheRun(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.rn.endErr = errors.New("docker: stop agent: context deadline exceeded")
+	f.sweep(t)
+
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
+		t.Fatalf("state %s, StopSandbox %d; want RUNNING, 0 — a transient end error must not tear the run down",
+			f.st.State(), f.rn.stopCount())
+	}
+	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostEnded {
+		t.Fatalf("lost = %v %q, want the kept mark kept", lostAt, reason)
+	}
+	ended := f.audit.eventsFor(f.run.ID, "run.ended")
+	if len(ended) != 1 {
+		t.Fatalf("run.ended events = %+v, want one", ended)
+	}
+	if d := leaseAuditData(t, ended[0]); d["kept"] != true || d["containment"] != "unresolved" || d["end_error"] == nil {
+		t.Errorf("run.ended data = %v, want kept:true, containment:unresolved and end_error", d)
+	}
+	if f.st.containmentError() == "" {
+		t.Error("containment_error not set on a run whose end failed")
+	}
+	if f.brk.count(f.run.ID) != 1 || f.idp.count() != 0 {
+		t.Errorf("broker revocations %d, identity revocations %d; want 1 and 0", f.brk.count(f.run.ID), f.idp.count())
+	}
+	if calls := f.fa.cancelledCalls(); len(calls) != 1 || calls[0].Reason != "run_ended" {
+		t.Errorf("approval cancels = %+v, want one with reason run_ended", calls)
+	}
+
+	for range 3 {
+		f.now = f.now.Add(time.Minute)
+		f.sweep(t)
+	}
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 || f.rn.endCount() != 4 || f.st.containmentError() == "" {
+		t.Fatalf("a persistent error: state %s, StopSandbox %d, EndSandbox %d, containment_error %q; want RUNNING, 0, 4, still set",
+			f.st.State(), f.rn.stopCount(), f.rn.endCount(), f.st.containmentError())
+	}
+	if got := f.audit.eventsFor(f.run.ID, "run.containment.reassert"); len(got) != 0 {
+		t.Errorf("run.containment.reassert events = %+v; want none — run.ended already audited this failure", got)
+	}
+
+	f.srv.containmentFailed.Delete(f.run.ID) // a restarted process
+	f.sweep(t)
+	f.sweep(t)
+	failed := f.audit.eventsFor(f.run.ID, "run.containment.reassert")
+	if len(failed) != 1 || failed[0].Outcome != "failure" || leaseAuditData(t, failed[0])["containment"] != "unresolved" {
+		t.Fatalf("after a restart: run.containment.reassert events = %+v, want one failure with containment:unresolved", failed)
+	}
+
+	f.rn.endErr = nil
+	f.sweep(t)
+	f.sweep(t)
+	if f.st.containmentError() != "" || f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
+		t.Fatalf("containment_error %q, state %s, StopSandbox %d; want cleared, RUNNING, 0",
+			f.st.containmentError(), f.st.State(), f.rn.stopCount())
+	}
+	var resolved []types.AuditEvent
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.containment.reassert") {
+		if ev.Outcome == "success" {
+			resolved = append(resolved, ev)
+		}
+	}
+	if len(resolved) != 1 || leaseAuditData(t, resolved[0])["containment"] != "resolved" {
+		t.Errorf("resolution rows = %+v, want one with containment:resolved", resolved)
+	}
+	if f.brk.count(f.run.ID) != 1 {
+		t.Errorf("broker revocations = %d, want still 1", f.brk.count(f.run.ID))
 	}
 }

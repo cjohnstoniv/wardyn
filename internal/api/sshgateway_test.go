@@ -154,11 +154,16 @@ type sshFakeRunner struct {
 	execFn   func(spec runner.ExecSpec) (*runner.ExecSession, error)
 	lastArgv []string
 	lastEnv  []string
+	// diskEnforcement lets a (sub)test model a substrate that actually binds
+	// disk_mib (run_resources_test.go's RL-13 cases). The zero value ("")
+	// reads as StorageEnforcementNone, unchanged from every test written before
+	// this field existed.
+	diskEnforcement types.StorageEnforcement
 }
 
 func (f *sshFakeRunner) Name() string { return "ssh-fake" }
 func (f *sshFakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
-	return runner.Capabilities{Driver: "ssh-fake"}, nil
+	return runner.Capabilities{Driver: "ssh-fake", EphemeralDiskEnforcement: f.diskEnforcement}, nil
 }
 func (f *sshFakeRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
 	return runner.Sandbox{}, errors.New("not used by this test")
@@ -296,6 +301,7 @@ var _ runner.Session = (*fakeShellSession)(nil)
 // sshTestHarness starts a real SSH gateway (ServeSSHGateway) on a loopback
 // port backed by st/fr, and returns everything a test needs to dial it.
 type sshTestHarness struct {
+	srv     *Server
 	addr    string
 	hostPub ssh.PublicKey
 	audit   *sshTestRecorder
@@ -333,7 +339,7 @@ func (r *sshTestRecorder) snapshot() []types.AuditEvent {
 	return append([]types.AuditEvent(nil), r.events...)
 }
 
-func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTestHarness {
+func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configure ...func(*Config)) *sshTestHarness {
 	t.Helper()
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -356,7 +362,7 @@ func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTes
 	_ = probe.Close()
 
 	audit := &sshTestRecorder{}
-	srv := New(Config{
+	cfg := Config{
 		Store:         st,
 		Identity:      mustIDP(t),
 		Approvals:     newFakeApprovals(),
@@ -370,7 +376,11 @@ func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTes
 		SSHListenAddr:    addr,
 		SSHAdvertiseAddr: addr,
 		SSHHostKey:       hostPriv,
-	})
+	}
+	for _, fn := range configure {
+		fn(&cfg)
+	}
+	srv := New(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -381,7 +391,7 @@ func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTes
 	}()
 	waitForListener(t, addr)
 
-	return &sshTestHarness{addr: addr, hostPub: signer.PublicKey(), audit: audit}
+	return &sshTestHarness{srv: srv, addr: addr, hostPub: signer.PublicKey(), audit: audit}
 }
 
 // waitForListener polls addr until something accepts a TCP connection —
@@ -490,7 +500,7 @@ func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
 	})
 	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
 
-	if run, msg := srv.sshFreshRun(context.Background(), runID); msg == "" || !strings.Contains(msg, "run has ended") {
+	if run, msg := srv.sshFreshRun(context.Background(), runID, "alice"); msg == "" || !strings.Contains(msg, "run has ended") {
 		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)
 	}
 }

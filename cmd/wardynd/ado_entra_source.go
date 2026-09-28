@@ -37,25 +37,26 @@ type adoEntraLogin struct {
 // empty input stays empty rather than being defaulted: an empty client or
 // tenant is what makes both Azure DevOps sign-in doors refuse and the console
 // login decline to widen, which is the fail-closed direction.
-func newADOEntraLogin(issuer, clientID, clientSecret, oidcRedirectURL string, allowTestEndpoints bool) adoEntraLogin {
+func newADOEntraLogin(issuer, clientID, clientSecret, oidcRedirectURL, basePath string, allowTestEndpoints bool) adoEntraLogin {
 	return adoEntraLogin{
 		clientID:           strings.TrimSpace(clientID),
 		clientSecret:       clientSecret,
 		tenantID:           entraTenantFromIssuer(issuer),
-		redirectURL:        adoEntraRedirectURL(oidcRedirectURL),
+		redirectURL:        adoEntraRedirectURL(oidcRedirectURL, basePath),
 		allowTestEndpoints: allowTestEndpoints,
 	}
 }
 
 // adoEntraRedirectURL puts the Azure DevOps callback on the SAME browser-facing
-// origin the console's own OIDC callback is registered on. "" when that URL
-// has no usable origin, which the sign-in refuses by name.
-func adoEntraRedirectURL(oidcRedirectURL string) string {
+// origin the console's own OIDC callback is registered on, under the console's
+// base path. "" when that URL has no usable origin, which the sign-in refuses
+// by name.
+func adoEntraRedirectURL(oidcRedirectURL, basePath string) string {
 	u, err := url.Parse(strings.TrimSpace(oidcRedirectURL))
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
-	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: api.ADOEntraCallbackPath}).String()
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: basePath + api.ADOEntraCallbackPath}).String()
 }
 
 // adoEntraSourceFromFlags is main's one call: the per-person Azure DevOps
@@ -64,7 +65,7 @@ func adoEntraRedirectURL(oidcRedirectURL string) string {
 // as an unset source does.
 func adoEntraSourceFromFlags(st siteConfigReader, f *bootFlags) api.ADOEntraSource {
 	return adoEntraSource(st, newADOEntraLogin(*f.oidcIssuer, *f.oidcClientID,
-		*f.oidcClientSecret, *f.oidcRedirectURL, *f.allowTestEndpoints))
+		*f.oidcClientSecret, *f.oidcRedirectURL, *f.basePath, *f.allowTestEndpoints))
 }
 
 // siteConfigReader is the one store read the source needs.

@@ -25,6 +25,8 @@ import type {
   ConfinementClass,
   CreateRunInput,
   FirstUseMode,
+  MeCapabilities,
+  SetupModelProvider,
   Workspace,
   WorkspaceMount,
   WorkspaceRepo,
@@ -33,6 +35,7 @@ import type {
   WorkspaceSourceInput,
 } from "../../../lib/types";
 import { effectiveWorkspaceRequirements } from "../../../lib/types";
+import { capabilityAllowed } from "../../../lib/capabilities";
 // review U-01: the ONE place both clone doors (run header, Runs-list kebab)
 // turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
 // below. lib/api must not import from components/ (audit.ts's own comment),
@@ -102,6 +105,82 @@ export function compositionSummary(ws: Workspace): string | null {
 // Run picker's reason line never diverge on what counts as not-admitted.
 export function hasSourceNotAdmitted(ws: Workspace): boolean {
   return workspaceSources(ws).some((s) => s.admitted === false);
+}
+
+// #922 (UT-7c), the person side: is this workspace pinned (llm_cred.provider_ref,
+// WorkspaceLLMCred) to a model provider this caller's own filtered list does
+// not carry? `modelProviders` is GET /setup/status's own `model_providers`
+// (SetupModelProvider[]) — already narrowed to what THIS caller may use by
+// the server's capVisible(capModelProvider) (#832, #1015): a provider this
+// caller isn't granted is dropped from that array whole, "so it reads exactly
+// as a resource the deployment does not have", not merely disabled. So an
+// absent match here is the caller's OWN answer, never re-derived from a grant
+// table the console cannot safely read for a plain member (there is no
+// member-safe way to learn a restricted value's own name — #1018 tracks the
+// same gap for the refusal sentence).
+//
+// undefined `modelProviders` means one of two things, and this function
+// deliberately can't and doesn't need to tell them apart: "haven't read the
+// list yet" (or the read failed), or "this deployment has no provider block
+// at all" — either way there is nothing to check the pin against, so it
+// answers false (fail open), the same default hasSourceNotAdmitted's sibling
+// checks take. A REAL, loaded, EMPTY array (`[]`, "granted no provider at
+// all") is different from undefined and correctly answers "unavailable" —
+// resolvedModelProviders (below) is what turns the wire's own distinction
+// between the two into this function's own `undefined` vs `[]` contract; this
+// function itself just trusts whatever it's given.
+export function workspaceModelProviderUnavailable(
+  ws: Workspace,
+  modelProviders: { id: string }[] | undefined,
+): boolean {
+  const ref = ws.llm_cred?.provider_ref;
+  if (!ref || !modelProviders) return false;
+  return !modelProviders.some((p) => p.id === ref);
+}
+
+// SetupStatus.model_providers is `omitzero` on the wire (setup.go): absent
+// means no provider block exists at all; a present `[]` means a block exists
+// but this caller is granted nothing from it (or the deployment has no
+// provider). So this is now a near-pass-through — the wire itself already
+// carries the distinction workspaceModelProviderUnavailable needs. The one
+// thing this function still adds: `unreachable` (the same bit
+// new-run-screen.tsx's own llmReady/harnesses reads) folds to `undefined`
+// too, since a failed read is not a loaded answer either way.
+export function resolvedModelProviders(
+  status: { unreachable?: boolean; model_providers?: SetupModelProvider[] } | null | undefined,
+): SetupModelProvider[] | undefined {
+  if (!status || status.unreachable) return undefined;
+  return status.model_providers;
+}
+
+// #922: the STRONGER answer New Run's own Launch button needs, folding both
+// person-side "isn't available to you" reasons into one boolean — an
+// ungranted workspace (capabilityAllowed's existing "workspace" narrowing) or
+// one pinned to a model provider the caller's own filtered list doesn't carry
+// (workspaceModelProviderUnavailable, above). Both arms answer DENIED.WORKSPACE_NOT_AVAILABLE
+// wherever this is read (workspace-card.tsx's own advisory line, the rail's
+// own `workspaceUnavailable` prop, workspace-detail.tsx, workspaces.tsx) —
+// one sentence, never two different ones for the same reason.
+//
+// KNOWN GAP, disclosed rather than silently shipped (see the PR body and
+// CHANGELOG for tracking): capabilityAllowed only answers "denied" when the
+// WORKSPACE KIND's enforcement switch is on (a caller with no matching allow,
+// `caps.enforcement.workspace`). A single workspace individually restricted
+// via its own "Available to: Only these" control (the per-VALUE bit
+// AvailabilityControl writes) with the kind switch left off — the common
+// case — is invisible here: GET /me/capabilities carries the caller's own
+// allow rows but no per-value restricted signal, so this reads "available"
+// and Launch stays enabled; the server still refuses it at launch
+// (capBatch.decide's step 3 treats a restricted value as enforced regardless
+// of the switch). No member-safe carrier exists for this today — see the PR
+// body and CHANGELOG for what's tracked to fix it, and #1018 for the
+// adjacent existence-oracle gap.
+export function workspaceUnavailableToCaller(
+  ws: Workspace,
+  caps: MeCapabilities | null,
+  modelProviders: { id: string }[] | undefined,
+): boolean {
+  return !capabilityAllowed(caps, "workspace", ws.id) || workspaceModelProviderUnavailable(ws, modelProviders);
 }
 
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
@@ -282,6 +361,15 @@ export type RunPrefill = {
    *  carry the one thing that governed the run it copies — a named ceiling the
    *  wizard states, never a silent fall back to the default policy. */
   inlinePolicy: boolean;
+  /** Review F4 (#1197 L3): the Runs landing page's composer rides this SAME
+   *  channel (task + an optional workspace, no policy/state overlay beyond
+   *  them) rather than a second one, but it is not a clone — there is no
+   *  source run, so the clone banner's two sentences (RUN.CLONE_NOTE,
+   *  RUN.CLONE_CEILING_NOTE: "prefilled from THIS RUN…", "…this run had
+   *  above it…") would both be false copy. Absent (the default) means a
+   *  clone, unchanged for every existing caller; "composer" suppresses just
+   *  that banner. */
+  source?: "composer";
 };
 
 /** The request-scoped half of a run, as read back off its `run.create` audit
@@ -402,6 +490,31 @@ export const CLONE_LOAD_FAILED = "Could not load this run's details";
 export function cloneFromAudit(run: ClonableRun, events: AuditEvent[]): RunPrefill | null {
   if (!events.some((e) => e.action === "run.create")) return null;
   return runPrefill(run, createRequestFromAudit(events));
+}
+
+// The New Run title's default, while the operator hasn't typed one of their
+// own (#1197 L2, design.md §3.4): the task's own first line, cut at a WORD
+// BOUNDARY within 80 characters — never mid-word, and never past a line break
+// the task itself chose. The server never required a title (runs_create_
+// validate.go's own doc comment); this is the console's default, not a
+// second validation rule.
+const MAX_PREFILLED_TITLE_LEN = 80;
+
+export function titleFromTask(task: string): string {
+  const firstLine = task.split("\n", 1)[0];
+  // F4 (#1197 L2 review): the task field tolerates tab/CR (the multiline
+  // exemption, runFieldCharsAllowed's `multiline` arg) but a title does not
+  // (it is validated non-multiline both here and server-side), so an
+  // interior tab or other control character surviving into the prefill would
+  // get the operator refused on Launch for a title they never typed. Collapse
+  // every run of control characters and whitespace into one space BEFORE the
+  // length/word-boundary cut, so the prefilled title always passes the same
+  // check a hand-typed one does.
+  const collapsed = firstLine.replace(/[\p{Cc}\s]+/gu, " ").trim();
+  if (collapsed.length <= MAX_PREFILLED_TITLE_LEN) return collapsed;
+  const cut = collapsed.slice(0, MAX_PREFILLED_TITLE_LEN);
+  const wordBoundary = cut.lastIndexOf(" ");
+  return (wordBoundary > 0 ? cut.slice(0, wordBoundary) : cut).trim();
 }
 
 /**

@@ -21,9 +21,12 @@ const mitmCATTL = 365 * 24 * time.Hour
 
 // generateRunCA mints a fresh ECDSA P-256 CA cert+key (PEM) for TLS-MITM
 // inspection of a single run. The PRIVATE key is delivered ONLY to that run's
-// wardyn-proxy sidecar (in proxy memory); the sandbox trusts only the PUBLIC cert.
-// A per-run CA bounds blast radius: a leaked CA can forge certs for the duration
-// of one run, not the whole fleet.
+// wardyn-proxy sidecar, as part of its rendered config (runner.BuildProxyConfig);
+// the sandbox trusts only the PUBLIC cert. Besides the proxy's memory the
+// config is kept only in the run's sealed run_proxy_configs row (#1176), so a
+// revive can hand the same CA to a new proxy; no container holds it at rest
+// (THREAT-MODEL residual 59). A per-run CA bounds blast radius regardless: a
+// leaked CA can forge certs for the duration of one run, not the whole fleet.
 func generateRunCA(now time.Time) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

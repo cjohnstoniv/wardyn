@@ -33,10 +33,11 @@ type fakeSubstrate struct {
 	freeze     map[types.ConfinementClass]bool
 	refPrefix  string
 
-	mu                            sync.Mutex
-	created                       []runner.SandboxSpec
-	execs, statuses, stops, kills []string
-	classesCalls                  atomic.Int64 // counts live Classes() probes
+	mu                                          sync.Mutex
+	created                                     []runner.SandboxSpec
+	execs, statuses, stops, kills               []string
+	waits, attaches, execStreams, agentStatuses []string
+	classesCalls                                atomic.Int64 // counts live Classes() probes
 }
 
 func (f *fakeSubstrate) Name() string { return f.name }
@@ -72,11 +73,16 @@ func (f *fakeSubstrate) Exec(_ context.Context, ref string, _ []string) (string,
 	f.rec(&f.execs, ref)
 	return "", nil
 }
-func (f *fakeSubstrate) Wait(context.Context, string) (int, error) { return 0, nil }
-func (f *fakeSubstrate) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+func (f *fakeSubstrate) Wait(_ context.Context, ref string) (int, error) {
+	f.rec(&f.waits, ref)
+	return 0, nil
+}
+func (f *fakeSubstrate) Attach(_ context.Context, ref string, _ runner.AttachOptions) (runner.Session, error) {
+	f.rec(&f.attaches, ref)
 	return nil, nil
 }
-func (f *fakeSubstrate) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+func (f *fakeSubstrate) ExecStream(_ context.Context, ref string, _ runner.ExecSpec) (*runner.ExecSession, error) {
+	f.rec(&f.execStreams, ref)
 	return nil, runner.ErrExecStreamUnsupported
 }
 func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, error) {
@@ -84,7 +90,7 @@ func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, er
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (f *fakeSubstrate) AgentStatus(_ context.Context, ref, _ string) (runner.Status, error) {
-	f.rec(&f.statuses, ref)
+	f.rec(&f.agentStatuses, ref)
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (f *fakeSubstrate) StopSandbox(_ context.Context, ref string) error {
@@ -535,9 +541,7 @@ type revivingSubstrate struct {
 	replaced, started []string
 }
 
-func (r *revivingSubstrate) ProxyConfig(context.Context, string) ([]byte, error) {
-	return []byte(`{"run_token":"t"}`), nil
-}
+func (r *revivingSubstrate) CanReplaceProxy(context.Context, string) error { return nil }
 
 func (r *revivingSubstrate) EnsureProxyImage(context.Context) error { return nil }
 
@@ -558,8 +562,8 @@ func TestOrchestrator_ProxyReviver(t *testing.T) {
 	ctx := context.Background()
 	oci := &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
 	o := New(oci)
-	if cfg, err := o.ProxyConfig(ctx, "wardyn-agent-x"); err != nil || string(cfg) != `{"run_token":"t"}` {
-		t.Fatalf("ProxyConfig = %s, %v", cfg, err)
+	if err := o.CanReplaceProxy(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("CanReplaceProxy = %v, want nil", err)
 	}
 	if err := o.ReplaceProxy(ctx, "wardyn-agent-x", nil); err != nil || len(oci.replaced) != 1 {
 		t.Fatalf("ReplaceProxy: %v, replaced %v", err, oci.replaced)
@@ -572,8 +576,8 @@ func TestOrchestrator_ProxyReviver(t *testing.T) {
 	if err := k8s.EnsureProxyImage(ctx); err != nil {
 		t.Errorf("EnsureProxyImage on a substrate that cannot revive: %v, want nil (nothing to ensure)", err)
 	}
-	if _, err := k8s.ProxyConfig(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
-		t.Errorf("ProxyConfig on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	if err := k8s.CanReplaceProxy(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("CanReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
 	}
 	if err := k8s.ReplaceProxy(ctx, "wardyn-agent-y", nil); !errors.Is(err, runner.ErrReviveUnsupported) {
 		t.Errorf("ReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)

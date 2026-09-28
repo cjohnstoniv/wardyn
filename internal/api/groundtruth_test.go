@@ -23,7 +23,7 @@ import (
 // groundtruth audience.
 func (h *harness) mintGroundtruthToken(t *testing.T) string {
 	t.Helper()
-	id, err := h.idp.MintRunIdentity(context.Background(), uuid.Nil, groundtruth.SensorActor, "", groundtruthAudience)
+	id, err := h.idp.MintRunIdentity(context.Background(), uuid.Nil, groundtruth.SensorActor, "", groundtruthAudience, false)
 	if err != nil {
 		t.Fatalf("mint groundtruth token: %v", err)
 	}
@@ -58,6 +58,27 @@ func TestGroundtruthTokenRejectedOnMintEndpoint(t *testing.T) {
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", gtTok, body)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("groundtruth token on mint: code = %d, want 401 (audit-write-only)", w.Code)
+	}
+}
+
+// TestGroundtruthTokenRejectedOnInjectionEndpoint is T-32 (#692): the same
+// audience-separation boundary as TestGroundtruthTokenRejectedOnMintEndpoint,
+// pinned on the credential-RESOLVE route a run's proxy actually calls
+// (GET /api/v1/internal/injection/{grantID}, internalAuth's internalAudience)
+// rather than the mint route. A groundtruth token grants ONLY
+// wardyn-groundtruth audit-write; it must never resolve an injected
+// credential VALUE.
+//
+// COUNTERFACTUAL: wire GET /api/v1/internal/injection/{grantID} behind
+// internalAuthGroundtruth instead of internalAuth (or widen internalAuth to
+// accept groundtruthAudience) and this goes green for the wrong reason —
+// 401 flips to something else entirely once the audience check is bypassed.
+func TestGroundtruthTokenRejectedOnInjectionEndpoint(t *testing.T) {
+	h, _ := newSecretsHarness(t) // mounts GET /internal/injection/{grantID} (cfg.Secrets != nil)
+	gtTok := h.mintGroundtruthToken(t)
+	w := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.New().String(), gtTok, "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("groundtruth token on injection resolve: code = %d, want 401 (audit-write-only)", w.Code)
 	}
 }
 
@@ -335,8 +356,8 @@ func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
 	if gt["state"] != "idle" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want idle", gt["state"])
 	}
-	// The dropped_unmapped COUNTER moved to the operator-gated /metrics with
-	// B6-F6 (wardyn_groundtruth_dropped_unmapped_total): the anonymous /healthz
+	// The dropped_unmapped COUNTER moved to the operator-gated /metrics
+	// (wardyn_groundtruth_dropped_unmapped_total): the anonymous /healthz
 	// must not publish fleet volumes. What this test exists for is unchanged and
 	// asserted below — the anonymous probe still distinguishes a BROKEN
 	// CORRELATION from a blind sensor, and the count still reaches an operator

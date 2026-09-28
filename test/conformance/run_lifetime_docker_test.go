@@ -12,8 +12,8 @@ package conformance_test
 // internal/api/run_lease.go, run_lost.go and run_revive.go make
 // (s.cfg.Runner.(runner.SandboxEnder) and siblings). This is one level above
 // internal/runner/docker's own driver_proxy_revive_test.go, which proves the
-// SAME driver methods (EndSandbox, StopProxy, ProxyConfig, ReplaceProxy,
-// StartSandbox) against an in-memory fake Docker API, never a real container.
+// SAME driver methods (EndSandbox, StopProxy, ReplaceProxy, StartSandbox)
+// against an in-memory fake Docker API, never a real container.
 //
 // Egress is proven STRUCTURALLY: the proxy sidecar is the sandbox's ONLY
 // route off its gatewayless per-run network (CreateSandbox's Internal=true
@@ -66,9 +66,11 @@ func TestRunLifetimeDocker(t *testing.T) {
 
 	sub, err := docker.New(docker.Config{
 		// See TestConformanceDocker's identical comment: busybox stands in for
-		// the real wardyn-proxy image so this gate needs no proxy binary.
+		// the real wardyn-proxy image so this gate needs no proxy binary. It
+		// echoes the config it is handed on stdin (#1176: its only way in) to
+		// its log, which is how the revive case reads what each proxy got.
 		ProxyImage: "busybox:latest",
-		ProxyCmd:   []string{"sleep", "infinity"},
+		ProxyCmd:   []string{"sh", "-c", "cat; exec sleep infinity"},
 	})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
@@ -179,8 +181,10 @@ func TestRunLifetimeDocker(t *testing.T) {
 
 	// ReviveReusesAddressAndCA: RL-9's proxy-only revive (runner.ProxyReviver).
 	// The new proxy must land at the SAME address the agent's hosts entry
-	// pins, and its rendered config's MITM CA must be the exact bytes carried
-	// over — "rewrites only its token and its denies" (ProxyReviver's doc).
+	// pins, and receive, on a real engine's stdin, exactly the config the
+	// control plane hands ReplaceProxy: the MITM CA carried over, only the
+	// token rewritten (ProxyReviver's doc). Neither proxy's container config
+	// may hold the CA (#1176).
 	t.Run("ReviveReusesAddressAndCA", func(t *testing.T) {
 		agentRef, proxyRef := newSandbox(t)
 		proxyIP := func(t *testing.T) string {
@@ -219,23 +223,20 @@ func TestRunLifetimeDocker(t *testing.T) {
 			t.Fatalf("StopProxy: %v", err)
 		}
 
-		oldCfg, err := reviver.ProxyConfig(context.Background(), agentRef)
-		if err != nil {
-			t.Fatalf("ProxyConfig: %v", err)
-		}
+		oldCfg := receivedProxyConfig(t, cli, proxyRef)
 		var old struct {
 			RunToken      string `json:"run_token"`
 			MITMCACertPEM string `json:"mitm_ca_cert_pem"`
 		}
-		if err := json.Unmarshal(oldCfg, &old); err != nil {
+		if err := json.Unmarshal([]byte(oldCfg), &old); err != nil {
 			t.Fatalf("decode old proxy config: %v", err)
 		}
 		if old.MITMCACertPEM == "" {
 			t.Fatal("the CA this test set at create never round-tripped into the rendered proxy config; the assertion below would prove nothing")
 		}
 
-		fresh := strings.Replace(string(oldCfg), `"run_token":"`+old.RunToken+`"`, `"run_token":"revived-token"`, 1)
-		if fresh == string(oldCfg) {
+		fresh := strings.Replace(oldCfg, `"run_token":"`+old.RunToken+`"`, `"run_token":"revived-token"`, 1)
+		if fresh == oldCfg {
 			t.Fatal("could not rewrite run_token in the captured config; the revive below would prove nothing")
 		}
 		if err := reviver.EnsureProxyImage(context.Background()); err != nil {
@@ -250,15 +251,15 @@ func TestRunLifetimeDocker(t *testing.T) {
 		}
 		requireState(t, proxyRef, true, false)
 
-		newCfg, err := reviver.ProxyConfig(context.Background(), agentRef)
-		if err != nil {
-			t.Fatalf("ProxyConfig after revive: %v", err)
+		newCfg := receivedProxyConfig(t, cli, proxyRef)
+		if newCfg != fresh {
+			t.Errorf("revived proxy received %q on stdin, want exactly the config handed to ReplaceProxy %q", newCfg, fresh)
 		}
 		var neu struct {
 			RunToken      string `json:"run_token"`
 			MITMCACertPEM string `json:"mitm_ca_cert_pem"`
 		}
-		if err := json.Unmarshal(newCfg, &neu); err != nil {
+		if err := json.Unmarshal([]byte(newCfg), &neu); err != nil {
 			t.Fatalf("decode revived proxy config: %v", err)
 		}
 		if neu.RunToken != "revived-token" {
@@ -267,6 +268,13 @@ func TestRunLifetimeDocker(t *testing.T) {
 		if neu.MITMCACertPEM != old.MITMCACertPEM {
 			t.Errorf("revived MITM CA = %q, want the SAME CA carried over verbatim (%q) — a revive must never mint or copy a new one",
 				neu.MITMCACertPEM, old.MITMCACertPEM)
+		}
+		res, err := cli.ContainerInspect(context.Background(), proxyRef, dockerclient.ContainerInspectOptions{})
+		if err != nil {
+			t.Fatalf("inspect revived proxy: %v", err)
+		}
+		if b, _ := json.Marshal(res.Container.Config); strings.Contains(string(b), old.MITMCACertPEM) {
+			t.Errorf("the revived proxy's container config holds the MITM CA; it must arrive only on stdin (#1176): %s", b)
 		}
 
 		// The agent was never stopped in this scenario (StopProxy alone keeps
@@ -346,4 +354,11 @@ func TestRunLifetimeDocker(t *testing.T) {
 			t.Errorf("exec on the thawed agent = running=%v exitCode=%d, want it to have completed with 0", insp.Running, insp.ExitCode)
 		}
 	})
+}
+
+// receivedProxyConfig is the config the stand-in proxy (ProxyCmd above) read
+// on stdin and echoed to its log.
+func receivedProxyConfig(t *testing.T, cli *dockerclient.Client, proxyRef string) string {
+	t.Helper()
+	return strings.TrimSpace(waitForLog(t, cli, proxyRef, `"run_token"`, 30*time.Second))
 }

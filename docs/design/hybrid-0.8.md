@@ -111,7 +111,7 @@ disk-link option needs.
 | **1 Provider policy delivery** | **Exists in 0.7.2.** `SiteConfig.WorkspaceProviders` / `AgentProviders`, MDM-delivered as `/etc/wardyn/site-config.json`; both tiers read one org document | nothing |
 | **2 Identity** | `m′` has it (§2.1); `a′` is loopback-admin and cannot be hybrid | nothing new; hybrid REQUIRES `m′` |
 | **3 Desktop enrolment to a REMOTE control plane** | a standalone daemon per laptop — its own Postgres, its own runs, its own audit fanout | **THE gap.** Either a *client mode* (the laptop runs no control plane; CLI and console talk to the org's `wardynd`, and a thin local agent offers the laptop as a runner target) or `m′` pointed at the org's `wardynd` for identity and policy while still owning its own runs. §5 |
-| **4 Run placement** | `RunnerTarget` is per-DAEMON: one value chosen at boot (`cmd/wardynd/main.go:372`), validated against `knownRunnerTargets()` (`cmd/wardynd/boot_deps.go:257-265`), with an unknown value failing boot closed rather than advertising a target no stored object could match (`boot_deps.go:215-217`). `DriveBackend.RunnerTarget()` (`internal/types/user_drive.go:110-119`) refuses a k8s drive on a Docker deployment for the same reason | **per-RUN placement** (`local docker` vs `remote k8s`) with identical ceiling and provider policy on both. Every "what substrate is this deployment" becomes "what substrate is this run". §6 |
+| **4 Run placement** | `RunnerTarget` is per-DAEMON: one value chosen at boot (`cmd/wardynd/main.go:372`), validated against `knownRunnerTargets()` (`cmd/wardynd/boot_deps.go:257-265`), with an unknown value failing boot closed rather than advertising a target no stored object could match (`boot_deps.go:215-217`). `DriveBackend.RunnerTarget()` (`internal/types/user_drive.go`) refuses a k8s drive on a Docker deployment for the same reason | **per-RUN placement** (`local docker` vs `remote k8s`) with identical ceiling and provider policy on both. Every "what substrate is this deployment" becomes "what substrate is this run". §6 |
 | **5 Local↔remote disk link** | nothing. `local_dir` is refused on Kubernetes (`errMountsUnsupported`; the chart README's known gaps) | the three options in §7 |
 
 ### 2.3 Non-gaps — asked for, already covered, and to be said out loud rather than built
@@ -299,7 +299,7 @@ and every downstream reader asks the run rather than re-deriving.
 ### 6.2 Drive backends versus placement
 
 This is the sharpest coupling in the whole design, and it is already half-written.
-`DriveBackend.RunnerTarget()` (`internal/types/user_drive.go:110-119`) maps
+`DriveBackend.RunnerTarget()` (`internal/types/user_drive.go`) maps
 `docker_volume`/`host_path` to `docker` and `k8s_pvc`/`k8s_pvc_static` to `k8s`, and
 a mismatch is refused. Under per-run placement that predicate stops being a
 deployment-level truth and becomes a per-run one: the same person's drive must

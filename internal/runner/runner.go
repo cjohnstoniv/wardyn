@@ -48,57 +48,29 @@ type Capabilities struct {
 	// SessionRecording reports wardyn-rec sidecar support.
 	SessionRecording bool `json:"session_recording"`
 	// UserDrives reports whether this driver can BIND a member's user drive
-	// (migration 0054) into the sandbox — SandboxSpec.Drive.
-	//
-	// False is the fail-closed default and it is load-bearing. A driver that
-	// says nothing declares no drive support, so the control plane refuses a
-	// drive-carrying request rather than admitting one this substrate would
-	// reject at CreateSandbox — the same rule ConfinementClasses states one
-	// field up: never claim a control that is not structurally enforced, and
-	// never schedule a run demanding more than the driver declares.
-	//
-	// omitempty: absent on a driver that predates the field reads the same as
-	// false, which is the safe half.
+	// (migration 0054) into the sandbox — SandboxSpec.Drive. False (fail-closed
+	// default, omitempty-safe) means the control plane refuses a drive-carrying
+	// request rather than admit one this driver would reject at CreateSandbox.
 	UserDrives bool `json:"user_drives,omitempty"`
 	// ManagedFiles reports whether this driver can deliver
 	// SandboxSpec.ManagedFiles — an operator-authored file the AGENT CANNOT
-	// MODIFY (root-owned, inside a directory it can neither write nor
-	// replace, in place before the agent's main process runs).
-	//
-	// False is the fail-closed default, for UserDrives' reason one field up
-	// and with the same consequence: a driver that says nothing declares no
-	// managed-file support, so the control plane withholds the file rather
-	// than shipping one the agent could rewrite — a ceiling that is not a
-	// ceiling is worse than no ceiling, because it is reported as delivered.
-	//
-	// omitempty: absent on a driver that predates the field reads as false,
-	// the safe half.
+	// MODIFY (root-owned, unwritable directory, present before the agent's main
+	// process runs). False (fail-closed, omitempty-safe): the control plane
+	// withholds the file rather than ship one the agent could rewrite.
 	ManagedFiles bool `json:"managed_files,omitempty"`
-	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS a run's Resources.DiskMiB
-	// on this deployment: `filesystem` (docker, on a storage driver that can
-	// enforce a per-container size quota), `eviction` (kubernetes — the kubelet
-	// measures periodically and kills the pod over the limit; it never refuses the
-	// write) or `none` (nothing binds it at all).
-	//
-	// EMPTY READS AS `none`, the same fail-closed direction UserDrives takes: a
-	// driver that says nothing claims no enforcement. The orchestrator aggregates
-	// it as the WEAKEST across substrates, not the strongest — a deployment must
-	// not promise an enforcement one of its substrates cannot deliver.
-	//
-	// Surfaced on the admin setup status (internal/api's SetupRunner), so an admin
-	// setting a disk number can see whether anything will hold it. NOT on the
-	// anonymous /healthz.
+	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS Resources.DiskMiB:
+	// `filesystem` (docker, a storage-driver size quota), `eviction`
+	// (kubernetes — the kubelet kills the pod over the limit, never refuses the
+	// write) or `none`/empty (nothing binds it). The orchestrator aggregates
+	// this as the WEAKEST across substrates, never the strongest. Surfaced on
+	// the admin setup status, not on /healthz.
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
-	// Freeze reports, PER CONFINEMENT CLASS, whether this driver can pause and
-	// resume the agent container in place without losing its state (long-holds
-	// design rev 4 §3.1: runner Freeze/Thaw). A class present and true is
-	// verified — Docker/runc (CC1) is the only one today. A class absent, or
-	// present and false, declares no freeze support for it: runsc/Kata pause is
-	// UNVERIFIED (the RL-0 spike), so it is never claimed here, the same
-	// never-claim-an-unproven-control rule ConfinementClasses follows one field
-	// up. A caller (the idle/wait pause reaper, RL-7) MUST check this per the
-	// run's own confinement class before attempting a freeze rather than assume
-	// every class a driver enforces can also be paused.
+	// Freeze reports, PER CONFINEMENT CLASS, whether this driver can
+	// pause/resume the agent without losing state (long-holds design rev 4
+	// §3.1). Docker/runc (CC1) is the only class verified true today;
+	// runsc/Kata pause is UNVERIFIED (RL-0 spike) and never claimed here.
+	// Callers (the idle/wait pause reaper, RL-7) MUST check this per the run's
+	// own class rather than assume every enforced class can also pause.
 	Freeze map[types.ConfinementClass]bool `json:"freeze,omitempty"`
 }
 
@@ -112,28 +84,17 @@ type SandboxSpec struct {
 	// Pod spec — which any principal with pods/get can read). Credential
 	// material NEVER passes through here; it rides SecretEnv.
 	Env map[string]string
-	// SecretEnv is CREDENTIAL-BEARING environment — the same name=value shape as
-	// Env, delivered to the agent under the same names — split out because a
-	// substrate must be able to deliver it WITHOUT writing the value anywhere an
-	// ordinary reader of that substrate can see it. Two dispatch lanes populate
-	// it (internal/api's resolveEnvSecretGrants, for env_secret grant VALUES,
-	// and applyBedrockTransport, for the resident AWS SigV4 keys / the captured
-	// AWS SSO blob); every other variable a run gets is platform configuration
-	// and stays in Env.
-	//
-	// DISJOINT from Env by construction — dispatch's splitSecretEnv MOVES a key
-	// from one map to the other, never copies — so a driver may concatenate the
-	// two without deduplicating, and no value is ever delivered twice.
-	//
-	// Driver obligations differ because the exposure differs. The k8s driver
-	// MUST route these through the per-run Secret via ValueFrom.SecretKeyRef:
-	// an inline EnvVar.Value is readable by anyone holding pods/get in the runs
-	// namespace, which is the entire reason this field exists (the same reason
-	// the proxy config already travels as a Secret rather than inline). The
-	// docker driver passes them as ordinary container env: a container's config
-	// is readable only through the daemon socket, i.e. by a principal already
-	// root-equivalent on that host — the trust boundary docker's proxyEnv
-	// already documents for the run token.
+	// SecretEnv is CREDENTIAL-BEARING environment, same name=value shape as
+	// Env under the same names — split out because a substrate must be able to
+	// deliver it WITHOUT writing the value anywhere an ordinary reader of that
+	// substrate can see it. DISJOINT from Env by construction (dispatch's
+	// splitSecretEnv MOVES a key, never copies), so a driver may concatenate the
+	// two without deduplicating. The k8s driver MUST route these through the
+	// per-run Secret via ValueFrom.SecretKeyRef (an inline EnvVar.Value is
+	// readable by anyone holding pods/get in the runs namespace); the docker
+	// driver passes them as ordinary container env, readable only through the
+	// daemon socket — the same trust boundary docker's proxyEnv already
+	// documents for the run token.
 	SecretEnv map[string]string
 	// ProxyConfig wires the L0 path: the sandbox's only egress is the
 	// wardyn-proxy sidecar identified here.
@@ -142,71 +103,53 @@ type SandboxSpec struct {
 	Resources Resources
 	// Labels are attached to the sandbox for attestation selectors and audit.
 	Labels map[string]string
-	// Mounts are operator/policy-controlled host bind mounts into the sandbox
-	// (e.g. a host repo at ~/work for the WSL-migration substrate / a persistent
-	// workspace). SECURITY: these are POLICY-controlled, NEVER attacker-controlled.
-	// The ONLY population path is internal/api dispatch copying a policy's
-	// RunPolicySpec.WorkspaceMounts here; the create-run HTTP request body has no
-	// mounts field, so a prompt-injected agent or a malicious run requester can
-	// never choose a host mount. Drivers apply these as bind mounts AND enforce a
-	// deny-list defense-in-depth (see runner/docker/driver.go) even though the
-	// values came from policy. Default ReadOnly.
+	// Mounts are operator/policy-controlled host bind mounts (e.g. a host repo
+	// for the WSL-migration substrate, or a persistent workspace). SECURITY:
+	// POLICY-controlled, NEVER attacker-controlled — the only population path
+	// is internal/api dispatch copying RunPolicySpec.WorkspaceMounts; the
+	// create-run wire has no mounts field. Drivers bind-mount these AND enforce
+	// a deny-list defense-in-depth (runner/docker/driver.go). Default ReadOnly.
 	Mounts []Mount
-	// UserMountRoots, when non-nil, marks this run as one whose mounts were
-	// authored by a MEMBER (a member-owned workspace's local_dir) and carries
-	// the operator/MDM-set roots those mounts must resolve inside. Resolved at
-	// create-run from the owning member's principal (UserMountPolicy.RootsFor)
-	// and re-checked by the driver at BIND time — the last moment this process
-	// can resolve the real path — via ValidateUserMountSource.
-	//
-	// NIL for every operator/non-member run, and nil means the driver does
-	// EXACTLY what it does today: the member gate is purely additive and can
-	// never narrow an operator mount. See member_mount.go for the threat model.
+	// UserMountRoots, non-nil, marks a run whose mounts were authored by a
+	// MEMBER (a member-owned workspace's local_dir) and carries the
+	// operator/MDM-set roots those mounts must resolve inside. Resolved at
+	// create-run (UserMountPolicy.RootsFor) and re-checked by the driver at BIND
+	// time via ValidateUserMountSource. Nil for every operator/non-member run —
+	// the member gate is purely additive and never narrows an operator mount
+	// (member_mount.go).
 	UserMountRoots []string
 	// Drive is the acting principal's USER DRIVE (migration 0054), already
-	// resolved, folded and narrowed by the control plane — nil for every run
-	// that did not ask for one. It is NOT a Mount: it never rides
-	// RunPolicySpec.WorkspaceMounts, the composer clamp never sees it, and the
-	// request that produced it carried a flag rather than a path (the operator-
-	// controlled-only mounts guardrail). Drivers mount ObjectName at Target
-	// (DriveTarget) with the given mode; the Docker driver still converts it to
-	// a Mount internally so the deny matrix runs on the host path.
+	// resolved/folded/narrowed by the control plane — nil if none was asked
+	// for. NOT a Mount: it never rides WorkspaceMounts or the composer clamp,
+	// and the request carried a flag rather than a path (the
+	// operator-controlled-only mounts guardrail). Drivers mount ObjectName at
+	// Target (DriveTarget); the Docker driver still converts it to a Mount
+	// internally so the deny matrix runs on the host path.
 	Drive *types.DriveMount
-	// ManagedFiles are operator-authored files delivered into the sandbox that
-	// the AGENT CANNOT MODIFY — root-owned, in a directory it can neither
-	// write nor replace, and present BEFORE its main process runs. Like
-	// Mounts, they are POLICY-controlled and never request-set: nothing on the
-	// create-run wire names a path or a byte of content.
-	//
-	// A driver that does not advertise Capabilities.ManagedFiles MUST refuse a
-	// spec carrying them rather than start a sandbox without them: silently
-	// dropping the ceiling is the one failure mode this field exists to
-	// prevent, and it is invisible to every test that only reads the file
-	// back. See ManagedFile (managed_files.go) for the delivery contract and
-	// ValidateManagedFiles for the path shape both substrates can honour.
+	// ManagedFiles are operator-authored files the AGENT CANNOT MODIFY —
+	// root-owned, unwritable directory, present BEFORE the main process runs.
+	// Like Mounts, POLICY-controlled and never request-set. A driver that
+	// doesn't advertise Capabilities.ManagedFiles MUST refuse a spec carrying
+	// them rather than start without them — silently dropping the ceiling is
+	// invisible to any test that only reads the file back. See ManagedFile
+	// (managed_files.go) and ValidateManagedFiles for the contract.
 	ManagedFiles []ManagedFile
-	// OnWaiting, when non-nil, reports WHY this sandbox is not up yet, in the
-	// substrate's own `<component>: <Reason>[: <message>]` words ("agent:
-	// ImagePullBackOff: …", "pod: Unschedulable: …", "image: Pulling: <ref>"),
-	// each time that reason CHANGES. It exists because the whole STARTING window
-	// is spent INSIDE CreateSandbox — there is no sandbox ref yet, so nothing
-	// outside the driver can ask a substrate what it is waiting on — and the
-	// answer is already in the driver's hand, read and discarded once per poll.
-	//
-	// CONTRACT, and the driver relies on every clause of it: called
-	// SYNCHRONOUSLY on CreateSandbox's own goroutine, so an implementation must
-	// not block (wardynd's does one scoped UPDATE under a 500ms deadline and
-	// drops an overdue one); called only while CreateSandbox is still running,
-	// never after it returns; only on a CHANGE, so a 200ms poll costs one call
-	// per distinct reason rather than five a second; DIAGNOSTIC, so a driver
-	// never fails a create because a report could not be delivered. Nil for every
-	// driver-level caller (the conformance suite, cmd/wardyn-runner), which is
-	// why NotifyWaiting rather than the field is what drivers call.
+	// OnWaiting, non-nil, reports WHY the sandbox isn't up yet
+	// (`<component>: <Reason>[: <message>]`, e.g. "agent: ImagePullBackOff: …"),
+	// each time the reason CHANGES — the whole STARTING window runs inside
+	// CreateSandbox with no sandbox ref yet, so nothing outside the driver can
+	// ask what it's waiting on. CONTRACT: called SYNCHRONOUSLY on
+	// CreateSandbox's own goroutine (must not block: wardynd's does one scoped
+	// UPDATE under a 500ms deadline and drops an overdue one), only while
+	// CreateSandbox is running, only on change, and DIAGNOSTIC (a driver never
+	// fails a create because a report couldn't be delivered). Nil for
+	// driver-level callers (conformance suite, cmd/wardyn-runner) — that's why
+	// NotifyWaiting rather than the field is what drivers call.
 	OnWaiting func(detail string) `json:"-"`
-	// Interactive marks a run that comes up idle for `wardyn attach` (no task is
-	// exec'd). Drivers use it to prepare the workspace on the idle main process —
-	// e.g. clone the repo into ~/work — so the attach shell isn't empty. A non-
-	// interactive run ignores it (its task exec does the preparation).
+	// Interactive marks a run that comes up idle for `wardyn attach` (no task
+	// exec'd); drivers prepare the workspace on the idle main process (e.g.
+	// clone the repo) so the attach shell isn't empty. A non-interactive run
+	// ignores it.
 	Interactive bool
 }
 
@@ -228,56 +171,27 @@ type Mount struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only"`
-	// MemberAuthored marks a bind whose SOURCE a MEMBER chose — a member-owned
-	// workspace's local_dir. ONLY these are re-checked against
-	// SandboxSpec.UserMountRoots at bind time, because the roots bound what a
-	// MEMBER may name and nothing else: the same spec also carries binds WARDYN
-	// ITSELF authored (the subscription ~/.claude credential staging, the Bedrock
-	// ~/.aws dir) and an operator-owned workspace's dirs, none of which live
-	// under any member root. Checking those too refused the credential mounts
-	// EVERY model run needs, so no member-owned workspace could run at all on a
-	// subscription or Bedrock deployment.
-	//
-	// Set by internal/api dispatch from the run's member-owned workspaces
-	// (userMountPosture); false — the operator default — everywhere else.
+	// MemberAuthored marks a bind whose SOURCE a MEMBER chose (a member-owned
+	// workspace's local_dir). ONLY these are re-checked against
+	// SandboxSpec.UserMountRoots at bind time — the spec also carries binds
+	// Wardyn itself authored (credential staging dirs) and operator-owned
+	// workspace dirs, none under any member root; checking those too would
+	// refuse the credential mounts every model run needs. Set by internal/api
+	// dispatch from the run's member-owned workspaces; false (operator default)
+	// everywhere else.
 	MemberAuthored bool `json:"member_authored,omitempty"`
 	// DriveAuthored marks the ONE bind a driver synthesizes from
-	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.
-	//
-	// IT IS A LABEL, NEVER A GATE — unlike MemberAuthored, which selects which
-	// of a mixed slice of binds the member roots apply to. A drive arrives on
-	// its OWN field (SandboxSpec.Drive), so the driver already knows it is
-	// looking at a drive; the deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling
-	// (UserDriveHostRootCheck) therefore runs on EVERY host_path drive
-	// unconditionally, and no check anywhere may be written as `if
-	// m.DriveAuthored`. One was, and it was fail-OPEN by shape: the flag's only
-	// false state is a refactor that stops stamping it, so the check would
-	// vanish exactly when the code around it changed.
-	//
-	// IT NEVER LEAVES THE DRIVER, and never reaches a wire. SandboxSpec.Drive is
-	// a types.DriveMount rather than a Mount precisely so the composer clamp, the
-	// workspace-source allow-list and the k8s blanket host-bind refusal never see
-	// a drive — which also means dispatch puts no Mount carrying this flag into
-	// spec.Mounts, and nothing that serializes a SandboxSpec ever observes it.
-	// The Docker driver builds a local Mount from the DriveMount so the bind
-	// passes through the same value shape every other bind does, stamps this on
-	// it, and converts it to the runtime's own mount type in the next statement.
-	// The json tag is the struct's shape, not a claim that this field is
-	// transmitted; `omitempty` plus "never set outside the driver" means it is
-	// absent from every spec that is.
-	//
-	// So it is DOCUMENTATION IN THE TYPE, kept deliberately (user-drives DESIGN
-	// §3.1(5) and §11 Q3, owner default: a bool, converted to a Kind enum at the
-	// third authoring class). `git grep -n DriveAuthored` is the whole audit: the
-	// declaration, the one assignment, and prose. If a gate ever reads it, that
-	// grep is where the fail-open shows up.
-	//
-	// TWO FLAGS, NOT A Kind ENUM, and this comment is the trigger to change
-	// that: N=2 is below the consolidation threshold and MemberAuthored is
-	// security-critical code, so a THIRD authoring class — anything that adds a
-	// `*Authored bool` beside these two — is the point at which both become one
-	// `Kind` field with a closed set of values, rather than three booleans whose
-	// illegal combinations are only prevented by everyone remembering.
+	// SandboxSpec.Drive (the host_path user drive's per-person subdirectory). A
+	// LABEL, NEVER A GATE — unlike MemberAuthored, no check anywhere may be
+	// written as `if m.DriveAuthored`: a drive arrives on its own field
+	// (SandboxSpec.Drive), so WARDYN_USER_DRIVE_HOST_ROOTS (UserDriveHostRootCheck)
+	// runs on EVERY host_path drive unconditionally regardless of this flag.
+	// NEVER reaches a wire (SandboxSpec.Drive is a types.DriveMount, not a Mount,
+	// precisely so the composer clamp and k8s host-bind refusal never see a
+	// drive); kept as DOCUMENTATION IN THE TYPE (user-drives DESIGN §3.1(5),
+	// §11 Q3). `git grep -n DriveAuthored` is the whole audit. TWO FLAGS, NOT A
+	// Kind ENUM: a third `*Authored bool` is the point to consolidate into one
+	// closed-set Kind field.
 	DriveAuthored bool `json:"drive_authored,omitempty"`
 }
 
@@ -390,43 +304,34 @@ type InjectionGrant struct {
 	Rule    egress.InjectionRule `json:"rule"`
 }
 
-// Resources are the hard sandbox caps the driver applies as cgroup / storage
-// limits. A ZERO field means "use the driver's conservative platform default"
-// (the docker driver fills CPU/memory/PIDs unconditionally so EVERY sandbox is
-// capped even when policy sets nothing). The control plane copies these from a
+// Resources are the hard sandbox caps the driver applies as cgroup/storage
+// limits. A ZERO field means "use the driver's conservative platform
+// default" (the docker driver fills CPU/memory/PIDs unconditionally so
+// EVERY sandbox is capped even when policy sets nothing). Copied from a
 // policy's types.ResourceLimits at dispatch.
 type Resources struct {
 	CPUMillis int64
 	MemoryMiB int64
-	// PidsLimit caps the number of processes/threads in the sandbox — the
-	// fork-bomb guard for the host PID space. Zero => driver default.
+	// PidsLimit caps processes/threads in the sandbox (fork-bomb guard). Zero
+	// => driver default.
 	PidsLimit int64
 	// DiskMiB caps writable storage. Best-effort, and WHAT BINDS IT DIFFERS BY
-	// SUBSTRATE — Capabilities.EphemeralDiskEnforcement names which: the docker
-	// driver applies it as a storage-driver quota only when the daemon supports a
-	// per-container one (overlay2 on xfs+pquota, or btrfs/zfs), otherwise it warns
-	// and runs uncapped rather than hard-failing the run; the k8s substrate sets
-	// the agent container's resources.limits[ephemeral-storage], where the kubelet
-	// enforces it by EVICTING the pod (periodically measured; the write is never
-	// refused).
+	// SUBSTRATE (Capabilities.EphemeralDiskEnforcement names which): docker
+	// applies a storage-driver quota only when supported (overlay2 on
+	// xfs+pquota, or btrfs/zfs), else warns and runs uncapped; k8s sets
+	// resources.limits[ephemeral-storage], enforced by the kubelet EVICTING
+	// the pod (never refusing the write).
 	DiskMiB int64
-	// DiskMiBFilled says DiskMiB was FILLED IN for this run from the org's
+	// DiskMiBFilled says DiskMiB was FILLED IN from the org's
 	// storage.ephemeral.default_disk_mib rather than authored on its policy —
-	// the one bit that tells a driver whose host cannot enforce a cap whether
-	// refusing the run is the honest answer or the destructive one.
-	//
-	// An org default arrives by MDM (site-config on every desktop boot), and the
-	// desktop tier is overlay2 over ext4, where the docker driver's disk quota
-	// FAILS THE CREATE CLOSED. Failing closed is right for a cap a policy asked
-	// for and this host cannot keep; applied to a fleet-wide default it would
-	// brick every request-less run on every laptop the moment an admin typed a
-	// number for the Kubernetes half of the estate. So a FILLED value degrades
-	// to uncapped-with-a-warning there (enforcement `none`), while a
-	// POLICY-AUTHORED DiskMiB keeps today's fail-closed arm exactly.
-	//
-	// The k8s substrate ignores the bit on purpose: an ephemeral-storage limit
-	// is set and the kubelet evicts either way, so there is no unenforceable
-	// case for it to degrade.
+	// the bit that tells a driver whose host can't enforce a cap whether
+	// refusing the run is honest or destructive. The desktop tier
+	// (overlay2/ext4) fails the create closed for a POLICY-AUTHORED DiskMiB,
+	// but a FILLED org default degrades to uncapped-with-a-warning instead —
+	// failing closed on a fleet-wide MDM default would brick every
+	// request-less run the moment an admin set a number for the k8s half of
+	// the estate. k8s ignores this bit: eviction enforces either way, with no
+	// unenforceable case to degrade.
 	DiskMiBFilled bool
 }
 
@@ -438,40 +343,35 @@ type AttachOptions struct {
 }
 
 // Session is a live, bidirectional interactive PTY stream into a RUNNING
-// sandbox, opened by Runner.Attach. It is the human-facing analogue of the
-// agent exec: a person types into Write and reads the terminal back from Read.
+// sandbox, opened by Runner.Attach — the human-facing analogue of the agent
+// exec.
 //
-// SECURITY (invariant 3): the interactive shell runs INSIDE the existing
-// sandbox, so it is bounded by exactly the same L0 structural-egress and
-// confinement envelope as the agent process. Attach opens NO new network path —
-// the stream flows control-plane -> dockerd -> container, never through the
-// sandbox's HTTP_PROXY egress path, and egress/mint enforcement stays at the
-// proxy/broker. Attach therefore grants a terminal, not a new egress route.
+// SECURITY (invariant 3): runs INSIDE the existing sandbox, bounded by the
+// same L0 confinement envelope as the agent; opens NO new network path (the
+// stream flows control-plane -> dockerd -> container, never through the
+// sandbox's HTTP_PROXY egress path). Attach grants a terminal, not a new
+// egress route.
 //
-// A Session is NOT safe for concurrent Read/Write from multiple goroutines on
-// the same direction, but the typical pump runs Read in one goroutine and Write
-// in another, which is supported.
+// Not safe for concurrent Read/Write from multiple goroutines on the same
+// direction; running Read and Write each in their own goroutine is
+// supported.
 type Session interface {
-	// Read copies terminal output (PTY bytes) into p. It returns io.EOF when the
-	// shell exits or the stream is closed.
+	// Read copies terminal output into p; io.EOF when the shell exits or the
+	// stream is closed.
 	Read(p []byte) (int, error)
-	// Write sends keystrokes (PTY bytes) into the shell.
+	// Write sends keystrokes into the shell.
 	Write(p []byte) (int, error)
-	// Resize informs the PTY of a new window size (e.g. on a browser resize).
+	// Resize informs the PTY of a new window size.
 	Resize(ctx context.Context, cols, rows uint16) error
-	// Close tears down ONLY the interactive exec stream. It does NOT stop the
-	// sandbox, the agent process, or any sidecar — detaching a human leaves the
-	// run exactly as it was.
+	// Close tears down ONLY the interactive exec stream — not the sandbox,
+	// the agent process, or any sidecar.
 	Close() error
 }
 
 // ErrExecStreamUnsupported is the sentinel a Runner/Substrate returns from
-// ExecStream when it has no implementation for the primitive (a stub, a fake,
-// or a driver that has not wired it up yet). Callers — notably the
-// conformance suite's testExecStream — use errors.Is against this exact
-// sentinel to skip cleanly on "not implemented" while still FAILING on any
-// other error, so an implemented-but-broken ExecStream cannot skip green by
-// returning some other error.
+// ExecStream when unimplemented. The conformance suite errors.Is against
+// this exact sentinel to skip cleanly on "not implemented" while still
+// FAILING on any other error.
 var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
@@ -480,12 +380,11 @@ type ExecSpec struct {
 	Argv []string
 	// Env is additional exec-scoped environment (on top of the sandbox's own).
 	Env []string
-	// TTY requests a pseudo-terminal. PTY semantics MERGE stdout and stderr
-	// onto ExecSession.Stdout (ExecSession.Stderr then reads io.EOF
-	// immediately — there is no separate channel to read). Without a TTY,
-	// stdout and stderr are delivered as SEPARATE streams: a binary protocol
-	// riding stdout (SFTP, socat) would be corrupted by interleaved stderr
-	// bytes, so a merged stream is only acceptable under PTY semantics.
+	// TTY requests a pseudo-terminal, which MERGES stdout and stderr onto
+	// ExecSession.Stdout (Stderr then reads io.EOF immediately). Without a
+	// TTY, stdout/stderr are SEPARATE streams — a binary protocol on stdout
+	// (SFTP, socat) would be corrupted by interleaved stderr, so merging is
+	// only acceptable under PTY semantics.
 	TTY bool
 	// Cols, Rows seed the initial PTY window size (TTY only); zero lets the
 	// implementation pick a default.
@@ -493,44 +392,33 @@ type ExecSpec struct {
 }
 
 // ExecSession is a live, bidirectional stream into ONE exec started by
-// Runner.ExecStream — the streaming-primitive analogue of Session (which is
-// shaped for an interactive attach shell). It is a PLAIN STRUCT of
-// streams/closures, deliberately NEVER an interface: ExecStream has exactly
-// one production implementation per substrate plus test fakes, and a struct
-// lets a fake construct a partial ExecSession (a canned Wait, a
-// strings.Reader for Stdout, a nil Stdin) by filling in fields directly —
-// there is no method set to satisfy, so no fake can ever "implement this
-// wrong."
+// Runner.ExecStream — the streaming-primitive analogue of Session. A PLAIN
+// STRUCT of streams/closures, deliberately NEVER an interface: a fake can
+// construct a partial ExecSession (a canned Wait, a strings.Reader for
+// Stdout, a nil Stdin) by filling in fields directly, with no method set to
+// satisfy wrong.
 //
-// Resize, Wait, and Close take NO context parameter: an implementation binds
-// them to whatever context it created the exec with. Callers that need a
-// fresh deadline per operation should scope the ctx passed to ExecStream
-// itself accordingly.
+// Resize, Wait, and Close take NO context: an implementation binds them to
+// whatever context it created the exec with.
 type ExecSession struct {
-	// Stdin writes to the exec's standard input. Close HALF-closes the write
-	// side only (the exec observes EOF on stdin) — implementations MUST NOT
-	// tear down Stdout/Stderr when Stdin.Close is called; those streams may
-	// still be flowing.
+	// Stdin writes to the exec's stdin. Close HALF-closes the write side only
+	// (the exec observes EOF) — implementations MUST NOT tear down
+	// Stdout/Stderr when Stdin.Close is called.
 	Stdin io.WriteCloser
-	// Stdout carries standard output. With ExecSpec.TTY=true it ALSO carries
-	// stderr (PTY semantics merge the two onto one stream); with TTY=false it
-	// carries ONLY stdout — see Stderr.
+	// Stdout carries standard output; with ExecSpec.TTY=true it ALSO carries
+	// stderr (PTY semantics merge the two); with TTY=false it carries ONLY
+	// stdout — see Stderr.
 	Stdout io.Reader
-	// Stderr carries standard error as a SEPARATE stream when ExecSpec.TTY is
-	// false. When TTY is true there is no separate stderr channel to read
-	// (PTY semantics already merged it onto Stdout), so Stderr reads io.EOF
-	// immediately.
+	// Stderr carries standard error as a SEPARATE stream when TTY is false;
+	// when TTY is true it reads io.EOF immediately (no separate channel).
 	//
 	// STREAMING CONTRACT (TTY=false): Stdout and Stderr are UNBUFFERED
-	// io.Pipes fed by a single background demux goroutine off ONE underlying
-	// connection: a single undrained stderr byte blocks the demux goroutine,
-	// Stdout, AND Wait (which observes the same exec). Callers MUST start
-	// draining Stderr BEFORE (or concurrently with) the first Stdout read.
-	// This mirrors how every demultiplexed docker/moby attach stream must be
-	// consumed; it is not implementation-specific.
+	// io.Pipes fed by one background demux goroutine off ONE connection — an
+	// undrained stderr byte blocks the demux, Stdout, AND Wait. Callers MUST
+	// start draining Stderr BEFORE or concurrently with the first Stdout
+	// read (as with any demultiplexed docker/moby attach stream).
 	Stderr io.Reader
-	// Resize changes the PTY window size. A no-op returning nil when the exec
-	// has no TTY.
+	// Resize changes the PTY window size; a no-op returning nil with no TTY.
 	Resize func(cols, rows uint16) error
 	// Wait blocks until the exec exits and returns its exit code.
 	Wait func() (int, error)
@@ -554,17 +442,13 @@ type Status struct {
 	Message  string
 }
 
-// ErrExecNeverStarted is the sentinel a Runner's Wait returns when it can
-// prove the agent exec will NEVER reach a terminal state on its own — e.g.
-// the k8s driver's ephemeral "wardyn-agent" container stuck Waiting on a
-// hard-failure Reason (ImagePullBackOff, CreateContainerConfigError, ...)
-// that will not resolve without intervention. Distinct from every other Wait
-// error (a transient probe error, ctx cancellation): those mean "the agent
-// might still be running, we just couldn't observe it right now" and the
-// caller retries/hands off to the reconciler; this one means "the task never
-// ran and never will", so the caller (startCompletionWatcher,
-// runs_lifecycle.go) must fail the run immediately rather than treat it as a
-// transient hiccup to hand off.
+// ErrExecNeverStarted: a Runner's Wait returns this when it can prove the
+// agent exec will NEVER reach a terminal state on its own (e.g. k8s's
+// ephemeral agent container stuck on a hard-failure Reason like
+// ImagePullBackOff). Distinct from every other Wait error (transient probe
+// error, ctx cancellation), which mean "might still be running, retry" — this
+// one means the caller (startCompletionWatcher) must fail the run
+// immediately.
 var ErrExecNeverStarted = errors.New("runner: agent exec never started")
 
 // Runner is the lifecycle contract. Implementations must be safe for
@@ -577,62 +461,39 @@ type Runner interface {
 	// with L0 confinement: no default route, egress only via the proxy.
 	CreateSandbox(ctx context.Context, spec SandboxSpec) (Sandbox, error)
 	// Exec starts the agent process inside the sandbox (PTY attached when
-	// recording). Returns when the process has been started, not finished. The
-	// returned agentExecID identifies the started process for exec-based substrates
-	// (the docker idle-container + `docker exec` path); it is "" for exec-less /
-	// main-process substrates (krun), where the container IS the agent. Persist it
-	// so the crash reconciler can observe agent liveness across a wardynd restart
-	// via AgentStatus.
+	// recording); returns once started, not finished. agentExecID identifies
+	// the started process for exec-based substrates ("" for exec-less/
+	// main-process substrates, where the container IS the agent) — persist it
+	// so the crash reconciler can observe agent liveness across a restart via
+	// AgentStatus.
 	Exec(ctx context.Context, ref string, argv []string) (agentExecID string, err error)
-	// Wait blocks until the agent process started by Exec for this sandbox ref
-	// has exited, returning its exit code. It is ONLY valid after a successful
-	// Exec on the same ref (it observes the agent exec Exec created). Wait
-	// honours ctx cancellation/deadline and returns an error if no agent exec
-	// is tracked for ref (e.g. Exec was never called, or the ref is unknown).
+	// Wait blocks until the agent process Exec started has exited, returning
+	// its exit code. Valid ONLY after a successful Exec on the same ref;
+	// errors if no agent exec is tracked for ref.
 	Wait(ctx context.Context, ref string) (exitCode int, err error)
-	// Attach opens a NEW interactive exec (an interactive shell) inside the
-	// already-RUNNING sandbox ref and returns a live PTY Session. This is the
-	// foundation of interactive session mode: a human attaches to a live PTY in
-	// a running sandbox. The exec is SEPARATE from the agent process Wait tracks
-	// — it is a fresh shell, so attaching/detaching never affects the agent.
-	//
-	// Session.Close tears down ONLY the exec stream, NOT the sandbox: detaching
-	// leaves the run and its sidecars exactly as they were. The interactive
-	// shell is bounded by the SAME L0 egress + confinement envelope as the agent
-	// (it runs inside the existing sandbox); Attach opens no new network path
-	// (invariant 3). Callers MUST record the human principal for attribution
-	// (invariant 4) at the call site (the runner is identity-agnostic).
+	// Attach opens a NEW interactive shell inside the already-RUNNING sandbox
+	// ref, SEPARATE from the agent process Wait tracks (attaching/detaching
+	// never affects the agent). Session.Close tears down ONLY the exec
+	// stream, not the sandbox. Bounded by the SAME L0 egress envelope as the
+	// agent (invariant 3); callers MUST record the human principal for
+	// attribution (invariant 4) at the call site.
 	Attach(ctx context.Context, ref string, opts AttachOptions) (Session, error)
-	// ExecStream launches spec.Argv inside the already-RUNNING sandbox ref as a
-	// fresh, streamable exec, distinct from both the agent process Exec starts
-	// (Wait/AgentStatus observe THAT one, not this) and from Attach's
-	// interactive shell (no PTY tmux session, no shell wrapping — argv runs
-	// directly). See ExecSpec/ExecSession for the streaming and TTY-merge
-	// contract.
-	//
-	// UNLIKE Exec, ExecStream MUST be repeatable against the SAME ref: a
-	// long-lived consumer (an SSH/SFTP bridge, a multiplexed shell) opens ONE
-	// ExecStream per channel against ONE long-lived sandbox ref for the life
-	// of the connection, so a substrate that errored or no-op'd on a second
-	// call would break that consumer outright. A k8s substrate implements
-	// ExecStream on the streaming exec subresource (pods/<name>/exec —
-	// repeatable, leaves no pod-spec residue), NOT an ephemeral container
-	// (add-only; that add-only limit is what makes Exec one-shot, not
-	// ExecStream — see Substrate.Exec's doc).
-	//
-	// SECURITY: ExecStream opens no new network path (invariant 3). Callers
-	// MUST record the human principal for attribution (invariant 4) at the
-	// call site (the runner is identity-agnostic) — a raw argv makes this the
-	// MORE dangerous of the two streaming primitives, not less.
+	// ExecStream launches spec.Argv inside the running sandbox as a fresh,
+	// streamable exec, distinct from both Exec's agent process and Attach's
+	// interactive shell (argv runs directly, no PTY/shell wrapping). UNLIKE
+	// Exec, MUST be repeatable against the SAME ref (an SSH/SFTP bridge opens
+	// one ExecStream per channel against one long-lived ref). k8s implements
+	// it on the streaming exec subresource, not an ephemeral container (see
+	// Substrate.Exec's doc). SECURITY: opens no new network path (invariant
+	// 3); callers MUST record the human principal (invariant 4) — a raw argv
+	// makes this the MORE dangerous of the two streaming primitives.
 	ExecStream(ctx context.Context, ref string, spec ExecSpec) (*ExecSession, error)
 	Status(ctx context.Context, ref string) (Status, error)
-	// AgentStatus reports the AGENT's observed state in a restart-safe way, given
-	// the agentExecID Exec returned (persisted on the run row). For exec-based
-	// substrates it inspects that exec, so a run whose agent has exited reports a
-	// terminal State + ExitCode even while the idle container is still up — the
-	// distinction container-level Status cannot make after a restart lost the
-	// in-memory exec map. When agentExecID is "" (exec-less/main-process, or Exec
-	// never ran) it falls back to Status, where the container IS the agent.
+	// AgentStatus reports the AGENT's observed state restart-safely, given the
+	// persisted agentExecID. For exec-based substrates it inspects that exec,
+	// so a run whose agent exited reports terminal State+ExitCode even while
+	// the idle container is still up. Falls back to Status when agentExecID
+	// is "" (exec-less/main-process, or Exec never ran).
 	AgentStatus(ctx context.Context, ref, agentExecID string) (Status, error)
 	// StopSandbox is the graceful path (lifecycle auto-stop).
 	StopSandbox(ctx context.Context, ref string) error
@@ -662,11 +523,16 @@ var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended 
 // sidecar and leave its agent running (a run lost to a control-plane outage,
 // long-holds design rev 4 §4 row 2). The agent keeps its processes and files
 // but has no network path, because the proxy was its only one. The stopped
-// proxy is kept, not removed: its rendered config is what ProxyReviver reads
-// back, and teardown removes it with the rest of the sandbox. Idempotent on
-// a missing or already-stopped proxy; an unresolvable ref is an error, never a
-// success that left the proxy up. A router in front of a substrate without it
-// returns ErrEndUnsupported.
+// proxy is removed, not kept: nothing a revive needs lives in it (the control
+// plane stores the run's proxy config, #1176), and a stopped container would
+// hold nothing but its own leftovers. Idempotent on a missing or
+// already-stopped proxy; an unresolvable ref is an error, never a success that
+// left the proxy up. A graceful stop that fails escalates to a kill; a proxy
+// that survives both is an error, with the agent stopped too
+// (kept, never removed) so no work runs while its egress is unconfirmed. An
+// error means containment is unconfirmed, not that the sandbox may go: the
+// control plane keeps the run and retries (#1060). A router in front of a
+// substrate without it returns ErrEndUnsupported.
 type ProxyStopper interface {
 	StopProxy(ctx context.Context, ref string) error
 }
@@ -674,19 +540,23 @@ type ProxyStopper interface {
 // ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
 // sidecar, running or stopped, with a new one while the agent keeps running
 // (proxy-only revive and restart with current limits, long-holds design rev 4
-// §4.1). The control plane reads the old config back, rewrites only its token
-// and its denies, and hands it to ReplaceProxy; the per-run MITM CA inside it
-// is carried over, never copied anywhere else.
+// §4.1). The control plane reads the run's stored config (never the proxy
+// container, #1176), rewrites only its token and its denies, and hands it to
+// ReplaceProxy; the per-run MITM CA inside it is carried over.
 //
-// ReplaceProxy removes the old proxy first, then starts the new one on the
-// run's network at the address the agent's hosts entry pins. An error wrapping
-// ErrProxyReplaceFailed means the old proxy is, or may be, gone and no new one
-// runs: the sandbox has no egress, and the caller must treat the run as lost.
+// CanReplaceProxy answers ErrReviveUnsupported, before the caller claims the
+// run, when ref's substrate cannot replace a proxy in place, and nil
+// otherwise. ReplaceProxy removes the old proxy (if there still is one), then
+// starts the new one on the run's network at the address the agent's hosts
+// entry pins, delivering cfgJSON so that no container config or environment
+// holds it. An error wrapping ErrProxyReplaceFailed means the old proxy is, or
+// may be, gone and no new one runs: the sandbox has no egress, and the caller
+// must treat the run as lost; a later revive rebuilds from the stored config.
 // Any other error came before the old proxy was touched and left it as it
 // was. A router in front of a substrate without it (Kubernetes: the agent pins
 // the proxy pod's IP) returns ErrReviveUnsupported.
 type ProxyReviver interface {
-	ProxyConfig(ctx context.Context, ref string) ([]byte, error)
+	CanReplaceProxy(ctx context.Context, ref string) error
 	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
 	// EnsureProxyImage pulls the proxy sidecar image if it is not already
 	// present locally. The control plane calls this BEFORE the revive claim
@@ -843,4 +713,76 @@ type DriveProber interface {
 	// exists (create, preflight, a /me poll) and MUST honour ctx's deadline —
 	// the caller is a request thread, not a background sweep.
 	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
+}
+
+// DriveReclaimOutcome is the closed set of answers a DriveReclaimer gives for
+// one object it was asked to destroy. Two states, and the second is not an
+// error: the object being gone already is the same END STATE the caller asked
+// for, reached by a prior partial reclaim or by the operator's own
+// `docker volume rm` / `kubectl delete pvc` — the idempotent-teardown contract
+// StopSandbox already takes. Telling the two apart matters only to the audit
+// row, which is exactly why it is a value and not a bool.
+type DriveReclaimOutcome string
+
+const (
+	// DriveReclaimDeleted: this call issued the delete and the substrate
+	// accepted it. The bytes are gone.
+	DriveReclaimDeleted DriveReclaimOutcome = "deleted"
+	// DriveReclaimAlreadyAbsent: no object answered to that name, so this call
+	// destroyed nothing. Not an error — but never reported as "deleted"
+	// either, because an audit row that says a person's storage was destroyed
+	// when it was already missing is the one row an operator must be able to
+	// trust.
+	DriveReclaimAlreadyAbsent DriveReclaimOutcome = "already_absent"
+)
+
+// ErrDriveInUse is the sentinel a DriveReclaimer returns when a sandbox still
+// holds the object: a running container mounts the Docker volume, or a pod
+// still references the claim. The caller answers 409 and the operator retries
+// once the run has finished.
+//
+// A refusal rather than a force-delete, and the asymmetry is deliberate: on
+// Docker a forced remove would pull the volume out from under a live agent
+// mid-write, and on Kubernetes the apiserver ACCEPTS a delete against an
+// in-use claim and leaves it Terminating behind the pvc-protection finalizer —
+// which destroys nothing now and refuses the member's NEXT run with
+// errDriveClaimTerminating until the pod goes. Neither is "reclaimed".
+var ErrDriveInUse = errors.New("runner: the drive's storage is still held by a running sandbox")
+
+// ErrDriveNotReclaimable is the sentinel a DriveReclaimer returns when the
+// object that answers to the drive's name is NOT the storage this drive
+// allocated — another drive's object under a colliding minted name, another
+// principal's object under a home template that folds two people onto one, an
+// operator's own pre-existing object, or one already being deleted.
+//
+// The same identity evidence the mount path refuses on (driveClaimIdentity /
+// driveVolumeAdoptable), asked one last time before anything is destroyed:
+// a mount that gets identity wrong shows one member another member's files,
+// and a reclaim that gets it wrong deletes them.
+var ErrDriveNotReclaimable = errors.New("runner: the object under this drive's name is not the storage it allocated")
+
+// DriveReclaimer is an OPTIONAL Runner capability, modelled on ImageRemover:
+// a substrate that can DESTROY the per-person storage object a user drive
+// allocated.
+//
+// It is the one verb in this file that is irreversible, and it exists because
+// there was no verb at all: deleting a drive removed its row and left the
+// volume or the claim behind, with nothing in the product able to name it
+// afterwards. The alternative — a daemon that reclaims on its own, at teardown
+// or when an allocation goes away — is refused outright: a drive OUTLIVES
+// every run that mounts it, so no automatic path may ever reach this.
+//
+// On Kubernetes the verb is not even granted by default. The chart's Role
+// carries `persistentvolumeclaims: [get, create]` and gains `delete` only
+// under `drives.reclaim.enabled`, so a stock install cannot execute this
+// call at all and the apiserver's own 403 is the backstop under the API's
+// super-admin gate.
+type DriveReclaimer interface {
+	// ReclaimDrive destroys the storage object mount names, bounded by ctx.
+	//
+	// It MUST refuse rather than destroy when the object is not this drive's
+	// (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse),
+	// and it MUST answer DriveReclaimAlreadyAbsent — not an error — when
+	// nothing answers to the name.
+	ReclaimDrive(ctx context.Context, mount types.DriveMount) (DriveReclaimOutcome, error)
 }

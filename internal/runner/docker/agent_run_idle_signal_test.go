@@ -41,6 +41,7 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 		{"claude-code", ccEnvIdleSignalSetup(ccRunnableAgentRun)},
 		{"codex-cli", ccEnvIdleSignalSetup(cxRunnableAgentRun)},
 		{"aws-sso", awsSSOIdleSignalSetup},
+		{"agent-base", ccEnvIdleSignalSetup(baseRunnableAgentRun)},
 	}
 	signals := []struct {
 		name   string
@@ -194,4 +195,22 @@ func awsSSOIdleSignalSetup(t *testing.T) (script string, env []string, prepDone 
 		"WARDYN_REPO_URL=",
 	)
 	return runnableAgentRun(t), env, filepath.Join(home, ".wardyn", "prep-done")
+}
+
+// baseRunnableAgentRun: agent-base's agent-run (deploy/images/common/agent-run-stub),
+// which agent-vscode and agent-novnc inherit unchanged — same real-script copy
+// idiom as cxRunnableAgentRun.
+func baseRunnableAgentRun(t *testing.T) string {
+	t.Helper()
+	body := ccRead(t, ccAbs(t, "../../../deploy/images/common/agent-run-stub"))
+	const from = "source /usr/local/bin/agent-run-lib.sh"
+	if !strings.Contains(body, from) {
+		t.Fatalf("agent-run-stub no longer sources %s", from)
+	}
+	body = strings.Replace(body, from, "source "+ccAbs(t, ccAgentRunLibPath), 1)
+	dst := filepath.Join(t.TempDir(), "agent-run")
+	if err := os.WriteFile(dst, []byte(body), 0o700); err != nil { //nolint:gosec // test fixture
+		t.Fatalf("write runnable agent-run: %v", err)
+	}
+	return dst
 }

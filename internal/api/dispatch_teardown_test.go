@@ -65,6 +65,14 @@ func (s *dispatchTestStore) State() types.RunState {
 }
 
 func (s *dispatchTestStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
+
+// SetRunDiskMiB records onto run, so GetRun shows what dispatch persisted.
+func (s *dispatchTestStore) SetRunDiskMiB(_ context.Context, _ uuid.UUID, mib int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.run.DiskMiB = mib
+	return nil
+}
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
 }
@@ -294,6 +302,8 @@ func (r *waitTransientRunner) AgentStatus(_ context.Context, _, execID string) (
 // Counterfactual: with a bare `return` on werr != nil the run stays RUNNING,
 // the broker never revokes, and the sandbox is never stopped.
 func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) {
+	prev := reconcileWatchIntervalNS.Swap(int64(20 * time.Millisecond))
+	t.Cleanup(func() { reconcileWatchIntervalNS.Store(prev) })
 	rn := &waitTransientRunner{
 		killRaceRunner: &killRaceRunner{fakeRunner: &fakeRunner{}},
 		waitErr:        errors.New("docker: wait: exec inspect: EOF"),
@@ -325,7 +335,8 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})
 
-	// The watcher is detached; reconcileWatch probes on a 5s tick. Wait for the
+	// The watcher is detached; reconcileWatch probes on its tick (5s, shrunk
+	// above). Wait for the
 	// WHOLE finalize, not just the state flip: the cascade wins the terminal CAS
 	// FIRST and revokes after (deliberately — C002), so a poll that stops at
 	// "terminal" can observe the run finalized microseconds before its revoke
@@ -364,3 +375,11 @@ var (
 	_ runner.Runner = (*execFailRunner)(nil)
 	_ runner.Runner = (*waitTransientRunner)(nil)
 )
+
+// TestReconcileWatchInterval_ProductionValueUnchanged pins the tick the test
+// above shrinks.
+func TestReconcileWatchInterval_ProductionValueUnchanged(t *testing.T) {
+	if got := time.Duration(reconcileWatchIntervalNS.Load()); got != 5*time.Second {
+		t.Fatalf("reconcileWatch interval = %v, want the production 5s", got)
+	}
+}

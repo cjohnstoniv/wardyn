@@ -8,6 +8,7 @@
 // overrides — no `as` cast, so a field added/renamed on the wire type fails
 // `tsc` here instead of drifting silently past a cast. See #195.
 import { aheadByHours } from "../app/lib/test-clock";
+import { heldFieldsFor } from "../app/lib/test-hold-fixture";
 import type { AgentRun } from "../app/lib/types/runs";
 import type { Workspace } from "../app/lib/types/workspaces";
 import type { ApprovalRequest } from "../app/lib/types/approvals";
@@ -42,8 +43,11 @@ export function makeWorkspace(o: Partial<Workspace> = {}): Workspace {
   };
 }
 
+// #1197: held/held_until are now server fields (internal/approval.Hold's
+// projection) — heldFieldsFor mirrors that same rule so every caller of this
+// factory keeps building rows by kind/requested_at/state exactly as before.
 export function makeApproval(o: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  const base: ApprovalRequest = {
     id: "approval-1",
     run_id: "run-1",
     kind: "tool_call",
@@ -52,4 +56,5 @@ export function makeApproval(o: Partial<ApprovalRequest> = {}): ApprovalRequest 
     requested_at: aheadByHours(-1),
     ...o,
   };
+  return { ...base, ...heldFieldsFor(base) };
 }

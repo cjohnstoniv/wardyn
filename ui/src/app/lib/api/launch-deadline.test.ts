@@ -12,6 +12,11 @@
 // default turned a launch that was working into "Could not reach the control
 // plane." and threw away the id the console was about to be handed.
 //
+// #125/#121: createRun (runs.ts) is NOT on this list any more — POST /runs is
+// async now (dispatch happens after the call answers), so it no longer blocks
+// through CreateSandbox and rides the plain default deadline. preflightRun
+// still runs that same resolution synchronously and keeps the longer one.
+//
 // A SOURCE SCAN rather than a behavioural test, deliberately: the defect is a
 // missing third argument at a call site, and the thing that must not regress is
 // that NO launch call site is left on the default. A new launch path added to
@@ -30,7 +35,6 @@ const read = (f: string) => readFileSync(join(here, f), "utf8");
 // lives in. POST /setup/harness-login is NOT here: it answers before dispatch
 // now (internal/api/harnesscred_launch.go), so it is a fast call again.
 const LAUNCH_CALLS: ReadonlyArray<{ file: string; fn: string; path: string }> = [
-  { file: "runs.ts", fn: "async createRun(", path: '"/runs"' },
   { file: "runs.ts", fn: "async preflightRun(", path: '"/runs/preflight"' },
   { file: "workspaces.ts", fn: "async recordTask(", path: "/record`" },
   // A repo scan is a sandbox launch too, and the least obvious one: handleScanWorkspace

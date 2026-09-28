@@ -12,10 +12,38 @@ import type {
   AvailabilityView,
   CapabilityGrant,
   CapabilityGrantInput,
+  CapabilitySubjectType,
   MeCapabilities,
   PermissionsSnapshot,
 } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+
+// The Explain grid (K4/AK-5, #739) — GET /permissions/explain's body. Each row
+// is one (kind, value) cell of the type editor's "What this type gets" grid
+// (user-types-design.md rev 4 §2.6). Mirrors internal/api/
+// capabilities_explain.go's explainResponse/capExplainRow exactly.
+export type ExplainState = "everyone" | "this_type" | "blocked" | "admins_only" | "not_available";
+
+export interface ExplainRow {
+  kind: string;
+  value: string;
+  state: ExplainState;
+  // The value is "Available to: Only these" — omitted when it isn't. A
+  // restricted value gets a row even when no grant names it.
+  restricted?: boolean;
+  // G-4: a non-secret display name the server can attach — a git provider's
+  // kind and organisation or host, or a model provider's own name — never an
+  // id or a secret. Omitted where the server can't name the row; the caller
+  // then falls back to a client-side name or the raw value.
+  label?: string;
+}
+
+export interface ExplainResponse {
+  subject_type: CapabilitySubjectType;
+  subject: string;
+  kinds_version: number;
+  rows: ExplainRow[];
+}
 
 // {kind}/{value} — the server takes the value as the REST of the path (an
 // image ref carries slashes, permissions_availability.go's availabilityTarget),
@@ -136,6 +164,30 @@ export const permissions = {
       enforcement: body.enforcement ?? {},
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
+    };
+  },
+
+  // GET /api/v1/permissions/explain?subject_type=&subject=&kinds= -> the
+  // Explain grid (#739) for one named subject — the User types screen asks
+  // for subject_type=user_type, whose subject is the type's id. securityOps,
+  // same tier as the rest of /permissions. `kinds` defaults server-side to
+  // every kind. A user or group subject's grid reads only rows naming that
+  // subject or `all`, never the person's groups or type. An unknown or
+  // malformed type id is a 400.
+  async explainCapabilities(
+    subjectType: CapabilitySubjectType,
+    subject: string,
+    kinds?: string[],
+  ): Promise<ExplainResponse> {
+    const params = new URLSearchParams({ subject_type: subjectType, subject });
+    if (kinds?.length) params.set("kinds", kinds.join(","));
+    const res = await wfetch(`/permissions/explain?${params.toString()}`, { method: "GET" });
+    const body = await asJson<Partial<ExplainResponse>>(res);
+    return {
+      subject_type: body.subject_type ?? subjectType,
+      subject: body.subject ?? subject,
+      kinds_version: body.kinds_version ?? 0,
+      rows: unwrapList<ExplainRow>(body.rows),
     };
   },
 };

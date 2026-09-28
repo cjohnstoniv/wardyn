@@ -46,11 +46,11 @@ const mintOKTicket = "test-minted-ticket"
 // request — no Upgrade header, so websocket.Accept always rejects it — would
 // be misread as the server's definitive answer and returned to the caller
 // before the dial these tests exist to exercise ever ran. Only requests for
-// POST .../attach-ticket are intercepted; everything else (the GET dial)
+// POST .../attach/ticket are intercepted; everything else (the GET dial)
 // reaches wsHandler unchanged, so these tests still exercise the real pump.
 func withMintOK(wsHandler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ticket":"` + mintOKTicket + `"}`))
 			return
@@ -64,7 +64,7 @@ func withMintOK(wsHandler http.HandlerFunc) http.HandlerFunc {
 // --------------------------------------------------------------------------
 
 func TestBuildWSURL(t *testing.T) {
-	// B12a-F10: attachCmd now refuses a non-UUID run id via parseID before
+	// attachCmd now refuses a non-UUID run id via parseID before
 	// buildWSURL ever sees it (the attach endpoint only ever accepts a UUID),
 	// so these fixtures use UUID-shaped ids — the only ones production code
 	// still reaches this function with. buildWSURL itself stays a plain string
@@ -250,7 +250,7 @@ func TestRunAttach_RejectedHandshakeReturnsAPIError(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F1: TERM/HUP/INT are wired INSIDE runAttach (never a root
+// TERM/HUP/INT are wired INSIDE runAttach (never a root
 // ExecuteContext) so a signal cancels the session through the SAME path a
 // clean pump end already takes: pumpCtx cancels, the pump halves end, and the
 // terminal is restored before the command returns. Signals aren't portable to
@@ -347,7 +347,7 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F1 (review R-02): a signal (or any other caller cancellation) that
+// A signal (or any other caller cancellation) that
 // lands WHILE the WebSocket handshake is still in flight must also be a
 // clean detach, not a mislabelled "couldn't reach the control plane" — the
 // exact mislabelling the whole point of scoping the signal wiring locally
@@ -382,7 +382,7 @@ func TestRunAttach_CancelledCtxDuringDialIsCleanDetach(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F1 (review R-01): the pinning test for the SIGNAL WIRING itself — not
+// The pinning test for the SIGNAL WIRING itself — not
 // just the cancellation mechanism it feeds — needs a real signal delivered
 // to a real process. TestHelperAttachSignal is the child body, re-exec'd
 // under an env guard by the two subprocess tests below; it is not a test in
@@ -607,7 +607,7 @@ func TestRunAttach_SecondSIGTERMKillsAWedgedSession(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F10: attach validates the run id client-side, exactly like `ssh`
+// attach validates the run id client-side, exactly like `ssh`
 // already does (ssh_test.go's TestRunSSH_RefusesANonUUIDRunID) — the id is
 // spliced straight into the WebSocket dial URL (buildWSURL) with no further
 // encoding, and the attach endpoint only ever accepts a UUID.
@@ -634,11 +634,11 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// `wardyn attach` mints a single-use attach ticket with whatever token is
-// configured (POST /runs/{id}/attach-ticket, owner-or-admin) and dials
-// with it, instead of dialing the WS route directly with a bearer that
-// route's fallback lane requires be an admin's. These four pin that
-// contract: a member's own
+// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn attach` mints a single-use
+// attach ticket with whatever token is configured (POST
+// /runs/{id}/attach/ticket, owner-or-admin) and dials with it, instead of
+// dialing the WS route directly with a bearer that route's fallback lane
+// requires be an ADMIN'S. These four pin the DONE criteria: a member's own
 // token mints and dials; a foreign run gets the ticket lane's 404 (no
 // existence oracle); an admin token still works; the ticket is freshly
 // minted on every attach attempt, never cached or reused.
@@ -658,7 +658,7 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 	mintSawToken := false
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			if r.Header.Get("Authorization") == "Bearer "+memberToken {
 				mintSawToken = true
 			}
@@ -701,7 +701,7 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
 	const adminTicket = "minted-for-admin"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ticket":"` + adminTicket + `"}`))
 			return
@@ -734,7 +734,7 @@ func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
 // must never be attempted once the mint has definitively refused.
 func TestRunAttach_ForeignRunMintReturns404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"run not found"}`))
@@ -768,7 +768,7 @@ func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
 	lastTicket.Store("")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			n := atomic.AddInt32(&mintCount, 1)
 			tok := fmt.Sprintf("ticket-%d", n)
 			lastTicket.Store(tok)
@@ -805,7 +805,7 @@ func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
 // TestRunAttach_FallsBackToBareDialWhenMintUnavailable pins the goal's other
 // requirement: "keep the admin/bearer path working exactly as now when no
 // ticket can be minted, so an admin-token CI caller is unaffected." No
-// /attach-ticket route is registered here (an older control plane); the mux's
+// /attach/ticket route is registered here (an older control plane); the mux's
 // own 404 page is not the JSON `{"ticket":...}` shape mintAttachTicket knows
 // how to read, so it is treated as inconclusive rather than a definitive
 // refusal, and the CLI falls back to dialing directly with the configured
@@ -1127,6 +1127,79 @@ func TestAttach_TakeoverCloseIsNotACleanDetach(t *testing.T) {
 	}
 	if strings.Contains(stderrGot, "detached") {
 		t.Errorf("stderr = %q, must not print the clean-detach line on a take-over", stderrGot)
+	}
+	if stdoutGot != "" {
+		t.Errorf("stdout = %q, want no PTY output leaked", stdoutGot)
+	}
+}
+
+// TestAttach_ShellExitIsCleanDetach pins #1112: when the remote shell exits
+// normally, the server sends a real StatusNormalClosure close frame (the fix
+// in internal/api/attach.go's attachPump — a graceful c.Close BEFORE the
+// shared pump ctx is cancelled, see that file's comment for why cancelling
+// first raced coder/websocket's own context-triggered abrupt teardown and
+// produced a bare "failed to read frame header: EOF" instead). runAttach must
+// treat that close as a clean detach: nil error, "detached" on stderr.
+func TestAttach_ShellExitIsCleanDetach(t *testing.T) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mode := `{"type":"attach-mode","read_only":false,"holder":null}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(mode)); err != nil {
+			return
+		}
+		_ = c.Close(websocket.StatusNormalClosure, "shell exited")
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if attachErr != nil {
+		t.Fatalf("runAttach = %v, want nil — a normal shell exit must be a clean detach", attachErr)
+	}
+	if !strings.Contains(stderrGot, "detached") {
+		t.Errorf("stderr = %q, want the clean-detach line", stderrGot)
+	}
+	if stdoutGot != "" {
+		t.Errorf("stdout = %q, want no PTY output leaked", stdoutGot)
+	}
+}
+
+// TestAttach_SeveredConnectionIsNotACleanDetach is #1112's negative control:
+// a connection that drops with NO close frame at all (a network partition,
+// not a shell exit) must still exit non-zero — CloseNow tears the raw
+// connection down abruptly, unlike the graceful Close the shell-exit test
+// above sends, and isNormalClose must stay strict against exactly this case.
+func TestAttach_SeveredConnectionIsNotACleanDetach(t *testing.T) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		mode := `{"type":"attach-mode","read_only":false,"holder":null}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(mode)); err != nil {
+			return
+		}
+		c.CloseNow()
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if attachErr == nil {
+		t.Fatal("runAttach = nil, want an error — a severed connection must not be reported as a clean detach")
+	}
+	if strings.Contains(stderrGot, "detached") {
+		t.Errorf("stderr = %q, must not print the clean-detach line on a severed connection", stderrGot)
 	}
 	if stdoutGot != "" {
 		t.Errorf("stdout = %q, want no PTY output leaked", stdoutGot)

@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -28,13 +29,59 @@ type reviveStore struct {
 	*lostStore
 	profiles []types.GovernanceProfile
 	release  string
+	// cfg is the run's stored proxy config in the clear; the store.RunProxyConfigs
+	// methods below seal and open it under key as a PG row would hold it
+	// (run_proxy_config.go). A revive's write replaces it.
+	cfg     []byte
+	key     []byte
+	dropped bool
 }
 
-func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason) (bool, error) {
+var _ store.RunProxyConfigs = (*reviveStore)(nil)
+
+func (s *reviveStore) PutRunProxyConfig(_ context.Context, id uuid.UUID, sealed []byte) error {
+	plain, err := kek.Open(s.key, sealed, runProxyConfigAAD(id))
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from ||
-		(from != "" && from != types.LostOutage && from != types.LostReboot) {
+	s.cfg, s.dropped = plain, false
+	return nil
+}
+
+func (s *reviveStore) GetRunProxyConfig(_ context.Context, id uuid.UUID) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cfg == nil || s.dropped || id != s.run.ID {
+		return nil, store.ErrNotFound
+	}
+	return kek.Seal(s.key, s.cfg, runProxyConfigAAD(id))
+}
+
+func (s *reviveStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropped = true
+	return nil
+}
+
+func (s *reviveStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) { return 0, nil }
+
+func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason, ended *store.EndedKept) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from {
+		return false, nil
+	}
+	switch from {
+	case "", types.LostOutage, types.LostReboot:
+	case types.LostEnded:
+		if ended == nil || !s.run.LostAt.Equal(ended.LostAt) || !s.run.LostAt.After(ended.KeptAfter) ||
+			(s.run.EndsAt != nil && !s.run.EndsAt.After(ended.Now)) {
+			return false, nil
+		}
+	default:
 		return false, nil
 	}
 	s.run.LostAt, s.run.LostReason = nil, ""
@@ -66,10 +113,10 @@ func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.Governanc
 	return s.profiles, nil
 }
 
-// reviveRunner is lostRunner that holds one proxy config and can replace it.
+// reviveRunner is lostRunner that can replace a proxy; replaced is every
+// config it was handed.
 type reviveRunner struct {
 	*lostRunner
-	cfg        []byte
 	replaced   [][]byte
 	replaceErr error
 	// status overrides the container's OWN reported status (Status, not
@@ -80,15 +127,19 @@ type reviveRunner struct {
 	// statusErr makes Status fail, as a wedged daemon would (Minor, Fable
 	// review): the probe could not observe the agent at all.
 	statusErr error
+	onEnsure  func()
 }
 
-func (r *reviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.cfg, nil
-}
+func (r *reviveRunner) CanReplaceProxy(context.Context, string) error { return nil }
 
-func (r *reviveRunner) EnsureProxyImage(context.Context) error { return nil }
+// EnsureProxyImage runs onEnsure, when set: what lands while a revive
+// prepares its image, between its admission and its claim.
+func (r *reviveRunner) EnsureProxyImage(context.Context) error {
+	if r.onEnsure != nil {
+		r.onEnsure()
+	}
+	return nil
+}
 
 func (r *reviveRunner) Status(context.Context, string) (runner.Status, error) {
 	r.mu.Lock()
@@ -109,7 +160,6 @@ func (r *reviveRunner) ReplaceProxy(_ context.Context, _ string, cfg []byte) err
 		return r.replaceErr
 	}
 	r.replaced = append(r.replaced, cfg)
-	r.cfg = cfg
 	return nil
 }
 
@@ -156,7 +206,9 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.rr = &reviveRunner{lostRunner: f.lr, cfg: cfg}
+	f.rr = &reviveRunner{lostRunner: f.lr}
+	key := make([]byte, kek.DEKSize)
+	f.rs.cfg, f.rs.key, f.srv.cfg.RunConfigKey = cfg, key, key
 	f.srv.cfg.Store = f.rs
 	f.srv.cfg.Runner = f.rr
 	f.srv.cfg.ControlPlaneURL = "https://wardynd:8443"
@@ -273,18 +325,21 @@ func TestReviveRun_Refusals(t *testing.T) {
 		"the git broker would lose GitHub": {func(f *reviveFixture) {
 			f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, "github.com")
 			var cfg map[string]any
-			_ = json.Unmarshal(f.rr.cfg, &cfg)
+			_ = json.Unmarshal(f.rs.cfg, &cfg)
 			cfg["git_grants"] = map[string]string{"acme/app": uuid.NewString()}
-			f.rr.cfg, _ = json.Marshal(cfg)
+			f.rs.cfg, _ = json.Marshal(cfg)
 		}, http.StatusConflict},
 		"a reboot stopped its agent and the runner cannot start it": {func(f *reviveFixture) { f.st.run.LostReason = types.LostReboot }, http.StatusConflict},
-		"it ended": {func(f *reviveFixture) { f.st.run.LostReason = types.LostEnded }, http.StatusConflict},
+		"it ended and was not extended": {func(f *reviveFixture) {
+			end := f.now.Add(-time.Minute)
+			f.st.run.LostReason, f.st.run.EndsAt = types.LostEnded, &end
+		}, http.StatusConflict},
 		"it passed its end": {func(f *reviveFixture) {
 			end := f.now.Add(-time.Minute)
 			f.st.run.EndsAt = &end
 		}, http.StatusConflict},
 		"a config for another run": {func(f *reviveFixture) {
-			f.rr.cfg, _ = runner.BuildProxyConfig(uuid.New(), runner.ProxyConfig{RunToken: "x", ControlPlaneURL: "http://x"}, 3128)
+			f.rs.cfg, _ = runner.BuildProxyConfig(uuid.New(), runner.ProxyConfig{RunToken: "x", ControlPlaneURL: "http://x"}, 3128)
 		}, http.StatusConflict},
 	}
 	for name, tc := range cases {
@@ -458,18 +513,18 @@ func TestAdminProxyWindow(t *testing.T) {
 func TestReviveRun_RevokesTheRetiringToken(t *testing.T) {
 	f := newReviveFixture(t)
 	ctx := context.Background()
-	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience)
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint the retiring token: %v", err)
 	}
 	// Splice the real, live old token into the run's rendered (stopped) proxy
 	// config, as ProxyConfig would read one back for a genuine revive.
-	cfg, err := proxy.LoadConfigBytes(f.rr.cfg)
+	cfg, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.RunToken = old.Token
-	if f.rr.cfg, err = json.Marshal(cfg); err != nil {
+	if f.rs.cfg, err = json.Marshal(cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -498,16 +553,16 @@ func TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive(t *testing.T) {
 	f := newReviveFixture(t)
 	f.st.run.LostAt, f.st.run.LostReason = nil, "" // live
 	ctx := context.Background()
-	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience)
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint the retiring token: %v", err)
 	}
-	cfg, err := proxy.LoadConfigBytes(f.rr.cfg)
+	cfg, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.RunToken = old.Token
-	if f.rr.cfg, err = json.Marshal(cfg); err != nil {
+	if f.rs.cfg, err = json.Marshal(cfg); err != nil {
 		t.Fatal(err)
 	}
 	f.rr.replaceErr = errors.New("docker: inspect agent for its proxy address: boom") // old proxy untouched

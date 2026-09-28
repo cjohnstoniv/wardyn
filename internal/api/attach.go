@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -255,6 +256,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
+	// A paused run is thawed before the exec: the daemon refuses one into a
+	// paused container (run_pause.go).
+	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
+		writeError(w, http.StatusBadGateway, "run is paused and could not be resumed; try again")
+		return
+	}
+
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -312,6 +320,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		actorType: principalType,
 		since:     s.cfg.Now().UTC(),
 		source:    attachSourceWeb,
+		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
 		cols:      opts.Cols,
 		rows:      opts.Rows,
 		// Promotion: the SAME socket is told it may now type. attach-terminal
@@ -437,6 +446,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	finishCtx := s.cfg.BaseCtx
 	if finishCtx == nil {
 		finishCtx = context.Background()
+	}
+	if via, ok := audit.DelegationFrom(ctx); ok {
+		finishCtx = audit.WithDelegation(finishCtx, via) // the close rows name the portal too (#1142)
 	}
 	finishRecording(finishCtx, principalType, principal)
 
@@ -567,6 +579,20 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 			if rerr != nil {
 				if errors.Is(rerr, io.EOF) {
 					reasonCh <- "shell exited"
+					// A real close handshake BEFORE cancelling ctx (#1112): the
+					// client->server goroutine below is blocked in c.Read(ctx) on
+					// the SAME ctx this func cancels just below, and coder/websocket
+					// arms that Read call to forcibly tear down the raw connection
+					// (c.close(), no close frame) the instant ctx is Done —
+					// cancelling first would race that teardown and the client
+					// would see a bare EOF ("failed to read frame header: EOF")
+					// instead of a clean detach. c.Close writes the close frame,
+					// then blocks briefly for the peer's echo before tearing the
+					// connection down itself, so a normal shell exit reaches the
+					// client as an actual StatusNormalClosure. Best-effort: if the
+					// peer is already gone, this is a no-op and cancel() below
+					// still reaps the goroutines.
+					_ = c.Close(websocket.StatusNormalClosure, "shell exited")
 				} else {
 					reasonCh <- "session read error"
 				}

@@ -446,5 +446,7 @@ func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string, po
 		}
 		return w
 	}
-	return doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), body)
+	// An SSO admin session is in the Admin view and cannot launch
+	// (refuseAdminViewLaunch); the token lane still can.
+	return do(t, srv, http.MethodPost, path, providerAdminToken(srv, joinCreateOwner), body)
 }

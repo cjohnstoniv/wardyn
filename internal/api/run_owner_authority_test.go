@@ -44,12 +44,12 @@ func newOwnerFixture(t *testing.T) (*reviveFixture, uuid.UUID) {
 
 func (f *reviveFixture) editConfig(t *testing.T, edit func(*proxy.Config)) {
 	t.Helper()
-	c, err := proxy.LoadConfigBytes(f.rr.cfg)
+	c, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatalf("fixture config: %v", err)
 	}
 	edit(c)
-	if f.rr.cfg, err = json.Marshal(c); err != nil {
+	if f.rs.cfg, err = json.Marshal(c); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -350,7 +350,7 @@ func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T)
 func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	t.Helper()
 	f, _ := newOwnerFixture(t)
-	c, err := proxy.LoadConfigBytes(f.rr.cfg)
+	c, err := proxy.LoadConfigBytes(f.rs.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,4 +648,34 @@ func TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows(t *testing.T) {
 			t.Error("a refused restart replaced the proxy")
 		}
 	})
+}
+
+// TestRecheck_OperatorOwnedIsTheRecordedFlagNotTheName: another admin's revive
+// of a run the admin token created (operator_owned recorded at create) skips
+// the owner re-check, while a person's run whose created_by is merely spelled
+// "admin-token" is held to the owner's rows like any other (#1162).
+func TestRecheck_OperatorOwnedIsTheRecordedFlagNotTheName(t *testing.T) {
+	otherAdmin := ssoSession(t, "sub-other-admin", "admin@corp.example", oidc.RoleAdmin)
+	for _, tc := range []struct {
+		name          string
+		operatorOwned bool
+		code          int
+	}{
+		{"admin-token run", true, http.StatusOK},
+		{"person's run named like the admin token", false, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.st.run.CreatedBy, f.st.run.OperatorOwned = adminTokenPrincipal, tc.operatorOwned
+			f.st.run.GovernanceProfileID = nil
+			f.st.enf = map[string]bool{capAgent: true}
+			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", otherAdmin, "")
+			if w.Code != tc.code {
+				t.Fatalf("revive = %d %s, want %d", w.Code, w.Body.String(), tc.code)
+			}
+			if tc.code != http.StatusOK {
+				f.assertReviveRefused(t, "capability_"+capAgent)
+			}
+		})
+	}
 }

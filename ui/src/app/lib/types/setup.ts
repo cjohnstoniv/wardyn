@@ -366,6 +366,15 @@ export interface SetupProviderAccess {
   // RFC3339 UTC, only on a state `action` names an instant for. Same reading
   // rule as SetupModelAccess.deadline.
   deadline?: string;
+  // The sign-in run the caller's stored credential for this provider was
+  // captured by, stamped by the server from that run's own token (#993).
+  // Absent for a typed key and when nothing is captured.
+  source_run_id?: string;
+  // RFC3339: when the caller's OWN credential for this provider was stored and
+  // when a run last used it (to the minute). Absent when none is stored or it
+  // was never used.
+  added_at?: string;
+  last_used_at?: string;
 }
 
 export interface SetupStatus {
@@ -393,8 +402,8 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
-  // The model providers the caller may use. Absent with no provider block
-  // (today), or when none serves an agent the caller may launch.
+  // The model providers the caller may use. Absent only when no provider
+  // block exists; a block that grants this caller nothing is `[]`.
   model_providers?: SetupModelProvider[];
   // THIS PRINCIPAL's own connection state for each provider in
   // `model_providers` (MP-12) — one row per provider, graded against the
@@ -452,6 +461,11 @@ export interface SetupStatus {
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };
   age_key: { durable: boolean };
+  // The kind of store this deployment keeps people's credentials in — never a
+  // host, path or vault name (design F-3). Kept through redactSetupStatusForUser,
+  // unlike `checks`: every signed-in person reads it, not just an admin.
+  // Optional: absent on an older daemon that predates the field.
+  credential_storage?: "local" | "key_service" | "vault" | "key_vault";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
   // Optional: absent on an older/fallback status (e.g. READY_FALLBACK, or a

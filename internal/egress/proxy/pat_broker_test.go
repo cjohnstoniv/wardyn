@@ -36,7 +36,7 @@ func newPATBrokerUpstream(t *testing.T, token, username string) *gitBrokerUpstre
 // operator's GrantSpec.TTLSeconds up to the 1h cap, so an operator can author a
 // grant whose whole life is shorter than a cache margin. The fixture that
 // stated NO expiry exercised only brokeredToken's unparseable-response arm
-// (expiresAt == 0, cache forever), which is why the 5-minute margin bug (F120)
+// (expiresAt == 0, cache forever), which is why the 5-minute margin bug
 // survived a green cache pin.
 func newPATBrokerUpstreamTTL(t *testing.T, token, username string, ttl time.Duration) *gitBrokerUpstream {
 	t.Helper()
@@ -132,7 +132,7 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	if up.mintCalls != 1 {
 		t.Fatalf("mintCalls = %d, want 1 (the PAT is minted server-side and cached per grant)", up.mintCalls)
 	}
-	// F014: the row must name the FORGE it dialled. Logged through
+	// the row must name the FORGE it dialled. Logged through
 	// emitLocalDecision it named the CONTROL PLANE, so a clone of gitlab.com and
 	// a credential mint were the same row, and two granted forges could not be
 	// told apart at all — in the one stream an egress review reads.
@@ -433,7 +433,7 @@ func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 	}
 }
 
-// F120: a PENDING credential approval must be waited out, not returned as a 502.
+// a PENDING credential approval must be waited out, not returned as a 502.
 //
 // The broker mints server-side with no caller able to retry, so the GitHub lane
 // polls the same approval itself. patToken returned an
@@ -468,6 +468,21 @@ func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {
 	}
 }
 
+// setPATBranchNS sets the merged WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS var's
+// `pat` scope, standing in for the pre-#203 standalone
+// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS these tests used to set directly.
+// An empty/whitespace-only value means "unset" — set the WHOLE var to it
+// (there is no scope to unset independently any more) rather than wrapping it
+// in "pat:", which would be a malformed scoped value, not an unset one.
+func setPATBranchNS(t *testing.T, v string) {
+	t.Helper()
+	if strings.TrimSpace(v) == "" {
+		t.Setenv(envEnforceBranchNS, v)
+		return
+	}
+	t.Setenv(envEnforceBranchNS, "pat:"+v)
+}
+
 // TestPATBranchNSEnforcedEnv: the opt-IN env is the App-lane switch's mirror —
 // OFF when unset (so nothing a 0.7.1 deployment pushed changes), off on an
 // explicit disable word, on for the enable words, and FAIL CLOSED (on) for
@@ -485,7 +500,7 @@ func TestPATBranchNSEnforcedEnv(t *testing.T) {
 		{"maybe", true}, // garbage => enforce, never silently off
 	} {
 		t.Run("val="+tc.val, func(t *testing.T) {
-			t.Setenv(envEnforcePATBranchNS, tc.val)
+			setPATBranchNS(t, tc.val)
 			if got := PATBranchNSEnforced(); got != tc.want {
 				t.Fatalf("PATBranchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
 			}
@@ -499,7 +514,7 @@ func TestPATBranchNSEnforcedEnv(t *testing.T) {
 // The confinement is opt-in, and "opt-in" has to mean the default deployment
 // sees no change at all.
 func TestPATBrokerPushUnconfinedByDefault(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "") // never inherit an operator's setting
+	setPATBranchNS(t, "") // never inherit an operator's setting
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -530,7 +545,7 @@ func TestPATBrokerPushUnconfinedByDefault(t *testing.T) {
 // minted and before a byte reaches the forge. The decision row names the FORGE,
 // not github.com: that is the one thing the two lanes must NOT share.
 func TestPATBrokerDeniesOutOfNamespacePushWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -566,7 +581,7 @@ func TestPATBrokerDeniesOutOfNamespacePushWhenEnforcing(t *testing.T) {
 // forwarded with the command section re-prepended byte-for-byte ahead of the
 // still-streaming pack, and keeps the ordinary brokered:git-pat allow.
 func TestPATBrokerForwardsInNamespacePushWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "1")
+	setPATBranchNS(t, "1")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -593,7 +608,7 @@ func TestPATBrokerForwardsInNamespacePushWhenEnforcing(t *testing.T) {
 // opted in, refs discovery and upload-pack are pure streaming — nothing
 // buffered, nothing refused, no new row.
 func TestPATBrokerFetchUnaffectedWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -615,7 +630,7 @@ func TestPATBrokerFetchUnaffectedWhenEnforcing(t *testing.T) {
 // cannot be ref-checked on this lane either, so it is refused (415) rather than
 // waved through unparsed — the same silent-bypass rule, the same words.
 func TestPATBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxy(t,
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
@@ -643,7 +658,7 @@ func TestPATBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
 // marker, since a push on a proxy whose switch is off was never confined and
 // keeps the ordinary brokered:git-pat allow.
 func TestPATBrokerPushPolicyOptOut(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "on")
+	setPATBranchNS(t, "on")
 	up := newPATBrokerUpstream(t, "PAT", "oauth2")
 	p, sink := newPATBrokerProxySpec(t, types.RunPolicySpec{GitPushAnyBranch: true},
 		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))

@@ -276,7 +276,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // clicked above already scopes allowed_domains to exactly
   // api.anthropic.com, so there is no second click left to attach this line
   // to — re-spotlighting the panel's Spec (JSON) textarea is the closest
-  // honest on-screen event. See local/light-episodes-dialog-flags.md.
+  // honest on-screen event.
   await spotlight(page, page.getByLabel("Spec (JSON)"));
   await caption(page, "Add api.anthropic.com.");
   await beat(page, BEAT_SHORT);

@@ -392,7 +392,7 @@ func networkNames(insp container.InspectResponse) []string {
 	return names
 }
 
-// TestL0_NoDNSExfil is B9-F4's settling probe, and the only thing that can
+// TestL0_NoDNSExfil is the settling probe, and the only thing that can
 // settle it: whether a CC1 agent — sealed on a gatewayless Internal=true
 // network, with no default route and no path to any resolver of its own — can
 // still get an EXTERNAL name RESOLVED through Docker's embedded DNS at

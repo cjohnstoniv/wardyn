@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestMITMHostsKeepOnlyTheLastPortPerHost (B10-F9) PINS today's behaviour rather
+// TestMITMHostsKeepOnlyTheLastPortPerHost PINS today's behaviour rather
 // than changing it: mitmHosts/mitmPorts are keyed on the bare host, so two
 // entries for the same host ("m.corp:443" and "m.corp:8443") collapse — the LAST
 // one wins and the other port silently falls through as an opaque tunnel, never
@@ -71,7 +71,7 @@ func TestMITMHostsKeepOnlyTheLastPortPerHost(t *testing.T) {
 			t.Error("the LAST authored port must be the one that survives")
 		}
 		if p.mitmPortAllowed("m.corp", 443) {
-			t.Error("mitmPorts now keys on host:port — B10-F9's re-keying landed; " +
+			t.Error("mitmPorts now keys on host:port — the re-keying landed; " +
 				"delete this pin and assert both ports instead")
 		}
 	})

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// B11a-F13, the wardyn-aws-sso half — and the one place the answer is the
+// The wardyn-aws-sso half — and the one place the answer is the
 // OPPOSITE of the other two clients.
 //
 // The finding names three in-sandbox clients that used http.DefaultTransport:

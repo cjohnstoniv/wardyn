@@ -105,9 +105,8 @@ func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, ge
 
 // loadableUpstreamProxyURL is the last gate BOTH resolve lanes pass through: a
 // URL the sidecar's own loader (proxy.ValidUpstreamProxyURL) would refuse is
-// dropped here, with a reason, instead of being delivered in
-// WARDYN_PROXY_CONFIG_JSON to a wardyn-proxy that then os.Exit(1)s at container
-// start and takes the run's whole egress path with it. validateSiteConfig
+// dropped here, with a reason, instead of being delivered in the proxy config
+// to a wardyn-proxy that then os.Exit(1)s at container start and takes the run's whole egress path with it. validateSiteConfig
 // applies the same gate at PUT /site-config, so reaching this is either a row
 // written before that check existed or a URL that arrived through the SECRET
 // lane, which no write-time validator can see inside — exactly the

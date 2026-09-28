@@ -145,7 +145,7 @@ func TestSiteConfigApply_ForwardsTheOnboardingMark(t *testing.T) {
 }
 
 // TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied is the CLI half of the
-// signal that REPLACED the 400 (R3 F025 fix-up): onboarding_completed_at is
+// signal that REPLACED the 400 (R3 fix-up): onboarding_completed_at is
 // server-owned, so a captured document's copy is dropped on the write. The
 // server says so with onboarding_completed_at_ignored, and `apply` must print
 // that the way it prints the integrations warning ten lines above — this file is
@@ -189,7 +189,7 @@ func TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied(t *testing.T) {
 	}
 }
 
-// TestSiteConfigApply_NotesFieldsAnOlderClientCannotName pins F285: the server
+// TestSiteConfigApply_NotesFieldsAnOlderClientCannotName: the server
 // carries forward a stored value for any key the request body did not MENTION
 // (carryForwardUnnamedSiteConfigFields, internal/api/site_config.go), which
 // closes the silent erase for every client — but an operator applying a
@@ -276,7 +276,7 @@ func TestSiteConfigApply_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	if strings.Contains(stderr, "left as the server already has it") {
-		t.Errorf("stderr = %q, want no F285 note when the file omits nothing", stderr)
+		t.Errorf("stderr = %q, want no omitted-fields note when the file omits nothing", stderr)
 	}
 }
 
@@ -296,6 +296,6 @@ func TestSiteConfigApply_NoOmittedFieldsNoteOnRejectedApply(t *testing.T) {
 		t.Fatalf("apply against a 500 server: want an error, got none")
 	}
 	if strings.Contains(stderr, "left as the server already has it") {
-		t.Errorf("stderr = %q, want no F285 note when PutSiteConfig failed", stderr)
+		t.Errorf("stderr = %q, want no omitted-fields note when PutSiteConfig failed", stderr)
 	}
 }

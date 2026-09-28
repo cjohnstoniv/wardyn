@@ -203,7 +203,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 			if ig.Rule.SecretName != "npm-artifactory-token" {
 				t.Errorf("artifactory.corp injection SecretName = %q, want npm-artifactory-token", ig.Rule.SecretName)
 			}
-			// B10-F5: an `https://` redirect declares TLS-only transport for its
+			// an `https://` redirect declares TLS-only transport for its
 			// corp token. Without it the rule defaulted to require_tls=false, so a
 			// sandbox-chosen `POST http://artifactory.corp/…` was merely
 			// uncredentialed instead of refused — and on a TLS-conventional port
@@ -238,7 +238,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 		t.Errorf("AllowedDomains still contains registry.npmjs.org, want substituted out; got %v", domains)
 	}
 	for _, want := range []string{
-		// PORT-QUALIFIED, matching the MITM entry above (R3 F106): the allowlist
+		// PORT-QUALIFIED, matching the MITM entry above (R3): the allowlist
 		// entry a redirect adds now names the To's port — and when the To spells
 		// none, the SCHEME's default, which redirectPort resolves as 80 for an
 		// explicit http:// To and 443 otherwise — so a literal-IP To cannot open

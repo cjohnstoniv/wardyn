@@ -131,6 +131,14 @@ export interface AgentRun {
   // explicitly never (interactive). No console reader today — kept for mirror
   // parity, same reason as source_id above.
   auto_stop_after_sec?: number;
+  // The run's EFFECTIVE ephemeral disk cap in MiB (internal/types/types.go's
+  // AgentRun.DiskMiB, RL-13), written by a scoped update at dispatch — see
+  // store.go's SetRunDiskMiB (and migration 0096) for why this can't be
+  // captured at create like auto_stop_after_sec above it. 0/absent = no cap
+  // resolved. No console reader today (the /runs/{id}/resources endpoint
+  // computes the Sandbox widget's disk_cap_bytes from it server-side); kept
+  // for mirror parity, same reason as source_id above.
+  disk_mib?: number;
   // The docker exec id of the run's agent process (internal/types/types.go's
   // AgentRun.AgentExecID) — empty for exec-less substrates and before Exec
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
@@ -190,6 +198,31 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // The run's end time, stamped by the three state writers that move a run to
+  // a terminal state (migration 0092, #1197). Absent for a live run and for a
+  // legacy row the backfill could not date exactly. A lease-ended run (
+  // lost_reason "ended") stays RUNNING until the ended-run grace makes it
+  // terminal, so ITS end time is lost_at, not this field — internal/types/
+  // types.go's AgentRun.EndedAt doc. Nothing in the console reads this field
+  // yet; it is a live wire field and the mirror rule forbids dropping one.
+  ended_at?: string;
+  // Set while a kept run's stop could not be confirmed (migration 0088,
+  // #1060): the latest stop error and when containment first failed. The
+  // lease sweep retries every pass and clears both once the stop lands.
+  containment_error?: string;
+  containment_error_at?: string;
+  // When the re-clamp of a tightened profile last moved this run's end
+  // (migration 0095, #573): the run page's "Your admin shortened the limit"
+  // banner. Cleared when a person moves the end again.
+  end_tightened_at?: string;
+  // Set while the run's agent is frozen because nobody is there (migration
+  // 0097, #572): "waiting" = parked on an open request, "idle" = unused past
+  // its profile's pause_idle_after_sec. The run stays RUNNING; typing, an
+  // exec, the request closing or POST /runs/{id}/resume thaws it. active_at is
+  // the presence clock (absent = nothing stamped since create).
+  paused_at?: string;
+  paused_reason?: "waiting" | "idle";
+  active_at?: string;
   // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
   // the id of the model provider chooseModelProvider (#526) resolved this run
   // to at create time. The KIND is not here (it can change later on the
@@ -198,6 +231,31 @@ export interface AgentRun {
   // block serving no provider for the agent, or a run created before this
   // field existed.
   model_provider_id?: string;
+  // AgentRun.Preset / PresetVersion (migration 0087, #1143): the launch
+  // preset this run was expanded from, and which version. Absent for a run
+  // sent as an explicit spec.
+  preset?: string;
+  preset_version?: number;
+  // AgentRun.CreatedVia (migration 0094, #1142): the registered portal this
+  // run was launched through on its owner's behalf. Absent for a run its
+  // owner launched themselves.
+  created_via?: string;
+  // internal/types/attention.go's RunAttention (#1197) — what this LIVE
+  // run is waiting on and who (in the caller's own console view) can clear
+  // it, projected only when the caller's GET /runs (or GET /me/attention)
+  // request opted into the `view` contract. Absent on every other read, and
+  // on a terminal or lease-ended run even under `view`. A SEPARATE named
+  // interface (not inline), not just style: runs.wire.fields.test.ts's
+  // tsInterfaceKeys scrapes an interface body LINE BY LINE with no brace
+  // tracking, so an inline nested object's own keys (kind/by/pending) would
+  // misread as top-level AgentRun keys and fail that parity test.
+  attention?: RunAttention;
+}
+
+export interface RunAttention {
+  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  by: "you" | "owner" | "admin";
+  pending: number;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
@@ -211,8 +269,14 @@ export interface AgentRun {
 // LIST consumer (GET /runs, the board/table) is typed for a field it never
 // receives, and a card built from list data must not silently type-check as
 // having answered "no apps declared" for one it was never asked about.
+//
+// user_type_name is the display name of AgentRun.user_type, resolved by the
+// same handler (runUserTypeName) because GET /user-types is securityOps and a
+// user-tier owner could not resolve the id themselves. Absent for a run with no
+// type or a type since deleted — the Identity widget then shows no "Ran as".
 export interface RunDetail extends AgentRun {
   ui_apps?: UIApp[];
+  user_type_name?: string;
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror
@@ -267,6 +331,15 @@ export interface RunResources {
    *  back to MemTotal, and stays absent if that was unreadable too. */
   memory_limit_bytes?: number;
   disk_written_bytes?: number;
+  /** Space occupied now, not disk_written_bytes' running write total. Beside
+   *  disk_cap_bytes it is the bytes that cap counts; without one, the
+   *  sandbox's root filesystem, image included (run_resources.go diskReading). */
+  disk_used_bytes?: number;
+  /** The run's ephemeral disk cap, present ONLY when a driver enforces it AND
+   *  disk_used_bytes was measured the way that enforcement counts — never a
+   *  denominator for a number about other bytes. Absent means: render
+   *  disk_used_bytes with no bar. */
+  disk_cap_bytes?: number;
   process_count?: number;
 }
 
@@ -281,7 +354,7 @@ export interface AttachModeMsg {
   holder?: AttachHolder;
 }
 
-// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach-holder).
+// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach/holder).
 // Attach is a SHARED session: without this, opening the run page while a CLI
 // holds it silently competes for the same PTY.
 export interface AttachHolder {

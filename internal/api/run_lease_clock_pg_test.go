@@ -59,7 +59,7 @@ func TestPG_FailClosedStopUsesTheMarkItWrote(t *testing.T) {
 			t.Fatalf("create run: %v", err)
 		}
 
-		if !h.srv.loseRun(ctx, st, st, run, types.LostReboot, types.RunFailed, 0) {
+		if !h.srv.loseRun(ctx, st, st, run, types.LostReboot, types.RunFailed, 0, h.srv.cfg.Now()) {
 			t.Fatal("loseRun returned false, want true (handled: kept, torn down, or retried)")
 		}
 		got, err := st.GetRun(ctx, run.ID)

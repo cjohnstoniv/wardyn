@@ -108,8 +108,7 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 	}
 
 	// Admin (ceiling authority) is unclamped, so there is nothing to warn about.
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight",
-		ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("admin preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
 	}
