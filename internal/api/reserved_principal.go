@@ -38,8 +38,8 @@ func (s *Server) refuseReservedPrincipal(w http.ResponseWriter, r *http.Request,
 	}
 	s.auditAuthFailed(r, authFailedReservedPrincipal)
 	// reasonReservedPrincipal is the SAME value as authFailedReservedPrincipal
-	// (oidc.DenialReservedPrincipal) — a reasons.go literal so the docs guard
-	// (which only reads that file) can see it, #656 slice 3.
+	// (oidc.DenialReservedPrincipal) — a reasons_routes.go literal so the docs
+	// guard (which reads both reasons files) can see it, #656 slice 3.
 	writeErrorReason(w, http.StatusUnauthorized, reasonReservedPrincipal, msg)
 	return true
 }

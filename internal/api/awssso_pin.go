@@ -108,9 +108,9 @@ func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin, en
 // incident review filtering "why were captures refused last Tuesday" needs to
 // GROUP, which free text cannot do.
 //
-// Moved to reasons.go (#656 slice 3), not left beside refuseCapture: that
-// guard only reads reasons.go's own string literals, and refuseCapture's
-// reason now also reaches the wire.
+// Moved to reasons_routes.go (#656 slice 3), not left beside refuseCapture:
+// the docs guard only reads reasons.go and reasons_routes.go's own string
+// literals, and refuseCapture's reason now also reaches the wire.
 
 // DRAFT (M2 canon pending)
 

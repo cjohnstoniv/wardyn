@@ -143,44 +143,52 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 // name.
 var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// reasonsGoFiles is the closed set's own two files (reasons.go's header
+// comment explains the split: #656 slice 3 pushed reasons.go past
+// scripts/check-file-size.sh's 1000-line gate). Every reader of the set —
+// this guard, driveRefusalConstants (user_drives_run_test.go) — must read
+// both, or a value declared in the second file is invisible to it.
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go"}
+
 // reasonsGoConstValues parses every top-level const's string-literal value in
-// reasons.go via go/parser rather than a line-anchored regex, so a
+// reasonsGoFiles via go/parser rather than a line-anchored regex, so a
 // single-line `const x = "…"` (legal Go outside a `const ( ... )` block) is
-// seen exactly like one declared inside one — driveRefusalConstants
-// (user_drives_run_test.go) parses the same file the same way. Returns the
-// set of values, and every const name declared under each value (so the
-// duplicate-value check above can name the collision).
+// seen exactly like one declared inside one. Returns the set of values, and
+// every const name declared under each value (so the duplicate-value check
+// above can name the collision).
 func reasonsGoConstValues(t *testing.T) (values map[string]bool, namesByValue map[string][]string) {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), "reasons.go", nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse reasons.go: %v", err)
-	}
 	values, namesByValue = map[string]bool{}, map[string][]string{}
-	for _, d := range f.Decls {
-		gd, ok := d.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+	for _, filename := range reasonsGoFiles {
+		f, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", filename, err)
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
 				continue
 			}
-			for i, name := range vs.Names {
-				if i >= len(vs.Values) {
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					value := strings.Trim(lit.Value, `"`)
+					if !reasonWireValueShape.MatchString(value) {
+						continue
+					}
+					values[value] = true
+					namesByValue[value] = append(namesByValue[value], name.Name)
 				}
-				value := strings.Trim(lit.Value, `"`)
-				if !reasonWireValueShape.MatchString(value) {
-					continue
-				}
-				values[value] = true
-				namesByValue[value] = append(namesByValue[value], name.Name)
 			}
 		}
 	}

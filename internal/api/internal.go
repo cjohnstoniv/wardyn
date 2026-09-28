@@ -431,10 +431,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
-		// rate-bound auth.fail row, limiter and suppressed
-		// counter as every other refusal; the KIND is a closed enum of our own
-		// types, never echoed from the body. The SAME string is now the wire
-		// reason too (#656 slice 3).
+		// rate-bound auth.fail row, limiter and suppressed counter as every
+		// other refusal; the KIND is a closed enum of our own types, never
+		// echoed from the body. The SAME string is now the wire reason too.
 		s.auditAuthFailedAs(r, internalApprovalActor, reasonUnsupportedInternalApprovalKind)
 		writeErrorReason(w, http.StatusBadRequest, reasonUnsupportedInternalApprovalKind, "unsupported approval kind for internal request")
 		return
@@ -831,8 +830,7 @@ func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err erro
 	case mintUnreachable(err):
 		// Transient, like the store's own outage: a run's proxy rides it out
 		// on its last-good header (K8) instead of dropping it at once. The
-		// SAME reason the credential-injection sinks use for the identical
-		// shape (reasonSinkStoreUnavailable, #656 slice 3).
+		// SAME reason the credential-injection sinks use for the identical shape.
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonSinkStoreUnavailable, sinkStoreUnreachable)
 	default:
 		writeServerError(w, r, "mint", err)
@@ -912,11 +910,9 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// 403, not 404: same reason as refuseTerminalRun — the caller's own
-			// presented token names claims.RunID, so a missing run is that
-			// token's authority gone, not a path a member could probe. The SAME
-			// wire reason notFoundIf's own "run" case uses (helpers.go, #656
-			// slice 3) — the identical cause, a different status for a
-			// different audience.
+			// presented token names claims.RunID, so a missing run is that token's
+			// authority gone, not a path a member could probe. The SAME wire
+			// reason notFoundIf's own "run" case uses, at a different status.
 			s.auditRenewDenied(r, claims, reasonRunNotFound)
 			writeErrorReason(w, http.StatusForbidden, reasonRunNotFound, "run not found")
 			return
@@ -928,9 +924,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	}
 	if isTerminalRunState(run.State) {
 		s.auditRenewDenied(r, claims, "run_terminal:"+string(run.State))
-		// The SAME registered reason refuseTerminalRun's own terminal arm
-		// writes (internal_live_run.go, #656 slice 3) — the identical cause,
-		// reached by renew's own separate read instead of the shared gate.
+		// The SAME registered reason refuseTerminalRun's own terminal arm writes.
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return
 	}
@@ -938,8 +932,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	// it one, with a token of its own. Nothing may carry its identity forward.
 	if runIsKept(run) {
 		s.auditRenewDenied(r, claims, "run_lost:"+string(run.LostReason))
-		// The SAME registered reason refuseTerminalRun's own kept-run arm
-		// writes (internal_live_run.go, #656 slice 3).
+		// The SAME registered reason refuseTerminalRun's own kept-run arm writes.
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 		return
 	}
