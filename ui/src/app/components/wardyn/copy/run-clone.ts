@@ -43,14 +43,6 @@ export const RUN = {
   // confinement_class at all, so the server's own read decides.
   BARRIER_UNKNOWN:
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
-  // #214 (owner comment on #214, corrected by #269's own SF-26 review round —
-  // the original wording claimed a run had been created; genericFailure
-  // (use-launch.ts) means the console cannot tell whether one was) — a
-  // launch that fires and gets back no server-composed reason at all.
-  LAUNCH_FAILED_TITLE: "Wardyn didn't answer the launch.",
-  LAUNCH_FAILED_BODY: "A run may or may not have started — check the Runs board before trying again.",
-  LAUNCH_FAILED_OPEN_RUN: "Open Runs",
-  LAUNCH_FAILED_DISMISS: "Dismiss",
 } as const;
 
 // #214 (mock approved 2026-09-20) — a host with no confinement class it can
@@ -59,14 +51,25 @@ export const RUN = {
 // the control they block, never in a tooltip.
 export const NO_BARRIER = {
   CTA: "Set up a barrier",
-  // #1328 review F2 — an ABSOLUTE route, correct for a caller reached the
-  // same way regardless of view (New Run's own Launch reason: no separate
-  // /admin/runs/new exists). A caller that can ALSO render inside the Admin
-  // view's own setup funnel (mounted at /admin/setup) must NOT use this one —
-  // it would drop an admin out of the Admin view (console-view.tsx's
-  // viewVerdict). See RELATIVE_ROUTE and the shell/top-bar's own
-  // view+operator-aware route below.
-  ROUTE: "/setup?step=environment",
+  // #1328 review round 2, R2-1 — the Environment step lives ONLY under
+  // /admin/setup: the plain /setup path always renders the read-only member
+  // recap (onboarding-screen.tsx's GettingStarted, `view !== "admin"`), which
+  // ignores `?step=` entirely. So every surface that offers this link (New
+  // Run's own Launch reason, the shell banner, the top bar) routes here, and
+  // ONLY when the caller can actually get there:
+  //   - an operator (meta.operator) already resolves this path directly,
+  //     whichever view they're currently rendering in (console-view.tsx's
+  //     viewVerdict: "url"/"admin-only"/"session-admin" all `pass`).
+  //   - an SSO admin who switched to the User view (access "session-user")
+  //     gets ViewGate's own "to-admin" interstitial instead of a redirect —
+  //     entering admin authority is always a deliberate click — and that
+  //     interstitial's `target` already carries the full pathname+search, so
+  //     `?step=environment` survives the switch with no extra plumbing here.
+  //   - anyone else (a member, a security admin) gets NO link at all: there
+  //     is nothing behind this route they may open, and view+role gating one
+  //     less faithfully (confinement-posture.tsx's #510-F7 precedent) is how
+  //     R2-1's dead-end shipped in the first place.
+  ADMIN_ROUTE: "/admin/setup?step=environment",
   // The Setup funnel's OWN Finish-setup gate is mounted at EITHER /setup or
   // /admin/setup — a query-only link resolves against whichever one is
   // already current, so it can never itself switch the view.

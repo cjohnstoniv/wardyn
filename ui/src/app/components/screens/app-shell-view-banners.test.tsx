@@ -143,13 +143,16 @@ describe("a clamped admin at an /admin/* path reads the resolved view, not the U
   });
 });
 
-// #214 (#1328 review F1/F2) — the shell's own global route to the fix,
-// present in BOTH views (unlike the two view-scoped bands above), so its
-// link must resolve into whichever setup funnel matches the CURRENT view —
-// never drop an admin out of the Admin view (console-view.tsx's viewVerdict,
-// confinement-posture.tsx's own #510-F7 precedent for exactly this).
-describe("the #214 no-barrier banner: present in both views, routed per view+role", () => {
-  it("a member in the User view: the banner and the top-bar link both point at plain /setup", async () => {
+// #214 (#1328 review round 2, R2-1) — the shell's own global route to the
+// fix, present in BOTH views (unlike the two view-scoped bands above). Only
+// /admin/setup?step=environment ever reaches the Environment step (the plain
+// /setup path always renders the read-only member recap regardless of
+// `?step=`, onboarding-screen.tsx's GettingStarted) — so the CTA renders only
+// for a caller who can actually get there: an operator, or a session-user
+// via ViewGate's own "to-admin" click. Everyone else reads the reason with
+// no link at all.
+describe("the #214 no-barrier banner: present in both views, CTA gated on who can reach it", () => {
+  it("a member in the User view: the reason shows, with no CTA at all", async () => {
     renderShellAt(
       "/runs",
       { principal: "m@corp.example", method: "sso", role: "user", operator: false, security_operator: false },
@@ -158,12 +161,7 @@ describe("the #214 no-barrier banner: present in both views, routed per view+rol
     );
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
     expect(screen.getByText(NO_BARRIER.BANNER_BODY)).toBeInTheDocument();
-    const links = screen.getAllByRole("link", { name: NO_BARRIER.CTA });
-    // One in the shell banner, one beside New run in the top bar.
-    expect(links).toHaveLength(2);
-    for (const link of links) {
-      expect(link).toHaveAttribute("href", "/setup?step=environment");
-    }
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
 
   it("an operator in the Admin view: the banner routes into /admin/setup, and the top-bar link is absent (no New run there)", async () => {
@@ -176,7 +174,29 @@ describe("the #214 no-barrier banner: present in both views, routed per view+rol
     expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });
 
-  it("a security admin (not a full operator) in the Admin view: the banner falls back to plain /setup, never the refusal at /admin/setup", async () => {
+  // R2-1's central fix: an admin who switched to the User view is clamped by
+  // the server exactly like a plain member (role "user", operator false —
+  // internal/api/me.go's own doc), so `meta.operator` alone cannot tell them
+  // apart. `access === "session-user"` is what does: the CTA still renders,
+  // routed at the SAME /admin/setup?step=environment — ViewGate answers with
+  // the "to-admin" interstitial (never a refusal) the moment it's clicked,
+  // and that click's own target already carries the query string.
+  it("an SSO admin who switched to the User view (session-user): the CTA still offers /admin/setup, from both the banner and the top bar", async () => {
+    renderShellAt(
+      "/runs",
+      { principal: "admin-in-member@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true },
+      {},
+      true,
+    );
+    expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
+    const links = screen.getAllByRole("link", { name: NO_BARRIER.CTA });
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/admin/setup?step=environment");
+    }
+  });
+
+  it("a security admin (not a full operator) in the Admin view: no CTA — /admin/setup would only refuse them", async () => {
     renderShellAt(
       "/admin/runs",
       { principal: "sec@corp.example", method: "sso", role: "security_admin", operator: false, security_operator: true },
@@ -184,7 +204,7 @@ describe("the #214 no-barrier banner: present in both views, routed per view+rol
       true,
     );
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: NO_BARRIER.CTA })).toHaveAttribute("href", "/setup?step=environment");
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
 
   it("stays silent when the deployment has a barrier", async () => {

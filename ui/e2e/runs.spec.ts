@@ -138,6 +138,18 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
 
 test.describe("Run detail (/runs/:id)", () => {
   test("clicking a run opens its addressable detail hub with identity + kill", async ({ page }) => {
+    // #1328 review round 2, R2-2 — the seeded backend runs with `-runner
+    // none` (this file's default), which #214's shell banner now reads as
+    // no-barrier on EVERY page; its extra row pushes the terminal pane below
+    // this test's <=300px above-the-fold bound. Spliced to a settled host
+    // with a barrier, the same fix new-run.spec.ts's own 1280x650 rail test
+    // already uses for the identical shape.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      await route.fulfill({ response, json });
+    });
     await openRuns(page);
 
     // Clicking the run card navigates to the addressable /runs/:id page (the old
@@ -1250,6 +1262,16 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
   test("the shell banner names the blocker and routes to the Environment step; New run stays reachable", async ({
     page,
   }) => {
+    // The Admin Setup funnel shows the welcome hero first until this is set
+    // (confinement-posture.spec.ts's own precedent) — this test clicks
+    // through into the funnel itself, not just to its URL.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-onboarding-seen", "1");
+      } catch {
+        /* private mode — ignore */
+      }
+    });
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
@@ -1262,22 +1284,20 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
     const routes = page.getByRole("link", { name: NO_BARRIER.CTA });
     await expect(routes).toHaveCount(2); // the shell banner + the top bar
     for (const link of await routes.all()) {
-      await expect(link).toHaveAttribute("href", NO_BARRIER.ROUTE);
+      await expect(link).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
     }
 
     // New run stays live — disabling it would hide the explanation behind
     // the control that carries it.
     await expect(page.getByRole("button", { name: "New run" })).toBeEnabled();
 
-    // /runs is never under /admin/*, so this session's view stays "user"
-    // across the navigation (console-view.tsx's viewOfPath/GettingStarted) —
-    // landing on the member recap, not the operator wizard, is the CORRECT
-    // destination for this route from here (see setup-screen.test.tsx's
-    // #1328 F2 pins for the one link that does reach the wizard,
-    // /admin/setup). This asserts the navigation itself, not which body
-    // renders at the far end.
+    // #1328 review round 2, R2-1 — the seeded backend is a single-operator
+    // install ("url" access): console-view.tsx's viewVerdict `pass`es
+    // /admin/setup straight through for it. This proves the real
+    // destination, not just the URL — the Environment step itself.
     await routes.first().click();
-    await expect(page).toHaveURL(/\/setup\?step=environment/);
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment/);
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
   });
 
   // The seeded backend's own default (`-runner none`) already reads

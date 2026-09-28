@@ -101,7 +101,6 @@ import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { ADO } from "../../../lib/ado-entra-copy";
-import { RUN } from "../../wardyn/copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -456,51 +455,6 @@ describe("NewRunScreen — a network failure never claims a run was created (F4)
     expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
     expect(railProps[railProps.length - 1].launch.credentialRefused).toBe(false);
     expect(navigateMock).not.toHaveBeenCalled();
-  });
-});
-
-// #214 (owner comment on #214, #1328 review — reconciled with #459's
-// role="alert"): the ONE shape with no server-composed message at all (a
-// response with no body and no reason phrase) draws the named-stage failure
-// card INSTEAD of the plain line above — mutually exclusive, so exactly one
-// alert region ever renders for one failure.
-describe("NewRunScreen — a launch that answers with no reason at all draws the named-stage card (#214)", () => {
-  it("shows the card, not the plain line; Dismiss clears it; Open Runs routes to the board", async () => {
-    createRunMock.mockRejectedValueOnce(new HttpError(500, ""));
-    renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    await user.click(screen.getByRole("button", { name: /Launch run/ }));
-
-    // The card has no aria-label of its own, only its visible heading — scope
-    // through the region that heading sits inside.
-    const region = (await screen.findByText(RUN.LAUNCH_FAILED_TITLE)).closest('[role="alert"]')!;
-    expect(region).toBeTruthy();
-    expect(region).toHaveTextContent(RUN.LAUNCH_FAILED_BODY);
-    expect(railProps[railProps.length - 1].launch.credentialRefused).toBe(false);
-    expect(navigateMock).not.toHaveBeenCalled();
-    // Never both: the plain server-text alert region does not ALSO render.
-    expect(screen.getAllByRole("alert")).toHaveLength(1);
-
-    // A RegExp, not exact:false + the plain string: the accessible name
-    // carries a trailing arrow glyph ("Open Runs →"), never re-typed as a
-    // second literal here.
-    const openRuns = screen.getByRole("link", { name: new RegExp(RUN.LAUNCH_FAILED_OPEN_RUN) });
-    expect(openRuns).toHaveAttribute("href", "/runs");
-
-    await user.click(screen.getByRole("button", { name: RUN.LAUNCH_FAILED_DISMISS }));
-    expect(screen.queryByText(RUN.LAUNCH_FAILED_TITLE)).toBeNull();
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("a server-composed message (even a terse one) keeps rendering verbatim — never the card", async () => {
-    createRunMock.mockRejectedValueOnce(new HttpError(500, "internal error"));
-    renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    await user.click(screen.getByRole("button", { name: /Launch run/ }));
-
-    expect(await screen.findByText("internal error")).toBeInTheDocument();
-    expect(screen.queryByText(RUN.LAUNCH_FAILED_TITLE)).toBeNull();
-    expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 });
 

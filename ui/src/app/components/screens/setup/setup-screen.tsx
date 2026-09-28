@@ -805,11 +805,11 @@ export function SetupScreen({
   // two on purpose.
   //
   // The route is RELATIVE (`?step=environment`, #1328 review F2), not
-  // NO_BARRIER.ROUTE's absolute `/setup?...`: this gate renders inside the
-  // funnel itself, which mounts at EITHER /setup or /admin/setup depending on
-  // which view sent an operator here (App.tsx's RequireSetup) — a query-only
-  // link resolves against whichever one is already current, so following it
-  // can never itself switch the view out from under an admin.
+  // NO_BARRIER.ADMIN_ROUTE's absolute `/admin/setup?...`: this gate renders
+  // inside the funnel itself, which mounts at EITHER /setup or /admin/setup
+  // depending on which view sent an operator here (App.tsx's RequireSetup) —
+  // a query-only link resolves against whichever one is already current, so
+  // following it can never itself switch the view out from under an admin.
   const finishGate = !readiness.barrierReady
     ? {
         head: NO_BARRIER.FINISH_GATE_HEAD,

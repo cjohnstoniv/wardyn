@@ -201,6 +201,16 @@ test.describe("New run — no barrier can be built (#214)", () => {
   });
 
   test("disables Launch with its reason beside it and a route to the Environment step", async ({ page }) => {
+    // The Admin Setup funnel shows the welcome hero first until this is set
+    // (confinement-posture.spec.ts's own precedent) — this test clicks
+    // through into the funnel itself, not just to its URL.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-onboarding-seen", "1");
+      } catch {
+        /* private mode — ignore */
+      }
+    });
     await spliceNoBarrier(page);
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e no barrier");
@@ -213,17 +223,17 @@ test.describe("New run — no barrier can be built (#214)", () => {
     // unscoped query is a Playwright strict-mode violation, not a bug.
     const rail = page.locator("aside");
     const route = rail.getByRole("link", { name: NO_BARRIER.CTA });
-    await expect(route).toHaveAttribute("href", NO_BARRIER.ROUTE);
+    await expect(route).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
 
-    // New Run is never under /admin/*, so this session's view stays "user"
-    // across the navigation (console-view.tsx's viewOfPath/GettingStarted) —
-    // landing on the member recap, not the operator wizard, is the CORRECT
-    // destination for this route from here (an admin token's own funnel only
-    // ever opens from /admin/setup — see setup-screen.test.tsx's #1328 F2
-    // pins for that one). This asserts the navigation itself, not which body
-    // renders at the far end.
+    // #1328 review round 2, R2-1 — the seeded backend is a single-operator
+    // install (a bare admin bearer, "url" access): console-view.tsx's
+    // viewVerdict `pass`es /admin/setup straight through for it, whichever
+    // view the click came from. So this proves the actual destination, not
+    // just the URL: the Environment step itself, not the read-only member
+    // recap plain /setup used to strand this caller on.
     await route.click();
-    await expect(page).toHaveURL(/\/setup\?step=environment/);
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment/);
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
   });
 
   test("a host with at least one barrier leaves Launch alone", async ({ page }) => {
@@ -232,21 +242,6 @@ test.describe("New run — no barrier can be built (#214)", () => {
     await expect(page.getByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toHaveCount(0);
   });
 });
-
-// #214 (owner comment on #214) — a launch that fires and gets back no
-// server-composed reason at all (a response with no body and no reason
-// phrase — genericFailure, use-launch.ts) draws the named-stage failure
-// card, reconciled with #459's role="alert" — mutually exclusive with the
-// plain server-text line, so exactly one alert region ever renders for one
-// failure. NOT PINNED HERE: Chromium always synthesizes a non-empty
-// res.statusText for a route.fulfill() mock (confirmed empirically — 500
-// reads "Internal Server Error", an unlisted 599 reads "Unknown"), so the
-// empty-body-AND-empty-reason-phrase shape this card is for cannot be
-// produced through browser-level route mocking at all. Covered instead at
-// the component level (new-run-screen-launch.test.tsx, mutation-proven):
-// the card's rendering, its Dismiss and its "never both" exclusivity with
-// the plain line are all pinned there, directly against getErrorMessage's
-// own empty-string case.
 
 // R4-F118 — "Review predicts launch", proved on the wire.
 //

@@ -616,16 +616,17 @@ export function AppShell({
   const navigate = useNavigate();
   const { access, view } = useShellView(meta);
   useViewResync(access, meta.memberMode);
-  // #1328 review F2 — a global surface (the shell banner and the top-bar
-  // link, both below) must route into WHICHEVER setup funnel matches the
-  // view it is currently shown in: /admin/setup for an operator already in
-  // the Admin view (confinement-posture.tsx's own #510-F7 precedent — a
-  // security admin there gets refused at that route, so operator is the
-  // narrower, correct gate, not just "is this the Admin view"), the plain
-  // /setup otherwise. New Run's own Launch reason does NOT need this: it is
-  // reached the same way regardless of view (no /admin/runs/new exists).
-  const environmentStepRoute =
-    view === "admin" && meta.operator ? "/admin/setup?step=environment" : NO_BARRIER.ROUTE;
+  // #1328 review round 2, R2-1 — this banner is shell-wide (every screen, both
+  // views), so its CTA renders only for a caller who can actually reach the
+  // Environment step: an operator (meta.operator resolves NO_BARRIER.ADMIN_ROUTE
+  // directly, whichever view they're in — console-view.tsx's viewVerdict
+  // `pass`es "url"/"admin-only"/"session-admin" straight through) or a
+  // session-user (an SSO admin who switched to the User view: ViewGate's own
+  // "to-admin" interstitial asks before switching, and its target already
+  // carries `?step=environment` — see NO_BARRIER's doc comment). Anyone else
+  // (a member, a security admin) gets the banner's text with no link — there
+  // is nothing behind that route for them to open.
+  const canReachEnvironmentStep = meta.operator || access === "session-user";
   React.useEffect(() => {
     document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
   }, [view]);
@@ -691,11 +692,6 @@ export function AppShell({
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
-                // The link renders only in the User view, beside New run
-                // itself (below) — never the Admin view, so it needs no
-                // view+operator-aware route of its own (New Run's own Launch
-                // reason link is the same shape: reached the same way
-                // regardless of view).
                 noBarrier={!unreachable && !!noBarrier}
               />
             )}
@@ -734,12 +730,14 @@ export function AppShell({
                   <p className="font-medium">{NO_BARRIER.BANNER_TITLE}</p>
                   <p className="text-xs text-danger">{NO_BARRIER.BANNER_BODY}</p>
                 </div>
-                <Link
-                  to={environmentStepRoute}
-                  className="ml-auto shrink-0 font-medium underline underline-offset-2"
-                >
-                  {NO_BARRIER.CTA}
-                </Link>
+                {canReachEnvironmentStep && (
+                  <Link
+                    to={NO_BARRIER.ADMIN_ROUTE}
+                    className="ml-auto shrink-0 font-medium underline underline-offset-2"
+                  >
+                    {NO_BARRIER.CTA}
+                  </Link>
+                )}
               </div>
             )}
             {/* B1 — the settled-but-unknown identity, beside the unreachable

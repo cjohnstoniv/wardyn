@@ -494,7 +494,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     await user.type(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
     const link = screen.getByRole("link", { name: NO_BARRIER.CTA });
-    expect(link).toHaveAttribute("href", NO_BARRIER.ROUTE);
+    expect(link).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
   });
 
@@ -504,5 +504,22 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     await user.type(await screen.findByLabelText("Title"), "Has a barrier");
     await waitFor(() => expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled());
     expect(screen.queryByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeNull();
+  });
+
+  // #1328 review round 2, R2-1 — a member (never an operator, never a
+  // session-user) reads the reason alone: there is nothing behind
+  // NO_BARRIER.ADMIN_ROUTE they may open, so no link renders at all.
+  it("a non-operator sees the reason with no CTA", async () => {
+    mockConfinementClasses = [];
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false}>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
 });

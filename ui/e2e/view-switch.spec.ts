@@ -5,8 +5,8 @@
 
 import type { BrowserContext, Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
-import { CONSOLE_VIEW, USER_PREVIEW } from "../src/app/components/wardyn/copy/console-view";
-import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
+import { CONSOLE_VIEW, USER_PREVIEW, VIEW_TO_ADMIN } from "../src/app/components/wardyn/copy/console-view";
+import { NO_BARRIER, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 
 // M-2 — the Console view switch and the per-view chrome
@@ -264,5 +264,55 @@ test.describe("the slimmed avatar menu and the preview", () => {
     await gotoConsole(page);
     await expect(segment(page, CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByText(/Viewing as/)).toHaveCount(0);
+  });
+});
+
+// #1328 review round 2, R2-1 — a session-user (an SSO admin who switched to
+// the User view) is clamped exactly like a plain member (role "user",
+// operator false), so #214's no-barrier CTA cannot gate on meta.operator
+// alone for them; it gates on access === "session-user" instead, routes to
+// the SAME /admin/setup?step=environment an operator uses, and leaves
+// entering admin authority to ViewGate's own "to-admin" click (never a
+// silent redirect). The click's own target already carries the full
+// pathname+search (console-view.tsx's ViewInterstitial), so `?step=
+// environment` needs no extra plumbing to survive the switch.
+test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment", () => {
+  test("a session-user's CTA still reaches the Environment step, through the switch prompt", async ({
+    page,
+    context,
+  }) => {
+    const session = await ssoAdminSession(context);
+    session.userView = true;
+    // The Admin Setup funnel shows the welcome hero first until this is set
+    // (confinement-posture.spec.ts's own precedent for reaching this step
+    // directly).
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-onboarding-seen", "1");
+      } catch {
+        /* private mode — ignore */
+      }
+    });
+    // A settled, empty probe — the deployment genuinely has no barrier, so
+    // the CTA this test clicks actually renders (context-level: it must
+    // survive the full reload switchView triggers).
+    await context.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+
+    // Scoped with .first(): the banner and the top bar both carry this CTA.
+    await page.getByRole("link", { name: NO_BARRIER.CTA }).first().click();
+    // The client-side navigation already lands the URL bar here — ViewGate
+    // renders the interstitial INSTEAD of the Outlet, not a redirect away.
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
+    await expect(page.getByRole("heading", { name: VIEW_TO_ADMIN.TITLE })).toBeVisible();
+
+    await page.getByRole("button", { name: VIEW_TO_ADMIN.GO }).click();
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
   });
 });

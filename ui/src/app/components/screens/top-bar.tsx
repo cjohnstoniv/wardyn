@@ -137,14 +137,15 @@ export function TopBar({
             {/* #214 — the top bar's own route to the Environment step, beside
                 New run rather than disabling or relabelling it: New run
                 itself stays reachable, since disabling it would hide this
-                explanation behind the one control that carries it. Plain
-                NO_BARRIER.ROUTE is correct here unconditionally — this link
-                only ever renders in the User view, the same as New run
-                itself, so it never needs the Admin-view-aware route the
-                shell banner computes (app-shell.tsx's own doc). */}
-            {noBarrier && (
+                explanation behind the one control that carries it.
+                #1328 review round 2, R2-1 — gated the same way as the shell
+                banner (app-shell.tsx's own doc): only an operator or a
+                session-user can reach NO_BARRIER.ADMIN_ROUTE at all, so
+                anyone else sees no link here (New run itself stays the only
+                control). */}
+            {noBarrier && (meta.operator || access === "session-user") && (
               <Link
-                to={NO_BARRIER.ROUTE}
+                to={NO_BARRIER.ADMIN_ROUTE}
                 className="hidden text-xs font-medium text-info hover:underline sm:inline"
               >
                 {NO_BARRIER.CTA}
