@@ -17,7 +17,7 @@ import { HttpError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -174,7 +174,7 @@ export function UserTypeEditor({
                     <div className="mt-3">
                       <p className="text-xs text-muted-foreground">{GOV.LIMITS_TITLE}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-body">
-                        {chips.length > 0 ? chips : GOV.LIMITS_NONE}
+                        {chips.length > 0 ? chips : !setsRunLimits(profile.limits) && GOV.LIMITS_NONE}
                       </div>
                     </div>
                   );

@@ -7,12 +7,14 @@
 // list's Limits cell and the User types editor's read-only "Ceiling and run
 // limits" section render the same words for the same field.
 import type { GovernanceLimits } from "../../../lib/api/governance";
-import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
+import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, runLimitsChip } from "../../../lib/governance-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { Chip } from "../../wardyn/primitives";
 
-// The doors, the run quota and the strictest autonomy cap. An empty array is
-// the profile bounding none of them — the caller's "None".
+// The doors, the run quota, the strictest autonomy cap and the run-limits
+// summary (RL-14, #579). An empty array is the profile bounding none of them —
+// the caller's "None", unless setsRunLimits says a run-limit field the summary
+// does not name (a default end, say) still binds.
 export function limitChips(limits: GovernanceLimits) {
   const autonomyLowest = foldAutonomyRubric(limits.autonomy_rubric).lowest;
   const chips: string[] = [];
@@ -23,6 +25,8 @@ export function limitChips(limits: GovernanceLimits) {
   // Ruling 2 (#96 review): names the STRICTEST cap, not merely that a rubric
   // exists — on the chip face, not behind a tooltip.
   if (autonomyLowest) chips.push(LIMITS_CHIP.AUTONOMY(AUTONOMY_META[autonomyLowest].label));
+  const runLimits = runLimitsChip(limits);
+  if (runLimits) chips.push(runLimits);
   return chips.map((label) => (
     <Chip key={label} tone="neutral">
       {label}

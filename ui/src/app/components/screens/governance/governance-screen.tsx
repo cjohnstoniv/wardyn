@@ -35,7 +35,7 @@ import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
   AlertDialog,
@@ -250,8 +250,11 @@ export function GovernanceScreen() {
                                   doors alone. max_concurrent_runs is enforced
                                   (denyUserRunQuota's 422), and a quota-only
                                   profile used to read "None". autonomy_rubric
-                                  joined the same rule the day its chip did. */}
-                              {chips.length > 0 ? chips : GOV.LIMITS_NONE}
+                                  joined the same rule the day its chip did, and
+                                  the run limits (RL-14, #579) read all seven
+                                  fields through setsRunLimits, since the chip
+                                  names only three of them. */}
+                              {chips.length > 0 ? chips : !setsRunLimits(p.limits) && GOV.LIMITS_NONE}
                             </span>
                           </TableCell>
                           <TableCell>

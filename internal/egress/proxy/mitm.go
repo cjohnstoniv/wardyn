@@ -373,7 +373,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// EVERY read goes through the hijack's own buffered reader, so nothing the
 	// client has already sent is lost — and so the peek below can put its byte
 	// back.
-	buffered := &readerConn{Conn: clientConn, r: brw.Reader}
+	buffered := p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader})
 	// Order matters, and the short circuit is load-bearing: a TLS entry must
 	// never reach the peek, because peeking waits for a byte the client has not
 	// sent yet and a TLS client is waiting for the server to go first. Only a
