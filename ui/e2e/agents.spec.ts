@@ -8,17 +8,12 @@ import {
   expect,
   ADMIN_TOKEN,
   gotoConsole,
-  mockMemberRole,
   navToRoute,
 } from "./fixtures";
 import {
   AGENTS,
-  MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
-  modelAccessChipBare,
 } from "../src/app/lib/workspace-providers-copy";
-import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
-import { YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy/model-key";
 import { RUN_DETAIL } from "../src/app/components/wardyn/copy/run-cockpit";
 import type { Page } from "@playwright/test";
 
@@ -35,23 +30,10 @@ import type { Page } from "@playwright/test";
 //     is REAL — GET/PUT /agent-providers and /model-providers are operatorOnly
 //     routes this harness's admin bearer reaches, so it writes to Postgres and
 //     reads its own write back.
-//   * The DECLARED-MECHANISM 422 (enforceCreateLLMMechanism) is ALSO real:
-//     this harness has no Bedrock credential of any kind configured, so a
-//     roster declaring claude-code's mechanism `bedrock_bearer` (written
-//     through the API — the tab no longer offers the mechanism) genuinely
-//     resolves to "is not configured" on launch — no stub involved.
-//   * The disabled-agent 422 (agentRosterRefusal) is real for the same
-//     reason: no isOperator exemption exists in that function.
-//   * What CANNOT be real here: a genuine per-user AWS SSO sign-in (no IdP in
-//     this harness — the file header repeated across drives.spec.ts/
-//     governance.spec.ts's own documented ceiling) and the {ts} "expired"
-//     variant of the declared-mechanism sentence, which fires only for a
-//     CAPTURED-then-expired AWS SSO session (bedrockAuth.ssoRefreshFailure) —
-//     there is no captured session to expire. Both are spliced (route.fetch()
-//     + patch + refulfill, the mockMemberRole technique) to prove the
-//     CLIENT's render only; the mechanics themselves are Go's, already unit-
-//     tested (runs_dispatch_llm_mechanism_test.go, awssso_refresh_test.go per
-//     a repo grep) and out of this lane's reach without a real IdP.
+//   * The disabled-agent 422 (agentRosterRefusal) is real: no isOperator
+//     exemption exists in that function.
+//   * A roster row carries no model credential since #548; a body that still
+//     declares one is refused at the PUT (strict decode), which is real too.
 // ---------------------------------------------------------------------------
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -216,27 +198,14 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     expect(error).toBe('agent: "codex-cli" is not an enabled agent on this deployment — ask an admin');
   });
 
-  test("a declared mechanism with nothing behind it refuses launch as 'not configured' (real, no Bedrock creds exist here)", async ({
-    page,
-  }) => {
-    // A lane this harness genuinely has zero credential for: bedrock_bearer,
-    // with no bearer-key secret ever stored.
-    await putDoc(page, "/api/v1/agent-providers", {
-      agents: [
-        { id: "claude-code", mechanism: "bedrock_bearer" },
-        { id: "codex-cli", mechanism: "openai_api_key", disabled: true },
-      ],
-    });
-
-    const res = await page.request.post("/api/v1/runs", {
+  // #548: a roster row carries no model credential and there is no alias
+  // window — a 0.7 body that still declares one is refused, not ignored.
+  test("a roster body that still declares a model credential mechanism is refused", async ({ page }) => {
+    const res = await page.request.put("/api/v1/agent-providers", {
       headers: auth,
-      data: { agent: "claude-code", repo: "acme/widgets", title: "declared mechanism dead", task: "e2e mechanism gate" },
+      data: { agents: [{ id: "claude-code", mechanism: "bedrock_bearer" }] },
     });
-    expect(res.status()).toBe(422);
-    const { error } = await res.json();
-    expect(error).toMatch(
-      /^This run's model access is configured as Amazon Bedrock \(bearer key\), and that credential is not configured/,
-    );
+    expect(res.status(), await res.text()).toBe(400);
   });
 });
 
@@ -326,261 +295,5 @@ test.describe("agents — the roster-unknown and empty-roster states withhold Sa
     await expect(page.getByText(AGENTS.AGENTS_LEAD)).toBeVisible();
     await expect(page.getByTestId("agent-row-claude-code")).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
-  });
-});
-
-// The member's Getting Started "Model access" chip — six states
-// (workspace-providers-prompt.md §7.7). Spliced onto GET /setup/status's
-// model_access field (this harness has no per-user AWS session to produce
-// any of these for real, per the file header). Only three states offer the
-// member's own Sign in to AWS action.
-//
-// #541 retired the dedicated per-state AGENTS.MODEL_ACCESS_* chip this
-// section used to carry: the summary chip at the top of "What's set up for
-// you" now reads legacySummary(status) (model-connections.ts), which
-// deliberately COLLAPSES live/expiring together (both "Model access ·
-// Ready") and expired_signin/not_configured together (both "Model access ·
-// Needs you") — shared_expired is the one state legacySummary still grades
-// on its own (round-3 Opus finding), so it keeps its old full label. The
-// fine distinction between the collapsed pairs now lives one level down, on
-// the restored "Your model key" card (your-model-key.tsx's per_user band of
-// modelKeyState), which is why each case below pins BOTH chips together.
-test.describe("agents — member Getting Started's Model access chip (spliced states)", () => {
-  const CASES: { state: string; topChip: string; cardChip?: string; hasCta: boolean }[] = [
-    { state: "live", topChip: CONNECTIONS.SUMMARY_READY, cardChip: YOUR_MODEL_KEY.SIGNED_IN_CHIP, hasCta: false },
-    { state: "expiring", topChip: CONNECTIONS.SUMMARY_READY, cardChip: YOUR_MODEL_KEY.EXPIRING_CHIP, hasCta: true },
-    {
-      state: "expired_signin",
-      topChip: CONNECTIONS.SUMMARY_NEEDS_YOU,
-      // U-10: expired_signin still grades modelKeyState's "not_signed_in"
-      // result, but the card's own chip swaps in the bare "Signed out" form
-      // for that one state (expiredSignIn in your-model-key.tsx) so it never
-      // claims "nothing is configured" over a session that used to work.
-      cardChip: modelAccessChipBare("expired_signin"),
-      hasCta: true,
-    },
-    {
-      state: "not_configured",
-      topChip: CONNECTIONS.SUMMARY_NEEDS_YOU,
-      cardChip: YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP,
-      hasCta: true,
-    },
-    // shared_expired is the one state legacySummary still grades by itself
-    // (round-3 Opus HIGH finding), so the top chip keeps the old
-    // fully-qualified label. Under the per_user band, though, that state
-    // maps to modelKeyState's "unknown" result (model-key-state.ts: "shared_
-    // expired / not_applicable / absent ... ALL land here" for a per_user
-    // row), whose card claims nothing (U-14) — no chip below either.
-    { state: "shared_expired", topChip: AGENTS.MODEL_ACCESS_SHARED_EXPIRED, hasCta: false },
-  ];
-
-  for (const c of CASES) {
-    test(`model_access.state=${c.state} shows its chip${c.hasCta ? " and the Sign in to AWS action" : ", no action"}`, async ({
-      page,
-    }) => {
-      await mockMemberRole(page);
-      // Cache-and-serve, not route.fetch()+refulfill per match: the landing
-      // redirect and the setup screen's own mount both hit /setup/status (same
-      // reason as the FETCH_FAILED/empty-roster cases above).
-      let cached: Record<string, unknown> | null = null;
-      await page.route("**/api/v1/setup/status*", async (route) => {
-        if (!cached) {
-          const response = await route.fetch();
-          const json = await response.json();
-          json.model_access = { state: c.state };
-          // U-1 (W6 blind lens): the roster row rides the splice now. `live` and
-          // `expiring` are PER-PERSON labels, and the server emits the same two
-          // states for a SHARED row's admin credential — where the chip row says
-          // "Provided by your admin", because that is whose credential it is. The
-          // six labels this case walks are the per_user lane's, so the fixture is
-          // the per_user lane.
-          json.harnesses = (json.harnesses ?? []).map((h: { id: string }) =>
-            h.id === "claude-code"
-              ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-              : h,
-          );
-          cached = json;
-        }
-        await route.fulfill({ json: cached! });
-      });
-      await gotoConsole(page);
-      await navToRoute(page, "/setup");
-      // The two chips live in separate SectionCards ("What's set up for
-      // you" vs "Your model key"), so there is no strict-mode collision
-      // between them — each locator is still scoped to its own section for
-      // the same reason the original test scoped the top chip: pinning
-      // WHICH card carries which fact, not just that the text exists
-      // somewhere on the page.
-      const setupSummarySection = page
-        .locator("section")
-        .filter({ has: page.getByRole("heading", { name: "What's set up for you" }) });
-      const modelKeySection = page
-        .locator("section")
-        .filter({ has: page.getByRole("heading", { name: "Your model key" }) });
-      await expect(setupSummarySection).toBeVisible();
-      await expect(setupSummarySection.getByText(c.topChip)).toBeVisible();
-      if (c.cardChip) {
-        await expect(modelKeySection.getByText(c.cardChip)).toBeVisible();
-      }
-      // U-13: under the per_user fixture the CARD carries its own sign-in button
-      // beside the chip row's, with its own accessible name — so this asks for
-      // the FIRST of the two rather than a single match.
-      const cta = page.getByRole("button", { name: AGENTS.SIGN_IN_AWS });
-      if (c.hasCta) {
-        await expect(cta.first()).toBeVisible();
-      } else {
-        await expect(cta).toHaveCount(0);
-      }
-    });
-  }
-
-  // Appendix A finding 5 / #158: not_applicable is the admin-token principal
-  // reading an ENABLED per_user row (model-key-state.ts's own comment: "not
-  // a rare skew case ... reached in real traffic"). #541 retired the
-  // dedicated MODEL_ACCESS_NOT_APPLICABLE chip this test used to pin at the
-  // top of "What's set up for you", and legacySummary had no not_applicable
-  // branch for a while — it fell to the llm_ready fallback and read plain
-  // "Ready", indistinguishable from a genuine per-person ready session
-  // (flagged by #1042's e2e, tracked as #1052... no — #1089). #1089 (owner
-  // ruling: build it as a chip) restored a not_applicable arm to
-  // legacySummary: this test now pins the RESTORED chip up top, and that the
-  // "Your model key" card still names the state in words underneath it.
-  test("model_access.state=not_applicable shows its own chip up top (#1089), and the model key card also names it", async ({
-    page,
-  }) => {
-    await mockMemberRole(page);
-    // Cache-and-serve rather than route.fetch()+refulfill per request: the
-    // landing redirect (gotoConsole) and MemberGettingStarted's own mount can
-    // both hit /setup/status, and a real round-trip PER match raced Playwright
-    // disposing an in-flight route's response under load. One real fetch, then
-    // every match (however many) is fulfilled from the cached body instead.
-    let cached: Record<string, unknown> | null = null;
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      if (!cached) {
-        const response = await route.fetch();
-        const body = await response.json();
-        body.model_access = { state: "not_applicable" };
-        // Same per_user roster override as the CASES loop above: not_applicable
-        // is only ever emitted for an admin-token principal on an ENABLED
-        // per_user row, so a fixture with no per_user row at all would not be
-        // the shape this state actually occurs in.
-        body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
-          h.id === "claude-code"
-            ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-            : h,
-        );
-        cached = body;
-      }
-      // TS can't narrow a `let` captured by this closure across the `await`
-      // above — the `if` guarantees it non-null by here.
-      await route.fulfill({ json: cached! });
-    });
-    await gotoConsole(page);
-    await navToRoute(page, "/setup");
-    const setupSummarySection = page
-      .locator("section")
-      .filter({ has: page.getByRole("heading", { name: "What's set up for you" }) });
-    const modelKeySection = page
-      .locator("section")
-      .filter({ has: page.getByRole("heading", { name: "Your model key" }) });
-    await expect(setupSummarySection).toBeVisible();
-    await expect(setupSummarySection.getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeVisible();
-    await expect(modelKeySection.getByText(YOUR_MODEL_KEY.PER_PERSON_NA_BODY)).toBeVisible();
-    // Never one of the OTHER five server-driven AGENTS.MODEL_ACCESS_* labels —
-    // not_applicable's own label above is the only one of the six that
-    // legitimately appears now that #1089 restored it.
-    for (const [state, label] of Object.entries(MODEL_ACCESS_CHIP_LABEL)) {
-      if (state === "not_applicable") continue;
-      await expect(page.getByText(label)).toHaveCount(0);
-    }
-    await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toHaveCount(0);
-  });
-});
-
-// Appendix A finding 4's other half — the roster pin, whose disagreement with
-// the model ARN needs a REAL model account on file to compare against
-// (bedrockModelAccount/validateAgentSSOPin) — scripts/e2e-backend.sh sets
-// WARDYN_BEDROCK_MODEL to a full ARN naming account 222222222222 for exactly
-// this reason.
-test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () => {
-  test.describe.configure({ mode: "serial" });
-
-  // The test here saves a real roster, and without this snapshot/restore the
-  // file would end with claude-code left declared bedrock_sso + per_user +
-  // pinned. A persisted per_user claude-code row
-  // makes the admin token's model_access `not_applicable` and can make
-  // enforceCreateLLMMechanism refuse claude-code launches — i.e. it breaks
-  // new-run.spec.ts, runs.spec.ts and the recording specs, from here.
-  let rosterBefore: { agents?: unknown[] } | null = null;
-  test.beforeEach(async ({ page }) => {
-    rosterBefore = (await getAgentProviders(page)).providers;
-  });
-  test.afterEach(async ({ page }) => {
-    if (rosterBefore) {
-      const restore = await page.request.put("/api/v1/agent-providers", { headers: auth, data: rosterBefore });
-      expect(restore.ok()).toBeTruthy();
-      rosterBefore = null;
-    }
-  });
-
-  // S2-09: a pin that disagrees with the model ARN's account is the ADMIN'S
-  // DELIBERATE ANSWER — a resource-shared application inference profile
-  // legitimately lives in another account, and refusing left that deployment
-  // with no configuration that worked. It saves; the disagreement shows up as a
-  // warning on the Getting-started Bedrock row (and a journal line per save).
-  test("a pin whose account differs from the model ARN saves as the deliberate pin", async ({ page }) => {
-    // Written through the API: the roster's SSO fields have no console
-    // surface any more (they live on the Bedrock provider); the server still
-    // validates and grades this row until the conversion retires it.
-    await putDoc(page, "/api/v1/agent-providers", {
-      agents: [
-        {
-          id: "claude-code",
-          mechanism: "bedrock_sso",
-          credential_source: "per_user",
-          sso_start_url: "https://acme.awsapps.com/start",
-          sso_account_id: "111111111111",
-          sso_role_name: "DevPower",
-        },
-      ],
-    });
-
-    const after = await getAgentProviders(page);
-    const afterClaude = ((after.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
-    expect(afterClaude).toMatchObject({ sso_account_id: "111111111111", sso_role_name: "DevPower" });
-
-    // P4 (0.7.4) — AND the disagreement is AUDIBLE, on the row this describe's
-    // own comment above says it shows up on. The Bedrock row carries a roster
-    // POSTURE appended to whatever it already said, and 0.7.4 appends a THIRD
-    // one (a stored capture the pin no longer allows); the regression that
-    // guards against is a fold that SUBSTITUTES and drops a sibling, which no
-    // Go unit test of one posture would catch.
-    //
-    // This is the posture the harness can actually produce: the daemon's
-    // WARDYN_BEDROCK_MODEL is a full ARN naming account 222222222222
-    // (scripts/e2e-backend.sh), so the 111111111111 pin just saved makes the
-    // row warn naming both. The stored-capture posture needs a real per-user
-    // AWS SSO capture, which this harness cannot make at all (no IdP, and
-    // `-runner none` means no login sandbox to capture in — see the file
-    // header); it is pinned by TestBedrockProviderCheck_StoredCaptureContradicting
-    // ThePinWarns, TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin
-    // and the kind-sso walk instead.
-    //
-    // Appended here rather than as a third test (blind review R-09): every test
-    // in this describe holds a per_user + pinned claude-code row against the
-    // shared e2e daemon for its duration, which U2-04 above names as the
-    // cross-file hazard — so the coverage rides a save that was happening
-    // anyway.
-    const status = await page.request.get("/api/v1/setup/status", { headers: auth });
-    expect(status.ok()).toBeTruthy();
-    const checks = ((await status.json()).checks ?? []) as Array<Record<string, string>>;
-    const bedrock = checks.find((c) => c.id === "bedrock_provider");
-    expect(bedrock, "the Bedrock row must be present once any Bedrock knob is set").toBeTruthy();
-    expect(bedrock!.status).toBe("warn");
-    // The row still names the live model (append-never-substitute), AND both
-    // accounts — a detail that named only one is the sentence that told the
-    // reporting operator nothing.
-    expect(bedrock!.detail).toContain("111111111111");
-    expect(bedrock!.detail).toContain("222222222222");
   });
 });

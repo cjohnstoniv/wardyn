@@ -55,7 +55,7 @@ test.describe("Settings — Model providers list", () => {
         ],
         connected_people: { "bedrock-prod": 12, "anthropic-key": 0 },
       },
-      { agents: [{ id: "claude-code", mechanism: "none", default_provider: "bedrock-prod" }] },
+      { agents: [{ id: "claude-code", default_provider: "bedrock-prod" }] },
     );
     await gotoSettings(page);
 

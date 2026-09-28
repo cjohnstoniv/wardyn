@@ -4,15 +4,16 @@
  */
 
 import type { Page, WebSocketRoute } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pane-copy";
+import { CLAUDE_DOOR, CONNECTIONS } from "../src/app/components/wardyn/copy/door";
 
 // The Claude sign-in door (#628). The packet draws it as the AWS door's
 // states 1-8 unchanged in shape, with no device code: Claude's flow is a link
 // and an approval, and the code it hands back is pasted into this dialog.
-// Opened from Settings' model provider card, which opens the shell's one door
-// (#544) rather than mounting its own.
+// Opened from the shell strip's button for a Claude subscription provider,
+// which opens the shell's one door (#544).
 //
 // Hermetic for the reason signin-door-aws.spec.ts gives: `-runner none` never
 // starts a login run, so the run, its kill, the attach and the token write are
@@ -25,6 +26,15 @@ const PULL_FAILED = "agent: ImagePullBackOff: Back-off pulling image \"wardyn/ag
 
 type LoginRun = Record<string, unknown>;
 
+const CLAUDE = {
+  id: "claude-sub",
+  name: "Claude subscription",
+  kind: "anthropic_subscription",
+  harnesses: ["claude-code"],
+  default_for: ["claude-code"],
+  host: "api.anthropic.com",
+};
+
 interface Door {
   setRun(run: LoginRun): void;
   socket(): Promise<WebSocketRoute>;
@@ -35,21 +45,23 @@ interface Door {
 }
 
 async function openClaudeDoor(page: Page): Promise<Door> {
+  await mockMemberRole(page);
   let base: Record<string, unknown> | null = null;
-  // No subscription of any kind — neither a managed capture nor this host's
-  // own resident Claude CLI login, which the e2e host may well have — and a
-  // deployment that allows one: the lane's "Sign in" button is on screen.
+  // A Claude subscription provider this person has not signed in to: the
+  // strip's "Sign in to Claude" button is on screen.
   await page.route("**/api/v1/setup/status*", async (route) => {
     if (!base) base = (await (await route.fetch()).json()) as Record<string, unknown>;
-    const auth = { ...((base.auth ?? {}) as Record<string, unknown>), shared_subscription_allowed: true };
-    const providers = ((base.providers ?? []) as { tool?: string }[]).map((p) =>
-      p.tool === "claude" ? { ...p, logged_in: false } : p,
-    );
-    const harness = ((base.harness ?? []) as { provider?: string }[]).filter((h) => h.provider !== "anthropic");
-    await route.fulfill({ json: { ...base, auth, providers, harness } });
+    await route.fulfill({
+      json: { ...base, model_providers: [CLAUDE], provider_access: [{ provider: CLAUDE.id, state: "not_configured" }] },
+    });
   });
   const runIds: string[] = [];
-  await page.route("**/api/v1/setup/harness-login", async (route) => {
+  let tokenWrites = 0;
+  await page.route(`**/api/v1/model-providers/${CLAUDE.id}/sign-in`, async (route) => {
+    if (route.request().method() === "PUT") {
+      tokenWrites++;
+      return route.fulfill({ json: {} });
+    }
     const id = `3f1b7c26-0000-4000-8000-${String(runIds.length + 101).padStart(12, "0")}`;
     runIds.push(id);
     await stubAttachTicket(page, id);
@@ -65,11 +77,6 @@ async function openClaudeDoor(page: Page): Promise<Door> {
     kills.push(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");
     await route.fulfill({ status: 202, json: {} });
   });
-  let tokenWrites = 0;
-  await page.route("**/api/v1/setup/harness-credential/anthropic", async (route) => {
-    tokenWrites++;
-    await route.fulfill({ json: {} });
-  });
   let resolveSocket: (ws: WebSocketRoute) => void = () => {};
   const socketP = new Promise<WebSocketRoute>((r) => (resolveSocket = r));
   await stubAttachSocket(page, (_n, ws) => {
@@ -81,11 +88,9 @@ async function openClaudeDoor(page: Page): Promise<Door> {
   page.context().on("page", (p) => tabs.push(p));
 
   await gotoConsole(page);
-  await navToRoute(page, "/admin/settings");
-  await page.locator("#lane-subscription").click();
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to Claude" })).toBeVisible();
-  await page.getByRole("button", { name: /start login/i }).click();
+  await navToRoute(page, "/runs");
+  await page.getByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE }).click();
+  await expect(page.getByRole("heading", { name: CLAUDE_DOOR.TITLE })).toBeVisible();
 
   return {
     setRun: (r) => (run = r),

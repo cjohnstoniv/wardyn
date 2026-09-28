@@ -7,13 +7,13 @@ import type { Page, Route } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
-import { BANNER, CLAUDE_DOOR, CRED_NOTICE, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "../src/app/components/wardyn/copy/door";
-import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import { BANNER, CRED_NOTICE, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "../src/app/components/wardyn/copy/door";
+import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 
-// ONE door (#544, packet MP-E §5.9; the strip that opens it, #540): Settings,
-// the Agents tab, Your model connections (#541 — Getting Started's own
-// button, replaced) and the strip keep their buttons, and every one of them
-// opens the single dialog the shell mounts — keyed by the provider it is for.
+// ONE door (#544, packet MP-E §5.9; the strip that opens it, #540): Your
+// model connections (#541 — Getting Started's own button, replaced), the
+// strip and the New Run rail keep their buttons, and every one of them opens
+// the single dialog the shell mounts — keyed by the provider it is for.
 // Nothing on a route mounts a sign-in pane of its own any more, so leaving
 // the route never takes the door (or its sign-in sandbox) with it.
 //
@@ -66,13 +66,6 @@ async function spliceStatus(page: Page, splice: (body: Record<string, unknown>) 
   });
 }
 
-const perUserRow = (body: Record<string, unknown>) => {
-  body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: AGENTS.SIGN_IN_AWS };
-  body.harnesses = ((body.harnesses ?? []) as { id: string }[]).map((h) =>
-    h.id === "claude-code" ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" } : h,
-  );
-};
-
 /** Exactly one door, in the dialog layer — none inside the page itself. */
 async function expectOneDoor(page: Page, title: string): Promise<void> {
   await expect(page.getByRole("dialog")).toHaveCount(1);
@@ -80,55 +73,6 @@ async function expectOneDoor(page: Page, title: string): Promise<void> {
   await expect(page.getByTestId("harness-login-pane")).toHaveCount(1);
   await expect(page.locator("#main-content [data-testid='harness-login-pane']")).toHaveCount(0);
 }
-
-test.describe("one door — today's door, where the install has no model providers", () => {
-  test("Settings and the Agents tab open the shell's one door, and leaving the route keeps it", async ({ page }) => {
-    await spliceStatus(page, perUserRow);
-    // A saved per_user roster row, so the Agents tab offers its own sign-in.
-    await page.route("**/api/v1/agent-providers", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({
-        headers: { ETag: '"one-door"' },
-        json: {
-          agents: [
-            {
-              id: "claude-code",
-              mechanism: "bedrock_sso",
-              credential_source: "per_user",
-              sso_start_url: "https://acme.awsapps.com/start",
-            },
-          ],
-        },
-      });
-    });
-    const sandbox = await stubSignInSandbox(page, "**/api/v1/setup/harness-login");
-
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await page.locator("#lane-bedrock").click();
-    await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    await expectOneDoor(page, MODEL_ACCESS_BANNER.DIALOG_TITLE);
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-
-    await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-    await expect(page).toHaveURL(/\/admin\/providers$/);
-    await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
-    await page.getByTestId("agent-row-claude-code").getByRole("button", { name: AGENTS.SIGN_IN_AWS }).click();
-    await expectOneDoor(page, MODEL_ACCESS_BANNER.DIALOG_TITLE);
-    await page.getByRole("button", { name: /start login/i }).click();
-    await expect.poll(sandbox.launches).toBe(1);
-
-    // The single-mount property: the door belongs to the shell, so a route
-    // change leaves it open on the same sign-in — no second pane, no second
-    // sandbox, nothing killed.
-    await navToRoute(page, "/admin/settings");
-    await expect(page).toHaveURL(/\/admin\/settings$/);
-    await expectOneDoor(page, MODEL_ACCESS_BANNER.DIALOG_TITLE);
-    expect(sandbox.launches()).toBe(1);
-    expect(sandbox.kills).toEqual([]);
-  });
-});
 
 test.describe("one door — keyed by provider (User view)", () => {
   const BEDROCK = {
@@ -148,11 +92,9 @@ test.describe("one door — keyed by provider (User view)", () => {
   }) => {
     await mockMemberRole(page);
     await spliceStatus(page, (body) => {
-      perUserRow(body);
       body.model_providers = [BEDROCK];
       body.provider_access = [{ provider: BEDROCK.id, state: "not_configured" }];
     });
-    const legacy = await stubSignInSandbox(page, "**/api/v1/setup/harness-login");
     const provider = await stubSignInSandbox(page, `**/api/v1/model-providers/${BEDROCK.id}/sign-in`);
 
     await gotoConsole(page);
@@ -165,7 +107,6 @@ test.describe("one door — keyed by provider (User view)", () => {
     await expect(door).toContainText(MODEL_ACCESS_BANNER.DIALOG_CLEANUP_NOTE);
     // Packet E draws no consent step: the provider's own sign-in starts at once.
     await expect.poll(provider.launches).toBe(1);
-    expect(legacy.launches()).toBe(0);
 
     await navToRoute(page, "/runs");
     await expect(page).toHaveURL(/\/runs$/);
@@ -180,7 +121,6 @@ test.describe("one door — keyed by provider (User view)", () => {
     await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
     await expect(page.getByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toContainText("For Bedrock (prod)");
     await expect.poll(provider.launches).toBe(2);
-    expect(legacy.launches()).toBe(0);
   });
 
   test("the strip's token line opens the token door, which saves to the provider", async ({ page }) => {
@@ -292,28 +232,5 @@ test.describe("one door — keyed by provider (User view)", () => {
     await expect(page.getByText("Token removed")).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(deletes).toBe(1);
-  });
-
-  test("Settings' Claude sign-in stays today's door in the Admin view", async ({ page }) => {
-    await spliceStatus(page, (body) => {
-      body.auth = { ...(body.auth as object), shared_subscription_allowed: true };
-      body.providers = ((body.providers ?? []) as { tool?: string }[]).map((p) =>
-        p.tool === "claude" ? { ...p, logged_in: false } : p,
-      );
-      body.harness = ((body.harness ?? []) as { provider?: string }[]).filter((h) => h.provider !== "anthropic");
-      body.model_providers = [{ ...BEDROCK, id: "claude-sub", name: "Claude subscription", kind: "anthropic_subscription" }];
-      body.provider_access = [{ provider: "claude-sub", state: "not_configured" }];
-    });
-    const legacy = await stubSignInSandbox(page, "**/api/v1/setup/harness-login");
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await page.locator("#lane-subscription").click();
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    const door = page.getByRole("dialog", { name: CLAUDE_DOOR.TITLE });
-    await expect(door).toBeVisible();
-    // No provider line: packet E mounts the provider doors in the User view only.
-    await expect(door).not.toContainText("For Claude subscription");
-    await door.getByRole("button", { name: /start login/i }).click();
-    await expect.poll(legacy.launches).toBe(1);
   });
 });

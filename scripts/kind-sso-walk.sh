@@ -53,7 +53,7 @@
 # call per file (#804 — so a failed spec's own ui/test-results survives to be
 # copied out before the next spec's Playwright process wipes it), in THAT
 # order: the recovery file inherits a member who is already `live` and a
-# roster pin that already contradicts nothing, the concurrency file makes its
+# provider pin that already contradicts nothing, the concurrency file makes its
 # own captures for both members, and the hold file goes last because its case K
 # spends ten minutes of wall clock and every case in it makes its own capture.
 #
@@ -783,6 +783,12 @@ export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
 export WARDYN_WALK_PIN_ROLE="${PIN_ROLE}"
 export WARDYN_WALK_SSO_START_URL="${SSO_START_URL}"
 export WARDYN_WALK_SSO_REGION="${SSO_REGION}"
+# The walk's bedrock_sso model provider (ui/e2e/walk/helpers.ts putProvider)
+# serves claude-code with the pinned-account ARN, addressed at the fake's
+# bedrock-runtime stub: since #548 a run's model credential comes only from its
+# provider, so these ride the provider record rather than the daemon's env.
+export WARDYN_WALK_BEDROCK_MODEL="${BEDROCK_MODEL}"
+export WARDYN_WALK_BEDROCK_BASE_URL="${FAKE_BEDROCK_URL}"
 # The recovery spec's cold-start case manufactures a Pending run pod with a node
 # TAINT, and reads that pod's phase back to prove the hold was real. It needs
 # the cluster coordinates this script already holds — never its own guesses, or

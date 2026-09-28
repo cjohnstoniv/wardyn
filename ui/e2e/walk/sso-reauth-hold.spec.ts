@@ -63,6 +63,7 @@ import {
   MODEL_ACCESS_BANNER,
   waitingReauth,
 } from "../../src/app/components/wardyn/model-access-copy";
+import { BANNER, CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 import { AGENTS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
@@ -70,6 +71,8 @@ import {
   MEMBER_EMAIL,
   SANDBOX_UP,
   SEEN_URL,
+  WALK_PROVIDER,
+  WALK_PROVIDER_NAME,
   dexSignIn,
   makeMemberActionable,
   me,
@@ -232,7 +235,7 @@ async function auditFor(page: Page, id: string): Promise<AuditRow[]> {
 
 /** A FRESH capture, and the moment it landed — every case's T.
  *
- *  makeMemberActionable() FLIPS the roster pin, so it is called only when the
+ *  makeMemberActionable() FLIPS the provider's pin, so it is called only when the
  *  member is `live`: on an already-contradicted member it would HEAL them and
  *  take the CTA away. */
 async function freshCapture(page: Page, request: APIRequestContext): Promise<number> {
@@ -243,37 +246,37 @@ async function freshCapture(page: Page, request: APIRequestContext): Promise<num
   return Date.now();
 }
 
-/** The ADMIN's own AWS sign-in, which is NOT on /setup — and NEVER a bare
- *  `page.goto("/admin/providers")`.
+/** The ADMIN's own AWS sign-in, which is NOT on /setup: an operator's /setup
+ *  is the operator Getting Started. A person's credential for a provider is
+ *  theirs as a person, added from the User view — the provider's row on
+ *  /account's connections card, which opens the same door and pane.
  *
- *  App.tsx's RequireSetup bounces the FIRST gated-route render of every full
- *  document load into /setup while any setup check grades fail or warn, which a
- *  fresh kind install always does, and only ONCE per load. So navigate
- *  CLIENT-SIDE (pushState + popstate, what a <NavLink> click does) and let the
- *  page say when it took: if the one bounce landed on top of this navigation,
- *  the retry cannot be bounced again. Same reasoning, same shape, as
- *  sso-member-recovery.spec.ts's gotoAgentsTab — 0.7.5's first green-looking
- *  walk sat thirty minutes on the welcome page for exactly this.
- *
- *  The button itself is gated on MODEL_ACCESS_ACTIONABLE (agents-tab.tsx): a
- *  LIVE admin is offered no sign-in at all, which is correct and is why every
- *  caller below checks the state first rather than assuming the control. */
+ *  The row's button is offered only in an actionable state: a LIVE admin is
+ *  offered no sign-in at all, which is correct and is why every caller below
+ *  checks the state first rather than assuming the control. */
 async function openAdminLoginPane(page: Page): Promise<void> {
-  await page.goto("/runs");
-  await expect(async () => {
-    if (!/\/admin\/providers$/.test(page.url())) {
-      await page.evaluate((path) => {
-        window.history.pushState({}, "", path);
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      }, "/admin/providers");
-    }
-    await expect(page.getByRole("button", { name: AGENTS.AGENTS_TITLE })).toBeVisible({ timeout: 5_000 });
-  }).toPass({ timeout: 90_000 });
-  await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+  await page.goto("/account");
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) await start.click();
+  await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
 }
+
+/** A sign-in started through the provider's own route, as the pane starts it,
+ *  for a caller the console offers no button to (a LIVE admin). The sandbox
+ *  signs itself in; signInThroughPane's witness is the moved capture. */
+async function startSignInByAPI(page: Page): Promise<void> {
+  const status = await page.evaluate(async (provider: string) => {
+    const r = await fetch(`/api/v1/model-providers/${encodeURIComponent(provider)}/sign-in`, {
+      method: "POST",
+      credentials: "include",
+    });
+    return r.status;
+  }, WALK_PROVIDER);
+  expect(status, "POST /model-providers/{id}/sign-in").toBe(200);
+}
+
+/** The strip's two lines for the walk's provider: first run, and a lapse. */
+const STRIP_NOT_SIGNED_IN = BANNER.B1("Claude Code", WALK_PROVIDER_NAME);
+const STRIP_EXPIRED = CONNECTIONS.C6_LINE(WALK_PROVIDER_NAME);
 
 /** Case H's recipe, which this file needs for the one reason an autonomous run
  *  cannot serve: the hold is unreachable before T+7 (see the header), and an
@@ -438,38 +441,14 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
     const adminPage = await page.context().browser()!.newPage();
     try {
       await dexSignIn(adminPage, ADMIN_EMAIL);
-      // THE ADMIN DISCONNECTS THEIR OWN CREDENTIAL, and that is the only lever
-      // that makes them actionable deterministically here.
-      //
-      // The obvious one — the roster pin — is forbidden twice over. A hold must
-      // never move the roster: a change mid-run is precisely the I3 scope-drift
-      // refusal (credentialReauthScopeChangedRefusal), so flipping the pin to
-      // give the admin a CTA would destroy the very hold this case is testing.
-      // And it does not even work: the pin OSCILLATES between the fixture's two
-      // valid pairs, so whether a flip leaves the ADMIN contradicted or matching
-      // is a question of parity with whichever pair they last captured under —
-      // walk-6 left them contradicted, walk-7 left them `live`, and this case
-      // waited sixty seconds for a button agents-tab.tsx correctly refuses to a
-      // live admin.
-      //
-      // DELETE /setup/harness-credential/aws is operator-only AND scoped to the
-      // CALLER's own subject (harnesscred.go's handleHarnessDisconnect), so the
-      // admin can only ever delete their own — the member's capture, the hold
-      // and the roster are all untouched. It is the same disconnect the Agents
-      // tab offers, and it leaves the admin `not_configured`: actionable, with
-      // a CTA, every time.
-      const disconnect = await adminPage.evaluate(async () => {
-        const r = await fetch("/api/v1/setup/harness-credential/aws", {
-          method: "DELETE",
-          credentials: "include",
-        });
-        return r.status;
-      });
-      expect(disconnect, "the admin could not disconnect their own AWS credential").toBe(200);
-      await expect
-        .poll(async () => (await modelAccess(adminPage)).state, { timeout: 60_000 })
-        .toBe("not_configured");
-      await signInThroughPane(adminPage, openAdminLoginPane);
+      // THE ADMIN SIGNS IN AGAIN THROUGH THE PROVIDER'S OWN ROUTE, whatever
+      // their state. The obvious lever for giving them a button — the
+      // provider's pin — is forbidden: a change mid-run is precisely the I3
+      // scope-drift refusal (credentialReauthScopeChangedRefusal), so flipping
+      // it would destroy the very hold this case is testing. A sign-in lands in
+      // the ADMIN's own namespace only; the member's capture, the hold and the
+      // provider are all untouched.
+      await signInThroughPane(adminPage, startSignInByAPI);
       // …and the member's request is exactly where it was. Read twice, a poll
       // apart: "still pending" measured once is a snapshot, and the resolve
       // path this denies runs on the proxy's own 2 s poll.
@@ -506,8 +485,6 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
     await p.getByRole("button", { name: REAUTH_ROW.ariaLabel }).click();
     await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
     await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
-    const start = p.getByRole("button", { name: "Start login" });
-    if (await start.isVisible().catch(() => false)) await start.click();
   });
 
   // The row leaves PENDING as APPROVED — resolved by a sign-in, never by a
@@ -563,8 +540,8 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
 
   // …and the console is back to an ordinary cockpit: no strip, because the
   // member's session is live again.
-  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toHaveCount(0);
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
+  await expect(page.getByText(STRIP_EXPIRED)).toHaveCount(0);
+  await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toHaveCount(0);
 });
 
 // ── J — the LAUNCH door, on a session retired at the portal ────────────────
@@ -646,8 +623,8 @@ test("negative (model-access-banner): an admin whose own session is live sees no
   await dexSignIn(page, ADMIN_EMAIL);
   expect((await me(page)).operator).toBe(true);
   // SELF-SUFFICIENT, because "the admin is live" is not something this file can
-  // inherit: every case above flips the roster pin to make the MEMBER
-  // actionable, and the pin is one field on one row — an admin whose capture
+  // inherit: every case above flips the provider's pin to make the MEMBER
+  // actionable, and the pin is one field on one provider — an admin whose capture
   // was minted under the other pair grades `expired_signin` too. So reach the
   // state this case is about rather than asserting somebody else left it.
   if ((await modelAccess(page)).state !== "live") {
@@ -660,8 +637,8 @@ test("negative (model-access-banner): an admin whose own session is live sees no
     // The shell's live region is EAGER and always mounted, so its presence is
     // not the assertion — its emptiness of every strip sentence is.
     await expect(page.getByRole("status").first()).toBeAttached({ timeout: 60_000 });
-    await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
-    await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toHaveCount(0);
+    await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toHaveCount(0);
+    await expect(page.getByText(STRIP_EXPIRED)).toHaveCount(0);
     await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
   }
 });
