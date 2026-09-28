@@ -69,15 +69,21 @@ if [[ "${IMAGES_AGREE}" != "1" ]]; then
   echo "         Re-run with WARDYN_KIND_SSO_REBUILD=1, which rebuilds all five (aws-sso is then re-pushed to the registry on this same run, step 1c)." >&2
 fi
 
-# #891: prove the aws-sso pull was actually COLD, not just that a Pulling
-# event exists — a warm pull (shared base layers, the old retag-only image)
-# still emits both a Pulling and a Pulled event, just seconds-to-milliseconds
-# apart instead of the several seconds a genuine download of the random pad
-# layer takes. Diffs the two Events' own (second-granularity) timestamps
-# rather than parsing the kubelet's free-text "in <duration>" message, whose
-# format has changed across k8s versions. Called from kind-sso-walk.sh right
-# after the spec that drives the cold sign-in (sso-member.spec.ts) returns, so
-# a warm node is reported as ITSELF, not as a mystery 90s UI timeout.
+# #891: record how long the aws-sso pull actually took, for a human reading
+# the walk's evidence — EVIDENCE ONLY, never gated on. An earlier version
+# `die`d under a 3s floor, but a genuine cold pull of the 16-64 MiB pad layer
+# regularly lands around 2-2.4s (measured against a local registry, and
+# against this same nightly's own event data for same-sized real images), so
+# that floor failed real cold pulls more often than it caught warm ones — and
+# doing it with `die` inside the spec loop (kind-sso-walk.sh) skipped the
+# recovery and reauth specs and the #1224 root-cause capture below them,
+# which is worse than the thing it was trying to catch. Whether the pull was
+# actually observed is the download-step UI assertion's job
+# (helpers.ts's openLoginPaneAssertingColdPull), not wall-clock arithmetic
+# here. Diffs the two Events' own (second-granularity) timestamps rather than
+# parsing the kubelet's free-text "in <duration>" message, whose format has
+# changed across k8s versions. Called from kind-sso-walk.sh right after the
+# spec that drives the cold sign-in (sso-member.spec.ts) returns.
 record_cold_pull_duration() {
   local events pulling_ts pulled_ts dur
   events="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get events -o json 2>/dev/null)"
@@ -88,13 +94,11 @@ record_cold_pull_duration() {
     '[.items[]? | select(.reason=="Pulled" and (.message // "" | contains($img)))] | sort_by(.lastTimestamp) | last | .lastTimestamp // empty' \
     <<<"${events}")"
   if [[ -z "${pulling_ts}" || -z "${pulled_ts}" ]]; then
-    echo "aws-sso cold pull duration: UNKNOWN (no Pulling/Pulled event found for ${AWS_SSO_NODE_IMAGE} in ${RUNS_NAMESPACE})" \
+    echo "aws-sso cold pull duration: UNKNOWN (no Pulling/Pulled event found for ${AWS_SSO_NODE_IMAGE} in ${RUNS_NAMESPACE}) — evidence only, does not fail the walk" \
       | tee -a "${EVIDENCE_DIR}/images.txt" >&2
     return 0
   fi
   dur=$(( $(date -d "${pulled_ts}" +%s) - $(date -d "${pulling_ts}" +%s) ))
-  echo "aws-sso cold pull duration: ${dur}s (${pulling_ts} -> ${pulled_ts})" | tee -a "${EVIDENCE_DIR}/images.txt"
-  if [[ "${dur}" -lt 3 ]]; then
-    die "aws-sso pull took only ${dur}s — the node already had this image's layers cached, so this was not a genuine cold pull (scripts/kind-sso-walk.sh's registry step, #891)"
-  fi
+  echo "aws-sso cold pull duration: ${dur}s (${pulling_ts} -> ${pulled_ts}) — evidence only, does not fail the walk" \
+    | tee -a "${EVIDENCE_DIR}/images.txt"
 }

@@ -330,10 +330,13 @@ printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
 # produces new bytes rather than replaying Docker's own build cache.
 AWS_SSO_COLD_TAG="cold-$(date +%s)"
 AWS_SSO_NODE_IMAGE="localhost:${REGISTRY_PORT}/agent-aws-sso:${AWS_SSO_COLD_TAG}"
-# 16-64 MiB: enough that the download step's "active" state holds for a
-# visible moment (and, on a truly warm node, that the guard below can tell
-# the difference) without turning every walk into a large-image build/push.
-COLD_PULL_MIB=$(( 16 + RANDOM % 49 ))
+# 64-128 MiB: the sign-in pane only learns about the pull via its own 2s
+# poll (harness-login-pane.tsx's RUN_POLL_MS), so the download has to
+# outlast at least one of those ticks with real margin — a 16-64 MiB pad
+# measured at ~2-2.4s wall clock (mostly fixed per-pull overhead, not
+# bandwidth) left too much of that window uncovered. Doubling the floor
+# buys margin without turning every walk into a large image build/push.
+COLD_PULL_MIB=$(( 64 + RANDOM % 65 ))
 printf 'FROM %s\nRUN head -c %dm /dev/urandom > /tmp/.wardyn-coldpull-pad # %s\n' \
     "${AWS_SSO_IMAGE}" "${COLD_PULL_MIB}" "${AWS_SSO_COLD_TAG}" \
   | docker build --no-cache -t "${AWS_SSO_NODE_IMAGE}" - \
@@ -844,9 +847,11 @@ for spec in "${specs[@]}"; do
     fi
   fi
   # sso-member is the ONE spec that drives the cold aws-sso sign-in
-  # (helpers.ts's openLoginPaneAssertingColdPull) — check right after it, so a
-  # node that was actually warm is reported as itself instead of surfacing
-  # only as that assertion's 90s timeout.
+  # (helpers.ts's openLoginPaneAssertingColdPull) — record the pull's own
+  # duration right after it, into the walk's evidence, for whoever reads a
+  # red run next. Evidence only: it never fails the walk (see
+  # record_cold_pull_duration's own comment for why a wall-clock floor here
+  # would fail real cold pulls too).
   if [[ "${spec}" == "sso-member" ]]; then
     record_cold_pull_duration
   fi
