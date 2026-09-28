@@ -42,7 +42,7 @@ func TestBuildExternalStore_AzureFailsClosed(t *testing.T) {
 		t.Fatalf("plain-http Key Vault = %v; want boot refused", err)
 	}
 	v, az = testExternalFlags("", "https://kv.example.vault.azure.net")
-	if _, err := buildExternalStore(t.Context(), v, az, ""); err == nil || !strings.Contains(err.Error(), "federated token file") {
-		t.Fatalf("unreadable federated token = %v; want boot refused", err)
+	if _, err := buildExternalStore(t.Context(), v, az, ""); err == nil || !strings.Contains(err.Error(), "WARDYN_AZURE_FEDERATED_TOKEN_FILE") {
+		t.Fatalf("unreadable federated token = %v; want boot refused naming the setting", err)
 	}
 }

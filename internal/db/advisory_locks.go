@@ -107,6 +107,20 @@ const BootKeyLockKey int64 = 0x5741524459_424B59 // ASCII "WARDYBKY"
 // and then find nothing left to convert, not skip ahead and read v0 rows.
 const SecretConvertLockKey int64 = 0x5741524459_454E56 // ASCII "WARDYENV"
 
+// TerminalSandboxSweepLockKey makes the terminal-sandbox sweep tick
+// single-flight across control planes (#710), the same shape as
+// ReaperAdvisoryLockKey and for the same reason SingleInstanceLockKey alone
+// is not enough: that lock is at most one steady-state instance, not mutual
+// exclusion (its own HONEST CEILING) — a deployment booted with
+// -allow-multi-instance skips the claim entirely, and a Postgres
+// restart/failover can release its session under a still-running daemon
+// while a second one boots and claims it. Either way, two tickers running at
+// once would both re-run teardown for the same aged KILLED run, doubling its
+// run.kill rows and calling the runner twice. Always taken with
+// TryAdvisoryLock: a control plane that loses simply skips the tick, since a
+// queued second sweep of the same page is pure duplicate work.
+const TerminalSandboxSweepLockKey int64 = 0x5741524459_545353 // ASCII "WARDYTSS"
+
 // AuditChainLockKey serializes appends to the audit_events hash chain
 // (migration 0047). Unlike every key above it is taken with the TRANSACTION
 // -scoped pg_advisory_xact_lock, never the session-scoped form: it is released

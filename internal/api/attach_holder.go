@@ -5,7 +5,7 @@
 //
 // The problem this exists to fix: attach is a SHARED tmux session. handleAttachWS
 // (attach.go) opens a fresh Runner.Attach per client against the same persistent
-// session, so opening the run page while a `wardyn attach` holds it from a CLI
+// session, so opening the run page while a `wardyn run attach` holds it from a CLI
 // means two clients silently compete for one PTY — and neither can observe the
 // other. The Redraw button in ui/src/app/components/attach-terminal.tsx exists
 // only to clean up the tmux clamp that competition leaves behind.

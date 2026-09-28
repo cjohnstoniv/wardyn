@@ -21,7 +21,7 @@
 #   CALLER-AUTH GATE: before any git runs, provision_git_helper_secret writes a
 #   per-run secret to a 0400 agent-owned file and exports WARDYN_GIT_HELPER_SECRET
 #   for THIS process tree only (the clone + the exec'd agent inherit it; a
-#   separate `wardyn attach` exec / non-descendant process does not).  The
+#   separate `wardyn run attach` exec / non-descendant process does not).  The
 #   credential helper requires that presented secret to match the file before it
 #   emits a token, so a stray in-sandbox process cannot exfiltrate a GitHub token
 #   merely by speaking git's credential protocol.  Residual: code running AS the
@@ -488,7 +488,7 @@ fi
 # The interactive counterpart to task mode: prepare the workspace EXACTLY as task
 # mode does — install the MITM CA, artifact config, git-helper caller-auth secret,
 # SSH keys, and CLONE the run's repo(s) into ~/work — then hold the container open
-# for `wardyn attach`. Without this, an interactive run came up with an EMPTY ~/work
+# for `wardyn run attach`. Without this, an interactive run came up with an EMPTY ~/work
 # (the human attached to a bare shell with no repo). The human then drives claude in
 # the attach shell; the repo is already there.
 if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then

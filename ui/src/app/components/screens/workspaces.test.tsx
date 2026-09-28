@@ -465,6 +465,49 @@ describe("WorkspacesScreen — member workspace access", () => {
     await screen.findByText("payments");
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
   });
+
+  // #1267: the server's own available_to_you — a per-value "Available to"
+  // restriction and a git-provider pin, neither of which the plain capability
+  // fixture above (no grant at all) could ever produce.
+  it("names a workspace the server marked available_to_you: false, with a granted capability", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { id: "ws-flagged", name: "payments", available_to_you: false }),
+    ]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [
+        {
+          id: "g1",
+          subject_type: "user_type",
+          subject: "standard",
+          capability: "workspace",
+          value: "ws-flagged",
+          effect: "allow",
+          created_at: "",
+        },
+      ],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember();
+    const text = await screen.findByText(DENIED.WORKSPACE_NOT_AVAILABLE);
+    expect(text.textContent).toBe(DENIED.WORKSPACE_NOT_AVAILABLE);
+  });
+
+  it("says nothing for a workspace the server marked available_to_you: true", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { id: "ws-flagged", name: "payments", available_to_you: true }),
+    ]);
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: true },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember();
+    await screen.findByText("payments");
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+  });
 });
 
 describe("sourceSubLine / workspaceImage — pure helpers", () => {

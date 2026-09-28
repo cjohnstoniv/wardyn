@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
@@ -27,6 +29,73 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
+
+// loadTLSConfig reads the operator-supplied WARDYN_TLS_CERT/WARDYN_TLS_KEY pair
+// once at boot and builds the *tls.Config both HTTP(S) listeners are derived
+// from (serveAndShutdown's console listener and startUISandboxGateway's second
+// one — "one certificate, two names", per that function's own doc comment).
+// The RETURNED value must never be handed to an http.Server directly: each
+// caller goes through tlsConfigForListener instead (below), which Clone()s it
+// — net/http's HTTP/2 setup (onceSetNextProtoDefaults, h2_bundle.go)
+// mutates Server.TLSConfig IN PLACE (appending to NextProtos, setting
+// PreferServerCipherSuites) before its own later ServeTLS clone runs, so two
+// *http.Server instances sharing ONE *tls.Config would race on that mutation —
+// the exact shape of the 0.7.9 regression (a shared *tls.Config mutated by
+// HTTP/2 broke corporate-CA installs). TestListenersDoNotShareOneTLSConfig
+// pins this.
+//
+// The key goes through the shared _FILE mode rule (cliutil.ReadSecretFile),
+// the same one every other secret-file setting is checked against (#1116,
+// #1293): unlike those, WARDYN_TLS_KEY is already a path rather than a value
+// with a _FILE twin, but it is exactly as sensitive, and until now it was
+// read straight off disk by net/http's ListenAndServeTLS with no mode check
+// at all — a group- or world-readable key was accepted silently. The
+// certificate is public, so it is read with a plain os.ReadFile.
+func loadTLSConfig(certPath, keyPath string) (*tls.Config, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: WARDYN_TLS_CERT=%q is unreadable: %w", certPath, err)
+	}
+	keyPEM, err := cliutil.ReadSecretFile("WARDYN_TLS_KEY", keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: %w", err)
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: WARDYN_TLS_CERT/WARDYN_TLS_KEY do not form a valid certificate and key pair: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+}
+
+// tlsConfigForListener returns the *tls.Config ONE HTTP(S) listener should
+// use: a Clone() of posture's shared, loaded keypair (posture.tlsConfig), or
+// nil when TLS is not enabled. Both httpSrv constructions below (this file's
+// serveAndShutdown and startUISandboxGateway) call this rather than reading
+// posture.tlsConfig directly — see loadTLSConfig's doc comment for why
+// handing the SAME *tls.Config to more than one *http.Server races.
+// TestListenersDoNotShareOneTLSConfig pins it.
+func tlsConfigForListener(posture tlsPosture) *tls.Config {
+	return posture.tlsConfig.Clone()
+}
+
+// resolveTLSPosture derives the TLS/cookie posture (validateConfig) and, when
+// TLS is enabled, loads the keypair (loadTLSConfig) — combined into one call
+// so run() keeps a single err-check here instead of gaining a branch of its
+// own; see the call site's comment (main.go) for why that matters.
+func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allowPlaintextListen bool) (tlsPosture, error) {
+	posture, err := validateConfig(dsn, tlsCert, tlsKey, listen, tlsTerminated, allowPlaintextListen)
+	if err != nil {
+		return tlsPosture{}, err
+	}
+	if !posture.tlsEnabled {
+		return posture, nil
+	}
+	posture.tlsConfig, err = loadTLSConfig(tlsCert, tlsKey)
+	if err != nil {
+		return tlsPosture{}, err
+	}
+	return posture, nil
+}
 
 // startBackgroundWorkers launches the daemon's periodic goroutines and runs the
 // boot-time reconciliation pass. Extracted verbatim from run():
@@ -127,6 +196,16 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 	}
 
+	// Terminal sandbox sweep ticker (#710): started AFTER ReconcileOnBoot
+	// returns, so the ordering is structural rather than resting only on the
+	// ticker's own interval being far slower (terminal_sandbox_sweeper.go's
+	// doc comment has the timing argument too, for the case this call is ever
+	// moved back above). Gated the same as the lifecycle reaper above (nothing
+	// to probe with no Runner), independent of autoStopInterval.
+	if run != nil {
+		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval)
+	}
+
 	// D28: re-apply decided `always`-scoped egress decisions onto their
 	// workspaces, healing any allow/deny the non-atomic post-Decide write-back
 	// dropped on a PG blip. In a goroutine — it reads all decided egress
@@ -165,7 +244,10 @@ func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server) {
 // the security control (see internal/api/uigateway.go's header), and boot has
 // already refused a UI address equal to the console's. It reuses the SAME TLS
 // cert/key — one certificate, two names is a deployment detail, and a
-// deployment that terminates TLS upstream terminates both the same way.
+// deployment that terminates TLS upstream terminates both the same way. It
+// gets its OWN Clone() of posture.tlsConfig, not the shared value itself: see
+// loadTLSConfig's doc comment for why sharing one *tls.Config between the two
+// listeners would race.
 //
 // The timeouts mirror serveAndShutdown's for the same reasons: no whole-request
 // deadline (a relayed editor holds a long-lived streaming connection), a
@@ -179,6 +261,7 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 	httpSrv := &http.Server{
 		Addr:              *f.uiListen,
 		Handler:           handler,
+		TLSConfig:         tlsConfigForListener(posture),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
@@ -193,7 +276,7 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 		slog.Info("wardynd: ui-sandbox gateway listening", slog.String("listen", *f.uiListen), slog.Bool("tls", posture.tlsEnabled))
 		var err error
 		if posture.tlsEnabled {
-			err = httpSrv.ListenAndServeTLS(*f.tlsCert, *f.tlsKey)
+			err = httpSrv.ListenAndServeTLS("", "")
 		} else {
 			err = httpSrv.ListenAndServe()
 		}
@@ -224,6 +307,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
+		TLSConfig:         tlsConfigForListener(posture),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No ReadTimeout/WriteTimeout: long-lived streaming endpoints (the attach
 		// WebSocket and the fleet SSE stream) must not be killed by a whole-request
@@ -244,7 +328,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 				slog.String("identity", idpName),
 				slog.String("trust_domain", *f.trustDomain),
 			)
-			if err := httpSrv.ListenAndServeTLS(*f.tlsCert, *f.tlsKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := httpSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- err
 			}
 		default:
@@ -289,6 +373,38 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
+	// fan.Close() is the deferred drain above — reached from here and from the
+	// serve-error return alike.
+	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, orgFederation)
+}
+
+// httpShutdowner is the *http.Server surface runShutdownSequence drives,
+// narrowed so a test can inject a Shutdown that fails without standing up a
+// real listener.
+type httpShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// backgroundServer is the *api.Server surface runShutdownSequence needs after
+// the HTTP drain, narrowed for the same reason as httpShutdowner.
+type backgroundServer interface {
+	WaitBackground()
+	FlushAuthFailedStreak()
+}
+
+// runShutdownSequence drains the internal listener, then the public HTTP
+// server, then any goBackground work still in flight, then flushes the
+// auth-failure streak — in that order, unconditionally, EVEN when the HTTP
+// drain itself fails or hits its budget: a timed-out or errored Shutdown
+// (shutErr != nil) must not skip what follows. An early return here would
+// answer the "shutdown is done" question honestly for HTTP, but still drop
+// the run.kill row and both revocations the same way a SIGKILL would (see
+// WaitBackground below), on precisely the slow shutdown where they matter
+// most. Extracted from serveAndShutdown so a test can inject a Shutdown that
+// fails and prove WaitBackground/FlushAuthFailedStreak still ran
+// (TestRunShutdownSequence*) — TestServeShutdownOrder used to pin the same
+// invariant by walking serveAndShutdown's AST for call order.
+func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, orgFederation *federation.Forwarder) error {
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
@@ -335,8 +451,6 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	// flushes its private-IP memo in.
 	srv.FlushAuthFailedStreak()
 
-	// fan.Close() is the deferred drain above — reached from here and from the
-	// serve-error return alike.
 	if shutErr != nil {
 		return fmt.Errorf("shutdown: %w", shutErr)
 	}

@@ -85,6 +85,59 @@ func isConcurrentMigrateRace(err error) bool {
 	return false
 }
 
+// pgPoolIsolated is pgPool on a throwaway, single-test database (CREATE
+// DATABASE, dropped on cleanup) instead of the one every other test in this
+// package shares. Mirrors throwawayDatabase
+// (internal/store/store_workspace_migration_pg_test.go) — this package can't
+// import that test-only helper across packages, so this is its minimum local
+// twin, for the one test here that mutates a live trigger on the audit table
+// (#1301: TestMigrateRestoresADisabledChainTrigger disabling the chain
+// trigger on the SHARED database left a trap for any whole-chain verifier
+// that later ran against it, even though this test itself always restored it).
+func pgPoolIsolated(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("WARDYN_TEST_PG")
+	if dsn == "" {
+		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed migration test")
+	}
+	ctx := context.Background()
+
+	admin, err := Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect admin: %v", err)
+	}
+
+	name := "wardyn_mig_isolated_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		admin.Close()
+		t.Fatalf("create throwaway database %s: %v", name, err)
+	}
+	// Registered before the pool's own cleanup below, so LIFO ordering closes
+	// the target pool's connections FIRST and drops the database second (a
+	// database with a connected client cannot be dropped).
+	t.Cleanup(func() {
+		cctx := context.Background()
+		_, _ = admin.Exec(cctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid <> pg_backend_pid()`, name)
+		_, _ = admin.Exec(cctx, `DROP DATABASE IF EXISTS `+name)
+		admin.Close()
+	})
+
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse WARDYN_TEST_PG: %v", err)
+	}
+	u.Path = "/" + name
+	pool, err := Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect to throwaway database %s: %v", name, err)
+	}
+	t.Cleanup(pool.Close)
+	if err := migrateTolerant(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return pool
+}
+
 // embeddedMigrationNames is the *.sql filenames bundled in the embed FS;
 // schema_migrations must track each exactly once after Migrate().
 func embeddedMigrationNames(t *testing.T) []string {
@@ -334,7 +387,13 @@ func auditTriggerEnabled(t *testing.T, pool *pgxpool.Pool, name string) bool {
 // the chain never fires — the quietest version of the same hole, and the one an
 // owner reaches for because it looks reversible.
 func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
-	pool := pgPool(t)
+	// Isolated (#1301): disabling the chain trigger here used to mutate the
+	// SHARED test database. Every test in this run passed regardless — Migrate
+	// below always restores it — but rows written by ANY OTHER test between
+	// the DISABLE and the restore carry no hash, which is a trap for whichever
+	// whole-chain verifier runs concurrently or lands here next. A throwaway
+	// database dropped on cleanup has no such neighbour to trap.
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	if !auditTriggerEnabled(t, pool, auditChainTrigger) {
 		t.Fatal("precondition: the chain trigger is not enabled before the test ran")
@@ -342,16 +401,6 @@ func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
 	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events DISABLE TRIGGER `+auditChainTrigger); err != nil {
 		t.Skipf("cannot DISABLE TRIGGER as this role (%v); the test needs table ownership", err)
 	}
-	t.Cleanup(func() {
-		// Belt and braces: Migrate below is what should have re-enabled it, but
-		// a failure here must not leave the shared table writing unchained rows
-		// for every later test in the run.
-		if !auditTriggerEnabled(t, pool, auditChainTrigger) {
-			if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE TRIGGER `+auditChainTrigger); err != nil {
-				t.Errorf("re-enable %s: %v", auditChainTrigger, err)
-			}
-		}
-	})
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate with a disabled chain trigger: %v", err)
 	}

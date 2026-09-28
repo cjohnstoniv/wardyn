@@ -294,13 +294,15 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 // windows it — so a member never gets a short page just because a colleague
 // owns the rows that would have filled it.
 //
-// ponytail: the capWorkspace capability is NOT re-applied here. It governs
-// which workspace a member may LAUNCH a run against (denyUserRequest,
-// runs_create_validate.go), and re-deriving it per row would pay two indexed
-// reads per listed workspace on the console's hot path to hide a NAME the
-// launch seam already refuses. Filter the list too only if a deployment ever
-// needs the name itself hidden.
+// The capWorkspace capability is NOT re-applied to FILTER this list — it
+// governs which workspace a member may LAUNCH a run against
+// (denyUserRequest, runs_create_validate.go), and hiding the row would hide a
+// NAME the launch seam already refuses, for no member benefit. It IS re-read,
+// batched, to STAMP available_to_you (#1267, below) — one shared capBatch for
+// the whole page (withCapBatch), so the advisory bit costs one grants +
+// enforcement + restrictions read total, not one round trip per row.
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(withCapBatch(r.Context()))
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
 		return
@@ -329,6 +331,9 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// how a UI comes to claim a repo is fine while every run refuses it). nil in
 	// legacy open mode, where the key is absent from every row.
 	stamp := s.admissionStamper(r.Context())
+	// #1267: one availability stamper for the whole page — the same shared
+	// capBatch every row's call asks through, installed by withCapBatch above.
+	availStamp := s.availabilityStamper(r.Context())
 	redact := func(rows []types.Workspace, err error) ([]types.Workspace, error) {
 		if err != nil {
 			return nil, err
@@ -339,6 +344,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 			if stamp != nil {
 				ws = stamp(ws)
 			}
+			ws = availStamp(ws)
 			out = append(out, ws)
 		}
 		return out, nil
@@ -377,6 +383,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 
 // handleGetWorkspace returns one workspace by id (404 when unknown).
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(withCapBatch(r.Context()))
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
 		return
@@ -406,6 +413,8 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	if stamp := s.admissionStamper(r.Context()); stamp != nil {
 		out = stamp(out)
 	}
+	// #1267: the same per-row available_to_you the list carries.
+	out = s.availabilityStamper(r.Context())(out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -456,11 +465,11 @@ func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.W
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceRequestInvalid, msg)
 		return
 	}
 	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSSHSourcesNotReady, msg)
 		return
 	}
 	// Onboarding is the first door a repository comes through, so BOTH provider
@@ -503,7 +512,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.
 	if msg := s.userSourcesAllowed(r, owner, req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -610,15 +619,15 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceRequestInvalid, msg)
 		return
 	}
 	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSSHSourcesNotReady, msg)
 		return
 	}
 	if msg := s.userSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
 		return
 	}
 	// Over the INCOMING sources, not the stored ones: an edit is how a member
@@ -907,7 +916,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	// already exists.
 	ws = s.repairStaleWorkspaceRuns(r.Context(), ws)
 	if ws.ActiveRunID != nil {
-		writeError(w, http.StatusConflict, fmt.Sprintf(workspaceDelete409ActiveRun, *ws.ActiveRunID))
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceDeleteActiveRun, fmt.Sprintf(workspaceDelete409ActiveRun, *ws.ActiveRunID))
 		return
 	}
 	staleImage := ws.ImageRef

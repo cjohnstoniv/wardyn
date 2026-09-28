@@ -8,11 +8,13 @@ package docker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
@@ -271,5 +273,117 @@ func TestStartSandbox_OnlyBehindARunningProxy(t *testing.T) {
 	}
 	if err := d.StartSandbox(ctx, "wardyn-agent-not-a-run"); err == nil {
 		t.Error("StartSandbox of an unresolvable ref succeeded")
+	}
+}
+
+// strictProxyDocker is fakeDocker with the daemon rule a replace retry leans
+// on (a create under a name another container still holds is refused, as
+// Docker's 409 name conflict is) and failpoints for the proxy's connect to
+// the control-plane network and its start.
+type strictProxyDocker struct {
+	*fakeDocker
+	failConnect, failStart bool
+}
+
+func (s *strictProxyDocker) ContainerCreate(ctx context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	s.mu.Lock()
+	c := s.containers[o.Name]
+	s.mu.Unlock()
+	if c != nil && !c.removed {
+		return client.ContainerCreateResult{}, fmt.Errorf("Conflict. The container name %q is already in use", o.Name)
+	}
+	return s.fakeDocker.ContainerCreate(ctx, o)
+}
+
+func (s *strictProxyDocker) NetworkConnect(ctx context.Context, n string, o client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
+	if s.failConnect {
+		return client.NetworkConnectResult{}, errors.New("boom: connect")
+	}
+	return s.fakeDocker.NetworkConnect(ctx, n, o)
+}
+
+func (s *strictProxyDocker) ContainerStart(ctx context.Context, id string, o client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	if s.failStart {
+		return client.ContainerStartResult{}, errors.New("boom: start")
+	}
+	return s.fakeDocker.ContainerStart(ctx, id, o)
+}
+
+// TestReplaceProxy_RetryRecoversFromEveryFailurePoint (#1059 under #1176): a
+// replace that fails, or a daemon crash, at any point after the old proxy is
+// touched leaves nothing a retry trips over. The config is the control
+// plane's, so the retry is handed the same bytes, and it must end with
+// exactly one running proxy for the run, at the address the agent pins, fed
+// those bytes.
+func TestReplaceProxy_RetryRecoversFromEveryFailurePoint(t *testing.T) {
+	for _, row := range []string{"create", "connect", "start", "exit-at-config-load", "crash-after-remove", "crash-after-create"} {
+		t.Run(row, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			s := &strictProxyDocker{fakeDocker: f}
+			d := newWithClient(s, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
+			ctx := context.Background()
+			sb, err := d.CreateSandbox(ctx, testSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			runID := testSpec().RunID
+			name := proxyContainerName(runID)
+			cfg := renderedTestConfig(t, "fresh")
+
+			switch row {
+			case "create":
+				f.failCreateContainer = "wardyn-proxy-"
+			case "connect":
+				s.failConnect = true
+			case "start":
+				s.failStart = true
+			case "exit-at-config-load":
+				f.exitAfterInspects = map[string]int{name: 0}
+			}
+			switch row {
+			case "crash-after-remove", "crash-after-create":
+				// The daemon went away between ReplaceProxy's steps: the old
+				// proxy is removed and, for crash-after-create, a new one was
+				// created under its name and never started.
+				if _, err := f.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil {
+					t.Fatal(err)
+				}
+				if row == "crash-after-create" {
+					if _, err := f.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: &container.Config{Image: "wardyn-proxy:dev"}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			default:
+				if err := d.ReplaceProxy(ctx, sb.Ref, cfg); !errors.Is(err, runner.ErrProxyReplaceFailed) {
+					t.Fatalf("first ReplaceProxy = %v; want ErrProxyReplaceFailed", err)
+				}
+			}
+
+			f.failCreateContainer, s.failConnect, s.failStart, f.exitAfterInspects = "", false, false, nil
+			if err := d.ReplaceProxy(ctx, sb.Ref, cfg); err != nil {
+				t.Fatalf("retried ReplaceProxy: %v", err)
+			}
+			proxies := 0
+			for _, c := range f.containers {
+				if !c.removed && c.cfg != nil && c.cfg.Labels[labelRun] == runID.String() && c.cfg.Labels[labelComponent] == componentProxy {
+					proxies++
+				}
+			}
+			p := f.containers[name]
+			if proxies != 1 || p == nil || p.removed || p.state == nil || !p.state.Running {
+				t.Fatalf("after the retry: %d proxies for the run, %s = %+v; want exactly one, running", proxies, name, p)
+			}
+			var ep *network.EndpointSettings
+			if p.net != nil {
+				ep = p.net.EndpointsConfig[internalNetName(runID)]
+			}
+			if ep == nil || ep.IPAMConfig == nil || ep.IPAMConfig.IPv4Address.String() != "10.88.0.2" {
+				t.Errorf("proxy endpoint = %+v; want it pinned to the agent's wardyn-proxy address 10.88.0.2", ep)
+			}
+			if got := f.stdinOf(name); string(got) != string(cfg) {
+				t.Errorf("proxy stdin = %q; want the config handed in", got)
+			}
+		})
 	}
 }

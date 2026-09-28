@@ -167,7 +167,7 @@ type AgentRun struct {
 	Image string `json:"image,omitempty"`
 	// Interactive marks a run created for human-driven use: the sandbox is brought
 	// up RUNNING but no agent task is exec'd and no completion watcher is started
-	// (the human drives via `wardyn attach`). A non-interactive run execs the agent
+	// (the human drives via `wardyn run attach`). A non-interactive run execs the agent
 	// with the task and is watched to completion. This is a first-class,
 	// sandbox-determining choice — see internal/api dispatch.
 	Interactive bool `json:"interactive"`

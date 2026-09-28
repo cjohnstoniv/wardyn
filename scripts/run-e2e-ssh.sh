@@ -26,7 +26,7 @@
 #     the same direct-Postgres way, reaches the first principal's (member-
 #     owned) run — and the resulting ssh.authenticate success row carries
 #     data.override=true (internal/api/sshgateway.go's sshVerifiedAuth)
-#   - in-place promotion (#131): a `wardyn attach` client mints its own
+#   - in-place promotion (#131): a `wardyn run attach` client mints its own
 #     ticket and holds the terminal over the WEB WebSocket, a second `ssh -tt`
 #     joins and is admitted read-only (the notice on ITS stderr), the web
 #     holder drops, and the ssh client is promoted on the SAME socket — the
@@ -462,7 +462,7 @@ fi
 
 # ── 11. in-place promotion (#131): web holds, ssh observes read-only, web
 #    drops, ssh is promoted on its own socket ─────────────────────────────
-# `wardyn attach` is the exact client the console's terminal uses: it mints
+# `wardyn run attach` is the exact client the console's terminal uses: it mints
 # its own single-use ticket (POST /runs/{id}/attach/ticket) and dials the WS
 # attach endpoint with it — built once here, the same way run-e2e-live.sh
 # already builds the CLI on this host.
@@ -473,7 +473,7 @@ go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "build wardyn CLI failed"
 # keystrokes; it only occupies the writer slot until killed below.
 mkfifo "${TMPDIR}/web_stdin"
 exec 5<>"${TMPDIR}/web_stdin"
-WARDYN_URL="${BASE}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMPDIR}/wardyn" attach "${RUN_ID}" \
+WARDYN_URL="${BASE}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMPDIR}/wardyn" run attach "${RUN_ID}" \
   <"${TMPDIR}/web_stdin" >"${TMPDIR}/web_attach.log" 2>&1 &
 WEB_PID=$!
 
@@ -510,7 +510,7 @@ else
   fail "promotion: ssh observer never saw the read-only notice on stderr (log: $(cat "${TMPDIR}/ssh2_err.log"))"
 fi
 
-# Drop the web holder. `wardyn attach` wires SIGTERM to a clean detach
+# Drop the web holder. `wardyn run attach` wires SIGTERM to a clean detach
 # (cmd/wardyn/attach.go's runAttach / signal.NotifyContext).
 kill "${WEB_PID}" >/dev/null 2>&1 || true
 wait "${WEB_PID}" 2>/dev/null || true

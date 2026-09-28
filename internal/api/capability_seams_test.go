@@ -680,7 +680,7 @@ func TestInlinePolicy_WorkspaceNarrowing(t *testing.T) {
 		if len(got.WorkspaceRepos) != 1 {
 			t.Fatalf("repos = %v, want it kept: validateWorkspaceSources refuses it clearly, this seam must not quietly shrink the run", got.WorkspaceRepos)
 		}
-		code, err := h.srv.validateWorkspaceSources(t.Context(), got)
+		code, _, err := h.srv.validateWorkspaceSources(t.Context(), got)
 		if err == nil || code != http.StatusUnprocessableEntity {
 			t.Fatalf("validateWorkspaceSources = %d %v, want a 422", code, err)
 		}

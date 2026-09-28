@@ -884,7 +884,7 @@ below is what tells them apart.
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
 | **A block the body does NOT name** | n/a — the route IS the block | **carried forward**, not cleared (`carryForwardUnnamedSiteConfigFields`, `internal/api/site_config.go`). Without this, every 5-minute converge on a laptop whose MDM file predates 0.7.2 would silently delete the org's provider policy |
-| **Clearing a block** | `{}` | `{}`. Over raw HTTP an explicit `null` also clears; through `wardyn site-config apply` it does **not** — the CLI strict-decodes into the pointer field and re-marshals it ABSENT under `omitempty`, so `null` in a file reads as "unnamed" and carries forward. Use `{}` on both doors and the question never arises |
+| **Clearing a block** | `{}` | `{}`. Over raw HTTP an explicit `null` also clears; through `wardyn site-config set` it does **not** — the CLI strict-decodes into the pointer field and re-marshals it ABSENT under `omitempty`, so `null` in a file reads as "unnamed" and carries forward. Use `{}` on both doors and the question never arises |
 | **Audit row** | `workspace_provider.write` / `agent_provider.write` — the block's own shape, including `base_urls` in the clear (a provider address is topology, not a credential) and never the `sso_start_url` | `site_config.write`, whose datum carries `git_providers`, `storage_configured`, `agent_providers` and — when the body named `workspace_providers` — `sources_no_longer_admitted`, so an MDM-applied narrowing is reviewable with nobody watching a console |
 | **Narrowing is never silent** | the `PUT` response counts the already-onboarded repo sources and library sources the new block refuses; the console renders it on the save toast | the same count, on the response and in `site_config.write` |
 
@@ -2512,9 +2512,9 @@ query string is fine — and always reads "Request access". A link saved as
 `http://` before 0.8 keeps working and is published unchanged, but the setup
 checklist warns about it (row `sign_in_help_url`) until you change it; a save
 that sends it back unchanged is accepted, and a new `http://` link is refused.
-That includes an MDM or CLI baseline (`wardyn site-config apply`) whose `http://`
+That includes an MDM or CLI baseline (`wardyn site-config set`) whose `http://`
 link differs from the stored one: the whole re-apply is refused with a 400 on
-every boot (`wardyn-desktop.sh` logs "site-config apply failed") until the
+every boot (`wardyn-desktop.sh` logs "site-config set failed") until the
 baseline file names an `https://` link.
 Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
 field, and a stored value that no longer passes is dropped from `/healthz`
@@ -2925,20 +2925,20 @@ Moved to [integrations.md](operations/integrations.md).
 
 One more piece of operator-wide config lives in Postgres alongside everything in
 **State stores** above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn
-site-config get|apply`) — the corporate upstream proxy and the list of outbound
+site-config get|set`) — the corporate upstream proxy and the list of outbound
 redirects every run's egress inherits. Unconfigured is a valid, common state.
 Because it lives in Postgres, `make reset` / `make reset-all` take it with the
 volume; `wardyn site-config get > corp-baseline.json` before a reset and `wardyn
-site-config apply corp-baseline.json` after is the round-trip — the document
+site-config set corp-baseline.json` after is the round-trip — the document
 carries secret **names**, never values, so it is safe to keep beside the repo.
-Because values never round-trip, `apply` re-attaches the *names* unconditionally
-even when a named secret was never restored into the fresh store: `apply` prints a
+Because values never round-trip, `set` re-attaches the *names* unconditionally
+even when a named secret was never restored into the fresh store: `set` prints a
 warning naming every such dangling ref, and the setup checklist's "Site config"
 row grades `warn` (never the plain `info` of a fully-live config) while one
 remains.
 
 A captured document carries `onboarding_completed_at` whenever the install it
-came from had finished the Getting Started funnel, and `apply` forwards it
+came from had finished the Getting Started funnel, and `set` forwards it
 verbatim — deliberately: no client strips it, so the same file works through
 `curl` and as the MDM-delivered `/etc/wardyn/site-config.json`. The server owns
 that mark, so it is ignored on the write and the STORED one (none on a fresh
@@ -2950,7 +2950,7 @@ a refusal would only have broken the recovery flows (`internal/api/site_config.g
 `handlePutSiteConfig`). When the file's copy is dropped — a captured baseline
 applied after re-onboarding, or the MDM file re-applied to a laptop that has
 since finished its own funnel — the response says so
-(`onboarding_completed_at_ignored`) and `apply` prints it as a warning.
+(`onboarding_completed_at_ignored`) and `set` prints it as a warning.
 
 **A SiteConfig write reaches only runs dispatched after it lands.** The fields
 below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_proxy`,
@@ -2969,7 +2969,7 @@ redirects are one of the compiled-at-dispatch fields listed above, so a save tha
 said nothing about its lifetime was the one most likely to be acted on twice.
 Every OTHER console write of site config still repeats nothing — the toast is not
 a general rule you can rely on elsewhere. A change made through
-`PUT /site-config` or `wardyn site-config apply` has the response field and
+`PUT /site-config` or `wardyn site-config set` has the response field and
 nothing else. Live
 sidecar reload is deliberately out of scope: a running sandbox's egress
 posture must not change under it with no audit row to show why. A run already
@@ -3368,7 +3368,7 @@ Bearer` (the bare-secret path's hardcoded shape) finally can. Which secret that 
 follows the delivery, not the role name: whatever the row calls it, its
 `proxy_header` secret is the credential this redirect presents. There is no UI
 control for picking an integration here yet; the seam is usable today via `PUT
-/site-config` and `wardyn site-config apply`.
+/site-config` and `wardyn site-config set`.
 
 What you get depends on whether `ecosystem` is set:
 
@@ -3743,7 +3743,7 @@ command, not the console: `agent-run --idle` creates a `wardyn` tmux session on
 *"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in
 your browser. Nothing else runs here."*, waits up to five minutes for prep, and
 runs the pair at most ONCE. Every attach path joins that one session — Wardyn's
-sign-in pane, `wardyn attach`, an SSH attach, and **the Runs list** — because
+sign-in pane, `wardyn run attach`, an SSH attach, and **the Runs list** — because
 attaching is `tmux new-session -A -s wardyn`, attach-or-create. So the path that
 used to hand out a bare prompt now shows the sign-in already in progress.
 If prep never finishes it runs nothing and prints *"wardyn: workspace
@@ -3767,7 +3767,7 @@ unattended once the browser step is done. If it does NOT, and the person's SSO
 session reaches more than one account (or more than one role in the chosen
 account), the helper asks WHICH ONE in the sign-in terminal and allows three
 tries. Anyone with a WRITABLE attach can answer — the console's sign-in pane,
-`wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
+`wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
 A read-only viewer cannot; the prompt itself has no deadline, so it waits until
 a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
 Pin the account and the role on the roster row and the question never comes up. While the sandbox
@@ -4545,9 +4545,9 @@ A site-config document saved before this shipped used `artifact_overrides:
 automatically on the first boot after upgrade — nothing to do for what's already
 in Postgres.
 
-`PUT /site-config` (and so `wardyn site-config apply`) still accepts a legacy
+`PUT /site-config` (and so `wardyn site-config set`) still accepts a legacy
 `artifact_overrides` body **for one release**, folding it into `egress_redirects`
-before validating: `apply` replaces the *whole* document, so an operator
+before validating: `set` replaces the *whole* document, so an operator
 re-applying a file saved before this release would otherwise silently wipe the
 proxy and every redirect rather than just fail to update them. A body that sets
 both fields is rejected (400) rather than guessed at. `wardyn site-config get`
@@ -4574,19 +4574,19 @@ this door. `PUT /site-config` 400s outright on a body carrying a non-empty
 persists, regardless of what the body sent (`handlePutSiteConfig`,
 `internal/api/site_config.go`). Same whole-document-replace reason as above: an
 older client that `get`s a config saved before `integrations` existed, then
-`apply`s it back unmodified, would otherwise silently delete every stored
+`set`s it back unmodified, would otherwise silently delete every stored
 integration.
 
 The practical edge: once any integrations are stored, a fresh `wardyn site-config
 get > corp-baseline.json` captures them too, and the client strips them back out
-on the way in (`PutSiteConfig`, `pkg/client/families.go`) so the `apply` half does
-not 400 on its own capture. That strip also means **`apply` never restores an
+on the way in (`PutSiteConfig`, `pkg/client/families.go`) so the `set` half does
+not 400 on its own capture. That strip also means **`set` never restores an
 integration** — the ones in the file are dropped, the stored ones carried forward
-untouched. `wardyn site-config apply` prints a warning naming how many it dropped.
+untouched. `wardyn site-config set` prints a warning naming how many it dropped.
 Manage integrations through their own routes (`GET /api/v1/integrations`,
 `PUT`/`DELETE /api/v1/integrations/{id}`).
 
-`apply` also decodes the file strictly (`DisallowUnknownFields`, the same
+`set` also decodes the file strictly (`DisallowUnknownFields`, the same
 validator the server runs): on a whole-document replace a typo'd key would leave
 the real setting out of the body and delete it, so a misspelled field fails on the
 host, before anything is sent.
@@ -4595,7 +4595,7 @@ host, before anything is sent.
 the document); a `PUT` carrying it back as `If-Match` is refused `412` if the
 document changed underneath — two admins editing the same config, or a stale
 `corp-baseline.json` applied after someone else's `PUT` landed. Omitting
-`If-Match` works exactly as before, and `wardyn site-config apply` today sends
+`If-Match` works exactly as before, and `wardyn site-config set` today sends
 none. On `412`, re-`GET`, re-apply the change on top, retry.
 
 ### Testing it: two probes, not a courtesy button

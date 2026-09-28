@@ -658,6 +658,23 @@ func pruneAWSSSOSpentTokens(ctx context.Context, pool *pgxpool.Pool) {
 	}
 }
 
+// terminalSandboxSweepTickLock is the terminal-sandbox sweep ticker's
+// single-flight gate: the same shape as reapTickLock, a different key
+// (db.TerminalSandboxSweepLockKey) — see that key's own doc for why
+// claimSingleInstance alone is not enough. A lock we cannot reach skips the
+// tick entirely; the sweep that follows would fail on the same database
+// anyway.
+func terminalSandboxSweepTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
+	return func(ctx context.Context) (func(), bool) {
+		release, ok, err := db.TryAdvisoryLock(ctx, pool, db.TerminalSandboxSweepLockKey)
+		if err != nil {
+			slog.DebugContext(ctx, "wardynd: terminal sandbox sweep tick lock unavailable", slog.Any("err", err))
+			return nil, false
+		}
+		return release, ok
+	}
+}
+
 // groundtruthRotatorLock is the ground-truth rotator's leader-election gate
 // (S2): a Postgres try-advisory-lock acquired ONCE (not per-tick, unlike
 // reapTickLock above) so at most one replica runs the mint/write loop in the
@@ -716,7 +733,7 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// IDLE-GUARDED terminal transition FIRST (findings #1 + N3): move RUNNING->
 	// STOPPED ONLY, and ONLY when updated_at has not advanced past the reaper's
 	// snapshot (notAfter). This MUST precede the destructive StopSandbox: an active
-	// `wardyn attach` TouchRun (which bumps updated_at, state stays RUNNING) between
+	// `wardyn run attach` TouchRun (which bumps updated_at, state stays RUNNING) between
 	// the scan and here means the run is NOT idle — the guarded CAS then no-ops
 	// (applied=false) and we tear nothing down and revoke nothing, preserving the
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or

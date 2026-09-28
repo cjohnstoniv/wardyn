@@ -22,7 +22,7 @@ func (s *Server) approvalsViewScope(w http.ResponseWriter, r *http.Request) (sco
 	switch view {
 	case "", "user", "admin":
 	default:
-		writeError(w, http.StatusBadRequest, "invalid view")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidViewParam, "invalid view")
 		return false, false
 	}
 	isOperator := s.isSecurityOperator(r.Context())

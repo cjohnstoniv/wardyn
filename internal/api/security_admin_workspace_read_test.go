@@ -66,6 +66,26 @@ func (s *wsReadStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
 
+// ListCapabilityGrantsFor/GetCapabilityEnforcement/ListCapabilityRestrictions
+// are the same #338 class of fix, for the same reason: #1267's
+// available_to_you stamp reads them on every GET /workspaces{,/{id}} now.
+// Empty/unenforced keeps this fixture's narrowing kinds allowed by default.
+func (s *wsReadStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *wsReadStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return nil, nil
+}
+func (s *wsReadStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return nil, nil
+}
+
+// ListGroupDenyGrants answers no rows: the stale-group-snapshot fallback a
+// security-admin session's request can take (capabilitySubjects).
+func (s *wsReadStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 // ListRuns answers no runs: GET /observed-egress windows the deployment's
 // history (newest-first) for hosts THIS workspace's runs observed, and this
 // double has none. Test doubles are the ONLY caller of the non-Pager

@@ -14,7 +14,7 @@
 #   1. `kubectl get pods -n wardyn`     the control plane is a Deployment; the
 #                                       run on the bench is two Pods, sandbox
 #                                       and proxy
-#   2. `wardyn ssh --print <run-id>`    the connect string, read off the
+#   2. `wardyn run ssh --print <run-id>` the connect string, read off the
 #                                       daemon's own /healthz — byte-identical
 #                                       to the console's "Attach from your
 #                                       terminal" card
@@ -110,6 +110,10 @@ LOG="${TAKE_DIR}/preflight.log"
 # Where the verifier reads this take's run id back from (check_video_13).
 HANDOFF="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-13}/v13-run-id.txt"
 
+# shellcheck source=../lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"
+# v13's own tag/color differ from common.sh's default — kept as a local
+# override defined AFTER sourcing (common.sh's own contract for this case).
 die()  { printf '\n\033[1;31mv13: %s\033[0m\n' "$*" >&2; exit 1; }
 note() { printf '[v13] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
 
@@ -164,7 +168,7 @@ preflight() {
   SSH_PORT="${ADVERTISE##*:}"
 
   # DA15, both halves: what the wire offers must be what /healthz (and so the
-  # console card, and so `wardyn ssh`) discloses, AND what this operator's
+  # console card, and so `wardyn run ssh`) discloses, AND what this operator's
   # known_hosts already trusts. The second half is what keeps the HOST
   # IDENTIFICATION HAS CHANGED banner off camera after a cluster rebuild.
   local scanned fp_wire fp_known
@@ -222,9 +226,9 @@ preflight() {
   # it" is false.
   SSH_CMD="ssh ${RUN_ID}@${SSH_HOST} -p ${SSH_PORT}"
   local printed
-  printed="$("${REPO_ROOT}/wardyn" ssh --print "${RUN_ID}" 2>>"${LOG}")"
+  printed="$("${REPO_ROOT}/wardyn" run ssh --print "${RUN_ID}" 2>>"${LOG}")"
   [[ "${printed}" == "${SSH_CMD}" ]] \
-    || die "'wardyn ssh --print' emits '${printed}' but beat 3 types '${SSH_CMD}' — the two beats disagree"
+    || die "'wardyn run ssh --print' emits '${printed}' but beat 3 types '${SSH_CMD}' — the two beats disagree"
 
   # Auth, proved without an exec: -N opens the connection and requests no
   # command, so this leaves an ssh.authenticate row and NO ssh.exec row, and the two
@@ -256,7 +260,7 @@ beats() {
 
   # --- B2 · the connect string is the product's, not mine -----------------
   say "To reach into it I do not need kubectl, a port forward, or a cluster role."
-  type_cmd "./wardyn ssh --print ${RUN_ID}"
+  type_cmd "./wardyn run ssh --print ${RUN_ID}"
   say "The command comes from the daemon's own health endpoint. The console card prints the same string."
   say "The run id is the username. A registered public key is the whole credential."
 

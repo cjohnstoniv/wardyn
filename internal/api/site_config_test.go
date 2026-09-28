@@ -445,7 +445,7 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 
 // TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins that PUT
 // /site-config must surface, never silently accept, a secret ref the store
-// doesn't currently hold (e.g. `wardyn site-config apply corp-baseline.json`
+// doesn't currently hold (e.g. `wardyn site-config set corp-baseline.json`
 // run before the referenced secrets were restored). The write itself still
 // succeeds — dangling is a valid mid-recovery state, never rejected.
 func TestHandlePutSiteConfig_ReportsDanglingSecretRefs(t *testing.T) {
