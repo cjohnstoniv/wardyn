@@ -175,6 +175,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Open works again on a compose stack whose console is at `http://127.0.0.1:<port>` (#1241).**
+  Compose always sets `WARDYN_OIDC_REDIRECT_URL` (`http://localhost:<port>/auth/callback`, SSO or
+  not), and the UI gateway's bind compared the console's `Origin` to that URL's host, so a console
+  opened at `127.0.0.1` (the address the installer prints) got a `403` from the bind and every
+  **Open** failed. The bind now also accepts the console under another loopback name
+  (`localhost`, `127.0.0.1`, `[::1]`) when the configured console URL is on loopback, at the same
+  scheme and port; any other port, address or site is still refused.
+
 - **Launching with an ungranted repo-kind workspace now refuses, instead of launching without it
   (#1259).** A `workspace_repos` entry naming an onboarded workspace the caller does not hold the
   `workspace` capability for used to be silently dropped, launching a smaller run; it now refuses

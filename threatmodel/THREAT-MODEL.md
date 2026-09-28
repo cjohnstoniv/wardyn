@@ -1151,8 +1151,9 @@ hiding them would repeat the failure mode we are designed to avoid.
       enter-scoped cookie holding an HMAC of the ticket; enter refuses a ticket
       without it, GET and POST alike, with the bad-ticket 403 and a
       `ui.authorize` / `denied` row, before the ticket is spent. The bind answers
-      only a fetch the browser labels `Sec-Fetch-Site: same-site` and, with SSO, one
-      whose `Origin` is the scheme and host of `WARDYN_OIDC_REDIRECT_URL` — an
+      only a fetch the browser labels `Sec-Fetch-Site: same-site` and, whenever
+      `WARDYN_OIDC_REDIRECT_URL` is set, one whose `Origin` is that URL's scheme and
+      host (on loopback, any of `localhost`/`127.0.0.1`/`[::1]` at its port) — an
       attacker's page gets no binding; a refused bind is audited as
       `ui.authorize` / `denied` with its reason. It needs the console and the
       gateway on one site.
@@ -1169,8 +1170,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     running on the gateway's registrable domain (a relayed app in path mode, a
     sibling host) could plant one with `document.cookie` for a ticket whose binding
     it learned in its own browser — which needs that code already in the victim's
-    browser, the very residual above. Without SSO there is one principal, and the
-    bind accepts any same-site fetch.
+    browser, the very residual above. With no `WARDYN_OIDC_REDIRECT_URL` (only
+    possible without SSO) there is one principal, and the bind accepts any
+    same-site fetch.
 
     **What the one-site rule costs the console.** The binding forces the console
     and the relay onto one registrable domain, so the old answer to the
