@@ -4,11 +4,13 @@
 
 This is the org-side half of [DESKTOP.md's Enrolling into an org control
 plane](../DESKTOP.md#enrolling-into-an-org-control-plane): an org control
-plane this Helm chart or compose stack runs can enrol member-mode laptops
-(topology m′) and receive their audit rows. It's issue #103's phase-one
-seam — no run ever places on the org cluster because a laptop enrolled.
+plane this Helm chart or compose stack runs can enrol member-mode
+laptops (topology m′) and receive their audit rows.
 
 ## Minting a token
+
+*It's issue #103's phase-one seam, not the full hybrid rollout — no run
+places on the org cluster because a laptop enrolled.*
 
 *See [docs/design/hybrid-0.8.md](../design/hybrid-0.8.md) for what is and
 isn't built.*
@@ -55,7 +57,7 @@ Each enrolled device's forwarder pushes its local audit table upward every
 
 | Signal | Where | Meaning |
 | --- | --- | --- |
-| `wardyn_org_federation_lag` | That laptop's own metrics (present only when `WARDYN_ORG_URL` is set on it) | Local rows the organisation has not yet acknowledged |
+| `wardyn_org_federation_lag` | That laptop's own metrics (present only when `WARDYN_ORG_URL` is set on it — see [Monitoring](monitoring.md)) | Local rows the organisation has not yet acknowledged |
 | `org_federation.lag` | That laptop's `/healthz` | The same value, human-readable |
 
 - Whenever forwarding isn't advancing, lag grows at the rate the laptop

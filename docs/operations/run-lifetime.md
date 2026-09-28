@@ -18,9 +18,9 @@ flowchart LR
 ## Capturing the lease
 
 *The long-holds design (RL-0..RL-11) landed across 0.8; this page covers
-what is actually wired today. The diagram's `kept -> revive -> running`
-edge is narrower than it looks: only an interactive run, extended past
-its own end and still inside its files grace, is eligible
+what is actually wired today. The diagram's "extend, revive" edge is
+narrower than it looks: only an interactive run, extended past its own
+end and still inside its files grace, is eligible for revive
 (`reviveEligible`, `internal/api/run_revive.go`, #1061).*
 
 Every run captures a **lease** at create:
@@ -45,7 +45,8 @@ security admin's own ceiling.
 | --- | --- |
 | Moving the end LATER, within the captured maximum | Always allowed |
 | Shortening it, granting "No end," or changing the wait | Needs the captured `user_changes_limits` gate; an over-ask is capped at the limit and the response says so |
-| A run already kept by its own end | Refuses the extend outright — its lease is over, and reviving from that state doesn't exist yet (see "What's not here") |
+| A run already kept by its own end, still inside its files grace | Allowed — moving `ends_at` into the future is the first step toward reviving it (#1061) |
+| A run kept by its own end, past its files grace | Refused: "its end cannot be moved" — start a new run |
 
 Every extend also re-checks the owner's CURRENT authority over the run's
 agent, workspaces, model provider, stored policy and git provider. An owner
@@ -126,10 +127,14 @@ Revive is refused, nothing changed, when:
   git broker needs.
 - The model credential its proxy would inject has been erased, or its
   provider disabled.
-- The run is past its end.
-- **The run is already kept by its own end** — this is the gap an open PR
-  targets. A live run, or one lost to an `outage` or a `reboot`, is
-  revivable today.
+- The run is past its end and hasn't been extended yet — extend it first.
+- The run is already kept by its own end, and either it's a task run (not
+  interactive) or it's past its files grace — the agent can't be started
+  again; start a new run instead.
+
+A live run, one lost to an `outage` or a `reboot`, or a kept run that's
+interactive, extended past its own end and still inside its files grace
+(#1061), is revivable today.
 
 Admins get the same path in bulk over LIVE runs only: `POST
 /admin/runs/restart` ("Restart with current limits") and `GET
