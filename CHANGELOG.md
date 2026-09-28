@@ -248,6 +248,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
   admin" only when the governance ceiling actually did the narrowing; none qualifying names the
   requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
+- **Every card on Admin Settings and Your account now collapses to a one-line summary and expands
+  on click (#1200).** The owner measured Admin Settings at 2625px and Your account at 981px against a 744px viewport
+  with every card already fully open (the Host card's own compact picker above included) — this
+  closes that gap. None of the seven Admin Settings cards or four Your account cards opens by
+  default, which is what keeps both pages under 744px regardless of which of a card's own
+  conditional branches renders. The Azure DevOps card still force-opens (and takes focus) when
+  reached via `/account#azure-devops`, the one deep-linked exception. `ModelProviderCard`,
+  `ProvidersCard` and `UserDrivesCard` also render inside Getting started, which stays fully open
+  unchanged — the collapse is an opt-in prop there, not a new default.
 - **The UI-sandbox gateway's enter hand-off gains a `POST` form, beside the existing `GET` (#1220).**
   `POST <ui-origin>/__wardyn/enter` takes `run`/`app`/`ticket` as an
   `application/x-www-form-urlencoded` body instead of a query string, runs the exact same

@@ -4,7 +4,7 @@
  */
 
 import type { Browser, Page } from "@playwright/test";
-import { consoleAPI, expect, gotoConsole, test } from "./fixtures";
+import { consoleAPI, expandCard, expect, gotoConsole, test } from "./fixtures";
 import { BRAND_HEADER, BRANDING } from "../src/app/lib/branding-copy";
 import { CONSOLE_VIEW } from "../src/app/components/wardyn/copy/console-view";
 
@@ -127,7 +127,8 @@ test.describe("branded console", () => {
     await gotoConsole(page, "admin");
     await expect(page).toHaveTitle("Example Corp Wardyn admin");
     await page.goto("/admin/settings");
-    await expect(page.getByRole("heading", { name: BRANDING.TITLE, level: 3 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: new RegExp(`^${BRANDING.TITLE}( |$)`), level: 3 })).toBeVisible();
+    await expandCard(page, BRANDING.TITLE);
     await expect(page.getByLabel(BRANDING.ORG_NAME_LABEL)).toHaveValue("Example Corp");
   });
 });
