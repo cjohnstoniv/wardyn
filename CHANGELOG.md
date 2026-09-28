@@ -79,16 +79,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this package. `docs/sdk.md`'s reason table covers the new routes.
 - **Every remaining route — the `run_*.go` per-run actions (revive, the owner-authority re-check,
   end/wait, title, files, resources, resume, model-provider choice), the UI gateway, device
-  federation, the Azure DevOps sign-in callback, branding, the CSRF guard, and the rest of the
-  surface — now sends the same machine-readable `reason` on every refusal, closing #656.** Coverage
-  is uniform: `TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new
-  unreviewed bare body, `TestReasonDocsMatchReasonsGo` checks `docs/sdk.md`'s reason table against
-  both `internal/api/reasons.go`/`reasons_routes.go` and `internal/authz`'s own registry (every
-  authorization refusal `s.refuse` sends carries its registered reason too, not only the doors this
-  package validates by hand), and nine of the newly-converted reasons are pinned by a literal-string
-  test against a renamed constant slipping past the docs guard unnoticed. Three refusals are
-  deliberately still bare, each with its own pinning test: a transient model-provider store failure
-  (no door), an unanswered AWS Bedrock SSO renewal (not a refusal class), and the drive-mount
+  federation, the Azure DevOps sign-in door, branding, the CSRF guard, and the rest of the
+  surface — now sends the same machine-readable `reason` on every refusal, closing #656.**
+  `TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new bare
+  `writeError`/`http.Error` call outside its small, evidence-backed allowlist, and
+  `TestNoAdHocErrorBodyOrReasonLiteral` catches the two shapes that guard cannot — a direct
+  `writeJSON(errorBody{...})` construction with no `Reason` (one reviewed construct-then-assign
+  exception today), and a hand-typed string literal passed to `writeErrorReason` instead of a
+  named constant. `TestReasonDocsMatchReasonsGo` checks
+  `docs/sdk.md`'s reason table against both `internal/api/reasons.go`/`reasons_routes.go` and
+  `internal/authz`'s own registry (every authorization refusal `s.refuse` sends carries its
+  registered reason too, not only the doors this package validates by hand), and nine of the
+  newly-converted reasons are pinned by a literal-string test against a renamed constant slipping
+  past the docs guard unnoticed. The Azure DevOps sign-in callback's own post-exchange failures
+  (a bad code, identity-binding, an unusable grant, a store error) are 302 redirects carrying
+  `?ado_signin_error=<reason>` for the console's own error banner, not an error body — its
+  pre-exchange 400s (an unconfigured/foreign app, no session, an invalid scope or prompt) do carry
+  `reason` in the body. Three refusals are deliberately still bare, each with its own pinning
+  test: a transient model-provider store failure (no door), an unanswered AWS Bedrock SSO renewal
+  (not a refusal class), and the drive-mount
   resolver's runner-unavailable/caller-cancelled arms.
 - **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
   rail lists every provider you may use for it, with its kind, your connection state and where

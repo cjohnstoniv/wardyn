@@ -499,6 +499,38 @@ func TestUIGateway_TicketInvalidReasonIsPinned(t *testing.T) {
 	}
 }
 
+// TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket (#656 final review
+// round 2, N1): uigateway.go:300's "not bound to this browser" refusal is
+// DELIBERATELY byte-identical to :315's "garbage/expired/already-used" one —
+// a probe must not tell an unbound-but-real ticket from one that never
+// existed. TestUIGateway_TicketInvalidReasonIsPinned above pins the SHARED
+// value both carry, but blanking either site's own reason argument alone
+// still passes the whole suite (round 2's own finding, N1): only a body
+// comparison catches that. A REAL, freshly-minted ticket sent with no binding
+// cookie at all (bypassing uiHarness.enter's own h.bound, which binds
+// whatever ticket string it is given, garbage included) reaches :300; the
+// existing "garbage ticket" string reaches :315.
+func TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	real := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+	q := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {real}}
+	unboundReq := httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil) // no bind cookie
+	unbound := httptest.NewRecorder()
+	h.gateway.ServeHTTP(unbound, unboundReq)
+
+	garbage := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}})
+
+	if unbound.Code != http.StatusForbidden || garbage.Code != http.StatusForbidden {
+		t.Fatalf("status = unbound %d, garbage %d; want both 403", unbound.Code, garbage.Code)
+	}
+	if unbound.Body.String() != garbage.Body.String() {
+		t.Errorf("bodies differ — an existence oracle: unbound %s, garbage %s", unbound.Body.String(), garbage.Body.String())
+	}
+	if got := errorReason(unbound); got != "ui_gateway_ticket_invalid" {
+		t.Errorf("unbound-ticket reason = %q, want the literal %q", got, "ui_gateway_ticket_invalid")
+	}
+}
+
 // TestUIGateway_EnterRejectsNonOwnerTicket: minting is owner-or-admin, but a
 // member CAN hold a ticket for a run they own — the gateway re-checks the
 // ticket's stamped principal/role against the freshly loaded run, exactly as

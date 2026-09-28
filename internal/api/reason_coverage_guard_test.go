@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -236,4 +237,183 @@ func TestEveryWriteErrorCallCarriesAReasonOrIsReviewed(t *testing.T) {
 		}
 	}
 	t.Logf("scanned %d files, %d allowlisted site(s), %d violation(s)", scanned, len(bareWriteErrorAllowlist), violations)
+}
+
+// bareErrorBodyAllowlist is TestNoAdHocErrorBodyOrReasonLiteral's own small
+// exception list (#656 final review round 2, N2/G4): an errorBody{} composite
+// literal built with no Reason: key, because the enclosing function sets
+// body.Reason afterward, on every path, before its writeJSON call — a
+// construct-then-assign shape the AST check below cannot see is safe without
+// tracing data flow, so it is reviewed and pinned here instead. Keyed
+// "file:enclosing-symbol", same reason bareWriteErrorAllowlist is.
+var bareErrorBodyAllowlist = map[string]string{
+	"run_model_provider.go:Server.writeProviderRefusal": "constructs body without Reason, then sets body.Reason on both branches below (credential vs generic bucket) before its one writeJSON call",
+}
+
+// findBareErrorBodyLiterals walks file for an errorBody{...} composite
+// literal with no Reason: key, keyed "file:enclosing-symbol" -> each site's
+// trimmed source line. A literal built with Error/Provider/Kind but no Reason
+// reaches the wire with an empty reason exactly like a bare writeError would,
+// but escapes that guard entirely since it never calls writeError by name.
+func findBareErrorBodyLiterals(fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
+	found := map[string][]string{}
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		symbol := enclosingSymbolName(fd)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			id, ok := lit.Type.(*ast.Ident)
+			if !ok || id.Name != "errorBody" {
+				return true
+			}
+			for _, elt := range lit.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Reason" {
+					return true // has one, named or not, static or not — not this check's business
+				}
+			}
+			pos := fset.Position(lit.Pos())
+			key := fmt.Sprintf("%s:%s", name, symbol)
+			found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
+			return true
+		})
+	}
+	return found
+}
+
+// findAdHocAndDirectReasonLiterals walks file for a writeErrorReason(w,
+// status, reason, msg) call whose reason argument is a non-empty string
+// literal written directly at the call site, rather than a named constant —
+// the shape #656's own convention has always forbidden by review, never by a
+// compiler or a test until now. "" is exempt: that is writeError's OWN
+// internal forwarding call (http.go), the bare-reason case the OTHER guard,
+// TestEveryWriteErrorCallCarriesAReasonOrIsReviewed, already owns.
+func findAdHocAndDirectReasonLiterals(fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
+	found := map[string][]string{}
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		symbol := enclosingSymbolName(fd)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fn, ok := call.Fun.(*ast.Ident)
+			if !ok || fn.Name != "writeErrorReason" || len(call.Args) != 4 {
+				return true
+			}
+			lit, ok := call.Args[2].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true // an identifier/selector/call — traced back to a const is FIX-1's job, not this check's
+			}
+			if v, err := strconv.Unquote(lit.Value); err == nil && v == "" {
+				return true // writeError's own bare-reason forwarder; the other guard's concern
+			}
+			pos := fset.Position(call.Pos())
+			key := fmt.Sprintf("%s:%s", name, symbol)
+			found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
+			return true
+		})
+	}
+	return found
+}
+
+// TestNoAdHocErrorBodyOrReasonLiteral is #656's second repo-wide reason guard
+// (final review round 2, N2): TestEveryWriteErrorCallCarriesAReasonOrIsReviewed
+// only catches a BARE writer (no reason argument at all); it cannot see a
+// writer that DOES carry something, but the wrong kind of something — a raw
+// string typed at the call site (G5) instead of a name from the closed set,
+// or an errorBody{} construction that skips the field a JSON encoder cannot
+// tell apart from "reviewed and empty" (G4). Neither shape exists in this
+// package today outside bareErrorBodyAllowlist's one reviewed exception;
+// this guard is what keeps it that way.
+func TestNoAdHocErrorBodyOrReasonLiteral(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	entries, err := os.ReadDir(wd)
+	if err != nil {
+		t.Fatalf("read %s: %v", wd, err)
+	}
+
+	bareBodies := map[string][]string{}
+	adHocLiterals := map[string][]string{}
+	fset := token.NewFileSet()
+	scanned := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(wd, name)
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Fatalf("read %s: %v", name, rerr)
+		}
+		file, perr := parser.ParseFile(fset, path, src, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", name, perr)
+		}
+		scanned++
+		for k, v := range findBareErrorBodyLiterals(fset, name, file, src) {
+			bareBodies[k] = append(bareBodies[k], v...)
+		}
+		for k, v := range findAdHocAndDirectReasonLiterals(fset, name, file, src) {
+			adHocLiterals[k] = append(adHocLiterals[k], v...)
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("scanned 0 files — the guard's directory listing is wrong")
+	}
+
+	var keys []string
+	for k := range bareBodies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, ok := bareErrorBodyAllowlist[k]; ok {
+			continue
+		}
+		for _, snippet := range bareBodies[k] {
+			t.Errorf("%s builds an errorBody{} with no Reason: key: %s\n"+
+				"set Reason (directly, or by assignment before every writeJSON call), or — only for a "+
+				"reviewed construct-then-assign shape — add %q to bareErrorBodyAllowlist with that evidence.",
+				k, snippet, k)
+		}
+	}
+	for k, why := range bareErrorBodyAllowlist {
+		if _, ok := bareBodies[k]; !ok {
+			t.Errorf("bareErrorBodyAllowlist has a stale entry %q (%s) — "+
+				"the site it names no longer builds a Reason-less errorBody{}; shrink the allowlist by removing it", k, why)
+		}
+	}
+
+	var litKeys []string
+	for k := range adHocLiterals {
+		litKeys = append(litKeys, k)
+	}
+	sort.Strings(litKeys)
+	for _, k := range litKeys {
+		for _, snippet := range adHocLiterals[k] {
+			t.Errorf("%s passes writeErrorReason a string literal directly: %s\n"+
+				"name a constant from reasons.go/reasons_routes.go (or an authz.Reason) instead — "+
+				"a hand-typed reason is not part of the documented closed set and TestReasonDocsMatchReasonsGo cannot see it.",
+				k, snippet)
+		}
+	}
+	t.Logf("scanned %d files, %d bare-errorBody allowlisted site(s), 0 ad-hoc-literal exceptions", scanned, len(bareErrorBodyAllowlist))
 }
