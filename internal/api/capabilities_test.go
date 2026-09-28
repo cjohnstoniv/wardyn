@@ -713,7 +713,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 // devcontainer_repo, which is deliberately NOT a capability: it executes
 // attacker-authored build config and stays unconditionally admin-only.
 func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature", "policy"}
+	want := []string{"egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy"}
 	if !slices.Equal(capabilityKinds, want) {
 		t.Errorf("capabilityKinds = %v, want %v (and ui/src/app/lib/permissions-copy.ts must match)", capabilityKinds, want)
 	}
@@ -722,7 +722,9 @@ func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
 			t.Errorf("validCapabilityKind(%q) = false", k)
 		}
 	}
-	for _, k := range []string{"", "devcontainer_repo", "EGRESS_HOST", "egress_host "} {
+	// "integration" is the retired kind (0.8): its stored rows are inert, and a
+	// new one is refused.
+	for _, k := range []string{"", "devcontainer_repo", "integration", "EGRESS_HOST", "egress_host "} {
 		if validCapabilityKind(k) {
 			t.Errorf("validCapabilityKind(%q) = true; the set is closed and exact", k)
 		}
@@ -731,13 +733,13 @@ func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
 
 // TestCapValueMatchesIsExactOffTheHostLane: only egress_host has a defensible
 // subdomain semantics. A secret name, a workspace uuid, an image ref, an agent
-// id, an integration id and a git provider row id are identifiers where a
+// id and a git provider row id are identifiers where a
 // prefix, a suffix, or a case fold must never match. The two 0.7 kinds and
 // 0.7.2's workspace_provider are in the list because they ride capValueMatches'
 // DEFAULT arm — nothing was added for them, so nothing but a test proves the
 // default is what they got.
 func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
-	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature, capPolicy} {
+	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy} {
 		if capValueMatches(kind, "*.corp", "api.corp") {
 			t.Errorf("%s: a wildcard-looking grant matched a suffix; only egress_host may do that", kind)
 		}

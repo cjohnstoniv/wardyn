@@ -53,23 +53,22 @@ const (
 	EnvBedrockModel    = "WARDYN_LIVE_BEDROCK_MODEL"
 	EnvBedrockMaxCalls = "WARDYN_LIVE_BEDROCK_MAX_CALLS"
 
-	// EnvBedrockWardynIntegrationID names the AI-provider Integration (GET
-	// /integrations) LL3w binds the run to (CreateRunRequest.IntegrationID) —
-	// this install's Amazon Bedrock lane, already bound to the member's
-	// captured per-user AWS SSO session. Install-specific, so it is never
-	// defaulted.
-	EnvBedrockWardynIntegrationID = "WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID"
-	// EnvBedrockWardynDeniedIntegrationID is OPTIONAL: a second Bedrock
-	// Integration this install has pointed at a model the capped account's
+	// EnvBedrockWardynModelProvider names the model provider (GET
+	// /model-providers) LL3w runs on (CreateRunRequest.ModelProvider) — this
+	// install's Amazon Bedrock SSO provider, which the member has signed in
+	// to. Install-specific, so it is never defaulted.
+	EnvBedrockWardynModelProvider = "WARDYN_LIVE_BEDROCK_WARDYN_MODEL_PROVIDER"
+	// EnvBedrockWardynDeniedModelProvider is OPTIONAL: a second Bedrock
+	// provider this install has pointed at a model the capped account's
 	// service control policy denies, for the forced-AccessDenied half of LL3w.
 	// Unset skips that half by name, never the whole suite.
-	EnvBedrockWardynDeniedIntegrationID = "WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID"
+	EnvBedrockWardynDeniedModelProvider = "WARDYN_LIVE_BEDROCK_WARDYN_DENIED_MODEL_PROVIDER"
 
-	// EnvAutonomyIntegrationID names a WORKING AI-provider Integration for the
-	// autonomy gate's own member — required so the run's model credential
-	// resolves cleanly and the request reaches the autonomy gate itself,
-	// rather than failing earlier on an unrelated missing-credential refusal.
-	EnvAutonomyIntegrationID = "WARDYN_LIVE_AUTONOMY_INTEGRATION_ID"
+	// EnvAutonomyModelProvider names a WORKING model provider for the autonomy
+	// gate's own member — required so the run's model credential resolves
+	// cleanly and the request reaches the autonomy gate itself, rather than
+	// failing earlier on an unrelated missing-credential refusal.
+	EnvAutonomyModelProvider = "WARDYN_LIVE_AUTONOMY_MODEL_PROVIDER"
 )
 
 // Require skips t unless gate is "1"; that is the only condition a skip may

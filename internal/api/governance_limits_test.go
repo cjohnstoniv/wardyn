@@ -597,16 +597,15 @@ func TestCeilingDeniedWorkspaceEgressWarning(t *testing.T) {
 // G4: member-authored llm_cred at workspace create (PF-35)
 
 // TestMemberWorkspaceLLMCredRefused is G4 (PF-35). handleCreateWorkspace
-// assigned LLMCred with no gate at all, and the binding folds through
-// resolveRunIntegration's TIER 2 — which carries no resident_host guard
-// precisely because a workspace pin is treated as OPERATOR consent. The
-// dedicated PUT is operatorOnly; create was the one unguarded door.
+// assigned LLMCred with no gate at all, and a workspace pin is treated as
+// OPERATOR consent. The dedicated PUT is operatorOnly; create was the one
+// unguarded door.
 //
 // REFUSED, never silently dropped: a member who sees a 201 believes the
-// workspace is bound to the integration they named.
+// workspace is bound to the provider they named.
 func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
-	const body = `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`
+	const body = `{"name":"mine","llm_cred":{"provider_ref":"corp-openai"}}`
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
 		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), body)
@@ -635,7 +634,7 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if created.LLMCred == nil || created.LLMCred.IntegrationRef != "corp-openai" {
+	if created.LLMCred == nil || created.LLMCred.ProviderRef != "corp-openai" {
 		t.Errorf("llm_cred = %+v, want the operator's binding persisted", created.LLMCred)
 	}
 
@@ -754,7 +753,35 @@ func TestCapabilityAgentKind(t *testing.T) {
 	})
 }
 
-// the integration kind, and the doctrine pin
+// TestWorkspaceLLMCred_IntegrationRefRefused pins #547 on the workspace doors:
+// an integration no longer chooses a model credential, so a pin to one is
+// refused on create and on PUT /workspaces/{id}/llm-cred alike, never stored
+// inert.
+func TestWorkspaceLLMCred_IntegrationRefRefused(t *testing.T) {
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admin, `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), llmCred400IntegrationRef) {
+		t.Fatalf("create with integration_ref = %d %s, want 400 %q", w.Code, w.Body.String(), llmCred400IntegrationRef)
+	}
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admin, `{"name":"mine"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", w.Code, w.Body.String())
+	}
+	var ws types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &ws); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	w = doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+ws.ID.String()+"/llm-cred", admin, `{"integration_ref":"corp-openai"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), llmCred400IntegrationRef) {
+		t.Fatalf("PUT llm-cred with integration_ref = %d %s, want 400 %q", w.Code, w.Body.String(), llmCred400IntegrationRef)
+	}
+	if got, _ := st.GetWorkspace(context.Background(), ws.ID); got.LLMCred != nil && got.LLMCred.IntegrationRef != "" {
+		t.Errorf("stored llm_cred = %+v, want no integration pin", got.LLMCred)
+	}
+}
+
+// an AI-kind integration grants no model credential
 
 // integStore is govEscapeStore plus the one read the integration tiers need:
 // the site config that holds the deployment's integration rows.
@@ -781,147 +808,78 @@ func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []ty
 	cfg.Audit = audit
 	cfg.Broker = h.broker
 	cfg.Runner = &fakeRunner{}
-	// The integration names govCorpSecret, so it has to be STORED or
-	// applyIntegrationCreds falls back honestly and nothing folds — which would
-	// make the doctrine pin below pass for the wrong reason.
+	// The integration names govCorpSecret, and it is STORED: an absent secret
+	// would grant nothing for an unrelated reason, and the pin below would pass
+	// without proving anything.
 	cfg.Secrets = &memSecrets{m: map[string][]byte{govCorpSecret: []byte("v")}}
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg), audit
 }
 
-// foldedIntegrationRef reads the run.workspace_cred.resolve audit event — the durable
-// record that a model-access binding actually folded into the run — and returns
-// the integration it named, or "" when nothing bound.
-func foldedIntegrationRef(t *testing.T, audit *recRecorder) string {
-	t.Helper()
-	for _, ev := range audit.snapshot() {
-		if ev.Action != "run.workspace_cred.resolve" {
-			continue
-		}
-		var d struct {
-			IntegrationRef string `json:"integration_ref"`
-		}
-		if err := json.Unmarshal(ev.Data, &d); err != nil {
-			t.Fatalf("unmarshal run.workspace_cred.resolve data: %v", err)
-		}
-		return d.IntegrationRef
-	}
-	return ""
-}
-
-// TestCapabilityIntegrationKind is PF-33: `integration` narrows TIER 1 — the
-// run-explicit integration_id, the one member-authored input — AND NOTHING ELSE.
-//
-// The last two subtests are THE DOCTRINE PIN, and they are the reason this kind
-// is safe to ship. resolveRunIntegration has three tiers; tiers 2 (a workspace's
-// own pin) and 3 (the operator's site default) are OPERATOR-authored. Gating
-// them would contradict PERM.DOCTRINE as rendered on the very screen this kind
-// appears on, and one `all` deny row would strip the deployment's model access
-// from every member at once. Without these two assertions a later "consistency"
-// refactor moves the check into resolveRunIntegration and nothing goes red.
-func TestCapabilityIntegrationKind(t *testing.T) {
+// TestAIKindIntegration_GrantsNoModelCredential pins #547: an AI-kind
+// integration no longer credentials a run by any of the three ways it once
+// did — naming it (integration_id), a workspace's pin (LLMCred.IntegrationRef)
+// or the site default (DefaultFor agent_runs). Each reached the OPERATOR's
+// stored key and handed it to the run proxy-side; a model credential now comes
+// only from the run's model provider, which is the run owner's own.
+func TestAIKindIntegration_GrantsNoModelCredential(t *testing.T) {
 	const integID = "corp-anthropic"
-	allow, deny := types.CapabilityAllow, types.CapabilityDeny
-	enforced := func() map[string]bool { return map[string]bool{capIntegration: true} }
-	rows := func() []types.Integration { return []types.Integration{apiKeyIntegration(integID, govCorpSecret)} }
-	explicit := `{"agent":"claude-code","task":"t","integration_id":"` + integID + `"}`
-
-	launch := func(t *testing.T, cs *capStore, rows []types.Integration, wss []types.Workspace, body string) (*Server, *recRecorder, *httptest.ResponseRecorder) {
-		t.Helper()
-		srv, audit := integFixture(t, cs, rows, wss)
-		return srv, audit, doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			govSession(t, govMemberSub, []string{"eng"}, false), body)
+	row := types.Integration{
+		ID: integID, Kind: types.IntegrationKindAnthropicAPIKey, DefaultFor: []string{"agent_runs"},
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: govCorpSecret,
+			Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
 	}
+	member := func(t *testing.T) *http.Cookie { return govSession(t, govMemberSub, []string{"eng"}, false) }
 
-	t.Run("UNENFORCED, no grant: 201 (the absent-row leg)", func(t *testing.T) {
-		_, audit, w := launch(t, &capStore{}, rows(), nil, explicit)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	t.Run("naming it is refused, not ignored", func(t *testing.T) {
+		srv, _ := integFixture(t, &capStore{}, []types.Integration{row}, nil)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"t","integration_id":"`+integID+`"}`)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), mpRunNoIntegration) {
+			t.Fatalf("create = %d %s, want 422 %q", w.Code, w.Body.String(), mpRunNoIntegration)
 		}
-		if got := foldedIntegrationRef(t, audit); got != integID {
-			t.Errorf("folded integration = %q, want %q — the tier-1 pick must still bind", got, integID)
+		if got := errorReason(w); got != reasonIntegrationIDRetired {
+			t.Errorf("reason = %q, want %q", got, reasonIntegrationIDRetired)
 		}
 	})
 
-	t.Run("enforced, no grant: 403 capability_integration", func(t *testing.T) {
-		srv, _, w := launch(t, &capStore{enf: enforced()}, rows(), nil, explicit)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
-		}
-		if !strings.Contains(w.Body.String(), integID) {
-			t.Errorf("body = %s, want the refused integration named", w.Body.String())
-		}
-		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "capability_integration") {
-			t.Errorf("authz.denied reasons = %v, want capability_integration", r)
-		}
-	})
-
-	t.Run("enforced, a * grant: 201", func(t *testing.T) {
-		_, audit, w := launch(t, &capStore{
-			enf:    enforced(),
-			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, govMemberSub, capIntegration, capWildcard, allow)},
-		}, rows(), nil, explicit)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
-		}
-		if got := foldedIntegrationRef(t, audit); got != integID {
-			t.Errorf("folded integration = %q, want %q", got, integID)
-		}
-	})
-
-	t.Run("deny beats an allow on the same person", func(t *testing.T) {
-		srv, _, w := launch(t, &capStore{
-			enf: enforced(),
-			grants: []types.CapabilityGrant{
-				grant(types.CapabilitySubjectUser, govMemberSub, capIntegration, integID, allow),
-				grant(types.CapabilitySubjectAll, "", capIntegration, integID, deny),
-			},
-		}, rows(), nil, explicit)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("create = %d, want 403 — an `all` deny must beat a user allow: %s", w.Code, w.Body.String())
-		}
-		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "capability_integration") {
-			t.Errorf("authz.denied reasons = %v, want capability_integration", r)
-		}
-	})
-
-	// ---- THE DOCTRINE PIN ----
-
-	t.Run("DOCTRINE: a workspace's own pin (tier 2) still folds, with the kind enforced and NO grant", func(t *testing.T) {
+	t.Run("a workspace pin and the site default inject nothing", func(t *testing.T) {
 		ws := types.Workspace{
 			ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
 			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
 			LLMCred: &types.WorkspaceLLMCred{IntegrationRef: integID},
 		}
-		// An `all` DENY on top of the enforcement switch: the strongest row an
-		// admin can write, and it still must not reach an operator-authored pin.
-		_, audit, w := launch(t, &capStore{
-			enf:    enforced(),
-			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capIntegration, capWildcard, deny)},
-		}, rows(), []types.Workspace{ws},
+		srv, audit := integFixture(t, &capStore{}, []types.Integration{row}, []types.Workspace{ws})
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
 			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",`+
 				`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"`+govWorkspaceRepo+`"}]}}`)
 		if w.Code != http.StatusCreated {
-			t.Fatalf("create = %d, want 201 — a workspace pin is OPERATOR consent, never the member's choice: %s", w.Code, w.Body.String())
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
-		if got := foldedIntegrationRef(t, audit); got != integID {
-			t.Fatalf("folded integration = %q, want %q — one `all` deny row just stripped a workspace's own model access", got, integID)
+		var run types.AgentRun
+		if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+			t.Fatalf("decode run: %v", err)
 		}
-	})
-
-	t.Run("DOCTRINE: the operator's site default (tier 3) still folds, with the kind enforced and NO grant", func(t *testing.T) {
-		def := apiKeyIntegration(integID, govCorpSecret)
-		def.DefaultFor = []string{"agent_runs"}
-		_, audit, w := launch(t, &capStore{
-			enf:    enforced(),
-			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capIntegration, capWildcard, deny)},
-		}, []types.Integration{def}, nil, `{"agent":"claude-code","task":"t"}`)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("create = %d, want 201 — the site default is not a member's choice: %s", w.Code, w.Body.String())
+		waitFor(t, "run to settle", func() bool {
+			got, err := srv.cfg.Store.GetRun(context.Background(), run.ID)
+			return err == nil && got.State != types.RunPending && got.State != types.RunStarting
+		})
+		fr := srv.cfg.Runner.(*fakeRunner)
+		fr.mu.Lock()
+		defer fr.mu.Unlock()
+		if fr.createCalls == 0 {
+			t.Fatal("the run never reached CreateSandbox, so its injections prove nothing")
 		}
-		if got := foldedIntegrationRef(t, audit); got != integID {
-			t.Fatalf("folded integration = %q, want %q — one `all` deny row just stripped the SITE DEFAULT deployment-wide", got, integID)
+		for _, g := range fr.lastSpec.ProxyConfig.Injection {
+			if g.Rule.Host == "api.anthropic.com" {
+				t.Fatalf("the operator's key was injected on %s via the AI integration: %+v", g.Rule.Host, g)
+			}
+		}
+		for _, ev := range audit.snapshot() {
+			if ev.Action == "run.workspace_cred.resolve" {
+				t.Fatalf("an AI integration folded into the run: %s", ev.Data)
+			}
 		}
 	})
 }

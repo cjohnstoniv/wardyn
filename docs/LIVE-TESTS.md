@@ -208,17 +208,16 @@ test identity's permission set on the capped member account.
 Unlike LL3, this suite never holds AWS credentials of its own — it drives the
 member's own Wardyn API token and Wardyn's own captured AWS SSO session.
 
-1. Sign in to the console as the member and complete AWS SSO sign-in when
-   asked (same capture LL4 walks through the console's own extractor for).
-2. Find this install's Bedrock Integration id (`GET /api/v1/integrations`, or
-   the console's Integrations page) and set
-   `WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID` to it.
-3. Optional, for the forced-`AccessDenied` half: point a SECOND Bedrock
-   Integration, on the BEARER (API-key) lane specifically — never the
-   per-user AWS SSO lane, whose bedrock-runtime traffic is an opaque,
-   un-MITM'd tunnel and can never surface this hint — at a model this capped
-   account's service control policy denies, and set
-   `WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID` to its id. Unset, that
+1. Sign in to the console as the member and complete the AWS sign-in for this
+   install's Bedrock SSO model provider (Settings → Model providers).
+2. Set `WARDYN_LIVE_BEDROCK_WARDYN_MODEL_PROVIDER` to that provider's id
+   (`GET /api/v1/model-providers`, or the Model providers page).
+3. Optional, for the forced-`AccessDenied` half: set up a SECOND Bedrock
+   provider, of the BEARER (API-key) kind specifically — never the per-user
+   AWS SSO kind, whose bedrock-runtime traffic is an opaque, un-MITM'd tunnel
+   and can never surface this hint — on a model this capped account's service
+   control policy denies, add the member's own key to it, and set
+   `WARDYN_LIVE_BEDROCK_WARDYN_DENIED_MODEL_PROVIDER` to its id. Unset, that
    half alone skips, named.
 
 `converse_through_wardyn` proves the run's credential mint is a PER-USER
@@ -245,9 +244,9 @@ resolves this run's posture to L0 (an admin authors this once through
 `POST /api/v1/governance/profiles` and `/governance/assignments` — the suite
 does not author one itself, the same way LL2's Azure DevOps project is a
 fixture the suite assumes rather than creates). Set
-`WARDYN_LIVE_AUTONOMY_INTEGRATION_ID` to a working AI-provider Integration for
-that member, so the request reaches the autonomy gate instead of failing
-earlier on an unrelated missing-model-credential refusal.
+`WARDYN_LIVE_AUTONOMY_MODEL_PROVIDER` to a working model provider for that
+member, so the request reaches the autonomy gate instead of failing earlier on
+an unrelated missing-model-credential refusal.
 
 ## Running
 
@@ -281,11 +280,11 @@ WARDYN_LIVE_AWS_SSO_TOKEN_FILE=$HOME/.aws/sso/cache/<file>.json \
   go test -tags live -count=1 -v -run TestLiveBedrock ./internal/testlive/
 
 # LL3w
-WARDYN_LIVE_BEDROCK_WARDYN=1 WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID=... \
+WARDYN_LIVE_BEDROCK_WARDYN=1 WARDYN_LIVE_BEDROCK_WARDYN_MODEL_PROVIDER=... \
   go test -tags live -count=1 -v -run TestLive_BedrockWardyn ./internal/testlive/
 
 # LL5
-WARDYN_LIVE_AUTONOMY=1 WARDYN_LIVE_AUTONOMY_INTEGRATION_ID=... \
+WARDYN_LIVE_AUTONOMY=1 WARDYN_LIVE_AUTONOMY_MODEL_PROVIDER=... \
   go test -tags live -count=1 -v -run TestLive_AutonomyL0Enforced ./internal/testlive/
 ```
 

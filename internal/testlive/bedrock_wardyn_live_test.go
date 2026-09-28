@@ -23,16 +23,16 @@ import (
 // bedrockWardynReply is the exact reply text every LL3w run asks its model
 // for — kept short and fixed so the transcript check has one literal to
 // search for, and so worst-case spend per call stays negligible: one short
-// prompt, one short reply, on whatever model the Integration resolves to.
+// prompt, one short reply, on whatever model the provider names.
 // There is no independent max_tokens fence on this path — unlike LL3's own
 // direct SigV4 calls, a claude-code harness run sends its own system prompt
 // and default generation settings, which this suite cannot override from the
-// CreateRun API, and there is no wrapped GET /integrations route to check the
+// CreateRun API, and this suite does not read GET /model-providers to check the
 // model BEFORE the call either. The converse_through_wardyn subtest's model
 // check (bedrock.go's ModelAllowed) runs AFTER the call completes, reading
 // the run's own run.bedrock.configure row — it catches a misconfigured
-// Integration, it does not prevent the one call's worth of spend from it.
-// Expect a few cents on Haiku/Nova pricing; a misconfigured Integration on a
+// provider, it does not prevent the one call's worth of spend from it.
+// Expect a few cents on Haiku/Nova pricing; a misconfigured provider on a
 // larger model costs one such turn at that model's price before this check
 // ever runs.
 const bedrockWardynReply = "pong"
@@ -44,11 +44,9 @@ const bedrockWardynReply = "pong"
 // -run pattern) does not also match this test.
 //
 // The member here holds none of its own: the run's model credential is
-// Wardyn's own per-user AWS SSO capture (resolveBedrockAuth's ssoInject lane,
-// internal/api/runs_bedrock.go — selectable only for agent="claude-code",
-// non-exec, non-interactive: bedrockLaneSelectable), bound to the run through
-// IntegrationID naming this install's Bedrock Integration. The member must
-// have signed in to AWS through the console once already (docs/LIVE-TESTS.md
+// the member's own AWS SSO sign-in on this install's Bedrock SSO model
+// provider, chosen through ModelProvider. The member must have signed in to
+// AWS for that provider through the console once already (docs/LIVE-TESTS.md
 // setup) so that capture exists.
 //
 // converse_through_wardyn proves the run actually used Bedrock, on THIS
@@ -63,8 +61,8 @@ const bedrockWardynReply = "pong"
 //
 // forced_access_denied proves the fault path (internal/egress/proxy/
 // bedrock_fault.go's bedrockUpstreamFault) on the ONE lane it is actually
-// observable on: pointed at a SECOND Integration the owner has bound, on the
-// BEARER (API-key) lane, to a model this capped account's service control
+// observable on: pointed at a SECOND provider the owner has set up, of the
+// Bedrock BEARER (API-key) kind, to a model this capped account's service control
 // policy denies, Wardyn's own AccessDeniedException sentence
 // (bedrockFaultHints — keyed by AWS's error class, not AWS's raw response
 // verbatim) reaches the run's failure_hint. It is NOT observable on the
@@ -73,15 +71,15 @@ const bedrockWardynReply = "pong"
 // bedrock-runtime, on that lane), so bedrockUpstreamFault never runs and no
 // hint is ever written — the subtest checks the row's own mode and fails
 // with that explanation rather than a confusing missing-hint error if the
-// denied Integration was configured on the wrong lane.
+// denied provider was configured on the wrong lane.
 //
-// forced_access_denied is OPTIONAL (EnvBedrockWardynDeniedIntegrationID):
+// forced_access_denied is OPTIONAL (EnvBedrockWardynDeniedModelProvider):
 // unset, this half alone skips, named, rather than blocking the whole suite
 // on a fixture LL3 never needed. A real ThrottlingException is not exercised
 // live: reliably forcing one means exhausting the account's own quota, which
 // is the one thing this suite's spend fence exists to avoid.
 func TestLive_BedrockWardyn(t *testing.T) {
-	Require(t, EnvBedrockWardyn, EnvBaseURL, EnvIdentities, EnvBedrockWardynIntegrationID)
+	Require(t, EnvBedrockWardyn, EnvBaseURL, EnvIdentities, EnvBedrockWardynModelProvider)
 	ids, err := LoadIdentities()
 	if err != nil {
 		Fatalf(t, "%v", err)
@@ -99,7 +97,7 @@ func TestLive_BedrockWardyn(t *testing.T) {
 	}
 
 	t.Run("converse_through_wardyn", func(t *testing.T) {
-		run := liveBedrockWardynRun(t, c, os.Getenv(EnvBedrockWardynIntegrationID), "live-local LL3w")
+		run := liveBedrockWardynRun(t, c, os.Getenv(EnvBedrockWardynModelProvider), "live-local LL3w")
 		if run.State != types.RunCompleted {
 			// run.ID is not a secret (it is how an operator kills a stuck
 			// run) — t.Fatalf directly, bypassing Redact's generic GUID mask.
@@ -129,15 +127,15 @@ func TestLive_BedrockWardyn(t *testing.T) {
 	})
 
 	t.Run("forced_access_denied", func(t *testing.T) {
-		denied := os.Getenv(EnvBedrockWardynDeniedIntegrationID)
+		denied := os.Getenv(EnvBedrockWardynDeniedModelProvider)
 		if denied == "" {
 			// The variable NAME alone, never a value — t.Skipf directly, the
 			// same reason Require itself bypasses Redact: at 48 characters
 			// the name itself matches Redact's long-secret shape and would
 			// print as "[long-secret]", hiding which variable to set.
-			t.Skipf("live: %s unset — point it at a second Bedrock Integration on the BEARER (API-key) lane, "+
+			t.Skipf("live: %s unset — point it at a second Bedrock provider of the BEARER (API-key) kind, "+
 				"bound to a model the capped account's service control policy denies, to prove the "+
-				"forced-AccessDenied half of LL3w (docs/LIVE-TESTS.md, LL3w)", EnvBedrockWardynDeniedIntegrationID)
+				"forced-AccessDenied half of LL3w (docs/LIVE-TESTS.md, LL3w)", EnvBedrockWardynDeniedModelProvider)
 		}
 		run := liveBedrockWardynRun(t, c, denied, "live-local LL3w-deny")
 		events, err := c.AuditEvents(context.Background(), run.ID)
@@ -150,9 +148,9 @@ func TestLive_BedrockWardyn(t *testing.T) {
 		}
 		if mode != "bearer" {
 			t.Fatalf("run %s: run.bedrock.configure mode is %q, not \"bearer\" — %s must name a Bedrock "+
-				"Integration on the bearer (API-key) lane; the per-user AWS SSO lane's bedrock-runtime traffic "+
+				"provider of the bearer (API-key) kind; the per-user AWS SSO lane's bedrock-runtime traffic "+
 				"is never MITM'd, so it can never produce this hint (see the test's own doc comment)",
-				run.ID, mode, EnvBedrockWardynDeniedIntegrationID)
+				run.ID, mode, EnvBedrockWardynDeniedModelProvider)
 		}
 		if err := BedrockWardynForcedFaultOK(run.FailureHint, "AccessDeniedException"); err != nil {
 			t.Fatalf("run %s ended %s: %v", run.ID, run.State, err)
@@ -210,20 +208,20 @@ func bedrockWardynTranscript(ctx context.Context, c *client.Client, runID uuid.U
 }
 
 // liveBedrockWardynRun launches one minimal non-interactive claude-code run
-// against integrationID asking for bedrockWardynReply, and waits for a
+// on the provider named modelProvider asking for bedrockWardynReply, and waits for a
 // terminal state, tolerating a short extra wait for a fault hint that can
 // land just after termination (bedrockUpstreamFault's own doc: the decision
 // row races the completion watcher). It never asserts the end state itself —
 // callers grade that differently for the clean and forced-fault cases. On a
 // timeout it kills the run before failing, rather than leave it running.
-func liveBedrockWardynRun(t *testing.T, c *client.Client, integrationID, title string) types.AgentRun {
+func liveBedrockWardynRun(t *testing.T, c *client.Client, modelProvider, title string) types.AgentRun {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	created, err := c.CreateRun(ctx, client.CreateRunRequest{
 		Agent:         "claude-code",
 		Task:          "Reply with the single word " + bedrockWardynReply + " and nothing else.",
-		IntegrationID: integrationID,
+		ModelProvider: modelProvider,
 		Title:         title,
 	})
 	if err != nil {

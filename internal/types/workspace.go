@@ -300,10 +300,10 @@ const (
 
 // ClosedIntegrationKinds is the closed kind set — the kinds with bespoke
 // behavior in code, and as of 0.5 the ONLY kinds a write may name
-// (validateIntegrationWrite).
+// (validateIntegrationWrite). The four AI kinds left it in 0.8: model access
+// is a model provider, and a stored AI row is kept only for the conversion to
+// read (AIProviderKind).
 var ClosedIntegrationKinds = map[string]bool{
-	IntegrationKindAnthropicAPIKey: true, IntegrationKindAnthropicSubscription: true,
-	IntegrationKindBedrock: true, IntegrationKindOpenAIAPIKey: true,
 	IntegrationKindGitHubApp: true, IntegrationKindGitHost: true,
 }
 
@@ -313,8 +313,9 @@ func ClosedIntegrationKindList() []string {
 	return slices.Sorted(maps.Keys(ClosedIntegrationKinds))
 }
 
-// AIProviderKind reports whether kind is one of the AI provider flavors —
-// eligible for DefaultFor and the run-time model-credential fold.
+// AIProviderKind reports whether kind is one of the retired AI provider
+// flavors. No resolver hands such a row out any more; it names what the
+// conversion to model providers reads.
 func AIProviderKind(kind string) bool {
 	switch kind {
 	case IntegrationKindAnthropicAPIKey, IntegrationKindAnthropicSubscription,

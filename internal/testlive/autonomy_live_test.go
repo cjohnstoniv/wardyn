@@ -59,7 +59,7 @@ import (
 // the regression as a finding — the runbook's own instruction for this
 // outcome ("don't try to fix your command").
 func TestLive_AutonomyL0Enforced(t *testing.T) {
-	Require(t, EnvAutonomy, EnvBaseURL, EnvIdentities, EnvAutonomyIntegrationID)
+	Require(t, EnvAutonomy, EnvBaseURL, EnvIdentities, EnvAutonomyModelProvider)
 	ids, err := LoadIdentities()
 	if err != nil {
 		Fatalf(t, "%v", err)
@@ -71,7 +71,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 			"also have a governance profile assignment that caps this run's posture at L0 (docs/LIVE-TESTS.md, LL5)")
 	}
 	c := client.New(os.Getenv(EnvBaseURL), member.APIToken)
-	integrationID := os.Getenv(EnvAutonomyIntegrationID)
+	modelProvider := os.Getenv(EnvAutonomyModelProvider)
 
 	t.Run("unattended_refused", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -79,7 +79,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 		created, err := c.CreateRun(ctx, client.CreateRunRequest{
 			Agent:         "claude-code",
 			Task:          "Run a shell command: cat /etc/passwd",
-			IntegrationID: integrationID,
+			ModelProvider: modelProvider,
 			Title:         "live-local LL5",
 		})
 
@@ -123,7 +123,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 		created, err := c.CreateRun(ctx, client.CreateRunRequest{
 			Agent:         "claude-code",
 			Interactive:   true,
-			IntegrationID: integrationID,
+			ModelProvider: modelProvider,
 			Title:         "live-local LL5-interactive",
 		})
 		if err != nil {

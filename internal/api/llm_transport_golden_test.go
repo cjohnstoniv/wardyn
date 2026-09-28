@@ -156,8 +156,8 @@ func llmGoldenCases() []llmGoldenCase {
 		{name: "codex-cli/nothing-configured", agent: "codex-cli"},
 
 		// (b) an anthropic-api-key secret is present AND an injection for it was
-		// already proposed (mirrors runs_create.go's ensureLLMGrant running BEFORE
-		// dispatch) — the interesting assertion is the OPT-OUT: this pre-existing
+		// already proposed (a policy's own grant, minted BEFORE dispatch) — the
+		// interesting assertion is the OPT-OUT: this pre-existing
 		// injection is what suppresses the managed-subscription fallback below.
 		{
 			name:  "claude-code/anthropic-api-key-injection-present",
@@ -172,7 +172,7 @@ func llmGoldenCases() []llmGoldenCase {
 		// (b') gateway-aware opt-out: an internal model gateway is configured
 		// AND a Wardyn-managed subscription blob is ALSO wired, but the api-key
 		// injection targets the GATEWAY host (not api.anthropic.com) — exactly
-		// what ensureLLMGrant now authors under a gateway. managed must still
+		// what a gateway-bound api_key grant targets. managed must still
 		// stay off: hasAnthropicAPIKeyInjection must recognize the gateway host,
 		// not just the hardcoded public one.
 		{

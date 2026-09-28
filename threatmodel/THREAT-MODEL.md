@@ -433,17 +433,16 @@ lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs ther
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
-Ten closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
-and it grew by two in v0.7, one in v0.7.2 and three in 0.8. Nine NARROW what a
-member could already do:
+Nine closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
+and it grew by two in v0.7, one in v0.7.2 and three in 0.8, and lost one in 0.8:
+`integration`, which bounded the AI-provider integration a member named on a run,
+retired with the AI integrations — `req.IntegrationID` is refused for everyone, so
+there is nothing left to gate. Eight NARROW what a member could already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
 reference, and which names `GET /secrets` lists back), `workspace` (which
 onboarded workspace they may launch against), `agent` (which harness — `req.Agent`,
-their own free-text choice) and `integration` (which AI-provider integration they
-may name on a run — `req.IntegrationID`, and TIER 1 ONLY: a workspace's own
-`LLMCred` pin and the operator's site default are operator-authored and are
-deliberately not gated) and — v0.7.2 — `workspace_provider` (which git provider
+their own free-text choice) and — v0.7.2 — `workspace_provider` (which git provider
 row the repositories a member's work comes from may belong to: the row
 `admitRepoURL` resolves a derived clone URL to, checked at every one of the SIX
 doors a member can reach a clone through — `POST /runs` over both the resolved
@@ -454,7 +453,7 @@ closed set refused at write time otherwise, one check at each mint door; mint
 only, so an existing key or token outlives a later deny until it is removed or
 revoked) and `policy` (which stored policy a member may select, `req.PolicyID`;
 the choice only, since the selected row is still clamped to their ceiling).
-`workspace`, `agent`, `integration` and `policy` are enforced at
+`workspace`, `agent` and `policy` are enforced at
 `denyUserRequest`, on launch and preflight alike. `workspace_provider` is deliberately a bound on
 the PROVIDER ROW and not on the repository: admission here is URL-prefix
 matching, not a repo ACL, and the row is the unit an admin writes down (the
@@ -467,10 +466,28 @@ provider KIND only — never a base URL, because `GET /workspace-providers` is a
 security-tier door precisely because base URLs name corporate topology.
 0.8's `model_provider` bounds which model provider a person's run may use —
 the one they name, the one a workspace pins and the agent's default alike
-(`enforceRunModelProvider`, create and Review). It deliberately does NOT carry
-`integration`'s pin exemption: every model credential is the person's own, so
-a pin is no admin grant of access, and a pin naming an ungranted provider
+(`enforceRunModelProvider`, create and Review). It deliberately exempts no
+admin pin: every model credential is the person's own, so a pin is no admin
+grant of access, and a pin naming an ungranted provider
 refuses the run rather than falling through to another provider.
+Since #547 nothing admin-authored hands a run a model credential in the
+provider's place: a run's `integration_id` is refused, an AI-integration pin
+or site default grants nothing, and a workspace requirement never authors a
+grant on a host that serves a model — a `secret:<name>` requirement (whose
+grant was always the agent's model host) and an integration requirement's
+header credential on such a host are skipped and audited
+(`run.requirement.skip`, reason `model_host`; `skipRequiredSecret`,
+`applyIntegrationRequirement`), and an integration write that would put a
+credential there is refused. "Serves a model" is one set, `modelServingHosts`:
+the vendor hosts, configured gateways and boot Bedrock pair, plus every model
+provider row's own host (a custom endpoint or route-through base URL, a
+Bedrock row's regional runtime and control hosts), chosen by the run or not.
+Under a provider block, dispatch also strips every injection on that set its
+arm did not author (`dropLegacyModelInjections`) before the arm adds its own,
+so no other grant can sit beside it. Until #549
+retires them, the operator-credential lanes that remain are the managed and
+host-mounted subscription, operator Bedrock config, and an `api_key` grant a
+run's own policy carries.
 `image` WIDENS — without both its switch on and an exact-ref grant a member cannot
 name a custom image at all. `devcontainer_repo` is deliberately not a kind and
 stays unconditionally admin-only: it executes attacker-authored build
@@ -493,7 +510,7 @@ are shape-validated at the write boundary.
 
 Enforcement seams: `narrowUserInlinePolicy` (a member's own `inline_policy`
 allowlist and secret refs), `denyUserRequest` (`workspace_id`, `image`,
-`devcontainer_repo`, `agent`, `integration_id`), `authorizeUserDecision` (which
+`devcontainer_repo`, `agent`, `policy_id`), `authorizeUserDecision` (which
 host a member may decide an `egress_domain` approval for) and `handleListSecrets`
 (which names `GET /secrets` lists back).
 
