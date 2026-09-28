@@ -232,10 +232,10 @@ export function NewRunScreen() {
         if (!alive) return;
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
-        // #922 review F3: a LOADED status with no model_providers key means
-        // "granted none", not "haven't checked" — resolvedModelProviders
-        // draws that line off the same `unreachable` bit this effect already
-        // reads, never a second signal.
+        // An absent model_providers key means no provider block (nothing to
+        // enforce); a present `[]` means a block that grants this caller
+        // nothing. resolvedModelProviders keeps that distinction and folds an
+        // unreachable read to undefined, off the same bit this effect reads.
         setModelProviders(resolvedModelProviders(st));
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));

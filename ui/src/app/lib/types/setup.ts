@@ -402,8 +402,8 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
-  // The model providers the caller may use. Absent with no provider block
-  // (today), or when none serves an agent the caller may launch.
+  // The model providers the caller may use. Absent only when no provider
+  // block exists; a block that grants this caller nothing is `[]`.
   model_providers?: SetupModelProvider[];
   // THIS PRINCIPAL's own connection state for each provider in
   // `model_providers` (MP-12) — one row per provider, graded against the
