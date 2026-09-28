@@ -93,6 +93,21 @@ export function runsViewSaved(name: string): string {
   return `Saved “${name}” in this browser. The link in the address bar shares it.`;
 }
 
+// The Saved view select's own option text, and the one shown when the
+// current URL matches no saved view — the mock never leaves that select
+// blank (home-runs-1197-packet.html:615).
+export function runsSavedViewOption(name: string): string {
+  return `View · ${name}`;
+}
+export const RUNS_SAVED_VIEW_CUSTOM = "View · Custom";
+
+// The save-view form's own literals (home-runs-1197-packet.html:617): a
+// prefilled name, and "Save" — distinct from the "Save view" button that
+// opens the form.
+export const RUNS_SAVE_VIEW_DEFAULT_NAME = "My view";
+export const RUNS_SAVE_VIEW_SUBMIT = "Save";
+export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
+
 // Row-state words that are NEW for this page (design.md §2.2). Reused words
 // (Completed/Failed/Killed/Stopped/Archived) are literals directly in
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or

@@ -15,16 +15,22 @@ import {
   RUNS_FILTERS,
   RUNS_INCLUDE_KILLED,
   RUNS_SAVE_VIEW,
+  RUNS_SAVE_VIEW_CANCEL,
+  RUNS_SAVE_VIEW_DEFAULT_NAME,
   RUNS_SAVE_VIEW_NAME_LABEL,
+  RUNS_SAVE_VIEW_SUBMIT,
+  RUNS_SAVED_VIEW_CUSTOM,
+  runsSavedViewOption,
 } from "../../wardyn/copy/runs-landing";
 import type { RunsFilterState, RunsGroupBy, RunsStatusFilter, RunsWhoseRuns } from "./runs-filters";
 import type { RunsEndedWithin } from "../../../lib/api/runs";
 import type { SavedRunsView } from "./runs-saved-views";
 
 const WORKSPACE_ALL = "all";
-// Never a real saved search — "" only ever means "matches no known view", so
-// picking it back is a no-op rather than a broken navigation.
-const CUSTOM_VIEW_VALUE = "";
+// Never a real saved view's index — it is only ever the sentinel item shown
+// when the current URL matches none of them (mock's "View · Custom"). Must
+// be non-empty: a Radix SelectItem's value may never be "".
+const CUSTOM_VIEW_VALUE = "custom";
 
 export function RunsFilterBar({
   filters,
@@ -54,7 +60,7 @@ export function RunsFilterBar({
   onSaveView: (name: string) => void;
 }) {
   const [saving, setSaving] = React.useState(false);
-  const [name, setName] = React.useState("");
+  const [name, setName] = React.useState(RUNS_SAVE_VIEW_DEFAULT_NAME);
   // Indexed by position, not by its own search string — "Default" is itself
   // the empty query string, and a Radix SelectItem's value may never be "".
   const selectedIndex = savedViews.findIndex((v) => v.search === currentSearch);
@@ -161,6 +167,7 @@ export function RunsFilterBar({
       <Select
         value={selectedView}
         onValueChange={(v) => {
+          if (v === CUSTOM_VIEW_VALUE) return; // informational only, mock (:615) offers no action for it
           const view = savedViews[Number(v)];
           if (view) onSelectView(view.search);
         }}
@@ -171,9 +178,13 @@ export function RunsFilterBar({
         <SelectContent>
           {savedViews.map((v, i) => (
             <SelectItem key={`${v.name}-${i}`} value={String(i)}>
-              {v.name}
+              {runsSavedViewOption(v.name)}
             </SelectItem>
           ))}
+          {/* The current URL matches no saved view — every filter/search
+              change leaves this true, so the trigger must never render
+              blank (mock's own `st.savedIdx < 0` -> "View · Custom"). */}
+          {selectedIndex < 0 && <SelectItem value={CUSTOM_VIEW_VALUE}>{RUNS_SAVED_VIEW_CUSTOM}</SelectItem>}
         </SelectContent>
       </Select>
       <Button type="button" size="sm" variant="outline" onClick={() => setSaving(true)}>
@@ -182,15 +193,15 @@ export function RunsFilterBar({
 
       {saving && (
         <form
-          className="flex w-full items-center gap-2"
+          className="flex w-full flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            onSaveView(name.trim() || "My view");
-            setName("");
+            onSaveView(name.trim() || RUNS_SAVE_VIEW_DEFAULT_NAME);
+            setName(RUNS_SAVE_VIEW_DEFAULT_NAME);
             setSaving(false);
           }}
         >
-          <label htmlFor="runs-save-view-name" className="text-meta text-muted-foreground">
+          <label htmlFor="runs-save-view-name" className="shrink-0 whitespace-nowrap text-meta text-muted-foreground">
             {RUNS_SAVE_VIEW_NAME_LABEL}
           </label>
           <Input
@@ -200,12 +211,13 @@ export function RunsFilterBar({
             className="h-8 max-w-[220px]"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
           />
           <Button type="submit" size="sm">
-            {RUNS_SAVE_VIEW}
+            {RUNS_SAVE_VIEW_SUBMIT}
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => setSaving(false)}>
-            Cancel
+            {RUNS_SAVE_VIEW_CANCEL}
           </Button>
         </form>
       )}

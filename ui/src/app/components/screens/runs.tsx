@@ -32,6 +32,7 @@ import { RunsComposer } from "./runs/runs-composer";
 import { RunsFilterBar } from "./runs/runs-filter-bar";
 import { RunRowList } from "./runs/run-row";
 import {
+  applySavedViewOwner,
   DEFAULT_RUNS_FILTERS,
   parseRunsFilters,
   runsFilterToServerOwner,
@@ -256,7 +257,9 @@ export function RunsScreen() {
             currentSearch={searchParams.toString()}
             savedViews={savedViews}
             onChange={setFilters}
-            onSelectView={(search) => setSearchParams(search, { replace: true })}
+            onSelectView={(search) =>
+              setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })
+            }
             onSaveView={(name) => {
               setSavedViews([...BUILTIN_RUNS_VIEWS, ...saveRunsView(name, searchParams.toString())]);
               toast(runsViewSaved(name));
@@ -327,8 +330,13 @@ export function RunsScreen() {
 }
 
 function RunsSection({ title, runs }: { title: string; runs: AgentRun[] }) {
+  // React's own id, not a slug of `title` — Group by Workspace/Title (H-6)
+  // feeds arbitrary, caller-typed labels through here, and two different
+  // titles can slugify to the same string (or, for a non-Latin title, to the
+  // same empty one), which duplicated this section's own DOM id and left
+  // `aria-labelledby` resolving to the WRONG heading.
+  const id = React.useId();
   if (runs.length === 0) return null;
-  const id = `runs-sec-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section aria-labelledby={id}>
       <div className="mb-2 flex items-center gap-2">
@@ -357,8 +365,8 @@ function RunsCollapsibleSection({
   open: boolean;
   onToggle: () => void;
 }) {
+  const id = React.useId();
   if (runs.length === 0) return null;
-  const id = `runs-sec-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section aria-labelledby={id}>
       <button

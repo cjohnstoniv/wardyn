@@ -106,3 +106,22 @@ export function runsFilterToServerStatus(status: RunsStatusFilter): RunsListStat
 export function runsFilterToServerOwner(scope: RunsWhoseRuns): "me" | undefined {
   return scope === "mine" ? "me" : undefined;
 }
+
+// Picking a saved view is a plain navigation to its OWN query string (a
+// saved view is a complete state, not a merge onto the current filters) —
+// except for Everyone/Mine (H-4), which is a fact about WHO is asking, not
+// something a view remembers: none of the built-ins carry an `owner` param,
+// and even a custom view saved under Mine must not silently flip the caller
+// back to Mine on every pick. This drops whatever `owner` the view's own
+// search carries and reapplies the CURRENT scope in its place (Admin view
+// only — the User view never sends `owner` at all).
+export function applySavedViewOwner(
+  viewSearch: string,
+  adminView: boolean,
+  currentScope: RunsWhoseRuns,
+): string {
+  const params = new URLSearchParams(viewSearch);
+  params.delete("owner");
+  if (adminView && currentScope === "mine") params.set("owner", "me");
+  return params.toString();
+}

@@ -102,6 +102,46 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByText("Someone else's run")).toHaveCount(0);
   });
 
+  test("the Saved view select never goes blank — it falls back to View · Custom once a filter changes", async ({
+    page,
+  }) => {
+    await mockRunsList(page, () => ({ runs: [baseRun("r1", "A run")] }));
+    await gotoConsole(page);
+    const trigger = page.getByRole("combobox", { name: "Saved view" });
+    await expect(trigger).toHaveText("View · Default");
+
+    await page.getByLabel("Search runs", { exact: true }).fill("something");
+    await expect(trigger).toHaveText("View · Custom");
+  });
+
+  test("picking a saved view in the Admin view keeps Mine, not reset to Everyone", async ({ page }) => {
+    await mockRunsList(page, (url) => {
+      const mineOnly = url.searchParams.get("owner") === "me";
+      return {
+        runs: mineOnly
+          ? [baseRun("m1", "My own run", { created_by: "admin-token" })]
+          : [
+              baseRun("m1", "My own run", { created_by: "admin-token" }),
+              baseRun("t1", "Someone else's run", { created_by: "someone-else" }),
+            ],
+      };
+    });
+    await gotoConsole(page, "admin");
+    await page.getByRole("combobox", { name: "Whose runs" }).click();
+    await page.getByRole("option", { name: "Mine" }).click();
+    await expect(page).toHaveURL(/owner=me/);
+
+    // The built-in "Default" view carries no owner param at all — Mine must
+    // survive picking it anyway (H-4 is who's asking, not something a saved
+    // view remembers).
+    await page.getByRole("combobox", { name: "Saved view" }).click();
+    await page.getByRole("option", { name: "View · Default" }).click();
+
+    await expect(page).toHaveURL(/owner=me/);
+    await expect(page.getByRole("combobox", { name: "Whose runs" })).toHaveText("Mine");
+    await expect(page.getByText("Someone else's run")).toHaveCount(0);
+  });
+
   test("a saved view survives a reload", async ({ page }) => {
     await mockRunsList(page, (url) => ({
       runs:
@@ -118,8 +158,10 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByText("A failed run")).toBeVisible();
 
     await page.getByRole("button", { name: "Save view" }).click();
-    await page.getByLabel("Name this view").fill("My failures");
-    await page.getByRole("button", { name: "Save view" }).last().click();
+    const nameInput = page.getByLabel("Name this view");
+    await expect(nameInput).toHaveValue("My view");
+    await nameInput.fill("My failures");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText(runsViewSaved("My failures")).first()).toBeVisible();
 
     // Back to plain /runs (defaults), then a REAL reload — the saved view
@@ -130,7 +172,7 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByText("A running run")).toBeVisible();
 
     await page.getByRole("combobox", { name: "Saved view" }).click();
-    await page.getByRole("option", { name: "My failures" }).click();
+    await page.getByRole("option", { name: "View · My failures" }).click();
     await expect(page).toHaveURL(/status=failed/);
     await expect(page.getByText("A failed run")).toBeVisible();
   });

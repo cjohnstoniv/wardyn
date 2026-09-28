@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  applySavedViewOwner,
   DEFAULT_RUNS_FILTERS,
   parseRunsFilters,
   runsFilterToServerOwner,
@@ -26,9 +27,9 @@ describe("DEFAULT_RUNS_FILTERS", () => {
 
 describe("parseRunsFilters", () => {
   it("defaults an empty URL to the H-2/H-4/H-6 defaults (7d, killed off, Everyone, Sections)", () => {
-    // Review F6: hand-typed, not read back through DEFAULT_RUNS_FILTERS
-    // itself — that would be a tautology unable to catch the constant
-    // drifting (the reviewer's M2b mutation, 7d -> 30d, survived it).
+    // Hand-typed, not read back through DEFAULT_RUNS_FILTERS itself —
+    // that would be a tautology unable to catch the constant drifting
+    // (a mutated default, 7d -> 30d, would survive a self-comparison).
     expect(parseRunsFilters(new URLSearchParams())).toEqual({
       q: "",
       status: "all",
@@ -119,6 +120,24 @@ describe("runsFilterToServerOwner", () => {
   });
   it("Everyone sends nothing — never speculatively 'all'", () => {
     expect(runsFilterToServerOwner("all")).toBeUndefined();
+  });
+});
+
+describe("applySavedViewOwner — Everyone/Mine survives picking a saved view (H-4)", () => {
+  it("Admin view, Mine: a built-in view with no owner param gets one added", () => {
+    expect(applySavedViewOwner("status=failed", true, "mine")).toBe("status=failed&owner=me");
+  });
+
+  it("Admin view, Mine: a custom view saved under Everyone still comes back as Mine", () => {
+    expect(applySavedViewOwner("status=failed&owner=me", true, "all")).toBe("status=failed");
+  });
+
+  it("Admin view, Everyone: owner is dropped even if the view's own search carried one", () => {
+    expect(applySavedViewOwner("owner=me", true, "all")).toBe("");
+  });
+
+  it("User view: owner is always dropped, whatever the current scope reads", () => {
+    expect(applySavedViewOwner("status=failed", false, "mine")).toBe("status=failed");
   });
 });
 
