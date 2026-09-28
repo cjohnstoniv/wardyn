@@ -503,28 +503,35 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 			return nil, false
 		}
 	}
-	ephemeralDirs, seededImageOwner, code, seedErr := s.seedRequestWorkspace(ctx, spec, req)
+	ephemeralDirs, seededImageOwner, code, seedReason, seedErr := s.seedRequestWorkspace(ctx, spec, req)
 	if seedErr != nil {
-		writeErrorReason(w, code, reasonWorkspaceSeedFailed, "workspace_id: "+seedErr.Error())
+		writeErrorReason(w, code, seedReason, "workspace_id: "+seedErr.Error())
 		return nil, false
 	}
 	if s.denyUserSeededImage(w, r, seededImageOwner, req.Image) {
 		return nil, false
 	}
-	if msg := s.validateImageBuildRequest(*req); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidImageBuildRequest, msg)
+	if msg, reason := s.validateImageBuildRequest(*req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return nil, false
 	}
-	if code, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
-		writeErrorReason(w, code, reasonWorkspaceSourcesInvalid, "workspace: "+err.Error())
+	if code, reason, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
+		writeErrorReason(w, code, reason, "workspace: "+err.Error())
 		return nil, false
 	}
 	// The caller-scoped twin of the onboarding gate above: onboarded is not the
 	// same question as "onboarded BY SOMEONE THIS CALLER MAY LAUNCH AS", and a
 	// policy naming a host path directly never passes through the workspace_id
 	// door that answers the second one.
-	if code, err := s.authorizeSpecWorkspaceSources(ctx, r, *spec); err != nil {
-		writeErrorReason(w, code, reasonWorkspaceSourcesUnauthorized, "workspace: "+err.Error())
+	//
+	// #656 H1: the not-onboarded arm of BOTH this check and validateWorkspaceSources
+	// above answers with the SAME reason (reasonWorkspaceSourceNotOnboarded) —
+	// deliberately, since the message is already byte-identical for the same
+	// cross-member existence-oracle reason (see authorizeSpecWorkspaceSources' own
+	// doc comment): a distinguishable reason would reopen exactly what the shared
+	// sentence closes.
+	if code, reason, err := s.authorizeSpecWorkspaceSources(ctx, r, *spec); err != nil {
+		writeErrorReason(w, code, reason, "workspace: "+err.Error())
 		return nil, false
 	}
 	// Both provider gates sit at this chokepoint, over the RESOLVED spec's repos

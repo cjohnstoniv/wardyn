@@ -159,8 +159,8 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// convention one). seedRequestWorkspace's caller re-runs this SAME check after
 	// workspace_id is resolved — a workspace's base_image can ALSO set req.Image,
 	// after this ran, and must clear the identical gate (see validateImageBuildRequest).
-	if msg := s.validateImageBuildRequest(req); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidImageBuildRequest, msg)
+	if msg, reason := s.validateImageBuildRequest(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return req, noCeiling, "", "", false
 	}
 
@@ -663,16 +663,19 @@ func (s *Server) denyUserSeededImage(w http.ResponseWriter, r *http.Request, see
 // or a workspace's base_image would bypass a check an explicit --image must
 // pass (e.g. silently pairing with a --devcontainer-repo the user set, or
 // reaching FinalizeBase with no ImageBuilder wired).
-func (s *Server) validateImageBuildRequest(req createRunRequest) string {
+// The two refusals are different causes (#656 M1) — the first is the
+// caller's own request shape, the second a deployment capability the caller
+// cannot fix by changing the request — so each gets its own reason.
+func (s *Server) validateImageBuildRequest(req createRunRequest) (msg, reason string) {
 	if req.Image == "" {
-		return ""
+		return "", ""
 	}
 	if req.DevcontainerRepo != "" {
-		return "image and devcontainer_repo are mutually exclusive"
+		return "image and devcontainer_repo are mutually exclusive", reasonImageDevcontainerExclusive
 	}
 	if s.cfg.ImageBuilder == nil {
 		return "a custom sandbox image was requested but this control plane has no image builder wired " +
-			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)"
+			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)", reasonImageBuilderUnavailable
 	}
-	return ""
+	return "", ""
 }

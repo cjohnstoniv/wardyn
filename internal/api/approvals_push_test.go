@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +166,10 @@ func TestInternalPushContentRaise(t *testing.T) {
 			`{"kind":"push_content","requested_scope":`+scope+`}`)
 		return w.Code
 	}
+	raiseBody := func(runID uuid.UUID, scope string) *httptest.ResponseRecorder {
+		return do(t, srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, runID),
+			`{"kind":"push_content","requested_scope":`+scope+`}`)
+	}
 	stored := func() map[string]types.PushContentScope {
 		aap.mu.Lock()
 		defer aap.mu.Unlock()
@@ -215,6 +220,12 @@ func TestInternalPushContentRaise(t *testing.T) {
 		if got := raise(c.run, c.scope); got != c.want {
 			t.Errorf("%s: status = %d, want %d", name, got, c.want)
 		}
+	}
+	// #656 M2: pin the LITERAL wire reason for the unattended-run refusal above,
+	// not just the Go constant — a silent rename of reasons.go's value must
+	// fail this, not only a comparison against the same renamed constant.
+	if w := raiseBody(unattended, withActsAs(t, "github_token:"+app.String())); !strings.Contains(w.Body.String(), `"reason":"push_content_unattended"`) {
+		t.Errorf("unattended raise body = %s, want reason \"push_content_unattended\"", w.Body.String())
 	}
 	if n := len(stored()); n != len(want) {
 		t.Errorf("rows = %d, want still %d: a refused raise must write nothing", n, len(want))

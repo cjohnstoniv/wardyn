@@ -89,7 +89,9 @@ func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, c
 		}
 	}
 	if s.cfg.Store == nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunStoreUnavailable, "run store unavailable")
+		// #656 L1: folded into decision_scope_always_unavailable — same cause
+		// (s.cfg.Store == nil), one reason.
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDecisionScopeAlwaysUnavailable, "run store unavailable")
 		return nil, false
 	}
 	if list != nil && !s.admitPushPathList(w, r, claims.RunID) {
@@ -171,7 +173,9 @@ func (s *Server) pushActsAs(ctx context.Context, run types.AgentRun, subject str
 func (s *Server) admitPushPathList(w http.ResponseWriter, r *http.Request, runID uuid.UUID) bool {
 	lists, ok := s.cfg.Store.(store.PushPathListStore)
 	if !ok {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonPushPathListStoreUnavailable, "push path list store unavailable")
+		// #656 L1: folded into push_path_lists_require_postgres — same cause
+		// (the store does not implement store.PushPathListStore), one reason.
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonPushPathListsRequirePostgres, "push path list store unavailable")
 		return false
 	}
 	n, err := lists.CountPushPathLists(r.Context(), runID)

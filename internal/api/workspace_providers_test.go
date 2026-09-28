@@ -749,6 +749,10 @@ func TestWorkspaceProvidersPutRefusals(t *testing.T) {
 	if !strings.Contains(w.Body.String(), providers412Stale) {
 		t.Errorf("412 body = %s, want the providers412Stale constant", w.Body.String())
 	}
+	// #656 M2: pin the LITERAL wire reason, not just the Go constant.
+	if !strings.Contains(w.Body.String(), `"reason":"workspace_providers_stale"`) {
+		t.Errorf("412 body = %s, want reason \"workspace_providers_stale\"", w.Body.String())
+	}
 
 	// And the ETag the GET handed out DOES satisfy the write.
 	etag := do(t, srv, http.MethodGet, "/api/v1/workspace-providers", adminToken, "").Header().Get("ETag")

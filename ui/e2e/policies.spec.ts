@@ -7,6 +7,7 @@ import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
+import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Page } from "@playwright/test";
 
 // Run this file's tests SERIALLY. They share one backend and the policy table is
@@ -416,6 +417,63 @@ test("the safety meter moves toward Weakest when allow_all_egress is flipped on"
   // Read-only interaction — cancel so the table stays at its clean empty state.
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(editorDialog(page)).toBeHidden();
+});
+
+// #57: the push_rules structured editor's main path — add a row, an invalid
+// pattern shows its live error inline (before Save ever sees it), fixing it
+// clears the error, and the policy still saves. PushRulesSection's own
+// component tests (policy-push-rules.test.tsx) cover every validation branch
+// and the ssh_key/non-GitHub warnings in isolation; this is the one real
+// browser round-trip through the actual dialog.
+test("push_rules editor: add a row, an invalid pattern shows its error, fixing it saves clean", async ({ page }) => {
+  const name = uniqueName("pushrules");
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  await dialog.getByLabel("Name").fill(name);
+
+  // Two "Add path" buttons exist (Deny, then Hold for review) — the first is Deny's.
+  await dialog.getByRole("button", { name: "Add path" }).first().click();
+  // exact: true — "Remove Deny path 1" otherwise substring-matches too.
+  const row = dialog.getByLabel("Deny path 1", { exact: true });
+
+  // A control character: no push path can contain one, and it is the row-level
+  // check named in the packet's own Strings table (PUSH_RULES.ERR_CONTROL).
+  await row.fill(".github/workflows/\u0007hook");
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "This pattern has a control character in it, which no push path can contain.",
+  );
+
+  // Fixing the pattern clears the row error — advisory only, never blocking typing.
+  await row.fill(".github/workflows/**");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+
+  // The row-level checks above only prove the EDITOR's own opinion — assert
+  // what actually reaches the server. Capture the real POST body rather than
+  // trusting the dialog closing/the row appearing.
+  const created = page.waitForRequest(
+    (r) => r.url().includes("/api/v1/policies") && r.method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "Create policy" }).click();
+  const body = (await created).postDataJSON() as { spec: RunPolicySpec };
+  expect(body.spec.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
+
+  await expect(dialog).toBeHidden();
+  await expect(policyRow(page, name)).toBeVisible();
+
+  // Round-trip: what the server actually stored (not just what was posted)
+  // carries the same push_rules — opens the just-created policy's raw-JSON
+  // escape hatch and reads it back.
+  await policyRow(page, name).click();
+  const sheet = page.getByRole("dialog").filter({ hasText: name });
+  await sheet.getByText("View raw JSON").click();
+  // The sheet renders the raw spec YAML-ish (unquoted keys), not literal JSON.
+  await expect(sheet).toContainText("push_rules");
+  await expect(sheet).toContainText("deny_paths");
+  await expect(sheet).toContainText(".github/workflows/**");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+
+  await deletePolicyViaUi(page, name);
 });
 
 test("create form surfaces the server-side error for an unknown spec key (strict decode)", async ({ page }) => {

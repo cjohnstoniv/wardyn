@@ -29,7 +29,15 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type SetupModelProvider, type Workspace } from "../../../lib/types";
+import {
+  CC_ORDER as ORDERED_CLASSES,
+  type ConfinementClass,
+  type RunPolicySpec,
+  type SetupHarnessTool,
+  type SetupModelProvider,
+  type SetupProviderAccess,
+  type Workspace,
+} from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard } from "./new-run-primitives";
 import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
@@ -70,6 +78,7 @@ import { mergeRunSelections } from "./wizard-spec";
 import {
   agentLabel,
   initialWizardState,
+  primaryWorkspaceId,
   resolvedModelProviders,
   titleFromTask,
   workspaceUnavailableToCaller,
@@ -77,6 +86,9 @@ import {
   type WizardState,
 } from "./wizard-types";
 import { useLaunch } from "./use-launch";
+import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
+import { useModelProviderPick } from "./use-model-provider-pick";
+import { RAIL_PROVIDER } from "../../wardyn/copy";
 import { WhatToRunStep } from "./step-bodies";
 
 export function NewRunScreen() {
@@ -152,11 +164,16 @@ export function NewRunScreen() {
   // SetupStatus.harnesses — absent while unfetched or failed, same "unknown
   // stays unknown" rule as llmReady above (AgentPicker's own fallback).
   const [harnesses, setHarnesses] = React.useState<SetupHarnessTool[] | undefined>(undefined);
-  // #922: SetupStatus.model_providers, THIS caller's own filtered list
-  // (capVisible(capModelProvider), #832/#1015) — the one member-safe signal
-  // for "is the chosen workspace's pinned model provider available to me".
-  // Read off the SAME /setup/status fetch above, never a second one.
+  // #542/#922 — this person's own model providers (/setup/status, already
+  // filtered to what they may use — capVisible(capModelProvider), #832/#1015)
+  // and their connection state. Same "unknown stays unknown" rule as
+  // harnesses above: undefined until the read lands, which is also what keeps
+  // the rail's provider picker from rendering (and forcing a preselection)
+  // before there is anything to pick from. It is also the one member-safe
+  // signal for "is the chosen workspace's pinned model provider available to
+  // me" (#922). Read off the SAME /setup/status fetch above, never a second one.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
+  const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> under the Title input.
   // Grouping is by EXACT string, so without this the operator has to retype a
   // title character-perfect for a run to ever join its family — the feature
@@ -237,6 +254,7 @@ export function NewRunScreen() {
         // nothing. resolvedModelProviders keeps that distinction and folds an
         // unreachable read to undefined, off the same bit this effect reads.
         setModelProviders(resolvedModelProviders(st));
+        setProviderAccess(st.unreachable ? undefined : st.provider_access);
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
@@ -322,6 +340,42 @@ export function NewRunScreen() {
   // Shared display name (wizard-types.agentLabel) — a local re-hardcode here
   // is exactly the drift that helper's doc says it exists to prevent.
   const agentName = agentLabel(state.agent);
+
+  // #542 — this agent's own model-provider candidates (already access-filtered
+  // per person by the server — #1015; the harness/disabled narrowing is the
+  // console's own). `undefined` modelProviders (unfetched, or an unreachable
+  // /setup/status) means "unknown" — no picker, not a false "no provider
+  // serves this agent" (R9's shape, which is for a REAL empty answer).
+  const providerCandidates = isAgent && modelProviders ? candidatesForAgent(modelProviders, state.agent) : [];
+
+  // F2 (#612) — the primary workspace's own pinned provider: its
+  // llm_cred.provider_ref (internal/types.WorkspaceLLMCred), the SAME "pin"
+  // the server falls back to when nothing was explicitly requested
+  // (cmp.Or(requested, pin), internal/api/run_model_provider.go). Read the
+  // primary the same way the server does — wizard-types.ts's
+  // primaryWorkspaceId — so this rail can never pin a different workspace's
+  // credential than the run actually inherits.
+  const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
+  const pin = workspaces.find((w) => w.id === primaryWsId)?.llm_cred?.provider_ref;
+
+  // #542 rail-gap packet (owner-approved 2026-09-25) — R5b/R5c: undefined for
+  // the ordinary R1-R4/R6-R8 shapes and for R9 (model-provider-lane.ts's
+  // providerGate).
+  const providerGateState = isAgent && modelProviders ? providerGate(modelProviders, state.agent) : undefined;
+
+  // Which provider (if any) is preselected, and the person's own pick
+  // (use-model-provider-pick.ts).
+  const { providerChangeNote, onModelProviderChange } = useModelProviderPick({
+    state,
+    isAgent,
+    modelProviders,
+    providerAccess,
+    providerCandidates,
+    pin,
+    providerGateState,
+    patch,
+  });
+
   const selectedPolicy =
     useSaved && state.selectedPolicyId
       ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
@@ -368,7 +422,31 @@ export function NewRunScreen() {
         ? RUN.POLICY_GONE
         : useSaved && !state.selectedPolicyId
           ? "Pick a saved policy, or write a custom one."
-          : null;
+          : // R5c (#542 rail-gap packet) — the admin's own default is
+            // disabled. Named regardless of how many other candidates
+            // remain, until an explicit pick lands (same "silent once
+            // chosen" rule as R7's changeNote). R5b ("granted none") is not
+            // drawn — see providerGate's own doc comment (Opus review
+            // round 2): the console has no signal for it.
+            providerGateState?.kind === "default_off" && !state.modelProviderId
+            ? providerCandidates.length > 0
+              ? RAIL_PROVIDER.DEFAULT_OFF(
+                  providerGateState.provider.name ?? providerGateState.provider.id,
+                  agentName,
+                )
+              : RAIL_PROVIDER.DEFAULT_OFF_ONLY(
+                  providerGateState.provider.name ?? providerGateState.provider.id,
+                  agentName,
+                )
+            : // R6 (QC-4): several candidates, none granted as this agent's
+              // default (or the default isn't one of them) — Wardyn never
+              // silently substitutes, so Launch waits for an explicit pick.
+              // Rule (3): a workspace pin already answers "why wait" its own
+              // way (the server's own named refusal on launch), so this
+              // generic hint stays silent whenever one is set.
+              providerCandidates.length > 1 && !state.modelProviderId && !pin
+              ? RAIL_PROVIDER.LAUNCH_HINT
+              : null;
 
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
@@ -850,6 +928,19 @@ export function NewRunScreen() {
               : { error: null, errorSeq: preflightErrorSeq, result: null }
           }
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
+          modelProvider={
+            isAgent
+              ? {
+                  candidates: providerCandidates,
+                  access: providerAccess,
+                  selectedId: state.modelProviderId,
+                  onChange: onModelProviderChange,
+                  changeNote: providerChangeNote,
+                  gate: providerGateState,
+                  harnessLabel: agentName,
+                }
+              : undefined
+          }
           adoDialog={adoDoor.dialog}
         />
       </div>

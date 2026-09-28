@@ -1856,7 +1856,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 				spec := &types.RunPolicySpec{}
 				req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
 
-				dirs, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+				dirs, _, code, _, err := srv.seedRequestWorkspace(context.Background(), spec, req)
 				if err == nil {
 					t.Fatalf("a stored %s source at %q composed unrefused: dirs=%v mounts=%+v repos=%+v",
 						src.Type, target, dirs, spec.WorkspaceMounts, spec.WorkspaceRepos)
@@ -1882,7 +1882,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 		srv := New(baseTestConfig(h, &workspaceStoreFake{ws: ws}))
 		spec := &types.RunPolicySpec{}
 		req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
-		dirs, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+		dirs, _, code, _, err := srv.seedRequestWorkspace(context.Background(), spec, req)
 		if err != nil {
 			t.Fatalf("neighbouring target refused: %d %v", code, err)
 		}

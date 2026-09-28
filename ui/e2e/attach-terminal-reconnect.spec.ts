@@ -123,9 +123,13 @@ test.describe("Attach terminal — reconnect budget (#216)", () => {
     // the first drop above already spent one, so 4 more exhaust the budget —
     // the 4th of those is the one that finds reconnectAttempts === the cap
     // and gives up instead of scheduling another attempt.
+    // The 4th reconnect waits 4.8s of backoff (600ms doubling) plus a ticket
+    // round trip, so the poll gets room past expect's 5s default.
     for (let socketIndex = 1; socketIndex <= 4; socketIndex++) {
       await expect
-        .poll(() => page.evaluate(() => (window as unknown as { __wsCount: () => number }).__wsCount()))
+        .poll(() => page.evaluate(() => (window as unknown as { __wsCount: () => number }).__wsCount()), {
+          timeout: 15_000,
+        })
         .toBeGreaterThan(socketIndex);
       await page.evaluate(
         (i) => (window as unknown as { __wsDrop: (i: number, c: number, r?: string) => void }).__wsDrop(i, 1006, "abnormal"),

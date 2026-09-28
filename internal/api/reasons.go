@@ -78,7 +78,7 @@ const (
 	// not be loaded at all") is the same regardless of which decide arm asked.
 	reasonApprovalNotFound             = "approval_not_found"              // the approval row does not exist, or the caller may not see it
 	reasonInvalidApprovalState         = "invalid_approval_state"          // ?state= is not one of the closed set
-	reasonInvalidRunIDParam            = "invalid_run_id"                  // ?run_id= does not parse as a UUID
+	reasonInvalidRunIDParam            = "invalid_run_id_param"            // ?run_id= does not parse as a UUID
 	reasonListingUnscopedBackend       = "listing_unscoped_backend"        // the store backend cannot scope this listing to the caller's own runs (approvals AND runs listings — same missing capability)
 	reasonApprovalRunEnded             = "approval_run_ended"              // the run ended before the approval was decided; it was auto-cancelled
 	reasonCredentialReauthNotDecidable = "credential_reauth_not_decidable" // a credential-reauth approval is resolved by signing in again, not Approve/Deny
@@ -106,19 +106,40 @@ const (
 	// Push-content review (approvals_push.go).
 	reasonInvalidPushScope             = "invalid_push_scope"               // requested_scope failed PushContentScope.Validate or set a server-only field
 	reasonInvalidPushPathList          = "invalid_push_path_list"           // path_list does not verify against the requested scope
-	reasonRunStoreUnavailable          = "run_store_unavailable"            // this backend has no run store configured
 	reasonPushContentUnattended        = "push_content_unattended"          // the run is unattended, so a push needing review is refused rather than held
-	reasonPushPathListStoreUnavailable = "push_path_list_store_unavailable" // this backend has no push-path-list store configured
 	reasonPushPathListCountUnavailable = "push_path_list_count_unavailable" // the per-run path-list count could not be read
 	reasonPushPathListCapReached       = "push_path_list_cap_reached"       // the run already holds the maximum number of pending push path lists
 	reasonPushNotHeld                  = "push_not_held"                    // the named approval is not a held push_content approval
-	reasonPushPathListsRequirePostgres = "push_path_lists_require_postgres" // push path lists need the Postgres store backend
+	// reasonPushPathListsRequirePostgres also covers approvals_push.go's earlier
+	// "run store unavailable" arm (#656 L1 fold): both fire on the identical
+	// s.cfg.Store == nil / not-a-*Store cause, one route apart, so one reason.
+	reasonPushPathListsRequirePostgres = "push_path_lists_require_postgres" // this backend has no Postgres-backed run/push-path-list store configured
 
 	// #656 slice 1 — POST /runs and its field/policy validation.
-	reasonWorkspaceSeedFailed                  = "workspace_seed_failed"                    // workspace_id could not be resolved into a run spec
-	reasonInvalidImageBuildRequest             = "invalid_image_build_request"              // the request's image/devcontainer build fields are inconsistent
-	reasonWorkspaceSourcesInvalid              = "workspace_sources_invalid"                // the resolved workspace's sources fail structural validation
-	reasonWorkspaceSourcesUnauthorized         = "workspace_sources_unauthorized"           // the caller may not launch against one of the workspace's sources
+	//
+	// seedRequestWorkspace's workspace_id resolution (#656 M1: five distinct
+	// causes used to share reasonWorkspaceSeedFailed; split so a caller can
+	// tell "no store" from "no base image" from "conflicts with the policy").
+	reasonWorkspaceSeedStoreUnavailable    = "workspace_seed_store_unavailable"     // workspace_id was sent but this backend has no store configured
+	reasonWorkspaceSeedUnreadable          = "workspace_seed_unreadable"            // the named workspace could not be read
+	reasonWorkspaceSeedSourceTargetInvalid = "workspace_seed_source_target_invalid" // a stored source's target fails the authored-target deny-list
+	reasonWorkspaceSeedNoBaseImage         = "workspace_seed_no_base_image"         // an exec run named a workspace with no base image and no --agent/--image
+	reasonWorkspaceSeedPolicyConflict      = "workspace_seed_policy_conflict"       // the seeded sources collide with the policy's own mount/repo targets
+	// validateImageBuildRequest (#656 M1: split from reasonInvalidImageBuildRequest,
+	// one cause was the caller's own request shape, the other a deployment
+	// capability neither request field can fix).
+	reasonImageDevcontainerExclusive = "image_devcontainer_exclusive" // image and devcontainer_repo were both set
+	reasonImageBuilderUnavailable    = "image_builder_unavailable"    // a custom image was requested but this control plane has no image builder wired
+	// validateWorkspaceSources / authorizeSpecWorkspaceSources (#656 M1: split
+	// from reasonWorkspaceSourcesInvalid/reasonWorkspaceSourcesUnauthorized —
+	// except the not-onboarded arm, which STAYS one shared reason across both
+	// functions on purpose, H1: a distinguishable reason there would be exactly
+	// the cross-member existence oracle authorizeSpecWorkspaceSources' own doc
+	// comment says the byte-identical SENTENCE already closes).
+	reasonWorkspaceSourcesStoreUnavailable     = "workspace_sources_store_unavailable"      // workspace onboarding needs a store, and this backend has none
+	reasonWorkspaceSourcesListUnavailable      = "workspace_sources_list_unavailable"       // the workspace list could not be read to resolve sources against
+	reasonWorkspaceSourceNotOnboarded          = "workspace_source_not_onboarded"           // the source is not onboarded — SHARED, see the doc comment above
+	reasonWorkspaceSourceMountNotAllowed       = "workspace_source_mount_not_allowed"       // the source IS onboarded, but the member-safe mount gate refuses this caller
 	reasonRunnerCapabilitiesUnavailable        = "runner_capabilities_unavailable"          // the runner's advertised capabilities could not be read
 	reasonConfinementClassConflict             = "confinement_class_conflict"               // the requested confinement_class conflicts with the resolved policy
 	reasonConfinementClassUnsupported          = "confinement_class_unsupported"            // the runner does not advertise the enforced confinement class

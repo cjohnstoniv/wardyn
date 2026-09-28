@@ -80,28 +80,86 @@ func TestForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 func TestForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 	// ticket: F335
 	root, project := memberProjectRoot(t)
-	srv, st, _ := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
-	memberOwnedWorkspace(st, ownerMemberSub, project) // the OTHER member's onboarded dir
+	const repo = "acme/secret-proj"
 
-	spec := types.RunPolicySpec{
-		MinConfinementClass: types.CC2,
-		WorkspaceMounts:     []types.WorkspaceMount{{Source: project, Target: composerWorkspaceTarget}},
+	// refuse builds a fresh harness (never sharing state across scenarios) and
+	// returns seedAndAdmitWorkspace's refusal for the SAME source (a local_dir
+	// path or a repo, per kind), either owned by another member (foreign=true)
+	// or never onboarded at all (foreign=false). gate mirrors
+	// seedAndAdmitWorkspace's own two callers: true is handleCreateRun
+	// (POST /runs), false is handlePreflightRun (POST /runs/preflight) — this
+	// IS the chokepoint both routes share, per this test's own doc comment
+	// above.
+	refuse := func(t *testing.T, kind string, foreign, gate bool) *httptest.ResponseRecorder {
+		t.Helper()
+		srv, st, _ := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2}
+		switch kind {
+		case "mount":
+			if foreign {
+				memberOwnedWorkspace(st, ownerMemberSub, project) // the OTHER member's onboarded dir
+			}
+			spec.WorkspaceMounts = []types.WorkspaceMount{{Source: project, Target: composerWorkspaceTarget}}
+		case "repo":
+			if foreign {
+				st.put(types.Workspace{
+					OwnedBy: ownerMemberSub,
+					Status:  types.WorkspaceScanned,
+					Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: repo}},
+				}) // the OTHER member's onboarded repo
+			}
+			spec.WorkspaceRepos = []types.WorkspaceRepo{{Repo: repo}}
+		default:
+			t.Fatalf("unknown kind %q", kind)
+		}
+		req := createRunRequest{Agent: "claude-code"}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
+			WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleUser))
+		w := httptest.NewRecorder()
+		if _, ok := srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req, gate); ok {
+			t.Fatalf("ADMITTED (kind=%s foreign=%v gate=%v): a run held a source it should not have", kind, foreign, gate)
+		}
+		return w
 	}
-	req := createRunRequest{Agent: "claude-code"}
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
-		WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleUser))
-	w := httptest.NewRecorder()
 
-	if _, ok := srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req, true); ok {
-		t.Fatalf("ADMITTED: a run held another member's onboarded dir %q; the member-mount re-check gates it against the OWNER's roots, so per-principal roots constrain the caller not at all", project)
-	}
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Errorf("refusal code = %d, want 422; body=%s", w.Code, w.Body.String())
-	}
-	// The refusal must not distinguish "another member owns it" from "nobody
-	// onboarded it" — that difference is the same existence oracle door 1 closes.
-	if !strings.Contains(w.Body.String(), "is not an onboarded local directory") {
-		t.Errorf("refusal body = %s, want the byte-identical not-onboarded sentence", w.Body.String())
+	for _, route := range []struct {
+		name string
+		gate bool
+	}{
+		{"create", true},     // POST /runs
+		{"preflight", false}, // POST /runs/preflight
+	} {
+		// kind="mount" pins authorizeSpecWorkspaceSources' MOUNT arm
+		// (runs_create.go:217); kind="repo" pins its REPO arm
+		// (runs_create.go:223) — the round-2 review's N2: the exact arm the
+		// round-1 HTTP exploit went through (inline workspace_repos), which
+		// this test did not cover before.
+		for _, kind := range []string{"mount", "repo"} {
+			t.Run(route.name+"/"+kind, func(t *testing.T) {
+				foreign := refuse(t, kind, true, route.gate)
+				neverOnboarded := refuse(t, kind, false, route.gate)
+				if foreign.Code != http.StatusUnprocessableEntity {
+					t.Errorf("foreign refusal code = %d, want 422; body=%s", foreign.Code, foreign.Body.String())
+				}
+				wantSentence := "is not an onboarded local directory"
+				if kind == "repo" {
+					wantSentence = "is not an onboarded repository"
+				}
+				if !strings.Contains(foreign.Body.String(), wantSentence) {
+					t.Errorf("foreign refusal body = %s, want the not-onboarded sentence %q", foreign.Body.String(), wantSentence)
+				}
+				// #656 H1: both scenarios name the IDENTICAL source, so status,
+				// message AND reason (the whole JSON body) must be byte-identical —
+				// any difference is a cross-member existence oracle: "another
+				// member owns it" told apart from "nobody onboarded it" is exactly
+				// what this refusal must never disclose, on the wire class as much
+				// as the sentence.
+				if foreign.Code != neverOnboarded.Code || foreign.Body.String() != neverOnboarded.Body.String() {
+					t.Errorf("foreign vs never-onboarded must answer identically: foreign=%d %s; neverOnboarded=%d %s",
+						foreign.Code, foreign.Body.String(), neverOnboarded.Code, neverOnboarded.Body.String())
+				}
+			})
+		}
 	}
 }
 

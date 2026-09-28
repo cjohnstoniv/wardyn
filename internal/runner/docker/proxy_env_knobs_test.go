@@ -31,7 +31,10 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 	// not, on either substrate, until it rode this list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
 
-	env, _, _ := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
+	env, _, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatalf("proxyEnv: %v", err)
+	}
 	got := map[string]string{}
 	for _, kv := range env {
 		if k, v, ok := strings.Cut(kv, "="); ok {
@@ -41,7 +44,7 @@ func TestProxyEnv_CarriesTheOperatorKnobs(t *testing.T) {
 	for name, want := range map[string]string{
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "pat:on",
 		"WARDYN_LLM_SCAN":                     "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy container env %s = %q, want %q", name, got[name], want)
@@ -62,7 +65,10 @@ func TestProxyEnv_CarriesNoUnsetKnob(t *testing.T) {
 			t.Fatalf("unset %s: %v", k, err)
 		}
 	}
-	env, _, _ := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
+	env, _, err := proxyEnv(uuid.New(), runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080"}, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatalf("proxyEnv: %v", err)
+	}
 	for _, kv := range env {
 		for _, k := range runner.ProxySidecarEnvKnobNames() {
 			if strings.HasPrefix(kv, k+"=") {

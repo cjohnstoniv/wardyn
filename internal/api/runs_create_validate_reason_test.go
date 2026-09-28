@@ -40,7 +40,7 @@ func TestDecodeAndValidateCreateRun_Reasons(t *testing.T) {
 			name:       "image and devcontainer_repo both set",
 			body:       `{"agent":"claude-code","image":"ubuntu:24.04","devcontainer_repo":"org/app"}`,
 			wantStatus: http.StatusBadRequest,
-			wantReason: reasonInvalidImageBuildRequest,
+			wantReason: reasonImageDevcontainerExclusive,
 		},
 		{
 			name:       "unknown confinement_class",
