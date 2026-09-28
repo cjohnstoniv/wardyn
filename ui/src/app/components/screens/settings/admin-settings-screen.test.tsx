@@ -195,7 +195,7 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
     const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
     const card = within(heading.closest("section")!);
     await expandCard(ADMIN_SSH_KEYS.TITLE);
-    expect(card.getByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).toBeInTheDocument();
+    expect(await card.findByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).toBeInTheDocument();
     expect(card.queryByText("laptop")).not.toBeInTheDocument();
   });
 
