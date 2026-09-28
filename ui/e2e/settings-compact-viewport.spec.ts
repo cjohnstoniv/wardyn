@@ -23,11 +23,22 @@ import { test, expect, asRealMember, gotoConsole, navToRoute } from "./fixtures"
 // beneath 744px, so Host opening alone is what tips it over.
 const VIEWPORT = { width: 1280, height: 744 };
 
+// runs.spec.ts's own "the page itself does not scroll" check notes the same
+// class of issue ("CI-flake: measured 300.28px ... sub-pixel layout jitter,
+// not a real regression ... it would not tolerate a genuine multi-hundred-
+// pixel regression, which this still catches"). Here that jitter is
+// cross-environment line-height rounding on the collapsed card row (measured
+// 65.875px here against the 63.9px waitForSettledSummaries' own comment
+// below records) — compounded over Admin Settings' seven cards, a couple of
+// px each. TOLERANCE_PX is nowhere near what a real defect produces: the
+// mutation proof below (Host defaulting open) adds ~200px on its own.
+const TOLERANCE_PX = 24;
+
 async function mainScrolls(page: import("@playwright/test").Page): Promise<boolean> {
-  return page.evaluate(() => {
+  return page.evaluate((tolerance) => {
     const m = document.querySelector("main");
-    return !!m && m.scrollHeight > m.clientHeight;
-  });
+    return !!m && m.scrollHeight > m.clientHeight + tolerance;
+  }, TOLERANCE_PX);
 }
 
 // review M2 — Model providers, Workspace providers, User drives, Admin SSH
