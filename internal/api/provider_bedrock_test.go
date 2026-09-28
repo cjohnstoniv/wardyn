@@ -652,7 +652,9 @@ func TestProviderRunCredentialFactsOnReview(t *testing.T) {
 				_ = sec.For(admin).Put(context.Background(), providerSecretName(tc.p.UID, providerKeyPart), []byte(brOwnerKey))
 				_ = sec.For(admin).Put(context.Background(), providerSecretName(tc.p.UID, providerSSOPart),
 					brBlob(brOwnerToken, "123456789012", "BedrockUser", time.Now().Add(time.Hour)))
-				w := doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
+				// An SSO admin session is in the Admin view and cannot launch
+				// (refuseAdminViewLaunch); the token lane still can.
+				w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, admin), `{"agent":"claude-code","task":"t"}`)
 				var got struct {
 					ModelCredential *modelCredentialFacts `json:"model_credential"`
 					Warnings        []string              `json:"warnings"`
