@@ -798,6 +798,18 @@ const (
 	reasonRecordPromoteConflict          = "record_promote_conflict"
 )
 
+// /api/v1/admin/user-types (user_types.go).
+const (
+	reasonUserTypeRequestInvalid    = "user_type_request_invalid" // the body fails userTypeFromRequest's shape validation
+	reasonUserTypeConflict          = "user_type_conflict"        // the id or name collides with an existing type
+	reasonUserTypeNotFound          = "user_type_not_found"
+	reasonUserTypeIDImmutable       = "user_type_id_immutable"         // the body's id does not match the path
+	reasonUserTypeBuiltInNoPriority = "user_type_built_in_no_priority" // the built-in type never wins a tie, so it takes no priority
+	reasonUserTypeBuiltInImmutable  = "user_type_built_in_immutable"   // the built-in type cannot be removed
+	reasonUserTypeInUse             = "user_type_in_use"               // a role mapping, grant or token stamp still names this type
+	reasonUserTypeDeleteConflict    = "user_type_delete_conflict"      // something started naming it between the read and the delete
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
