@@ -960,6 +960,37 @@ const (
 	reasonDirectorySearchFailed        = "directory_search_failed"
 )
 
+// /api/v1/base-images (base_images.go).
+const (
+	reasonBaseImageWriteInvalid = "base_image_write_invalid" // validateBaseImageWrite's own bucket
+	reasonBaseImageInUse        = "base_image_in_use"
+	reasonBaseImageNotFound     = "base_image_not_found"
+)
+
+// DELETE /people/{principal}/credentials (credential_erase.go).
+const (
+	reasonCredentialErasePrincipalRequired = "credential_erase_principal_required"
+	reasonCredentialEraseOperatorNamespace = "credential_erase_operator_namespace"
+)
+
+// GET /permissions/explain (capabilities_explain.go).
+const reasonExplainPrincipalInvalid = "explain_principal_invalid"
+
+// GET /admin/credentials/inventory (credential_inventory.go).
+const reasonCredentialInventoryNoMeta = "credential_inventory_no_meta"
+
+// PUT /internal/recordings/{runID} (recording.go).
+const (
+	reasonRecordingStoreUnavailable = "recording_store_unavailable"
+	reasonRecordingTooLarge         = "recording_too_large"
+)
+
+// The Azure DevOps escalation's decision rule (injection_ado_capability.go).
+const (
+	reasonADODecisionScopeInvalid = "ado_decision_scope_invalid"
+	reasonADOAccessAboveCeiling   = "ado_access_above_ceiling"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

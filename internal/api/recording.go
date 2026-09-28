@@ -79,7 +79,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.cfg.RecordingStore == nil {
-		writeError(w, http.StatusNotImplemented, "recording store not configured")
+		writeErrorReason(w, http.StatusNotImplemented, reasonRecordingStoreUnavailable, "recording store not configured")
 		return
 	}
 
@@ -126,7 +126,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 		// An over-cap upload surfaces as *http.MaxBytesError through the masker.
 		var maxErr *http.MaxBytesError
 		if errors.As(saveErr, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
+			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingTooLarge, "recording exceeds size limit")
 			return
 		}
 		writeServerError(w, r, "save recording", saveErr)

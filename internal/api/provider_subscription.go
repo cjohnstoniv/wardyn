@@ -207,7 +207,9 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", name, "failure",
 			mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"})))
-		writeError(w, status, body)
+		// reason reaches the wire now (#656 slice 3), matching
+		// injection_bedrock_bearer.go's identical fix.
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 	var rec providerGrantSnapshot
