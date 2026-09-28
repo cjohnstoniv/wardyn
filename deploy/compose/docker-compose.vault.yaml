@@ -1,4 +1,4 @@
-# Store mode overlay (docs/OPERATIONS.md "Store mode: credentials in Vault"):
+# Store mode overlay (docs/operations/secrets-and-keys.md "Store mode: credentials in Vault"):
 # wardynd keeps every stored credential in your organisation's Vault KV v2
 # engine and holds no key. Token-file auth, the compose and VM shape: point
 # WARDYN_VAULT_TOKEN_DIR at the directory your Vault Agent sink (or CSI driver)

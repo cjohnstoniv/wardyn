@@ -155,7 +155,7 @@ func TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode(t *testing.T) {
 }
 
 // TestLaunchRecordRun_HonorsSiteWideDefaultIntegration: model access resolves
-// in three tiers (docs/OPERATIONS.md "Model access resolves") — run-explicit
+// in three tiers (docs/operations/integrations.md "Model access resolves") — run-explicit
 // integration_id, then the workspace's own LLMCred.IntegrationRef binding,
 // then the operator's site-wide DefaultFor:agent_runs integration.
 // launchRecordRun must not gate its foldRunIntegration call on the workspace

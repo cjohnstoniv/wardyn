@@ -83,7 +83,7 @@ below.
 
 ### Renamed in 0.8 (`#203`)
 
-Owner ruling (2026-09-22, REPLAN.md Owner decisions #6): Wardyn has no users
+Owner ruling (2026-09-22, `#206`): Wardyn has no users
 yet, so these land as a **clean break** — no `cliutil.EnvAlias` shim, no boot
 warning naming the old spelling, no dual-emit. Set the OLD name after
 upgrading and it is simply not read; nothing refuses boot over it, it is

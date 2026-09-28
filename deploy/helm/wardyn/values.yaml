@@ -217,7 +217,7 @@ secrets:
   # losing every stored secret on restart is genuinely fine.
   allowEphemeralAgeKey: false
 
-# Store mode (docs/OPERATIONS.md "Store mode: credentials in Vault"): every
+# Store mode (docs/operations/secrets-and-keys.md "Store mode: credentials in Vault"): every
 # stored credential's value lives in your organisation's Vault KV v2 engine
 # (OpenBao is a supported endpoint), and Postgres keeps only a pointer row.
 # wardynd then holds no key: with backend vaultkv the age-key refusal above does
@@ -225,7 +225,7 @@ secrets:
 # -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
 # wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
 #
-# backend azurekv is the same in Azure Key Vault (docs/OPERATIONS.md "Store
+# backend azurekv is the same in Azure Key Vault (docs/operations/secrets-and-keys.md "Store
 # mode: credentials in Azure Key Vault"); allow its egress to the vault and to
 # the Entra token endpoint. One external store at a time: set vault.addr or
 # azure.vaultUrl, not both.
@@ -293,7 +293,7 @@ secretStore:
     purge: auto
 
 # The key that wraps each stored credential's data key when secretStore.backend
-# is pg (docs/OPERATIONS.md "Key service: Vault Transit"). "local": derived
+# is pg (docs/operations/secrets-and-keys.md "Key service: Vault Transit"). "local": derived
 # from the age key. "transit": your Vault's Transit key, over the
 # secretStore.vault client (addr, auth, role and TLS above); the key never
 # leaves Vault, and once `wardynd -rewrap` reports no row left under the age
@@ -350,7 +350,7 @@ extraEnv: []
 # wardynd reads each file ONCE at boot (restart to pick up a rotation) and
 # refuses to boot on a var set both ways (so does this render), or an empty,
 # unreadable, group- or world-writable file, or one wardynd's own non-root uid
-# owns that others can read. See docs/OPERATIONS.md "Secrets from files".
+# owns that others can read. See docs/operations/secrets-and-keys.md "Secrets from files".
 secretFiles:
   enabled: false
   mountPath: /etc/wardyn/secrets

@@ -277,7 +277,7 @@ func registerVaultFlags() vaultFlags {
 		auth:         flagEnv("vault-auth", "WARDYN_VAULT_AUTH", vaultkv.AuthKubernetes, `Vault auth method: "kubernetes" (a projected service-account token) or "token-file" (a Vault Agent sink or CSI file)`),
 		authMount:    flagEnv("vault-auth-mount", "WARDYN_VAULT_AUTH_MOUNT", "kubernetes", "mount path of Vault's Kubernetes auth method"),
 		role:         flagEnv("vault-role", "WARDYN_VAULT_ROLE", "", "Vault Kubernetes-auth role wardynd logs in as"),
-		rolePlatform: flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/OPERATIONS.md"),
+		rolePlatform: flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/operations/secrets-and-keys.md"),
 		k8sTokenFile: flagEnv("vault-k8s-token-file", "WARDYN_VAULT_K8S_TOKEN_FILE", "", "path of the projected service-account token (audience vault) for Kubernetes auth; re-read at every login"),
 		tokenFile:    flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read on every 403"),
 		caCertFile:   flagEnv("vault-cacert-file", "WARDYN_VAULT_CACERT_FILE", "", "PEM bundle added to the system roots for the Vault client only; empty = WARDYN_TRUSTED_CA_FILE, else system roots"),

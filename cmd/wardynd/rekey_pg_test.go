@@ -323,7 +323,7 @@ func ageKeyFromFile(t *testing.T, f *bootFlags) {
 	t.Fatal("WARDYN_AGE_KEY_FILE is not a _FILE setting")
 }
 
-// TestRotateAgeKeyMode_FromAMountedKeyFile is the OPERATIONS.md runbook for a
+// TestRotateAgeKeyMode_FromAMountedKeyFile is the docs/operations/secrets-and-keys.md runbook for a
 // file-mounted key: `WARDYN_AGE_KEY_FILE=/tmp/age.key wardynd -rotate-age-key
 // /tmp/age.key`. The old key comes in through the _FILE twin, the rotation
 // replaces that same file, and the next boot's _FILE read hands back the new

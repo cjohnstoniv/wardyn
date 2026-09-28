@@ -96,7 +96,7 @@ func (s *Server) recordSessionModelAccess(ctx context.Context, runID uuid.UUID, 
 	// ceiling/convention fallback below stays the last resort exactly as before. Gating
 	// this call on the workspace carrying its own binding skipped tier 3 (the operator's
 	// site-wide default) for every unbound workspace's record/replay session, silently
-	// diverging from "Model access resolves" (docs/OPERATIONS.md).
+	// diverging from "Model access resolves" (docs/operations/integrations.md).
 	_, integKind, bedrockRef := s.foldRunIntegration(ctx, "", policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
 	subMounted := specHasMountTarget(policy, claudeCredTarget)
 	if integKind == "" && !subMounted {
