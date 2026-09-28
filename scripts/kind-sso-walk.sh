@@ -25,10 +25,8 @@
 #  3. a Bedrock lane to spend the minted credential on: WARDYN_BEDROCK_BASE_URL
 #     points the data plane at the same fake's bedrock-runtime stub, and
 #     WARDYN_BEDROCK_MODEL is an ARN naming the PINNED account, so the
-#     account-pin check has both halves. The fake serves HTTPS (#703) under a
-#     throwaway CA this script mints and installs as the chart's trustedCA, so
-#     the portal MITM, the credential hold and the SigV4 tunnel all run the
-#     production shape: a TLS CONNECT, trusted through the corporate-CA path;
+#     account-pin check has both halves. The fake serves HTTPS under a walk CA
+#     installed as the chart's trustedCA (#703, scripts/lib/kind-sso-fake-tls.sh);
 #  4. site-config `internal_hosts` seeded with the fake's SERVICE host AND the
 #     Service CIDR, BEFORE the first sign-in.
 #
@@ -467,12 +465,9 @@ dex_iss="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get configmap wardyn
   || die "this cluster's Dex issuer is '${dex_iss}', not http://localhost:${DEX_PORT} — the browser would sign in elsewhere"
 
 # ── 2c. THE FAKE ON TLS (#703) — scripts/lib/kind-sso-fake-tls.sh says why ──
-FAKE_TLS_DIR="${EVIDENCE_DIR}/fake-tls"
-FAKE_CA="${FAKE_TLS_DIR}/ca.pem"
 step "minting the fake's throwaway CA and serving cert (${FAKE_HOST})"
 # shellcheck source=scripts/lib/kind-sso-fake-tls.sh
-. "${ROOT}/scripts/lib/kind-sso-fake-tls.sh"
-fake_tls_up
+. "${ROOT}/scripts/lib/kind-sso-fake-tls.sh" && fake_tls_up
 
 step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values; WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT})"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
@@ -547,8 +542,7 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart "deployment/${R
 step "setting the fake's session TTLs (the hold's live timeline)"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" set env "deployment/${FAKE_SVC}" \
   "AWSSSOFAKE_TOKEN_TTL=${WARDYN_KIND_SSO_TOKEN_TTL:-12m}" \
-  "AWSSSOFAKE_ROLE_CRED_TTL=${WARDYN_KIND_SSO_ROLE_CRED_TTL:-3m}" \
-  "AWSSSOFAKE_TLS_CERT=/etc/awsssofake-tls/tls.crt" "AWSSSOFAKE_TLS_KEY=/etc/awsssofake-tls/tls.key" >/dev/null \
+  "AWSSSOFAKE_ROLE_CRED_TTL=${WARDYN_KIND_SSO_ROLE_CRED_TTL:-3m}" >/dev/null \
   || die "could not set the fake's TTL knobs"
 
 # THE FAKE TOO, and for a third reason beyond the two above: /_seen is a
@@ -565,16 +559,14 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${FA
   || die "the fake AWS endpoints did not come back after the reset"
 
 if ! kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s; then
-  # The refusals are one line on stderr of a pod that has already exited, so
-  # read the PREVIOUS container's log and print it rather than guessing.
+  # A refusal is one stderr line of an exited pod: print the PREVIOUS container's log.
   echo "" >&2
   echo "FAIL: wardynd did not become ready after the upgrade. Its own refusal, verbatim:" >&2
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" --previous --tail=50 2>/dev/null \
     | grep -i "refusing to start" | tail -3 >&2 \
     || kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" --tail=50 >&2 || true
   echo "" >&2
-  echo "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL} is refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true is ALSO set," >&2
-  echo "and WARDYN_TRUSTED_CA_FILE (the chart's trustedCA, ${FAKE_CA}) must be a PEM bundle." >&2
+  echo "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE needs WARDYN_ALLOW_TEST_ENDPOINTS=true, and trustedCA (${FAKE_CA}) must be PEM." >&2
   die "wardynd did not become ready after the upgrade"
 fi
 
@@ -782,9 +774,7 @@ export WARDYN_E2E_WALK_BASE_URL="${BASE_URL}"
 export WARDYN_TEST_K8S=1
 export WARDYN_WALK_ADMIN_TOKEN="${ADMIN_TOKEN}"
 export WARDYN_WALK_FAKE_URL="${FAKE_URL}"
-# The harness's own reads of the fake (seen(), the reauth control) are HTTPS
-# under the walk's throwaway CA: Node trusts it through NODE_EXTRA_CA_CERTS,
-# the specs' curl through --cacert.
+# The fake is HTTPS under the walk CA (#703): Node trusts it via NODE_EXTRA_CA_CERTS, curl via --cacert.
 export WARDYN_WALK_FAKE_CA="${FAKE_CA}"
 export NODE_EXTRA_CA_CERTS="${FAKE_CA}"
 export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
@@ -816,8 +806,7 @@ fi
 # FOUR specs, run in this order against this one cluster: sso-member-recovery
 # inherits the state sso-member leaves (a `live` member under the contradicting
 # pin, and the Dex principals). Order is the argument order — never sort these.
-# sso-concurrency.spec.ts (#697) flips the pin itself before each of its
-# sign-ins, so it needs nothing from the files before it but the Dex principals.
+# sso-concurrency.spec.ts (#697) flips the pin itself; it needs only the Dex principals.
 # sso-reauth-hold.spec.ts is LAST: its case K spends about ten minutes of wall
 # clock waiting for the injector's own re-resolve window, and every case in it
 # makes its own capture, so nothing after it should depend on which session the

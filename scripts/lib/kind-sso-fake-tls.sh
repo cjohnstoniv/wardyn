@@ -16,9 +16,13 @@
 # upstream dials, and each sandbox's CA trust (installSandboxTrustedCA); the
 # harness trusts it through NODE_EXTRA_CA_CERTS and curl --cacert.
 #
-# Reads the walk's FAKE_TLS_DIR, FAKE_CA, FAKE_HOST, FAKE_SVC, NAMESPACE and
-# CONTEXT; dies through the walk's own die().
+# Reads the walk's EVIDENCE_DIR, FAKE_HOST, FAKE_SVC, NAMESPACE and CONTEXT;
+# sets FAKE_TLS_DIR and FAKE_CA (the walk reads FAKE_CA after); dies through the
+# walk's own die(). The patch also turns the fake's TLS on (AWSSSOFAKE_TLS_*),
+# which the walk's later `kubectl set env` of its TTLs leaves in place.
 fake_tls_up() {
+  FAKE_TLS_DIR="${EVIDENCE_DIR}/fake-tls"
+  FAKE_CA="${FAKE_TLS_DIR}/ca.pem"
   rm -rf "${FAKE_TLS_DIR}" && mkdir -p "${FAKE_TLS_DIR}"
   if ! { openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=wardyn kind-sso walk CA" \
       -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
@@ -39,6 +43,7 @@ fake_tls_up() {
   rm -f "${FAKE_TLS_DIR}/tls.key"
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" patch deployment "${FAKE_SVC}" --type=strategic -p "$(jq -cn --arg s "${FAKE_SVC}-tls" \
     '{spec:{template:{spec:{volumes:[{name:"fake-tls",secret:{secretName:$s}}],
-      containers:[{name:"awsssofake",volumeMounts:[{name:"fake-tls",mountPath:"/etc/awsssofake-tls",readOnly:true}]}]}}}}')" >/dev/null \
+      containers:[{name:"awsssofake",volumeMounts:[{name:"fake-tls",mountPath:"/etc/awsssofake-tls",readOnly:true}],
+        env:[{name:"AWSSSOFAKE_TLS_CERT",value:"/etc/awsssofake-tls/tls.crt"},{name:"AWSSSOFAKE_TLS_KEY",value:"/etc/awsssofake-tls/tls.key"}]}]}}}}')" >/dev/null \
     || die "could not mount the serving cert into deployment/${FAKE_SVC}"
 }
