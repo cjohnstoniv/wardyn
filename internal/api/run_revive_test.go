@@ -315,6 +315,22 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	}
 }
 
+// TestReviveRun_NotRunningReasonIsPinned (#656 final review round FIX-3): a
+// run outside RunRunning cannot be revived at all — reviveEligible's very
+// first check. Asserts the LITERAL wire value, not the Go const, so a rename
+// of reasonReviveNotRunning without updating docs/sdk.md fails here too.
+func TestReviveRun_NotRunningReasonIsPinned(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.state = types.RunCompleted
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "revive_not_running" {
+		t.Errorf("reason = %q, want the literal %q", got, "revive_not_running")
+	}
+}
+
 // TestReviveRun_Refusals: every refusal leaves the run lost with no proxy.
 func TestReviveRun_Refusals(t *testing.T) {
 	cases := map[string]struct {

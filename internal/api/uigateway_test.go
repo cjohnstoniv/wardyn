@@ -484,6 +484,21 @@ func TestUIGateway_EnterRejectsBadTickets(t *testing.T) {
 	}
 }
 
+// TestUIGateway_TicketInvalidReasonIsPinned (#656 final review round FIX-3):
+// a garbage ticket string hits the SAME shared "invalid, expired, or
+// already-used" refusal TestUIGateway_EnterRejectsBadTickets exercises.
+// Asserts the LITERAL wire value, not the Go const.
+func TestUIGateway_TicketInvalidReasonIsPinned(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := errorReason(rec); got != "ui_gateway_ticket_invalid" {
+		t.Errorf("reason = %q, want the literal %q", got, "ui_gateway_ticket_invalid")
+	}
+}
+
 // TestUIGateway_EnterRejectsNonOwnerTicket: minting is owner-or-admin, but a
 // member CAN hold a ticket for a run they own — the gateway re-checks the
 // ticket's stamped principal/role against the freshly loaded run, exactly as

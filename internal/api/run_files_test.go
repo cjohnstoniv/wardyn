@@ -214,6 +214,24 @@ func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	}
 }
 
+// TestRunFiles_NoRunnerReasonIsPinned (#656 final review round FIX-3): this
+// deployment configures no runner at all — the earliest refusal
+// handleRunFiles can give, before it ever asks the runner anything. Asserts
+// the LITERAL wire value, not the Go const, so a rename of
+// reasonRunInspectNoRunner without updating docs/sdk.md fails here too, not
+// only in TestReasonDocsMatchReasonsGo.
+func TestRunFiles_NoRunnerReasonIsPinned(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-owner@corp.example", State: types.RunRunning, SandboxRef: "sandbox-abc"}
+	srv := New(Config{Store: runFilesStore{run: run}, Runner: nil, Audit: &recRecorder{}})
+	w := doRunFiles(srv, run.ID, nil)
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "run_inspect_no_runner" {
+		t.Errorf("reason = %q, want the literal %q", got, "run_inspect_no_runner")
+	}
+}
+
 // TestRunFiles_ExecStreamUnsupported: a runner with no exec primitive cannot be
 // asked this question at all — 501 naming the reason, plus the one audit row
 // (this IS a failure).

@@ -5,12 +5,15 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // TestCeilingAndDriveErrorsLogMethodAndPath (#189) pins the fix for
@@ -57,5 +60,44 @@ func TestCeilingAndDriveErrorsLogMethodAndPath(t *testing.T) {
 				t.Errorf("%s: logged line carries no path: %s", tc.name, line)
 			}
 		})
+	}
+}
+
+// TestWriteServerError_InternalErrorReasonIsPinned (#656 final review round
+// FIX-3): the generic, otherwise-unclassified 500 every OTHER writeServerError
+// call in this package falls through to. Asserts the LITERAL wire value, not
+// the Go const, so a rename of reasonInternalError without updating
+// docs/sdk.md fails here too.
+func TestWriteServerError_InternalErrorReasonIsPinned(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	w := httptest.NewRecorder()
+	writeServerError(w, r, "get run", errors.New("boom"))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "internal_error" {
+		t.Errorf("reason = %q, want the literal %q", got, "internal_error")
+	}
+}
+
+// TestParseIDParam_InvalidIDReasonIsPinned (#656 final review round FIX-3):
+// parseIDParam's one refusal, reused by every {param} path segment in the
+// package. Asserts the LITERAL wire value, not the Go const, so a rename of
+// reasonInvalidIDParam without updating docs/sdk.md fails here too.
+func TestParseIDParam_InvalidIDReasonIsPinned(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/not-a-uuid", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "not-a-uuid")
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+
+	if _, ok := parseIDParam(w, r, "id", "run"); ok {
+		t.Fatal("parseIDParam accepted a non-UUID")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "invalid_id_param" {
+		t.Errorf("reason = %q, want the literal %q", got, "invalid_id_param")
 	}
 }
