@@ -15,8 +15,55 @@ import type { GrantSpec, PushRulesSpec, RunPolicySpec } from "../../lib/types";
 import { nonNegativeInt } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { cn } from "../ui/utils";
 import { Chip, SectionLabel } from "./primitives";
 import { Field } from "./form-primitives";
+
+const UTF8 = new TextEncoder();
+
+// Mirrors internal/api/policy.go's maxPushRulesPathBytes — the same ceiling,
+// so a row's live error and the server's 400 are about the same number.
+export const MAX_PUSH_RULE_PATH_BYTES = 256;
+
+function hasControlChar(s: string): boolean {
+  return /[\x00-\x1f\x7f]/.test(s);
+}
+
+// hasEmptyPathSegment mirrors types.DenyPathSegments' segment split
+// (internal/types/policy.go): a leading "/" is stripped, a trailing one reads
+// as "everything beneath" (so it can never itself be the empty final segment),
+// and no segment may be "", "." or "..".
+function hasEmptyPathSegment(pattern: string): boolean {
+  const p = pattern.startsWith("/") ? pattern.slice(1) : pattern;
+  const withTrailing = p.endsWith("/") ? `${p}**` : p;
+  return withTrailing.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+}
+
+// pushRulePatternProblem mirrors validatePushRulePaths + DenyPathSegments
+// (internal/api/policy.go, internal/types/policy.go) for ONE pattern, in the
+// same order the server checks them — advisory only, the server stays the
+// gate. An empty pattern is not flagged: a freshly added, unwritten row is not
+// yet a mistake, and the server itself only refuses a truly empty SAVED entry.
+//
+// isReview is the packet's own scope call (#57, PR-2 "the three questions"):
+// the empty/./.. segment check renders live only for require_review_paths —
+// deny_paths gets the identical check, just server-side only, at Save.
+export function pushRulePatternProblem(pattern: string, isReview: boolean): string | null {
+  const bytes = UTF8.encode(pattern).length;
+  if (bytes > MAX_PUSH_RULE_PATH_BYTES) {
+    return `This pattern is ${bytes} bytes. Patterns are at most ${MAX_PUSH_RULE_PATH_BYTES} bytes.`;
+  }
+  if (hasControlChar(pattern)) {
+    return "This pattern has a control character in it, which no push path can contain.";
+  }
+  if (pattern.length > 0 && pattern.trim() !== pattern) {
+    return "Remove the leading or trailing space — it can never match a real path.";
+  }
+  if (isReview && pattern.length > 0 && hasEmptyPathSegment(pattern)) {
+    return "A path segment can't be empty, \".\", or \"..\".";
+  }
+  return null;
+}
 
 // pushRulesUnenforceableBySSHOnly mirrors composer/risk.go's
 // pushRulesUnenforceable EXACTLY: push_rules needs the git BROKER to read the
@@ -106,40 +153,54 @@ function withPushRules(
   return next;
 }
 
-// One path-pattern list (Deny or Hold for review) — add/remove rows. Live
-// per-row validation lands in a follow-up (#57 packet, PR-2).
+// One path-pattern list (Deny or Hold for review) — add/remove rows, each with
+// its own live error line directly under it (#57 packet, PR-2).
 function PathListRows({
   listLabel,
   paths,
+  isReview,
   onChange,
 }: {
   listLabel: string;
   paths: readonly string[];
+  isReview: boolean;
   onChange: (next: string[]) => void;
 }) {
   return (
     <>
-      {paths.map((p, i) => (
-        <div key={i} className="mt-1.5 flex items-start gap-2">
-          <Input
-            aria-label={`${listLabel} path ${i + 1}`}
-            value={p}
-            spellCheck={false}
-            className="h-8 flex-1 font-mono text-body"
-            onChange={(e) => onChange(paths.map((row, n) => (n === i ? e.target.value : row)))}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            aria-label={`Remove ${listLabel} path ${i + 1}`}
-            onClick={() => onChange(paths.filter((_, n) => n !== i))}
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        </div>
-      ))}
+      {paths.map((p, i) => {
+        const problem = pushRulePatternProblem(p, isReview);
+        return (
+          <div key={i}>
+            <div className="mt-1.5 flex items-start gap-2">
+              <Input
+                aria-label={`${listLabel} path ${i + 1}`}
+                value={p}
+                spellCheck={false}
+                className={cn("h-8 flex-1 font-mono text-body", problem && "border-danger")}
+                onChange={(e) =>
+                  onChange(paths.map((row, n) => (n === i ? e.target.value : row)))
+                }
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={`Remove ${listLabel} path ${i + 1}`}
+                onClick={() => onChange(paths.filter((_, n) => n !== i))}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+            {problem && (
+              <p role="alert" className="mt-1 text-xs text-danger">
+                {problem}
+              </p>
+            )}
+          </div>
+        );
+      })}
       <Button
         type="button"
         variant="ghost"
@@ -198,7 +259,12 @@ export function PushRulesSection({
         <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
           Refuses the push outright. Anchored at the repository root; ** crosses path segments.
         </p>
-        <PathListRows listLabel="Deny" paths={deny} onChange={(next) => write(next, review, maxPack, hold)} />
+        <PathListRows
+          listLabel="Deny"
+          paths={deny}
+          isReview={false}
+          onChange={(next) => write(next, review, maxPack, hold)}
+        />
       </div>
 
       <div className="mt-3.5">
@@ -212,6 +278,7 @@ export function PushRulesSection({
         <PathListRows
           listLabel="Hold for review"
           paths={review}
+          isReview
           onChange={(next) => write(deny, next, maxPack, hold)}
         />
       </div>

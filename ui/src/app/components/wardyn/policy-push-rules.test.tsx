@@ -9,7 +9,9 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GrantSpec, RunPolicySpec } from "../../lib/types";
 import {
+  MAX_PUSH_RULE_PATH_BYTES,
   nonGitHubPushRuleHosts,
+  pushRulePatternProblem,
   PUSH_RULES_WARN_SSH_ONLY,
   pushRulesUnenforceableBySSHOnly,
   pushRulesWarnNonGithub,
@@ -21,6 +23,61 @@ const BASE: RunPolicySpec = {
   first_use_approval: "always_deny",
   min_confinement_class: "CC2",
 };
+
+// push_rules is a SECURITY field (#57): the one that can hold or refuse a
+// run's push. The mirror exists so the editor names what the server will
+// refuse before Save — if it drifts from internal/api/policy.go's
+// validatePushRulePaths/DenyPathSegments, the console starts promising writes
+// the server rejects.
+describe("pushRulePatternProblem — mirrors validatePushRulePaths + DenyPathSegments (#57, PR-2)", () => {
+  it("accepts a well-formed pattern", () => {
+    expect(pushRulePatternProblem(".github/workflows/**", false)).toBeNull();
+    expect(pushRulePatternProblem("deploy/**", true)).toBeNull();
+  });
+
+  it("accepts an empty pattern — a freshly added row is not yet a mistake", () => {
+    expect(pushRulePatternProblem("", false)).toBeNull();
+    expect(pushRulePatternProblem("", true)).toBeNull();
+  });
+
+  it("refuses a pattern over the byte ceiling and names the actual count", () => {
+    const long = "a/".repeat(200);
+    const problem = pushRulePatternProblem(long, false);
+    expect(problem).toMatch(/bytes\. Patterns are at most 256 bytes\./);
+    expect(problem).toContain(String(new TextEncoder().encode(long).length));
+  });
+
+  it("measures the cap in bytes, not UTF-16 units — 120 characters is well under 256 but 360 bytes is not", () => {
+    const cjk = "漢".repeat(120); // 120 UTF-16 units, 360 bytes (3 bytes/char)
+    expect(cjk.length).toBeLessThan(MAX_PUSH_RULE_PATH_BYTES);
+    expect(new TextEncoder().encode(cjk).length).toBeGreaterThan(MAX_PUSH_RULE_PATH_BYTES);
+    expect(pushRulePatternProblem(cjk, false)).toMatch(/bytes/);
+  });
+
+  it("refuses a control character", () => {
+    expect(pushRulePatternProblem("deploy/\u0007hook", false)).toBe(
+      "This pattern has a control character in it, which no push path can contain.",
+    );
+  });
+
+  it("refuses leading or trailing whitespace", () => {
+    expect(pushRulePatternProblem(" deploy/**", false)).toMatch(/leading or trailing space/);
+    expect(pushRulePatternProblem("deploy/** ", false)).toMatch(/leading or trailing space/);
+  });
+
+  // The packet's own scope call (PR-2): the empty/./.. segment check is
+  // rendered live only for require_review_paths — deny_paths gets the
+  // identical check, just server-side only, at Save.
+  it("flags an empty/./.. path segment live only for review paths", () => {
+    expect(pushRulePatternProblem("deploy/../etc", true)).toBe(
+      'A path segment can\'t be empty, ".", or "..".',
+    );
+    expect(pushRulePatternProblem("deploy/./x", true)).toMatch(/path segment/);
+    expect(pushRulePatternProblem("deploy//x", true)).toMatch(/path segment/);
+    // The identical pattern on the DENY side is not flagged live.
+    expect(pushRulePatternProblem("deploy/../etc", false)).toBeNull();
+  });
+});
 
 describe("pushRulesUnenforceableBySSHOnly — mirrors composer/risk.go's pushRulesUnenforceable", () => {
   it("is true when ssh_key is the only git-capable grant", () => {
@@ -116,6 +173,21 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
   function denySection() {
     return screen.getByText("Deny").parentElement as HTMLElement;
   }
+  function reviewSection() {
+    return screen.getByText("Hold for review").parentElement as HTMLElement;
+  }
+
+  it("shows the main path: add a review row, an invalid pattern shows the row error, fixing it clears it (#57, PR-2)", async () => {
+    render(<Harness initial={BASE} />);
+    await user.click(within(reviewSection()).getByRole("button", { name: "Add path" }));
+    const row = screen.getByLabelText("Hold for review path 1");
+    await user.type(row, "deploy/../etc");
+    expect(screen.getByRole("alert")).toHaveTextContent(/path segment/);
+
+    await user.clear(row);
+    await user.type(row, "deploy/**");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 
   it("adds a deny path and persists it into the spec document", async () => {
     let current: RunPolicySpec = BASE;

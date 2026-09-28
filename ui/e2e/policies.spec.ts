@@ -418,6 +418,41 @@ test("the safety meter moves toward Weakest when allow_all_egress is flipped on"
   await expect(editorDialog(page)).toBeHidden();
 });
 
+// #57: the push_rules structured editor's main path — add a row, an invalid
+// pattern shows its live error inline (before Save ever sees it), fixing it
+// clears the error, and the policy still saves. PushRulesSection's own
+// component tests (policy-push-rules.test.tsx) cover every validation branch
+// and the ssh_key/non-GitHub warnings in isolation; this is the one real
+// browser round-trip through the actual dialog.
+test("push_rules editor: add a row, an invalid pattern shows its error, fixing it saves clean", async ({ page }) => {
+  const name = uniqueName("pushrules");
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  await dialog.getByLabel("Name").fill(name);
+
+  // Two "Add path" buttons exist (Deny, then Hold for review) — the first is Deny's.
+  await dialog.getByRole("button", { name: "Add path" }).first().click();
+  // exact: true — "Remove Deny path 1" otherwise substring-matches too.
+  const row = dialog.getByLabel("Deny path 1", { exact: true });
+
+  // A control character: no push path can contain one, and it is the row-level
+  // check named in the packet's own Strings table (PUSH_RULES.ERR_CONTROL).
+  await row.fill(".github/workflows/\u0007hook");
+  await expect(dialog.getByRole("alert")).toHaveText(
+    "This pattern has a control character in it, which no push path can contain.",
+  );
+
+  // Fixing the pattern clears the row error — advisory only, never blocking typing.
+  await row.fill(".github/workflows/**");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "Create policy" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(policyRow(page, name)).toBeVisible();
+
+  await deletePolicyViaUi(page, name);
+});
+
 test("create form surfaces the server-side error for an unknown spec key (strict decode)", async ({ page }) => {
   const name = uniqueName("unknownkey");
   // Syntactically valid JSON, structurally valid otherwise, but a key the
