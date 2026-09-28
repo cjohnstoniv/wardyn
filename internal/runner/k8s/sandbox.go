@@ -443,8 +443,9 @@ func isClientThrottled(err error) bool {
 // back to the bare timeout rather than a fabricated cause. PodScheduled=False
 // is checked first: it's where the scheduler writes storage facts like
 // "unbound immediate PersistentVolumeClaims". The cross-node ReadWriteOnce
-// case (stalls in ContainerCreating on detach) is NOT covered here — see
-// docs/OPERATIONS.md ("User drives on Kubernetes").
+// case is NOT covered here: that pod is scheduled and stalls in
+// ContainerCreating on a FailedAttachVolume event this function never reads —
+// see docs/OPERATIONS.md ("User drives on Kubernetes").
 func podStuckReason(pod *corev1.Pod) string {
 	if pod == nil {
 		return ""
