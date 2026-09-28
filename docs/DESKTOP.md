@@ -178,7 +178,7 @@ explicitly is not; and compose serves the console and the UI relay on a
 
 ### Named gap: the browser lane is not available on this tier
 
-`wardyn ssh` works on a managed laptop as of 0.7. The **browser** half of
+`wardyn run ssh` works on a managed laptop as of 0.7. The **browser** half of
 UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN`
 commented out rather than pretending otherwise.
 
@@ -353,17 +353,17 @@ admin-access limits verbatim.
 | `/etc/wardyn/wardyn.env` | **MDM** | `0644` | the non-secret envelope — `WARDYN_LOCAL_MODE`, `WARDYN_LOCAL_OPERATOR`, `WARDYN_DEFAULT_POLICY`, `WARDYN_AGENT_IMAGES`, `WARDYN_LISTEN`, `WARDYN_RUNNER`, `WARDYN_WORKSPACES_ROOT`, `WARDYN_TRUSTED_CA_FILE` | fleet-uniform, non-sensitive; readable is fine and makes support tractable — a CA cert is public, unlike the age key below |
 | `/etc/wardyn/secret.env` | **MDM** | `0600` | secret-bearing variables — `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM `bearer_token`), and `WARDYN_OIDC_CLIENT_SECRET` on the SSO variant | these are org credentials, uniform across the fleet, so MDM is the right delivery path — but they are not per-device secrets and `0600` does not make them ones |
 | `/etc/wardyn/policy.json` | **MDM** | `0644` | the default `RunPolicySpec` — confinement class, allowed egress, eligible grant kinds ([POLICIES.md](POLICIES.md)) | this file *is* the managed ceiling; it is the reason the tier is called managed |
-| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts — and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config apply`; see the note below this table) | environment-shaped, identical across the fleet, and re-applied after a reset |
+| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts — and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
 
 **The two provider blocks, and why an old MDM file cannot delete them.**
 `workspace_providers` says which git hosts and org paths a run may clone from,
 which credential lanes it may use there, and the ephemeral/drive storage
 ceilings; `agent_providers` says which agents this org offers and how each
-reaches its model. `wardyn site-config apply` is a **full-document replace**, but
+reaches its model. `wardyn site-config set` is a **full-document replace**, but
 a key the file does not NAME is **carried forward, not cleared** — the CLI
 strict-decodes and re-marshals, so an omitted (or `null`) block leaves the stored
-one alone, and `apply` prints which post-0.6.6 keys it left as the server already
+one alone, and `set` prints which post-0.6.6 keys it left as the server already
 had them. That carry-forward is what stops the 5-minute converge on a laptop
 whose MDM file predates 0.7.2 from silently deleting the org's provider policy on
 every tick. To CLEAR a block deliberately, write it as `{}` — the only clear form

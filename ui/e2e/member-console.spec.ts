@@ -142,7 +142,13 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
   });
 
   test("an ungranted workspace stays LISTED and annotated — visibility is not capability", async ({ page }) => {
-    await mockMemberRole(page);
+    // #1267: available_to_you is computed for the REAL caller (decide's own
+    // step 1 exempts an operator unconditionally), so a role SPLICE no longer
+    // suffices here — mockMemberRole's request still carries the operator
+    // bearer, which the server now correctly reports as always available.
+    // asRealMember is a genuine non-operator token, so the real backend's
+    // real enforcement (this describe's own beforeEach) refuses it for real.
+    await asRealMember(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();

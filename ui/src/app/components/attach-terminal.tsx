@@ -274,7 +274,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // `force` sends a ONE-COLUMN-SMALLER size first, then the real one. That looks
   // pointless and is not: the session is tmux, tmux clamps a shared window to
   // the SMALLEST attached client, and it re-evaluates on a client size CHANGE.
-  // So when a second client (a `wardyn attach` from another terminal) attaches
+  // So when a second client (a `wardyn run attach` from another terminal) attaches
   // small, the browser's grid fills with tmux's `·` filler — and when that
   // client leaves, the filler STAYS, because the browser's own size never
   // changed and a same-size resize frame is a no-op tmux ignores.

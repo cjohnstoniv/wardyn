@@ -277,6 +277,13 @@ export interface Workspace {
   owned_by?: string;
   created_at: string;
   updated_at: string;
+  // #1267: a member-safe, per-row, per-CALLER bit — would the SAME decide
+  // path a launch runs admit THIS workspace for the person reading it?
+  // Computed fresh at every GET /workspaces{,/{id}} read, never stored.
+  // Always true for an operator. Optional so an OLDER server (the field
+  // absent entirely, not `false`) falls back to the pre-#1267 client-only
+  // check — see workspaceUnavailableToCaller (new-run/wizard-types.ts).
+  available_to_you?: boolean;
 }
 
 // POST /workspaces and PUT /workspaces/{id} response: the workspace's fields PLUS

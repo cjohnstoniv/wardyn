@@ -31,7 +31,7 @@ import (
 //   - TestLive_SubscriptionInject      (WARDYN_E2E_EXPECT_INJECT=on, the default):
 //     the safe default. Launching a subscription run authors the re-mintable
 //     injection grant + auto-enables MITM — proven by the wardynd-emitted
-//     run.subscription.inject audit event — then `wardyn attach` reaches a
+//     run.subscription.inject audit event — then `wardyn run attach` reaches a
 //     shell whose curl to api.anthropic.com traverses the injected+MITM'd path.
 //   - TestLive_SubscriptionEscapeHatch (WARDYN_E2E_EXPECT_INJECT=off): the
 //     WARDYN_SUBSCRIPTION_INJECT=off escape hatch. NO injection grant is authored
@@ -97,7 +97,7 @@ func TestLive_SubscriptionInject(t *testing.T) {
 	}
 	t.Logf("control plane authored the proxy-side injection grant + enabled TLS-MITM of api.anthropic.com (audit %s)", subscriptionInjectAuditAction)
 
-	// The run must actually come up for `wardyn attach`. If the proxy sidecar
+	// The run must actually come up for `wardyn run attach`. If the proxy sidecar
 	// failed to RESOLVE the live token (resident token near expiry AND the
 	// delegated refresh is rate-limited), the sandbox never reaches RUNNING —
 	// that is an EXTERNAL dependency, not a feature defect, so skip (the primary
@@ -111,9 +111,9 @@ func TestLive_SubscriptionInject(t *testing.T) {
 	conn := h.dialAttach(t, run.ID)
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
-	// `wardyn attach` reaches a live shell: echo a computed token back.
+	// `wardyn run attach` reaches a live shell: echo a computed token back.
 	driveExpect(t, conn, "echo wardyn-sub-$((6*7))\n", "wardyn-sub-42", 20*time.Second)
-	t.Logf("attach PTY round-trip OK — a human at `wardyn attach` has a live shell in the subscription sandbox")
+	t.Logf("attach PTY round-trip OK — a human at `wardyn run attach` has a live shell in the subscription sandbox")
 
 	// Transport corroboration: from inside the attached sandbox, hit
 	// api.anthropic.com through the proxy carrying only a GARBAGE sentinel
@@ -370,7 +370,7 @@ func (h *harness) driveRealClaude(t *testing.T, conn *websocket.Conn) {
 	}
 	switch {
 	case strings.Contains(out, "42"):
-		t.Logf("real-model: `wardyn attach` -> `claude` replied through the injected subscription token (saw 42) — full walkthrough PASS")
+		t.Logf("real-model: `wardyn run attach` -> `claude` replied through the injected subscription token (saw 42) — full walkthrough PASS")
 	case strings.Contains(out, "limit") || strings.Contains(out, "usage"):
 		t.Logf("real-model: `claude` authenticated (rate/usage-limit reply, not an auth error) — injection is load-bearing; PASS")
 	default:

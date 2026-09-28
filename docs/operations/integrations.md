@@ -230,7 +230,7 @@ Profiles and their assignments live in Postgres, so `make reset` / `make
 reset-all` take them with the volume; `wardyn governance get > governance.json`
 (`GET /api/v1/governance`) before a reset and `wardyn governance apply
 governance.json` after is the round-trip (0.8, #1108) — the same get-then-apply
-shape `wardyn site-config get|apply` and `wardyn drive get|apply` already take.
+shape `wardyn site-config get|set` and `wardyn drive get|apply` already take.
 `apply` upserts every named profile **by name** (its unique handle) and every
 assignment by its own natural key (subject_type, subject); a profile the file
 does not mention is left alone, and one present server-side but absent from the

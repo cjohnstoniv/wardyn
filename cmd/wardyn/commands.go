@@ -110,7 +110,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
-		Short:   "Create a governed agent run (subcommands list/get/grants/recording/kill inspect and stop runs)",
+		Short:   "Create a governed agent run (subcommands list/get/grants/recording/kill/attach/ssh inspect, stop and connect to runs)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// --repo is optional: a run with no repo comes up in an ephemeral
@@ -154,7 +154,7 @@ func runCmd(client clientFn) *cobra.Command {
 				if data, err = policyToJSON(data); err != nil {
 					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
 				}
-				// Strict decode (DisallowUnknownFields, shared with `policy create`/
+				// Strict decode (DisallowUnknownFields, shared with `policy set`/
 				// `policy render`): a misspelled spec field fails here, not as a
 				// silently-dropped setting the server never sees.
 				spec, err := decodeSpecStrict(data)
@@ -186,7 +186,7 @@ func runCmd(client clientFn) *cobra.Command {
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive {
-					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
+					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn run attach %s`\n", run.ID)
 				}
 			}
 			// Advisory server warnings (workspace collision, dropped ssh grant):
@@ -210,7 +210,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")
-	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn run attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side; wraps the image only — nothing runs until inside the run's confinement tier, unlike --devcontainer-repo, which builds unconfined on the host)")
 	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check 'wardyn run get <id>'; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
@@ -222,7 +222,8 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
-		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client))
+		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client),
+		attachCmd(client), sshCmd(client))
 	return cmd
 }
 

@@ -22,7 +22,7 @@ import (
 
 // TestPG_ProviderPurgeTriggers is rule 8 against a real Postgres, through each
 // door a providers block is written by: PUT /model-providers, PUT /site-config,
-// and an MDM `wardyn site-config apply` (the CLI client, whole document, no
+// and an MDM `wardyn site-config set` (the CLI client, whole document, no
 // UIDs). An address change, a kind change and a deletion each remove that
 // provider's credentials from every namespace, and the write's audit row
 // counts them; an identical re-apply — what a managed laptop does on every
@@ -48,7 +48,7 @@ func TestPG_ProviderPurgeTriggers(t *testing.T) {
 			ts := httptest.NewServer(panicFails(t, srv.Handler()))
 			defer ts.Close()
 			if _, _, _, err := client.New(ts.URL, adminToken).PutSiteConfig(t.Context(), types.SiteConfig{ModelProviders: block}); err != nil {
-				t.Fatalf("site-config apply: %v", err)
+				t.Fatalf("site-config set: %v", err)
 			}
 		}},
 	}

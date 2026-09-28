@@ -187,7 +187,7 @@ credential brokering, the audit trail — are the same for any sandboxed workloa
 | 11 — CI and headless | No UI, no human: a governed run's exit code becomes the pipeline's | coming soon |
 | 12 — Audit and attach | The append-only audit trail, and attaching live from browser or SSH | coming soon |
 | 12b — Admin operations | Backup, upgrade, rotation and monitoring, day-2 on a running deployment | coming soon |
-| 13 — Your terminal, our cluster | `wardyn ssh` into a Kubernetes-hosted run, from an ordinary terminal | coming soon |
+| 13 — Your terminal, our cluster | `wardyn run ssh` into a Kubernetes-hosted run, from an ordinary terminal | coming soon |
 
 They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0),
 not in the repo, so a clone stays small. Each link pins the release that first

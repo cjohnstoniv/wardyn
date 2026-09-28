@@ -77,7 +77,7 @@ upstream fails fast instead of hanging (it hangs, and fails, without the deadlin
 ```sh
 wardyn setup proxy-relay 18080 CORP_PROXY_PORT     # host, foreground
 wardyn secret set upstream-proxy-url               # paste http://<host-gateway>:18080
-wardyn site-config apply corp-baseline.json        # reference the secret
+wardyn site-config set corp-baseline.json        # reference the secret
 ```
 
 `<host-gateway>` is the address your sandbox reaches the host on (e.g. the VM's gateway on
@@ -89,7 +89,7 @@ Both reset paths delete the Postgres volume, and the upstream-proxy secret **and
 live only there — so a plain `reset && setup` returned with broken egress and no step in between
 where the operator could notice.
 
-- `wardyn site-config get|apply` now exists, so the baseline is a file you can keep. It carries
+- `wardyn site-config get|set` now exists, so the baseline is a file you can keep. It carries
   secret **names**, never values, so it is safe to store beside the repo.
 - `make reset`'s and `make reset-all`'s manifests now say explicitly that the corporate baseline dies with the volume,
   and prints the capture command *before* asking for confirmation.

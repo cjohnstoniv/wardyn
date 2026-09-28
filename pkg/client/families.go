@@ -197,7 +197,7 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // PutSiteConfig replaces the operator-wide site config and returns the
 // persisted value plus the write's two advisory signals: danglingSecretRefs —
 // the names of any secret the document now references that the secret store
-// doesn't currently hold (e.g. a `site-config apply` recovery run before the
+// doesn't currently hold (e.g. a `site-config set` recovery run before the
 // referenced secrets were restored) — and onboardingMarkIgnored, true when the
 // body named an onboarding_completed_at the server did not keep (that mark is
 // server-owned and always carried forward; see types.SiteConfig). Both are
@@ -208,7 +208,7 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // non-empty one outright (integrations are managed through their own
 // endpoints, never PUT /site-config), so the documented disaster-recovery
 // round-trip — `wardyn site-config get > f` before a reset, `wardyn
-// site-config apply f` after — 400ed outright the moment any integration was
+// site-config set f` after — 400ed outright the moment any integration was
 // ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
 // remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
 // TS side).

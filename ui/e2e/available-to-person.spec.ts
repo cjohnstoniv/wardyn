@@ -266,3 +266,89 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
     await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
   });
 });
+
+// #1267 (closes #1250's design note too): the PER-VALUE "Available to: Only
+// these" restriction — set on the WORKSPACE ITSELF via
+// PUT /permissions/availability/workspace/{id}, the kind-wide switch left
+// OFF throughout. This is exactly the gap #922's own review found and #1267's
+// available_to_you closes: the block above already pins the kind-wide
+// switch; this one pins the per-value bit the switch does nothing for.
+test.describe("Available to — a workspace's own per-value restriction (#1267)", () => {
+  test.describe.configure({ mode: "serial" });
+  const LISTED_TYPE = "e2e-1267-listed";
+  let workspaceId = "";
+  let grantId = "";
+
+  test.beforeAll(async ({ request }) => {
+    const created = await request.post("/api/v1/workspaces", {
+      headers: auth,
+      data: { name: "e2e-1267-workspace", sources: [{ type: "ephemeral", target: "/home/agent/work" }] },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    workspaceId = (await created.json()).id;
+
+    const madeType = await request.post("/api/v1/user-types", {
+      headers: auth,
+      data: { id: LISTED_TYPE, name: "E2E 1267 listed" },
+    });
+    expect([201, 409], await madeType.text()).toContain(madeType.status());
+    const granted = await request.post("/api/v1/permissions/grants", {
+      headers: auth,
+      data: { subject_type: "user_type", subject: LISTED_TYPE, capability: "workspace", value: workspaceId, effect: "allow" },
+    });
+    expect(granted.status(), await granted.text()).toBe(201);
+    grantId = (await granted.json()).id;
+
+    // The workspace's OWN restricted bit — never the "workspace" KIND's
+    // enforcement switch, which this block never touches and which stays
+    // whatever this backend already has it at.
+    const restrict = await request.put(`/api/v1/permissions/availability/workspace/${workspaceId}`, {
+      headers: auth,
+      data: { restricted: true },
+    });
+    expect(restrict.status(), await restrict.text()).toBe(200);
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (workspaceId) {
+      await request.put(`/api/v1/permissions/availability/workspace/${workspaceId}`, {
+        headers: auth,
+        data: { restricted: false },
+      });
+    }
+    if (grantId) await request.delete(`/api/v1/permissions/grants/${grantId}`, { headers: auth });
+    if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`, { headers: auth });
+  });
+
+  test("a member outside the restriction: Launch is disabled with the canon sentence", async ({ page }) => {
+    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw("standard")]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("combobox", { name: "Workspace" }).click();
+    await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
+
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeDisabled();
+    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeVisible();
+  });
+
+  test("the listed type: Launch stays enabled, the sentence never renders", async ({ page }) => {
+    await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw(LISTED_TYPE)]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("combobox", { name: "Workspace" }).click();
+    await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
+
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeEnabled();
+    await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
+  });
+
+  test("an admin still sees it available on the Workspaces list", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/workspaces");
+    const row = page.getByRole("row", { name: /e2e-1267-workspace/ });
+    await expect(row).toBeVisible();
+    await expect(row.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
+  });
+});

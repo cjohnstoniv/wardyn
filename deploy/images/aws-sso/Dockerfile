@@ -2,7 +2,7 @@
 #
 # This is NOT a coding agent — it has no LLM harness. Its ONLY job is to host
 # an interactive `aws sso login --sso-session wardyn --no-browser --use-device-code` session so an
-# operator can `wardyn attach` into a governed sandbox and authenticate an AWS
+# operator can `wardyn run attach` into a governed sandbox and authenticate an AWS
 # SSO profile. It carries AWS CLI v2 — v1 (apt's `awscli` package) does not
 # support the sso-session / device-code flow, so this image does NOT use apt
 # for the CLI itself.
@@ -106,7 +106,7 @@ LABEL org.opencontainers.image.title="agent-aws-sso" \
 #   cheap, and handy for an attached operator).
 # less: the AWS CLI's default pager; AWS_PAGER="" below disables it anyway so a
 #   non-tty exec never hangs, but `less` stays installed for an interactive
-#   `wardyn attach` shell where a human may want normal pager behavior.
+#   `wardyn run attach` shell where a human may want normal pager behavior.
 # git + openssh-client: parity with the sibling images' git-broker wiring.
 # gnupg: ONLY needed to verify the AWS CLI installer's GPG signature at build
 #   time — purged below so it doesn't bloat the shipped image.
@@ -244,7 +244,7 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*
 
 # Never let the CLI's pager block a non-tty exec (agent-run / a scripted
-# selftest have no terminal to page through); an interactive `wardyn attach`
+# selftest have no terminal to page through); an interactive `wardyn run attach`
 # shell can still `less` things manually.
 ENV AWS_PAGER=""
 
@@ -293,7 +293,7 @@ COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/codex
 # no xterm.js line-drawing artifacts), truecolor, large scrollback.
 COPY deploy/images/common/tmux.conf /etc/tmux.conf
 # Interactive attach shell sources this: waits for workspace prep to finish
-# (mirrors claude-code/codex-cli) so `wardyn attach` never lands mid-setup.
+# (mirrors claude-code/codex-cli) so `wardyn run attach` never lands mid-setup.
 COPY --chown=agent:agent deploy/images/common/attach-bashrc.sh /home/agent/.bashrc
 RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \

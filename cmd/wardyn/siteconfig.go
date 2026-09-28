@@ -30,7 +30,7 @@ var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hos
 // carry-forward.
 //
 // A JSON `null` COUNTS AS OMITTED here, and that is not a liberty: these fields
-// are pointers with `omitempty`, so `apply` strict-decodes `null` into a nil
+// are pointers with `omitempty`, so `set` strict-decodes `null` into a nil
 // pointer and re-marshals the document WITHOUT the key — the wire the server
 // sees is byte-identical to an absent key, and it carries the old block forward.
 // Reporting `null` as present printed nothing and let an operator believe they
@@ -58,7 +58,7 @@ func omittedPostV066Fields(raw []byte) ([]string, error) {
 // (which deletes the volume) takes it with them. Without a host-side way to
 // re-apply it, an operator who resets comes back up with the UI configured but
 // corporate egress silently broken, and the only fix is to re-click through the
-// wizard. `get` before a reset and `apply` after makes it a two-command
+// wizard. `get` before a reset and `set` after makes it a two-command
 // round-trip that scripts/up.sh can automate.
 //
 // This document never holds secret values — only secret NAMES (refs), so a
@@ -72,12 +72,12 @@ func siteConfigCmd(client clientFn) *cobra.Command {
 		Long: "Read or replace the operator-wide corporate baseline. The document carries secret\n" +
 			"NAMES, never secret values, so it is safe to save alongside the repo:\n\n" +
 			"    wardyn site-config get > corp-baseline.json      # before a reset\n" +
-			"    wardyn site-config apply corp-baseline.json      # after `make setup`\n\n" +
-			"`apply` REPLACES the whole document (the server contract), so edit what `get`\n" +
+			"    wardyn site-config set corp-baseline.json        # after `make setup`\n\n" +
+			"`set` REPLACES the whole document (the server contract), so edit what `get`\n" +
 			"produced rather than sending a fragment. A document saved before egress_redirects\n" +
-			"existed (still keyed by artifact_overrides) is folded automatically on apply.",
+			"existed (still keyed by artifact_overrides) is folded automatically on set.",
 	}
-	cmd.AddCommand(siteConfigGetCmd(client), siteConfigApplyCmd(client))
+	cmd.AddCommand(siteConfigGetCmd(client), siteConfigSetCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -96,9 +96,9 @@ func siteConfigGetCmd(client clientFn) *cobra.Command {
 	}
 }
 
-func siteConfigApplyCmd(client clientFn) *cobra.Command {
+func siteConfigSetCmd(client clientFn) *cobra.Command {
 	return &cobra.Command{
-		Use:   "apply [file]",
+		Use:   "set [file]",
 		Short: "Replace the site config from a JSON file (or stdin with '-')",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -117,7 +117,7 @@ func siteConfigApplyCmd(client clientFn) *cobra.Command {
 				return fmt.Errorf("read site config: %w", err)
 			}
 			// Strict decode, same shape as decodeSpecStrict in policy.go and as
-			// the server's own decodeStrict. `apply` REPLACES the whole document,
+			// the server's own decodeStrict. `set` REPLACES the whole document,
 			// so a key a non-strict decode drops is not a no-op: the setting the
 			// operator meant to write is absent from what we re-marshal, and the
 			// stored one is deleted. The server can never catch the typo — it
