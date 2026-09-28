@@ -343,13 +343,18 @@ func TestRenewer_GiveUpCannotLeaveRenewedIdentity(t *testing.T) {
 	if cp.renewAttempts() < 3 {
 		t.Fatal("the loop never renewed successfully at least twice before the flip; the test proves nothing")
 	}
-	lastGood := ts.Get()
-	if lastGood == "startup-token" {
-		t.Fatal("token is still the startup one; no successful renew actually landed before the flip")
-	}
+	// The last good identity is the last token the control plane issued before it
+	// started refusing, read under the same lock as the flip: a renew already in
+	// flight when the flip lands still delivers a good token, so ts.Get() at this
+	// instant can trail it.
 	cp.mu.Lock()
 	cp.renewErr = http.StatusUnauthorized
+	issued := cp.issued
 	cp.mu.Unlock()
+	if issued < 1 {
+		t.Fatal("no successful renew landed before the flip; the test proves nothing")
+	}
+	lastGood := "renewed-" + itoa(issued)
 
 	select {
 	case <-done:
