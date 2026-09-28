@@ -210,9 +210,12 @@ func TestRunModelProviderDoors(t *testing.T) {
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
 			want: http.StatusUnprocessableEntity, wantBody: mpcNoPerson,
 			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
+		// integration_id is refused unconditionally, before this door is ever
+		// reached (decodeAndValidateCreateRun / preflight.go's own copy) — a
+		// model-providers block configured alongside it changes nothing.
 		{name: "integration_id under a provider block", site: withIntegration, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","integration_id":"corp-anthropic","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration, wantReasonOverride: reasonModelProviderIntegrationConflict},
+			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration, wantReasonOverride: reasonIntegrationIDRetired},
 		{name: "a disabled default with one other candidate", cs: &capStore{}, operator: true,
 			site: types.SiteConfig{
 				ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), func() types.ModelProvider {
