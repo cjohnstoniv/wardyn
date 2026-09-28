@@ -91,14 +91,22 @@ record_cold_pull_duration() {
     '[.items[]? | select(.reason=="Pulling" and (.message // "" | contains($img)))] | sort_by(.lastTimestamp) | last | .lastTimestamp // empty' \
     <<<"${events}")"
   pulled_ts="$(jq -r --arg img "${AWS_SSO_NODE_IMAGE}" \
-    '[.items[]? | select(.reason=="Pulled" and (.message // "" | contains($img)))] | sort_by(.lastTimestamp) | last | .lastTimestamp // empty' \
+    '[.items[]? | select(.reason=="Pulled" and (.message // "" | startswith("Successfully pulled")) and (.message // "" | contains($img)))] | sort_by(.lastTimestamp) | last | .lastTimestamp // empty' \
     <<<"${events}")"
   if [[ -z "${pulling_ts}" || -z "${pulled_ts}" ]]; then
     echo "aws-sso cold pull duration: UNKNOWN (no Pulling/Pulled event found for ${AWS_SSO_NODE_IMAGE} in ${RUNS_NAMESPACE}) — evidence only, does not fail the walk" \
       | tee -a "${EVIDENCE_DIR}/images.txt" >&2
     return 0
   fi
-  dur=$(( $(date -d "${pulled_ts}" +%s) - $(date -d "${pulling_ts}" +%s) ))
+  local from to
+  from="$(date -d "${pulling_ts}" +%s 2>/dev/null)"
+  to="$(date -d "${pulled_ts}" +%s 2>/dev/null)"
+  if [[ ! "${from}" =~ ^[0-9]+$ || ! "${to}" =~ ^[0-9]+$ ]]; then
+    echo "aws-sso cold pull duration: UNKNOWN (this date cannot parse ${pulling_ts} / ${pulled_ts}) — evidence only, does not fail the walk" \
+      | tee -a "${EVIDENCE_DIR}/images.txt" >&2
+    return 0
+  fi
+  dur=$(( to - from ))
   echo "aws-sso cold pull duration: ${dur}s (${pulling_ts} -> ${pulled_ts}) — evidence only, does not fail the walk" \
     | tee -a "${EVIDENCE_DIR}/images.txt"
 }

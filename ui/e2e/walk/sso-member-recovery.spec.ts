@@ -326,6 +326,28 @@ test.afterEach(() => {
   }
 });
 
+// Case H's interactive run never ends by itself, and the walk's single 4-vCPU
+// node holds one agent run at a time: left running, it takes the CPU the NEXT
+// case's sign-in sandbox needs, whose proxy pod then never schedules and never
+// gets an IP. Ended here, pass or fail, and waited out until its pods are gone.
+let runToEnd = "";
+test.afterEach(async ({ page }) => {
+  if (!runToEnd) return;
+  const id = runToEnd;
+  runToEnd = "";
+  await page.evaluate(async (rid: string) => {
+    const r = await fetch(`/api/v1/runs/${rid}/kill`, { method: "POST", credentials: "include" });
+    // 409: the run already ended on its own, which is what this wants.
+    if (!r.ok && r.status !== 409) throw new Error(`POST /runs/${rid}/kill: ${r.status}`);
+  }, id);
+  if (process.env.WARDYN_TEST_K8S !== "1") return;
+  await expect
+    .poll(() => kubectlOrEmpty("-n", KUBE_NAMESPACE, "get", "pods", "-o", "name").split("\n").filter((n) => n.includes(id)), {
+      timeout: 180_000,
+    })
+    .toEqual([]);
+});
+
 // ── B — the member's own card, while they are still signed in ───────────────
 
 test("B (ui-member-model-key): a per_user member's card names their OWN AWS sign-in", async ({ page }) => {
@@ -831,6 +853,7 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   // the trust dialog is blind to exactly the thing this case measures, and
   // would have read empty on the BROKEN image too.
   const runID = runIDFromURL(page);
+  runToEnd = runID;
   expect(
     await approvalsFor(page, runID),
     "the CLI's first REPL start parked an approval nobody asked for",
