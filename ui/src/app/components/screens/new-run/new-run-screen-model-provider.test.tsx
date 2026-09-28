@@ -200,12 +200,14 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
         ),
     );
     renderScreenWithWorkspace("ws1");
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    // The automatic default lands first — proves the race is real, not
-    // avoided by mock timing.
-    await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
-    // The pin then arrives and wins outright.
+    // The pin arrives and wins outright.
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id), { timeout: 2000 });
+    // The automatic default landed first — proves the race is real, not
+    // avoided by mock timing. Read from the render history rather than
+    // polled live: a slow runner can still be busy when the pin lands, and
+    // the default's window has closed by the time a live poll looks.
+    expect(railProps.some((p) => p.modelProvider?.selectedId === gateway.id)).toBe(true);
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
