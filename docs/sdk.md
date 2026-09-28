@@ -172,7 +172,9 @@ per-person token mint), `/access` (role-mapping admin), `/permissions`
 `/setup/integrations`, `/setup/onboarding-complete`, `/sessions/revoke`,
 `/ssh-keys` (self-service and the admin delete-by-principal door), and the
 user-drive doors (`/user-drives`, allocation, reclaim, the naming/bind
-previews, and the launch-time drive resolver). Most OTHER routes still send
+previews, and the launch-time drive resolver). Run revive and the admin bulk
+restart send `revive_unsupported` for a run whose substrate cannot replace its
+proxy, and no reason yet for their other refusals. Most OTHER routes still send
 `error` alone, so `apiErr.Reason == ""`
 does not mean "no error", only "this route has not been converted yet". Two
 refusals are DELIBERATELY still bare even on a converted route: an AWS
@@ -217,6 +219,7 @@ means the same thing regardless of which lane sent it:
 | `runner_capabilities_unavailable` / `confinement_class_conflict` / `confinement_class_unsupported` / `run_grants_require_spire` | `POST /runs`' confinement-class resolution and the SPIRE-only-grants check (invariant 5). |
 | `agent_required` / `agent_not_enabled` / `run_task_reserved` / `confinement_class_unknown` / `task_mode_unknown` / `interactive_start_unknown` / `tool_approvals_unknown` / `tool_approvals_hold_unsupported_agent` / `tool_approvals_hold_interactive_conflict` / `integration_id_retired` / `run_field_too_long` / `run_field_control_char` | `POST /runs`' request-shape validation (`decodeAndValidateCreateRun`): one reason per closed-enum field, plus the agent/text-field checks and the refusal of the retired `integration_id` (Review answers it the same way). |
 | `run_kill_already_terminal` / `run_kill_state_changed` | `POST /runs/{id}/kill`: the run was already terminal, or moved to another state between the read and the write. |
+| `revive_unsupported` | `POST /runs/{id}/revive` (409), and the same value in each refused run's `reason` in `POST /admin/runs/restart`'s `results`: the run's runner substrate cannot replace its proxy in place (`runner.ErrReviveUnsupported`; on Kubernetes the agent pod pins the proxy pod's IP, so the substrate implements no `runner.ProxyReviver`). Nothing changed. Stop the run and start a new one. |
 | `workspace_repo_not_admitted` | The repository is not on this deployment's admitted list (`workspace_admission.go`), at create/update and at launch. |
 | `workspace_envcode_no_local_dir` / `workspace_envcode_no_profile` | `GET /workspaces/{id}/env-as-code`: the workspace has no `local_dir` source, or no scanned profile, to emit from. |
 | `workspace_providers_invalid` / `workspace_providers_stale` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation, or `If-Match` is stale. |

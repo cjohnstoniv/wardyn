@@ -79,6 +79,7 @@ type jtiRevoker interface {
 type reviveError struct {
 	status int
 	msg    string
+	reason string // errorBody.Reason, and adminRestartResult.Reason in a bulk restart
 	lost   bool
 }
 
@@ -86,6 +87,13 @@ func (e *reviveError) Error() string { return e.msg }
 
 func reviveRefused(status int, msg string) *reviveError {
 	return &reviveError{status: status, msg: msg}
+}
+
+// reviveUnsupported is the refusal for a run whose substrate cannot replace
+// its proxy (runner.ErrReviveUnsupported): a 409 with reasonReviveUnsupported,
+// the same on the single-run revive and in each bulk-restart result.
+func reviveUnsupported() *reviveError {
+	return &reviveError{status: http.StatusConflict, msg: runner.ErrReviveUnsupported.Error(), reason: reasonReviveUnsupported}
 }
 
 // reviveResult is what a revive or restart reports.
@@ -110,7 +118,7 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.reviveFromRequest(r, run, true)
 	if err != nil {
-		writeError(w, err.status, err.msg)
+		writeErrorReason(w, err.status, err.reason, err.msg)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -145,7 +153,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	rv, ok := s.cfg.Runner.(runner.ProxyReviver)
 	if !ok {
-		return reviveResult{}, reviveRefused(http.StatusConflict, runner.ErrReviveUnsupported.Error())
+		return reviveResult{}, reviveUnsupported()
 	}
 	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
 		return reviveResult{}, rerr
@@ -156,7 +164,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
 	if rebooted && !canStart {
-		return reviveResult{}, reviveRefused(http.StatusConflict, runner.ErrReviveUnsupported.Error())
+		return reviveResult{}, reviveUnsupported()
 	}
 	if rebooted && !startAgent {
 		return reviveResult{}, reviveRefused(http.StatusConflict,
@@ -300,7 +308,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun) (*proxy.Config, *reviveError) {
 	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
 		if errors.Is(err, runner.ErrReviveUnsupported) {
-			return nil, reviveRefused(http.StatusConflict, err.Error())
+			return nil, reviveUnsupported()
 		}
 		return nil, reviveRefused(http.StatusBadGateway, "resolve the run's substrate: "+err.Error())
 	}
@@ -558,6 +566,7 @@ type adminRestartResult struct {
 	RunID       uuid.UUID `json:"run_id"`
 	OK          bool      `json:"ok"`
 	Error       string    `json:"error,omitempty"`
+	Reason      string    `json:"reason,omitempty"` // the single-run revive's errorBody.Reason for the same refusal
 	LostAgain   bool      `json:"lost_again,omitempty"`
 	DeniedAdded []string  `json:"denied_added,omitempty"`
 }
@@ -587,7 +596,7 @@ func (s *Server) handleAdminRestartRuns(w http.ResponseWriter, r *http.Request) 
 		default:
 			out, rerr := s.reviveFromRequest(r, run, false)
 			if rerr != nil {
-				res.Error, res.LostAgain = rerr.msg, rerr.lost
+				res.Error, res.Reason, res.LostAgain = rerr.msg, rerr.reason, rerr.lost
 			} else {
 				res.OK, res.DeniedAdded = true, out.DeniedAdded
 			}

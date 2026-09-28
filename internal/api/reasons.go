@@ -157,6 +157,12 @@ const (
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
 
+	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
+	// (#1342): the run's substrate cannot replace a proxy in place
+	// (runner.ErrReviveUnsupported; Kubernetes pins the proxy pod's IP in the
+	// agent pod). Nothing changed; stop the run and start a new one.
+	reasonReviveUnsupported = "revive_unsupported"
+
 	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history
 	// paging (runs_policy.go) — one reason per rejected query parameter.
 	reasonInvalidOwnerParam         = "invalid_owner_param"          // ?owner= is not "", "me", or "all"
