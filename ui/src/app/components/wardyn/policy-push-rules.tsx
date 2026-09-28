@@ -19,6 +19,14 @@ import { cn } from "../ui/utils";
 import { Chip, SectionLabel } from "./primitives";
 import { Field } from "./form-primitives";
 
+// Scope check, recorded (#57 packet, PR-3): PushRulesSpec's own doc comment
+// (internal/types/policy.go) says DenyNewExecutables and MaxFileSizeMiB are
+// "reserved for a later change" — they are not on the wire type yet, so this
+// editor deliberately never authors them. Designing UI for a field the server
+// cannot accept is exactly what CONSOLE-RULES §12's mock-first rule exists to
+// catch; when they land, they get their own mock round, not a quiet addition
+// here.
+
 const UTF8 = new TextEncoder();
 
 // Mirrors internal/api/policy.go's maxPushRulesPathBytes — the same ceiling,
