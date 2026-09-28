@@ -118,7 +118,7 @@ func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetPreset(w http.ResponseWriter, r *http.Request) {
 	p, err := s.cfg.Store.GetLaunchPreset(r.Context(), chi.URLParam(r, "name"))
 	if errors.Is(err, store.ErrNotFound) || err == nil && !s.presetOpenTo(r, p) {
-		writeError(w, http.StatusNotFound, "preset not found")
+		writeErrorReason(w, http.StatusNotFound, reasonPresetNotFound, "preset not found")
 		return
 	}
 	if err != nil {
@@ -140,31 +140,31 @@ func (s *Server) handleGetPreset(w http.ResponseWriter, r *http.Request) {
 // launch, under the launching caller.
 func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, name string, req presetRequest) bool {
 	if len(name) > maxPresetNameLen || !presetNameRE.MatchString(name) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf(
 			"preset name must be lowercase letters and digits joined by single hyphens, at most %d characters", maxPresetNameLen))
 		return false
 	}
 	if utf8.RuneCountInString(req.Description) > maxPresetDescriptionLen || !runFieldCharsAllowed(req.Description, true) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf(
 			"description must be at most %d characters, with no control characters", maxPresetDescriptionLen))
 		return false
 	}
 	if bad := slices.DeleteFunc(setRunFields(req.Request), func(f string) bool { return !presetLaunchFields[f] }); len(bad) > 0 {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf(
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
 	if msg := agentRequirementError(req.Request); msg != "" {
-		writeError(w, http.StatusBadRequest, "request: "+msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: "+msg)
 		return false
 	}
 	if _, ok := parseConfinementClass(req.Request.ConfinementClass); !ok {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("request: unknown confinement_class %q", req.Request.ConfinementClass))
+		writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf("request: unknown confinement_class %q", req.Request.ConfinementClass))
 		return false
 	}
 	if req.Request.InlinePolicy != nil {
 		if err := validatePolicySpec(*req.Request.InlinePolicy); err != nil {
-			writeError(w, http.StatusBadRequest, "request: invalid inline_policy: "+err.Error())
+			writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, "request: invalid inline_policy: "+err.Error())
 			return false
 		}
 	}
@@ -181,7 +181,7 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 	}
 	for _, t := range req.UserTypes {
 		if !slices.ContainsFunc(known, func(k types.UserType) bool { return k.ID == t }) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("user type %q does not exist", t))
+			writeErrorReason(w, http.StatusBadRequest, reasonPresetRequestInvalid, fmt.Sprintf("user type %q does not exist", t))
 			return false
 		}
 	}

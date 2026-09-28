@@ -822,6 +822,23 @@ const (
 	reasonAttachTakeoverNoHolder = "attach_takeover_no_holder"  // nobody is currently attached to this run
 )
 
+// /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is
+// one cause bucket, the same grain as reasonSiteConfigInvalid.
+const reasonPresetRequestInvalid = "preset_request_invalid"
+
+// /api/v1/model-providers/{id}/credential (model_provider_credentials.go):
+// the console's own key/token storage door, distinct from the sign-in door
+// (provider_signin.go) and run-create's model-provider choice
+// (run_model_provider.go).
+const (
+	reasonModelProviderCredentialNoStore          = "model_provider_credential_no_store"          // this deployment configures no secret store
+	reasonModelProviderCredentialNoPerson         = "model_provider_credential_no_person"         // the caller resolves to no storable identity (e.g. the admin token)
+	reasonModelProviderCredentialIsSignIn         = "model_provider_credential_is_sign_in"        // this provider's kind is a sign-in, not a pasted key/token
+	reasonModelProviderCredentialBodyInvalid      = "model_provider_credential_body_invalid"      // the body did not decode, or value is empty
+	reasonModelProviderCredentialTooShort         = "model_provider_credential_too_short"         // the value is below the mask's minimum length
+	reasonModelProviderCredentialStoreUnavailable = "model_provider_credential_store_unavailable" // the secret store did not answer (transient)
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
