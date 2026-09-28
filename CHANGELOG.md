@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`GET /me/capabilities` names which of a person's OWN values are covered by an "Available to:
+  Only ..." restriction (#1250).** A new `restricted_values` map, keyed by capability kind, lists —
+  for each restrictable kind that currently has at least one restricted value — the values THIS
+  caller may personally use among them; a restricted value the caller cannot use is simply absent,
+  never the admin's full restricted list. This closes the gap #1249's review found: a per-value
+  restriction (as opposed to a kind-wide enforcement switch) was invisible to a member. Server field
+  and TS types only in this PR; the console reader that consumes it is a follow-up.
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
   group); the portal then trades the person's own live identity-provider token for a ten-minute,
@@ -101,6 +108,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Launching with an ungranted repo-kind workspace now refuses, instead of launching without it
+  (#1259).** A `workspace_repos` entry naming an onboarded workspace the caller does not hold the
+  `workspace` capability for used to be silently dropped, launching a smaller run; it now refuses
+  with the same named 403 `req.workspace_id` already gives for the identical workspace, audited
+  under the same `capability_workspace` reason.
 - **`WARDYN_BEDROCK_BASE_URL` on a wardyn-proxy sidecar's own subnet now refuses boot instead of
   denying every model call (#1198).** The proxy's SSRF guard never lifts an address on any subnet
   its own interfaces sit on, so a Bedrock PrivateLink endpoint resolving onto the docker

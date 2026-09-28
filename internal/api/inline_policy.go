@@ -82,6 +82,12 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	capWarns, capDrops, cerr := s.narrowUserInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 	if cerr != nil {
+		var refused *errUngrantedWorkspaceRepo
+		if errors.As(cerr, &refused) { // #1259: refuse, not a 500
+			s.refuse(w, r, authz.Deny(authz.ReasonCapabilityWorkspace, "runs.workspace",
+				"you are not granted workspace "+refused.wsID+" — ask an admin for access, or launch without a workspace"))
+			return types.RunPolicySpec{}, nil, false
+		}
 		writeServerError(w, r, "resolve capability", cerr)
 		return types.RunPolicySpec{}, nil, false
 	}
@@ -477,9 +483,10 @@ type capDrop struct {
 //
 // Drops, never rejects, exactly as filterUserGrants does — with a warning per
 // drop, so preflight/Review names what will not be there before launch, and a
-// capDrop so the audit stream records it. A member whose whole allowlist is
-// ungranted gets a run with no member-authored egress, not a 403: the run's
-// admin-authored egress is still there and is what the task usually needs.
+// capDrop so the audit stream records it — except an ungranted workspace_repos
+// entry (#1259, errUngrantedWorkspaceRepo), a second door onto
+// req.workspace_id's own REFUSAL. Otherwise a member whose whole allowlist is
+// ungranted gets a run with no member-authored egress, not a 403.
 //
 // Under an operator ceiling of allow_all_egress the allowlist is not the gate
 // at all (composer.Clamp leaves AllowAllEgress set and the proxy allows any
@@ -618,9 +625,8 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 					return nil, nil, err
 				}
 				if !ok {
-					warns = append(warns, fmt.Sprintf("dropped repo %q: workspace %s is not granted to you", wr.Repo, ws.ID))
-					drops = append(drops, capDrop{reason: authz.ReasonCapabilityWorkspace, detail: wr.Repo})
-					continue
+					// Refused, not dropped (#1259) — see boundUserSpec.
+					return nil, nil, &errUngrantedWorkspaceRepo{repo: wr.Repo, wsID: ws.ID.String()}
 				}
 			}
 			keptRepos = append(keptRepos, wr)

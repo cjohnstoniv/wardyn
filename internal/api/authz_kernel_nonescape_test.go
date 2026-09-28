@@ -75,6 +75,11 @@ var kernelDoors = map[string][]string{
 	"setupModelProviderState":        {"capModelProvider"},
 	"computeSCMAccessRowsFor":        {"capWorkspaceProvider"},
 	"userVisibleOperatorSecretNames": {"capSecret"},
+	// GET /me/capabilities' restricted_values (#1250): every restrictable
+	// kind that currently has a restricted value, asked about by the loop
+	// variable rather than a named constant — ownerCapabilityRefusal's
+	// "d.kind" is the same shape.
+	"myRestrictedValues": {"kind"},
 }
 
 // kernelDoorCalls walks internal/api's non-test sources and returns, per

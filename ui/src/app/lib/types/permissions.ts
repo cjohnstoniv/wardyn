@@ -45,11 +45,23 @@ export interface PermissionsSnapshot {
 // groups_snapshot_stale is the nil-vs-empty distinction: a session recorded
 // before Wardyn stamped groups can't have its group grants resolved at all,
 // which reads as "can't tell yet", never as "holds no group grants".
+//
+// restricted_values (#1250) is the per-value twin of `enforcement`'s kind-wide
+// switch: a workspace or git-provider row can be singled out by "Available
+// to: Only ..." whether or not the whole kind is enforced, and `enforcement`
+// alone cannot say so (FINAL-PR-1249.md's F1). Keyed by kind, present only for
+// a kind that currently has at least one restricted value; the values listed
+// are the CALLER's OWN — never the admin's full restricted set, and a
+// wildcard-only allow can never appear here (a restricted value needs a NAMED
+// allow server-side). A follow-up wires the console reader that reads it
+// (#1249's workspaceUnavailableToCaller and its siblings); this type only
+// carries the wire shape.
 export interface MeCapabilities {
   grants: CapabilityGrant[];
   enforcement: Record<string, boolean>;
   session_groups: string[];
   groups_snapshot_stale: boolean;
+  restricted_values: Record<string, string[]>;
 }
 
 // POST /permissions/grants — the natural key plus the effect. Identity

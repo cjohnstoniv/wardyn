@@ -139,3 +139,19 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 		})))
 	writeJSON(w, http.StatusOK, v)
 }
+
+// errUngrantedWorkspaceRepo is narrowUserInlinePolicy's signal (inline_policy.go)
+// that a workspace_repos entry named an onboarded workspace the caller does
+// not hold capWorkspace for (#1259) — a REFUSAL, not a capDrop, because
+// req.workspace_id already refuses the identical workspace with a named 403
+// (denyUserRequest) and this is the same door reached a second way. Distinct
+// from the plain errors that function otherwise returns (which boundUserSpec
+// 500s as a store failure) so the caller can tell the two apart and answer
+// 403 instead.
+type errUngrantedWorkspaceRepo struct {
+	repo, wsID string
+}
+
+func (e *errUngrantedWorkspaceRepo) Error() string {
+	return fmt.Sprintf("workspace %s (repo %q) is not granted to you", e.wsID, e.repo)
+}

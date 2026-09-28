@@ -38,7 +38,13 @@ vi.mock("../../lib/api/approvals", () => ({
 vi.mock("../../lib/api/permissions", () => ({
   permissions: {
     getMyCapabilities: () =>
-      Promise.resolve({ grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false } satisfies MeCapabilities),
+      Promise.resolve({
+        grants: [],
+        enforcement: {},
+        session_groups: [],
+        groups_snapshot_stale: false,
+        restricted_values: {},
+      } satisfies MeCapabilities),
   },
 }));
 

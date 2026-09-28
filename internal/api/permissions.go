@@ -9,6 +9,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -462,12 +463,77 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 // resolution capAllowed itself uses — so the console can answer "am I
 // granted X" the identical way the server would, without a dedicated
 // per-value probe endpoint.
+//
+// RestrictedValues (#1250) is the per-value twin of Enforcement's kind-wide
+// switch: a workspace or a git-provider row can be singled out by "Available
+// to: Only ..." (capability_restrictions) whether or not the whole kind is
+// enforced, and Enforcement alone cannot say so — F1 of FINAL-PR-1249.md's
+// review named exactly this gap invisible to a member. See its own doc below.
 type meCapabilitiesResponse struct {
 	Grants              []types.CapabilityGrant `json:"grants"`
 	Enforcement         map[string]bool         `json:"enforcement"`
 	SessionGroups       []string                `json:"session_groups"`
 	GroupsSnapshotStale bool                    `json:"groups_snapshot_stale"`
 	KindsVersion        int                     `json:"kinds_version"`
+	RestrictedValues    map[string][]string     `json:"restricted_values"`
+}
+
+// myRestrictedValues answers, for every restrictable capability kind
+// (capKinds[kind].restrictable) that currently has at least one value under
+// an "Available to: Only ..." restriction, which of THOSE restricted values
+// THIS caller may personally use — capAllowed's own answer, the same resolver
+// every enforcement seam already runs the caller through, so this can never
+// say "available" where a launch would then refuse it.
+//
+// It is never the admin's full restricted list (GET /permissions/availability
+// stays operatorOnly for that): a restricted value this caller cannot use is
+// simply absent from the slice, indistinguishable from a value nobody has
+// singled out at all. That is deliberate — the caller learns only "which of
+// MY choices are allowed", never who else is listed or what else is
+// restricted — but it also means a wildcard-only allow (no value named
+// specifically) can never appear here, since capAllowed requires a NAMED
+// allow to clear a restricted value (capRead.granted's namedAllow rule); a
+// member with no grants at all gets an empty slice for every restricted kind,
+// same as a member who holds only a kind-wide wildcard.
+//
+// A kind with NO restriction anywhere is left out of the map entirely (never
+// an empty slice for it) — that absence is what lets the console fall back to
+// Enforcement's kind-wide switch unchanged for the overwhelming majority of
+// kinds and deployments that have never restricted a single value, matching
+// "a person with no enforcement sees no change" (#1250's own bar).
+//
+// One extra store read (ListCapabilityRestrictions) plus one capAllowed per
+// restricted value, all sharing the resolution's capBatch memo (withCapBatch)
+// so N restricted values cost one grants/enforcement/restrictions read, not N.
+func (s *Server) myRestrictedValues(ctx context.Context) (map[string][]string, error) {
+	restricted, err := s.cfg.Store.ListCapabilityRestrictions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("api: list capability restrictions: %w", err)
+	}
+	ctx = withCapBatch(ctx)
+	out := make(map[string][]string, len(capabilityKinds))
+	for _, kind := range capabilityKinds {
+		if !capKinds[kind].restrictable {
+			continue
+		}
+		values := restricted[kind]
+		if len(values) == 0 {
+			continue
+		}
+		mine := make([]string, 0, len(values))
+		for value := range values {
+			allowed, err := s.capAllowed(ctx, kind, value)
+			if err != nil {
+				return nil, fmt.Errorf("api: resolve capability %q: %w", kind, err)
+			}
+			if allowed {
+				mine = append(mine, value)
+			}
+		}
+		slices.Sort(mine)
+		out[kind] = mine
+	}
+	return out, nil
 }
 
 // handleMeCapabilities is the member-safe twin of GET /permissions: it sits on
@@ -513,6 +579,11 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get capability enforcement", err)
 		return
 	}
+	restrictedValues, err := s.myRestrictedValues(ctx)
+	if err != nil {
+		writeServerError(w, r, "resolve capability restricted values", err)
+		return
+	}
 	// CreatedBy names the ADMIN who wrote the row (principal or email). A member
 	// needs to know WHAT they hold, never which colleague signed it — and the
 	// field is `omitempty`, so blanking it drops it from the body rather than
@@ -529,5 +600,6 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		SessionGroups:       subj.groups,
 		GroupsSnapshotStale: subj.stale,
 		KindsVersion:        capKindsVersion,
+		RestrictedValues:    restrictedValues,
 	})
 }
