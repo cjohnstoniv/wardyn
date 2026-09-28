@@ -2,6 +2,10 @@ ado_grant
 ado_grant.capabilities
 ado_grant.hosts
 ado_grant.organization
+ado_grants
+ado_grants.capabilities
+ado_grants.hosts
+ado_grants.organization
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size

@@ -4,11 +4,10 @@
  */
 
 // Your account (M-5, #636 — the settings split, §4.3): a person's OWN
-// connections and keys, reached at /account. Today: the model connection
-// (S-4 — whichever section is on main; #1042/MP-22 isn't merged yet, so
-// that's still ModelProviderCard, the same shared component Admin Settings
-// mounts for the org's shared credential), Azure DevOps (a personal
-// connection, #386) and Your SSH keys.
+// connections and keys, reached at /account: Your model connections (#541,
+// User view only), the model connection (S-4 — ModelProviderCard, the same
+// shared component Admin Settings mounts for the org's shared credential),
+// Azure DevOps (a personal connection, #386) and Your SSH keys.
 //
 // Nothing here belongs to the deployment — Host, the admin's Model providers
 // list, Providers and User drives all stayed in Admin Settings
@@ -26,11 +25,14 @@ import type { SetupStatus } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { ModelProviderCard } from "./connection-cards";
+import { ModelConnectionsCard } from "./model-connections-card";
+import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
 export function YourAccountScreen() {
+  const adminView = useConsoleMode() === "admin";
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
 
@@ -52,9 +54,11 @@ export function YourAccountScreen() {
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
         <div className="space-y-4">
-          {/* S-4 (#636): mounts whichever model section is on main when M-5
-              merges. #1042 (MP-22, "Your model connections") is still open,
-              so this is today's ModelProviderCard — the SAME component Admin
+          {/* #541 (§5.4, packet MP-D): every person's own model-provider
+              credentials, User view only — an admin reaches it by switching
+              to Member view. Renders nothing with no provider block. */}
+          {!adminView && <ModelConnectionsCard status={status} onChanged={load} />}
+          {/* S-4 (#636): ModelProviderCard — the SAME component Admin
               Settings mounts for the org's shared credential; the card's own
               per-caller branches (operator vs. a per_user bearer/SSO row)
               already tell the two apart. */}

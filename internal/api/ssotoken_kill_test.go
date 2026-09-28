@@ -176,3 +176,48 @@ func TestUploadSSOToken_KillsSignInRunAfterResponse(t *testing.T) {
 		}
 	})
 }
+
+// blockingGetRunStore's GetRun never returns on its own — only when its
+// context is cancelled — standing in for a wedged read (a stalled connection
+// pool, a saturated primary) that killSignInRunAfterCapture's post-grace read
+// must not be allowed to ride out for as long as the kill cascade that would
+// follow it.
+type blockingGetRunStore struct {
+	ssoLoginRunStore
+}
+
+func (s blockingGetRunStore) GetRun(ctx context.Context, _ uuid.UUID) (types.AgentRun, error) {
+	<-ctx.Done()
+	return types.AgentRun{}, ctx.Err()
+}
+
+// TestKillSignInRunAfterCapture_ReadIsBoundedShortOfTheCascade pins #971's
+// background-budget fix. Before it, the post-grace run read shared
+// killCascadeTimeout's own 30s bound with the kill cascade that may follow it,
+// so together they could take up to 60s against backgroundShutdownBudget's
+// 35s ceiling — a shutdown landing between the read and the cascade would
+// abandon a live kill cascade mid-flight instead of getting the bounded
+// window it asked for. The read alone must give up at signInCaptureReadTimeout
+// (5s), well short of killCascadeTimeout (30s).
+func TestKillSignInRunAfterCapture_ReadIsBoundedShortOfTheCascade(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	cfg := baseTestConfig(h, blockingGetRunStore{})
+	srv := New(cfg)
+	srv.signInCaptureKillGrace = 0
+
+	start := time.Now()
+	srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+	srv.WaitBackground()
+	elapsed := time.Since(start)
+
+	if elapsed >= killCascadeTimeout {
+		t.Fatalf("the post-capture read took %s — at or past killCascadeTimeout (%s); it must give up "+
+			"at signInCaptureReadTimeout (%s) instead, or a shutdown mid-cascade can abandon this "+
+			"goroutine past backgroundShutdownBudget", elapsed, killCascadeTimeout, signInCaptureReadTimeout)
+	}
+	if elapsed < signInCaptureReadTimeout {
+		t.Fatalf("the post-capture read returned after %s, before its own %s timeout could even "+
+			"elapse — the fixture is not exercising a blocked read", elapsed, signInCaptureReadTimeout)
+	}
+}
