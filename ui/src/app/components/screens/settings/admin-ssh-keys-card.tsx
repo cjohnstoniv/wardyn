@@ -29,7 +29,7 @@ import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, ErrorState, STATES, TableSkeleton } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { AddSSHKeyDialog, RemoveSSHKeyDialog } from "../ssh-keys";
@@ -66,9 +66,11 @@ export function AdminSshKeysCard() {
   // #1200 compact cards — absent while unloaded. A distinct phrase from
   // ADMIN_SSH_KEYS.EMPTY_TITLE, not that constant itself: the header summary
   // and the expanded body's EmptyState both render at once, and a query for
-  // the canon empty-state string must still resolve to a single node.
+  // the canon empty-state string must still resolve to a single node. The
+  // error case reuses ErrorState's own default heading (review L4) rather
+  // than inventing a new "Couldn't load" phrase the packet never named.
   const summary =
-    status === "loading" ? undefined : status === "error" ? "Couldn't load" : `${adminKeys.length} admin ${adminKeys.length === 1 ? "key" : "keys"}`;
+    status === "loading" ? undefined : status === "error" ? STATES.ERROR_TITLE : `${adminKeys.length} admin ${adminKeys.length === 1 ? "key" : "keys"}`;
 
   return (
     <CollapsibleCard title={ADMIN_SSH_KEYS.TITLE} summary={summary} testId="admin-ssh-keys-card">

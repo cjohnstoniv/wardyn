@@ -40,7 +40,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, STATES, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CollapsibleCard } from "../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../lib/format";
@@ -76,9 +76,19 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
 
   // #1200 compact cards — one line, absent while unloaded. "0 keys", not the
   // EmptyState's own "No keys yet." — both render at once once expanded, and
-  // a query for that canon string must still resolve to a single node.
+  // a query for that canon string must still resolve to a single node. The
+  // error case reuses ErrorState's own default heading (review L4) rather
+  // than inventing a new "Couldn't load" phrase the packet never named.
   const summary =
-    status === "loading" ? undefined : status === "error" ? "Couldn't load" : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
+    status === "loading" ? undefined : status === "error" ? STATES.ERROR_TITLE : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
+
+  // review L2 — nested inside CollapsibleCard on Your account (h3), this
+  // table wrapper must not repeat the card's own border+bg-card (CONSOLE-
+  // RULES §9 "never nest a card in a card"); admin-ssh-keys-card.tsx's own
+  // table wrapper sets the same precedent. The standalone page (h1, no live
+  // route) keeps the full card treatment, since nothing wraps it.
+  const tableWrapperClass =
+    heading === "h3" ? "overflow-hidden rounded-lg border border-border" : "overflow-hidden rounded-xl border border-border bg-card";
 
   const table = (
     <>
@@ -87,7 +97,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
           {DENIED.SSH_KEY_FEATURE}
         </p>
       )}
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className={tableWrapperClass}>
         {status === "loading" ? (
           <TableSkeleton rows={3} cols={4} />
         ) : status === "error" ? (

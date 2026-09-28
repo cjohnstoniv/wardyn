@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -119,6 +119,11 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
       expect(section).toHaveAttribute("id", "azure-devops");
       expect(section).toHaveAttribute("tabindex", "-1");
       expect(document.activeElement).toBe(section);
+      // review M1 — the force-open half of the same effect, pinned
+      // separately from focus: without it the deep link would focus a
+      // COLLAPSED card and hide the very state it exists to show.
+      expect(within(section).getByRole("button", { name: /^Azure DevOps/ })).toHaveAttribute("aria-expanded", "true");
+      expect(within(section).getByRole("button", { name: ADO.CONNECT_ADO })).toBeVisible();
     });
 
     it("does not steal focus on a plain /account landing (no hash)", () => {

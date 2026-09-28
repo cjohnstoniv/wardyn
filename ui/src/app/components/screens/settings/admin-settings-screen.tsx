@@ -20,8 +20,8 @@
 // UserDrivesCard/BrandingCard/ModelProvidersList are unchanged, shared
 // components.
 //
-// #1200 compact cards (settings-compact-1200-packet.html, owner-approved):
-// every card here collapses to a one-line summary and expands on click, none
+// #1200 compact cards (owner-approved mock): every card here collapses to a
+// one-line summary and expands on click, none
 // open by default — see collapsible-card.tsx for why that default is
 // load-bearing. ModelProviderCard/ProvidersCard/UserDrivesCard also render in
 // Getting started, which must stay fully open, so they take the collapse as
@@ -318,7 +318,7 @@ export function AdminSettingsScreen() {
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
         // space-y-2, not -4: seven collapsed cards plus this page's own
-        // header must fit 744px (settings-compact-1200-packet.html §4).
+        // header must fit 744px (the approved mock's §4).
         <div className="space-y-2">
           <HostCard
             status={status}

@@ -20,8 +20,8 @@
 // /ssh-keys is gone (deleted with no alias); SshKeysPane is mounted here
 // instead, exactly as it always rendered on this route.
 //
-// #1200 compact cards (settings-compact-1200-packet.html, owner-approved):
-// every card here collapses to a one-line summary and expands on click, none
+// #1200 compact cards (owner-approved mock): every card here collapses to a
+// one-line summary and expands on click, none
 // open by default — admin-settings-screen.tsx's own header comment has the
 // full reasoning. ModelProviderCard also renders in Getting started, which
 // must stay fully open, so it takes the collapse as an opt-in `compact` prop.

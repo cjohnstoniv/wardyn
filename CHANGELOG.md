@@ -149,8 +149,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin" only when the governance ceiling actually did the narrowing; none qualifying names the
   requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
 - **Every card on Admin Settings and Your account now collapses to a one-line summary and expands
-  on click (#1200), pending the owner's review of the mock (`settings-compact-1200-packet.html`).**
-  The owner measured Admin Settings at 2625px and Your account at 981px against a 744px viewport
+  on click (#1200).** The owner measured Admin Settings at 2625px and Your account at 981px against a 744px viewport
   with every card already fully open (the Host card's own compact picker above included) — this
   closes that gap. None of the seven Admin Settings cards or four Your account cards opens by
   default, which is what keeps both pages under 744px regardless of which of a card's own

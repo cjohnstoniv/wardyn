@@ -30,6 +30,22 @@ async function mainScrolls(page: import("@playwright/test").Page): Promise<boole
   });
 }
 
+// review M2 — Model providers, Workspace providers, User drives, Admin SSH
+// keys and Your SSH keys each fetch their OWN summary after the page's own
+// heading is already on screen (a "the last card's heading is visible" wait
+// alone catches the page's first paint, not each card's own settled fetch).
+// A probe against this same backend measured a collapsed card at 44px before
+// its summary lands and 63.9px after — up to ~40px of understatement, which
+// the height budget (a few dozen px of headroom) cannot absorb silently.
+// Waiting for each card's REAL summary text (never the empty pre-fetch
+// button name, which still matches on title alone) is what makes the
+// measurement below a steady-state one.
+async function waitForSettledSummaries(page: import("@playwright/test").Page, patterns: RegExp[]) {
+  for (const pattern of patterns) {
+    await expect(page.getByRole("button", { name: pattern })).toBeVisible();
+  }
+}
+
 test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact cards)", () => {
   test("Admin Settings: every card collapsed, no scroll on main", async ({ page }) => {
     await page.setViewportSize(VIEWPORT);
@@ -40,6 +56,14 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     // rendering every card" signal — earlier cards could be present while a
     // later one is still pending its own fetch.
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
+    // Settled (review M2): each self-fetching card's own summary, not just
+    // its heading.
+    await waitForSettledSummaries(page, [
+      /^Model providers \S/,
+      /^Workspace providers \S/,
+      /^User drives \S/,
+      /^Admin SSH keys \d+ admin key/,
+    ]);
 
     // Collapsed by default: none of the seven cards' bodies are in the DOM.
     for (const title of ["Host", "Branding", "Model providers", "Model provider", "Workspace providers", "User drives", "Admin SSH keys"]) {
@@ -57,6 +81,9 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     await navToRoute(page, "/account");
 
     await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
+    // Settled (review M2): Your SSH keys fetches its own list separately
+    // from the page's initial status load.
+    await waitForSettledSummaries(page, [/^Your SSH keys \d+ key/]);
 
     for (const title of ["Model provider", "Your SSH keys"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });

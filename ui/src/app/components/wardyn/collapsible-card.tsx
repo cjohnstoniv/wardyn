@@ -66,36 +66,50 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
         className={cn("rounded-xl border border-border bg-card", className)}
         {...rest}
       >
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={bodyId}
-          onClick={toggle}
-          // p-3, not p-4: this header IS the collapsed row on Settings/Your
-          // account, where seven of these plus the page header must fit
-          // 744px (settings-compact-1200-packet.html §4) — p-4 measured a
-          // few px over at 1280x744 in the real browser. The body keeps p-4;
-          // only the always-visible collapsed row is tighter.
-          className="flex w-full items-start justify-between gap-3 rounded-xl p-3 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
-        >
-          <span className="min-w-0">
-            <h3 id={headingId} className="text-sm font-medium text-foreground">
-              {title}
-            </h3>
-            {summary && (
-              <span className="mt-0.5 block truncate text-body leading-snug text-muted-foreground">
-                {summary}
-              </span>
-            )}
-          </span>
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
-              open && "rotate-180",
-            )}
-          />
-        </button>
+        {/* APG accordion shape (review FINAL-PR-1329.md M3) — the heading
+            wraps the button rather than nesting inside it: a `<h3>` is not
+            phrasing content, so a button containing one is invalid HTML, and
+            an engine/AT that honours ARIA's button-children-presentational
+            rule (unlike Chromium) drops it from heading navigation. `h3`'s
+            own base-layer margin reset (theme.css) already makes it a
+            zero-margin block, so wrapping the (already `w-full`) button adds
+            no visible box of its own.
+            `aria-label` pins the heading's OWN accessible name back to the
+            title alone: without it, the heading's name is its full text
+            content, which is now the button's (title + summary), so every
+            "Host"-only heading query would start matching "Host Runs default
+            to Vault" instead. Every real caller's `title` is a plain string;
+            a caller that ever passes a richer node (none does today) simply
+            keeps the old, unoverridden behavior. */}
+        <h3 id={headingId} aria-label={typeof title === "string" ? title : undefined}>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            onClick={toggle}
+            // px-4 py-3, not p-3 (review L1): the body is p-4 — matching the
+            // horizontal inset keeps the title flush with the body text once
+            // expanded (CONSOLE-RULES §11 "one grid"). Only the vertical
+            // inset is trimmed, which is what the 744px fit needed.
+            className="flex w-full items-start justify-between gap-3 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-foreground">{title}</span>
+              {summary && (
+                <span className="mt-0.5 block truncate text-body leading-snug text-muted-foreground">
+                  {summary}
+                </span>
+              )}
+            </span>
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-180",
+              )}
+            />
+          </button>
+        </h3>
         {open && (
           <div id={bodyId} className="border-t border-border p-4 pt-3">
             {children}
