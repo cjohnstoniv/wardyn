@@ -14,7 +14,7 @@
 #   1. `kubectl get pods -n wardyn`     the control plane is a Deployment; the
 #                                       run on the bench is two Pods, sandbox
 #                                       and proxy
-#   2. `wardyn ssh --print <run-id>`    the connect string, read off the
+#   2. `wardyn run ssh --print <run-id>` the connect string, read off the
 #                                       daemon's own /healthz — byte-identical
 #                                       to the console's "Attach from your
 #                                       terminal" card
@@ -168,7 +168,7 @@ preflight() {
   SSH_PORT="${ADVERTISE##*:}"
 
   # DA15, both halves: what the wire offers must be what /healthz (and so the
-  # console card, and so `wardyn ssh`) discloses, AND what this operator's
+  # console card, and so `wardyn run ssh`) discloses, AND what this operator's
   # known_hosts already trusts. The second half is what keeps the HOST
   # IDENTIFICATION HAS CHANGED banner off camera after a cluster rebuild.
   local scanned fp_wire fp_known
@@ -226,9 +226,9 @@ preflight() {
   # it" is false.
   SSH_CMD="ssh ${RUN_ID}@${SSH_HOST} -p ${SSH_PORT}"
   local printed
-  printed="$("${REPO_ROOT}/wardyn" ssh --print "${RUN_ID}" 2>>"${LOG}")"
+  printed="$("${REPO_ROOT}/wardyn" run ssh --print "${RUN_ID}" 2>>"${LOG}")"
   [[ "${printed}" == "${SSH_CMD}" ]] \
-    || die "'wardyn ssh --print' emits '${printed}' but beat 3 types '${SSH_CMD}' — the two beats disagree"
+    || die "'wardyn run ssh --print' emits '${printed}' but beat 3 types '${SSH_CMD}' — the two beats disagree"
 
   # Auth, proved without an exec: -N opens the connection and requests no
   # command, so this leaves an ssh.authenticate row and NO ssh.exec row, and the two
@@ -260,7 +260,7 @@ beats() {
 
   # --- B2 · the connect string is the product's, not mine -----------------
   say "To reach into it I do not need kubectl, a port forward, or a cluster role."
-  type_cmd "./wardyn ssh --print ${RUN_ID}"
+  type_cmd "./wardyn run ssh --print ${RUN_ID}"
   say "The command comes from the daemon's own health endpoint. The console card prints the same string."
   say "The run id is the username. A registered public key is the whole credential."
 

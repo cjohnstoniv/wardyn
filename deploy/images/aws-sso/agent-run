@@ -15,7 +15,7 @@
 # aws-sso run to interpret, so the task text (if any) is logged, not consumed.
 # Idle mode RUNS THE LOGIN ITSELF: it starts the `wardyn` tmux session on
 # signin-pane.sh before the prep below, and every attach path (the console's
-# login pane, the Runs list, `wardyn attach`, ssh) joins that one session and
+# login pane, the Runs list, `wardyn run attach`, ssh) joins that one session and
 # watches it — nobody has to know, or type, the chained command. The device-code
 # flow prints a URL + code for the operator to open elsewhere. `agent-run
 # "<anything>"` still runs the login directly for a non-interactive/scripted

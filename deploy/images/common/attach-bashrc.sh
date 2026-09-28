@@ -1,7 +1,7 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Wardyn agent ~/.bashrc — sourced by the interactive `wardyn attach` shell
+# Wardyn agent ~/.bashrc — sourced by the interactive `wardyn run attach` shell
 # (tmux→bash / bash -i), and by the fallback shell a seeded run's boot pane execs
 # once its seed finishes (agent-run --boot-seed). Its ONE job: never drop the
 # operator into a workspace that isn't ready yet.

@@ -2,7 +2,7 @@
 
 `wardynd` can serve native SSH directly into a running sandbox's tmux
 session — the same one the browser terminal (run detail's "Live terminal" /
-`wardyn attach`) shows. It authenticates registered **public keys only** (no
+`wardyn run attach`) shows. It authenticates registered **public keys only** (no
 passwords) and is **owner-or-admin**: a human may SSH into a run they
 created, or — if their key was registered while they held the admin role —
 into anyone's. That admin half is a bounded-stale stamp, not a live role
@@ -150,12 +150,12 @@ command for a run you own while it is RUNNING:
 ssh <run-id>@<advertise-host> -p <port>
 ```
 
-Or let the CLI assemble it: `wardyn ssh <run-id>` reads the gateway's
+Or let the CLI assemble it: `wardyn run ssh <run-id>` reads the gateway's
 address off `/healthz` and execs your local `ssh(1)` against it, so there is
-no connect string to copy. `wardyn ssh --print <run-id>` emits that command
+no connect string to copy. `wardyn run ssh --print <run-id>` emits that command
 instead of running it (for a script or a demo) and `--config` emits the
 `ssh_config` block below — both byte-identical to what the card renders. It
-is a separate command from `wardyn attach`, deliberately: `attach` mints a
+is a separate command from `wardyn run attach`, deliberately: `attach` mints a
 single-use ticket with your configured token (`WARDYN_TOKEN` or
 `WARDYN_ADMIN_TOKEN`) and carries it over a WebSocket — the same door the
 console's own terminal uses, so a member needs no admin credential to attach
@@ -296,7 +296,7 @@ wardyn run --agent claude-code --interactive --json \
   --description "external:<tool>" \
   --policy-file examples/policies/remote-workspace.yaml
 wardyn run wait-ready <id> --json                        # -> {"workspace":{"vcs":"git","path":"..."}}
-wardyn ssh <id> --json                                   # -> {"host","port","username","host_key_fingerprint","command"}
+wardyn run ssh <id> --json                                   # -> {"host","port","username","host_key_fingerprint","command"}
 ```
 
 **`wardyn ssh-key ensure`** (`cmd/wardyn/sshkey.go`) generates an ed25519
@@ -326,7 +326,7 @@ when audit carries one, the same lookup `run --wait` uses), any other
 terminal state exits `2` — and `--timeout` (default `5m`) exits `124` rather
 than hanging a script forever.
 
-**`wardyn ssh <run-id> --json`** (`cmd/wardyn/ssh.go`) is the same `/healthz`
+**`wardyn run ssh <run-id> --json`** (`cmd/wardyn/ssh.go`) is the same `/healthz`
 read `--print`/`--config` use, shaped for a program instead of a terminal:
 `{"host", "port", "username", "host_key_fingerprint", "command"}`. `port` is
 **always populated** — `22` when the gateway's advertised address names none
@@ -334,7 +334,7 @@ read `--print`/`--config` use, shaped for a program instead of a terminal:
 `--print` command's absent `-p` flag implies it. `host_key_fingerprint` comes
 straight off `/healthz` (the same `ED25519 SHA256:…` line the console card
 shows) — verify it out-of-band the same way you would any new SSH host;
-`wardyn ssh` does not do that for you. `command` is the literal `ssh …`
+`wardyn run ssh` does not do that for you. `command` is the literal `ssh …`
 invocation `--print` would emit, so a caller that just wants to shell out
 rather than reimplement the client can.
 

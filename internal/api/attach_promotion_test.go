@@ -445,7 +445,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 }
 
 // TestAttachPromotion_SSHObserverPromoted: the CLI lane is the same registry,
-// so a `wardyn attach` watching over the browser's shoulder inherits the
+// so a `wardyn run attach` watching over the browser's shoulder inherits the
 // terminal the same way — and, unlike the browser, must re-apply its own
 // window, because it never resized the shared tmux session while it watched.
 func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {

@@ -69,7 +69,7 @@ func sshLaneWidePastPathRows(p *types.WorkspaceProviders) []string {
 // logWarnSSHLaneWidePastPath is the site-config door's LOUD half of the
 // grandfather (#380 F2): the write still succeeds (sshLaneWidePastPathRows'
 // rows are reported in the response, never refused), but an operator watching
-// the deployment log — not staring at a `site-config apply` terminal — must
+// the deployment log — not staring at a `site-config set` terminal — must
 // still learn that ROW admits its whole host over SSH, same as the console's
 // own admitSSHHostLevel warning names the repo. No rows => silent.
 func logWarnSSHLaneWidePastPath(rows []string) {

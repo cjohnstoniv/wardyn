@@ -595,7 +595,7 @@ func credentialStorageMode(external, keyService string) string {
 // the unconfigured/fully-configured cases — it is optional and skippable, never
 // a blocking gate. "warn" when it IS configured but names a secret present does
 // not currently hold (danglingSiteConfigSecretRefs) — e.g. after a
-// `wardyn site-config apply corp-baseline.json` recovery whose secrets were
+// `wardyn site-config set corp-baseline.json` recovery whose secrets were
 // never restored: the document round-trips fine and reads as fully configured,
 // but every credentialed path through it (the upstream proxy, a redirect's
 // token) is dead until the named secret is set.

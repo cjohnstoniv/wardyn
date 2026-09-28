@@ -230,7 +230,7 @@ func (s *fakeOnboardingStatusStore) GetCapabilityEnforcement(context.Context) (m
 // the exact bytes GET emitted. onboarding_completed_at is a plain field of the
 // same types.SiteConfig GET serialises, so on any install whose operator has
 // finished the funnel that key IS in the GET body, and refusing it refused
-// `wardyn site-config get > f` / `wardyn site-config apply f` (the documented
+// `wardyn site-config get > f` / `wardyn site-config set f` (the documented
 // disaster-recovery round-trip, docs/OPERATIONS.md) and every console save,
 // which builds its PUT by spreading the GET document. Echoing the stored value
 // is not an attempt to set it — and neither is naming a different instant: the

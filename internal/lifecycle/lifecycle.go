@@ -109,7 +109,7 @@ type StopOutcome struct {
 	// Applied reports whether the stop actually transitioned the run from RUNNING
 	// to STOPPED. False when a concurrent kill/complete had already moved the
 	// run terminal, OR when the idleness guard no-op'd because the run's
-	// updated_at advanced past the reaper's snapshot (an active `wardyn attach`
+	// updated_at advanced past the reaper's snapshot (an active `wardyn run attach`
 	// touched it after the scan). Either way the reaper must NOT emit a
 	// spurious run.autostop.
 	Applied bool

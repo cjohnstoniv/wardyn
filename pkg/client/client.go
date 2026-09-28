@@ -223,7 +223,7 @@ type CreateRunRequest struct {
 	ConfinementClass string `json:"confinement_class,omitempty"`
 	// Interactive requests an interactive run: the sandbox comes up idle — or,
 	// with a non-empty Task, runs that boot seed in a persistent session — so a
-	// human can attach to it (wardyn attach <id>) either way. Pair with a
+	// human can attach to it (wardyn run attach <id>) either way. Pair with a
 	// never-reap policy (AutoStopAfterSec < 0) or the idle reaper will stop the
 	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`

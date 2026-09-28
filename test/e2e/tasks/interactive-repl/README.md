@@ -9,7 +9,7 @@ than the final workspace.
 ## What the orchestrator does
 
 1. Attach to the run's PTY (WS-attach), same channel a human gets from
-   `wardyn attach <run-id>`.
+   `wardyn run attach <run-id>`.
 2. Send `echo wardyn-pty-$((6*7))\n` and wait for `wardyn-pty-42` in the stream.
    This proves the PTY is live and evaluating shell input end to end.
 3. Send an **in-PTY negative egress probe** and wait for `403` in the stream:

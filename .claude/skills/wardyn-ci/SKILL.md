@@ -57,7 +57,7 @@ Reuse the shipped machinery; never hand-roll what exists.
 4. **Validate before shipping the config**: with a control plane up, POST the
    exact create-run body to `/api/v1/runs/preflight` (dry-run, mints nothing)
    and act on `setup_items`; `ci-run.sh` does this automatically. At minimum,
-   `wardyn policy create -f <file> --name tmp` against a dev stack exercises
+   `wardyn policy set -f <file> --name tmp` against a dev stack exercises
    the real validator.
 
 5. **Least-privilege for complex tasks — derive, don't guess**: run once
