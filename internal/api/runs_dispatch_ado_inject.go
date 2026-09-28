@@ -52,6 +52,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -294,6 +295,40 @@ func adoEntraHosts(org string) []string {
 		add(org + "." + svc + ".visualstudio.com")
 	}
 	return hosts
+}
+
+// isADOEntraHost reports whether host is one adoEntraHosts (any org) can
+// return: dev.azure.com, a service subdomain of it (vssps./vsrm./feeds./
+// pkgs./almsearch..., adoEntraServices), or any *.visualstudio.com. Not
+// adoEgressDomains, which answers a narrower question (the two-host egress
+// bundle to open for a git_pat/ssh_key grant) and misses the *.dev.azure.com
+// service subdomains the Entra lane's own credential hold also gates and
+// times out on.
+//
+// handlePostDecision uses it to keep an Azure DevOps sign-in hold that ran out
+// off wardyn_credential_reauth_total's timeout outcome. The proxy writes the
+// SAME rule source for that hold (ado_hold.go's adoCredentialRefusalFor), on
+// the Azure DevOps host itself and never with an ApprovalID (decisionLog sets
+// none for this source, on either lane), so the host is the only signal the
+// ingest has to tell the two apart. The metric's HELP promises the AWS SSO
+// re-auth population alone (#971), and the Azure DevOps lane's
+// `requested`/`resolved` raises never call that recorder at all.
+func isADOEntraHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
+}
+
+// countReauthTimeout counts a credential hold that ran out on its OWN series,
+// at the one moment the control plane learns of it (handlePostDecision): the
+// expiry happens in the sidecar, and the approval row deliberately stays
+// PENDING (the sign-in is still wanted), so this decision row is the only
+// signal that reaches here. An Azure DevOps hold writes the same rule source;
+// isADOEntraHost says why it is excluded.
+func (s *Server) countReauthTimeout(dl egress.DecisionLog) {
+	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout &&
+		!isADOEntraHost(dl.Request.Host) {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
+	}
 }
 
 // adoEntraGitHosts are the broker entries for the hosts git is served from in

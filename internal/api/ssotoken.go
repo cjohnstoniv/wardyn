@@ -319,6 +319,17 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 // line the console corroborates (signin-pane.sh) before the sandbox goes.
 const signInCaptureKillGrace = 30 * time.Second
 
+// signInCaptureReadTimeout bounds killSignInRunAfterCapture's own post-grace
+// run read (below) — a plain single-row read, nowhere near as long as the kill
+// cascade that may follow it. background.go's backgroundShutdownBudget is
+// built from this PLUS killCascadeTimeout: that sum is this goroutine's own
+// worst-case internal bound, the one WaitBackground must actually cover.
+// Before this existed the read shared killCascadeTimeout's own 30s budget, so
+// the read-then-cascade could together take up to 60s against a 35s shutdown
+// budget — a shutdown landing between the two would abandon a live kill
+// cascade mid-flight instead of waiting the bounded time it asked for.
+const signInCaptureReadTimeout = 5 * time.Second
+
 // killSignInRunAfterCapture is #151's server belt: a sign-in run whose capture
 // was just STORED ends on the server, so a closed console tab (or a pane mount
 // that never kills) no longer leaves the sandbox running to its idle cap. Only
@@ -350,7 +361,7 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 		case <-s.cfg.BaseCtx.Done():
 			return
 		}
-		readCtx, cancel := context.WithTimeout(detached, killCascadeTimeout)
+		readCtx, cancel := context.WithTimeout(detached, signInCaptureReadTimeout)
 		run, err := s.cfg.Store.GetRun(readCtx, runID)
 		cancel()
 		if err != nil {

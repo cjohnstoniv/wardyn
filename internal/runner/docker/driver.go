@@ -123,6 +123,15 @@ type Driver struct {
 	cli dockerAPI
 	cfg Config
 
+	// proxySettle is how long startProxy's exit-watch (driver_proxy_revive.go)
+	// requires a proxy's Running state to have HELD before trusting it. New()
+	// sets this to proxyStartSettle for a real daemon; newWithClient's own
+	// zero value (0) is the deliberate default for every fake-backed test
+	// driver, so the unit suite does not pay a real wall-clock tax on every
+	// CreateSandbox — the handful of tests that deliberately exercise the
+	// settle window override it back to proxyStartSettle themselves.
+	proxySettle time.Duration
+
 	// mu guards agentExecs, pending, mainProc, and creating. The driver is safe
 	// for concurrent use; these maps are the only mutable state.
 	mu sync.Mutex
@@ -199,7 +208,9 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker: new client: %w", err)
 	}
-	return newWithClient(cli, cfg), nil
+	d := newWithClient(cli, cfg)
+	d.proxySettle = proxyStartSettle
+	return d, nil
 }
 
 // newWithClient is the seam unit tests use to inject a fake dockerAPI.
