@@ -859,6 +859,43 @@ const (
 	reasonHarnessCredentialUnknownProvider = "harness_credential_unknown_provider"
 )
 
+// /api/v1/admin/audit (audit.go): the security tier's audit-log query,
+// export and chain-verification doors.
+const (
+	reasonAuditInvalidRunID                = "audit_invalid_run_id"
+	reasonAuditExportStoreUnavailable      = "audit_export_store_unavailable"
+	reasonAuditChainVerifyStoreUnavailable = "audit_chain_verify_store_unavailable"
+	reasonAuditChainVerifyBusy             = "audit_chain_verify_busy"
+	reasonAuditChainSweepFailed            = "audit_chain_sweep_failed"
+	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
+	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
+	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+)
+
+// POST /api/v1/sources/{id}/scan and the admin bulk scan (source_scan.go).
+const (
+	reasonSourceNotFound            = "source_not_found"
+	reasonSourceScanAlreadyRunning  = "source_scan_already_running"
+	reasonSourceScanUnsupportedKind = "source_scan_unsupported_kind" // this source kind has nothing to scan
+	// reasonSourceScanFailed is scanLocalDirSource's own bucket: whatever
+	// `detail` names, the scan itself did not complete.
+	reasonSourceScanFailed   = "source_scan_failed"
+	reasonSourceScanNoRunner = "source_scan_no_runner"
+)
+
+// POST /runs and POST /runs/preflight's policy resolution (inline_policy.go):
+// resolveRunPolicy and boundUserSpec, shared by create and the dry-run
+// preview so the two can never disagree.
+const (
+	reasonInlinePolicyXOR  = "inline_policy_xor" // policy_id and inline_policy were both set
+	reasonPolicyIDNotFound = "policy_id_not_found"
+	// reasonInlinePolicyInvalid is the whole resolution chain's bucket
+	// (grant filtering, domain-count cap, validatePolicySpec,
+	// validateInlineSecretRefs — inline or stored): one cause, "this
+	// policy/spec fails validation", the same grain as reasonSiteConfigInvalid.
+	reasonInlinePolicyInvalid = "inline_policy_invalid"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

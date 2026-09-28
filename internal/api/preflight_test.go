@@ -331,10 +331,13 @@ func TestPreflight_UnknownSecret422Passthrough(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("preflight unknown secret: code=%d, want 422; body=%s", w.Code, w.Body.String())
 	}
-	// Not a model-credential refusal: no `reason` rides a policy error, so the
-	// console's launch door stays shut for it.
-	if strings.Contains(w.Body.String(), `"reason"`) {
-		t.Errorf("unknown-secret 422 carries a reason: %s", w.Body.String())
+	// Not a model-credential refusal: the reason (#656 slice 3,
+	// reasonInlinePolicyInvalid) is not one of the classes the console's
+	// launch door acts on (model_credential/git_credential,
+	// core.errenvelope.test.ts) — it is the generic policy-validation bucket,
+	// so the launch door stays shut for it.
+	if got := errorReason(w); got != reasonInlinePolicyInvalid {
+		t.Errorf("unknown-secret 422 reason = %q, want %q: %s", got, reasonInlinePolicyInvalid, w.Body.String())
 	}
 }
 
