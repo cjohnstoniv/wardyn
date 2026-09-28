@@ -39,6 +39,7 @@ import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-f
 import { WithDoor } from "../../../../test/door-harness";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { expandCard } from "../../../lib/test-dom";
 
 function renderScreen(operator = false) {
   return render(
@@ -113,6 +114,8 @@ describe("YourAccountScreen", () => {
 describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
   it("carries the rewritten description", async () => {
     renderScreen();
+    await screen.findByRole("heading", { name: "Your SSH keys", level: 3 });
+    await expandCard("Your SSH keys");
     expect(
       await screen.findByText(
         "Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's.",
@@ -125,6 +128,8 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
       { fingerprint: "SHA256:aaa", name: "laptop", public_key: "", role: "user", capped: true, created_at: new Date().toISOString() },
     ]);
     renderScreen();
+    await screen.findByRole("heading", { name: "Your SSH keys", level: 3 });
+    await expandCard("Your SSH keys");
     const chip = await screen.findByText("User access");
     expect(screen.queryByText("Member access")).not.toBeInTheDocument();
     expect(chip.closest("[title]")).toHaveAttribute(

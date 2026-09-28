@@ -14,6 +14,10 @@ import { test, expect, asRealMember, asRealSecurityAdmin, gotoConsole, navToRout
 // split itself: a super admin's new Admin SSH keys card (S-1), a security
 // admin's refusal at /admin/settings with nothing fetched (S-5), and a
 // member's Your account carrying no admin card at all.
+//
+// #1200 compact cards: every card collapses to a one-line summary by default
+// and expands on click — the Admin SSH keys test below expands it before
+// reading its body.
 
 test.describe("Admin Settings — Admin SSH keys (S-1)", () => {
   test("a super admin sees the Admin SSH keys card, empty by default", async ({ page }) => {
@@ -24,6 +28,7 @@ test.describe("Admin Settings — Admin SSH keys (S-1)", () => {
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Admin SSH keys" }) });
     await expect(card).toBeVisible();
+    await card.getByRole("button", { name: /^Admin SSH keys/ }).click();
     await expect(card.getByText("No admin keys")).toBeVisible();
 
     // The reused add dialog — same one Your account's "+ Add key" opens.

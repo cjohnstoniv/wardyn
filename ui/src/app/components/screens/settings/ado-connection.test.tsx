@@ -9,6 +9,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
 import { ADO } from "../../../lib/ado-entra-copy";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { expandCard } from "../../../lib/test-dom";
 
 const adoConnectMock = vi.fn();
 let adoBlockedUrl: string | null = null;
@@ -41,7 +43,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
     expect(screen.queryByText("Azure DevOps")).not.toBeInTheDocument();
   });
 
-  it("live: the org, how it connected, and the renewal note — no button", () => {
+  it("live: the org, how it connected, and the renewal note — no button", async () => {
     renderCard(
       <AdoConnectionCard
         status={status({ state: "live", source: "org", org: "https://dev.azure.com/contoso" })}
@@ -49,6 +51,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
       />,
     );
     expect(screen.getByText(ADO.ACCESS_LIVE_ORG)).toBeInTheDocument();
+    await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     expect(screen.getByText("https://dev.azure.com/contoso")).toBeInTheDocument();
     expect(screen.getByText(new RegExp(ADO.PANEL_HOW_ORG))).toBeInTheDocument();
     expect(screen.getByText(new RegExp(ADO.PANEL_ENDS_RENEWED))).toBeInTheDocument();
@@ -58,9 +61,10 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
   // Review finding F3: a SHARED row's `live` (no source) must render
   // ACCESS_SHARED_NOTE, never a per-person claim like "Your Wardyn sign-in"
   // or "Renewed while you keep using it".
-  it("live on a shared row (no source): ACCESS_SHARED_NOTE, never the per-person panel", () => {
+  it("live on a shared row (no source): ACCESS_SHARED_NOTE, never the per-person panel", async () => {
     renderCard(<AdoConnectionCard status={status({ state: "live", org: "https://dev.azure.com/contoso" })} onChanged={vi.fn()} />);
     expect(screen.getByText(ADO.ACCESS_SHARED_LIVE)).toBeInTheDocument();
+    await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     expect(screen.getByText(ADO.ACCESS_SHARED_NOTE)).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(ADO.PANEL_HOW_ORG))).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(ADO.PANEL_ENDS_RENEWED))).not.toBeInTheDocument();
@@ -70,14 +74,16 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
     adoConnectMock.mockResolvedValueOnce(true);
     const onChanged = vi.fn();
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);
+    await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     expect(screen.getByText(ADO.CAUSE_ROW_IS_NEWER)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: ADO.CONNECT_ADO }));
     expect(adoConnectMock).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("shared_expired: the admin-facing action line, no button", () => {
+  it("shared_expired: the admin-facing action line, no button", async () => {
     renderCard(<AdoConnectionCard status={status({ state: "shared_expired" })} onChanged={vi.fn()} />);
+    await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     expect(screen.getByText(ADO.ACCESS_SHARED_EXPIRED_ACTION)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
   });
@@ -91,7 +97,11 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
       renderCard(<AdoConnectionCard status={status({ state: "not_applicable" })} onChanged={vi.fn()} />);
       expect(screen.getByText("Azure DevOps")).toBeInTheDocument();
       expect(screen.getByText(ADO.NOT_APPLICABLE_BODY)).toBeInTheDocument();
-      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      // #1200 compact cards: the CollapsibleCard's own disclosure toggle is
+      // the one button every card has now — "no button" means no ACTION
+      // button, same claim the live/shared_expired tests above already make.
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button")).toHaveLength(1);
       expect(screen.queryByText(ADO.ACCESS_NOT_CONNECTED)).not.toBeInTheDocument();
     });
   });
@@ -186,8 +196,9 @@ describe("AdoConnectionCard — a blocked popup", () => {
     adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
   });
 
-  it("shows the canon sentence and a plain fallback link to the sign-in URL, alongside the button", () => {
+  it("shows the canon sentence and a plain fallback link to the sign-in URL, alongside the button", async () => {
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />);
+    await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
     const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
     expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
@@ -201,6 +212,7 @@ describe("AdoConnectionCard — a blocked popup", () => {
     adoConnectMock.mockResolvedValueOnce(true);
     const onChanged = vi.fn();
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);
+    await expandCard(PROVIDERS.KIND_AZURE_DEVOPS);
     await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN }));
     expect(adoConnectMock).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledTimes(1);

@@ -23,6 +23,7 @@
 // provider.
 import { Chip } from "../../wardyn/primitives";
 import { Button } from "../../ui/button";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../../wardyn/model-access-context";
 import {
   connectionRowCopy,
@@ -87,12 +88,12 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
   const summary = connectionsSummary(rows);
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4" data-testid="model-connections-card">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium text-foreground">{CONNECTIONS.TITLE}</h3>
-        <Chip tone={summary.tone}>{summary.label}</Chip>
-      </div>
-      <p className="mt-0.5 text-body leading-snug text-muted-foreground">{CONNECTIONS.LEDE}</p>
+    <CollapsibleCard
+      title={CONNECTIONS.TITLE}
+      summary={<Chip tone={summary.tone}>{summary.label}</Chip>}
+      testId="model-connections-card"
+    >
+      <p className="text-body leading-snug text-muted-foreground">{CONNECTIONS.LEDE}</p>
       {rowCopies.length > 0 && (
         <div className="mt-3 divide-y divide-border">
           {rowCopies.map(({ row, copy }) => (
@@ -105,6 +106,6 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
           ))}
         </div>
       )}
-    </section>
+    </CollapsibleCard>
   );
 }

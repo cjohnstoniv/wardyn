@@ -23,6 +23,7 @@ vi.mock("./harness-login-pane", () => ({
 import { ModelConnectionsCard } from "./model-connections-card";
 import { WithDoor } from "../../../../test/door-harness";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
+import { expandCard } from "../../../lib/test-dom";
 import { CONNECTIONS, KEY_DOOR } from "../../wardyn/copy/door";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import type { SetupStatus } from "../../../lib/types";
@@ -60,6 +61,7 @@ it("renders the title, lede and summary chip, and one row per provider", async (
   renderCard(s);
   const card = await screen.findByTestId("model-connections-card");
   expect(within(card).getByText(CONNECTIONS.TITLE)).toBeInTheDocument();
+  await expandCard(CONNECTIONS.TITLE);
   expect(within(card).getByText(CONNECTIONS.LEDE)).toBeInTheDocument();
   expect(within(card).getByText(CONNECTIONS.SUMMARY_READY)).toBeInTheDocument();
   expect(within(card).getByText(MODEL_PROVIDERS.bedrock.name!)).toBeInTheDocument();
@@ -83,6 +85,7 @@ it("claims the door: the strip's own line for the same provider does not also re
   const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "not_configured" }]);
   renderCard(s);
   await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
   expect(await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS })).toHaveLength(1);
 });
 
@@ -90,6 +93,8 @@ it("clicking a row's button opens the shared door, keyed to that provider", asyn
   const user = userEvent.setup();
   const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "not_configured" }]);
   renderCard(s);
+  await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
   await user.click(await screen.findByRole("button", { name: AGENTS.SIGN_IN_AWS }));
   const dialog = await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS });
   expect(dialog).toHaveTextContent(`For ${MODEL_PROVIDERS.bedrock.name}`);
@@ -99,6 +104,8 @@ it("a key row's Replace button opens the key door with the stored state", async 
   const user = userEvent.setup();
   const s = providerStatus([{ provider: MODEL_PROVIDERS.anthropicKey, state: "live" }]);
   renderCard(s);
+  await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
   await user.click(await screen.findByRole("button", { name: CONNECTIONS.REPLACE }));
   expect(
     await screen.findByRole("dialog", { name: KEY_DOOR.TITLE_REPLACE(false, MODEL_PROVIDERS.anthropicKey.name) }),

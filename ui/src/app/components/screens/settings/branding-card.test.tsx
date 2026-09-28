@@ -16,6 +16,7 @@ vi.mock("../../../lib/api/branding", () => ({
 import { ThemeProvider } from "../../wardyn/theme-provider";
 import { BrandingCard } from "./branding-card";
 import { BRANDING } from "../../../lib/branding-copy";
+import { expandCard } from "../../../lib/test-dom";
 
 function renderCard() {
   return render(
@@ -35,6 +36,8 @@ async function validDraft() {
   getSettings.mockResolvedValue({});
   renderCard();
   await waitFor(() => expect(getSettings).toHaveBeenCalled());
+  // #1200 compact cards — collapsed by default; the form lives in the body.
+  await expandCard(BRANDING.TITLE);
   await fill(BRANDING.ORG_NAME_LABEL, "Example Corp");
   await fill(BRANDING.PRIMARY_LABEL, "#7c3aed");
   await fill(BRANDING.TEXT_LABEL, "#ffffff");
@@ -133,6 +136,7 @@ describe("Branding card (#1125)", () => {
       dark_custom: true, dark_primary: "#a78bfa", dark_primary_text: "#171717", support_url: "https://status.example.com",
     });
     renderCard();
+    await expandCard(BRANDING.TITLE);
     expect(await screen.findByDisplayValue("Example Corp")).toBeInTheDocument();
     expect(screen.getByDisplayValue("#a78bfa")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Wardyn for Example Corp/ })).toHaveAttribute("aria-pressed", "true");

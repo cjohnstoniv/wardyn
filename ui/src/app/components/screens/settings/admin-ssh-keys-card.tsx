@@ -30,6 +30,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { AddSSHKeyDialog, RemoveSSHKeyDialog } from "../ssh-keys";
 
@@ -62,14 +63,17 @@ export function AdminSshKeysCard() {
   // Your account's SshKeysPane lists every key this caller holds, admin or
   // not — this one narrows to the "Admin override" set.
   const adminKeys = keys.filter((k) => k.role === "admin");
+  // #1200 compact cards — absent while unloaded. A distinct phrase from
+  // ADMIN_SSH_KEYS.EMPTY_TITLE, not that constant itself: the header summary
+  // and the expanded body's EmptyState both render at once, and a query for
+  // the canon empty-state string must still resolve to a single node.
+  const summary =
+    status === "loading" ? undefined : status === "error" ? "Couldn't load" : `${adminKeys.length} admin ${adminKeys.length === 1 ? "key" : "keys"}`;
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4" data-testid="admin-ssh-keys-card">
+    <CollapsibleCard title={ADMIN_SSH_KEYS.TITLE} summary={summary} testId="admin-ssh-keys-card">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">{ADMIN_SSH_KEYS.TITLE}</h3>
-          <p className="mt-0.5 text-body leading-snug text-muted-foreground">{ADMIN_SSH_KEYS.LEDE}</p>
-        </div>
+        <p className="text-body leading-snug text-muted-foreground">{ADMIN_SSH_KEYS.LEDE}</p>
         {/* Outline, not the page's one teal button — that stays "Add model
             provider" (mock colfoot, packet MP-A precedent). */}
         <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
@@ -139,6 +143,6 @@ export function AdminSshKeysCard() {
 
       <AddSSHKeyDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
       <RemoveSSHKeyDialog keyToDelete={toDelete} onOpenChange={(o) => !o && setToDelete(null)} onRemoved={load} />
-    </section>
+    </CollapsibleCard>
   );
 }
