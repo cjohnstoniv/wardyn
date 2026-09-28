@@ -58,7 +58,10 @@ vi.mock("../../../lib/capabilities", async () => {
 // The REAL rail with its props recorded — pins the SEAM (what the screen
 // hands the rail), same pattern new-run-screen-launch.test.tsx uses for
 // launch.credentialRefused/refusedProvider.
-const railProps: Array<{ modelProvider?: { selectedId?: string; changeNote: string | null } }> = [];
+const railProps: Array<{
+  modelProvider?: { selectedId?: string; changeNote: string | null };
+  launch: { problem: string | null };
+}> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
   return {
@@ -294,6 +297,36 @@ describe("NewRunScreen — R6 (QC-4): no default among several candidates — La
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBe(anthropicKey.id);
+  });
+});
+
+// R6 rule (3): a workspace pin already answers "why wait" its own way (the
+// server refuses a pin it cannot serve, by name), so LAUNCH_HINT stays silent
+// whenever one is set — even a pin naming no candidate, which preselects
+// nothing.
+describe("NewRunScreen — R6 rule (3): a workspace pin silences LAUNCH_HINT", () => {
+  it("names no pick-a-provider problem under a pin that is not a candidate", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      providerStatus([
+        { provider: gateway, state: "not_configured" },
+        { provider: anthropicKey, state: "not_configured" },
+      ]),
+    );
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws1",
+        name: "repo-a",
+        kind: "local_dir",
+        source: "/home/agent/repo-a",
+        status: "scanned",
+        llm_cred: { provider_ref: claude.id },
+      },
+    ]);
+    renderScreenWithWorkspace("ws1");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeInTheDocument());
+    await waitFor(() => expect(railProps.at(-1)?.launch.problem).toBeNull());
+    expect(railProps.at(-1)?.modelProvider?.selectedId).toBeUndefined();
+    expect(screen.queryByText(RAIL_PROVIDER.LAUNCH_HINT)).toBeNull();
   });
 });
 
