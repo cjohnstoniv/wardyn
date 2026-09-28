@@ -268,7 +268,7 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([...CONFIG_STEPS, ...DEMO_STE
 // stepBadges/stepDone carry one design delta (see the workspaces case below).
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
 
-// DRAFT (M2 canon pending) — the Review badge must not read
+// The Review badge must not read
 // "Ready to launch" while a confinement floor warning is standing (every run
 // on the default policy is refused before it launches) — see stepBadges' review case below.
 export const REVIEW_BADGE_FLOOR_WARN = "Ready, except the default policy";

@@ -36,12 +36,12 @@ import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
   AGENTS,
-  AGENTS_DRAFT,
+  AGENTS_EXTRA,
   isPerUserSsoRow,
   MODEL_ACCESS_ACTIONABLE,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
-  PROVIDERS_DRAFT,
+  PROVIDERS_EXTRA,
   modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
@@ -342,8 +342,8 @@ function Row({
               {/* role="status" covers ONLY the title/body pair — NOT
                   ModelAccessSignIn below and the button that opens the door. */}
               <div role="status">
-                <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
-                <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
+                <p className="text-sm font-medium text-foreground">{AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE}</p>
+                <p className="mt-1 text-body text-muted-foreground">{AGENTS_EXTRA.PER_USER_SIGN_IN_BODY}</p>
               </div>
               <div className="mt-2">
                 <ModelAccessSignIn access={modelAccess!} />
@@ -457,14 +457,14 @@ function Row({
                 />
               </Field>
               {agentRowInvalid(row) && (
-                <p className="-mt-2 text-xs leading-snug text-danger">{AGENTS_DRAFT.SSO_START_URL_REQUIRED}</p>
+                <p className="-mt-2 text-xs leading-snug text-danger">{AGENTS_EXTRA.SSO_START_URL_REQUIRED}</p>
               )}
               {/* The roster pin (Appendix A finding 1, ask 1): optional, ADMIN-OWNED like the
                   start URL above it — set together, or left blank, never
                   independently (agent400SSOPinPair). */}
               <Field
-                label={AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID}
-                hint={AGENTS_DRAFT.SSO_ACCOUNT_ID_HINT}
+                label={AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID}
+                hint={AGENTS_EXTRA.SSO_ACCOUNT_ID_HINT}
                 htmlFor={`agent-${row.id}-sso-account-id`}
               >
                 <Input
@@ -477,8 +477,8 @@ function Row({
                 />
               </Field>
               <Field
-                label={AGENTS_DRAFT.FIELD_SSO_ROLE_NAME}
-                hint={AGENTS_DRAFT.SSO_ROLE_NAME_HINT}
+                label={AGENTS_EXTRA.FIELD_SSO_ROLE_NAME}
+                hint={AGENTS_EXTRA.SSO_ROLE_NAME_HINT}
                 htmlFor={`agent-${row.id}-sso-role-name`}
               >
                 <Input
@@ -743,7 +743,7 @@ export function AgentsTab({
           {!operator && <OperatorOnlyHint />}
           {operator && changedLines.length > 0 && (
             <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
-              {PROVIDERS_DRAFT.UNSAVED_MARKER}
+              {PROVIDERS_EXTRA.UNSAVED_MARKER}
             </span>
           )}
           {writeDropped && (

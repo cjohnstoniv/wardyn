@@ -25,7 +25,7 @@ import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
-import { AGENTS, AGENTS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_EXTRA } from "../../../lib/workspace-providers-copy";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -426,7 +426,7 @@ function ProviderFields({
                   onChange={(e) => set({ ssoStartUrl: e.target.value })}
                 />
               </Field>
-              <Field label={AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID} htmlFor="mp-sso-account-id">
+              <Field label={AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID} htmlFor="mp-sso-account-id">
                 <Input
                   id="mp-sso-account-id"
                   className="font-mono"
@@ -434,7 +434,7 @@ function ProviderFields({
                   onChange={(e) => set({ ssoAccountId: e.target.value })}
                 />
               </Field>
-              <Field label={AGENTS_DRAFT.FIELD_SSO_ROLE_NAME} htmlFor="mp-sso-role-name" hint={PROVIDER_EDITOR.SSO_SETUP_HINT}>
+              <Field label={AGENTS_EXTRA.FIELD_SSO_ROLE_NAME} htmlFor="mp-sso-role-name" hint={PROVIDER_EDITOR.SSO_SETUP_HINT}>
                 <Input
                   id="mp-sso-role-name"
                   className="font-mono"

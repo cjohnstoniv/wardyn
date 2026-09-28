@@ -8,7 +8,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { SavedElsewhereBanner } from "./saved-elsewhere-banner";
-import { PROVIDERS, PROVIDERS_DRAFT } from "../../lib/workspace-providers-copy";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
@@ -30,11 +30,11 @@ describe("SavedElsewhereBanner", () => {
     // The whole document is what's shown, not just the changed fields.
     expect(screen.getByText(/github/)).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY }));
     expect(write).toHaveBeenCalledWith(whole);
     // toast is mocked (sonner renders nothing here) — asserted as a call, the
     // use-copy-to-clipboard.test.ts precedent, not a DOM node.
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST));
   });
 
   it("a clipboard failure falls back to selecting the text instead of copying", async () => {
@@ -44,7 +44,7 @@ describe("SavedElsewhereBanner", () => {
     vi.spyOn(window, "getSelection").mockReturnValue({ addRange, removeAllRanges } as unknown as Selection);
 
     render(<SavedElsewhereBanner documentText="the whole document" onDiscard={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY }));
 
     expect(removeAllRanges).toHaveBeenCalled();
     expect(addRange).toHaveBeenCalled();
@@ -57,11 +57,11 @@ describe("SavedElsewhereBanner", () => {
 
     // Copy my changes before Discard — order is part of the contract (#217).
     const buttons = screen.getAllByRole("button");
-    expect(buttons[0]).toHaveTextContent(PROVIDERS_DRAFT.CONFLICT_COPY);
-    expect(buttons[1]).toHaveTextContent(PROVIDERS_DRAFT.DISCARD_AND_RELOAD);
+    expect(buttons[0]).toHaveTextContent(PROVIDERS_EXTRA.CONFLICT_COPY);
+    expect(buttons[1]).toHaveTextContent(PROVIDERS_EXTRA.DISCARD_AND_RELOAD);
     expect(screen.queryByText(/save over theirs/i)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
     expect(onDiscard).toHaveBeenCalledTimes(1);
   });
 });

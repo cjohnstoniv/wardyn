@@ -364,16 +364,13 @@ export function modelAccessActionLine(
 // server's settled row, agents-tab.tsx's perUserSaved reads the same
 // `harness` prop — same three-part test, same answer.
 
-// AGENTS_DRAFT — new strings not yet in the frozen §7.7 table
-// DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
-// §7.7 AGENTS table above — workspace-providers-copy.test.ts's byte-check
-// parses only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW
-// export beside it (never inside it) is what keeps that gate meaningful.
-// Canon rows staged for the M2 sitting land in
-// docs/design/workspace-providers-prompt.md, the same doc §7.2-§7.5/§7.7
-// above were transcribed from (the working sheet itself is gitignored
-// campaign evidence, not a path this shipped file can point at).
-export const AGENTS_DRAFT = {
+// AGENTS_EXTRA — shipped copy, frozen by #206, not part of the byte-parity
+// §7.7 table above — workspace-providers-copy.test.ts's byte-check parses
+// only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW export
+// beside it (never inside it) is what keeps that gate meaningful. These rows
+// started as a draft in docs/design/workspace-providers-prompt.md, the same
+// doc §7.2-§7.5/§7.7 above were transcribed from.
+export const AGENTS_EXTRA = {
   // The per_user sign-in banner (Appendix A finding 4): moves the
   // claude-code model-access block to the TOP of an expanded per_user row so
   // the legacy Settings door stops being the one an admin reaches for.
@@ -395,12 +392,11 @@ export const AGENTS_DRAFT = {
   SSO_START_URL_REQUIRED: "Required for a per-person lane — Save is disabled until this names a real https:// start URL.",
 } as const;
 
-// PROVIDERS_DRAFT — new strings not yet in the frozen §7.2 table
-// DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
-// §7.2 PROVIDERS table — kept in a separate export for the same reason
-// AGENTS_DRAFT is (the byte-check parses only PROVIDERS/PROVIDER_MEMBER/
+// PROVIDERS_EXTRA — shipped copy, frozen by #206, not part of the
+// byte-parity §7.2 table — kept in a separate export for the same reason
+// AGENTS_EXTRA is (the byte-check parses only PROVIDERS/PROVIDER_MEMBER/
 // AGENTS out of the doc).
-export const PROVIDERS_DRAFT = {
+export const PROVIDERS_EXTRA = {
   // F4-F3 (Appendix A V8, corrected verdict): the keep-draft-mounted 412
   // banner's SECOND control — discards the admin's own unsaved edits and
   // reloads the server's version. NO "Save over theirs" arm: a security

@@ -15,7 +15,7 @@ import { dirname, resolve } from "node:path";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
-import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_EXTRA, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab, agentCapabilityFor } from "./agents-tab";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -146,15 +146,15 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     render(<AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     const banner = within(row).getByTestId("per-user-sign-in-banner");
-    expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
-    expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_BODY)).toBeInTheDocument();
+    expect(within(banner).getByText(AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
+    expect(within(banner).getByText(AGENTS_EXTRA.PER_USER_SIGN_IN_BODY)).toBeInTheDocument();
     expect(within(banner).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
     expect(within(banner).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
     // role="status" covers ONLY the title/body pair — never ModelAccessSignIn
     // (HarnessLoginPane's own multi-step device-code/poll flow would
     // otherwise re-announce wholesale on every poll tick).
     const statusRegion = within(banner).getByRole("status");
-    expect(within(statusRegion).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
+    expect(within(statusRegion).getByText(AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
     expect(within(statusRegion).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
     expect(within(statusRegion).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     // It renders BEFORE the mechanism radiogroup — prominence, not an addition.
@@ -170,7 +170,7 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
     render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+    expect(within(row).queryByText(AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
     expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
     // The chip still renders, just in its ordinary spot at the bottom.
     expect(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
@@ -181,7 +181,7 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     const modelAccess: SetupModelAccess = { state: "live" };
     render(<AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+    expect(within(row).queryByText(AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
   });
 
   // U-03: a per_user row that is only DRAFTED — Per person toggled in the
@@ -195,7 +195,7 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
     render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+    expect(within(row).queryByText(AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
     expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
     // The ordinary bottom chip still renders — the row can still be signed
     // into, just not with prominence it has not earned by being saved.
@@ -289,8 +289,8 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
     });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
-    const accountInput = await screen.findByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID);
-    const roleInput = screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME);
+    const accountInput = await screen.findByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID);
+    const roleInput = screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME);
     expect(accountInput).toHaveValue("111111111111");
     expect(roleInput).toHaveValue("BedrockRunner");
   });
@@ -302,8 +302,8 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
     });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
-    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
-    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toBeNull();
   });
 
   it("saves typed pin values on the row", async () => {
@@ -320,8 +320,8 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin4"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
-    await userEvent.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID), "222222222222");
-    await userEvent.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME), "DevPower");
+    await userEvent.type(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID), "222222222222");
+    await userEvent.type(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME), "DevPower");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     const [body] = putAgentProvidersMock.mock.calls[0];
     const claude = body.agents.find((a: { id: string }) => a.id === "claude-code");
@@ -402,7 +402,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin10"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
-    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     const [body] = putAgentProvidersMock.mock.calls[0];
     const saved = body.agents.find((a: { id: string }) => a.id === "claude-code");

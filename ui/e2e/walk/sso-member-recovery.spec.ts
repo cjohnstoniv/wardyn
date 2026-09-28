@@ -87,7 +87,7 @@ import {
   RECORDING_DISABLED_TITLE,
   YOUR_MODEL_KEY,
 } from "../../src/app/components/wardyn/copy";
-import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
+import { AGENTS, AGENTS_EXTRA, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
   LOGIN_DONE,
@@ -380,8 +380,8 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
   // The three ORG SETTINGS the row carries, typed into the console.
   await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill(SSO_START_URL);
-  await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill(pin.account);
-  await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill(pin.role);
+  await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID).fill(pin.account);
+  await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME).fill(pin.role);
 
   // …and the field report's deployment shape: ONE enabled row.
   for (const display of ["Codex CLI", "Your own tools"]) {

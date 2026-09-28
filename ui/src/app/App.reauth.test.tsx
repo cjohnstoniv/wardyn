@@ -14,8 +14,8 @@ import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
 import { SESSION_ENDED_REASON, wfetch } from "./lib/api/core";
-import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "./lib/reauth-copy";
-import { PROVIDERS_DRAFT } from "./lib/workspace-providers-copy";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
+import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
 import { UNSAVED } from "./lib/unsaved-copy";
 
@@ -219,7 +219,7 @@ describe("App — a session that ends mid-page (#483)", () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/admin/providers"));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByLabelText("Note")).toBeNull();
-    expect(screen.queryByText(PROVIDERS_DRAFT.CONFLICT_COPY)).toBeNull();
+    expect(screen.queryByText(PROVIDERS_EXTRA.CONFLICT_COPY)).toBeNull();
   });
 
   it("someone else who cannot open this page reloads onto Runs", async () => {
@@ -235,8 +235,8 @@ describe("App — a session that ends mid-page (#483)", () => {
     await signInWithToken();
     const dialog = screen.getByRole("dialog");
     expect(await within(dialog).findByText(REAUTH_DIALOG.ROLE_CHANGED_BODY)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY })).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: REAUTH_DRAFT.GO_TO_RUNS }));
+    expect(within(dialog).getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
     await screen.findByText("at /runs");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(assign).not.toHaveBeenCalled();
@@ -260,7 +260,7 @@ describe("App — a session that ends mid-page (#483)", () => {
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByText(REAUTH_BAR.BODY)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY })).toBeInTheDocument();
     await act(async () => {
       await wfetch("/again").catch(() => {});
     });

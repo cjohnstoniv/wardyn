@@ -104,8 +104,8 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     direction: "narrows",
   },
   integration: {
-    // DRAFT (M2 canon pending): was "Model providers", which is now the
-    // model_provider kind's label; this kind retires with the AI integrations.
+    // Was "Model providers", which is now the model_provider kind's label;
+    // this kind retires with the AI integrations.
     label: "Model integrations",
     blurb: "Which model provider a member may name on a run of their own.",
     valueLabel: "Integration",
@@ -119,11 +119,10 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them.",
     direction: "narrows",
   },
-  // A new kind's strings are staged in docs/design/workspace-providers-prompt.md
-  // §7.6 as DRAFT (M2 canon pending) until the owner's canon sitting freezes
-  // them, and the swap to canon is then a one-file diff here.
+  // This kind's strings started as a draft in
+  // docs/design/workspace-providers-prompt.md §7.6; #206 froze the wording
+  // below as canon.
   workspace_provider: {
-    // DRAFT (M2 canon pending)
     label: "Git providers",
     blurb: "Which git provider a member's own run may bring work from.",
     valueLabel: "Provider",
@@ -137,7 +136,6 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
   // default too: every model credential is the person's own, so no admin pin
   // is exempt (multi-provider design §2.10).
   model_provider: {
-    // DRAFT (M2 canon pending)
     label: "Model providers",
     blurb: "Which model provider a member's run may use.",
     valueLabel: "Model provider",
@@ -147,9 +145,8 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only run on providers granted to them — the one they choose, the one a workspace pins, or their agent's default. A run on another one is refused, naming it.",
     direction: "narrows",
   },
-  // Staged in docs/design/permissioning-prompt.md §7.1 as DRAFT (#614).
+  // Frozen in docs/design/permissioning-prompt.md §7.1 (#614, closed).
   feature: {
-    // DRAFT (canon pending)
     label: "SSH keys and API tokens",
     blurb: "Whether a member may add an SSH key or mint an API token.",
     valueLabel: "Feature",
@@ -159,9 +156,8 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
     direction: "narrows",
   },
-  // Staged in docs/design/permissioning-prompt.md §7.1 as DRAFT (#613).
+  // Frozen in docs/design/permissioning-prompt.md §7.1 (#613, closed).
   policy: {
-    // DRAFT (canon pending)
     label: "Stored policies",
     blurb: "Which stored policies a member may select for a run of their own.",
     valueLabel: "Policy",
@@ -275,13 +271,13 @@ export const PERM = {
   GRANT_IS_NOT_SUCCESS: "Every allow below is something a member can reach that they otherwise couldn't.",
 };
 
-// DRAFT (M2 canon pending): new strings this round. Kept OUT of PERM above —
-// permissions-copy.ts carries no byte-parity gate against
-// docs/design/permissioning-prompt.md, so nothing parses this file back out
-// of the doc, but a DRAFT string still gets its own export (the AGENTS_DRAFT
-// / workspace-providers-copy.ts precedent) rather than landing inside PERM,
-// which the doc's own §7 table transcribes verbatim.
-export const PERM_DRAFT = {
+// Shipped copy, frozen by #206. Kept OUT of PERM above — permissions-copy.ts
+// carries no byte-parity gate against docs/design/permissioning-prompt.md, so
+// nothing parses this file back out of the doc, but this still gets its own
+// export (the AGENTS_EXTRA / workspace-providers-copy.ts precedent) rather
+// than landing inside PERM, which the doc's own §7 table transcribes
+// verbatim.
+export const PERM_EXTRA = {
   // A stored grant whose value predates the per-kind canonicalization rule
   // (grantView.Inert, permissions.go's markInertGrants) can never match
   // anything the resolver compares — a red Deny chip for a rule that has

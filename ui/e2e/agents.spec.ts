@@ -13,7 +13,7 @@ import {
 } from "./fixtures";
 import {
   AGENTS,
-  AGENTS_DRAFT,
+  AGENTS_EXTRA,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
   modelAccessChipBare,
@@ -487,16 +487,16 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
     await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
     await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("222222222222");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("BedrockRunner");
+    await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID).fill("222222222222");
+    await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME).fill("BedrockRunner");
     await saveAgents(page);
     await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
 
     await page.reload();
     await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
     const reloaded = page.getByTestId("agent-row-claude-code");
-    await expect(reloaded.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toHaveValue("222222222222");
-    await expect(reloaded.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toHaveValue("BedrockRunner");
+    await expect(reloaded.getByLabel(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toHaveValue("222222222222");
+    await expect(reloaded.getByLabel(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toHaveValue("BedrockRunner");
 
     const snap = await getAgentProviders(page);
     const claude = (snap.providers.agents as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
@@ -520,8 +520,8 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
     await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
     await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("DevPower");
+    await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
+    await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME).fill("DevPower");
     await saveAgents(page);
     await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
 
@@ -623,7 +623,7 @@ test.describe("agents — the per_user sign-in affordance renders before the mec
 
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
-    await expect(row.getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeVisible();
+    await expect(row.getByText(AGENTS_EXTRA.PER_USER_SIGN_IN_TITLE)).toBeVisible();
     const banner = row.getByTestId("per-user-sign-in-banner");
     const mechanismField = row.getByRole("radiogroup", { name: AGENTS.FIELD_MECHANISM });
     const bannerBox = await banner.boundingBox();

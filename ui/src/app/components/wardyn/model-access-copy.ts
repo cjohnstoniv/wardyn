@@ -19,7 +19,7 @@ import { AGENTS } from "../../lib/workspace-providers-copy";
 // the rail, the failure block and the two card CTAs cannot drift into four
 // spellings of one control.
 
-// DRAFT (M2 canon pending) — ruled by the UX round (S2, S3, S13, nits)
+// Ruled by the UX round (S2, S3, S13, nits)
 export const MODEL_ACCESS_BANNER = {
   // The first-run state. It states the NEED, never a verdict about what will
   // happen at launch: "refused at launch" is true of the interactive and
@@ -79,7 +79,7 @@ export const MODEL_ACCESS_BANNER = {
 
 } as const;
 
-// DRAFT (M2 canon pending) — the rail's per-PERSON model-access lines. Distinct
+// The rail's per-PERSON model-access lines. Distinct
 // from RAIL_CREDENTIAL, which states where the credential LANDS: these state
 // whether the person launching has one at all. "refused at launch" is the
 // server's word: create answers 422 for every model-calling shape while the
@@ -106,7 +106,7 @@ export const RAIL_MODEL_ACCESS = {
   NO_PROVIDER_CTA: "Connect →",
 } as const;
 
-// DRAFT (M2 canon pending) — ruled by the UX rounds (B7, S7, S8)
+// Ruled by the UX rounds (B7, S7, S8)
 //
 // The FAILED run's own door (0.7.6 Finding 3). Its sentence is the SERVER's,
 // rendered from the run's failure_hint exactly as it always was; these two
@@ -134,7 +134,7 @@ export const MODEL_ACCESS_RUN_DOOR = {
   NOT_OWNER: (owner: string) => `It ran on ${owner}'s own credential — only they can reconnect it.`,
 } as const;
 
-// DRAFT (M2 canon pending) — the mid-run re-auth row (Finding 4), ruled by the
+// The mid-run re-auth row (Finding 4), ruled by the
 // UX rounds (B2, B3, S6, S8) and Codex #5.
 //
 // The rule these strings follow: say what the ROW PROVES, and nothing more. A

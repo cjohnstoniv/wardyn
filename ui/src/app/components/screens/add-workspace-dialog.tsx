@@ -32,7 +32,7 @@ import { getErrorMessage } from "../../lib/format";
 import { adoRepoName } from "../../lib/scm-provider";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
-import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../lib/workspace-copy";
+import { WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../lib/workspace-copy";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
 import { useK8sRunner } from "../../lib/use-k8s-runner";
 import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
@@ -163,7 +163,7 @@ export function AddWorkspaceDialog({
   const summaryImage =
     imageChoice === "pinned"
       ? pinnedRef.trim() || "pinned image"
-      : WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_TITLE;
+      : WORKSPACE_COPY_EXTRA.ADD_WORKSPACE_IMAGE_AUTO_TITLE;
 
   const submit = async () => {
     if (!canSubmit || submitting) return;
@@ -334,8 +334,8 @@ export function AddWorkspaceDialog({
               <OptionCard
                 selected={imageChoice === "auto"}
                 onClick={() => setImageChoice("auto")}
-                title={WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_TITLE}
-                hint={WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_HINT}
+                title={WORKSPACE_COPY_EXTRA.ADD_WORKSPACE_IMAGE_AUTO_TITLE}
+                hint={WORKSPACE_COPY_EXTRA.ADD_WORKSPACE_IMAGE_AUTO_HINT}
               />
               <OptionCard
                 selected={imageChoice === "pinned"}

@@ -32,7 +32,7 @@
 // discipline waitingReauth's own AWS strings already require against
 // model-access-copy.ts's REAUTH_ROW (that module is lazy-side, so it is
 // never actually cross-checked in code — a human/review catches drift).
-// DRAFT (M2 canon pending) — round-2 UX S8: the COUNT stays. A count-free
+// Round-2 UX S8: the COUNT stays. A count-free
 // string would hide a co-pending egress approval, and the person would sign in
 // and watch the run sit there.
 //

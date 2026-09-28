@@ -7,7 +7,7 @@ import type { BrowserContext, Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
 import { CONSOLE_VIEW, USER_PREVIEW, VIEW_DROPPED } from "../src/app/components/wardyn/copy/console-view";
 import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
-import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 
 // M-2 — the Console view switch and the per-view chrome
 // (admin-member-modes-design.md §2.2, §2.4, §3; packet M-A).
@@ -128,7 +128,7 @@ test.describe("the view switch", () => {
     await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).first().click();
     const row = page.getByTestId("provider-row-github");
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
-    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_EXTRA.UNSAVED_MARKER);
 
     await segment(page, CONSOLE_VIEW.USER).click();
     const dialog = page.getByRole("alertdialog");

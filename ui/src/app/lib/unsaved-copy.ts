@@ -6,7 +6,7 @@
 // #460 — the unsaved-guard / sidebar-Settings canon (docs/design/
 // unsaved-guard-canon.md carries the full table + the Q460 decisions,
 // including the save-conflict CONFLICT.* strings, which live directly in
-// workspace-providers-copy.ts's PROVIDERS/PROVIDERS_DRAFT — their existing
+// workspace-providers-copy.ts's PROVIDERS/PROVIDERS_EXTRA — their existing
 // home — rather than being re-exported here).
 //
 // This module stays on the console's EAGER entry path (use-unsaved-guard.tsx

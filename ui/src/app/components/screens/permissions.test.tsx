@@ -40,7 +40,7 @@ vi.mock("../../lib/api/user-types", () => ({
   userTypes: { listUserTypes: () => listUserTypesMock() },
 }));
 
-import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA } from "../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -338,7 +338,7 @@ describe("PermissionsScreen — the grant table", () => {
     renderScreen();
 
     const table = await screen.findByRole("table");
-    expect(within(table).getByText(PERM_DRAFT.INERT_CHIP)).toBeInTheDocument();
+    expect(within(table).getByText(PERM_EXTRA.INERT_CHIP)).toBeInTheDocument();
     expect(within(table).queryByText(PERM.EFFECT_ALLOW)).not.toBeInTheDocument();
     expect(within(table).queryByText(PERM.EFFECT_DENY)).not.toBeInTheDocument();
   });
@@ -351,7 +351,7 @@ describe("PermissionsScreen — the grant table", () => {
 
     const table = await screen.findByRole("table");
     expect(within(table).getByText(PERM.EFFECT_ALLOW)).toBeInTheDocument();
-    expect(within(table).queryByText(PERM_DRAFT.INERT_CHIP)).not.toBeInTheDocument();
+    expect(within(table).queryByText(PERM_EXTRA.INERT_CHIP)).not.toBeInTheDocument();
   });
 
   it("removing a grant confirms with the subject named, then deletes it", async () => {

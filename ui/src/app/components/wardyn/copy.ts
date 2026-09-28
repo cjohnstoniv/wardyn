@@ -115,7 +115,7 @@ export const RISK_ATTRIBUTION = "Graded by Wardyn's rules, not the model.";
 // never drifts between screens.
 export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 
-// DRAFT (M2 canon pending) — X3-F6 residual. The SECURITY tier is a DIFFERENT
+// X3-F6 residual. The SECURITY tier is a DIFFERENT
 // gate: the server's isSecurityOperator admits an admin OR a security admin, so
 // a control refused by it must not tell the reader "requires the admin role"
 // when the role beside it would also do. Picked by the gate that fired, never

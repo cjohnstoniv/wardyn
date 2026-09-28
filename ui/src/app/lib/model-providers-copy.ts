@@ -13,7 +13,7 @@ import type { ModelProviderKind } from "./types/site";
 // Playwright specs can import it; connection-cards.tsx cannot be (it pulls in
 // xterm's CSS). The editor's Codex/Claude/Bedrock "can't drive it" reasons are
 // lib/integrations.ts's INTEGRATIONS.X_* rows, reused verbatim; its AWS
-// sign-in labels are lib/workspace-providers-copy.ts's AGENTS/AGENTS_DRAFT.
+// sign-in labels are lib/workspace-providers-copy.ts's AGENTS/AGENTS_EXTRA.
 
 // Reused as the Model provider card's lede (connection-cards.tsx S.MODEL_LEDE).
 export const MODEL_LEDE = "Agent runs need one. Governed commands don't.";

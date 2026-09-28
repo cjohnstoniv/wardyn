@@ -37,12 +37,9 @@ export const PEOPLE_STEP = {
   MULTI_USER_PERMISSIONS_HINT: "Capability grants, per person or group",
 } as const;
 
-// DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6
-// ("U1 → corp-network-step / wardyn/copy.ts (B2, F22)"), parsed by nothing
-// today; each row moves into its lane's own frozen table at the M2 sitting.
-// Rendered here ahead of that sitting because the states themselves (the save
-// note, the trusted-CA count) already exist and shipping words for them beats
-// a blank control.
+// Shipped copy, frozen by #206 — started as a draft staged in
+// workspace-providers-prompt.md §7.6 ("U1 → corp-network-step /
+// wardyn/copy.ts (B2, F22)"), parsed by nothing.
 // 0.7.3 F6: this block carries no CONFINEMENT_NETPOL_* rows (app-shell.tsx's
 // header chip was their only consumer) — the netpol verdict lives on the
 // setup Environment step alone; see docs/design/workspace-providers-prompt.md

@@ -270,7 +270,7 @@ export interface SetupHarnessTool {
 //
 // The chip renders the LABEL for `state` and the server's `action` verbatim
 // underneath it (the action is the member's own words and is never reworded
-// client-side). DRAFT canon, docs/design/workspace-providers-prompt.md §7.7:
+// client-side). Canon per docs/design/workspace-providers-prompt.md §7.7:
 //   live           → AGENTS.MODEL_ACCESS_LIVE, success tone, no action
 //                    (expired-but-renewable folds in — dispatch renews it)
 //   expiring       → AGENTS.MODEL_ACCESS_EXPIRING, warning; the server's own

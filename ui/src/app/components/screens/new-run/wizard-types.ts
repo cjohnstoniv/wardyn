@@ -480,13 +480,13 @@ export function runPrefill(run: ClonableRun, created: RunCreateRequestFacts = {}
   };
 }
 
-// DRAFT (M2 canon pending) — review U-01: moved here from runs/run-card.tsx
+// Review U-01: moved here from runs/run-card.tsx
 // so both clone doors (the run header's onClone, run-detail.tsx; the
 // Runs-list kebab, run-card.tsx) show ONE string, not two that could drift.
 export const CLONE_UNREADABLE =
   "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.";
 
-// DRAFT (M2 canon pending) — U2-08 (blind round 2, lens-U2): the OTHER clone
+// U2-08 (blind round 2, lens-U2): the OTHER clone
 // refusal, the one where the audit read itself failed rather than came back
 // empty. It lived inline in runs/run-card.tsx, which is both the one new
 // user-facing literal outside a constants block in this delta and the one

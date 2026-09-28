@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool } from "../../../lib/types";
-import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_EXTRA, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { AgentsTab } from "./agents-tab";
 
 const getAgentProvidersMock = vi.fn();
@@ -116,11 +116,11 @@ describe("AgentsTab — Save is withheld over an invalid per_user start URL", ()
 
     await userEvent.click(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER }));
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
-    expect(within(row).getByText(AGENTS_DRAFT.SSO_START_URL_REQUIRED)).toBeInTheDocument();
+    expect(within(row).getByText(AGENTS_EXTRA.SSO_START_URL_REQUIRED)).toBeInTheDocument();
 
     await userEvent.type(within(row).getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeEnabled();
-    expect(within(row).queryByText(AGENTS_DRAFT.SSO_START_URL_REQUIRED)).not.toBeInTheDocument();
+    expect(within(row).queryByText(AGENTS_EXTRA.SSO_START_URL_REQUIRED)).not.toBeInTheDocument();
   });
 
   // Negative control: a valid start URL typed straight away keeps Save

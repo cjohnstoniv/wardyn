@@ -5,8 +5,9 @@
 
 import { MEMBER_GETTING_STARTED } from "./getting-started";
 
-// DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6
-// ("B-γ → wardyn/copy.ts"), parsed by nothing today.
+// Shipped copy, frozen by #206 — started as a draft staged in
+// workspace-providers-prompt.md §7.6 ("B-γ → wardyn/copy.ts"), parsed by
+// nothing.
 //
 // The shell's identity states (B1, R4-F107). Both are about the ONE question
 // the console cannot answer for itself: who is signed in. A failed /me must
@@ -24,10 +25,10 @@ export const SHELL = {
   // R4-F107: POST /auth/logout failed, so the HttpOnly OIDC session cookie may
   // still be live — the local token is gone either way, which is why the title
   // says "here".
-  // DRAFT (M2) — DIVERGES from the §7.6 staging ("Couldn't sign you out" /
-  // "Your session is still live…"): these two are the M2 sitting sheet's §2
-  // texts, which do not overclaim — a failed POST does not PROVE the session
-  // survived, only that nothing confirmed it died.
+  // Deliberately DIVERGES from the §7.6 staging ("Couldn't sign you out" /
+  // "Your session is still live…"): these two do not overclaim — a failed
+  // POST does not PROVE the session survived, only that nothing confirmed it
+  // died.
   SIGN_OUT_FAILED_TITLE: "Signed out here, but not on the server",
   SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Close the browser, or try signing out again.",
 } as const;
@@ -49,7 +50,7 @@ export const UNSAVED_GUARD = {
   // use-unsaved-guard.tsx), and workspace-providers-copy.ts is a large,
   // route-split file (bundle-split.test.ts's entry-chunk budget). Every
   // per-editor dirty chip reuses THIS constant rather than each carrying its
-  // own copy — providers-screen.tsx's PROVIDERS_DRAFT.UNSAVED_MARKER included.
+  // own copy — providers-screen.tsx's PROVIDERS_EXTRA.UNSAVED_MARKER included.
   DIRTY_CHIP: "Unsaved changes",
 } as const;
 
