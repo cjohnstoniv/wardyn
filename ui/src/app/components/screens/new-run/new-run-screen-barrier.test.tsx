@@ -461,4 +461,22 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
     expect(screen.queryByText(RUN.CLONE_NOTE)).toBeNull();
     expect(screen.queryByText(RUN.CLONE_CEILING_NOTE)).toBeNull();
   });
+
+  // Review F4 (#1197 L3): the Runs landing page's composer rides this SAME
+  // prefill channel (task + an optional workspace) but has no source run —
+  // `source: "composer"` must suppress the whole banner (both sentences),
+  // never just re-word it, while the task itself still prefills the form
+  // exactly like a clone's would.
+  it("a composer prefill (source: 'composer') shows no clone banner at all, but still prefills the task", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    renderClone({
+      prefill: { inlinePolicy: false, source: "composer", state: { task: "from the composer" } },
+    });
+    await screen.findByRole("button", { name: /Launch run/ });
+    // Default mode is interactive (freshWizardState) — same label the task
+    // field carries for any prefill that doesn't also set `mode`.
+    expect(screen.getByLabelText("Initial prompt (optional)")).toHaveValue("from the composer");
+    expect(screen.queryByText(RUN.CLONE_NOTE)).toBeNull();
+    expect(screen.queryByText(RUN.CLONE_CEILING_NOTE)).toBeNull();
+  });
 });

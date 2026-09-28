@@ -335,12 +335,15 @@ SQL
   # wizard, which would clamp the audit-derived tool_approvals seeded below
   # right back to "auto" and defeat the fidelity this fixture exists to pin.
   local agents=(claude-code codex-cli claude-code claude-code claude-code claude-code claude-code claude-code claude-code)
-  # Fixtures 0 and 1 deliberately SHARE a title so the Runs board actually has a
-  # group to render — a title held by only one run is not a group (runs.tsx's
-  # titleGroups), so without a repeat the grouping path would go unexercised.
-  # The rest stay untitled on purpose: that is the legacy/CLI/system-run shape,
-  # and it must keep rendering by task (runHeadline).
-  local titles=("e2e group" "e2e group" "" "" "" "" "" "" "")
+  # #1197 L3: every fixture is untitled — that is the legacy/CLI/system-run
+  # shape, and it must keep rendering by task (board-groups.ts's rowHeadline).
+  # Fixtures 0 and 1 used to deliberately SHARE a title ("e2e group") to
+  # exercise the old Runs board's title-GROUPING path (runs.tsx's
+  # titleGroups) — #1197 D2 removed grouping-by-title from this page
+  # entirely (it groups by need-then-time now), so that shared title has no
+  # feature left to exercise, and every row here is addressed by its own task
+  # text (runs.spec.ts's openRuns and its per-row click tests all rely on it).
+  local titles=("" "" "" "" "" "" "" "" "")
   for i in "${!agents[@]}"; do
     # review C-02: fixture 4 (rn=5, fixed to COMPLETED below) carries a
     # NON-DEFAULT audit-derived field (tool_approvals) on its own run.create
@@ -359,11 +362,22 @@ SQL
     api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null
   done
   # Diversify states deterministically by created order so specs can target them.
+  # #1197 L3: a real terminal transition always stamps ended_at in the same
+  # statement (migration 0092, store.go's UPDATE ... ended_at=CASE WHEN ...) —
+  # this raw SQL bypasses that write path, so it stamps it here too. Without
+  # it every terminal fixture (rn 5-9) carries ended_at=NULL, which the Runs
+  # landing page's default 7-day ended_within window then reads as "outside
+  # every window" (store_runs_filtered.go's ageWindowSQL: NULL comparisons
+  # never satisfy >=) and drops silently instead of showing or counting as
+  # hidden — a seed-script artifact a real backend can't produce (the store's
+  # comment on killedVisibleSQL calls a NULL ended_at on a terminal row
+  # "should not happen past migration 0092").
   psql_e2e >/dev/null <<'SQL' || true
 WITH ordered AS (
   SELECT id, row_number() OVER (ORDER BY created_at) AS rn FROM agent_runs
 )
-UPDATE agent_runs a SET state = v.state
+UPDATE agent_runs a SET state = v.state,
+  ended_at = CASE WHEN v.state IN ('COMPLETED','STOPPED','FAILED','KILLED','ARCHIVED') THEN now() ELSE NULL END
 FROM ordered o
 JOIN (VALUES
   (1,'PENDING'),(2,'STARTING'),(3,'RUNNING'),(4,'WAITING_FOR_CONFIRMATION'),
