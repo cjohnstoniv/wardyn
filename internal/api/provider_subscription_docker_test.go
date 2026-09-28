@@ -336,13 +336,27 @@ func startSubfakeCP(t *testing.T, cli *dockerclient.Client, bin, netName, cpHost
 }
 
 // startSubfakeVendor runs a SEPARATE subfake instance (a different container,
-// off the proxy's own subnet) with its :8443 published to 127.0.0.1:port on
+// off the proxy's own subnet) with its :8443 published to 0.0.0.0:port on
 // the host, serving TLS for subDockerVendorHost — the real proxy container
 // reaches it back at that name, landing on the published port. Its grant id
 // is a random one no proxy ever asks it to resolve; its only real job is
 // recording the Authorization header of whatever the proxy forwards to it
 // (the vendor leg). Returns the container id and the CA PEM for
 // ProxyConfig.TrustedCAPEM.
+//
+// 0.0.0.0, not 127.0.0.1 (F1, found on hosted CI run 36389795298): the proxy
+// container reaches this port via its ExtraHosts "host-gateway" entry
+// (runSubDockerProxy), which on a native-Linux dockerd resolves to the
+// bridge network's OWN gateway address — a port published on loopback is
+// unreachable from a sibling container's view of that address. Binding to
+// the gateway address specifically (rather than 0.0.0.0) was tried first and
+// rejected: on Docker Desktop, publishing to any address other than 127.0.0.1
+// or 0.0.0.0 fails outright ("ports are not available: exposing port TCP
+// <gateway>:P -> 127.0.0.1:0: /forwards/expose returned unexpected status:
+// 500" — its VM-side port-forward shim does not support an arbitrary bridge
+// address as HostIP). 0.0.0.0 is the one binding proven to work in both real
+// environments; the published port lives only for one subtest's duration and
+// is torn down in t.Cleanup below.
 func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string, port int) (id, caPEM string) {
 	t.Helper()
 	certPEM, keyPEM, caPEM := subfakeCert(t, subDockerVendorHost)
@@ -369,7 +383,7 @@ func startSubfakeVendor(t *testing.T, cli *dockerclient.Client, bin string, port
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: network.PortMap{pp: []network.PortBinding{
-				{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: strconv.Itoa(port)},
+				{HostIP: netip.IPv4Unspecified(), HostPort: strconv.Itoa(port)},
 			}},
 		},
 	})

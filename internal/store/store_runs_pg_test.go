@@ -32,19 +32,25 @@ import (
 // runsPGPoolIsolated gives the caller its own freshly-migrated throwaway
 // database instead of runsPGPool's shared WARDYN_TEST_PG target (#983 part 3).
 // The audit-chain whole-table verifiers (VerifyAuditChain reads every row)
-// and the tests that deliberately disable/rewrite the append-only trigger to
-// probe tamper-detection both live on the shared database when they use
-// runsPGPool — so a -p 4 run against internal/api, internal/db and
-// internal/store together lets one package's brief trigger-disabled tamper
-// window (auditchain_pg_test.go's own TestPG_AuditChain_DetectsTamperedMiddleRow,
-// for one) get read by another package's or another -count rep's concurrent
-// whole-chain verify, seen as "seq=N row carries no hash" — a real race, not
+// live on the shared database when they use runsPGPool — so a -p 4 run
+// against internal/api, internal/db and internal/store together lets one of
+// two brief windows on that shared database produce a row with NO hash at
+// all, which a concurrent whole-chain verify (or another -count rep) then
+// reads as "seq=N row carries no hash": internal/db's own
+// TestMigrateRestoresADisabledChainTrigger (migrate_pg_test.go, via its
+// shared-DB pgPool) disables the chain trigger outright for the span of the
+// test, and this package's own F11 probes (auditchain_f11_probe_pg_test.go)
+// insert under `session_replication_role = replica`, which bypasses the same
+// trigger. (auditchain_pg_test.go's TestPG_AuditChain_DetectsTamperedMiddleRow
+// disables a DIFFERENT trigger — audit_events_no_update — to REWRITE a row
+// in place, which produces a hash MISMATCH on that one row, never a missing
+// hash; it is not a source of this failure shape.) This is a real race, not
 // deterministic, so a single green run proves nothing. Every test in
 // auditchain_pg_test.go, auditchain_f11_probe_pg_test.go,
 // store_devices_federation_pg_test.go and store_devices_origin_pg_test.go
-// uses this instead of runsPGPool for that reason, mirroring the
-// per-package throwaway-database pattern #983a already used
-// (internal/api's throwawayPGPool, internal/db's probeSchemaPool).
+// uses this instead of runsPGPool, mirroring the per-package
+// throwaway-database pattern #983a already used (internal/api's
+// throwawayPGPool, internal/db's probeSchemaPool).
 func runsPGPoolIsolated(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := throwawayDatabase(t)

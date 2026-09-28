@@ -143,9 +143,9 @@ func TestPG_AuditChain_SurvivesConcurrentWriters(t *testing.T) {
 // residual 0007 documents) rewrites ONE row in the middle of the log, and the
 // sweep names it.
 //
-// The rewrite is undone before the test returns: audit_events is append-only
-// and shared by every other test in this package, so leaving it broken would
-// fail every later sweep in the same run.
+// The rewrite is undone before the test returns anyway: audit_events is
+// append-only by design, and leaving a row broken would misrepresent what
+// this test proves even on its own throwaway database (runsPGPoolIsolated).
 func TestPG_AuditChain_DetectsTamperedMiddleRow(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
