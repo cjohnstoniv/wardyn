@@ -10,7 +10,7 @@ only.
   other config or script picks up.
 - Every suite skips unless its own gate variable is `1`. The skip message
   names the variables it needs and never prints a value. Once the gate is
-  `1`, the Go suites (LL2, LL3) fail, not skip, on a missing variable.
+  `1`, the Go suites fail, not skip, on a missing variable.
 - Only code is committed. There are no recorded responses, fixtures, tenant
   names, organisation names, account ids or addresses in the repository.
 
@@ -21,7 +21,9 @@ only.
 | LL2b Azure DevOps, bounded | A run that starts with `read` reads, has its push refused and raised for approval, pushes once the harness approves `code_write` for the run, and gets 403 with no request raised for `repo_admin`, which is above the ceiling | Go | `WARDYN_LIVE_ADO_WRITE=1` |
 | LL2c personal access token probe | Whether a third-party app registration can mint a personal access token through the token lifecycle API. It logs a verdict either way and revokes anything it mints | Go | `WARDYN_LIVE_ADO_PAT_PROBE=1` |
 | LL3 Bedrock | One Claude Haiku 4.5 call on Identity Center role credentials in the capped member account, and the reply is checked | Go | `WARDYN_LIVE_BEDROCK=1` |
+| LL3w Bedrock through Wardyn | A governed claude-code run whose model credential is Wardyn's own per-user AWS SSO capture (not the test process's own credentials) completes on the per-user SSO lane, on an allow-listed model, with a minted credential, attributed to the member, reply in the transcript; a second run on the bearer lane pointed at a denied model surfaces an `AccessDeniedException` sentence on `failure_hint` | Go | `WARDYN_LIVE_BEDROCK_WARDYN=1` |
 | LL4 AWS SSO through Entra | The per-user AWS SSO device sign-in URL, taken through the console's own extractor, lands on an Entra sign-in page | Playwright | `WARDYN_LIVE_AWS_SSO=1` |
+| LL5 Autonomy L0 | A member whose governance profile caps this run's posture at L0 is refused a non-interactive run outright — 403 naming autonomy level L0 — before any run, identity or `run.exec` audit row exists; an interactive run at the same level is admitted and its managed-settings file is delivered | Go | `WARDYN_LIVE_AUTONOMY=1` |
 
 Every variable is listed in [ENV.md](ENV.md#live-local-harness-opt-in-never-in-ci).
 
@@ -49,7 +51,7 @@ string. The browser suites assert on categories (Wardyn, Entra, other) rather
 than raw URLs, keep no trace, screenshot or video, and write their scratch
 output to the OS temp directory. Nothing is written inside the repository.
 
-**Spend.** Only LL3 spends money, and it is fenced in code
+**Spend.** LL3 spends money and it is fenced in code
 (`internal/testlive/bedrock.go`):
 
 - Credentials come only from IAM Identity Center role credentials for the
@@ -65,6 +67,24 @@ output to the OS temp directory. Nothing is written inside the repository.
   hard maximum 20). Past the budget, a call is refused before it is sent.
 - The account's own budget and service control policies stay the outer
   limit.
+
+LL3w spends money too, but the fence is partly the deployment's own, not this
+harness's own code: it rides Wardyn's ordinary per-run Bedrock credential and
+asks for one short reply per run, on a model the suite verifies AFTER the
+run completes is Claude Haiku 4.5 or Amazon Nova Micro
+(`testlive.ModelAllowed`, read off the run's own `run.bedrock.configure`
+audit row) — there is no independent `max_tokens` fence on this path the way
+LL3's own direct SigV4 calls have one, and no way to refuse a misconfigured
+Integration BEFORE the one call it makes (`GET /integrations` is not wrapped
+by the SDK this harness uses). Configure the Integration this suite points at
+to a Haiku/Nova model to begin with; the post-hoc check catches a
+misconfiguration, it does not prevent the one call's worth of spend from it.
+
+LL5 spends nothing: `unattended_refused`'s whole proof is a 403 before a run
+exists, and `interactive_agent_policy_delivered` sends NO task at all (an
+interactive run with a task would seed the agent CLI at boot, before anyone
+attaches, spending at least one model call — see the test's own doc
+comment), so no agent process ever starts.
 
 **One at a time.** Run live suites one at a time, and never alongside a heavy
 test gate.
@@ -183,6 +203,52 @@ test identity's permission set on the capped member account.
    under `~/.aws/sso/cache/`. It is the one whose `startUrl` is your start
    URL. When it expires, LL3 fails and tells you to sign in again.
 
+### Bedrock through Wardyn (LL3w)
+
+Unlike LL3, this suite never holds AWS credentials of its own — it drives the
+member's own Wardyn API token and Wardyn's own captured AWS SSO session.
+
+1. Sign in to the console as the member and complete AWS SSO sign-in when
+   asked (same capture LL4 walks through the console's own extractor for).
+2. Find this install's Bedrock Integration id (`GET /api/v1/integrations`, or
+   the console's Integrations page) and set
+   `WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID` to it.
+3. Optional, for the forced-`AccessDenied` half: point a SECOND Bedrock
+   Integration, on the BEARER (API-key) lane specifically — never the
+   per-user AWS SSO lane, whose bedrock-runtime traffic is an opaque,
+   un-MITM'd tunnel and can never surface this hint — at a model this capped
+   account's service control policy denies, and set
+   `WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID` to its id. Unset, that
+   half alone skips, named.
+
+`converse_through_wardyn` proves the run's credential mint is a PER-USER
+capture owned by this member — never the operator's SHARED session, which
+produces the same `run.bedrock.configure` mode and would otherwise pass —
+by reading the mint's own scope snapshot (`credential_source`,
+`owner_subject`). `owner_subject` is compared for exact equality against
+this member's own `GET /me` principal; both are `run.CreatedBy`/the token
+`sub` read the same way outside local mode (see
+`BedrockWardynRunProvesPerUserSSO`'s own doc comment for the exact call
+chain), but this has not been independently confirmed against a live row —
+if a real deployment spells the two differently, this subtest FAILS rather
+than silently passing on the wrong identity. Its message does not print
+either value: a token `sub` can be email-shaped, and this suite prints no
+value it does not have to, the same reason `RunCreatedByIsMember` prints
+neither `created_by` nor the principal it compares against. Diagnosing a
+real mismatch means reading the two values yourself, off the run's own
+`run.bedrock.configure`/`credential.mint` audit rows and `GET /me`.
+
+### Autonomy L0 (LL5)
+
+The member needs a governance profile assignment whose `AutonomyRubric`
+resolves this run's posture to L0 (an admin authors this once through
+`POST /api/v1/governance/profiles` and `/governance/assignments` — the suite
+does not author one itself, the same way LL2's Azure DevOps project is a
+fixture the suite assumes rather than creates). Set
+`WARDYN_LIVE_AUTONOMY_INTEGRATION_ID` to a working AI-provider Integration for
+that member, so the request reaches the autonomy gate instead of failing
+earlier on an unrelated missing-model-credential refusal.
+
 ## Running
 
 Start from a running Wardyn (a compose stack or a kind cluster) that signs in
@@ -213,6 +279,14 @@ WARDYN_LIVE_BEDROCK_ACCOUNT_ID=... WARDYN_LIVE_BEDROCK_ROLE_NAME=... \
 WARDYN_LIVE_BEDROCK_REGION=us-east-1 WARDYN_LIVE_AWS_SSO_REGION=... \
 WARDYN_LIVE_AWS_SSO_TOKEN_FILE=$HOME/.aws/sso/cache/<file>.json \
   go test -tags live -count=1 -v -run TestLiveBedrock ./internal/testlive/
+
+# LL3w
+WARDYN_LIVE_BEDROCK_WARDYN=1 WARDYN_LIVE_BEDROCK_WARDYN_INTEGRATION_ID=... \
+  go test -tags live -count=1 -v -run TestLive_BedrockWardyn ./internal/testlive/
+
+# LL5
+WARDYN_LIVE_AUTONOMY=1 WARDYN_LIVE_AUTONOMY_INTEGRATION_ID=... \
+  go test -tags live -count=1 -v -run TestLive_AutonomyL0Enforced ./internal/testlive/
 ```
 
 LL1 and LL4 (Playwright):
@@ -230,4 +304,11 @@ The parts that need no live service run in the normal test suite:
 `go test ./internal/testlive/` covers the redactor, the configuration limits,
 the SigV4 signer against AWS's published test vector, and the account
 refusal, which uses a local fake STS that answers with the wrong account and
-checks that no model call is made.
+checks that no model call is made. It also covers LL3w's and LL5's own
+grading logic hermetically — `AutonomyL0RefusalOK`, `AgentPolicyDeliveredOK`,
+`BedrockWardynRunProvesPerUserSSO`, `RunCreatedByIsMember`,
+`TranscriptContainsReply` and `BedrockWardynForcedFaultOK` are pure functions,
+unit-tested against both a genuine and a deliberately wrong-shaped fixture, so
+the live suites' PASS is never just "got a 403" or "the run ended" but the
+specific shape each proof
+requires.
