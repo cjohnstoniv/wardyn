@@ -19,6 +19,12 @@ package api
 // each lane converts. A reason only one lane currently sends still lives
 // here, not beside its lane, so the next lane converted picks from the same
 // vocabulary rather than starting a second one.
+//
+// Continued in reasons_routes.go: #656 slice 3 finishing the route-surface
+// sweep pushed this file past scripts/check-file-size.sh's 1000-line gate, so
+// the set is declared across two files, not one. Nothing else about the
+// convention changes — TestReasonDocsMatchReasonsGo and TestNoAdHocAuthz both
+// read that file too.
 const (
 	// Shared by every lane's resolve arm: the dispatch-time-snapshot family
 	// of refusals (I1-I3 in the Azure DevOps and AWS SSO doc comments).
@@ -181,7 +187,6 @@ const (
 	reasonWorkspaceEnvcodeNoLocalDir  = "workspace_envcode_no_local_dir"  // the workspace has no local_dir source to emit env-as-code from
 	reasonWorkspaceEnvcodeNoProfile   = "workspace_envcode_no_profile"    // the workspace has no scanned profile to emit from
 	reasonWorkspaceProvidersInvalid   = "workspace_providers_invalid"     // the submitted provider block fails validation
-	reasonWorkspaceProvidersStale     = "workspace_providers_stale"       // If-Match does not match the current providers ETag; reload and retry
 	reasonWorkspaceRequestInvalid     = "workspace_request_invalid"       // the create/update request body fails workspace-request validation
 	reasonWorkspaceSSHSourcesNotReady = "workspace_ssh_sources_not_ready" // an SSH-remote source names a secret that has not been stored yet
 	reasonWorkspaceSourcesNotAllowed  = "workspace_sources_not_allowed"   // the caller's own local_dir sources fail the member-safe mount gate
@@ -369,17 +374,4 @@ const (
 	// many runs are still asking. Shared with userDriveWriteRefusal's OWN
 	// org-switch check (user_drives.go): the identical cause, one route apart.
 	driveRefusalDrivesDisabled = "drives_disabled"
-)
-
-// The user-drive resolver's own closed enum (user_drives_resolve.go) members
-// that reach writeDriveError's wire body. driveUnavailableGroups,
-// driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
-// their own GET /me field instead — they never reach errorBody.Reason, so
-// TestReasonDocsMatchReasonsGo does not need to see them, and docs/sdk.md does
-// not document them (#656 slice 2 review round S3: a documented-but-unsent
-// reason is worse than an undocumented one, and `unavailable` collided with
-// ADOEntraFailure's own reason of the same name).
-const (
-	driveUnavailableUserType    = "user_type_unknown" // the caller's stamped user type no longer exists. 403 at launch.
-	driveUnavailableUnmountable = "unmountable"       // an allocation EXISTS and cannot be mounted — a home name that cannot name a directory, a share that is not there. 422 at launch, and the one state whose remedy is an admin's, not the member's.
 )

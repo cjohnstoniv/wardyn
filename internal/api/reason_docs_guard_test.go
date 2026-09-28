@@ -4,11 +4,16 @@
 package api
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 )
 
 // adoEntraFailureEnumValues is ADOEntraFailure's own closed enum
@@ -28,12 +33,42 @@ var adoEntraFailureEnumValues = []string{
 // added here to silence the guard. Empty today: no such pair exists yet.
 var documentedDuplicateReasonValues = map[string]bool{}
 
-// TestReasonDocsMatchReasonsGo (#656 M2) parses docs/sdk.md's Reason table and
-// internal/api/reasons.go's const block and requires their sets of wire
-// values to be equal, modulo ADOEntraFailure's own documented exception. This
-// is the guard the FINAL review on PR #1299 asked for: without it, renaming a
-// PUBLISHED wire value in reasons.go (a breaking change for any caller
-// matching on it) passes every other test in the package.
+// authzWireReasons returns every registered authz.Reason whose Effect
+// actually reaches the wire — everything except EffectHidden, whose whole
+// point is to answer byte-identical to a missing row and so is never itself
+// a wire value; s.refuse's AsIf is what a Hidden decision actually sends.
+// s.refuse writes d.Reason/d.WireReason on every OTHER effect, so every one
+// of those names is as wire-visible as a reasons.go literal, and
+// TestReasonDocsMatchReasonsGo must see it as one.
+func authzWireReasons(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, r := range authz.Reasons() {
+		ref, ok := authz.Lookup(r)
+		if !ok {
+			t.Fatalf("authz.Reasons() returned %q, which authz.Lookup does not know — registry inconsistency", r)
+		}
+		if ref.Effect == authz.EffectHidden {
+			continue
+		}
+		out[string(r)] = true
+	}
+	if len(out) < 20 {
+		t.Fatalf("parsed only %d non-Hidden authz reason(s) — the registry shrank, or this guard broke", len(out))
+	}
+	return out
+}
+
+// TestReasonDocsMatchReasonsGo (#656 M2) parses docs/sdk.md's Reason table,
+// internal/api's two reasons.go files, and authz's own registry, and requires
+// the FIRST to be a superset of the union of the other two (every wire value
+// documented), modulo ADOEntraFailure's own documented exception. This is the
+// guard the FINAL review on PR #1299 asked for: without it, renaming a
+// PUBLISHED wire value (a breaking change for any caller matching on it)
+// passes every other test in the package. Also reads authz.Reasons(): a
+// value that only ever reaches the wire through authz's registry (s.refuse)
+// is just as published as one in reasons.go, and was invisible to this guard
+// before authzWireReasons was added.
 func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	docBytes, err := os.ReadFile("../../docs/sdk.md")
 	if err != nil {
@@ -71,24 +106,19 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 		t.Fatalf("parsed only %d reason(s) from docs/sdk.md — the table anchor or parser broke, not reasons.go", len(docReasons))
 	}
 
-	reasonsGoBytes, err := os.ReadFile("reasons.go")
-	if err != nil {
-		t.Fatalf("read reasons.go: %v", err)
-	}
 	// Any string-literal const in this file counts, not only ones named
 	// reasonXxx: driveRefusal*/driveUnavailable* (#656 slice 2 review round)
 	// moved here BECAUSE this guard only reads this one file, and a naming
-	// prefix is not what makes a value wire-visible.
-	constValue := regexp.MustCompile(`(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([a-z][a-z0-9_]*)"`)
-	goReasons := map[string]bool{}
-	namesByValue := map[string][]string{}
-	for _, m := range constValue.FindAllStringSubmatch(string(reasonsGoBytes), -1) {
-		name, value := m[1], m[2]
-		goReasons[value] = true
-		namesByValue[value] = append(namesByValue[value], name)
-	}
+	// prefix is not what makes a value wire-visible. go/parser, not a regex
+	// anchored on "^\s*name = ..." (#656 slice 3 review round): that regex
+	// assumed every spec sat on its own line inside a `const ( ... )` block,
+	// so a single-line `const x = "…"` — legal Go, invisible to a line-anchored
+	// pattern that never expects the "const" keyword before the name — escaped
+	// both this check and the duplicate-value one below. driveRefusalConstants
+	// (user_drives_run_test.go) already parses this same file this way.
+	goReasons, namesByValue := reasonsGoConstValues(t)
 	if len(goReasons) < 50 {
-		t.Fatalf("parsed only %d reason(s) from reasons.go — the regex broke, not the const block", len(goReasons))
+		t.Fatalf("parsed only %d reason(s) from reasons.go — the parser broke, not the const block", len(goReasons))
 	}
 
 	// #656 slice 2 review round F4: no two consts may share a wire value
@@ -108,9 +138,15 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 			"documentedDuplicateReasonValues entry: %v", undocumentedDuplicates)
 	}
 
-	// docReasons must equal goReasons ∪ the ADO enum exception, exactly.
+	authzReasons := authzWireReasons(t)
+
+	// docReasons must equal goReasons ∪ authzReasons ∪ the ADO enum exception,
+	// exactly — three sources of wire-visible reasons, one required doc table.
 	want := map[string]bool{}
 	for k := range goReasons {
+		want[k] = true
+	}
+	for k := range authzReasons {
 		want[k] = true
 	}
 	for _, v := range adoEntraFailureEnumValues {
@@ -118,7 +154,7 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	}
 
 	var missingFromDocs, missingFromGo []string
-	for k := range goReasons {
+	for k := range want {
 		if !docReasons[k] {
 			missingFromDocs = append(missingFromDocs, k)
 		}
@@ -131,9 +167,68 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	sort.Strings(missingFromDocs)
 	sort.Strings(missingFromGo)
 	if len(missingFromDocs) > 0 {
-		t.Errorf("reasons.go values with no docs/sdk.md row: %v", missingFromDocs)
+		t.Errorf("wire reason(s) (reasons.go/reasons_routes.go or authz's registry) with no docs/sdk.md row: %v", missingFromDocs)
 	}
 	if len(missingFromGo) > 0 {
-		t.Errorf("docs/sdk.md values with no reasons.go const (and not the ADOEntraFailure exception): %v", missingFromGo)
+		t.Errorf("docs/sdk.md values with no source (not reasons.go, not authz.Reasons(), and not the ADOEntraFailure exception): %v", missingFromGo)
 	}
+}
+
+// reasonWireValueShape is a wire reason's own shape: lowercase snake_case,
+// the same shape docs/sdk.md's table anchors on. reasons.go declares other
+// string consts too (HTTP header names, capability kinds); this filters to
+// the ones that look like a reason without needing every const to say so by
+// name.
+var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// reasonsGoFiles is the closed set's own two files (reasons.go's header
+// comment explains the split: #656 slice 3 pushed reasons.go past
+// scripts/check-file-size.sh's 1000-line gate). Every reader of the set —
+// this guard, driveRefusalConstants (user_drives_run_test.go) — must read
+// both, or a value declared in the second file is invisible to it.
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go"}
+
+// reasonsGoConstValues parses every top-level const's string-literal value in
+// reasonsGoFiles via go/parser rather than a line-anchored regex, so a
+// single-line `const x = "…"` (legal Go outside a `const ( ... )` block) is
+// seen exactly like one declared inside one. Returns the set of values, and
+// every const name declared under each value (so the duplicate-value check
+// above can name the collision).
+func reasonsGoConstValues(t *testing.T) (values map[string]bool, namesByValue map[string][]string) {
+	t.Helper()
+	values, namesByValue = map[string]bool{}, map[string][]string{}
+	for _, filename := range reasonsGoFiles {
+		f, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", filename, err)
+		}
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					value := strings.Trim(lit.Value, `"`)
+					if !reasonWireValueShape.MatchString(value) {
+						continue
+					}
+					values[value] = true
+					namesByValue[value] = append(namesByValue[value], name.Name)
+				}
+			}
+		}
+	}
+	return values, namesByValue
 }

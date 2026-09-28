@@ -127,7 +127,7 @@ func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := ds.RevokeDelegate(r.Context(), id, s.cfg.Now().UTC())
-	if notFoundIf(w, err, "delegate") {
+	if notFoundIf(w, err, "delegate", reasonDelegateNotFound) {
 		return
 	}
 	if err != nil {

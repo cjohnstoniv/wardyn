@@ -216,8 +216,9 @@ func mechanismSatisfied(row types.AgentProvider, selected types.AgentMechanism, 
 // CLASS, and the console decides whether to offer a door from the same
 // model-access grading every other surface reads — a refusal whose renewal
 // merely did not complete ("launch again in a moment") grades live and gets no
-// button, correctly, without this key knowing anything about it.
-const llmRefusalAuditReason = "model_credential"
+// button, correctly, without this key knowing anything about it. Declared in
+// reasons_routes.go, not here (#656 review round: the docs guard only reads
+// the two reasons files).
 
 // llmMechanismRemedy is the destination clause for one reader: the member's own
 // two doors under a per_user row, the admin's Settings page otherwise.

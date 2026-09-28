@@ -220,7 +220,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.Runner == nil {
-		writeError(w, http.StatusNotImplemented, runFilesUnsupportedMsg)
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectNoRunner, runFilesUnsupportedMsg)
 		return
 	}
 	// A finished run's sandbox is gone (finalize clears the ref on a clean
@@ -228,7 +228,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	// ref check so both shapes get the same honest answer instead of a 500 +
 	// an audit failure row per widget mount.
 	if run.State.IsTerminal() {
-		writeError(w, http.StatusConflict, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "run has finished; its sandbox is gone (state="+string(run.State)+")")
 		return
 	}
 	// A run that never dispatched (or whose sandbox was never recorded) has no
@@ -236,11 +236,11 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	// driver and surfacing whatever error it invents — same shape as
 	// handleAttachTicket's "not attachable" refusal.
 	if run.SandboxRef == "" {
-		writeError(w, http.StatusConflict, "run has no sandbox to read (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectNoSandbox, "run has no sandbox to read (state="+string(run.State)+")")
 		return
 	}
 	if run.PausedAt != nil {
-		writeError(w, http.StatusConflict, runPausedReadMsg)
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
 		return
 	}
 
@@ -256,14 +256,14 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.auditRunFilesFailure(r, id, err)
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
-			writeError(w, http.StatusNotImplemented, loggedMsg(ctx, runFilesUnsupportedMsg, err))
+			writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, loggedMsg(ctx, runFilesUnsupportedMsg, err))
 			return
 		}
 		writeServerError(w, r, "read workspace files", err)
 		return
 	}
 	if sess == nil {
-		writeError(w, http.StatusInternalServerError, "read workspace files: runner returned no exec session")
+		writeErrorReason(w, http.StatusInternalServerError, reasonRunFilesNoExecSession, "read workspace files: runner returned no exec session")
 		return
 	}
 	defer func() {

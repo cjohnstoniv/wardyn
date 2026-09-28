@@ -207,7 +207,9 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", name, "failure",
 			mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"})))
-		writeError(w, status, body)
+		// reason reaches the wire now (#656 slice 3), matching
+		// injection_bedrock_bearer.go's identical fix.
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 	var rec providerGrantSnapshot
@@ -236,9 +238,9 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	tok, err := s.ownerSubscriptionToken(claims.Sub, uid).Current(ctx)
 	switch {
 	case errors.Is(err, secretstore.ErrUnavailable):
-		return fail(http.StatusServiceUnavailable, "store_unavailable", sinkStoreUnreachable)
+		return fail(http.StatusServiceUnavailable, reasonSinkStoreUnavailable, sinkStoreUnreachable)
 	case err != nil:
-		return fail(http.StatusFailedDependency, "resolve_failed", fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
+		return fail(http.StatusFailedDependency, reasonSinkResolveFailed, fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
 	}
 	// One correct wire shape, whatever the grant says (see the legacy arm).
 	formatted := formatInjectionValue("Bearer %s", []byte(tok.Value))
