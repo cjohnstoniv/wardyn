@@ -289,6 +289,38 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
+	// fan.Close() is the deferred drain above — reached from here and from the
+	// serve-error return alike.
+	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, orgFederation)
+}
+
+// httpShutdowner is the *http.Server surface runShutdownSequence drives,
+// narrowed so a test can inject a Shutdown that fails without standing up a
+// real listener.
+type httpShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// backgroundServer is the *api.Server surface runShutdownSequence needs after
+// the HTTP drain, narrowed for the same reason as httpShutdowner.
+type backgroundServer interface {
+	WaitBackground()
+	FlushAuthFailedStreak()
+}
+
+// runShutdownSequence drains the internal listener, then the public HTTP
+// server, then any goBackground work still in flight, then flushes the
+// auth-failure streak — in that order, unconditionally, EVEN when the HTTP
+// drain itself fails or hits its budget: a timed-out or errored Shutdown
+// (shutErr != nil) must not skip what follows. An early return here would
+// answer the "shutdown is done" question honestly for HTTP, but still drop
+// the run.kill row and both revocations the same way a SIGKILL would (see
+// WaitBackground below), on precisely the slow shutdown where they matter
+// most. Extracted from serveAndShutdown so a test can inject a Shutdown that
+// fails and prove WaitBackground/FlushAuthFailedStreak still ran
+// (TestRunShutdownSequence*) — TestServeShutdownOrder used to pin the same
+// invariant by walking serveAndShutdown's AST for call order.
+func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, httpSrv httpShutdowner, srv backgroundServer, orgFederation *federation.Forwarder) error {
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
@@ -335,8 +367,6 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	// flushes its private-IP memo in.
 	srv.FlushAuthFailedStreak()
 
-	// fan.Close() is the deferred drain above — reached from here and from the
-	// serve-error return alike.
 	if shutErr != nil {
 		return fmt.Errorf("shutdown: %w", shutErr)
 	}
