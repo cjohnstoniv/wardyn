@@ -288,7 +288,7 @@ Which of the two shapes below applies depends on whether your admin has set
 up per-provider model records (#551) — the console tells you which one you
 are in: a "Your model connections" card on Your account means the
 provider-block shape; a "Your model key" card on Getting Started means the
-legacy one. `GET /setup/status`'s `model_providers` is `null` under the
+legacy one. `GET /setup/status`'s `model_providers` is absent under the
 legacy shape and an array (possibly empty, if your admin has started but
 granted you nothing yet) under the provider-block one.
 

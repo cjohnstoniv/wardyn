@@ -233,10 +233,10 @@ export function MemberGettingStarted() {
   // #548 lands) keeps "Your model key" as the door it always had. Computed
   // before `actionable` and `connectionsChip` below since both branch on it.
   //
-  // `!= null` (not `!!`): the server sends model_providers with no
-  // `omitempty` now (#541 fix review), so a real block granting this caller
-  // nothing reads `[]` — still provider mode, just the "No providers" state
-  // — never the same wire shape as no block at all (`null`/absent).
+  // `!= null` (not `!!`): model_providers is `omitzero` on the wire (#541
+  // fix review), so a real block granting this caller nothing reads `[]` —
+  // still provider mode, just the "No providers" state — never the same wire
+  // shape as no block at all (absent).
   const providerMode = status?.model_providers != null;
   // legacyMode additionally requires `status` itself to have loaded: while it
   // is null (the pre-fetch window), providerMode already reads false, and

@@ -63,10 +63,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Changed
 
 - **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
-  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and `null` (or is
-  absent, from an older daemon) only when there is no provider block at all — the two are different
-  facts, and collapsing them into the same missing key made a real "not connected to anything" grant
-  indistinguishable from an admin who has not started setting providers up.
+  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and is absent only
+  when there is no provider block at all — the two are different facts, and collapsing them into the
+  same missing key made a real "not connected to anything" grant indistinguishable from an admin who
+  has not started setting providers up.
 - **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
   matrix (#1200).** A new shared `TierPicker` component lists only the tiers this host has installed,
   each with a one-line strength and an info popover, plus a "Compare barriers" dialog holding the full

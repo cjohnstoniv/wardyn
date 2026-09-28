@@ -144,17 +144,16 @@ type SetupStatus struct {
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
 	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
 	// member-safe shape (SetupModelProvider) — the same for every tier, so the
-	// member redaction has nothing to strip. No `omitempty`, deliberately
-	// (#541 fix review): a provider BLOCK that exists but grants this caller
-	// nothing must serialize as `[]`, never collapse into the SAME wire shape
-	// as "no block at all" — the two are different facts (an admin who set up
-	// providers for other people vs. one who has not started), and the
-	// console's own providerMode read (`!= null`) depends on telling them
-	// apart. `null` (Go's zero value for a nil slice) is "no provider block" —
-	// setupModelProviders returns nil ONLY then, an empty-but-non-nil slice
-	// otherwise, so a nil check here is a nil check on this field the whole
-	// way down to sc.ModelProviders itself.
-	ModelProviders []SetupModelProvider `json:"model_providers"`
+	// member redaction has nothing to strip. `omitzero`, not `omitempty`:
+	// setupModelProviders returns nil when there is no provider block at all
+	// (the field is then absent, exactly as before), and a non-nil, possibly
+	// empty slice whenever a block exists — including one this caller is
+	// granted nothing from, or one capVisible's own filter-error path
+	// answered with rows[:0:0] — so the field is then present as `[]`. A
+	// console reading this field can tell "no block" from "granted none"
+	// only because of that distinction; `omitempty` could not make it (it
+	// drops both nil and an empty-but-present slice alike).
+	ModelProviders []SetupModelProvider `json:"model_providers,omitzero"`
 	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
 	// ModelProviders (MP-12) — one row per provider, generalising the single
 	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
