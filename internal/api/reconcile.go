@@ -126,13 +126,32 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// TestReconcileOnBoot_SweepsOrphanedTerminalSandbox asserts the teardown
 	// happens EXACTLY ONCE, and adding the sweep here makes it twice.
 	//
-	// So the primitive's value is not a second boot pass; it is an ON-DEMAND
-	// retry surface for the shape a laptop actually produces — suspend for a
-	// week, wake with dead sandboxes, never reboot, so no boot pass ever runs.
-	// That is POST /api/v1/admin/sandboxes/sweep, which MDM can schedule like
-	// `wardyn support-bundle`. A ticker was rejected separately: the primitive
-	// calls ListRuns unpaged and probes every terminal run carrying a ref, so its
-	// cost grows with run history forever and it would need leader election.
+	// So the primitive's value HERE is not a second boot pass; it is an
+	// ON-DEMAND retry surface for the shape a laptop actually produces —
+	// suspend for a week, wake with dead sandboxes, never reboot, so no boot
+	// pass ever runs. That is POST /api/v1/admin/sandboxes/sweep, which MDM can
+	// schedule like `wardyn support-bundle`.
+	//
+	// A periodic ticker DOES exist (cmd/wardynd's runTerminalSandboxSweeper,
+	// started in startBackgroundWorkers next to the lifecycle reaper and the
+	// approval-expiry sweeper) — it is simply not wired HERE, inside the boot
+	// pass, for the same reason as above: adding it to this Join would make
+	// TestReconcileOnBoot_SweepsOrphanedTerminalSandbox's teardown run twice.
+	// Its earlier rejection (unpaged ListRuns, so cost grows with run history
+	// forever; and needing leader election) is answered where it actually
+	// runs: SweepTerminalSandboxesPage bounds each tick to one
+	// store.Pager.ListRunsPage page, so per-tick cost is constant regardless of
+	// run history. Election is NOT free, though: claimSingleInstance
+	// (cmd/wardynd/single_instance.go) holds db.SingleInstanceLockKey for the
+	// whole process lifetime only in the DEFAULT configuration — a deployment
+	// booted with -allow-multi-instance skips that claim entirely, and a
+	// Postgres restart/failover can release its session under a still-running
+	// daemon while a second one boots and claims it (SingleInstanceLockKey's
+	// own HONEST CEILING). So the ticker takes its own per-tick advisory lock
+	// (terminalSandboxSweepTickLock, cmd/wardynd/adapters.go) the same way the
+	// lifecycle reaper's reapTickLock does, rather than relying on the
+	// single-instance claim: a control plane that loses skips the tick
+	// entirely instead of queuing it.
 	//
 	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
 	// reboot stopped is then marked lost (reboot), which says its agent needs

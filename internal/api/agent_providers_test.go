@@ -483,6 +483,9 @@ func TestAgentRosterRefusesRunCreate(t *testing.T) {
 		if strings.Contains(w.Body.String(), "codex-cli") || strings.Contains(w.Body.String(), "openai") {
 			t.Errorf("the refusal discloses the roster: %s", w.Body.String())
 		}
+		if got := errorReason(w); got != reasonAgentNotEnabled {
+			t.Errorf("reason = %q, want %q; body=%s", got, reasonAgentNotEnabled, w.Body.String())
+		}
 	})
 
 	// "Operators and members alike": the roster is the ORG's statement of what
