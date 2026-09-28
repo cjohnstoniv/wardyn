@@ -1,4 +1,4 @@
-# Key service overlay (docs/OPERATIONS.md "Key service: Vault Transit"): every
+# Key service overlay (docs/operations/secrets-and-keys.md "Key service: Vault Transit"): every
 # stored credential stays sealed in Postgres, but its data key is wrapped by
 # your Vault's Transit key instead of the age key. Token-file auth: point
 # WARDYN_VAULT_TOKEN_DIR at the directory your Vault Agent sink (or CSI driver)

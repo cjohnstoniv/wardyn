@@ -183,7 +183,7 @@ shipped behavior; none is scheduled.
   isn't mistaken for a live plan.
 - **Age-key rotation is offline and operator-driven.** `wardynd -rotate-age-key`
   now re-encrypts every stored secret to a fresh identity in one transaction
-  ([docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Rotating the age key"), so the old
+  ([docs/operations/secrets-and-keys.md](docs/operations/secrets-and-keys.md#rotating-the-age-key)'s "Rotating the age key"), so the old
   "no rotation path at all" ceiling is gone. What remains: the daemon has to be
   **stopped** for it, and nothing enforces that — no wardynd holds a
   process-lifetime advisory lock, so the tool can refuse a second concurrent
