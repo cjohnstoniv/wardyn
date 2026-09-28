@@ -21,9 +21,8 @@ import type { RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { relativeTime, getErrorMessage } from "../../../lib/format";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import * as RL from "../../wardyn/copy/run-lifetime";
+import { ChangeEndDialog } from "./change-end-dialog";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -49,16 +49,8 @@ export function weekdayClock(iso: string): string {
   return `${weekday} ${clock}`;
 }
 
-// <input type=datetime-local> wants local wall-clock time with no offset.
-function toDatetimeLocalValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {
   const [changeOpen, setChangeOpen] = React.useState(false);
-  const [changeValue, setChangeValue] = React.useState("");
-  const [noEnd, setNoEnd] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   // handleSetRunEndAndWait's own exempt rule (run_end_wait.go): a super admin
   // is bounded only by the deployment ceiling REGARDLESS of what the run's
@@ -69,6 +61,13 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
   // "is run_limits present" cannot stand in for "does a gate apply here". Read
   // unconditionally, ahead of the early return below (Rules of Hooks).
   const operator = useOperator();
+  // F16 (PR #1317 review): ownsRunOrSuperAdmin is the server's OWN gate on
+  // every write here (run_end_wait.go) — a security admin who is not this
+  // run's owner and not a true super admin gets a 403 on all of them, so the
+  // client must not dangle a control that always fails. usePrincipal, not a
+  // view prop: the same predicate run-row.tsx and the terminal pane already
+  // use for "own".
+  const principal = usePrincipal();
 
   // The Ends row is the LIVE-run surface; a lease-ended or otherwise lost run
   // (kept, no network) and every terminal state get the lifetime banner's own
@@ -76,9 +75,18 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
   // would tell two different stories about the same run.
   if (isTerminalRunState(run.state) || run.lost_at) return null;
 
+  const canAct = operator || run.created_by === principal;
   const limits = run.run_limits;
-  const mayChange = operator || (limits ? !!limits.user_changes_limits : true);
-  const allowNoEnd = operator || (limits ? !!limits.allow_no_end : true);
+  // F15 (PR #1317 review): AgentRun.RunLimits is a Go VALUE with no
+  // omitempty (types.go), so the server ALWAYS sends a run_limits object —
+  // never absent. The `limits ? … : true` fallback this used to have was
+  // therefore dead code, and wrong in the direction it never ran: an
+  // all-absent/zero-value object reads user_changes_limits/allow_no_end as
+  // their Go zero (false) on the server, which is LOCKED, not open. A bare
+  // `!!limits?.x` agrees with the server on both the reachable case (present,
+  // some fields set) and the unreachable one (absent).
+  const mayChange = canAct && (operator || !!limits?.user_changes_limits);
+  const allowNoEnd = canAct && (operator || !!limits?.allow_no_end);
   const maxDays = limits?.max_end_ahead_sec ? Math.ceil(limits.max_end_ahead_sec / (24 * 3600)) : undefined;
 
   const applyEndsAt = async (endsAt: string | null) => {
@@ -101,21 +109,14 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
     void applyEndsAt(new Date(base + ms).toISOString());
   };
 
-  const submitChange = () => {
-    setChangeOpen(false);
-    if (noEnd) {
-      void applyEndsAt(null);
-      return;
-    }
-    if (!changeValue) return;
-    void applyEndsAt(new Date(changeValue).toISOString());
-  };
-
   const setWaitHours = async (hours: number) => {
     setBusy(true);
     try {
-      const res = await runsApi.setRunEndAndWait(run.id, { waitBudgetSec: Math.round(hours * 3600) });
-      if (res.capped.includes("wait_budget_sec")) toast.warning(`Capped at ${res.max_wait_sec ?? hours} sec`);
+      // No canon string covers a capped WAIT (only ENDS_CAPPED, for the end) —
+      // the re-rendered button already shows the actual value the server
+      // applied, so a toast here would either invent copy or repeat that
+      // number in seconds (the defect this replaced, F: "Capped at N sec").
+      await runsApi.setRunEndAndWait(run.id, { waitBudgetSec: Math.round(hours * 3600) });
       onChanged();
     } catch (err) {
       toast.error("Couldn't change the wait", { description: getErrorMessage(err) });
@@ -131,37 +132,40 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
           {run.ends_at ? RL.endsValue(weekdayClock(run.ends_at), relativeTime(run.ends_at)) : RL.ENDS_NONE}
         </span>
         {run.ends_at ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-6 px-2 text-xs" disabled={busy}>
-                {RL.ENDS_EXTEND}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onSelect={() => extendBy(DAY_MS)}>{RL.ENDS_EXTEND_1_DAY}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => extendBy(WEEK_MS)}>{RL.ENDS_EXTEND_1_WEEK}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => extendBy(FAR_FUTURE_MS)}>
-                {maxDays ? RL.endsExtendAsFarAsAllowed(maxDays) : RL.ENDS_EXTEND}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          canAct && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-6 px-2 text-xs" disabled={busy}>
+                  {RL.ENDS_EXTEND}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onSelect={() => extendBy(DAY_MS)}>{RL.ENDS_EXTEND_1_DAY}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => extendBy(WEEK_MS)}>{RL.ENDS_EXTEND_1_WEEK}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => extendBy(FAR_FUTURE_MS)}>
+                  {maxDays ? RL.endsExtendAsFarAsAllowed(maxDays) : RL.ENDS_EXTEND}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )
         ) : (
           mayChange && (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => { setNoEnd(false); setChangeOpen(true); }}>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setChangeOpen(true)}>
               {RL.ENDS_SET_AN_END}
             </Button>
           )
         )}
-        {mayChange ? (
-          run.ends_at && (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => { setNoEnd(false); setChangeOpen(true); }}>
-              {RL.ENDS_CHANGE}
-            </Button>
-          )
-        ) : (
-          <span className="text-muted-foreground">
-            {run.ends_at && maxDays ? RL.endsLocked(weekdayClock(run.ends_at), maxDays) : maxDays ? RL.endsHint(maxDays) : null}
-          </span>
+        {mayChange && run.ends_at && (
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setChangeOpen(true)}>
+            {RL.ENDS_CHANGE}
+          </Button>
+        )}
+        {/* M2 (packet:246): the "No end" hint is a fact about the STATE, shown
+            regardless of who can change it — the mock's own "No end · where
+            allowed" column pairs it with "No end" itself, not with the gate. */}
+        {!run.ends_at && <span className="text-muted-foreground">{RL.NO_END_HINT}</span>}
+        {!mayChange && run.ends_at && maxDays && (
+          <span className="text-muted-foreground">{RL.endsLocked(maxDays)}</span>
         )}
       </div>
 
@@ -189,39 +193,14 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
         </div>
       )}
 
-      <Dialog open={changeOpen} onOpenChange={setChangeOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{RL.ENDS_CHANGE}</DialogTitle>
-            <DialogDescription>{maxDays ? RL.endsHint(maxDays) : "Pick a date, or turn this run's end off."}</DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            {allowNoEnd && (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={noEnd} onChange={(e) => setNoEnd(e.target.checked)} />
-                {RL.ENDS_NO_END_OPTION}
-              </label>
-            )}
-            {!noEnd && (
-              <input
-                type="datetime-local"
-                aria-label="Ends at"
-                className="rounded-md border border-border-strong bg-background px-2 py-1.5 text-sm"
-                value={changeValue || toDatetimeLocalValue(new Date(Date.now() + DAY_MS))}
-                onChange={(e) => setChangeValue(e.target.value)}
-              />
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setChangeOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={submitChange} disabled={busy}>
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ChangeEndDialog
+        open={changeOpen}
+        onOpenChange={setChangeOpen}
+        run={run}
+        onChanged={onChanged}
+        maxDays={maxDays}
+        allowNoEnd={allowNoEnd}
+      />
     </div>
   );
 }

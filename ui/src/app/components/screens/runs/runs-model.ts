@@ -24,7 +24,7 @@ import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetim
 import { statusDetailSentence } from "../run-status-detail";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
-export type RowAction = "review" | "sign-in" | null;
+export type RowAction = "review" | "sign-in" | "revive" | null;
 
 export interface RowPresentation {
   hue: RowHue;
@@ -97,10 +97,12 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
           needsYou: you,
         };
       case "lost":
-        // #1197 L5 owns the Revive row and its own copy — this is a clean
-        // seam (H-7): the run still lands in Needs you when `you`, with the
-        // reused short word and NO action, rather than nothing at all.
-        return { hue: "amber", word: RUNS_ROW_WORD.SANDBOX_STOPPED, action: null, needsYou: you };
+        // #1197 L5 (F1, PR #1317 review): Revive-from-row, reusing RL-15's own
+        // run-page action (runs.reviveRun) — offered only to `you` (the
+        // owner or a super admin), matching the server's ownsRunOrSuperAdmin
+        // gate on POST /runs/{id}/revive; `by=owner` still lands in Needs you
+        // with no action, since nobody else can act on it.
+        return { hue: "amber", word: RUNS_ROW_WORD.SANDBOX_STOPPED, action: you ? "revive" : null, needsYou: you };
     }
   }
   switch (run.state) {

@@ -19,12 +19,23 @@ export const ENDS_NONE = "No end";
 export function endsHint(days: number): string {
   return `You can set it up to ${days} day${days === 1 ? "" : "s"} ahead and extend it any time.`;
 }
-export function endsLocked(dateText: string, days: number): string {
-  return `Ends ${dateText}. You can extend it up to ${days} day${days === 1 ? "" : "s"} ahead; your admin sets the rest.`;
+// F11 (PR #1317 review): the mock's own admin-set column (packet:249-251)
+// shows the value line ("Ends Tue 18:00 (in 8 hours)") ABOVE this hint, so the
+// hint itself never repeats the date — only the caller (run-ends-row.tsx),
+// which already renders that value line right beside this one, would.
+export function endsLocked(days: number): string {
+  return `You can extend it up to ${days} day${days === 1 ? "" : "s"} ahead; your admin sets the rest.`;
 }
 export function endsCapped(days: number): string {
   return `That's as far as your admin allows (${days} day${days === 1 ? "" : "s"}). You can extend again later.`;
 }
+// ENDS_CAPPED_LOOSENED (packet:268, design:312) is defined for completeness
+// but UNUSED: nothing on the wire distinguishes "still capped by the live
+// policy" from "capped by a now-stale captured value the admin has since
+// loosened" — run.run_limits is captured once at create and never updated
+// (run_limits_reclamp.go's own comment: "Loosening never reaches a live
+// run"). Filed as issue #1322 (a companion to #1319/#1320) rather than
+// guessed at.
 export const ENDS_CAPPED_LOOSENED =
   "Your admin loosened this after the run started. Start a new run to get the new limit.";
 export function endsTightened(dateText: string): string {
@@ -34,11 +45,16 @@ export const ENDS_EXTEND = "Extend";
 export const ENDS_EXTEND_1_DAY = "1 more day";
 export const ENDS_EXTEND_1_WEEK = "1 more week";
 export function endsExtendAsFarAsAllowed(days: number): string {
-  return `As far as allowed (${days} days)`;
+  return `As far as allowed (${days} day${days === 1 ? "" : "s"})`;
 }
 export const ENDS_CHANGE = "Change…";
 export const ENDS_SET_AN_END = "Set an end…";
 export const ENDS_NO_END_OPTION = "No end";
+// M2 (packet:246): the "No end" state's own hint, shown only where allow_no_end
+// is true (the state it always describes — an admin-locked run never reaches
+// "No end" in the first place, since Change… is how anyone gets there).
+export const NO_END_HINT =
+  "Keeps going until you or an admin ends it. It pauses when nobody is here and keeps its memory.";
 
 // ---- Warnings (design.md §2.3, mock "1 hour before") ----
 
@@ -93,7 +109,18 @@ export const ENDED_TITLE = "This run ended at its end time";
 export function endedBody(dateText: string): string {
   return `It has no network. Its files are kept until ${dateText}. Extend to revive it.`;
 }
+// F4 (PR #1317 review): the grace deadline is lost_at + Config.EndedRunGrace,
+// and EndedRunGrace is server-only config, never on the wire (filed as
+// #1320). Rendering endedBody(lost_at) would print the moment the run
+// ENDED, not the moment its files go away — a wrong, not just a missing,
+// date. This is the interim wording until #1320 adds the real one.
+export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it before its files are cleaned up.";
 export const ENDED_EXTEND_AND_REVIVE = "Extend and revive";
+// F9 (PR #1317 review): a task run's own agent ran once, at dispatch — the
+// server always refuses reviveEligible's "task run's agent cannot be started
+// again" for an ended, non-interactive run (run_revive.go). Only Extend
+// (never revive) is offered for one.
+export const ENDED_EXTEND_ONLY = "Extend";
 export const END_RUN = "End run";
 
 // ---- Lost and revive (design.md §4.1, mock "Paused, and lost then revived") ----
@@ -107,6 +134,9 @@ export const LOST_BODY_CLAUDE =
 export const LOST_BODY_OTHER = "Revive starts it again with its files. The agent starts a new session.";
 export const LOST_OUTAGE =
   "Wardyn was unreachable for over an hour, so this run's network was stopped. Revive reconnects it; the terminal stays as it was.";
+// M4 (design:336, packet:287): no k8s revive in 0.8 (L6) — a node-restarted
+// run only ever keeps what a drive holds.
+export const LOST_K8S = "The node it ran on restarted. Files on your drive are kept; the rest is gone.";
 export const REVIVE = "Revive";
 export const REVIVING = "Reviving… (about a minute)";
 export function revivePolicy(hostsBlocked: number): string {
@@ -134,3 +164,15 @@ export function waitValueHours(hours: number): string {
 export function waitLocked(hours: number): string {
   return `Kept for up to ${hours} hour${hours === 1 ? "" : "s"}. Your admin sets this.`;
 }
+
+// F14 (PR #1317 review, run_pause.go's pauseDelayFloor): the server never
+// pauses an idle run sooner than 630s, even when a profile sets less — the
+// banner must say the time it ACTUALLY pauses at, not the raw setting.
+export const PAUSE_IDLE_FLOOR_SEC = 630;
+
+// ---- Admin: older limits + bulk restart (design.md §2.2, mock "Admin") ----
+
+export const OLDER_LIMITS_CHIP = "Older limits";
+export const RESTART_WITH_CURRENT_LIMITS = "Restart with current limits";
+export const RESTART_HINT =
+  "Restarts each run's network proxy with its owner's current limits. Terminals stay open; requests in flight fail once.";

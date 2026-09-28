@@ -86,15 +86,20 @@ describe("rowPresentation — reauth / ado_consent (design.md §2.2 rows 2-3)", 
   });
 });
 
-describe("rowPresentation — lost (H-7 seam: no Revive action built here)", () => {
-  it("by=you: Sandbox stopped, amber, needsYou, but NO action (L5 builds Revive)", () => {
+describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () => {
+  it("by=you: Sandbox stopped, amber, needsYou, action revive", () => {
     const r = run({ attention: { kind: "lost", by: "you", pending: 0 } });
     expect(rowPresentation(r, false)).toMatchObject({
       hue: "amber",
       word: "Sandbox stopped",
-      action: null,
+      action: "revive",
       needsYou: true,
     });
+  });
+
+  it("by=owner: no action — nobody but the owner can revive it", () => {
+    const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
+    expect(rowPresentation(r, true)).toMatchObject({ action: null, needsYou: false });
   });
 
   it("in the admin view, a lost run is never by=you (the server forces owner)", () => {

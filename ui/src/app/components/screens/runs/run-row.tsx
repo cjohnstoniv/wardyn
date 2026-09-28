@@ -12,9 +12,12 @@
 // (also keeps it out of getByRole("link") queries elsewhere on the page —
 // the shell's own "Review" link, model-access-copy.ts's BANNER.REVIEW,
 // shares the word).
+import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import type { AgentRun } from "../../../lib/types";
-import { relativeTime } from "../../../lib/format";
+import { relativeTime, getErrorMessage } from "../../../lib/format";
+import { runs as runsApi } from "../../../lib/api/runs";
 import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { usePrincipal } from "../../wardyn/operator-context";
@@ -24,6 +27,7 @@ import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation } from "./runs-model";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
+import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
 
 function formatDuration(startIso: string, endIso: string): string {
   const mins = Math.max(0, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000));
@@ -59,8 +63,32 @@ export function RunRow({ run }: { run: AgentRun }) {
   const glyph = glyphKindFor(p.hue, p.word, run.state);
   const title = rowHeadline(run);
   const href = runPath(view, run.id);
+  // F1 (#1197 L5, PR #1317 review): Revive is the one row action that acts
+  // IN PLACE rather than navigating — Review/Sign-in both open the run's own
+  // cockpit, but "Revive moves it to Running" (design.md's own L5 row) means
+  // right here, on the board, with the next poll redrawing the row.
+  const [reviving, setReviving] = React.useState(false);
+  const revive = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setReviving(true);
+    try {
+      await runsApi.reviveRun(run.id);
+    } catch (err) {
+      toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
+    } finally {
+      setReviving(false);
+    }
+  };
   const actionLabel =
-    p.action === "review" ? RUNS_ROW_ACTION.REVIEW : p.action === "sign-in" ? RUNS_ROW_ACTION.SIGN_IN : null;
+    p.action === "review"
+      ? RUNS_ROW_ACTION.REVIEW
+      : p.action === "sign-in"
+        ? RUNS_ROW_ACTION.SIGN_IN
+        : p.action === "revive"
+          ? reviving
+            ? REVIVING
+            : REVIVE
+          : null;
   const meta = metaLine(run, adminView, own);
 
   return (
@@ -116,9 +144,11 @@ export function RunRow({ run }: { run: AgentRun }) {
             size="sm"
             variant="outline"
             className="h-7 shrink-0"
+            disabled={p.action === "revive" && reviving}
             onClick={(e) => {
               e.stopPropagation();
-              void navigate(href);
+              if (p.action === "revive") void revive(e);
+              else void navigate(href);
             }}
           >
             {actionLabel}

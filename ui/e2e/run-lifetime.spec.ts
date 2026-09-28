@@ -86,14 +86,29 @@ test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
 });
 
 test.describe("Run lifetime — lost and revive", () => {
-  test("a run lost to a reboot: the danger banner, Revive posts and the page redraws lost-free", async ({ page }) => {
+  // Overlay via a MUTABLE splice this test itself controls (not stubRunDetail's
+  // cache-once helper), so Revive's success can be followed by a real redraw:
+  // the same run, now clean, is what the very next poll picks up.
+  async function stubMutableRunDetail(page: Page, runId: string, initialOverlay: Record<string, unknown>) {
+    let overlay = initialOverlay;
+    let base: Record<string, unknown> | null = null;
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      if (!base) base = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...base, ...overlay } });
+    });
+    return { setOverlay: (next: Record<string, unknown>) => { overlay = next; } };
+  }
+
+  test("a run lost to a reboot: the danger banner, Revive posts, and the page redraws lost-free", async ({ page }) => {
     await gotoConsole(page);
     const id = await seedRun(page, "run-lifetime e2e lost-reboot " + randomUUID().slice(0, 8));
-    await stubRunDetail(page, id, { lost_reason: "reboot", agent: "claude-code" });
+    const detail = await stubMutableRunDetail(page, id, { lost_reason: "reboot", agent: "claude-code" });
 
     let revived = false;
     await page.route(`**/api/v1/runs/${id}/revive`, async (route) => {
       revived = true;
+      detail.setOverlay({}); // a real revive clears lost_at/lost_reason server-side
       await route.fulfill({ json: { run_id: id, denied_added: ["evil.example"], proxy_release: "r1" } });
     });
 
@@ -106,17 +121,22 @@ test.describe("Run lifetime — lost and revive", () => {
     await banner.getByRole("button", { name: "Revive" }).click();
     await expect.poll(() => revived).toBe(true);
     await expect(page.getByText("Policy updated at revive: 1 host now blocked.")).toBeVisible();
+    // The redraw: onChanged's refetch (not the 4s poll) picks up the cleared
+    // overlay immediately, so the lost banner is gone without a page reload.
+    await expect(banner).toHaveCount(0);
   });
 
-  test("a run lost to an outage: the outage sentence joins the lost body", async ({ page }) => {
+  test("a run lost to an outage: F5, ONLY the outage sentence — never the reboot body or a harness-continuity line", async ({ page }) => {
     await gotoConsole(page);
     const id = await seedRun(page, "run-lifetime e2e lost-outage " + randomUUID().slice(0, 8));
-    await stubRunDetail(page, id, { lost_reason: "outage", agent: "codex-cli" });
+    await stubRunDetail(page, id, { lost_reason: "outage", agent: "codex-cli", ends_at: new Date(Date.now() + 3600_000).toISOString() });
     await navToRoute(page, `/runs/${id}`);
 
     const banner = page.getByTestId("run-lifetime-lost");
-    await expect(banner.getByText(/starts a new session/)).toBeVisible();
     await expect(banner.getByText(/unreachable for over an hour/)).toBeVisible();
+    await expect(banner.getByText(/machine it ran on restarted/)).toHaveCount(0);
+    await expect(banner.getByText(/starts a new session/)).toHaveCount(0);
+    await expect(banner.getByText(/continues the Claude Code conversation/)).toHaveCount(0);
   });
 });
 
@@ -127,6 +147,11 @@ test.describe("Run lifetime — ended (the lease ran out)", () => {
     await stubRunDetail(page, id, {
       lost_reason: "ended",
       lost_at: new Date(Date.now() - 3600_000).toISOString(),
+      // F9 (PR #1317 review): Extend-and-revive is offered only for an
+      // interactive run — a task run's agent cannot be started again
+      // (reviveEligible, run_revive.go), and gets a plain Extend instead.
+      // This case is deliberately the interactive one.
+      interactive: true,
     });
 
     let patchedEndsAt = "";
@@ -148,6 +173,38 @@ test.describe("Run lifetime — ended (the lease ran out)", () => {
     await banner.getByRole("button", { name: "Extend and revive" }).click();
     await expect.poll(() => revived).toBe(true);
     expect(Date.parse(patchedEndsAt)).toBeGreaterThan(Date.now());
+  });
+
+  test("F9: a task (non-interactive) run offers Extend alone, and never calls revive", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e ended-task " + randomUUID().slice(0, 8));
+    await stubRunDetail(page, id, {
+      lost_reason: "ended",
+      lost_at: new Date(Date.now() - 3600_000).toISOString(),
+      interactive: false,
+    });
+    let revived = false;
+    await page.route(`**/api/v1/runs/${id}/revive`, async (route) => {
+      revived = true;
+      await route.fulfill({ json: { run_id: id, denied_added: [], proxy_release: "r1" } });
+    });
+    // stubRunDetail's own GET intercept also catches page-context fetches
+    // (Playwright routes every request from the page, including
+    // consoleAPI's), so the PATCH itself — not a GET read afterwards — is
+    // what proves the real request.
+    let patchedEndsAt = "";
+    await page.route(`**/api/v1/runs/${id}`, async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      patchedEndsAt = JSON.parse(route.request().postData() ?? "{}").ends_at;
+      await route.fulfill({ json: { id, ends_at: patchedEndsAt, wait_budget_sec: 0, capped: [] } });
+    });
+
+    await navToRoute(page, `/runs/${id}`);
+    const banner = page.getByTestId("run-lifetime-ended");
+    await expect(banner.getByRole("button", { name: "Extend and revive" })).toHaveCount(0);
+    await banner.getByRole("button", { name: "Extend", exact: true }).click();
+    await expect.poll(() => Date.parse(patchedEndsAt || "")).toBeGreaterThan(Date.now());
+    expect(revived).toBe(false);
   });
 });
 

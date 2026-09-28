@@ -1,0 +1,101 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// F2 (#580, PR #1317 review) — the admin "Older limits" chip + bulk
+// "Restart with current limits", over GET /admin/runs/proxy-window and
+// POST /admin/runs/restart (RL-10, #575's own server, already merged).
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { OperatorProvider } from "../../wardyn/operator-context";
+import { AdminOlderLimitsCard } from "./admin-older-limits-card";
+
+const getAdminProxyWindowMock = vi.fn();
+const restartAdminRunsMock = vi.fn();
+vi.mock("../../../lib/api/runs", () => ({
+  runs: {
+    getAdminProxyWindow: (...a: unknown[]) => getAdminProxyWindowMock(...a),
+    restartAdminRuns: (...a: unknown[]) => restartAdminRunsMock(...a),
+  },
+}));
+const toastErrorMock = vi.fn();
+vi.mock("sonner", () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(...a) } }));
+
+function renderCard(operator = true) {
+  return render(
+    <OperatorProvider operator={operator}>
+      <AdminOlderLimitsCard />
+    </OperatorProvider>,
+  );
+}
+
+beforeEach(() => vi.clearAllMocks());
+
+describe("AdminOlderLimitsCard", () => {
+  it("renders nothing for a non-operator", async () => {
+    getAdminProxyWindowMock.mockResolvedValue({ release: "0.8.0", window: ["0.8"], outside: [{ run_id: "r1", created_by: "u", state: "RUNNING", proxy_release: "0.6" }] });
+    const { container } = renderCard(false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container).toBeEmptyDOMElement();
+    expect(getAdminProxyWindowMock).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing once nothing is outside the window", async () => {
+    getAdminProxyWindowMock.mockResolvedValue({ release: "0.8.0", window: ["0.8"], outside: [] });
+    const { container } = renderCard();
+    await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows the Older limits chip with the real count, and the canon hint", async () => {
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8", "0.7"],
+      outside: [
+        { run_id: "r1", created_by: "u1", state: "RUNNING", proxy_release: "0.6" },
+        { run_id: "r2", created_by: "u2", state: "RUNNING", proxy_release: "0.6" },
+      ],
+    });
+    renderCard();
+    expect(await screen.findByText("Older limits · 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart with current limits" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Restarts each run's network proxy with its owner's current limits. Terminals stay open; requests in flight fail once."),
+    ).toBeInTheDocument();
+  });
+
+  it("Restart posts exactly the outside ids, renders per-run results, and re-lists", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: [{ run_id: "r1", created_by: "u1", state: "RUNNING", proxy_release: "0.6" }],
+    });
+    restartAdminRunsMock.mockResolvedValue({ results: [{ run_id: "r1", ok: true }] });
+    renderCard();
+    await screen.findByText("Older limits · 1");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"]));
+    expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
+    // Re-lists after a restart (best-effort refresh).
+    await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("a lost_again result names it, rather than reading as a plain success", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: [{ run_id: "r1", created_by: "u1", state: "RUNNING", lost_reason: "reboot", proxy_release: "0.6" }],
+    });
+    restartAdminRunsMock.mockResolvedValue({
+      results: [{ run_id: "r1", ok: false, error: "run was lost to a reboot and its agent is stopped; revive it from the run's page", lost_again: true }],
+    });
+    renderCard();
+    await screen.findByText("Older limits · 1");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    expect(await screen.findByText(/still lost/)).toBeInTheDocument();
+  });
+});

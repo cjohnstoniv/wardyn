@@ -24,15 +24,19 @@ vi.mock("sonner", () => ({
 }));
 
 const NOW = Date.now();
-const detail = (o: Partial<RunDetail> = {}): RunDetail => makeRun(o) as RunDetail;
+// makeRun's own default created_by — renderRow's default principal matches
+// it, so every case below is "the owner looking at their own run" unless it
+// says otherwise (the F16 describe block flips it on purpose).
+const OWNER = "test-user";
+const detail = (o: Partial<RunDetail> = {}): RunDetail => makeRun({ created_by: OWNER, ...o }) as RunDetail;
 
 // Every case below is about the run's OWN captured gate, so it renders as a
-// non-operator caller unless a case says otherwise — an operator bypasses the
-// gate entirely (its own describe block below), which would mask what these
-// cases mean to prove.
-function renderRow(run: RunDetail, onChanged: () => void = () => {}, operator = false) {
+// non-operator OWNER caller unless a case says otherwise — an operator
+// bypasses the gate entirely, and a non-owner non-operator sees no actions at
+// all (F16); either would mask what a plain gate case means to prove.
+function renderRow(run: RunDetail, onChanged: () => void = () => {}, opts: { operator?: boolean; principal?: string } = {}) {
   return render(
-    <OperatorProvider operator={operator}>
+    <OperatorProvider operator={opts.operator ?? false} principal={opts.principal ?? OWNER}>
       <RunEndsRow run={run} onChanged={onChanged} />
     </OperatorProvider>,
   );
@@ -44,20 +48,30 @@ beforeEach(() => {
 });
 
 describe("RunEndsRow — the four states (mock 'Ends')", () => {
-  it("No end, gated: offers Set an end…", () => {
+  it("No end, gated: offers Set an end…, and the No-end hint (M2)", () => {
     const run = detail({ run_limits: { user_changes_limits: true, allow_no_end: true } });
     renderRow(run);
     expect(screen.getByText("No end")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set an end…" })).toBeInTheDocument();
+    expect(screen.getByText(/Keeps going until you or an admin ends it/)).toBeInTheDocument();
   });
 
-  it("has an end, ungated: the locked hint, no Change button", () => {
+  it("No end, ungated: still shows the hint, but no Set-an-end button", () => {
+    const run = detail({ run_limits: { user_changes_limits: false } });
+    renderRow(run);
+    expect(screen.getByText(/Keeps going until you or an admin ends it/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set an end…" })).not.toBeInTheDocument();
+  });
+
+  it("has an end, ungated: the locked hint with NO repeated date (F11), no Change button", () => {
     const run = detail({
       ends_at: new Date(NOW + 8 * 3600_000).toISOString(),
       run_limits: { user_changes_limits: false, max_end_ahead_sec: 30 * 24 * 3600 },
     });
     renderRow(run);
-    expect(screen.getByText(/your admin sets the rest/)).toBeInTheDocument();
+    const hint = screen.getByText(/your admin sets the rest/);
+    expect(hint).toBeInTheDocument();
+    expect(hint.textContent).not.toMatch(/^Ends /);
     expect(screen.queryByRole("button", { name: "Change…" })).not.toBeInTheDocument();
     // Extending within the max is still always offered.
     expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
@@ -73,11 +87,15 @@ describe("RunEndsRow — the four states (mock 'Ends')", () => {
     expect(screen.getByRole("button", { name: "Change…" })).toBeInTheDocument();
   });
 
-  it("no run_limits at all (unassigned/super-admin owner): treated as fully open, never locked", () => {
-    const run = detail({ ends_at: new Date(NOW + 8 * 3600_000).toISOString() });
+  // F15 (PR #1317 review): AgentRun.RunLimits has no omitempty, so the
+  // server ALWAYS sends a run_limits object — an absent one is unreachable,
+  // and a present-but-all-zero one (the closest real analogue) reads
+  // user_changes_limits as the Go zero value, false — LOCKED, matching the
+  // server's own planRunEndWait, never "fully open".
+  it("an all-zero-value run_limits object: locked, matching the server's own zero-value default", () => {
+    const run = detail({ ends_at: new Date(NOW + 8 * 3600_000).toISOString(), run_limits: {} });
     renderRow(run);
-    expect(screen.getByRole("button", { name: "Change…" })).toBeInTheDocument();
-    expect(screen.queryByText(/your admin sets the rest/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change…" })).not.toBeInTheDocument();
   });
 });
 
@@ -126,8 +144,37 @@ describe("RunEndsRow — Extend", () => {
     });
     renderRow(run);
     await user.click(screen.getByRole("button", { name: "Extend" }));
-    await user.click(await screen.findByText(/As far as allowed/));
+    await user.click(await screen.findByText(/As far as allowed \(30 days\)/));
     await waitFor(() => expect(toastWarningMock).toHaveBeenCalledWith(expect.stringMatching(/as far as your admin allows/)));
+  });
+
+  it("a 1-day limit reads '(1 day)', not '(1 days)'", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const run = detail({
+      ends_at: new Date(NOW + 8 * 3600_000).toISOString(),
+      run_limits: { user_changes_limits: true, max_end_ahead_sec: 24 * 3600 },
+    });
+    renderRow(run);
+    await user.click(screen.getByRole("button", { name: "Extend" }));
+    expect(await screen.findByText("As far as allowed (1 day)")).toBeInTheDocument();
+  });
+});
+
+describe("RunEndsRow — Change… (F7: Save on the untouched default must still send a PATCH)", () => {
+  it("opening Set an end… and pressing Save with the prefilled default sends a real PATCH", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const onChanged = vi.fn();
+    const run = detail({ run_limits: { user_changes_limits: true, allow_no_end: true } });
+    renderRow(run, onChanged);
+    await user.click(screen.getByRole("button", { name: "Set an end…" }));
+    await user.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
+    const [runId, body] = setRunEndAndWaitMock.mock.calls[0];
+    expect(runId).toBe(run.id);
+    // The prefilled default is "now + 1 day", a real future timestamp — not
+    // null/undefined, which is what the F7 bug silently sent instead.
+    expect(body.endsAt).toBeTruthy();
+    expect(Date.parse(body.endsAt)).toBeGreaterThan(Date.now());
   });
 });
 
@@ -155,14 +202,37 @@ describe("RunEndsRow — an operator caller is never gated, regardless of the ru
       ends_at: new Date(NOW + 8 * 3600_000).toISOString(),
       run_limits: { user_changes_limits: false, max_end_ahead_sec: 30 * 24 * 3600 },
     });
-    renderRow(run, () => {}, true);
+    renderRow(run, () => {}, { operator: true, principal: "someone-else" });
     expect(screen.getByRole("button", { name: "Change…" })).toBeInTheDocument();
     expect(screen.queryByText(/your admin sets the rest/)).not.toBeInTheDocument();
   });
 
   it("an all-zero-value run_limits OBJECT (an operator's own unassigned run) is still fully open", () => {
     const run = detail({ run_limits: {} });
-    renderRow(run, () => {}, true);
+    renderRow(run, () => {}, { operator: true, principal: "someone-else" });
     expect(screen.getByRole("button", { name: "Set an end…" })).toBeInTheDocument();
+  });
+});
+
+// F16 (PR #1317 review): ownsRunOrSuperAdmin (run_end_wait.go) is the
+// server's OWN gate on every write here — a security admin (operator=false)
+// looking at a run they neither own nor superadmin over gets a 403 on all of
+// them, so the client must not dangle a control that always fails.
+describe("RunEndsRow — F16: a non-owner, non-operator viewer gets no action controls", () => {
+  it("gated run, foreign viewer: no Extend, no Change…, no Set an end…", () => {
+    const run = detail({
+      ends_at: new Date(NOW + 8 * 3600_000).toISOString(),
+      run_limits: { user_changes_limits: true, allow_no_end: true },
+    });
+    renderRow(run, () => {}, { operator: false, principal: "a-security-admin" });
+    expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change…" })).not.toBeInTheDocument();
+  });
+
+  it("no-end run, foreign viewer: no Set an end…, but the informational hint still shows", () => {
+    const run = detail({ run_limits: { user_changes_limits: true, allow_no_end: true } });
+    renderRow(run, () => {}, { operator: false, principal: "a-security-admin" });
+    expect(screen.queryByRole("button", { name: "Set an end…" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Keeps going until you or an admin ends it/)).toBeInTheDocument();
   });
 });

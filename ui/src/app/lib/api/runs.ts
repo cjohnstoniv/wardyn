@@ -7,6 +7,8 @@
 // credential-grant eligibility. Consumed directly (import { runs }) so a route
 // that never touches runs drops this module from its chunk.
 import type {
+  AdminProxyWindowResult,
+  AdminRestartResponse,
   AgentRun,
   AttachHolder,
   CreateRunInput,
@@ -474,5 +476,25 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/takeover`, { method: "POST" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<{ promoted: boolean }>(res);
+  },
+
+  // GET /api/v1/admin/runs/proxy-window — operator only (F2/#580, PR #1317
+  // review, RL-10). Every live run whose proxy started outside the supported
+  // wardynd N/N-1 window; these are exactly the ids the bulk restart below
+  // takes.
+  async getAdminProxyWindow(): Promise<AdminProxyWindowResult> {
+    const res = await wfetch("/admin/runs/proxy-window", { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<AdminProxyWindowResult>(res);
+  },
+
+  // POST /api/v1/admin/runs/restart { run_ids } — operator only. Restarts
+  // each named run's proxy under its OWNER's current limits, one at a time;
+  // a per-run failure (including a rebooted run's own "revive it from the
+  // run's page" 409) never aborts the rest — see AdminRestartResult.
+  async restartAdminRuns(runIds: string[]): Promise<AdminRestartResponse> {
+    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<AdminRestartResponse>(res);
   },
 };

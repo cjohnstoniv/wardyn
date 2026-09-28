@@ -93,19 +93,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
   owner, showing a "Renamed" toast and the new title in place, with no reload.
 
-- **The run page shows its lease, and offers Revive when a sandbox is lost (#580, #1197 L5).**
-  A live run's own "Ends" row shows its end time with an Extend menu (+1 day, +1 week, or as far
-  as the captured limit allows) — always available, since extending is the lease — plus a
-  "Change…" dialog and a wait-for-a-decision control for whoever the captured `user_changes_limits`
-  gate (or operator standing) admits. Warnings land at 24h/1h/10 minutes before the end, both as a
-  run-page banner (Extend 1 day / Change end… / Dismiss) and as an amber "Ends in…" word on the
-  run's own board row. A run whose lease ran out offers Extend and revive or End run; a run whose
-  sandbox was lost to a reboot or a control-plane outage offers Revive, Extend and End run, with
-  copy naming whether Claude Code's own conversation continues or another harness starts fresh. A
-  paused run (waiting on a decision, or idle) offers Resume now, and a tightened profile's own
-  banner says which admin change moved the end. Nothing here changes what the server enforces —
-  `PATCH /runs/{id}`, `POST /runs/{id}/revive` and `POST /runs/{id}/resume` already existed; this is
-  the console surface for them.
+- **The run page shows its lease, offers Revive when a sandbox is lost, and Revive-from-row moves a
+  lost run straight to Running (#580, #1197 L5).** A live run's own "Ends" row shows its end time
+  with an Extend menu (+1 day, +1 week, or as far as the captured limit allows) — always available,
+  since extending is the lease — plus a "Change…" dialog, the "No end" hint, and a
+  wait-for-a-decision control for whoever the captured `user_changes_limits` gate (or operator
+  standing) admits; every action is hidden, not just refused, for a viewer who is neither the
+  owner nor a super admin. Warnings land at 24h/1h/10 minutes before the end, both as a run-page
+  banner (Extend 1 day / Change end… / Dismiss) and as an amber "Ends in…" word on the run's own
+  board row, which now also offers Revive directly for a lost run in Needs you. A run whose lease
+  ran out offers Extend-and-revive (or Extend alone for a task run, which cannot be revived) or End
+  run; a run lost to a reboot offers Revive/Extend/End run with copy naming whether Claude Code's
+  own conversation continues or another harness starts fresh, and one lost to a control-plane
+  outage shows only the outage's own sentence, not the reboot copy. A terminal run (after End run,
+  or once a lease-ended run's grace expires) shows none of this. A paused run (waiting on a
+  decision, or idle — its minutes floored at the server's own 630 s) offers Resume now, and a
+  tightened profile's own note sits alongside whichever of the above is showing. The admin view
+  gets its own "Older limits" chip and bulk "Restart with current limits" (`GET
+  /admin/runs/proxy-window`, `POST /admin/runs/restart`, both existing, operator-only routes).
+  Nothing here changes what the server enforces. Two known gaps, both disclosed rather than
+  guessed at: the ended state's "files are kept until…" omits the exact date, since the grace
+  deadline isn't on the wire (#1320); and a loosened admin limit has no note, since nothing
+  distinguishes it from an ordinary cap on the wire (#1322). The New Run "Ends" picker itself
+  cannot be built at all yet — `POST /runs` has no end field (#1319).
 
 - **Helm: `WARDYN_DAEMON_PROXY_SECRET` from an operator-managed Secret (#719).** New chart value
   `daemonProxySecret.existingSecret` (+ `existingSecretKey`, `mountPath`, `defaultMode`) mounts a

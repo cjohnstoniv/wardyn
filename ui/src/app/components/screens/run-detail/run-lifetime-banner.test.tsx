@@ -5,12 +5,14 @@
 
 // RL-15 (#580, #1197 L5): the run page's one lifetime banner — lost/ended/
 // paused/ending-soon are mutually exclusive server facts, so this pins each
-// state's own copy and actions, and that only one ever renders.
+// state's own copy and actions, and that only one ever renders (the
+// tightened note is the one exception, F19).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 
 const reviveRunMock = vi.fn();
@@ -31,7 +33,24 @@ vi.mock("sonner", () => ({
 }));
 
 const NOW = Date.now();
-const detail = (o: Partial<RunDetail> = {}): RunDetail => makeRun(o) as RunDetail;
+const OWNER = "test-user";
+const detail = (o: Partial<RunDetail> = {}): RunDetail => makeRun({ created_by: OWNER, ...o }) as RunDetail;
+
+// The default context (DEFAULT_ME_IDENTITY) is fail-open operator:true, which
+// is why plain `render` below still sees every action button — this helper
+// is only needed where a case cares about a SPECIFIC identity (F16).
+function renderBanner(
+  run: RunDetail,
+  pending: ApprovalRequest[] = [],
+  onChanged: () => void = () => {},
+  opts: { operator?: boolean; principal?: string } = {},
+) {
+  return render(
+    <OperatorProvider operator={opts.operator ?? true} principal={opts.principal ?? OWNER}>
+      <RunLifetimeBanner run={run} pending={pending} onChanged={onChanged} />
+    </OperatorProvider>,
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -41,10 +60,27 @@ beforeEach(() => {
   resumeRunMock.mockResolvedValue(undefined);
 });
 
-describe("RunLifetimeBanner — lost (reboot/outage)", () => {
+describe("RunLifetimeBanner — terminal guard (F3)", () => {
+  it.each(["KILLED", "STOPPED", "FAILED", "COMPLETED", "ARCHIVED"])(
+    "a %s run that was lost to a reboot renders NOTHING — only a revive clears lost_*, never a terminal transition",
+    (state) => {
+      const run = detail({ state, lost_reason: "reboot" });
+      const { container } = renderBanner(run);
+      expect(container).toBeEmptyDOMElement();
+    },
+  );
+
+  it("a KILLED, lease-ended run also renders nothing (not stuck showing Extend to revive forever)", () => {
+    const run = detail({ state: "KILLED", lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString() });
+    const { container } = renderBanner(run);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("RunLifetimeBanner — lost (reboot)", () => {
   it("a Claude Code run lost to a reboot: LOST_TITLE, the Claude-continues body, Revive/Extend/End run", () => {
     const run = detail({ lost_reason: "reboot", ends_at: new Date(NOW + 3600_000).toISOString(), agent: "claude-code" });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    renderBanner(run);
     expect(screen.getByText("This run's sandbox stopped")).toBeInTheDocument();
     expect(screen.getByText(/continues the Claude Code conversation/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
@@ -54,31 +90,61 @@ describe("RunLifetimeBanner — lost (reboot/outage)", () => {
     expect(screen.queryByText(/unreachable for over an hour/)).not.toBeInTheDocument();
   });
 
-  it("a non-Claude harness lost to an outage: the other-agent body PLUS the outage sentence", () => {
-    const run = detail({ lost_reason: "outage", agent: "codex-cli" });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
-    expect(screen.getByText(/starts a new session/)).toBeInTheDocument();
-    expect(screen.getByText(/unreachable for over an hour/)).toBeInTheDocument();
-  });
-
   it("clicking Revive calls reviveRun and reports newly-blocked hosts, then refreshes", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: ["a.com", "b.com"], proxy_release: "r1" });
     const onChanged = vi.fn();
     const run = detail({ lost_reason: "reboot" });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={onChanged} />);
+    renderBanner(run, [], onChanged);
     await user.click(screen.getByRole("button", { name: "Revive" }));
     await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1"));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 2 hosts now blocked.");
   });
+
+  // F8 (PR #1317 review): one shared `busy` boolean used to relabel EVERY
+  // button "Reviving…" while any action was in flight.
+  it("F8: clicking Extend never relabels the Revive button as Reviving…", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    let resolveExtend!: () => void;
+    setRunEndAndWaitMock.mockReturnValue(new Promise((r) => { resolveExtend = () => r({ id: "run-1", ends_at: null, wait_budget_sec: 0, capped: [] }); }));
+    const run = detail({ lost_reason: "reboot" });
+    renderBanner(run);
+    await user.click(screen.getByRole("button", { name: "Extend" }));
+    // Still mid-flight (the promise above hasn't resolved) — Revive must
+    // still read "Revive", and reviveRun must never have been called.
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(reviveRunMock).not.toHaveBeenCalled();
+    resolveExtend();
+    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalled());
+  });
+});
+
+describe("RunLifetimeBanner — lost (outage): F5, one sentence, no contradiction", () => {
+  it("shows ONLY LOST_OUTAGE — never the reboot body or the harness-continuity line", () => {
+    const run = detail({ lost_reason: "outage", agent: "claude-code", ends_at: new Date(NOW + 3600_000).toISOString() });
+    renderBanner(run);
+    expect(screen.getByText(/unreachable for over an hour/)).toBeInTheDocument();
+    expect(screen.queryByText(/machine it ran on restarted/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/continues the Claude Code conversation/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/starts a new session/)).not.toBeInTheDocument();
+  });
+
+  it("still offers Revive/Extend/End run", () => {
+    const run = detail({ lost_reason: "outage" });
+    renderBanner(run);
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
 });
 
 describe("RunLifetimeBanner — a lease-ended run", () => {
-  it("ENDED_TITLE with Extend-and-revive / End run — never the lost copy", () => {
-    const run = detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString() });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+  it("ENDED_TITLE, NO date in the body (F4 — the grace deadline isn't on the wire, #1320), never the lost copy", () => {
+    const run = detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true });
+    renderBanner(run);
     expect(screen.getByText("This run ended at its end time")).toBeInTheDocument();
+    expect(screen.getByText("It has no network. Extend to revive it before its files are cleaned up.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend and revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
     expect(screen.queryByText("This run's sandbox stopped")).not.toBeInTheDocument();
@@ -95,12 +161,27 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
       order.push("revive");
       return { run_id: "run-1", denied_added: [], proxy_release: "r1" };
     });
-    const run = detail({ lost_reason: "ended" });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    const run = detail({ lost_reason: "ended", interactive: true });
+    renderBanner(run);
     await user.click(screen.getByRole("button", { name: "Extend and revive" }));
     await waitFor(() => expect(order).toEqual(["end", "revive"]));
     const [, patchBody] = setRunEndAndWaitMock.mock.calls[0];
     expect(Date.parse(patchBody.endsAt)).toBeGreaterThan(Date.now());
+  });
+
+  // F9 (PR #1317 review): reviveEligible always refuses a task run's revive
+  // ("task run's agent cannot be started again") — offering "Extend and
+  // revive" would PATCH successfully and then 409 on the pointless revive.
+  it("F9: a non-interactive (task) run offers Extend alone, never Extend and revive", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const run = detail({ lost_reason: "ended", interactive: false });
+    renderBanner(run);
+    expect(screen.queryByRole("button", { name: "Extend and revive" })).not.toBeInTheDocument();
+    const extendButton = screen.getByRole("button", { name: "Extend" });
+    expect(extendButton).toBeInTheDocument();
+    await user.click(extendButton);
+    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalled());
+    expect(reviveRunMock).not.toHaveBeenCalled();
   });
 });
 
@@ -111,62 +192,128 @@ describe("RunLifetimeBanner — paused", () => {
     const pending: ApprovalRequest[] = [
       { id: "a1", run_id: "run-1", kind: "egress_domain", requested_scope: {}, state: "PENDING", requested_at: NOW.toString(), expires_at: until },
     ];
-    render(<RunLifetimeBanner run={run} pending={pending} onChanged={vi.fn()} />);
+    renderBanner(run, pending);
     expect(screen.getByText("Paused while waiting for approval")).toBeInTheDocument();
     expect(screen.getByText(/The request stays open until/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Resume now" })).toBeInTheDocument();
   });
 
-  it("idle: the minutes come from the run's OWN captured pause_idle_after_sec", () => {
+  it("idle: the minutes come from the run's OWN captured pause_idle_after_sec, above the floor", () => {
     const run = detail({
       paused_at: new Date(NOW - 60_000).toISOString(),
       paused_reason: "idle",
       run_limits: { pause_idle_after_sec: 1800 },
     });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    renderBanner(run);
     expect(screen.getByText("Paused — nobody's been here for 30 minutes")).toBeInTheDocument();
+  });
+
+  // F14 (PR #1317 review): the server never pauses an idle run sooner than
+  // pauseDelayFloor (630s / 10.5 min), even under a profile that sets less.
+  it("F14: a setting BELOW the server's 630s floor reads the floor, not the raw setting", () => {
+    const run = detail({
+      paused_at: new Date(NOW - 60_000).toISOString(),
+      paused_reason: "idle",
+      run_limits: { pause_idle_after_sec: 300 },
+    });
+    renderBanner(run);
+    expect(screen.getByText("Paused — nobody's been here for 11 minutes")).toBeInTheDocument();
+    expect(screen.queryByText(/5 minutes/)).not.toBeInTheDocument();
   });
 
   it("clicking Resume now calls resumeRun", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const onChanged = vi.fn();
     const run = detail({ paused_at: new Date(NOW - 60_000).toISOString(), paused_reason: "idle" });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={onChanged} />);
+    renderBanner(run, [], onChanged);
     await user.click(screen.getByRole("button", { name: "Resume now" }));
     await waitFor(() => expect(resumeRunMock).toHaveBeenCalledWith("run-1"));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 });
 
-describe("RunLifetimeBanner — ending soon and the quiet default", () => {
-  it("10 minutes left: the warning banner, dismissible", async () => {
+describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 day/Dismiss)", () => {
+  it("10 minutes left: the warning banner, with Change end… and Dismiss", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const run = detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    renderBanner(run);
     expect(screen.getByText("This run ends in 10 minutes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change end…" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("This run ends in 10 minutes")).not.toBeInTheDocument();
   });
 
-  it("a tightened profile note renders when nothing more urgent is going on", () => {
+  it("M1: Change end… opens the SAME Change… dialog the Ends row uses, and Save PATCHes", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const run = detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString(), run_limits: { user_changes_limits: true } });
+    renderBanner(run);
+    await user.click(screen.getByRole("button", { name: "Change end…" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("RunLifetimeBanner — F19: the tightened note sits ALONGSIDE the primary banner", () => {
+  it("a tightened note renders together with the paused banner, not in place of it", () => {
+    const run = detail({
+      paused_at: new Date(NOW - 60_000).toISOString(),
+      paused_reason: "idle",
+      ends_at: new Date(NOW + 5 * 24 * 3600_000).toISOString(),
+      end_tightened_at: new Date(NOW - 60_000).toISOString(),
+    });
+    renderBanner(run);
+    expect(screen.getByText(/nobody's been here/)).toBeInTheDocument();
+    expect(screen.getByText(/Your admin shortened the limit/)).toBeInTheDocument();
+  });
+
+  it("alone, when nothing more urgent is going on", () => {
     const run = detail({
       ends_at: new Date(NOW + 5 * 24 * 3600_000).toISOString(),
       end_tightened_at: new Date(NOW - 60_000).toISOString(),
     });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    renderBanner(run);
     expect(screen.getByText(/Your admin shortened the limit/)).toBeInTheDocument();
   });
 
   it("nothing lost, ended, paused, ending-soon or tightened: renders nothing", () => {
     const run = detail({ ends_at: new Date(NOW + 30 * 24 * 3600_000).toISOString() });
-    const { container } = render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    const { container } = renderBanner(run);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("lost always wins over a simultaneous ending-soon window", () => {
     const run = detail({ lost_reason: "reboot", ends_at: new Date(NOW + 9 * 60_000).toISOString() });
-    render(<RunLifetimeBanner run={run} pending={[]} onChanged={vi.fn()} />);
+    renderBanner(run);
     expect(screen.getByText("This run's sandbox stopped")).toBeInTheDocument();
     expect(screen.queryByText(/This run ends in/)).not.toBeInTheDocument();
+  });
+});
+
+// F16 (PR #1317 review): every action here is owner-or-super-admin on the
+// server — a security admin (operator:false) who neither owns nor
+// superadmins this run gets a 403 on all of them.
+describe("RunLifetimeBanner — F16: a non-owner, non-operator viewer gets no action buttons", () => {
+  it("lost: the situation still reads, but no Revive/Extend/End run", () => {
+    const run = detail({ lost_reason: "reboot" });
+    renderBanner(run, [], () => {}, { operator: false, principal: "a-security-admin" });
+    expect(screen.getByText("This run's sandbox stopped")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "End run" })).not.toBeInTheDocument();
+  });
+
+  it("paused: no Resume now", () => {
+    const run = detail({ paused_at: new Date(NOW - 60_000).toISOString(), paused_reason: "idle" });
+    renderBanner(run, [], () => {}, { operator: false, principal: "a-security-admin" });
+    expect(screen.queryByRole("button", { name: "Resume now" })).not.toBeInTheDocument();
+  });
+
+  it("ending soon: Dismiss still works (it's local-only), but no Extend 1 day or Change end…", () => {
+    const run = detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() });
+    renderBanner(run, [], () => {}, { operator: false, principal: "a-security-admin" });
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Extend 1 day" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change end…" })).not.toBeInTheDocument();
   });
 });

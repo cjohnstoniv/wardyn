@@ -285,6 +285,45 @@ export interface ReviveResult {
   agent_started?: boolean;
 }
 
+// GET /admin/runs/proxy-window's one row (internal/store's RunProxyRelease,
+// F2/#580, PR #1317 review) — one live run whose proxy started on a release
+// outside the supported N/N-1 window.
+export interface RunProxyRelease {
+  run_id: string;
+  created_by: string;
+  state: RunState;
+  lost_reason?: "ended" | "reboot" | "outage";
+  proxy_release: string;
+}
+
+// GET /admin/runs/proxy-window (internal/api/run_revive.go's
+// handleAdminProxyWindow, RL-10, F2/#580): release is this daemon's own
+// version; window names the supported minors, newest first; outside is every
+// live run outside it — these are the runs "Restart with current limits"
+// bulk-restarts.
+export interface AdminProxyWindowResult {
+  release: string;
+  window: string[];
+  outside: RunProxyRelease[];
+}
+
+// One run's outcome in POST /admin/runs/restart (internal/api/run_revive.go's
+// adminRestartResult). lost_again is true when the restart itself left the
+// run lost again (a 409 the person can act on — reviveEligible's "revive it
+// from the run's page" arm for a rebooted run, since the bulk path never
+// starts a stopped agent).
+export interface AdminRestartResult {
+  run_id: string;
+  ok: boolean;
+  error?: string;
+  lost_again?: boolean;
+  denied_added?: string[];
+}
+
+export interface AdminRestartResponse {
+  results: AdminRestartResult[];
+}
+
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
 // endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
 // the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
