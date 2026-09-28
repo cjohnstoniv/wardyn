@@ -1199,7 +1199,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Recordings list join the parts into one cast; a part whose header differs from part 1's (an
   earlier cast of the same run) ends the join. A run past 64 MiB of terminal output used to lose
   its whole recording to a 413 at exit, and a run lost before exit lost all of it; now at most the
-  span since the last part is lost. A `.log` fallback recording still uploads whole at exit.
+  span since the last part is lost. A `.log` fallback recording still uploads whole at exit. A
+  run's cast is stored as at most 2048 parts; a higher part is refused (413, audited
+  `recording.upload` with `reason: part_limit`) and not stored. Each upload's deadline now grows
+  with its size (20 seconds plus the body at 2 Mbit/s), so a full part is not held to 20 seconds.
 
 - **Console branding (#1125).** A super admin sets the organisation's name, how the product name
   reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an

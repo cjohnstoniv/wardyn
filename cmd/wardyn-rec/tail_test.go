@@ -534,3 +534,35 @@ func TestTailUploader_IntervalPartStopsAtTheLastWholeLine(t *testing.T) {
 		t.Fatalf("parts = %+v, want %+v", ups, want)
 	}
 }
+
+// TestUploadTimeout_GivesAFullPartItsTime: a PUT's deadline grows with its
+// body at uploadMinBytesPerSec on top of the small-cast floor, so a full tail
+// part is not held to the 20s a small cast gets.
+func TestUploadTimeout_GivesAFullPartItsTime(t *testing.T) {
+	if got := uploadTimeout(0); got != uploadClientTimeout {
+		t.Errorf("uploadTimeout(0) = %v, want the floor %v", got, uploadClientTimeout)
+	}
+	full := int(partMaxBytes)
+	if got, want := uploadTimeout(full), uploadClientTimeout+time.Duration(full/uploadMinBytesPerSec)*time.Second; got != want {
+		t.Errorf("uploadTimeout(%d) = %v, want %v", full, got, want)
+	}
+}
+
+// TestPutCast_UsesTheBodysTimeout: a PUT that answers after the floor, but
+// within the time its body earns, is delivered — the deadline is the body's,
+// not the small-cast floor's.
+func TestPutCast_UsesTheBodysTimeout(t *testing.T) {
+	orig := uploadClientTimeout
+	uploadClientTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { uploadClientTimeout = orig })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	body := make([]byte, uploadMinBytesPerSec/2) // earns 500ms on top of the floor
+	if err := putCast(body, srv.URL, ""); err != nil {
+		t.Fatalf("a PUT inside its body's deadline failed: %v", err)
+	}
+}

@@ -59,11 +59,23 @@ import (
 // minute, longer than the site-config probe's own wait budget
 // (siteConfigProbeWaitTimeout, internal/api/site_config_probe.go). A cast is
 // small and the proxy hop is local, so 5s to dial / 20s total is generous,
-// not tight.
+// not tight. A long run's tail part is not small (up to 32 MiB), so each PUT
+// also gets its body's time at uploadMinBytesPerSec (uploadTimeout): a small
+// cast still has 20s, and a full part about two and a half minutes.
 var (
 	uploadDialTimeout   = 5 * time.Second
 	uploadClientTimeout = 20 * time.Second
 )
+
+// uploadMinBytesPerSec is the slowest proxy-to-control-plane path an upload
+// is given time for (2 Mbit/s). Below it a full part times out on every
+// attempt and the tail stalls on it.
+const uploadMinBytesPerSec = 256 << 10
+
+// uploadTimeout is one PUT's deadline for an n-byte body.
+func uploadTimeout(n int) time.Duration {
+	return uploadClientTimeout + time.Duration(n)*time.Second/uploadMinBytesPerSec
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -337,7 +349,7 @@ func uploadCast(srcPath, uploadURL, runToken string) error {
 func putCast(data []byte, uploadURL, runToken string) error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: uploadDialTimeout}).DialContext
-	client := &http.Client{Timeout: uploadClientTimeout, Transport: transport}
+	client := &http.Client{Timeout: uploadTimeout(len(data)), Transport: transport}
 	req, err := http.NewRequest(http.MethodPut, uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
