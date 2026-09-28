@@ -23,6 +23,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
+  rail lists every provider you may use for it, with its kind, your connection state and where
+  the credential lives during the run, and the run is sent with the one you pick. The agent's
+  default, or a workspace's pinned provider, is preselected; with one candidate it is used
+  unprompted. With several and no default, Launch waits for a choice, and an admin default that is
+  disabled is named rather than silently replaced. An install with no provider block keeps
+  today's rail.
 - **Your account ▸ Your model connections (#541).** Every person — admins included, by switching to
   Member view — now connects their own credential for each model provider their admin enabled for
   them, one row per provider: an AWS or Claude sign-in, or an API key/token, each with its own
@@ -182,6 +189,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Docker names the cause when the proxy sidecar exits at config load (#1051).** A proxy that
+  refused its rendered config at start used to surface as "proxy has no IP" when the run was
+  created. The Docker driver now watches a new proxy until it has stayed up for a second and fails
+  the run with `docker: proxy exited at config load (exit N)` plus the last lines the proxy logged,
+  as Kubernetes already did. A replacement proxy that dies this way on revive is left in place so
+  its logs stay readable.
 - **Review states where a chosen model provider's credential lives (#983).** A run that chose a
   model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
   "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
@@ -2054,7 +2067,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (the same proxy image) now stages the config out of a Secret volume that projects only the
   config key (mode 0440) into a shared in-memory `emptyDir`, as an owner-only (0400) file; the
   main proxy container mounts only that file, read-only, and reads it via `-config` — no env var
-  carries it at all. Docker is unchanged (tracked separately, waiting on #1051/#1059). **Upgrade
+  carries it at all. Docker hands its proxy the config on stdin instead (#1176). **Upgrade
   note:** run this wardynd with the wardyn-proxy image from the same release. An older proxy image
   has no `-stage-config-src`, so its init container exits and every Kubernetes run starts with no
   egress (it fails closed rather than erroring at create).
