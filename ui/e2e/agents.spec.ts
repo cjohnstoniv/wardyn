@@ -13,7 +13,6 @@ import {
 } from "./fixtures";
 import {
   AGENTS,
-  AGENTS_DRAFT,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
   modelAccessChipBare,
@@ -32,14 +31,15 @@ import type { Page } from "@playwright/test";
 // the tree those commits produced.
 //
 // BROWSER VS API, and why:
-//   * The Agents tab's own write walk (enable/mechanism/credential-source/
-//     save/reload) is REAL — GET/PUT /agent-providers are operatorOnly routes
-//     this harness's admin bearer reaches, so it writes to Postgres and reads
-//     its own write back.
-//   * The DECLARED-MECHANISM 422 (enforceCreateLLMMechanism, runs.go:220) is
-//     ALSO real: this harness has no Bedrock credential of any kind
-//     configured, so declaring claude-code's mechanism `bedrock_bearer` and
-//     launching genuinely resolves to "is not configured" — no stub involved.
+//   * The Agents tab's own write walk (enable/default provider/save/reload)
+//     is REAL — GET/PUT /agent-providers and /model-providers are operatorOnly
+//     routes this harness's admin bearer reaches, so it writes to Postgres and
+//     reads its own write back.
+//   * The DECLARED-MECHANISM 422 (enforceCreateLLMMechanism) is ALSO real:
+//     this harness has no Bedrock credential of any kind configured, so a
+//     roster declaring claude-code's mechanism `bedrock_bearer` (written
+//     through the API — the tab no longer offers the mechanism) genuinely
+//     resolves to "is not configured" on launch — no stub involved.
 //   * The disabled-agent 422 (agentRosterRefusal) is real for the same
 //     reason: no isOperator exemption exists in that function.
 //   * What CANNOT be real here: a genuine per-user AWS SSO sign-in (no IdP in
@@ -92,6 +92,16 @@ async function saveAgents(page: Page): Promise<void> {
   await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
 }
 
+// GET-then-PUT-with-If-Match, the round trip the console itself performs.
+async function putDoc(page: Page, path: string, body: unknown): Promise<void> {
+  const cur = await page.request.get(path, { headers: auth });
+  const etag = cur.headers()["etag"] ?? null;
+  const headers: Record<string, string> = { ...auth };
+  if (etag) headers["If-Match"] = etag;
+  const res = await page.request.put(path, { headers, data: body });
+  expect(res.status(), await res.text()).toBe(200);
+}
+
 test.describe.configure({ mode: "serial" });
 
 test.describe("agents — legacy open mode (no agent_providers row saved yet)", () => {
@@ -113,31 +123,67 @@ test.describe("agents — legacy open mode (no agent_providers row saved yet)", 
 test.describe("agents — the admin authoring walk (real writes, real reload)", () => {
   test.describe.configure({ mode: "serial" });
 
-  test("enabling claude-code as bedrock_sso + per_user with a start URL persists", async ({ page }) => {
+  // Packet MP-C (design §5.3): the row's default model provider. The
+  // providers are seeded through PUT /model-providers (Settings → Model
+  // providers owns that document); the default is picked and saved here.
+  test("G1: with no model provider set up, every managed agent says so", async ({ page }) => {
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
-    await expect(row).toBeVisible();
+    await expect(row.getByText(AGENTS.NO_PROVIDER("Claude Code"))).toBeVisible();
+    await expect(page.getByTestId("agent-row-none").getByText(AGENTS.MECHANISM_NONE)).toBeVisible();
+  });
 
-    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await saveAgents(page);
-
-    // Tab selection is local React state (providers-screen.tsx's `tab`), not
-    // URL-carried — a reload always re-lands on the Git tab.
-    await page.reload();
-    await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
-    const reloaded = page.getByTestId("agent-row-claude-code");
-    await expect(reloaded.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO })).toBeChecked();
-    await expect(reloaded.getByLabel(AGENTS.FIELD_SSO_START_URL)).toHaveValue("https://acme.awsapps.com/start");
-
-    const snap = await getAgentProviders(page);
-    const claude = (snap.providers.agents as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
-    expect(claude).toMatchObject({
-      mechanism: "bedrock_sso",
-      credential_source: "per_user",
-      sso_start_url: "https://acme.awsapps.com/start",
+  test("G2 + G3: one provider is a static line; several are a select whose pick persists", async ({ page }) => {
+    await putDoc(page, "/api/v1/model-providers", {
+      providers: [
+        {
+          id: "bedrock-prod",
+          name: "Bedrock (prod)",
+          kind: "bedrock_sso",
+          bedrock: { region: "us-east-1", sso_start_url: "https://acme.awsapps.com/start" },
+          harnesses: [{ harness: "claude-code", model: "acme.claude-sonnet" }],
+        },
+        {
+          id: "corp-gateway",
+          name: "Corp gateway",
+          kind: "custom_endpoint",
+          base_url: "https://gateway.corp.example",
+          harnesses: [
+            { harness: "claude-code", path: "/anthropic" },
+            { harness: "codex-cli", path: "/v1" },
+          ],
+        },
+      ],
     });
+    try {
+      await gotoAgentsTab(page);
+      await expect(page.getByTestId("agent-row-codex-cli").getByText(AGENTS.ONLY_PROVIDER("Corp gateway", "Codex CLI"))).toBeVisible();
+
+      const row = page.getByTestId("agent-row-claude-code");
+      await expect(row.getByText(AGENTS.DEFAULT_HINT)).toBeVisible();
+      await row.getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` }).click();
+      await page.getByRole("option", { name: AGENTS.DEFAULT_OPTION("Bedrock (prod)", "Amazon Bedrock") }).click();
+      await saveAgents(page);
+
+      // Tab selection is local React state (providers-screen.tsx's `tab`), not
+      // URL-carried — a reload always re-lands on the Git tab.
+      await page.reload();
+      await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+      await expect(
+        page.getByTestId("agent-row-claude-code").getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` }),
+      ).toHaveText(AGENTS.DEFAULT_OPTION("Bedrock (prod)", "Amazon Bedrock"));
+
+      const snap = await getAgentProviders(page);
+      const agents = snap.providers.agents as Array<Record<string, unknown>>;
+      expect(agents.find((a) => a.id === "claude-code")).toMatchObject({ default_provider: "bedrock-prod" });
+      // G2 writes nothing: the one candidate is not stored as a default.
+      expect(agents.find((a) => a.id === "codex-cli")?.default_provider).toBeUndefined();
+    } finally {
+      // Roster first: a stored default naming a provider about to be removed
+      // is refused. Both back to legacy open mode for the tests after this one.
+      await putDoc(page, "/api/v1/agent-providers", {});
+      await putDoc(page, "/api/v1/model-providers", {});
+    }
   });
 
   test("disabling codex-cli renders it unavailable in the New Run picker, and refuses a real launch naming it", async ({
@@ -173,12 +219,14 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
   test("a declared mechanism with nothing behind it refuses launch as 'not configured' (real, no Bedrock creds exist here)", async ({
     page,
   }) => {
-    await gotoAgentsTab(page);
-    const row = page.getByTestId("agent-row-claude-code");
-    // Switch off per_user/SSO back to a lane this harness genuinely has zero
-    // credential for: bedrock_bearer, with no bearer-key secret ever stored.
-    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }).click();
-    await saveAgents(page);
+    // A lane this harness genuinely has zero credential for: bedrock_bearer,
+    // with no bearer-key secret ever stored.
+    await putDoc(page, "/api/v1/agent-providers", {
+      agents: [
+        { id: "claude-code", mechanism: "bedrock_bearer" },
+        { id: "codex-cli", mechanism: "openai_api_key", disabled: true },
+      ],
+    });
 
     const res = await page.request.post("/api/v1/runs", {
       headers: auth,
@@ -453,21 +501,17 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
   });
 });
 
-// Appendix A finding 4's other half — the roster pin. A real write/reload
-// walk (like the per_user save test above) plus the server-400 refusal, both
-// of which need a REAL model account on file to compare against
+// Appendix A finding 4's other half — the roster pin, whose disagreement with
+// the model ARN needs a REAL model account on file to compare against
 // (bedrockModelAccount/validateAgentSSOPin) — scripts/e2e-backend.sh sets
 // WARDYN_BEDROCK_MODEL to a full ARN naming account 222222222222 for exactly
 // this reason.
 test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () => {
   test.describe.configure({ mode: "serial" });
 
-  // U2-04 (blind round 2, lens-U2): the SAME snapshot/restore the sibling
-  // describe below carries, applied one describe earlier — where it was
-  // missing. Both tests here save real rosters against the shared e2e daemon
-  // (fullyParallel: every other spec FILE runs against it at the same time),
-  // and without this the file ended with claude-code left declared
-  // bedrock_sso + per_user + pinned. A persisted per_user claude-code row
+  // The test here saves a real roster, and without this snapshot/restore the
+  // file would end with claude-code left declared bedrock_sso + per_user +
+  // pinned. A persisted per_user claude-code row
   // makes the admin token's model_access `not_applicable` and can make
   // enforceCreateLLMMechanism refuse claude-code launches — i.e. it breaks
   // new-run.spec.ts, runs.spec.ts and the recording specs, from here.
@@ -483,51 +527,27 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     }
   });
 
-  test("a per_user row saves an account/role pin and re-renders it after a reload", async ({ page }) => {
-    await gotoAgentsTab(page);
-    const row = page.getByTestId("agent-row-claude-code");
-    await expect(row).toBeVisible();
-
-    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("222222222222");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("BedrockRunner");
-    await saveAgents(page);
-    await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
-
-    await page.reload();
-    await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
-    const reloaded = page.getByTestId("agent-row-claude-code");
-    await expect(reloaded.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toHaveValue("222222222222");
-    await expect(reloaded.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toHaveValue("BedrockRunner");
-
-    const snap = await getAgentProviders(page);
-    const claude = (snap.providers.agents as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
-    expect(claude).toMatchObject({ sso_account_id: "222222222222", sso_role_name: "BedrockRunner" });
-  });
-
   // S2-09: a pin that disagrees with the model ARN's account is the ADMIN'S
   // DELIBERATE ANSWER — a resource-shared application inference profile
   // legitimately lives in another account, and refusing left that deployment
   // with no configuration that worked. It saves; the disagreement shows up as a
   // warning on the Getting-started Bedrock row (and a journal line per save).
   test("a pin whose account differs from the model ARN saves as the deliberate pin", async ({ page }) => {
-    await gotoAgentsTab(page);
-    const row = page.getByTestId("agent-row-claude-code");
-    // U2-04: the afterEach above restores the roster this describe found on
-    // arrival, so this test no longer inherits the previous one's SAVED
-    // per_user row — it declares its own draft (unsaved: the pin fields only
-    // render under a per_user credential source) and then asks the server to
-    // refuse it. The before/after equality below is unaffected: a draft that
-    // 400s writes nothing either way.
-    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("DevPower");
-    await saveAgents(page);
-    await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
+    // Written through the API: the roster's SSO fields have no console
+    // surface any more (they live on the Bedrock provider); the server still
+    // validates and grades this row until the conversion retires it.
+    await putDoc(page, "/api/v1/agent-providers", {
+      agents: [
+        {
+          id: "claude-code",
+          mechanism: "bedrock_sso",
+          credential_source: "per_user",
+          sso_start_url: "https://acme.awsapps.com/start",
+          sso_account_id: "111111111111",
+          sso_role_name: "DevPower",
+        },
+      ],
+    });
 
     const after = await getAgentProviders(page);
     const afterClaude = ((after.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
@@ -566,74 +586,5 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     // reporting operator nothing.
     expect(bedrock!.detail).toContain("111111111111");
     expect(bedrock!.detail).toContain("222222222222");
-  });
-});
-
-// Appendix A finding 4 (prominence): the per_user sign-in affordance moves
-// to the TOP of the expanded row, above the mechanism radio group, so it is
-// the first thing an admin sees after declaring the lane — never scrolled
-// past on the way to the legacy Settings door.
-test.describe("agents — the per_user sign-in affordance renders before the mechanism field", () => {
-  // U-09: this test's own PUT below writes a roster of ONE row
-  // (claude-code), dropping codex-cli and none — real, against the shared
-  // e2e daemon other spec FILES run against concurrently (fullyParallel).
-  // Restore the roster this test found on arrival so it never leaks a
-  // narrowed roster to anything running alongside or after it. R-05
-  // (review): snapshotted in beforeEach (not the test body) so a second
-  // test added to this describe restores its own arrival state too, and the
-  // restore PUT's status is asserted so a failed restore is never silent.
-  let rosterBefore: { agents?: unknown[] } | null = null;
-  test.beforeEach(async ({ page }) => {
-    rosterBefore = (await getAgentProviders(page)).providers;
-  });
-  test.afterEach(async ({ page }) => {
-    if (rosterBefore) {
-      const restore = await page.request.put("/api/v1/agent-providers", { headers: auth, data: rosterBefore });
-      expect(restore.ok()).toBeTruthy();
-      rosterBefore = null;
-    }
-  });
-
-  test("the banner renders before the mechanism field under an actionable per_user row", async ({ page }) => {
-    // Cache-and-serve (the same closure the not_applicable test above uses):
-    // a per-request route.fetch()+refulfill raced Playwright disposing an
-    // in-flight route's response under load (see that test's own comment).
-    let cached: Record<string, unknown> | null = null;
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      if (!cached) {
-        const response = await route.fetch();
-        const body = await response.json();
-        body.model_access = { state: "not_configured", action: "Sign in to AWS" };
-        cached = body;
-      }
-      // TS can't narrow a `let` captured by this closure across the `await`
-      // above — the `if` guarantees it non-null by here.
-      await route.fulfill({ json: cached! });
-    });
-    const put = await page.request.put("/api/v1/agent-providers", {
-      headers: auth,
-      data: {
-        agents: [
-          {
-            id: "claude-code",
-            mechanism: "bedrock_sso",
-            credential_source: "per_user",
-            sso_start_url: "https://acme.awsapps.com/start",
-          },
-        ],
-      },
-    });
-    expect(put.status()).toBe(200);
-
-    await gotoAgentsTab(page);
-    const row = page.getByTestId("agent-row-claude-code");
-    await expect(row.getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeVisible();
-    const banner = row.getByTestId("per-user-sign-in-banner");
-    const mechanismField = row.getByRole("radiogroup", { name: AGENTS.FIELD_MECHANISM });
-    const bannerBox = await banner.boundingBox();
-    const mechanismBox = await mechanismField.boundingBox();
-    expect(bannerBox).not.toBeNull();
-    expect(mechanismBox).not.toBeNull();
-    expect(bannerBox!.y).toBeLessThan(mechanismBox!.y);
   });
 });

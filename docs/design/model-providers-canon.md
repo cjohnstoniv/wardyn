@@ -124,3 +124,14 @@ as every other row below.
 | `PROVIDER_EDITOR.SSO_SETUP_HINT` | E3, under Pinned IAM role name | These make each person's sign-in one click. |
 | `PROVIDER_EDITOR.MODEL_HINT_BEDROCK` | E3, under a ticked agent | An inference profile id. |
 | `PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING` | kind step (disabled reason) and E4 | Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image. |
+
+## Owner decisions (packet MP-C) — the Agents tab default (#539)
+
+Packet MP-C ("Choosing at Launch", owner-approved 2026-09-28, recommended on every question). Its
+Agents-tab strings are frozen in the `AGENTS` table of `workspace-providers-prompt.md` §7.7, beside the
+rest of that tab's copy, and parsed back by `workspace-providers-copy.test.ts`.
+
+| Id | Decision |
+|---|---|
+| QC-1 | With one provider for an agent, no select: the static G2 line. |
+| QC-5 | The Agents-tab default is a select, not radio rows. |
