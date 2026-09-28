@@ -4,7 +4,7 @@
  */
 
 import type { Page, Route } from "@playwright/test";
-import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { BANNER, CLAUDE_DOOR, CRED_NOTICE, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "../src/app/components/wardyn/copy/door";
@@ -105,12 +105,14 @@ test.describe("one door — today's door, where the install has no model provide
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expectOneDoor(page, MODEL_ACCESS_BANNER.DIALOG_TITLE);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
+    await expandCard(page, "Workspace providers");
     await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
     await expect(page).toHaveURL(/\/admin\/providers$/);
     await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
@@ -157,6 +159,7 @@ test.describe("one door — keyed by provider (User view)", () => {
 
     await gotoConsole(page);
     await navToRoute(page, "/account");
+    await expandCard(page, "Your model connections");
     // The card claims the door, so the strip's own line for this same
     // provider is suppressed — one "Sign in to AWS" on the page, not two.
     await page.getByTestId("model-connections-card").getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
@@ -307,6 +310,7 @@ test.describe("one door — keyed by provider (User view)", () => {
     const legacy = await stubSignInSandbox(page, "**/api/v1/setup/harness-login");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-subscription").click();
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     const door = page.getByRole("dialog", { name: CLAUDE_DOOR.TITLE });

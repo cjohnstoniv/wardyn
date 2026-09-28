@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, asRealMember, asRealSecurityAdmin, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, asRealMember, asRealSecurityAdmin, expandCard, gotoConsole, navToRoute } from "./fixtures";
 
 // E2E coverage for the M-5 settings split (#636):
 // src/app/components/screens/settings/{admin-settings-screen,your-account-screen,admin-ssh-keys-card}.tsx
@@ -28,7 +28,7 @@ test.describe("Admin Settings — Admin SSH keys (S-1)", () => {
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Admin SSH keys" }) });
     await expect(card).toBeVisible();
-    await card.getByRole("button", { name: /^Admin SSH keys/ }).click();
+    await expandCard(page, "Admin SSH keys");
     await expect(card.getByText("No admin keys")).toBeVisible();
 
     // The reused add dialog — same one Your account's "+ Add key" opens.
