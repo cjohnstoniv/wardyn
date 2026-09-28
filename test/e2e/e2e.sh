@@ -401,7 +401,13 @@ cat > "${WORKDIR}/oidc.sh" <<'SH'
 set -u
 JAR=/tmp/cj.txt; rm -f "$JAR"
 BASE="http://wardynd:8080"; DEX="http://dex:5556"
-C="curl -sS -c $JAR -b $JAR"
+# Dex's own discovery advertises authorization_endpoint as
+# http://localhost:5556/auth (dex.yaml's public issuer, read by wardynd's
+# oidc.go) — nothing inside this throwaway curl container listens on ITS OWN
+# localhost:5556, so a follow of that URL would otherwise fail outright.
+# --connect-to routes the TCP connection to the real dex service while
+# leaving the URL (and Host header) exactly as Dex handed it back.
+C="curl -sS --connect-to localhost:5556:dex:5556 -c $JAR -b $JAR"
 AU=$($C -D - -o /dev/null "$BASE/auth/login" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
 if [ -z "$AU" ]; then
   echo "login_redirect_pkce_s256=0 reason=no-location"
