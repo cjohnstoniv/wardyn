@@ -93,6 +93,7 @@ export function TopBar({
           className="hidden sm:flex"
           currentUserType={meta.userType}
           preselectType={meta.userViewPreselectType}
+          userTypes={meta.userViewTypes}
         />
       )}
 

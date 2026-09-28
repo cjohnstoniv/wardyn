@@ -7,21 +7,28 @@
 -- the rename touched, and the People page cannot honestly show a "Migrated
 -- from member" chip without a marker.
 --
--- Backfill cutoff: the migration tracking table this codebase reserves for
--- Migrate()'s own bookkeeping is off limits here, so this cannot look up
--- 0074's own apply moment to find the exact rewrite. Falling back, per the
--- design's own allowance for "when that timestamp is not recorded", to
--- 0074's LANDING commit instead: 2026-09-23T22:20:09Z (UTC;
--- eda59c3fcff4bd052dc57a68a48b50cc61a70e2b, "renumber migration
--- 0073_user_tier_rename to 0074"). role_mappings_role_check already forbids
--- 'member' outright once 0074 applies, so nothing saved afterward can ever
--- be a false negative here; the one residual is a genuinely fresh
--- Standard-user row saved in the few hours around 0074's own landing, which
--- is marked migrated in error and only needs a type chosen for it once, the
--- same click a truly migrated row asks for.
+-- Backfill: mark every role='user' AND user_type='standard' row, unconditional
+-- on created_at. This is exact, not a heuristic, for any install upgrading
+-- from a release: 0074 is unreleased (no shipped tag contains it), so a
+-- 0.7.x deployment applies 0074 and this migration in the SAME Migrate()
+-- call, back to back, with no application traffic served in between --
+-- nothing can write a fresh role='user' row into the gap because there is no
+-- gap. And before 0074 runs, role_mappings_role_check (0053) allows only
+-- ('admin','security_admin','member') -- 'user' cannot exist in the table at
+-- all until 0074's own rewrite puts it there. So at the moment this migration
+-- runs, on a real upgrade, every 'user'/'standard' row IS 0074's rewrite.
+--
+-- The one place this over-marks is a dev/lab database that applied 0074 on
+-- its own, kept serving traffic, and only later picked up this migration in
+-- a separate deploy -- a genuinely fresh Standard-user row saved in that
+-- window is marked migrated in error, and needs a type chosen for it once,
+-- the same click a truly migrated row asks for. This file cannot narrow that
+-- further: it has no way to ask WHEN 0074 itself applied (the migration
+-- tracking table is Migrate()'s own bookkeeping, off limits to any
+-- migration), so "every 0.7.x install" is the exact case this backfill gets
+-- right, and the dev/lab case above is the one it cannot.
 ALTER TABLE role_mappings ADD COLUMN IF NOT EXISTS migrated_from_member BOOLEAN NOT NULL DEFAULT false;
 
 UPDATE role_mappings
 SET migrated_from_member = true
-WHERE role = 'user' AND user_type = 'standard'
-  AND created_at < '2026-09-23T22:20:09Z';
+WHERE role = 'user' AND user_type = 'standard';

@@ -113,6 +113,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// entered — "" when there is nothing to preselect (already in the view,
 	// or no human identity to remember a choice for).
 	body["user_view_preselect_type"] = s.meUserViewPreselectType(r)
+	// #912, H2: the org's user types, present only for a STAMPED admin or
+	// security_admin (never a real member) — this is what lets the type
+	// picker work from INSIDE the view too, where the effective role is
+	// clamped to user and GET /user-types (securityOps) would 403 it.
+	body["user_view_types"] = s.meUserViewTypes(r)
 	// The AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
 	// an operator (the dialog never renders the hint for one) and for a member

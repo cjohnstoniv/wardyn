@@ -101,7 +101,7 @@ export interface Me {
   // the next switch (0.8, internal/api/me.go's meUserViewDropped) — the
   // console says why it is back in the Admin view. null otherwise, including
   // on a pre-0.8 daemon.
-  user_view_dropped?: { user_type: string; reason: "deleted" } | null;
+  user_view_dropped?: { user_type: string; user_type_name?: string; reason: "deleted" } | null;
   // The type id the switch's dropdown preselects BEFORE the view is entered
   // (0.8, UT-7a/#912) — the same resolution the server applies when POST
   // /me/view names none: the admin's remembered choice, else their own
@@ -109,6 +109,14 @@ export interface Me {
   // means there is nothing to preselect — already in the view (user_type
   // above answers that case) or no admin identity to remember a choice for.
   user_view_preselect_type?: string;
+  // The org's user types (id + name only), present ONLY when this caller's
+  // STAMPED role -- never the clamped one -- is admin or security_admin (0.8,
+  // #912 H2). This is what lets the type picker work from INSIDE the user
+  // view too, where the effective role reads user and GET /user-types
+  // (securityOps) would refuse it; the console reads this instead of calling
+  // that route at all whenever it might be inside the view. null for anyone
+  // else, including a real member, and absent on a pre-0.8 daemon.
+  user_view_types?: { id: string; name: string }[] | null;
   // WHY /me COULD NOT ANSWER for this caller's drive, or "" when it could.
   // Always present on a 0.7 daemon, so an absent key is an older server rather
   // than "nothing is wrong".

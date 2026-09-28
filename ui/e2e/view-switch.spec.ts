@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
-import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
+import type { BrowserContext, Page } from "@playwright/test";
+import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
 import { CONSOLE_VIEW, USER_PREVIEW, VIEW_DROPPED } from "../src/app/components/wardyn/copy/console-view";
 import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
@@ -23,21 +23,37 @@ import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-c
 
 interface Session {
   userView: boolean;
+  // The chosen type's id, persisted for as long as this mocked session lives
+  // (across a reload too, since it's a JS closure the routes keep reading) —
+  // #912's own "the choice persists" pin needs this remembered somewhere,
+  // and the real backend's equivalent is the session cookie.
+  viewType: string | null;
   posts: unknown[];
   failNext: boolean;
 }
 
+// user_view_types (#912, H2): /me carries the org's type list ONLY for a
+// caller whose STAMPED role is admin or security_admin — never from GET
+// /user-types, which a clamped in-view session cannot reach (pinned in Go,
+// internal/api/user_view_test.go's TestMeUserViewTypes). Passed here as
+// `extra.user_view_types` so a picker test can hand the mock a fixed roster
+// with no real POST /user-types write needed.
 async function ssoAdminSession(context: BrowserContext, extra: Record<string, unknown> = {}): Promise<Session> {
-  const session: Session = { userView: false, posts: [], failNext: false };
+  const session: Session = { userView: false, viewType: null, posts: [], failNext: false };
+  const types = (extra.user_view_types as { id: string; name: string }[] | undefined) ?? [];
   await context.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     Object.assign(json, { method: "sso", user_view: session.userView }, extra);
-    if (session.userView) Object.assign(json, { role: "user", operator: false, security_operator: false });
+    if (session.userView) {
+      Object.assign(json, { role: "user", operator: false, security_operator: false });
+      const chosen = types.find((t) => t.id === session.viewType);
+      if (chosen) json.user_type = chosen;
+    }
     await route.fulfill({ response, json });
   });
   await context.route("**/api/v1/me/view", async (route) => {
-    const body = route.request().postDataJSON() as { view: string; no_credential?: boolean };
+    const body = route.request().postDataJSON() as { view: string; no_credential?: boolean; user_type?: string };
     session.posts.push(body);
     if (session.failNext) {
       session.failNext = false;
@@ -45,6 +61,7 @@ async function ssoAdminSession(context: BrowserContext, extra: Record<string, un
       return;
     }
     session.userView = body.view === "user";
+    if (session.userView && body.user_type) session.viewType = body.user_type;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user_view: session.userView }) });
   });
   return session;
@@ -192,45 +209,38 @@ test.describe("the view switch", () => {
   });
 });
 
-// #912 — the type picker. GET /user-types is unmocked (the ssoAdminSession
-// helper only intercepts /me and /me/view), so a real bearer-authenticated
-// admin caller reads REAL rows this seeds through the API — the same rows the
-// User Types screen itself manages (user-types.spec.ts).
-async function seedUserType(request: APIRequestContext, id: string, name: string): Promise<void> {
-  const res = await request.post("/api/v1/user-types", {
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
-    data: { id, name },
-  });
-  expect(res.status(), await res.text()).toBeLessThan(300);
-}
-
 test.describe("the type picker (#912)", () => {
   test("with two or more types, the User segment opens a menu; entering names the picked type on the wire", async ({
     page,
     context,
-    request,
   }) => {
-    await seedUserType(request, "e2e-vs-pm", "Portfolio manager");
-    await seedUserType(request, "e2e-vs-dev", "Developer");
-    const session = await ssoAdminSession(context);
+    const session = await ssoAdminSession(context, {
+      user_view_types: [
+        { id: "e2e-vs-pm", name: "Portfolio manager" },
+        { id: "e2e-vs-dev", name: "Developer" },
+      ],
+    });
     await gotoConsole(page, "admin");
 
     await segment(page, CONSOLE_VIEW.USER).click();
     await page.getByRole("menuitem", { name: "Developer" }).click();
     await expect(page).toHaveURL(/\/runs$/);
+    // Waits for the chrome before reading posts: switchView's reload lands on
+    // the SAME "/runs" this test started on, so a bare URL match can pass
+    // before the round trip that populates it ever ran.
     await expectUserChrome(page);
-    expect(session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev" }]);
+    await expect.poll(() => session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev" }]);
   });
 
-  test("the eyebrow reopens the picker; choosing another type re-enters without leaving the view", async ({
-    page,
-    context,
-    request,
-  }) => {
-    await seedUserType(request, "e2e-vs-pm2", "Portfolio manager 2");
-    await seedUserType(request, "e2e-vs-dev2", "Developer 2");
-    const session = await ssoAdminSession(context, { user_type: { id: "e2e-vs-pm2", name: "Portfolio manager 2" } });
+  test("the eyebrow reopens the picker; choosing another type re-enters without leaving the view", async ({ page, context }) => {
+    const session = await ssoAdminSession(context, {
+      user_view_types: [
+        { id: "e2e-vs-pm2", name: "Portfolio manager 2" },
+        { id: "e2e-vs-dev2", name: "Developer 2" },
+      ],
+    });
     session.userView = true;
+    session.viewType = "e2e-vs-pm2";
     await gotoConsole(page);
     await expectUserChrome(page);
 
@@ -239,22 +249,50 @@ test.describe("the type picker (#912)", () => {
     await eyebrow.click();
     await page.getByRole("menuitem", { name: "Developer 2" }).click();
     await expect(page).toHaveURL(/\/runs$/);
-    expect(session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev2" }]);
+    await expectUserChrome(page);
+    await expect.poll(() => session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev2" }]);
   });
 
-  test("a dropped type shows the notice; Choose another type re-enters as the picked one", async ({ page, context, request }) => {
-    await seedUserType(request, "e2e-vs-analyst", "Analyst");
+  test("a dropped type shows its NAME, not its id; Choose another type re-enters as the picked one", async ({ page, context }) => {
     const session = await ssoAdminSession(context, {
-      user_view_dropped: { user_type: "e2e-vs-contractor", reason: "deleted" },
+      user_view_types: [{ id: "e2e-vs-analyst", name: "Analyst" }],
+      user_view_dropped: { user_type: "e2e-vs-contractor", user_type_name: "Contractor", reason: "deleted" },
     });
     await gotoConsole(page, "admin");
 
-    const notice = page.getByRole("status").filter({ hasText: VIEW_DROPPED.BODY("e2e-vs-contractor") });
+    const notice = page.getByRole("status").filter({ hasText: VIEW_DROPPED.BODY("Contractor") });
     await expect(notice).toBeVisible();
     await notice.getByRole("button", { name: VIEW_DROPPED.CHOOSE_ANOTHER }).click();
     await page.getByRole("menuitem", { name: "Analyst" }).click();
     await expect(page).toHaveURL(/\/runs$/);
-    expect(session.posts).toEqual([{ view: "user", user_type: "e2e-vs-analyst" }]);
+    await expectUserChrome(page);
+    await expect.poll(() => session.posts).toEqual([{ view: "user", user_type: "e2e-vs-analyst" }]);
+  });
+
+  // M3: the admin's choice survives a reload (the server side of this is
+  // pinned in Go — internal/api/user_view_test.go's
+  // TestUserViewSwitchValidatesAndRemembersTheType, a fresh session of the
+  // same principal preselecting the remembered choice). This proves the
+  // CONSOLE reads it back correctly: the eyebrow still names the chosen type
+  // after the page reloads, not just right after the click.
+  test("the choice persists across a reload", async ({ page, context }) => {
+    const session = await ssoAdminSession(context, {
+      user_view_types: [
+        { id: "e2e-vs-pm3", name: "Portfolio manager 3" },
+        { id: "e2e-vs-dev3", name: "Developer 3" },
+      ],
+    });
+    await gotoConsole(page, "admin");
+    await segment(page, CONSOLE_VIEW.USER).click();
+    await page.getByRole("menuitem", { name: "Developer 3" }).click();
+    await expectUserChrome(page);
+    await expect.poll(() => session.posts).toEqual([{ view: "user", user_type: "e2e-vs-dev3" }]);
+
+    await page.reload();
+    await expectUserChrome(page);
+    await expect(
+      page.locator("aside").getByRole("button", { name: CONSOLE_VIEW.EYEBROW_USER("Developer 3") }),
+    ).toBeVisible();
   });
 });
 

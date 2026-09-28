@@ -36,14 +36,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The User view picks a user type (#912).** With more than one user type configured, the User
   view side of the console switch becomes a dropdown, preselecting the admin's last choice; the
   eyebrow it shows while looking through a type reopens the same picker without leaving the view.
-  A type removed mid-session drops the admin back to the Admin view with a notice naming it and a
-  real "Choose another type" action. With only the built-in type, the switch stays the plain
-  two-way toggle it always was.
+  A type removed mid-session drops the admin back to the Admin view with a notice naming it and
+  real "Choose another type" / "Stay in the Admin view" actions. With only the built-in type, the
+  switch stays the plain two-way toggle it always was.
 - **People marks rows migrated from a member mapping (#913).** Migration
   `0098_role_mappings_migrated_from_member` marks a console role-mapping row 0074's rename rewrote
   from `role='member'`, so the People page can show it a "Migrated from member" chip and a
   "Choose a type" action, distinct from a row an admin saved as Standard user on purpose. The
-  marker clears the moment a real type is picked for the row.
+  marker clears the moment an admin writes to the row again, whether that picks a type or flips it
+  to another tier.
 - **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
   rail lists every provider you may use for it, with its kind, your connection state and where
   the credential lives during the run, and the run is sent with the one you pick. The agent's

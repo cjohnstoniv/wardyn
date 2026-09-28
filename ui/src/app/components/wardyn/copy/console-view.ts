@@ -24,20 +24,18 @@ export const CONSOLE_VIEW = {
   // failure block or reauth card on the admin's own run (whose door is User
   // view only) all reuse this one string.
   OPEN_IN_USER: "Open in user view",
-  // #912's type picker: offered only once the org has more than one type
-  // (the built-in one counts) — with just Standard user the switch stays the
-  // plain two-way toggle.
-  CHOOSE_TYPE_LABEL: "User type",
 } as const;
 
-// The deleted-type notice (UT-13, #912): an admin's user view dropped back to
-// Admin because the type they were looking through was removed — read off
-// /me's user_view_dropped. BODY deliberately omits the sentence's own
-// "Choose another type to use the User view." clause: that is a real button
-// here, not prose.
+// The deleted-type notice (UT-13, #912; packet B, owner-approved): an admin's
+// user view dropped back to Admin because the type they were looking through
+// was removed — read off /me's user_view_dropped. Frozen verbatim from
+// user-types-packet-b.html's "the type is removed" banner (heading, body,
+// Choose another type / Stay in the Admin view).
 export const VIEW_DROPPED = {
   BODY: (type: string) => `The ${type} user type was removed, so you're back in the Admin view.`,
+  DETAIL: (type: string) => `Nothing you did as a ${type} is undone. Choose another type to keep looking through the user view.`,
   CHOOSE_ANOTHER: "Choose another type",
+  STAY: "Stay in the Admin view",
 } as const;
 
 export const NAV = {

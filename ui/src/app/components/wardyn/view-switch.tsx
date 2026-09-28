@@ -8,6 +8,14 @@
 // gate. The User view's type picker (user-types-design.md §2.7, #912) lives
 // here too: a plain toggle while the org has one type, otherwise a dropdown
 // on the "User view" segment.
+//
+// The type list ALWAYS comes from /me's user_view_types (#912, H2) — never
+// from GET /user-types (securityOps) — because these components render while
+// the session is INSIDE the view too, where the effective role is clamped to
+// user and that route correctly refuses it. /me carries the list only for a
+// caller whose STAMPED role is admin or security_admin (internal/api/
+// user_view.go's meUserViewTypes), so a real member always sees an empty
+// list here and falls through to no picker at all.
 import * as React from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -17,7 +25,6 @@ import { onForbidden } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
 import { useRequestLeave } from "../../lib/use-unsaved-guard";
 import { appURL, routerPath } from "../../lib/base-path";
-import { useUserTypes } from "../../lib/use-user-types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import {
   currentView,
@@ -32,6 +39,12 @@ import {
   type ViewAccess,
 } from "./console-view";
 import { CONSOLE_VIEW, VIEW_DROPPED } from "./copy/console-view";
+
+/** A row of /me's user_view_types. */
+export interface ViewUserType {
+  id: string;
+  name: string;
+}
 
 interface ViewMeta {
   method: string;
@@ -52,14 +65,6 @@ export function useShellView(meta: ViewMeta): { access: ViewAccess; view: Consol
   return { access, view, hasSwitch };
 }
 
-// Only an SSO admin/security-admin tier ever resolves a type through the
-// picker — url access (D1's single-operator install) has no SSO principal to
-// look one up for, and a real user IS one type rather than choosing among
-// them.
-function typePickerEnabled(access: ViewAccess): boolean {
-  return access === "session-admin" || access === "session-user";
-}
-
 const segmentClass = (pressed: boolean) =>
   cn(
     "rounded px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:opacity-50",
@@ -75,6 +80,7 @@ export function ViewSwitch({
   onNavigate,
   currentUserType,
   preselectType,
+  userTypes,
 }: {
   access: ViewAccess;
   view: ConsoleView;
@@ -86,12 +92,13 @@ export function ViewSwitch({
   /** /me's user_view_preselect_type — the dropdown's first value before the
    *  view is entered (#912). */
   preselectType?: string;
+  /** /me's user_view_types — empty for anyone who never renders a picker. */
+  userTypes: ViewUserType[];
 }) {
   const requestLeave = useRequestLeave();
   const navigate = useNavigate();
   const [busy, setBusy] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
-  const { userTypes } = useUserTypes(typePickerEnabled(access));
   const multiType = userTypes.length > 1;
   const selected = view === "user" ? (currentUserType?.id ?? "") : (preselectType ?? "");
 
@@ -125,41 +132,40 @@ export function ViewSwitch({
     perform("user", id);
   };
 
-  const userSegment =
-    multiType && typePickerEnabled(access) ? (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-pressed={view === "user"}
-            disabled={busy}
-            className={cn(segmentClass(view === "user"), "inline-flex items-center gap-1")}
-          >
-            {CONSOLE_VIEW.USER}
-            <ChevronDown className="size-3" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          {userTypes.map((t) => (
-            <DropdownMenuItem key={t.id} onSelect={() => chooseType(t.id)}>
-              <Check className={cn("mr-2 size-3.5", t.id === selected ? "opacity-100" : "opacity-0")} />
-              {t.name}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    ) : (
-      <button
-        type="button"
-        aria-pressed={view === "user"}
-        aria-disabled={view === "user" || undefined}
-        disabled={busy}
-        onClick={() => switchTo("user")}
-        className={segmentClass(view === "user")}
-      >
-        {CONSOLE_VIEW.USER}
-      </button>
-    );
+  const userSegment = multiType ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-pressed={view === "user"}
+          disabled={busy}
+          className={cn(segmentClass(view === "user"), "inline-flex items-center gap-1")}
+        >
+          {CONSOLE_VIEW.USER}
+          <ChevronDown className="size-3" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {userTypes.map((t) => (
+          <DropdownMenuItem key={t.id} onSelect={() => chooseType(t.id)}>
+            <Check className={cn("mr-2 size-3.5", t.id === selected ? "opacity-100" : "opacity-0")} />
+            {t.name}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : (
+    <button
+      type="button"
+      aria-pressed={view === "user"}
+      aria-disabled={view === "user" || undefined}
+      disabled={busy}
+      onClick={() => switchTo("user")}
+      className={segmentClass(view === "user")}
+    >
+      {CONSOLE_VIEW.USER}
+    </button>
+  );
 
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
@@ -194,15 +200,14 @@ export function ViewSwitch({
  *  the same picker ViewSwitch's User segment offers, so the type can change
  *  without leaving the view. */
 export function UserViewEyebrow({
-  access,
   currentUserType,
+  userTypes,
 }: {
-  access: ViewAccess;
   currentUserType?: { id: string; name: string } | null;
+  userTypes: ViewUserType[];
 }) {
   const [busy, setBusy] = React.useState(false);
-  const { userTypes } = useUserTypes(access === "session-user");
-  if (access !== "session-user" || userTypes.length <= 1 || !currentUserType) return null;
+  if (userTypes.length <= 1 || !currentUserType) return null;
   const choose = (id: string) => {
     if (id === currentUserType.id || busy) return;
     setBusy(true);
@@ -232,23 +237,27 @@ export function UserViewEyebrow({
   );
 }
 
-/** The deleted-type notice (UT-13, #912): the console's re-sync (below)
- *  already reloaded this admin back into the Admin view once the type they
- *  were looking through was removed — this says why, from /me's own
- *  user_view_dropped, and offers a real "Choose another type" action rather
- *  than the sentence's own prose CTA. Renders nothing once the admin picks a
- *  type (the switch's own POST clears the session state the next /me reads). */
+/** The deleted-type notice (UT-13, #912; packet B, owner-approved): the
+ *  console's re-sync (below) already reloaded this admin back into the
+ *  Admin view once the type they were looking through was removed — this
+ *  says why, from /me's own user_view_dropped, and offers both a real
+ *  "Choose another type" action and a "Stay in the Admin view" dismissal.
+ *  Renders nothing once the admin picks a type (the switch's own POST clears
+ *  the session state the next /me reads), or once dismissed for this mount. */
 export function UserViewDroppedNotice({
   access,
   dropped,
+  userTypes,
 }: {
   access: ViewAccess;
-  dropped: { user_type: string } | null;
+  dropped: { user_type: string; user_type_name?: string } | null;
+  userTypes: ViewUserType[];
 }) {
   const [busy, setBusy] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
-  const { userTypes } = useUserTypes(access === "session-admin" && !!dropped);
-  if (!dropped || access !== "session-admin") return null;
+  const [dismissed, setDismissed] = React.useState(false);
+  if (!dropped || access !== "session-admin" || dismissed) return null;
+  const label = dropped.user_type_name || dropped.user_type;
   const choose = (id: string) => {
     setBusy(true);
     setFailed(false);
@@ -260,9 +269,11 @@ export function UserViewDroppedNotice({
   return (
     <div
       role="status"
-      className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+      className="relative z-50 flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
     >
-      <span>{VIEW_DROPPED.BODY(dropped.user_type)}</span>
+      <span>
+        {VIEW_DROPPED.BODY(label)} {VIEW_DROPPED.DETAIL(label)}
+      </span>
       {userTypes.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -279,6 +290,9 @@ export function UserViewDroppedNotice({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+      <button type="button" onClick={() => setDismissed(true)} className="font-medium underline underline-offset-2">
+        {VIEW_DROPPED.STAY}
+      </button>
       {failed && <span>{CONSOLE_VIEW.SWITCH_FAILED}</span>}
     </div>
   );

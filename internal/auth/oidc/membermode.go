@@ -35,7 +35,12 @@ import (
 //
 // noCredential (0.7.5) is "view as a member who hasn't signed in", stored as
 // `on && noCredential` so OFF clears it by construction.
-func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on bool, typeID string, noCredential bool) (stampedRole string, err error) {
+//
+// typeName caches typeID's display name (Session.UserViewTypeName) purely so
+// a LATER DropUserView can still name the type once its row is gone — see
+// that field's own doc. The caller resolves it; this function never reads
+// the store.
+func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on bool, typeID, typeName string, noCredential bool) (stampedRole string, err error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {
 		return "", err
@@ -46,10 +51,13 @@ func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on b
 	sess.MemberMode = on
 	sess.MemberModeNoCredential = on && noCredential
 	sess.UserViewType = ""
+	sess.UserViewTypeName = ""
 	if on {
 		sess.UserViewType = typeID
+		sess.UserViewTypeName = typeName
 	}
 	sess.UserViewDropped = ""
+	sess.UserViewDroppedName = ""
 	cookie, err := a.encodeSession(sess)
 	if err != nil {
 		return "", err
@@ -74,9 +82,11 @@ func (a *Authenticator) DropUserView(w http.ResponseWriter, r *http.Request) (co
 		return r.Context(), nil
 	}
 	sess.UserViewDropped = viewedUserType(sess)
+	sess.UserViewDroppedName = sess.UserViewTypeName
 	sess.MemberMode = false
 	sess.MemberModeNoCredential = false
 	sess.UserViewType = ""
+	sess.UserViewTypeName = ""
 	cookie, err := a.encodeSession(sess)
 	if err != nil {
 		return nil, err

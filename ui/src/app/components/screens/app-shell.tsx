@@ -60,7 +60,14 @@ import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
 import { appURL } from "../../lib/base-path";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
-import { useShellView, useViewResync, UserViewDroppedNotice, UserViewEyebrow, ViewSwitch } from "../wardyn/view-switch";
+import {
+  useShellView,
+  useViewResync,
+  UserViewDroppedNotice,
+  UserViewEyebrow,
+  ViewSwitch,
+  type ViewUserType,
+} from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
@@ -140,7 +147,14 @@ export interface ShellMeta {
   userViewPreselectType: string;
   /** #912 (UT-13) — the type whose deletion turned this session's user view
    *  off, until the next switch (/me's user_view_dropped). null otherwise. */
-  userViewDropped: { user_type: string } | null;
+  userViewDropped: { user_type: string; user_type_name?: string } | null;
+  /** #912 (H2) — /me's user_view_types: the org's user types, present only
+   *  for a caller whose STAMPED role is admin or security_admin (never a
+   *  real member). This is the switch/eyebrow/notice's ONLY source for the
+   *  type list — it must never call GET /user-types itself, which a clamped
+   *  in-view session cannot reach (securityOps). Empty for anyone who never
+   *  renders a picker. */
+  userViewTypes: ViewUserType[];
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
   /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
@@ -197,6 +211,7 @@ function identityFromMe(me: Me | null) {
     userType: me?.user_type ?? null,
     userViewPreselectType: me?.user_view_preselect_type ?? "",
     userViewDropped: me?.user_view_dropped ?? null,
+    userViewTypes: me?.user_view_types ?? [],
     memberMode: me?.user_view ?? false,
     memberModeNoCredential: me?.user_view_no_credential ?? false,
     memberPreviewAvailable: me?.user_preview_available ?? false,
@@ -230,6 +245,7 @@ function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     userType: null,
     userViewPreselectType: "",
     userViewDropped: null,
+    userViewTypes: [],
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
@@ -486,12 +502,13 @@ function SidebarNav({
           className="mb-3 sm:hidden"
           currentUserType={meta.userType}
           preselectType={meta.userViewPreselectType}
+          userTypes={meta.userViewTypes}
         />
       )}
       {view === "admin" && items.length > 0 && (
         <div className="label-eyebrow mb-2 px-2.5">{CONSOLE_VIEW.EYEBROW_ADMIN}</div>
       )}
-      {view === "user" && <UserViewEyebrow access={access} currentUserType={meta.userType} />}
+      {view === "user" && <UserViewEyebrow currentUserType={meta.userType} userTypes={meta.userViewTypes} />}
       <nav className="space-y-0.5">
         {items.map((item) => {
           const count =
@@ -698,7 +715,7 @@ export function AppShell({
             {/* #912 (UT-13): why this admin is back in the Admin view, with a
                 real way to pick another type — never hidden in focus mode,
                 same reasoning as the preview band above. */}
-            <UserViewDroppedNotice access={access} dropped={meta.userViewDropped} />
+            <UserViewDroppedNotice access={access} dropped={meta.userViewDropped} userTypes={meta.userViewTypes} />
             {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
           cannot paint over it: this banner is the only thing that separates a
           quiet fleet from a dead daemon, and a full-bleed terminal is exactly

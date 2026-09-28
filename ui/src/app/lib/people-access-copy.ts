@@ -78,7 +78,7 @@ export const PEOPLE = {
   // the console, with no trace of the alias left to carry); this row is
   // exactly the console-row half migration 0098 marks.
   MIGRATED_FROM_MEMBER_BADGE: "Migrated from member",
-  MIGRATED_FROM_MEMBER_HINT: "Still works.",
+  MIGRATED_FROM_MEMBER_HINT: "still works",
   CHOOSE_TYPE: "Choose a type",
   EMAIL_KEY_BADGE: "Unverified claim",
   // Post-adjudication canon addition (backend review round): the

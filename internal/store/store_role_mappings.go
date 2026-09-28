@@ -41,11 +41,20 @@ const roleMappingCols = `id, value, role, COALESCE(user_type, ''), migrated_from
 // creator across a later role flip by a different admin, the same way
 // created_at is untouched on conflict (no SET at all, so Postgres leaves it).
 //
-// The conflict path also forces migrated_from_member to false, unconditionally
-// (never EXCLUDED.migrated_from_member, which the caller never sets to true
-// anyway — see the type's own doc comment): any write that flips an existing
-// row IS an admin picking a type for it, which is what migration 0098's
-// marker exists to prompt, so the row's job is done the moment one lands.
+// The conflict path also forces migrated_from_member to false,
+// UNCONDITIONALLY — on a flip to admin/security_admin too, not only a real
+// type pick (never EXCLUDED.migrated_from_member, which the caller never sets
+// to true anyway — see the type's own doc comment). Decision, not an
+// oversight: the marker means "a person still needs to look at this row", and
+// an admin choosing ANYTHING for it — a type or a tier — is that look. The
+// alternative (clear only on a type pick) would let the marker survive a
+// flip to admin and ride along if the row is later flipped BACK to user with
+// no type named — a "migrated" chip on a row an admin, in the interim,
+// explicitly decided was an admin mapping, which is a worse answer than
+// "the row was touched, the flag's job is done" for a marker the design
+// itself frames as a one-time prompt, never a permanent history bit.
+// TestPG_RoleMappings_UpsertClearsMigratedFromMemberOnAdminFlip pins this
+// call.
 func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.RoleMapping, error) {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()

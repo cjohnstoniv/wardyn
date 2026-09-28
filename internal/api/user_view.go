@@ -108,7 +108,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `The "view" field must be "user" or "admin".`)
 		return
 	}
-	typeID := ""
+	typeID, typeName := "", ""
 	if on {
 		var msg string
 		var err error
@@ -121,6 +121,11 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
+		// Best-effort, cached ONLY so a later DropUserView can still name the
+		// type once its row is gone (Session.UserViewTypeName's own doc); "" on
+		// a store failure degrades to the id-only sentence, never a 500 for
+		// advisory display data.
+		typeName = s.userTypeName(ctx, typeID)
 	}
 	// The posture is granted by the server, never taken from the body. The
 	// no-credential preview only does anything where the model-access agent's
@@ -130,7 +135,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	// silently downgrades to the plain view — the honest answer, and no new
 	// string.
 	preview := on && req.NoCredential && s.userPreviewApplies(ctx, r)
-	realRole, err := s.cfg.OIDC.SetUserView(w, r, on, typeID, preview)
+	realRole, err := s.cfg.OIDC.SetUserView(w, r, on, typeID, typeName, preview)
 	if err != nil {
 		// decodeSession's own errors: the cookie went missing or stopped
 		// verifying between the middleware and here. Not a 500 — there is
@@ -250,6 +255,19 @@ func (s *Server) userTypeExists(ctx context.Context, id string) (bool, error) {
 	return err == nil, err
 }
 
+// userTypeName is id's display name, "" on any failure — display data only,
+// never worth failing a switch over (see SetUserView's typeName doc).
+func (s *Server) userTypeName(ctx context.Context, id string) string {
+	if s.cfg.Store == nil {
+		return ""
+	}
+	t, err := s.cfg.Store.GetUserType(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return t.Name
+}
+
 // rememberedUserViewType reads the principal's last chosen type, "" when there
 // is none or it cannot be read. It is a default, not a control, so a failed
 // read falls through to the next candidate.
@@ -354,12 +372,51 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 
 // meUserViewDropped is /me's user_view_dropped: the type whose deletion
 // turned this session's user view off, until the next switch. nil otherwise.
+// user_type_name is the type's display name CACHED at the switch that
+// entered it (Session.UserViewDroppedName) — the row itself is gone by the
+// time this fires, so nothing can look the name up fresh; omitted for a
+// cookie that predates the field, which the console reads the same as "name
+// unknown, show the id".
 func meUserViewDropped(ctx context.Context) any {
 	id := oidc.UserViewDroppedFromContext(ctx)
 	if id == "" {
 		return nil
 	}
-	return map[string]string{"user_type": id, "reason": "deleted"}
+	out := map[string]string{"user_type": id, "reason": "deleted"}
+	if name := oidc.UserViewDroppedNameFromContext(ctx); name != "" {
+		out["user_type_name"] = name
+	}
+	return out
+}
+
+// meUserViewTypes is /me's user_view_types (#912, H2): the org's user types
+// (id + name only), present ONLY when the caller's STAMPED role — never the
+// clamped one — is admin or security_admin. This is the one piece of data
+// the console's type picker needs WHILE ALREADY INSIDE the view, where the
+// effective role reads user and GET /user-types (securityOps) correctly
+// refuses it; reading it from here instead means a clamped session never has
+// to call that route at all. Advisory UI data only: nothing here decides
+// what the caller may actually do (RoleFromContext, unaffected by this, still
+// does). nil for anyone else, including a real member, who must never see
+// the org's type roster. A store failure degrades to nil, the same "nothing
+// to offer" the picker already treats an empty list as.
+func (s *Server) meUserViewTypes(r *http.Request) []meUserTypeView {
+	if !oidc.StampedRoleIsOperatorTier(r.Context()) {
+		return nil
+	}
+	if s.cfg.Store == nil {
+		return nil
+	}
+	list, err := s.cfg.Store.ListUserTypes(r.Context())
+	if err != nil {
+		slog.WarnContext(r.Context(), "api: could not list user types for /me", "error", err)
+		return nil
+	}
+	out := make([]meUserTypeView, len(list))
+	for i, t := range list {
+		out[i] = meUserTypeView{ID: t.ID, Name: t.Name}
+	}
+	return out
 }
 
 // runCreatorUserType is the type a run is frozen with (AgentRun.UserType): the

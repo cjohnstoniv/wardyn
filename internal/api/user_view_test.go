@@ -97,12 +97,13 @@ func reSigned(t *testing.T, w *httptest.ResponseRecorder) (*http.Cookie, oidc.Se
 }
 
 type uvMe struct {
-	Role            string            `json:"role"`
-	Operator        bool              `json:"operator"`
+	Role              string            `json:"role"`
+	Operator          bool              `json:"operator"`
 	MemberMode        bool              `json:"user_view"`
 	UserType          *meUserTypeView   `json:"user_type"`
 	UserViewDropped   map[string]string `json:"user_view_dropped"`
 	UserViewPreselect string            `json:"user_view_preselect_type"`
+	UserViewTypes     []meUserTypeView  `json:"user_view_types"`
 }
 
 func uvGetMe(t *testing.T, srv *Server, c *http.Cookie) (uvMe, *httptest.ResponseRecorder) {
@@ -348,5 +349,90 @@ func TestMeUserViewPreselectType(t *testing.T) {
 	me, _ = uvGetMe(t, srv, user)
 	if me.UserViewPreselect != "" {
 		t.Fatalf("preselect for a real user = %q, want empty", me.UserViewPreselect)
+	}
+}
+
+// TestMeUserViewTypes (#912, H2): GET /user-types is securityOps and 403s a
+// session CLAMPED to user by the view — this is what /me's user_view_types
+// is for instead. An admin gets the org's types whether or not they have
+// entered the view yet (their STAMPED role decides, never the clamped one);
+// a real user — who has no stamped role above user to underlie any clamp —
+// never gets the list, which is what keeps the org's type roster off a
+// member's own /me.
+func TestMeUserViewTypes(t *testing.T) {
+	srv, _, _ := uvServer(t)
+
+	// An admin outside the view: the picker's own pre-entry data source.
+	// (uvServer's fake store answers ListUserTypes with the one built-in
+	// type regardless of seeding — this test is about WHO gets the list, not
+	// how many rows are in it; a real store's row count is store_user_types's
+	// own concern.)
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+	me, _ := uvGetMe(t, srv, admin)
+	if len(me.UserViewTypes) != 1 || me.UserViewTypes[0].ID != types.UserTypeStandard {
+		t.Fatalf("admin outside the view: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+
+	// The SAME admin, now clamped INSIDE the view: GET /user-types itself
+	// would 403 here (securityOps, clamped role); /me must still answer.
+	inView := uvSession(t, uvAdminSub, oidc.RoleAdmin, utDev, utPM)
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/user-types", inView, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("GET /user-types inside the view = %d, want 403 (the clamp this field exists to work around)", w.Code)
+	}
+	me, _ = uvGetMe(t, srv, inView)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("admin inside the view: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+
+	// A security admin gets it too — the same tier GET /user-types itself
+	// admits outside any view.
+	secAdmin := uvSession(t, "sub-uv-secadmin", oidc.RoleSecurityAdmin, types.UserTypeStandard, "")
+	me, _ = uvGetMe(t, srv, secAdmin)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("security admin: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+
+	// A real member: never the org's type roster, on any request shape.
+	user := uvSession(t, "sub-uv-types-user", oidc.RoleUser, types.UserTypeStandard, "")
+	me, _ = uvGetMe(t, srv, user)
+	if me.UserViewTypes != nil {
+		t.Fatalf("real user: user_view_types = %+v, want nil — never expose the org's types to a member", me.UserViewTypes)
+	}
+}
+
+// TestUserViewDroppedCarriesTheCachedName (M4): the drop notice must name the
+// removed type, not just its id — but the type's row is gone by the time the
+// drop fires, so the only way to answer with a name is one cached at the
+// switch that entered it. This proves the cache survives the round trip:
+// choose a real type (POST /me/view resolves and caches its name), delete
+// it, trip the drop, and read the name back off /me.
+func TestUserViewDroppedCarriesTheCachedName(t *testing.T) {
+	srv, st, _ := uvServer(t)
+	st.userTypes = []types.UserType{{ID: utPM, Name: "Portfolio manager"}}
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","user_type":"`+utPM+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("choose %q: %d %s", utPM, w.Code, w.Body.String())
+	}
+	chosen, sess := reSigned(t, w)
+	if sess.UserViewTypeName != "Portfolio manager" {
+		t.Fatalf("cached name after choosing = %q, want %q", sess.UserViewTypeName, "Portfolio manager")
+	}
+
+	// The row is gone: the next request trips the drop.
+	st.userTypes = nil
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/me/capabilities", chosen, "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("request after the delete = %d %s, want 403", w.Code, w.Body.String())
+	}
+	dropped, sess := reSigned(t, w)
+	if sess.UserViewDroppedName != "Portfolio manager" {
+		t.Fatalf("cached name after the drop = %q, want %q", sess.UserViewDroppedName, "Portfolio manager")
+	}
+
+	me, _ := uvGetMe(t, srv, dropped)
+	if me.UserViewDropped["user_type"] != utPM || me.UserViewDropped["user_type_name"] != "Portfolio manager" {
+		t.Fatalf("/me user_view_dropped = %+v, want user_type %q and user_type_name %q", me.UserViewDropped, utPM, "Portfolio manager")
 	}
 }

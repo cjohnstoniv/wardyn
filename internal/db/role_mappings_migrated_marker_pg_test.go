@@ -6,67 +6,52 @@ package db
 import (
 	"context"
 	"testing"
-	"time"
 )
 
-// migration0098Cutoff mirrors 0098_role_mappings_migrated_from_member.sql's own
-// hardcoded backfill cutoff (0074's landing commit) — kept as a named constant
-// here rather than a magic literal repeated across the seeds below.
-var migration0098Cutoff = time.Date(2026, 9, 23, 22, 20, 9, 0, time.UTC)
-
-// TestPG_RoleMappingsMarkMigratedFromMember (#913) applies migration 0098 over
-// a database holding: a role_mappings row already rewritten by 0074's rename
-// (a 'user'/'standard' row whose created_at predates the backfill cutoff —
-// the only state 0074's rewrite can produce before that date, since nothing
-// after 0074 applies can ever be 'member') and a row an admin saved as
-// Standard user on purpose after the cutoff. Only the first should come out
-// marked.
+// TestPG_RoleMappingsMarkMigratedFromMember (#913) applies 0074's rename and
+// migration 0098 in the SAME Migrate() call — the shape every real upgrade
+// takes, since 0074 ships in no release tag. Floored at 0073 (below 0074), a
+// 'member' row (any created_at: the marker no longer looks at the column)
+// lands, 0074 rewrites it to role='user'/user_type='standard', and 0098 must
+// mark that exact row. A row saved fresh AFTER Migrate() has already run —
+// the only state 0098 is not present to mark FALSE by construction, since it
+// never runs a second time — must NOT carry the marker.
 func TestPG_RoleMappingsMarkMigratedFromMember(t *testing.T) {
-	const floor = "0098"
+	const floor = "0074"
 	pool, _ := partialSchemaPool(t, floor)
 	ctx := context.Background()
-	before, after := migration0098Cutoff.Add(-24*time.Hour), migration0098Cutoff.Add(24*time.Hour)
 
-	// Pre-cutoff state: a 'member' row landed, then 0074 (already applied by
-	// partialSchemaPool) rewrote it in place — its created_at is the ORIGINAL
-	// row's, well before the cutoff.
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO role_mappings (id, value, role, user_type, created_at)
-		 VALUES (gen_random_uuid(), 'eng-team', 'user', 'standard', $1)`, before); err != nil {
-		t.Fatalf("seed the pre-cutoff row: %v", err)
-	}
-	// A genuinely fresh Standard-user save, created after the cutoff —
-	// nothing 0098 should ever touch.
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO role_mappings (id, value, role, user_type, created_at)
-		 VALUES (gen_random_uuid(), 'new-hire', 'user', 'standard', $1)`, after); err != nil {
-		t.Fatalf("seed the fresh row: %v", err)
-	}
-	// An admin row, untouched by the rename and irrelevant to the marker.
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO role_mappings (id, value, role, created_at) VALUES (gen_random_uuid(), 'ops-team', 'admin', $1)`,
-		before); err != nil {
-		t.Fatalf("seed the admin row: %v", err)
+		`INSERT INTO role_mappings (id, value, role) VALUES (gen_random_uuid(), 'eng-team', 'member')`); err != nil {
+		t.Fatalf("seed the member row: %v", err)
 	}
 
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate applying %s+ : %v", floor, err)
 	}
 
-	for _, c := range []struct {
-		value string
-		want  bool
-	}{
-		{"eng-team", true},
-		{"new-hire", false},
-		{"ops-team", false},
-	} {
-		var got bool
-		if err := pool.QueryRow(ctx, `SELECT migrated_from_member FROM role_mappings WHERE value = $1`, c.value).Scan(&got); err != nil {
-			t.Fatalf("read %s: %v", c.value, err)
-		}
-		if got != c.want {
-			t.Errorf("%s migrated_from_member = %v, want %v", c.value, got, c.want)
-		}
+	var role, userType string
+	var migrated bool
+	if err := pool.QueryRow(ctx,
+		`SELECT role, user_type, migrated_from_member FROM role_mappings WHERE value = 'eng-team'`).Scan(&role, &userType, &migrated); err != nil {
+		t.Fatalf("read the rewritten row: %v", err)
+	}
+	if role != "user" || userType != "standard" || !migrated {
+		t.Errorf("eng-team = role %q user_type %q migrated_from_member %v, want user/standard/true", role, userType, migrated)
+	}
+
+	// A genuinely fresh Standard-user save, made AFTER 0098 already ran —
+	// nothing here should ever retroactively mark it.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO role_mappings (id, value, role, user_type) VALUES (gen_random_uuid(), 'new-hire', 'user', 'standard')`); err != nil {
+		t.Fatalf("seed the post-migrate row: %v", err)
+	}
+	var freshMigrated bool
+	if err := pool.QueryRow(ctx,
+		`SELECT migrated_from_member FROM role_mappings WHERE value = 'new-hire'`).Scan(&freshMigrated); err != nil {
+		t.Fatalf("read the fresh row: %v", err)
+	}
+	if freshMigrated {
+		t.Error("new-hire migrated_from_member = true, want false — it was saved after 0098 already ran")
 	}
 }
