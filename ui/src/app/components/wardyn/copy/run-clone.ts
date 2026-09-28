@@ -45,3 +45,40 @@ export const RUN = {
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
 } as const;
 
+// #214 (mock approved 2026-09-20) — a host with no confinement class it can
+// enforce says so, rather than leaving Launch clickable for a run that can
+// only fail after the click. LAUNCH_REASON/FINISH_GATE_* are stated beside
+// the control they block, never in a tooltip.
+export const NO_BARRIER = {
+  CTA: "Set up a barrier",
+  // #1328 review round 2, R2-1 — the Environment step lives ONLY under
+  // /admin/setup: the plain /setup path always renders the read-only member
+  // recap (onboarding-screen.tsx's GettingStarted, `view !== "admin"`), which
+  // ignores `?step=` entirely. So every surface that offers this link (New
+  // Run's own Launch reason, the shell banner, the top bar) routes here, and
+  // ONLY when the caller can actually get there:
+  //   - an operator (meta.operator) already resolves this path directly,
+  //     whichever view they're currently rendering in (console-view.tsx's
+  //     viewVerdict: "url"/"admin-only"/"session-admin" all `pass`).
+  //   - an SSO admin who switched to the User view (access "session-user")
+  //     gets ViewGate's own "to-admin" interstitial instead of a redirect —
+  //     entering admin authority is always a deliberate click — and that
+  //     interstitial's `target` already carries the full pathname+search, so
+  //     `?step=environment` survives the switch with no extra plumbing here.
+  //   - anyone else (a member, a security admin) gets NO link at all: there
+  //     is nothing behind this route they may open, and view+role gating one
+  //     less faithfully (confinement-posture.tsx's #510-F7 precedent) is how
+  //     R2-1's dead-end shipped in the first place.
+  ADMIN_ROUTE: "/admin/setup?step=environment",
+  // The Setup funnel's OWN Finish-setup gate is mounted at EITHER /setup or
+  // /admin/setup — a query-only link resolves against whichever one is
+  // already current, so it can never itself switch the view.
+  RELATIVE_ROUTE: "?step=environment",
+  LAUNCH_REASON: "No barrier can be built on this host, so no run can be confined.",
+  BANNER_TITLE: "No barrier can be built on this host — runs can't launch.",
+  BANNER_BODY:
+    "Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with.",
+  FINISH_GATE_HEAD: "Setup can't finish without a barrier.",
+  FINISH_GATE_REASON: "Wardyn confines every run.",
+} as const;
+
