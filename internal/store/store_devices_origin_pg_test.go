@@ -26,7 +26,7 @@ import (
 // side and a genuine organisation row on the other, and the device's claim
 // still re-checks from the stored row.
 func TestPG_Devices_ForwardedRowNeverReadsAsAnOrgPrincipal(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	d := federationDevice(t, st)
@@ -96,7 +96,7 @@ func TestPG_Devices_ForwardedRowNeverReadsAsAnOrgPrincipal(t *testing.T) {
 // Only a still-redeemable token is listed and revocable; a revoked one can no
 // longer be redeemed, and a second revoke is ErrNotFound (no second audit row).
 func TestPG_Devices_EnrolmentToken_ListAndRevoke(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	now := time.Now().UTC()

@@ -130,6 +130,10 @@ RUN_ID_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
 # shellcheck source=../demo-typist.sh
 . "${_HERE}/../demo-typist.sh"
 
+# shellcheck source=../lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"
+# v10's own tag/color differ from common.sh's default — kept as a local
+# override defined AFTER sourcing (common.sh's own contract for this case).
 die() { printf '\n\033[1;31mv10: %s\033[0m\n' "$*" >&2; exit 1; }
 note() { printf '[v10] %s\n' "$*" >>"${LOG}" 2>/dev/null; }
 
