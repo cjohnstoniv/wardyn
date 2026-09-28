@@ -129,11 +129,9 @@ func TestForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 		{"create", true},     // POST /runs
 		{"preflight", false}, // POST /runs/preflight
 	} {
-		// kind="mount" pins authorizeSpecWorkspaceSources' MOUNT arm
-		// (runs_create.go:217); kind="repo" pins its REPO arm
-		// (runs_create.go:223) — the round-2 review's N2: the exact arm the
-		// round-1 HTTP exploit went through (inline workspace_repos), which
-		// this test did not cover before.
+		// kind="mount" pins authorizeSpecWorkspaceSources' MOUNT arm and
+		// kind="repo" pins its REPO arm — the exact arm an inline
+		// workspace_repos existence probe goes through.
 		for _, kind := range []string{"mount", "repo"} {
 			t.Run(route.name+"/"+kind, func(t *testing.T) {
 				foreign := refuse(t, kind, true, route.gate)
