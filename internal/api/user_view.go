@@ -83,7 +83,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" || s.cfg.OIDC == nil {
-		writeError(w, http.StatusBadRequest, userViewNoHumanRefusal)
+		writeErrorReason(w, http.StatusBadRequest, reasonUserViewNoHuman, userViewNoHumanRefusal)
 		return
 	}
 	var req userViewRequest
@@ -105,7 +105,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	case "user":
 		on = true
 	default:
-		writeError(w, http.StatusBadRequest, `The "view" field must be "user" or "admin".`)
+		writeErrorReason(w, http.StatusBadRequest, reasonUserViewInvalidField, `The "view" field must be "user" or "admin".`)
 		return
 	}
 	typeID := ""
@@ -118,7 +118,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if msg != "" {
-			writeError(w, http.StatusBadRequest, msg)
+			writeErrorReason(w, http.StatusBadRequest, reasonUserViewTypeInvalid, msg)
 			return
 		}
 	}
@@ -142,7 +142,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 		// requests land on the no-human 400 above and never get here. Kept
 		// because the guard above proves the caller HAS a human identity, not
 		// that it came from a cookie this Authenticator can re-sign.
-		writeError(w, http.StatusUnauthorized, "no session to change: sign in again")
+		writeErrorReason(w, http.StatusUnauthorized, reasonUserViewNoSession, "no session to change: sign in again")
 		return
 	}
 	// Actor is the admin's OWN sub, from the untouched actorFromRequest: the
@@ -303,7 +303,7 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 	}
 	dropped, err := s.cfg.OIDC.DropUserView(w, r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "no session to change: sign in again")
+		writeErrorReason(w, http.StatusUnauthorized, reasonUserViewNoSession, "no session to change: sign in again")
 		return nil
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/me" {

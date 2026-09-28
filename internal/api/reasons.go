@@ -917,6 +917,29 @@ const (
 	reasonADOSignInScopeInvalid = "ado_sign_in_scope_invalid"
 )
 
+// POST /api/v1/me/view (user_view.go): the admin/security-admin user-view
+// toggle.
+const (
+	reasonUserViewNoHuman      = "user_view_no_human"
+	reasonUserViewInvalidField = "user_view_invalid_field"
+	reasonUserViewTypeInvalid  = "user_view_type_invalid"
+	reasonUserViewNoSession    = "user_view_no_session"
+)
+
+// /api/v1/sources (sources.go): the shared source library.
+const (
+	reasonSourceWriteInvalid   = "source_write_invalid" // validateSourceWrite's own bucket
+	reasonSourceDeleteConflict = "source_delete_conflict"
+	reasonSourceInUse          = "source_in_use"
+)
+
+// /api/v1/admin/branding (branding.go).
+const (
+	reasonBrandingNotBranded       = "branding_not_branded"
+	reasonBrandingStoreUnavailable = "branding_store_unavailable"
+	reasonBrandingBodyUnreadable   = "branding_body_unreadable"
+)
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
