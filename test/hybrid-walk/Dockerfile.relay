@@ -1,0 +1,15 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The org relay scripts/hybrid-walk.sh runs to partition/drain the laptop from
+# the org (see that file's header, "THE PARTITION MECHANISM"). Built once per
+# walk and reused across every partition/drain restart, rather than
+# installing socat fresh on each one.
+#
+# Digest-pinned like every other Dockerfile in this repo (scripts/
+# check-image-pins.sh has no test-only exemption) — the SAME alpine:3.20
+# digest test/e2e/fixtures/Dockerfile and scripts/test-image-pins.sh already
+# pin, so this is not a new image pull.
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+RUN apk add --no-cache socat
+ENTRYPOINT ["socat"]
