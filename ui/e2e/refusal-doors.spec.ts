@@ -63,9 +63,23 @@ async function asViewer(page: Page, principal: string, admin = false): Promise<v
  *  both hit the real backend, doubling this handler's exposure to exactly the
  *  daemon latency a loaded CI host adds. Caching the in-flight PROMISE rather
  *  than its result closes that window: a second request arriving before the
- *  first resolves awaits the same promise instead of starting its own fetch. */
-async function withProviders(page: Page): Promise<void> {
+ *  first resolves awaits the same promise instead of starting its own fetch.
+ *
+ *  `statusRefreshed` resolves once that SECOND request has round-tripped
+ *  (#1291): caching the promise stops the handler dialing the real backend
+ *  twice, but the BROWSER still gets two separate Response bodies — one per
+ *  fetch() call — so the failure block's own refresh still lands as a genuine
+ *  second context update, re-rendering ProviderDoor's button after the page's
+ *  first paint. A caller about to click a door button a credential-ending
+ *  failed run renders awaits this so the click lands after that churn
+ *  settles, not mid-way through it. */
+async function withProviders(page: Page): Promise<{ statusRefreshed: Promise<void> }> {
   let cachedPromise: Promise<Record<string, unknown>> | null = null;
+  let calls = 0;
+  let resolveRefreshed: () => void;
+  const statusRefreshed = new Promise<void>((resolve) => {
+    resolveRefreshed = resolve;
+  });
   await page.route("**/api/v1/setup/status*", async (route: Route) => {
     if (!cachedPromise) {
       cachedPromise = (async () => {
@@ -80,11 +94,14 @@ async function withProviders(page: Page): Promise<void> {
       })();
     }
     await route.fulfill({ json: await cachedPromise });
+    calls += 1;
+    if (calls === 2) resolveRefreshed();
   });
   // The AWS and Claude doors start their sign-in at once; nothing here signs in.
   await page.route("**/api/v1/model-providers/*/sign-in", (route) =>
     route.fulfill({ status: 503, json: { error: "e2e: no sign-in here" } }),
   );
+  return { statusRefreshed };
 }
 
 /** Fixture 6 (FAILED) refused over `provider`'s credential, created by `owner`. */
@@ -143,7 +160,7 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
     test(`${c.p.kind}: the owner's "${c.label}" opens ${c.p.name}'s door`, async ({ page }) => {
       const sentence = refusal(c.p.name, c.state);
       await asViewer(page, VIEWER);
-      await withProviders(page);
+      const { statusRefreshed } = await withProviders(page);
       await refusedRun(page, c.p, sentence);
       await openFailedRun(page);
 
@@ -155,6 +172,11 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       await expect(block.getByText(c.note)).toBeVisible();
       const button = block.getByRole("button", { name: c.aria });
       await expect(button).toHaveText(c.label);
+      // Wait for the failure block's own credential-refresh (its ONE-time
+      // mount effect, failure-block.tsx) to land before clicking (#1291): it
+      // re-renders this button's parent a second time, close on the first
+      // paint's heels, and a click that lands inside that window can miss.
+      await statusRefreshed;
       await button.click();
       const dialog = page.getByRole("dialog", { name: c.dialog });
       await expect(dialog).toBeVisible();
