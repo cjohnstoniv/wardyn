@@ -247,6 +247,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (#1116).** `WARDYN_AZURE_FEDERATED_TOKEN_FILE` and `WARDYN_PLATFORM_KEY_FILE` were the two
   remaining secret-file reads that bypassed it after #980's follow-ups; a group- or world-writable
   file at either setting now refuses to boot with the same message as every other `_FILE` setting.
+- **A boot WARN whenever `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` is set, not only when it suppresses a
+  refusal (#1050).** With no unknown migration present, the downgrade break-glass previously logged
+  nothing, so a var left in an env file (or a chart's `values.yaml`) after one break-glass boot
+  silently disarmed the refusal for the next real downgrade too, with no signal at any boot in
+  between. Same volume and posture as the `WARDYN_ALLOW_SHARED_SUBSCRIPTION` warn.
 - **Session revocation also removes registered SSH keys (#154).** Admins and security admins
   can remove a person's keys through `DELETE /people/{principal}/ssh-keys`. Deleted or changed
   keys cannot open new SSH channels on an existing connection; already-open channels continue
