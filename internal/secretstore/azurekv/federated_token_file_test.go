@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+// unsafeFederatedTokenModes mirrors vaultkv's unsafeTokenModes: 0o644 is
+// refused only via CheckSecretFileMode's "other-readable AND non-root euid
+// owns it" rule, so it is not unsafe when the test itself runs as root
+// (euid 0) — the group-/world-WRITABLE modes are refused unconditionally
+// either way.
+func unsafeFederatedTokenModes() []os.FileMode {
+	modes := []os.FileMode{0o666, 0o620, 0o602}
+	if os.Geteuid() != 0 {
+		modes = append(modes, 0o644)
+	}
+	return modes
+}
+
 // TestFederatedTokenFile_RejectsUnsafeMode pins #1116: the federated token
 // file is the workload-identity exact analogue of WARDYN_VAULT_K8S_TOKEN_FILE
 // (#980/#1102), and must go through the same cliutil mode rule — a group- or
@@ -17,7 +30,7 @@ import (
 func TestFederatedTokenFile_RejectsUnsafeMode(t *testing.T) {
 	f := newFakeKV(t)
 	file := writeFile(t, "projected-sa-1\n")
-	for _, mode := range []os.FileMode{0o666, 0o620, 0o602, 0o644} {
+	for _, mode := range unsafeFederatedTokenModes() {
 		t.Run(mode.String(), func(t *testing.T) {
 			if err := os.Chmod(file, mode); err != nil {
 				t.Fatal(err)

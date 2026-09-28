@@ -244,9 +244,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused; root-owned Secret-volume and CSI files, and the 0644 file Vault Agent writes as its own
   uid, are still read.
 - **The Azure federated token file and the platform key file now get the same `_FILE` mode rule
-  (#1116).** `WARDYN_AZURE_FEDERATED_TOKEN_FILE` and `WARDYN_PLATFORM_KEY_FILE` were the two
-  remaining secret-file reads that bypassed it after #980's follow-ups; a group- or world-writable
-  file at either setting now refuses to boot with the same message as every other `_FILE` setting.
+  (#1116).** `WARDYN_AZURE_FEDERATED_TOKEN_FILE` and `WARDYN_PLATFORM_KEY_FILE` were two more
+  secret-file reads that bypassed it after #980's follow-ups; a group- or world-writable file at
+  either setting now refuses to boot with the same message as every other `_FILE` setting.
+  `WARDYN_TLS_KEY` still bypasses it — Refs #1297.
 - **A boot WARN whenever `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` is set, not only when it suppresses a
   refusal (#1050).** With no unknown migration present, the downgrade break-glass previously logged
   nothing, so a var left in an env file (or a chart's `values.yaml`) after one break-glass boot

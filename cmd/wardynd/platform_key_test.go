@@ -46,6 +46,18 @@ func TestReadPlatformKey_RefusesAKeyThatSeparatesNothing(t *testing.T) {
 	}
 }
 
+// unsafePlatformKeyModes mirrors vaultkv's unsafeTokenModes: 0o644 is refused
+// only via CheckSecretFileMode's "other-readable AND non-root euid owns it"
+// rule, so it is not unsafe when the test itself runs as root (euid 0) — the
+// group-/world-WRITABLE modes are refused unconditionally either way.
+func unsafePlatformKeyModes() []os.FileMode {
+	modes := []os.FileMode{0o666, 0o620, 0o602}
+	if os.Geteuid() != 0 {
+		modes = append(modes, 0o644)
+	}
+	return modes
+}
+
 // TestReadPlatformKey_RejectsUnsafeMode pins #1116: WARDYN_PLATFORM_KEY_FILE
 // is the platform secret identity and must go through the same cliutil mode
 // rule as every other _FILE setting — a group- or world-writable file lets a
@@ -53,7 +65,7 @@ func TestReadPlatformKey_RefusesAKeyThatSeparatesNothing(t *testing.T) {
 func TestReadPlatformKey_RejectsUnsafeMode(t *testing.T) {
 	ageID := mustAgeIdentity(t)
 	platform := mustAgeIdentity(t)
-	for _, mode := range []os.FileMode{0o666, 0o620, 0o602, 0o644} {
+	for _, mode := range unsafePlatformKeyModes() {
 		t.Run(mode.String(), func(t *testing.T) {
 			p := keyFile(t, platform.String())
 			if err := os.Chmod(p, mode); err != nil {
