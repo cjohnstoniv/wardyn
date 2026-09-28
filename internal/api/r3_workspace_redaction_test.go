@@ -51,6 +51,28 @@ func (s *r3TopologyStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.W
 	return types.Workspace{}, store.ErrNotFound
 }
 
+// ListCapabilityGrantsFor/GetCapabilityEnforcement/ListCapabilityRestrictions
+// answer empty: GET /api/v1/workspaces and GET /workspaces/{id} now stamp
+// available_to_you (#1267) on every read, through the same capBatch every
+// launch door reads — the nil embed panicked here, the same #338 class of bug
+// for a new set of methods. Empty/unenforced is the safe default: a narrowing
+// kind with nothing configured stays allowed, so nothing this file tests moves.
+func (s *r3TopologyStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *r3TopologyStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return nil, nil
+}
+func (s *r3TopologyStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return nil, nil
+}
+
+// ListGroupDenyGrants answers no rows: the stale-group-snapshot fallback a
+// security-admin session's request can take (capabilitySubjects).
+func (s *r3TopologyStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 const (
 	r3TopologyHostPath = "/srv/nfs-prod/payments"
 	r3TopologyImage    = "registry.corp.internal/base:1"

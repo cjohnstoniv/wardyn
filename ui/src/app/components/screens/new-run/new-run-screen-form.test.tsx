@@ -484,6 +484,57 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
   });
 
+  // #1267: the server's own available_to_you — a per-value "Available to"
+  // restriction and a git-provider pin, neither of which any fixture above
+  // can produce (no llm_cred, no capability grant at all), so this pins the
+  // Launch gate reading the NEW field rather than only the two arms it
+  // already computed locally.
+  it("disables Launch when available_to_you is false, though no other reason here applies", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-flagged",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        available_to_you: false,
+      },
+    ]);
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled when available_to_you is true", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws-flagged",
+        name: "trading-desk",
+        kind: "repo",
+        source: "acme/trading-desk",
+        status: "scanned",
+        created_at: "",
+        updated_at: "",
+        available_to_you: true,
+      },
+    ]);
+    renderScreen();
+
+    await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+
+    const launch = screen.getByRole("button", { name: /Launch run/ });
+    await waitFor(() => expect(launch).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+
   // review F6: R1 (the reviewer's mutation) flipped `useMyCapabilities(!operator)`
   // to `useMyCapabilities(true)` and survived every existing test in this
   // file — nothing here asserted an operator's OWN exemption is wired
