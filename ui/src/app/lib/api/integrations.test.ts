@@ -8,7 +8,6 @@ import { baseStatus } from "../../lib/test-fixtures";
 import { T } from "../integrations";
 import { aiServerId, deriveIntegrations } from "./integrations";
 import type { SiteConfig } from "../types";
-import { aheadByHours } from "../test-clock";
 
 // The Add dialog resolves which wire row to adopt/PUT via this helper,
 // BEFORE its first reload can hand it a derived IntegrationRow of its own —
@@ -88,16 +87,6 @@ describe("deriveIntegrations — AI providers", () => {
     expect(ai[0].id).toBe("ai:anthropic_subscription:host");
   });
 
-  it("a managed subscription reads Captured Xd ago when fresh, and Reconnect soon when aging", () => {
-    const fresh = baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: new Date(Date.now() - 3 * 86400_000).toISOString() }] });
-    const freshRow = deriveIntegrations(fresh, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;
-    expect(freshRow.posture).toEqual({ kind: "captured", ageLabel: "3d ago" });
-
-    const aging = baseStatus({ harness: [{ provider: "anthropic", captured: true, aging: true }] });
-    const agingRow = deriveIntegrations(aging, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;
-    expect(agingRow.posture).toEqual({ kind: "reconnect_soon" });
-  });
-
   it("Bedrock: region/model unset wins over an active lane", () => {
     const status = baseStatus({ bedrock: { creds_present: true } });
     const [row] = deriveIntegrations(status, null, []).ai;
@@ -109,12 +98,6 @@ describe("deriveIntegrations — AI providers", () => {
     const [row] = deriveIntegrations(baseStatus({ bedrock: { ready: true, creds_present: false } }), null, []).ai;
     expect(row.id).toBe("ai:bedrock");
     expect(row.posture).toEqual({ kind: "configured" });
-    // The member's OWN captured session still drives the SSO posture.
-    const sso = baseStatus({
-      bedrock: { ready: true, creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
-    });
-    expect(deriveIntegrations(sso, null, []).ai[0].posture.kind).toBe("session_expires");
     // Negative control: ready:false with region/model unset still reads region_model_unset.
     expect(deriveIntegrations(baseStatus({ bedrock: { ready: false, creds_present: true } }), null, []).ai[0].posture).toEqual({ kind: "region_model_unset" });
   });
@@ -127,17 +110,7 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.secretNames).toEqual(["bedrock-api-key"]);
   });
 
-  it("Bedrock: an unexpired AWS SSO session reads 'Session expires HH:MM'", () => {
-    const status = baseStatus({
-      bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
-    });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.bedrockLane).toBe("sso");
-    expect(row.harnessProvider).toBe("aws");
-    expect(row.posture.kind).toBe("session_expires");
-    expect((row.posture as { when: string }).when).toMatch(/^\d{1,2}:\d{2}/);
-  });
+;
 
   // Azure OpenAI is gone as a model provider. It only ever powered Wardyn's own
   // features (the AI Run Composer, deleted), and harness.go is explicit that

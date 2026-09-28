@@ -626,7 +626,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} adminView={view === "admin"} />
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
       <TerminalPane
         run={run}
         terminal={terminal}

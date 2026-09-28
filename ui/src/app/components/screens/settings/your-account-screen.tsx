@@ -62,7 +62,7 @@ export function YourAccountScreen() {
               Settings mounts for the org's shared credential; the card's own
               per-caller branches (operator vs. a per_user bearer/SSO row)
               already tell the two apart. */}
-          <ModelProviderCard status={status} siteConfig={null} onChanged={load} />
+          <ModelProviderCard />
           {/* #386, Q9: a personal connection. Renders nothing with no Azure
               DevOps row configured. */}
           <AdoConnectionCard status={status} onChanged={load} />

@@ -92,13 +92,14 @@ export function ProvidersCard({
   // otherwise both counts ride, including a zero half (0 git providers IS the
   // legacy-open fact, and CARD_PROVIDERS(0) says it without claiming the agents
   // are gone too).
-  // The agents half exists only once an agent POLICY exists. The server stamps
-  // `enabled: true` on every catalog row in legacy open mode too (setupHarnessTools:
-  // no block ⇒ everything is offered), so `enabled` alone cannot tell "the admin
-  // enabled three agents" from "nobody has decided"; a row carries `mechanism`
-  // only when a stored agent row exists. No row with a mechanism ⇒ no policy ⇒
-  // the summary names git providers alone (and CARD_EMPTY when those are zero).
-  const rosterHasPolicy = !!harnesses && harnesses.some((h) => typeof h.mechanism === "string" && h.mechanism !== "");
+  // The agents half exists only once an agent POLICY is visible. The server
+  // stamps `enabled: true` on every catalog row in open mode too
+  // (setupHarnessTools: no block ⇒ everything is offered), so an all-enabled
+  // roster cannot be told from "nobody has decided"; a turned-off row is the
+  // one sign of a stored policy (a row carries no model credential since 0.8).
+  // No such row ⇒ the summary names git providers alone (and CARD_EMPTY when
+  // those are zero).
+  const rosterHasPolicy = !!harnesses && harnesses.some((h) => h.enabled === false);
   const agents = rosterHasPolicy ? harnesses!.filter((h) => h.enabled !== false).length : null;
   const summary =
     count === null

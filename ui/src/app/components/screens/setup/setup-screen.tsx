@@ -891,11 +891,7 @@ export function SetupScreen({
           />
         )}
         {stepId === "integrations" && (
-          <IntegrationsStep
-            status={status}
-            siteConfig={siteConfig}
-            onRecheck={recheck}
-          />
+          <IntegrationsStep />
         )}
         {/* No demo sub-step renders here any more (M-6/D5) — demos moved to
             User Getting Started (member-getting-started.tsx), which renders

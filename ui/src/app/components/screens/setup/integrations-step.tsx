@@ -9,7 +9,8 @@
 // do you clone my private repos — not an abstract "which integration kind?".
 //
 // Renders the SAME card as /settings (connection-cards.tsx): one component in
-// both places so they can't drift.
+// both places so they can't drift. Since 0.8 that card only says where model
+// access is set up — model providers, each person's own credential.
 //
 // Git credentials live in a provider row (`/providers`'s Git tab) via the
 // funnel's own `providers` step (steps.ts, phase "Your work", before
@@ -21,7 +22,6 @@
 // connected; clicking Next past this step with nothing set marks it Skipped
 // (setup-screen.tsx's selectStep).
 import { Link } from "react-router-dom";
-import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { ModelProviderCard } from "../settings/connection-cards";
 
 // The lede names "the Secrets page" and must actually link there (renaming
@@ -35,17 +35,7 @@ export const STEP_LEDE_SUFFIX = ", and handed to runs by name.";
 // Preserved for any external byte-parity check against the old single string.
 export const STEP_LEDE = `${STEP_LEDE_PREFIX}${STEP_LEDE_LINK}${STEP_LEDE_SUFFIX}`;
 
-export function IntegrationsStep({
-  status,
-  siteConfig,
-  onRecheck,
-}: {
-  status: SetupStatus;
-  siteConfig: SiteConfig | null;
-  /** Re-fetch the orchestrator's own status/siteConfig/secrets so the rail
-   *  badge doesn't go stale right after a connect or disconnect. */
-  onRecheck: () => void;
-}) {
+export function IntegrationsStep() {
   return (
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
@@ -55,7 +45,7 @@ export function IntegrationsStep({
         </Link>
         {STEP_LEDE_SUFFIX}
       </p>
-      <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={onRecheck} />
+      <ModelProviderCard />
     </div>
   );
 }

@@ -857,7 +857,7 @@ export function AppShell({
               case — reads the view they are actually in, not the one in the
               address bar. */}
               <React.Suspense fallback={null}>
-                <ModelAccessBanner view={view} />
+                <ModelAccessBanner />
               </React.Suspense>
               {/* #484 — admins only: after the per-person credential block,
               before the cluster-wide confinement note. */}

@@ -319,7 +319,7 @@ export function WorkspacesScreen() {
                       </Chip>
                     </TableCell>
                     <TableCell>
-                      {w.llm_cred?.integration_ref ? (
+                      {w.llm_cred?.provider_ref ? (
                         <Chip tone={llmCredTone(w.llm_cred)} mono>
                           {llmCredLabel(w.llm_cred)}
                         </Chip>

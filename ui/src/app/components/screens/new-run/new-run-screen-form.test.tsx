@@ -161,10 +161,10 @@ describe("NewRunScreen — the rail tells the truth about model access", () => {
     expect(await screen.findByText(/No model provider is connected/)).toBeInTheDocument();
   });
 
+  // The server's llm_ready — an enabled model provider serves a harness — is
+  // the one model path since #548; a stored operator key is none.
   it("says nothing when a provider IS connected", async () => {
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
-    );
+    getSetupStatusMock.mockResolvedValue(baseStatus({ llm_ready: true }));
     renderScreen();
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
     expect(screen.queryByText(/No model provider is connected/)).not.toBeInTheDocument();

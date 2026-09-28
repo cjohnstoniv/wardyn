@@ -9,8 +9,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
-  isLikelyStartUrl,
-  serverConfirmsCapture,
   HarnessLoginPane,
   loginFlow,
   SELFRUN_MARKER,
@@ -19,27 +17,8 @@ import {
 import { SIGNIN_PROGRESS } from "./login-pane-copy";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
-import type { SetupStatus } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
 
-describe("isLikelyStartUrl", () => {
-  it("accepts a real AWS access portal URL", () => {
-    expect(isLikelyStartUrl("https://my-org.awsapps.com/start")).toBe(true);
-    expect(isLikelyStartUrl("  https://identitycenter.amazonaws.com/ssoins-abc  ")).toBe(true);
-  });
-
-  it("rejects what the server would also reject", () => {
-    expect(isLikelyStartUrl("")).toBe(false);
-    expect(isLikelyStartUrl("my-org.awsapps.com/start")).toBe(false);
-    expect(isLikelyStartUrl("http://my-org.awsapps.com/start")).toBe(false);
-    // A newline would smuggle extra keys into the generated ~/.aws/config INI.
-    expect(isLikelyStartUrl("https://\nsso_region = x")).toBe(false);
-  });
-});
-
-// doneLabel is per-provider: a hardcoded "your Claude subscription is
-// connected" regardless of provider would end an AWS SSO capture with the
-// same Anthropic-only claim.
 describe("loginFlow doneLabel", () => {
   it("names the provider actually connected, not always Claude", () => {
     expect(loginFlow("anthropic").doneLabel).toMatch(/claude subscription/i);
@@ -47,13 +26,6 @@ describe("loginFlow doneLabel", () => {
     expect(loginFlow("aws").doneLabel).not.toMatch(/claude subscription/i);
   });
 });
-
-// The consent gate.
-//
-// Owner report, verbatim: "you see a dialog then all of a sudden terminal then
-// all of a sudden a popup asking for auth. We should alert the user before
-// this happens what to expect and what's required from them." Nothing
-// launches the sandbox except Start login.
 
 // lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
 // on its most recent render, so a test can feed it PTY chunks directly — the
@@ -81,10 +53,13 @@ vi.mock("../../attach-terminal", () => ({
 }));
 const harnessLoginMock = vi.fn();
 const harnessPasteMock = vi.fn();
-vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: {
-    harnessLogin: (...a: unknown[]) => harnessLoginMock(...a),
-    harnessCredentialPaste: (...a: unknown[]) => harnessPasteMock(...a),
+// The pane launches and stores through the provider door (#548: the only
+// door), adapted to the mocks below: a launch resolves the run id, a
+// capture passes the token.
+vi.mock("../../../lib/api/model-provider-signin", () => ({
+  modelProviderSignIn: {
+    startSignIn: (...a: unknown[]) => Promise.resolve(harnessLoginMock(...a)).then((runId: unknown) => ({ runId, state: "PENDING" })),
+    captureSignIn: (_provider: unknown, _run: unknown, token: unknown) => harnessPasteMock(token),
   },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
@@ -95,113 +70,9 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 const listAuditMock = vi.fn();
 vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) } }));
 
-// S-13: serverConfirmsCapture is the pure predicate the component's
-// confirmCapture wires to getSetupStatus — covered directly so every branch
-// (harness row, model_access state, and the anthropic flow's narrower rule)
-// is pinned without going through a rendered pane.
-describe("serverConfirmsCapture", () => {
-  function status(overrides: Partial<SetupStatus>): SetupStatus {
-    return {
-      ready: true,
-      checks: [],
-      auth: { mode: "local", local_loopback: true },
-      runner: { driver: "docker", confinement_classes: [] },
-      providers: [],
-      secrets: { present: [], github_app: false },
-      age_key: { durable: false },
-      has_runs: false,
-      platform: { os: "linux", wsl: false },
-      ...overrides,
-    };
-  }
-
-  // R-1: the ONE fact that says "this sign-in captured something" rather than
-  // "a credential exists". source_run_id is stamped server-side from the login
-  // run's own token claims (ssotoken.go), so the sandbox cannot write it.
-  it("aws: confirmed by a harness row stamped with THIS run", () => {
-    expect(
-      serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }), "aws", "run-123"),
-    ).toBe(true);
-  });
-
-  // R-1, the reconnect: a PREVIOUS sign-in's credential satisfies every
-  // presence predicate, and is not this run's capture.
-  it("aws: a row from a PREVIOUS run is refused even when model_access is live", () => {
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-earlier" }], model_access: { state: "live" } }),
-        "aws",
-        "run-123",
-      ),
-    ).toBe(false);
-  });
-
-  // The MEMBER-REDACTED shape — {provider, captured, expired,
-  // source_run_id} and nothing else (setup.go's redactSetupStatusForUser).
-  it("aws: the member-redacted row shape confirms on its own", () => {
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: true, expired: false, source_run_id: "run-123" }] }),
-        "aws",
-        "run-123",
-      ),
-    ).toBe(true);
-  });
-
-  // R-2: for aws the RULE is live/expiring on model_access. A harness row is a
-  // presence bit that stays true for a dead credential, so on its own it only
-  // widens what a forged marker can land on.
-  it("aws: a presence-only harness row is NOT enough — model_access decides", () => {
-    expect(serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: true }] }), "aws", "run-123")).toBe(false);
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: true }], model_access: { state: "live" } }),
-        "aws",
-        "run-123",
-      ),
-    ).toBe(true);
-  });
-
-  // An EXPIRED row is exactly the shape the dropped leg used to admit.
-  it("aws: an expired harness row confirms nothing", () => {
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: true, expired: true }], model_access: { state: "expired_signin" } }),
-        "aws",
-        "run-123",
-      ),
-    ).toBe(false);
-  });
-
-  it("aws: confirmed by model_access state live or expiring alone", () => {
-    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws", "run-123")).toBe(true);
-    expect(serverConfirmsCapture(status({ model_access: { state: "expiring" } }), "aws", "run-123")).toBe(true);
-  });
-
-  it("aws: not confirmed when neither the harness row nor model_access agrees", () => {
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: false }], model_access: { state: "expired_signin" } }),
-        "aws",
-        "run-123",
-      ),
-    ).toBe(false);
-    expect(serverConfirmsCapture(status({}), "aws", "run-123")).toBe(false);
-  });
-
-  it("anthropic: confirmed only by its own harness row — model_access never counts for it", () => {
-    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "anthropic", "run-123")).toBe(true);
-    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "anthropic", "run-123")).toBe(false);
-  });
-
-  it("a captured row for the OTHER provider does not confirm this one", () => {
-    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "aws", "run-123")).toBe(false);
-  });
-});
-
 // P5: the pane waits for the sandbox instead of assuming it.
 //
-// POST /setup/harness-login answers with the run id BEFORE dispatch
+// POST /model-providers/{id}/sign-in answers with the run id BEFORE dispatch
 // (internal/api/harnesscred_launch.go), so "resolved" does not mean
 // "attachable": handleAttachTicket 409s a non-RUNNING run and a mint failure is
 // terminal in AttachTerminal. The pane holds a `starting` phase — with the run
@@ -220,8 +91,7 @@ describe("HarnessLoginPane — the starting phase", () => {
   });
 
   async function startAws() {
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
   }
 
   it("keeps the run id so Cancel kills a sandbox that is still coming up", async () => {
@@ -267,10 +137,9 @@ describe("HarnessLoginPane — the starting phase", () => {
     // extra. Installed BEFORE the render: usePoll's setInterval has to be the
     // faked one, and userEvent gets the same clock so its own waits resolve.
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     try {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await user.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+      await act(async () => {}); // the pane launches on mount
 
       // The first failures are blips: the pane keeps waiting.
       expect(screen.getByTestId("login-sandbox-starting")).toBeInTheDocument();
@@ -319,10 +188,9 @@ describe("HarnessLoginPane — the starting phase", () => {
   it("a healthy STARTING read past 60s shows the slow-start sentence and never an alert", async () => {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     try {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await user.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+      await act(async () => {}); // the pane launches on mount
       expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(SIGNIN_PROGRESS.STEP_START);
       expect(screen.getByTestId("login-sandbox-starting")).not.toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
 
@@ -360,10 +228,9 @@ describe("HarnessLoginPane — the starting phase", () => {
       return makeRun({ id: "run-123", state: "PENDING" });
     });
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     try {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await user.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+      await act(async () => {}); // the pane launches on mount
 
       const advance = async (ticks: number) => {
         for (let i = 0; i < ticks; i++) {
@@ -399,9 +266,8 @@ describe("HarnessLoginPane — the starting phase", () => {
   // every "did not type" assertion below would be true for the wrong reason.
   async function attachedOnFakeTimers(): Promise<void> {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await user.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await act(async () => {}); // the pane launches on mount
     await screen.findByTestId("fake-terminal");
   }
 

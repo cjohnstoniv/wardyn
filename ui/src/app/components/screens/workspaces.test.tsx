@@ -27,10 +27,15 @@ vi.mock("../../lib/api/workspaces", () => ({
     deleteWorkspace: (...a: unknown[]) => deleteWorkspaceMock(...a),
   },
 }));
-const listIntegrationsMock = vi.fn();
-vi.mock("../../lib/api/integrations", async () => {
-  const actual = await vi.importActual<typeof import("../../lib/api/integrations")>("../../lib/api/integrations");
-  return { ...actual, integrationsApi: { list: (...a: unknown[]) => listIntegrationsMock(...a) } };
+const getModelProvidersMock = vi.fn();
+vi.mock("../../lib/api/model-providers", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/api/model-providers")>("../../lib/api/model-providers");
+  return { ...actual, modelProviders: { ...actual.modelProviders, getModelProviders: () => getModelProvidersMock() } };
+});
+const providersList = (providers: { id: string; name: string; kind: string }[]) => ({
+  providers: { providers },
+  connected: {},
+  etag: null,
 });
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
@@ -117,12 +122,12 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("ghcr.io/acme/dev@sha256:ab12")).toBeInTheDocument();
   });
 
-  it("Model column: the binding chip names the bound Integration", async () => {
+  it("Model column: the binding chip names the bound model provider", async () => {
     listWorkspacesMock.mockResolvedValue([
-      ws({}, { status: "scanned", llm_cred: { integration_ref: "ai-anthropic-key" } }),
+      ws({}, { status: "scanned", llm_cred: { provider_ref: "anthropic-key" } }),
     ]);
     renderScreen();
-    expect(await screen.findByText("ai-anthropic-key")).toBeInTheDocument();
+    expect(await screen.findByText("anthropic-key")).toBeInTheDocument();
   });
 
   it("Model column: unbound reads a bare em dash", async () => {
@@ -539,42 +544,30 @@ describe("sourceSubLine / workspaceImage — pure helpers", () => {
 describe("WorkspaceLLMCredDialog", () => {
   beforeEach(() => {
     setWorkspaceLLMCredMock.mockReset();
-    listIntegrationsMock.mockReset().mockResolvedValue({ ai: [], scm: [] });
+    getModelProvidersMock.mockReset().mockResolvedValue(providersList([]));
   });
 
-  it("saves the picked Integration via setWorkspaceLLMCred and reports the updated workspace", async () => {
-    listIntegrationsMock.mockResolvedValue({
-      // serverId is required: LLMCredFields skips any row without one (a
-      // deliberate filter — see workspace-llm-cred.tsx's `.filter((r) =>
-      // r.serverId)` — mirroring step-access.tsx's identical picker, since a
-      // client display id with no server-side identity would silently fail
-      // to bind server-side). A real deriveAiRows "Managed subscription" row
-      // always carries one (aiServerId("anthropic_subscription", false)).
-      ai: [{ id: "ai-managed", serverId: "ai-managed", name: "Managed subscription", typeLabel: "anthropic · managed login" }],
-      scm: [],
-    });
+  it("saves the picked model provider via setWorkspaceLLMCred and reports the updated workspace", async () => {
+    getModelProvidersMock.mockResolvedValue(providersList([{ id: "anthropic-key", name: "Anthropic API", kind: "anthropic_api_key" }]));
     const workspace = ws({}, { id: "ws-9", name: "payments", llm_cred: {} });
-    const updated = { ...workspace, llm_cred: { integration_ref: "ai-managed" } };
+    const updated = { ...workspace, llm_cred: { provider_ref: "anthropic-key" } };
     setWorkspaceLLMCredMock.mockResolvedValue(updated);
     const onSaved = vi.fn();
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={onSaved} />);
 
-    await user.click(await screen.findByRole("radio", { name: /managed subscription/i }));
+    await user.click(await screen.findByRole("radio", { name: /anthropic api/i }));
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() =>
-      expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-9", { integration_ref: "ai-managed" }),
-    );
+    await waitFor(() => expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-9", { provider_ref: "anthropic-key" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(updated));
   });
 
   it("keeps a stored ref that no longer lists selectable — named honestly, never invented", async () => {
-    listIntegrationsMock.mockResolvedValue({ ai: [], scm: [] });
-    const workspace = ws({}, { llm_cred: { integration_ref: "ai-gone" } });
+    const workspace = ws({}, { llm_cred: { provider_ref: "provider-gone" } });
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
-    expect(await screen.findByRole("radio", { name: /ai-gone \(not in the Integrations list\)/i })).toBeChecked();
+    expect(await screen.findByRole("radio", { name: /provider-gone \(not in the Model providers list\)/i })).toBeChecked();
   });
 });
 

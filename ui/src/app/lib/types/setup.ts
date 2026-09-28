@@ -6,7 +6,7 @@
 // First-run setup — GET /api/v1/setup/status (mirrors internal/api/setup.go
 // SetupStatus). FROZEN CONTRACT — keep in exact sync with the Go struct.
 // The wizard derives its per-step "done" state from these fields.
-import type { ConfinementClass, ModelCredentialResidency } from "./runs";
+import type { ConfinementClass } from "./runs";
 import type { StorageEnforcement } from "../api/drives";
 
 export type SetupCheckStatus = "ok" | "warn" | "fail" | "info";
@@ -57,39 +57,14 @@ export interface SetupBedrock {
   region?: string;
   model?: string;
   creds_present: boolean;
-  // Additional credential sources resolveBedrockAuth accepts (any one is enough).
-  // Optional for fixture-compat with an older daemon that predates them.
+  // Additional boot-configured credential sources (any one is enough). Since 0.8
+  // no run is credentialed from these — a run's Bedrock credential is its model
+  // provider's. Optional for fixture-compat with an older daemon.
   aws_mount?: boolean;
   bearer_present?: boolean;
-  // A captured, non-expired container-login AWS SSO session. The lane controls
-  // read it from status.harness (which also carries the expiry to render); this
-  // is the server folding the same fact into `ready` below.
-  sso_present?: boolean;
   // Server-computed readiness (region+model+any credential source). Prefer this
   // over re-deriving in the UI so the two gates can't drift.
   ready?: boolean;
-}
-
-// A Wardyn-managed subscription credential captured via container login
-// (setup-token) — mirrors internal/api SetupHarness. Presence + capture age only
-// (honesty law: not live-verified). `aging` is a conservative age-based
-// "reconnect soon" flag, never a hard expiry claim.
-export interface SetupHarness {
-  provider: string; // "anthropic" | "aws"
-  captured: boolean;
-  captured_at?: string;
-  aging?: boolean;
-  source_run_id?: string;
-  // Real, machine-readable expiry — populated ONLY by providers whose credential
-  // exposes one (AWS SSO does; an Anthropic setup-token does not, which is why
-  // `aging` exists at all). Absent means "this provider can't tell you", never
-  // "it doesn't expire".
-  expires_at?: string;
-  expired?: boolean;
-  // The stored credential carries a refresh token, so it can be renewed without
-  // a fresh interactive login (AWS `sso-session` profiles; legacy
-  // sso_start_url profiles have none).
-  renewable?: boolean;
 }
 
 // Host-proxy detection — mirrors internal/setup/detect_proxy.go. Every value is
@@ -204,7 +179,6 @@ export interface WireIntegration {
   // internal/types/workspace.go's Integration.DisabledCapabilities), so a
   // caller doesn't need a hardcoded per-provider capability matrix.
   disabled_capabilities?: string[];
-  default_for?: string[];
   source?: "stored" | "legacy" | (string & {});
   // The server's live per-capability matrix for this row
   // (integrationsWithCapabilities) — not read client-side yet; CAPS in
@@ -233,28 +207,6 @@ export interface SetupHarnessTool {
   // A disabled row is rendered DISABLED WITH A REASON, never hidden — hiding is
   // how "Claude Code is just gone" becomes a support ticket.
   enabled?: boolean;
-  // The row's declared model-access lane and whose credential it uses, absent
-  // when no roster exists or no row names this agent. The member-safe half of
-  // the agent policy: a lane name and "shared"/"per_user", never the AWS access
-  // portal URL (see the Go SetupHarnessTool doc).
-  mechanism?: string;
-  credential_source?: string;
-  // Published for exactly ONE row shape: an enabled `per_user` + `bedrock_sso`
-  // row, which is "sandbox". ABSENT for every other row, and absent is the
-  // common case — not an older daemon, not an error.
-  //
-  // A roster cannot say where a credential lands; the lane that RESOLVES decides
-  // that, and a GET has no run body to resolve one from. The per-user Bedrock SSO
-  // row is the one exception in kind: it admits no other lane, that lane writes
-  // the captured session into the sandbox whatever the run carries, and it is the
-  // one state whose precise answer is unavailable (Preflight 422s a member who
-  // has not signed in — the very person deciding whether to sign in).
-  //
-  // Everywhere else the console says "Resolved at launch." and offers Preflight,
-  // which answers for the exact run. NEVER infer a sentence from `mechanism`
-  // above: that is the DECLARED lane, and under a `shared` row it is satisfied by
-  // a chain that fell through to a different, resident one.
-  credential_residency?: ModelCredentialResidency;
   // #1052: true when at least one model provider serves this harness (enabled,
   // on the roster) but this caller is granted none of them — canon.md's R5b,
   // "no provider serves this person for this harness at all". Absent/false
@@ -262,55 +214,6 @@ export interface SetupHarnessTool {
   // cannot tell those two apart without this fact (setupModelProviderState's
   // capVisible already narrows model_providers to granted ones before the wire).
   providers_ungranted?: boolean;
-}
-
-// THIS PRINCIPAL's model-access state (internal/api.SetupModelAccess) — the
-// per-person answer `llm_ready` below structurally cannot give, since that is a
-// DEPLOYMENT fact and read green over a member's own lapsed AWS session.
-//
-// The chip renders the LABEL for `state` and the server's `action` verbatim
-// underneath it (the action is the member's own words and is never reworded
-// client-side). DRAFT canon, docs/design/workspace-providers-prompt.md §7.7:
-//   live           → AGENTS.MODEL_ACCESS_LIVE, success tone, no action
-//                    (expired-but-renewable folds in — dispatch renews it)
-//   expiring       → AGENTS.MODEL_ACCESS_EXPIRING, warning; the server's own
-//                    `action` is MODEL_ACCESS_EXPIRING_ACTION ("Sign in again
-//                    before {ts}"), rendered verbatim — SIGN_IN_AWS is the
-//                    BUTTON beside it, not the line
-//   expired_signin → AGENTS.MODEL_ACCESS_EXPIRED, warning, SIGN_IN_AWS
-//   not_configured → AGENTS.MODEL_ACCESS_NOT_CONFIGURED, warning, SIGN_IN_AWS
-//   shared_expired → AGENTS.MODEL_ACCESS_SHARED_EXPIRED, warning, NO button —
-//                    there is nothing the member can do but ask their admin
-//   not_applicable → AGENTS.MODEL_ACCESS_NOT_APPLICABLE, neutral, NO action —
-//                    the caller is a mechanism, not a person (the shared
-//                    admin bearer token under a per_user row), so there is no
-//                    credential to grade and no sign-in it could complete
-export interface SetupModelAccess {
-  state:
-    | "live"
-    | "expiring"
-    | "expired_signin"
-    | "not_configured"
-    | "shared_expired"
-    | "not_applicable"
-    | (string & {});
-  // The declared lane, as the roster's wire value ("bedrock_sso"). Member-safe:
-  // a lane name, never a portal URL or a secret name.
-  mechanism?: string;
-  // The one thing to do, already composed by the server ("" when nothing).
-  action?: string;
-  // The instant `action` names, RFC3339 UTC — the registration's lapse, or the
-  // access token's expiry for a blob that cannot be renewed. ON THE WIRE since
-  // 0.7.6 (in-process only before) for one reason: `expiring`'s sentence
-  // carries a UTC stamp, and the surfaces that now render that state on EVERY
-  // screen for 24 h have to show it on the reader's own clock (relativeTime in
-  // the shell strip and the New Run rail, absoluteTime in the two card rows —
-  // lib/workspace-providers-copy.ts's modelAccessActionLine). Absent for every state that
-  // names no instant, and from a pre-0.7.6 daemon: render `action` verbatim
-  // then. NEVER sent to a member under a `shared` row — userModelAccess
-  // builds a fresh struct that drops it, which is the leak that projection
-  // exists to close.
-  deadline?: string;
 }
 
 // THIS PRINCIPAL's Azure DevOps access state (internal/api.SCMAccess) —
@@ -360,18 +263,16 @@ export interface SetupModelProvider {
 }
 
 // One provider's connection state for THIS PRINCIPAL (internal/api.
-// SetupProviderAccess, MP-12) — SetupModelAccess generalised per provider
-// rather than the one hardcoded AWS-only row. `state` is one of
-// SetupModelAccess's five live states; `shared_expired` is never produced
-// here (design doctrine: every credential is per person). `action` is
-// already composed by the server and rendered verbatim, exactly like
-// SetupModelAccess.action — never reworded client-side.
+// SetupProviderAccess, MP-12) — one row per model provider. `state` is one of
+// the model-access states below (every credential is per person); `action`
+// is already composed by the server and rendered verbatim — never reworded
+// client-side.
 export interface SetupProviderAccess {
   provider: string;
   state: "live" | "expiring" | "expired_signin" | "not_configured" | "not_applicable" | (string & {});
   action?: string;
-  // RFC3339 UTC, only on a state `action` names an instant for. Same reading
-  // rule as SetupModelAccess.deadline.
+  // RFC3339 UTC, only on a state `action` names an instant for: render it on
+  // the reader's own clock; absent, render `action` verbatim.
   deadline?: string;
   // The sign-in run the caller's stored credential for this provider was
   // captured by, stamped by the server from that run's own token (#993).
@@ -403,12 +304,6 @@ export interface SetupStatus {
   // runner fix advice for detail that is merely hidden from them. Absent on an
   // operator's body and on any older daemon — treat absent as false.
   checks_redacted?: boolean;
-  // The CALLER's own model-access state — kept through the member redaction on
-  // purpose, and what the member's Getting Started chip reads INSTEAD of
-  // llm_ready. Absent when there is nothing per-principal to say (no roster row
-  // declares a lane for claude-code and no session is captured), in which case
-  // the console renders today's chip.
-  model_access?: SetupModelAccess;
   // The model providers the caller may use. Absent only when no provider
   // block exists; a block that grants this caller nothing is `[]`.
   model_providers?: SetupModelProvider[];
@@ -492,10 +387,6 @@ export interface SetupStatus {
   // "no login" in compose even when the operator IS logged in on the host. Optional
   // for the same fixture-compat reason as `bedrock`.
   deployment?: { host_like: boolean };
-  // Wardyn-managed subscription credentials captured via container login
-  // (setup-token). Present per provider that has a stored token; empty/absent
-  // when none. Optional for the same fixture-compat reason as `bedrock`.
-  harness?: SetupHarness[];
   // The EFFECTIVE integration set (stored ∪ legacy-derived) with each row's live
   // capabilities — the server's own answer, as opposed to the rows
   // lib/api/integrations.ts derives client-side for the two legacy categories.
@@ -503,8 +394,7 @@ export interface SetupStatus {
   integrations?: WireIntegration[];
   // The STATIC coding-agent harness catalog (harnessCatalog, harness.go) —
   // which tools Wardyn knows how to run and whether it can wire each one a
-  // managed model credential or a container-login subscription. Distinct
-  // from `harness` above (a CAPTURED credential's live readiness). Not read
+  // managed model credential or a container-login subscription. Not read
   // client-side yet (same as `capabilities` above) — new-run's
   // WizardAgent literal union is a hand-maintained copy of the same facts,
   // pending consolidation onto this field. Optional for the same

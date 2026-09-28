@@ -14,7 +14,7 @@ import userEvent from "@testing-library/user-event";
 
 const loginPaneMock = vi.fn();
 vi.mock("./harness-login-pane", () => ({
-  HarnessLoginPane: (props: { startURLManaged?: boolean }) => {
+  HarnessLoginPane: (props: Record<string, unknown>) => {
     loginPaneMock(props);
     return <div data-testid="login-pane" />;
   },

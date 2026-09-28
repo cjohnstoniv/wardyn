@@ -38,9 +38,16 @@ const STATUS = providerStatus([
   { provider: gateway },
 ]);
 
-function renderRail(opts: { refusedProvider?: string; credentialRefused?: boolean; error?: string; onLaunch?: () => void }) {
+type RailOpts = { refusedProvider?: string; credentialRefused?: boolean; error?: string; onLaunch?: () => void };
+
+function renderRail(opts: RailOpts) {
   window.history.pushState({}, "", "/runs/new");
-  render(
+  const result = render(railTree(opts));
+  return { rerenderWith: (next: Partial<RailOpts>) => result.rerender(railTree({ ...opts, ...next })) };
+}
+
+function railTree(opts: RailOpts) {
+  return (
     <WithDoor status={STATUS} path="/runs/new" operator={false} principal="bob@acme.example">
       <RunRail
         cc="CC1"
@@ -71,7 +78,7 @@ function renderRail(opts: { refusedProvider?: string; credentialRefused?: boolea
           onCancel: () => {},
         }}
       />
-    </WithDoor>,
+    </WithDoor>
   );
 }
 
@@ -110,5 +117,56 @@ describe("state 4 — a New Run refusal opens its own provider's door", () => {
     await act(async () => {});
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText(sentence)).toBeInTheDocument();
+  });
+});
+
+// The launch door's own contract, over a provider door: the server's refusal
+// opens it with no click, focus returns to Launch however it closes, and each
+// Launch click arms it once.
+describe("the launch door — focus and once-per-click", () => {
+  const afterFocusSettles = () => act(() => new Promise((r) => setTimeout(r, 0)));
+  const launchButton = () => screen.getByRole("button", { name: "Launch run" });
+
+  it("a completed sign-in launches again exactly once and returns focus to Launch", async () => {
+    const onLaunch = vi.fn();
+    renderRail({ refusedProvider: bedrock.id, onLaunch });
+    await userEvent.click(await screen.findByRole("button", { name: "fake pane" }));
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    await afterFocusSettles();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(launchButton());
+  });
+
+  it("Escape launches nothing, the sentence stays, and focus lands on Launch, not #main-content", async () => {
+    const onLaunch = vi.fn();
+    renderRail({ refusedProvider: bedrock.id, error: "the server's sentence", onLaunch });
+    await screen.findByRole("button", { name: "fake pane" });
+    await userEvent.keyboard("{Escape}");
+    await afterFocusSettles();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(screen.getByText("the server's sentence")).toBeInTheDocument();
+    expect(document.activeElement).toBe(launchButton());
+    expect(document.activeElement).not.toBe(document.getElementById("main-content"));
+  });
+
+  it("a relaunch refused again does not reopen the door; a fresh Launch click re-arms it", async () => {
+    const onLaunch = vi.fn();
+    const r = renderRail({ refusedProvider: bedrock.id, credentialRefused: false, onLaunch });
+    r.rerenderWith({ credentialRefused: true });
+    await userEvent.click(await screen.findByRole("button", { name: "fake pane" }));
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    // The relaunch (through the door's callback, not the button) is refused
+    // again: the screen clears the flag and sets it once more.
+    r.rerenderWith({ credentialRefused: false });
+    r.rerenderWith({ credentialRefused: true });
+    await afterFocusSettles();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The person clicks Launch themselves — that re-arms the door.
+    await userEvent.click(launchButton());
+    expect(onLaunch).toHaveBeenCalledTimes(2);
+    r.rerenderWith({ credentialRefused: false });
+    r.rerenderWith({ credentialRefused: true });
+    expect(await screen.findByRole("button", { name: "fake pane" })).toBeInTheDocument();
   });
 });

@@ -32,21 +32,12 @@
 //
 // The VIEWER is resolved in the consumer hook, not here: OperatorProvider lives
 // inside AppShell (app-shell.tsx), below the provider App.tsx mounts around
-// <Routes>, so a door graded here would read the fail-open operator default for
-// every caller. Grading at the point of consumption is also what makes the
-// audience-aware `shared_expired` arm correct for a surface the shell does not
-// own.
+// <Routes>, so a viewer read here would be the fail-open operator default for
+// every caller.
 
 import * as React from "react";
 
-import {
-  modelAccessDoor,
-  NO_MODEL_ACCESS_DOOR,
-  resolveDoor,
-  type DoorRequest,
-  type DoorTarget,
-  type ModelAccessDoor,
-} from "../../lib/model-access";
+import { resolveDoor, type DoorRequest, type DoorTarget } from "../../lib/model-access";
 import type { SetupStatus } from "../../lib/types";
 import { viewOfPath } from "./console-view";
 import { routerPath } from "../../lib/base-path";
@@ -54,8 +45,8 @@ import { useOperator, useOperatorResolved, usePrincipal } from "./operator-conte
 
 /** How an entrance opens the door. */
 export interface OpenDoorOptions {
-  /** Which door (#544): a provider id, or today's login lane. Default
-   *  `{ login: "aws" }` — the one door every existing caller opened. */
+  /** Which door (#544): a provider id, or a login lane keyed to its provider.
+   *  Default `{ login: "aws" }`. */
   for?: DoorRequest;
   /** The element focus should return to when the door closes and no better
    *  target exists. Callers whose OWN trigger unmounts before the door closes
@@ -79,9 +70,9 @@ export interface OpenDoorOptions {
   onClosed?: () => void;
 }
 
-/** What a caller gets: the graded door, plus the three things only the shared
+/** What a caller gets: the shared door controls — the things only the shared
  *  instance can offer. */
-export interface ModelAccessDoorHandle extends ModelAccessDoor {
+export interface ModelAccessDoorHandle {
   /** Re-read /setup/status (the shell's own read). Returns its promise so a
    *  caller can await the new answer. */
   refresh: () => void | Promise<unknown>;
@@ -91,8 +82,7 @@ export interface ModelAccessDoorHandle extends ModelAccessDoor {
   claim: () => () => void;
   /** Whether ANY surface currently owns the door. */
   claimed: boolean;
-  /** THIS viewer's resolved role — false until /me has answered, which is also
-   *  when every field above reads as "nothing to say". Consumers read it here
+  /** THIS viewer's resolved role — false until /me has answered. Consumers read it here
    *  rather than calling useOperator() again: a second read would answer the
    *  fail-open default in exactly the window the door refuses to grade. */
   operator: boolean;
@@ -142,9 +132,9 @@ interface ModelAccessContextValue {
   focusOpener: () => boolean;
 }
 
-// FAIL-OPEN DEFAULT — no provider above means no status, which grades to
-// NO_MODEL_ACCESS_DOOR (needsAttention false): every screen and every suite
-// that mounts a component directly renders exactly what it renders today. Never
+// FAIL-OPEN DEFAULT — no provider above means no status and no door: every
+// screen and every suite that mounts a component directly renders exactly what
+// it renders today. Never
 // "harden" this into a thrown error; a missing provider must not be able to
 // paint a warning nobody can act on.
 const ModelAccessContext = React.createContext<ModelAccessContextValue>({
@@ -298,34 +288,23 @@ export function useShellSetupStatus(): { status: SetupStatus | null; refresh: ()
 }
 
 /**
- * useModelAccessDoor grades the shell's last /setup/status for THIS viewer and
- * hands back the shared door controls.
+ * useModelAccessDoor hands back the shared door controls for THIS viewer.
  */
 export function useModelAccessDoor(): ModelAccessDoorHandle {
   const ctx = React.useContext(ModelAccessContext);
   // useOperator()'s default is fail-OPEN (true) — right for a console that must
-  // never lock an admin out of their own controls, and wrong for this: while
-  // /me is in flight (or after it failed) a MEMBER under a dead shared row
-  // would read the ADMIN's sentence, "The shared AWS sign-in no longer works …
-  // sign in again", with a button the server then refuses — and usePrincipal()
-  // is "" in the same window, so a "Not now" there would write an unkeyed flag
-  // for whoever uses the tab next.
-  //
-  // So the door says NOTHING until the identity is known: the same rule the
-  // shell's own role chip follows (useOperatorResolved), and the honest one —
-  // the answer is audience-dependent and the audience is not known yet.
+  // never lock an admin out of their own controls, and wrong for a viewer
+  // fact: while /me is in flight (or after it failed) usePrincipal() is "", so
+  // a "Not now" there would write an unkeyed flag for whoever uses the tab
+  // next. So both read as unknown until the identity is known — the same rule
+  // the shell's own role chip follows (useOperatorResolved).
   const operator = useOperator();
   const resolved = useOperatorResolved();
   const principal = usePrincipal();
-  const door = React.useMemo(
-    () => (ctx.status && resolved ? modelAccessDoor(ctx.status, { operator }) : NO_MODEL_ACCESS_DOOR),
-    [ctx.status, operator, resolved],
-  );
   const viewerOperator = resolved && operator;
   const viewerPrincipal = resolved ? principal : "";
   return React.useMemo(
     () => ({
-      ...door,
       refresh: ctx.refresh,
       claim: ctx.claim,
       claimed: ctx.claimed,
@@ -342,7 +321,6 @@ export function useModelAccessDoor(): ModelAccessDoorHandle {
       focusOpener: ctx.focusOpener,
     }),
     [
-      door,
       viewerOperator,
       viewerPrincipal,
       ctx.refresh,

@@ -80,46 +80,6 @@ export function connectionsSummary(rows: ConnectionRow[]): ConnectionsSummary {
     : { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
 }
 
-/**
- * legacySummary is Getting Started's OWN fallback (fix review on #541): with
- * no model-providers block at all, connectionsSummary's rows are always
- * empty — but "Not set up by your admin" is a real regression for every
- * install that predates provider records, which is every legacy shared or
- * per_user roster install main still carries (the admin funnel writes no
- * provider block until #548 lands). Read the SAME per-principal
- * `model_access` (and its `llm_ready` deployment-wide fallback) the retired
- * "Your model key" card used to, so a shared install with a working credential
- * still reads Ready rather than a false alarm.
- *
- * Used ONLY when `!status?.model_providers` — a real provider block always
- * takes connectionsSummary instead, even an empty one (§5.4's own "No
- * providers" state).
- */
-export function legacySummary(status: SetupStatus | null | undefined): ConnectionsSummary {
-  const state = status?.model_access?.state;
-  if (state === "live" || state === "expiring") return { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
-  if (state === "not_configured" || state === "expired_signin") {
-    return { label: CONNECTIONS.SUMMARY_NEEDS_YOU, tone: "warning" };
-  }
-  // Fix review (HIGH): shared_expired is a DEAD shared credential, not a
-  // config fact — llm_ready is computed at the deployment/config level
-  // (internal/api/setup.go), so it stays true for an install whose one
-  // shared credential has expired, and the llmReady fallback below would
-  // otherwise read that install as Ready.
-  if (state === "shared_expired") return { label: AGENTS.MODEL_ACCESS_SHARED_EXPIRED, tone: "warning" };
-  // #1089 (owner ruling: build it as a chip) — the shared admin-token
-  // principal's own state (#158): real, just never a claim about a
-  // credential that has anything to sign in to. Without this arm it fell
-  // through to the llm_ready fallback below and read as an ordinary "Model
-  // access · Ready", indistinguishable from a genuinely ready session
-  // (#1042's e2e caught this after #541's rewrite dropped the old always-visible
-  // chip). Checked ahead of llm_ready for the same reason shared_expired is:
-  // llm_ready is a deployment fact and would otherwise paint over it.
-  if (state === "not_applicable") return { label: AGENTS.MODEL_ACCESS_NOT_APPLICABLE, tone: "neutral" };
-  if (status?.llm_ready === true) return { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
-  return { label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" };
-}
-
 export interface ConnectionRowCopy {
   chip: { label: string; tone: "success" | "warning" | "neutral" | "danger" };
   /** The "For {harness}" / "For {harness} and {harness}" line — always shown. */

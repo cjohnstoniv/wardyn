@@ -7,7 +7,7 @@
 // captured a credential; did it?"
 //
 // Extracted from harness-login-pane.tsx (R1-F7): the rule
-// (serverConfirmsCapture), its reasoning and its sentences are that file's
+// (serverConfirmsProviderCapture), its reasoning and its sentences are that file's
 // own, moved verbatim. What the pane keeps is the phase machine that calls
 // this.
 //
@@ -23,7 +23,7 @@ import { isTerminalRunState, type SetupStatus } from "../../../lib/types";
 // login image can print it without ever completing a real capture), so the
 // pane no longer trusts the marker alone. On doneMarker it re-fetches
 // /setup/status and only claims a capture when the server independently
-// agrees (serverConfirmsCapture below) — the server is the one copy of the
+// agrees (serverConfirmsProviderCapture below) — the server is the one copy of the
 // truth the sandbox cannot write. This is the sentence shown when the two
 // disagree.
 //
@@ -72,57 +72,10 @@ const CONFIRM_RETRY_MS = 500;
 // marker (which never becomes true) still ends in the refusal.
 const CAPTURE_CONFIRM_RETRIES = 3;
 
-// serverConfirmsCapture corroborates a doneMarker sighting against the
-// server's own /setup/status (S-13): the marker is a PTY string a forged
-// sandbox binary can print unconditionally, so it is never sufficient on its
-// own.
-//
-// It has to prove THIS sign-in captured something, not that a credential
-// exists (R-1) — otherwise every re-login over an existing row, the case the
-// product's own "re-run the login" fix line creates, re-admits a forged
-// marker. `source_run_id` is the proof: the server stamps it from the login
-// run's own token claims (ssotoken.go), nothing in the sandbox can write it,
-// and an honest capture replaces the blob, so after one it always equals this
-// run's id. A row carrying SOMEONE ELSE'S run id is therefore a previous
-// sign-in, and refuses.
-//
-// The presence legs below are the FALLBACK, for a daemon old enough to omit
-// source_run_id entirely. For aws that is model_access reading live/expiring
-// — never the harness row, whose `captured` bit stays true for a dead
-// credential (R-2). anthropic has no per-caller model_access shape here, so
-// its own harness row is all it has.
-//
-// Only the aws flow reaches this today (R-5): it is the only flow with a
-// doneMarker. anthropic ends through saveToken (capture: "scrape"). Its
-// branch is kept because it is the right rule for the next helper flow.
-//
-// `strict` (Finding 7b, Codex #9): the background watch below is a
-// FREE-RUNNING poll with no marker to anchor it, so the presence fallbacks
-// below — right for the SHORT, marker-triggered round trip, where a marker
-// was at least seen — would be the one dangerous line in the lane if the
-// watch used them: a pre-existing credential would confirm a sign-in that
-// never happened. `strict` refuses them outright; every existing caller
-// (this file's own round trip, every S-13 pin) omits it and is unchanged.
-// Exported for tests.
-export function serverConfirmsCapture(
-  status: SetupStatus,
-  provider: string,
-  runId?: string | null,
-  opts?: { strict?: boolean },
-): boolean {
-  const rows = (status.harness ?? []).filter((h) => h.provider === provider);
-  if (runId && rows.some((h) => h.captured && h.source_run_id === runId)) return true;
-  if (opts?.strict) return false;
-  if (rows.some((h) => h.source_run_id)) return false; // someone else's sign-in
-  if (provider === "aws") {
-    const state = status.model_access?.state;
-    return state === "live" || state === "expiring";
-  }
-  return rows.some((h) => h.captured);
-}
-
-// serverConfirmsProviderCapture is serverConfirmsCapture for a sign-in through
-// a model provider's door (#544). The provider's own row must agree the
+// serverConfirmsProviderCapture corroborates a sign-in through a model
+// provider's door (#544) against the server's own /setup/status (S-13): the
+// done marker is a PTY string a forged sandbox binary can print
+// unconditionally, so it is never sufficient on its own. The provider's own row must agree the
 // credential is there and usable, and something the sandbox cannot write must
 // prove it is THIS run's. That proof is the row's `source_run_id` (#993),
 // stamped by the server from the capturing run's own token and read from the
@@ -157,17 +110,15 @@ export function serverConfirmsProviderCapture(
 // that DID land must not be accused of not existing — retry once, then say the
 // check failed (R-3).
 export async function confirmCaptureWithServer(
-  provider: string,
-  runId?: string | null,
-  modelProvider?: string,
+  runId: string | null | undefined,
+  modelProvider: string,
 ): Promise<{ confirmed: boolean; unreachable: boolean }> {
   let audited = false;
-  const confirms = (s: SetupStatus) =>
-    modelProvider ? serverConfirmsProviderCapture(s, modelProvider, audited, runId) : serverConfirmsCapture(s, provider, runId);
+  const confirms = (s: SetupStatus) => serverConfirmsProviderCapture(s, modelProvider, audited, runId);
   // A THROW stays fail-closed and is never retried: a propagated 401 is an
   // answer, not a blip, and retrying it would only delay the refusal.
   const read = async (): Promise<SetupStatus | null> => {
-    if (modelProvider && runId && !audited) {
+    if (runId && !audited) {
       audited = await auditApi.listAudit(runId, { action: CAPTURE_AUDIT_ACTION }).then((r) => r.length > 0, () => false);
     }
     try {
@@ -299,18 +250,16 @@ function sleep(ms: number, signal: AbortSignal, wake?: EventTarget): Promise<voi
 // this. The run's own state transition needs no separate wiring: the loop
 // already re-reads `getRun` every tick regardless.
 export async function watchForCapture({
-  provider,
   runId,
   signal,
   wake,
   modelProvider,
 }: {
-  provider: string;
   runId: string;
   signal: AbortSignal;
   wake?: EventTarget;
-  /** A provider door's sign-in: the audit hit is the proof, not a hint. */
-  modelProvider?: string;
+  /** The provider the sign-in is for. */
+  modelProvider: string;
 }): Promise<boolean> {
   const startedAt = Date.now();
   let terminalAt: number | null = null;
@@ -336,9 +285,7 @@ export async function watchForCapture({
       lastStatusCheck = Date.now();
       try {
         const status = await setupApi.getSetupStatus();
-        const confirmed = modelProvider
-          ? serverConfirmsProviderCapture(status, modelProvider, hinted, runId)
-          : serverConfirmsCapture(status, provider, runId, { strict: true });
+        const confirmed = serverConfirmsProviderCapture(status, modelProvider, hinted, runId);
         if (!status.unreachable && confirmed) return true;
       } catch {
         /* a read failure is a tick, never a verdict */

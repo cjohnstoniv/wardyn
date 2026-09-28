@@ -185,7 +185,7 @@ describe("MemberGettingStarted — demos (M-6 D5)", () => {
   it("offers the model- and secret-gated demos once the preconditions they need are met", async () => {
     getSetupStatusMock.mockResolvedValue(
       status({
-        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+        llm_ready: true,
         secrets: {
           present: ["wardyn-demo-key", "wardyn-demo-api-token", "wardyn-demo-pat", "wardyn-demo-ssh-key"],
           github_app: false,

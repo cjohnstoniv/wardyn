@@ -48,7 +48,7 @@ function given(providers: ModelProvider[], connected: Record<string, number> = {
   getAgentProvidersMock.mockResolvedValue({ providers: { agents: roster }, etag: '"r"' });
 }
 
-const def = (id: string, provider: string): AgentProvider => ({ id, mechanism: "none", default_provider: provider });
+const def = (id: string, provider: string): AgentProvider => ({ id, default_provider: provider });
 
 function renderList(harnesses: SetupHarnessTool[] = [CLAUDE, CODEX, NONE], subscriptionAvailable?: boolean) {
   return render(

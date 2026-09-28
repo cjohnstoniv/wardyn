@@ -4,8 +4,8 @@
  */
 
 // T-69 — Go->TS wire parity for the DTOs the F8 console-e2e audit named that
-// had no source-parity probe yet: SetupStatus, SetupModelAccess (the
-// `model_access` chip state), ApprovalRequest, and the attach-mode control
+// had no source-parity probe yet: SetupStatus, ApprovalRequest, and the
+// attach-mode control
 // frame (attachModeMsg + its nested attachHolderView, `attach_holder.go`
 // 215-263 — the shape ui/e2e/attach-stub.ts hand-builds against). SiteConfig,
 // AgentRun, RunPolicySpec, AuditEvent, SCMAccess, CapabilityGrant and Me
@@ -110,7 +110,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   const setupChecksGo = readFileSync(join(root, "internal/api/setup_checks.go"), "utf8");
   const bedrockGo = readFileSync(join(root, "internal/api/runs_bedrock_probe.go"), "utf8");
   const harnessToolGo = readFileSync(join(root, "internal/api/setup_integrations.go"), "utf8");
-  const modelAccessGo = readFileSync(join(root, "internal/api/modelaccess.go"), "utf8");
   const attachGo = readFileSync(join(root, "internal/api/attach_holder.go"), "utf8");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
@@ -138,7 +137,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   it.each([
     ["SetupCheck", setupChecksGo],
     ["SetupProvider", setupGo],
-    ["SetupHarness", setupGo],
     ["SetupBedrock", bedrockGo],
     ["SetupHarnessTool", harnessToolGo],
   ])("%s: full parity with the TS mirror of the same name", (name, goSrc) => {
@@ -158,13 +156,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const goTags = goJSONTags(setupGo, goName);
     expect(goTags.length).toBeGreaterThan(0);
     expect(new Set(tsInlineKeys(setupTs, "SetupStatus", member))).toEqual(new Set(goTags));
-  });
-
-  it("SetupModelAccess (`model_access`): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(modelAccessGo, "SetupModelAccess");
-    expect(goTags.length).toBeGreaterThanOrEqual(4);
-    const tsKeys = tsInterfaceTopKeys(setupTs, "SetupModelAccess");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
   it("SetupProviderAccess (`provider_access`): full parity with the TS mirror", () => {

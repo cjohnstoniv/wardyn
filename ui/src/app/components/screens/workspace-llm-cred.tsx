@@ -7,7 +7,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { workspaces as api } from "../../lib/api/workspaces";
-import { integrationsApi, type IntegrationRow } from "../../lib/api/integrations";
+import { modelProviders as modelProvidersApi, type ModelProvider } from "../../lib/api/model-providers";
 import { getErrorMessage } from "../../lib/format";
 import type { Workspace, WorkspaceLLMCred } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -24,29 +24,26 @@ import {
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
 
-// Human label for the current model/harness binding (list/detail display).
-// The binding names an Integration (category ai_provider) by id; absent/"" =>
-// no binding, the run falls back to the global provider config. Pass the
-// fetched rows when you have them to show the integration's display name;
-// without them the id itself is the honest label (operator-readable by
-// construction — it is what the Integrations screen shows and audit logs).
-export function llmCredLabel(cred?: WorkspaceLLMCred, rows?: IntegrationRow[]): string {
-  const ref = cred?.integration_ref;
+// Human label for the current model-provider binding (list/detail display).
+// The binding names a model provider by id; absent/"" => no binding, the run
+// chooses its provider itself. Pass the fetched providers when you have them to
+// show the provider's display name; without them the id itself is the honest
+// label (it is what Model providers shows and audit logs carry).
+export function llmCredLabel(cred?: WorkspaceLLMCred, providers?: ModelProvider[]): string {
+  const ref = cred?.provider_ref;
   if (!ref) return "None";
-  return rows?.find((r) => r.serverId === ref || r.id === ref)?.name ?? ref;
+  return providers?.find((p) => p.id === ref)?.name ?? ref;
 }
-// success = a named binding resolves model access proxy-side; neutral = no
-// binding (global provider fallback).
+// success = a named binding; neutral = no binding (the run chooses).
 export function llmCredTone(cred?: WorkspaceLLMCred): "neutral" | "success" {
-  return cred?.integration_ref ? "success" : "neutral";
+  return cred?.provider_ref ? "success" : "neutral";
 }
 
-// The binding picker shared by the onboarding form (create) and
-// WorkspaceLLMCredDialog (edit): "None" + every ai_provider Integration the
-// server knows. Uncontrolled data lives in the caller — this renders `value`
-// and reports edits via `onChange`. Rows are fetched once on mount; a fetch
-// failure renders the None-only honest floor (the binding can still be
-// cleared, never invented).
+// The binding picker: "None" + every model provider the server knows.
+// Uncontrolled data lives in the caller — this renders `value` and reports
+// edits via `onChange`. Providers are fetched once on mount; a fetch failure
+// renders the None-only honest floor (the binding can still be cleared, never
+// invented).
 export function LLMCredFields({
   value,
   onChange,
@@ -54,69 +51,61 @@ export function LLMCredFields({
   value: WorkspaceLLMCred;
   onChange: (next: WorkspaceLLMCred) => void;
 }) {
-  const [rows, setRows] = React.useState<IntegrationRow[] | null>(null);
+  const [providers, setProviders] = React.useState<ModelProvider[] | null>(null);
   React.useEffect(() => {
     let live = true;
-    integrationsApi
-      .list()
-      .then((d) => live && setRows(d.ai))
-      .catch(() => live && setRows([]));
+    modelProvidersApi
+      .getModelProviders()
+      .then((d) => live && setProviders(d.providers.providers ?? []))
+      .catch(() => live && setProviders([]));
     return () => {
       live = false;
     };
   }, []);
 
-  const ref = value.integration_ref ?? "";
+  const ref = value.provider_ref ?? "";
   return (
     <div className="space-y-2.5 rounded-lg border border-border p-3">
-      <Label>Model / harness for this environment</Label>
+      <Label>Model provider for this environment</Label>
       <RadioGroup
         value={ref || "none"}
-        onValueChange={(v) => onChange({ integration_ref: v === "none" ? "" : v })}
+        onValueChange={(v) => onChange({ provider_ref: v === "none" ? "" : v })}
         className="flex flex-col gap-1.5"
       >
         <label className="flex items-center gap-1.5 text-xs">
           <RadioGroupItem value="none" id="cred-ref-none" />
           <Label htmlFor="cred-ref-none" className="cursor-pointer font-normal">
-            None — use the server&apos;s global provider
+            None — each run chooses its model provider
           </Label>
         </label>
-        {/* Skip rows with no server-side identity (aiServerId's azure_openai
-            case today): integration_ref is resolved server-side against the
-            SAME id (resolveIntegrationRef), so a client display id like
-            "ai:azure_openai" would silently fail to bind. */}
-        {(rows ?? [])
-          .filter((r) => r.serverId)
-          .map((r) => (
-            <label key={r.id} className="flex items-center gap-1.5 text-xs">
-              <RadioGroupItem value={r.serverId!} id={`cred-ref-${r.id}`} />
-              <Label htmlFor={`cred-ref-${r.id}`} className="cursor-pointer font-normal">
-                {r.name} <span className="font-mono text-muted-foreground">{r.typeLabel}</span>
-              </Label>
-            </label>
-          ))}
-        {/* A stored ref whose integration no longer lists: still selectable/clearable, named honestly. */}
-        {ref && rows !== null && !rows.some((r) => r.serverId === ref) && (
+        {(providers ?? []).map((p) => (
+          <label key={p.id} className="flex items-center gap-1.5 text-xs">
+            <RadioGroupItem value={p.id} id={`cred-ref-${p.id}`} />
+            <Label htmlFor={`cred-ref-${p.id}`} className="cursor-pointer font-normal">
+              {p.name || p.id} <span className="font-mono text-muted-foreground">{p.kind}</span>
+            </Label>
+          </label>
+        ))}
+        {/* A stored ref whose provider no longer lists: still selectable/clearable, named honestly. */}
+        {ref && providers !== null && !providers.some((p) => p.id === ref) && (
           <label className="flex items-center gap-1.5 text-xs">
             <RadioGroupItem value={ref} id="cred-ref-current" />
             <Label htmlFor="cred-ref-current" className="cursor-pointer font-mono font-normal">
-              {ref} (not in the Integrations list)
+              {ref} (not in the Model providers list)
             </Label>
           </label>
         )}
       </RadioGroup>
-      {rows === null && (
-        <p className="text-meta leading-snug text-muted-foreground">Loading integrations…</p>
-      )}
+      {providers === null && <p className="text-meta leading-snug text-muted-foreground">Loading model providers…</p>}
       <p className="text-meta leading-snug text-muted-foreground">
-        A run that picks this workspace/container inherits this model access — injected proxy-side at
-        launch, never resident.
+        A run that picks this workspace/container uses this model provider unless it chooses one itself — with
+        its launcher&apos;s own credential for it.
       </p>
     </div>
   );
 }
 
-// Standalone editor for an EXISTING workspace's model/harness binding — the
+// Standalone editor for an EXISTING workspace's model-provider binding — the
 // onboarding form's llm_cred is create-only (the server ignores it on a
 // generic PUT /workspaces/{id}), so changing it post-create goes through
 // api.setWorkspaceLLMCred instead. `workspace` null => closed. Exported for
@@ -160,8 +149,7 @@ export function WorkspaceLLMCredDialog({
         <DialogHeader>
           <DialogTitle>Model access — {workspace?.name}</DialogTitle>
           <DialogDescription>
-            A run that picks this workspace/container inherits this model access, injected proxy-side —
-            never resident in the sandbox.
+            A run that picks this workspace/container uses this model provider unless it chooses one itself.
           </DialogDescription>
         </DialogHeader>
         <LLMCredFields value={cred} onChange={setCred} />

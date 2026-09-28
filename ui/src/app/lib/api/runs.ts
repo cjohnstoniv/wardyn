@@ -147,10 +147,10 @@ function runWireBody(input: RunWireInput): Record<string, unknown> {
   return body;
 }
 
-// The create-time model-credential refusal — enforceCreateLLMMechanism's 422
+// The create-time model-credential refusal — writeProviderRefusal's 422
 // carrying reason `model_credential`, the failure audit row's own word. It is
 // the one launch refusal a sign-in repairs, so the New Run rail answers it with
-// the AWS sign-in dialog and launches again. Beside createRun because that is
+// the named provider's door and launches again. Beside createRun because that is
 // the call that raises it, and so the screen (at the file-size gate) reaches it
 // through the import line it already has.
 export function isCredentialRefusal(e: unknown): boolean {

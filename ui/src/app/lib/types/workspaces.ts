@@ -114,17 +114,11 @@ export interface RecordResult {
   caveats?: string[];
 }
 
-// The OPERATOR-owned model/harness credential BINDING on a workspace/
-// container: a run that picks this workspace resolves its model access through
-// the NAMED Integration (category ai_provider) — the generalized replacement
-// for the retired inline {mode, api_key_secret, bedrock} shape (the server
-// tolerates old stored rows by decoding them as "no binding"). Refs/names
-// only, never secret values: the credential lives on the Integration, injected
-// proxy-side at dispatch. Absent / "" => no binding; the run falls back to the
-// global provider config. Set via createWorkspace's `llm_cred` (create) or
-// api.setWorkspaceLLMCred (edit).
+// The OPERATOR-owned model-provider BINDING on a workspace/container: a run
+// that picks this workspace uses the NAMED model provider unless it chooses
+// one itself. A name only, never a credential. Absent / "" => no binding. Set
+// via createWorkspace's `llm_cred` (create) or api.setWorkspaceLLMCred (edit).
 export interface WorkspaceLLMCred {
-  integration_ref?: string;
   // The model provider (GET /model-providers id) a run on this workspace uses
   // unless it chooses one itself. internal/types/workspace.go ProviderRef.
   provider_ref?: string;
