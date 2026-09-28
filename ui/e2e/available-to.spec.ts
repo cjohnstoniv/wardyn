@@ -9,7 +9,7 @@
 // list refused), and on a model provider (the editor asking). Each write is
 // read back from the wire, not only from the screen.
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, TOKEN_KEY, expandCard, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
@@ -23,6 +23,7 @@ const PARTIAL = "ghcr.io/acme/e2e-partial:2.0";
 async function gotoImages(page: Page): Promise<void> {
   await gotoConsole(page);
   await navToRoute(page, "/admin/settings");
+  await expandCard(page, "Workspace providers");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
   await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
@@ -244,6 +245,7 @@ test.describe("Available to — a model provider (#923)", () => {
   test("a new provider asks who gets it, and an existing one carries the live control", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model providers");
     await page.getByRole("button", { name: MODEL_PROVIDERS.ADD_CTA }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }).click();

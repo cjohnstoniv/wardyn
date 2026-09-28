@@ -40,18 +40,23 @@ func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
 func parseIDParam(w http.ResponseWriter, r *http.Request, param, noun string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, param))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid "+noun+" id")
+		// One reason for every caller (#656 slice 3): a path segment failing to
+		// parse as a UUID is the identical cause regardless of which entity's id
+		// it names — the human message still says which one (noun).
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidIDParam, "invalid "+noun+" id")
 		return uuid.UUID{}, false
 	}
 	return id, true
 }
 
-// notFoundIf writes a 404 "<entity> not found" and reports true when err is
+// notFoundIf writes a 404 "<entity> not found" (with reason, #656 slice 3 —
+// one per entity kind, the caller's own to name since notFoundIf itself
+// cannot tell one resource kind from another) and reports true when err is
 // store.ErrNotFound; any other err (including nil) is left for the caller to
 // handle. Callers must return immediately when this reports true.
-func notFoundIf(w http.ResponseWriter, err error, entity string) bool {
+func notFoundIf(w http.ResponseWriter, err error, entity, reason string) bool {
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, entity+" not found")
+		writeErrorReason(w, http.StatusNotFound, reason, entity+" not found")
 		return true
 	}
 	return false
@@ -64,15 +69,21 @@ func notFoundIf(w http.ResponseWriter, err error, entity string) bool {
 func claimsForRunUpload(w http.ResponseWriter, r *http.Request) (*identity.Claims, bool) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return nil, false
 	}
 	if claims.RunID.String() != chi.URLParam(r, "runID") {
-		writeError(w, http.StatusForbidden, "run id mismatch")
+		writeErrorReason(w, http.StatusForbidden, reasonRunIDMismatch, "run id mismatch")
 		return nil, false
 	}
 	return claims, true
 }
+
+// sandboxUploadRefusal pairs an authSandboxRunUpload refusal's human message
+// with its wire reason — each of its 3 call-site-supplied refusals means
+// something different at each of its (today, one) callers, so the reason
+// travels with the message rather than being guessed from it (#656 slice 3).
+type sandboxUploadRefusal struct{ msg, reason string }
 
 // authSandboxRunUpload authenticates a per-run sandbox upload (scan result /
 // verify result): the token's claims must match the path run id (via
@@ -81,24 +92,24 @@ func claimsForRunUpload(w http.ResponseWriter, r *http.Request) (*identity.Claim
 // response and returns ok=false on any failure. GetWorkspace is
 // intentionally left to each caller so the read/unmarshal/GetWorkspace error
 // precedence on a malformed body stays exactly what it is today.
-func (s *Server) authSandboxRunUpload(w http.ResponseWriter, r *http.Request, notFoundMsg, notGovernedMsg, wrongTaskMsg string, wantTasks ...string) (*identity.Claims, types.AgentRun, bool) {
+func (s *Server) authSandboxRunUpload(w http.ResponseWriter, r *http.Request, notFound, notGoverned, wrongTask sandboxUploadRefusal, wantTasks ...string) (*identity.Claims, types.AgentRun, bool) {
 	claims, ok := claimsForRunUpload(w, r)
 	if !ok {
 		return nil, types.AgentRun{}, false
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, notFoundMsg)
+		writeErrorReason(w, http.StatusForbidden, notFound.reason, notFound.msg)
 		return nil, types.AgentRun{}, false
 	}
 	if run.WorkspaceID == nil && run.SourceID == nil {
 		// Governed = carries a trusted linkage: a workspace step run OR a
 		// per-source scan run (the three-tier retarget).
-		writeError(w, http.StatusForbidden, notGovernedMsg)
+		writeErrorReason(w, http.StatusForbidden, notGoverned.reason, notGoverned.msg)
 		return nil, types.AgentRun{}, false
 	}
 	if !slices.Contains(wantTasks, run.Task) {
-		writeError(w, http.StatusForbidden, wrongTaskMsg)
+		writeErrorReason(w, http.StatusForbidden, wrongTask.reason, wrongTask.msg)
 		return nil, types.AgentRun{}, false
 	}
 	return claims, run, true
@@ -198,11 +209,11 @@ func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uu
 	// authorize BEFORE they parse a body, so this is now the first store touch on
 	// every one of them, and an unexplained panic there reads like an auth bug.
 	if s.cfg.Store == nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: no store configured")
+		writeErrorReason(w, http.StatusInternalServerError, reasonWorkspaceStoreUnavailable, "get workspace: no store configured")
 		return types.Workspace{}, false
 	}
 	ws, err := s.cfg.Store.GetWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return types.Workspace{}, false
 	}
 	if err != nil {
@@ -286,7 +297,10 @@ func (s *Server) ownsWorkspaceOrSecurityAdmin(r *http.Request, ws types.Workspac
 // known to exist and to be foreign — a truly-missing workspace stays silent, so
 // the audit trail is not a scan log of every 404.
 func (s *Server) denyForeignWorkspace(w http.ResponseWriter, r *http.Request, ws types.Workspace) {
-	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, ws.ID.String(), "workspace not found"))
+	// AsIf: the wire reason must match getWorkspaceOr404's own
+	// reasonWorkspaceNotFound byte for byte (#656 slice 3) — not_owner stays
+	// the audit row's TRUE reason.
+	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, ws.ID.String(), "workspace not found").AsIf(authz.Reason(reasonWorkspaceNotFound)))
 }
 
 // getWorkspaceAuthorized loads a workspace and authorizes the caller to MUTATE
@@ -396,7 +410,7 @@ func (s *Server) getWorkspaceLaunchable(w http.ResponseWriter, r *http.Request, 
 // Callers must return immediately when ok is false.
 func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.AgentRun, bool) {
 	run, err := s.cfg.Store.GetRun(r.Context(), id)
-	if notFoundIf(w, err, "run") {
+	if notFoundIf(w, err, "run", reasonRunNotFound) {
 		return types.AgentRun{}, false
 	}
 	if err != nil {
@@ -501,8 +515,9 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 	// Audited AFTER confirming the run genuinely exists — a truly-missing
 	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY
 	// identified foreign run reaches this audit (reason not_owner). The body
-	// is byte-identical to getRunOr404's either way.
-	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, run.ID.String(), "run not found").OnRun(run.ID))
+	// is byte-identical to getRunOr404's either way, including its wire
+	// reason (AsIf, #656 slice 3) — not_owner stays the audit row's own.
+	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 	return types.AgentRun{}, false
 }
 
@@ -515,7 +530,7 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 // setter, and the audit payload — which stays count/shape-only, never
 // value-shaped, for anything that could carry repo content.
 func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Request, action string,
-	normalize func(T) (V, string),
+	normalize func(T) (V, string, string),
 	set func(context.Context, uuid.UUID, V) (types.Workspace, error),
 	data func(V) map[string]any,
 ) {
@@ -527,13 +542,13 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	val, msg := normalize(req)
+	val, reason, msg := normalize(req)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return
 	}
 	updated, err := set(r.Context(), id, val)
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
 	if err != nil {
@@ -608,7 +623,10 @@ func decodeStrictKeys(w http.ResponseWriter, r *http.Request, dst any) (present 
 // return immediately when it reports false.
 func decodeStrict(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if msg := decodeStrictMsg(w, r, dst); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		// The SAME cause approvals.go's own body-decode check answers
+		// (reasonInvalidRequestBody, #656 slice 1) — one reason regardless of
+		// which of the package's ~40 callers hit it.
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return false
 	}
 	return true
@@ -621,10 +639,10 @@ func readCappedBody(w http.ResponseWriter, r *http.Request, capBytes int64, noun
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, noun+" exceeds size limit")
+			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRequestBodyTooLarge, noun+" exceeds size limit")
 			return nil, false
 		}
-		writeError(w, http.StatusBadRequest, "read "+noun+": "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonRequestBodyUnreadable, "read "+noun+": "+err.Error())
 		return nil, false
 	}
 	return raw, true

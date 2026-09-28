@@ -45,7 +45,7 @@ func (s *Server) handleGradePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validatePolicySpec(req.Spec); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid policy spec: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonPolicyGradeSpecInvalid, "invalid policy spec: "+err.Error())
 		return
 	}
 	runInput := composer.RunInput{Interactive: req.Interactive}

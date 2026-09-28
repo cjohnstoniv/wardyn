@@ -86,7 +86,7 @@ func runLayoutEmptyResponse(preset string) runLayoutResponse {
 func (s *Server) handleGetRunLayout(w http.ResponseWriter, r *http.Request) {
 	preset := r.URL.Query().Get("preset")
 	if !slices.Contains(runLayoutPresets, preset) {
-		writeError(w, http.StatusBadRequest, "preset must be one of: live, finished")
+		writeErrorReason(w, http.StatusBadRequest, reasonUILayoutInvalidPreset, "preset must be one of: live, finished")
 		return
 	}
 
@@ -122,27 +122,27 @@ func (s *Server) handlePutRunLayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !slices.Contains(runLayoutPresets, req.Preset) {
-		writeError(w, http.StatusBadRequest, "preset must be one of: live, finished")
+		writeErrorReason(w, http.StatusBadRequest, reasonUILayoutInvalidPreset, "preset must be one of: live, finished")
 		return
 	}
 	if len(req.Layout) > runLayoutMaxWidgets {
-		writeError(w, http.StatusBadRequest, "layout has too many widgets")
+		writeErrorReason(w, http.StatusBadRequest, reasonUILayoutTooManyWidgets, "layout has too many widgets")
 		return
 	}
 	for _, wgt := range req.Layout {
 		if !slices.Contains(runLayoutWidgetIDs, wgt.Widget) {
-			writeError(w, http.StatusBadRequest, "unknown widget id: "+wgt.Widget)
+			writeErrorReason(w, http.StatusBadRequest, reasonUILayoutUnknownWidget, "unknown widget id: "+wgt.Widget)
 			return
 		}
 		if wgt.X < 0 || wgt.Y < 0 || wgt.W < 1 || wgt.H < 1 {
-			writeError(w, http.StatusBadRequest, "widget "+wgt.Widget+" has an invalid position or size")
+			writeErrorReason(w, http.StatusBadRequest, reasonUILayoutInvalidGeometry, "widget "+wgt.Widget+" has an invalid position or size")
 			return
 		}
 	}
 
 	ls, ok := s.cfg.Store.(store.RunLayoutStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "layout persistence is not implemented on this build")
+		writeErrorReason(w, http.StatusNotImplemented, reasonUILayoutPersistenceUnavailable, "layout persistence is not implemented on this build")
 		return
 	}
 

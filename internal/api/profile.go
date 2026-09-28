@@ -134,7 +134,7 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	ceiling := widenCeilingRepoAllowlist(base.Spec, synthGitHubRepos(synth))
 	clamped, clampWarns := composer.Clamp(synth, ceiling, base.Limits.MaxEphemeralDiskMiB)
 	if verr := validatePolicySpec(clamped); verr != nil {
-		writeError(w, http.StatusUnprocessableEntity, "synthesized profile invalid: "+verr.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSynthesizedProfileInvalid, "synthesized profile invalid: "+verr.Error())
 		return
 	}
 	runInput := composer.RunInput{

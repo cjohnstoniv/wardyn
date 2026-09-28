@@ -233,7 +233,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if msg := validateSourceWrite(src, ado); msg != "" {
-		writeError(w, http.StatusBadRequest, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
+		writeErrorReason(w, http.StatusBadRequest, reasonSourceWriteInvalid, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
 		return
 	}
 	// Provider admission on the LIBRARY door, not only the workspace one. This is
@@ -302,7 +302,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	}
 	src, err := s.cfg.Store.GetSource(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "no such source")
+		writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
 		return
 	}
 	if err != nil {
@@ -349,16 +349,16 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 				// workspace with ZERO attachments (the store's own error names
 				// which ones) — never the "pass ?force=1" hint, force is
 				// already set.
-				writeError(w, http.StatusConflict, err.Error())
+				writeErrorReason(w, http.StatusConflict, reasonSourceDeleteConflict, err.Error())
 				return
 			}
-			writeError(w, http.StatusConflict, fmt.Sprintf(
+			writeErrorReason(w, http.StatusConflict, reasonSourceInUse, fmt.Sprintf(
 				"source is attached by %d workspace(s): %s — detach them first, or pass ?force=1 to detach everywhere and delete",
 				len(names), strings.Join(names, ", ")))
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "no such source")
+			writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
 			return
 		}
 		writeServerError(w, r, "delete source", err)

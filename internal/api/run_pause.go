@@ -438,12 +438,12 @@ func (s *Server) handleResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run.State != types.RunRunning || runIsKept(run) || run.SandboxRef == "" {
-		writeError(w, http.StatusConflict, "run is not running; there is nothing to resume (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonRunResumeNotRunning, "run is not running; there is nothing to resume (state="+string(run.State)+")")
 		return
 	}
 	actorType, principal := actorFromRequest(r)
 	if err := s.thawForExec(r.Context(), run, actorType, principal, "resume"); err != nil {
-		writeError(w, http.StatusBadGateway, "resuming the run failed; try again")
+		writeErrorReason(w, http.StatusBadGateway, reasonRunResumeFailed, "resuming the run failed; try again")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": run.ID, "paused": false})
@@ -456,7 +456,7 @@ func (s *Server) handleResumeRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInternalActivity(w http.ResponseWriter, r *http.Request) {
 	claims, err := claimsFromContext(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
 		return
 	}
 	s.noteAgentActive(r.Context(), claims.RunID)

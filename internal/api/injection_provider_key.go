@@ -60,9 +60,9 @@ func providerKeyDestination(p types.ModelProvider, agent string) (host, header, 
 func providerStoreReadRefusal(name string, err error) (status int, reason, body string) {
 	status, _, _ = storeReadRefusal(name, err)
 	if status == http.StatusServiceUnavailable {
-		return status, "store_unavailable", sinkStoreUnreachable
+		return status, reasonSinkStoreUnavailable, sinkStoreUnreachable
 	}
-	return status, "store_refused", providerKeyRefused
+	return status, reasonProviderStoreRefused, providerKeyRefused
 }
 
 // resolveProviderKeyInjection is the wardyn-provider-<uid>-key arm of
@@ -95,7 +95,9 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	fail := func(status int, reason, body string) bool {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", name, "failure", mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"}, row))))
-		writeError(w, status, body)
+		// reason reaches the wire now (#656 slice 3), matching
+		// injection_bedrock_bearer.go's identical fix.
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 	var rec providerGrantSnapshot

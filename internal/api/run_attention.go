@@ -195,7 +195,9 @@ func (s *Server) handleMeAttention(w http.ResponseWriter, r *http.Request) {
 			view = "user"
 		}
 	default:
-		writeError(w, http.StatusBadRequest, "invalid view")
+		// The SAME cause GET /runs' own ?view= check answers
+		// (reasonInvalidViewParam, #656 slice 1).
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidViewParam, "invalid view")
 		return
 	}
 	adminView := view == "admin"
@@ -203,7 +205,9 @@ func (s *Server) handleMeAttention(w http.ResponseWriter, r *http.Request) {
 
 	runsPager, ok := s.cfg.Store.(store.RunsFilteredPager)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "run listing is not scoped for this request on this store backend")
+		// The SAME cause GET /runs' own scoping check answers
+		// (reasonListingUnscopedBackend, #656 slice 1).
+		writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "run listing is not scoped for this request on this store backend")
 		return
 	}
 	owner := principal

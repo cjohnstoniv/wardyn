@@ -394,6 +394,21 @@ func TestDevices_DeviceTokenIs401OnCreateRun(t *testing.T) {
 	}
 }
 
+// TestDevices_InvalidTokenReasonIsPinned covers a device-shaped bearer no
+// device was ever enrolled under. Asserts the LITERAL wire value, not the Go
+// const, so a rename of reasonInvalidDeviceToken without updating
+// docs/sdk.md fails here too.
+func TestDevices_InvalidTokenReasonIsPinned(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t)
+	w := do(t, srv, http.MethodPost, "/api/v1/devices/"+uuid.NewString()+"/heartbeat", deviceTokenPrefix+"never-enrolled", "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "invalid_device_token" {
+		t.Errorf("reason = %q, want the literal %q", got, "invalid_device_token")
+	}
+}
+
 // TestDevices_DeviceTokenRefusedOnEveryHumanRoute widens the two named routes
 // to the whole router: every route outside the device routes and the anonymous
 // set answers a live device token 401. routeMatrix is the chi.Walk-checked

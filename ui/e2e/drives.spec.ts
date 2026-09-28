@@ -8,6 +8,7 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
+  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -514,6 +515,7 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
+    await expandCard(page, DRIVES.TITLE);
     await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
     // It counts ALLOCATIONS, never people — and with none it says so rather
     // than rendering a zero.

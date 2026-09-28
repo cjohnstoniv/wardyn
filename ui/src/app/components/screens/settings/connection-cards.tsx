@@ -43,6 +43,7 @@ import { Input } from "../../ui/input";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useOperator } from "../../wardyn/operator-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
@@ -129,13 +130,29 @@ function Card({
   title,
   lede,
   footer,
+  // #1200 compact cards — Settings' and Your account's ModelProviderCard only.
+  // Getting started's Secrets step mounts the SAME card and must stay fully
+  // open, so the collapse is an opt-in, never this shell's own new default.
+  compact = false,
+  summary,
   children,
 }: {
   title: string;
   lede: string;
   footer?: string;
+  compact?: boolean;
+  summary?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  if (compact) {
+    return (
+      <CollapsibleCard title={title} summary={summary} testId="model-provider-card">
+        <p className="text-body leading-snug text-muted-foreground">{lede}</p>
+        <div className="mt-3 space-y-2">{children}</div>
+        {footer && <p className="mt-3 text-meta leading-snug text-muted-foreground">{footer}</p>}
+      </CollapsibleCard>
+    );
+  }
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <h3 className="text-sm font-medium text-foreground">{title}</h3>
@@ -398,10 +415,15 @@ export function ModelProviderCard({
   status,
   siteConfig,
   onChanged,
+  // #1200 compact cards — Settings' and Your account's opt-in; Getting
+  // started's Secrets step (integrations-step.tsx) omits it and stays fully
+  // open (Card's own comment).
+  compact = false,
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
   onChanged: () => void;
+  compact?: boolean;
 }) {
   const operator = useOperator();
   const present = status.secrets.present;
@@ -473,13 +495,29 @@ export function ModelProviderCard({
   // complete" (internal/api/modelaccess.go). One predicate behind both the
   // sentence and the missing door, so they can never drift apart.
   const mechanismPrincipal = perUserSso && !!status.model_access && modelAccessState === "not_applicable";
+  // The bedrock Lane's own `connected` predicate (below), extracted so #1200's
+  // one-line summary can share it rather than compute a second, driftable copy.
+  const bedrockConnected =
+    perUserSso && status.model_access
+      ? modelAccessState !== "not_applicable" && perUserLive
+      : !!bedrockRow?.bedrockLane || !!status.bedrock?.ready;
+  // #1200 compact cards — one line: which lane is connected, reusing the
+  // exact same lane titles the radiogroup below renders, never a new name
+  // for the same thing.
+  const modelSummary = subRow
+    ? "Connected — Claude subscription"
+    : keyRow
+      ? "Connected — API key"
+      : bedrockConnected
+        ? "Connected — AWS Bedrock"
+        : "Not connected";
 
   const LANES: ModelLane[] = ["subscription", "api_key", "bedrock"];
   const { containerProps, itemProps } = useRovingRadio(LANES.length, LANES.indexOf(lane), (i) => setLane(LANES[i]));
 
   return (
     <>
-      <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
+      <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER} compact={compact} summary={modelSummary}>
         {/* PR #352 review, finding 3: suppressed while a member sits on the
             ONE lane/row combination this card actually hands them an
             editable field (a per_user bearer row's AWS Bedrock lane) — the
@@ -541,11 +579,7 @@ export function ModelProviderCard({
             // server's own "region + model + one credential lane" fold and is
             // the member-safe form of the same fact; it is false on the
             // region-or-model-only deployment the check above guards against.
-            connected={
-              perUserSso && status.model_access
-                ? modelAccessState !== "not_applicable" && perUserLive
-                : !!bedrockRow?.bedrockLane || !!status.bedrock?.ready
-            }
+            connected={bedrockConnected}
             connectedDetail={
               bedrockConfigured ? `${status.bedrock?.region} · ${status.bedrock?.model}` : undefined
             }

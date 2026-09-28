@@ -45,7 +45,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	}
 	src, err := s.cfg.Store.GetSource(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "no such source")
+		writeErrorReason(w, http.StatusNotFound, reasonSourceNotFound, "no such source")
 		return
 	}
 	if err != nil {
@@ -60,7 +60,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
-			writeError(w, http.StatusUnprocessableEntity, detail)
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
 			return
 		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
@@ -75,12 +75,12 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 
 	case types.SourceRepo:
 		if s.cfg.Runner == nil {
-			writeError(w, http.StatusServiceUnavailable, "no runner configured to launch a governed scan run")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonSourceScanNoRunner, "no runner configured to launch a governed scan run")
 			return
 		}
 		run, lerr := s.launchSourceScanRun(r.Context(), actor, src)
 		if errors.Is(lerr, store.ErrConflict) {
-			writeError(w, http.StatusConflict, "a scan is already running for this source")
+			writeErrorReason(w, http.StatusConflict, reasonSourceScanAlreadyRunning, "a scan is already running for this source")
 			return
 		}
 		// Provider admission refused the clone: the policy answer, not a daemon
@@ -105,7 +105,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
-		writeError(w, http.StatusUnprocessableEntity, "source kind has nothing to scan")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanUnsupportedKind, "source kind has nothing to scan")
 	}
 }
 
@@ -391,7 +391,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		case types.SourceLocalDir:
 			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
 				partialAudit(id, detail)
-				writeError(w, http.StatusUnprocessableEntity, detail)
+				writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
 				return
 			}
 			scanned = append(scanned, id)
@@ -401,7 +401,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			}
 			if s.cfg.Runner == nil {
 				partialAudit(id, "no runner configured to launch a governed scan run")
-				writeError(w, http.StatusServiceUnavailable, "no runner configured to launch a governed scan run")
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonSourceScanNoRunner, "no runner configured to launch a governed scan run")
 				return
 			}
 			run, lerr := s.launchSourceScanRun(r.Context(), actor, src)

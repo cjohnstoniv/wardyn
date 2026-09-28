@@ -52,7 +52,7 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	updated, err := s.cfg.Store.SetWorkspaceOwner(r.Context(), id, "")
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
 	if err != nil {

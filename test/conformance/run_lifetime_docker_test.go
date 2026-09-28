@@ -28,6 +28,7 @@ package conformance_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -311,6 +312,17 @@ func TestRunLifetimeDocker(t *testing.T) {
 		freezer, ok := r.(runner.Freezer)
 		if !ok {
 			t.Fatal("orchestrator does not implement runner.Freezer")
+		}
+		// A class whose runtime cannot be paused safely (runsc, Kata: see
+		// Capabilities.Freeze) must be REFUSED, and the agent left running —
+		// never paused on a runtime nobody verified the pause against.
+		if !caps.Freeze[class] {
+			if err := freezer.FreezeSandbox(context.Background(), agentRef); !errors.Is(err, runner.ErrFreezeUnsupported) {
+				t.Fatalf("FreezeSandbox on %s (Capabilities.Freeze=false) = %v, want runner.ErrFreezeUnsupported", class, err)
+			}
+			requireState(t, agentRef, true, false)
+			requireState(t, proxyRef, true, false)
+			return
 		}
 		if err := freezer.FreezeSandbox(context.Background(), agentRef); err != nil {
 			t.Fatalf("FreezeSandbox: %v", err)

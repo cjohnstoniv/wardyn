@@ -18,6 +18,7 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { ModelProviderEditor } from "./model-provider-editor";
 
 // The GET snapshot is kept whole: the editor (#537, #538) writes the whole
@@ -52,37 +53,43 @@ export function ModelProvidersList({
   React.useEffect(load, [load]);
 
   const label = (id: string) => harnesses?.find((h) => h.id === id)?.display ?? id;
+  // #1200 compact cards — absent while unloaded, the same "absent, not a
+  // guess" rule this card's own EmptyState/error branches already follow.
+  // Deliberately its own short phrase, not M.FETCH_FAILED_TITLE/M.EMPTY_TITLE
+  // verbatim — the header summary and the expanded body both render at once,
+  // and a query for either canon string must still resolve to a single node.
+  const summary =
+    data === "loading" ? undefined : data === "error" ? "Couldn't load" : data.providers.length === 0 ? "No providers configured" : `${data.providers.length} ${data.providers.length === 1 ? "provider" : "providers"}`;
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4" data-testid="model-providers-list">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">{M.TITLE}</h3>
-          <p className="mt-0.5 text-body leading-snug text-muted-foreground">{MODEL_LEDE}</p>
+    <>
+      <CollapsibleCard title={M.TITLE} summary={summary} testId="model-providers-list">
+        <div className="flex items-start justify-between gap-4">
+          <p className="text-body leading-snug text-muted-foreground">{MODEL_LEDE}</p>
+          <Button size="sm" disabled={typeof data === "string"} onClick={() => setEditing("new")}>
+            {M.ADD_CTA}
+          </Button>
         </div>
-        <Button size="sm" disabled={typeof data === "string"} onClick={() => setEditing("new")}>
-          {M.ADD_CTA}
-        </Button>
-      </div>
-      <div className="mt-3">
-        {data === "loading" ? (
-          <TableSkeleton rows={3} cols={3} />
-        ) : data === "error" ? (
-          <EmptyState
-            as="h4"
-            icon={AlertTriangle}
-            title={M.FETCH_FAILED_TITLE}
-            description={M.FETCH_FAILED_BODY}
-            action={
-              <Button variant="outline" size="sm" onClick={load}>
-                {ACCESS_STATE.FETCH_FAILED_RETRY}
-              </Button>
-            }
-          />
-        ) : (
-          <Rows data={data} label={label} harnesses={harnesses} onEdit={setEditing} />
-        )}
-      </div>
+        <div className="mt-3">
+          {data === "loading" ? (
+            <TableSkeleton rows={3} cols={3} />
+          ) : data === "error" ? (
+            <EmptyState
+              as="h4"
+              icon={AlertTriangle}
+              title={M.FETCH_FAILED_TITLE}
+              description={M.FETCH_FAILED_BODY}
+              action={
+                <Button variant="outline" size="sm" onClick={load}>
+                  {ACCESS_STATE.FETCH_FAILED_RETRY}
+                </Button>
+              }
+            />
+          ) : (
+            <Rows data={data} label={label} harnesses={harnesses} onEdit={setEditing} />
+          )}
+        </div>
+      </CollapsibleCard>
       {editing && typeof data !== "string" && (
         <ModelProviderEditor
           list={data.list}
@@ -99,7 +106,7 @@ export function ModelProvidersList({
           }}
         />
       )}
-    </section>
+    </>
   );
 }
 

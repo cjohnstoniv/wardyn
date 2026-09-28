@@ -111,6 +111,28 @@ func TestSetRunTitle_OwnerRenamesRunningRun(t *testing.T) {
 	}
 }
 
+// TestSetRunTitle_StoreUnavailableReasonIsPinned covers a backend whose
+// store does not implement store.RunTitler at all — the bare
+// dispatchTestStore, unlike titleStore's wrapper. Asserts the LITERAL wire
+// value, not the Go const.
+func TestSetRunTitle_StoreUnavailableReasonIsPinned(t *testing.T) {
+	run := newFinalizeRun()
+	run.CreatedBy = runTitleOwner
+	h := newHarness(t)
+	st := &dispatchTestStore{run: run, state: types.RunRunning}
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+
+	w := doSSO(t, srv, http.MethodPatch, "/api/v1/runs/"+run.ID.String()+"/title", runTitleOwnerSession(t), `{"title":"x"}`)
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "run_title_store_unavailable" {
+		t.Errorf("reason = %q, want the literal %q", got, "run_title_store_unavailable")
+	}
+}
+
 // TestSetRunTitle_OwnerRenamesEndedRun: unlike PATCH /runs/{id} (end/wait),
 // this route is allowed on a TERMINAL run — a title is a display field, not
 // part of the lease.

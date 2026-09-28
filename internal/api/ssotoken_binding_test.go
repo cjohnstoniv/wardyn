@@ -338,8 +338,8 @@ func TestUploadSSOToken_RefusalIsAudited(t *testing.T) {
 			continue
 		}
 		data := string(ev.Data)
-		if !strings.Contains(data, refuseReasonAccountRolePin) {
-			t.Errorf("refusal row data = %s, want the fixed reason %q", data, refuseReasonAccountRolePin)
+		if !strings.Contains(data, reasonCaptureAccountRolePin) {
+			t.Errorf("refusal row data = %s, want the fixed reason %q", data, reasonCaptureAccountRolePin)
 		}
 		if strings.Contains(data, "222222222222") {
 			t.Errorf("refusal row data = %s, carries sandbox-chosen values; the reason vocabulary is closed on purpose", data)
@@ -364,30 +364,30 @@ func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
 		wantReason string
 	}{
 		"a body that is not JSON at all": {
-			body: `{"access_token": `, wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
+			body: `{"access_token": `, wantStatus: http.StatusBadRequest, wantReason: reasonCaptureBlobShape,
 		},
 		"a structurally incomplete blob": {
 			body:       `{"access_token":"tok","region":"` + operatorRegion + `","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
-			wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
+			wantStatus: http.StatusBadRequest, wantReason: reasonCaptureBlobShape,
 		},
 		"a region that is not the one this run was launched with": {
 			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"eu-central-1",` +
 				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
-			wantStatus: http.StatusBadRequest, wantReason: refuseReasonRegionMismatch,
+			wantStatus: http.StatusBadRequest, wantReason: reasonCaptureRegionMismatch,
 		},
 		"a start URL that is not the one this run was launched with": {
 			body: `{"access_token":"tok","start_url":"https://attacker.example.com/start","region":"` + operatorRegion + `",` +
 				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
-			wantStatus: http.StatusBadRequest, wantReason: refuseReasonStartURLMismatch,
+			wantStatus: http.StatusBadRequest, wantReason: reasonCaptureStartURLMismatch,
 		},
 		"a control character in a field baked into ~/.aws/config": {
 			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"` + operatorRegion + `",` +
 				`"account_id":"111111111111","role_name":"Bedrock\nRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
-			wantStatus: http.StatusBadRequest, wantReason: refuseReasonFieldUnsafe,
+			wantStatus: http.StatusBadRequest, wantReason: reasonCaptureFieldUnsafe,
 		},
 		"an account the configured model does not live in": {
 			body: ssoBlobFor("222222222222", "BedrockRunner"), wantStatus: http.StatusBadRequest,
-			wantReason: refuseReasonModelAccount,
+			wantReason: reasonCaptureModelAccount,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -430,7 +430,7 @@ func TestUploadSSOToken_FailedPersistIsAudited(t *testing.T) {
 	}
 	found := false
 	for _, ev := range h.audit.events {
-		if ev.Action == "harness.credential.refuse" && strings.Contains(string(ev.Data), refuseReasonStoreError) {
+		if ev.Action == "harness.credential.refuse" && strings.Contains(string(ev.Data), reasonStoreError) {
 			found = true
 		}
 	}
@@ -571,8 +571,8 @@ func TestUploadSSOToken_WrongShapedAccountOrRoleRejected(t *testing.T) {
 					continue
 				}
 				rows++
-				if !strings.Contains(string(ev.Data), refuseReasonFieldShape) {
-					t.Errorf("refusal row data = %s, want reason %q", ev.Data, refuseReasonFieldShape)
+				if !strings.Contains(string(ev.Data), reasonCaptureFieldShape) {
+					t.Errorf("refusal row data = %s, want reason %q", ev.Data, reasonCaptureFieldShape)
 				}
 			}
 			if rows != 1 {
