@@ -54,7 +54,6 @@ import * as React from "react";
 import { Plus, X } from "lucide-react";
 import type { MeCapabilities, SetupModelProvider, Workspace } from "../../../lib/types";
 import type { MeUserDrive } from "../../../lib/api/health";
-import { capabilityAllowed } from "../../../lib/capabilities";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DENIED } from "../../../lib/permissions-copy";
 import { DRIVE_MEMBER } from "../../../lib/user-drives-copy";
@@ -67,7 +66,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { makeMono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { SectionCard } from "./new-run-primitives";
-import { hasSourceNotAdmitted, workspaceModelProviderUnavailable } from "./wizard-types";
+import { hasSourceNotAdmitted, workspaceUnavailableToCaller } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
 
 // /me.user_drive_unavailable's four closed tokens (user_drives_resolve.go),
@@ -241,24 +240,22 @@ export function WorkspaceCard({
   // against. Advisory — denyUserRequest is the real gate.
   const pickedWorkspaceId = state.workspaces[0]?.workspaceId;
   const pickedWorkspace = workspaces.find((w) => w.id === pickedWorkspaceId);
-  const selectedWorkspaceUngranted =
-    !!pickedWorkspaceId && !capabilityAllowed(caps, "workspace", pickedWorkspaceId);
   // A3's per-repo-source `admitted` flag (§5.3): the same "not an enabled git
   // provider" refusal the workspace-row state renders (workspaces.tsx), here
   // as the Select's own reason line — the server withholds the base URL and
   // the row id, so PROVIDERS.CARD_NOT_ADMITTED names neither.
   const selectedNotAdmitted = !!pickedWorkspace && hasSourceNotAdmitted(pickedWorkspace);
-  // #922: the picked workspace is pinned to a model provider this caller's
-  // OWN filtered `/setup/status.model_providers` doesn't carry (see
-  // workspaceModelProviderUnavailable's own doc comment for why this can
-  // never name the provider). `modelProviders` is a PROP (see this
-  // component's own doc comment above) — never a second read of its own.
-  // review F2: gated on isAgent — a Shell/exec run never asks the server's
-  // model-provider door (see new-run-screen.tsx's own `workspaceUnavailable`
-  // comment for the full reasoning), so this line must not flash on for one.
+  // #922/#1267: the picked workspace isn't available to this caller — a
+  // plain ungranted workspace, a per-value "Available to" restriction, a
+  // git-provider pin the caller lacks, or one pinned to a model provider the
+  // caller's own filtered list doesn't carry. `modelProviders` is a PROP (see
+  // this component's own doc comment above) — never a second read of its
+  // own. The model-provider arm stays isAgent-gated, locally
+  // (workspaceUnavailableToCaller's own doc comment) — #1267's
+  // available_to_you never carries it.
   const isAgent = state.runType === "agent";
-  const selectedProviderUnavailable =
-    !!pickedWorkspace && workspaceModelProviderUnavailable(pickedWorkspace, isAgent ? modelProviders : undefined);
+  const selectedWorkspaceUnavailable =
+    !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);
 
   return (
     <SectionCard title="Workspace">
@@ -295,7 +292,7 @@ export function WorkspaceCard({
               {statusWord(w.status) === "Import failed" && (
                 <span className="text-danger"> — import failed</span>
               )}
-              {!capabilityAllowed(caps, "workspace", w.id) && (
+              {workspaceUnavailableToCaller(w, caps, modelProviders, isAgent) && (
                 <Chip tone="neutral">{DENIED.WORKSPACE_CHIP}</Chip>
               )}
             </SelectItem>
@@ -331,15 +328,14 @@ export function WorkspaceCard({
           content is what the closed trigger renders, so a per-row
           paragraph would end up inside the trigger. The chip above
           annotates every ungranted row; this says what it costs.
-          review F5: both the capability arm (selectedWorkspaceUngranted) and
-          the provider arm (selectedProviderUnavailable) now show the SAME
-          canon sentence Launch's own disable reads (DENIED.WORKSPACE_NOT_AVAILABLE)
-          — merged into one paragraph so the two reasons never print it twice
-          back to back when both happen to be true at once. This is also the
-          ONE place the sentence renders for New Run: Launch disables through
-          the rail's own `workspaceUnavailable` boolean, with no text of its
-          own, precisely so it is never shown here AND in the rail together. */}
-      {(selectedWorkspaceUngranted || selectedProviderUnavailable) && (
+          review F5 (widened by #1267): every arm workspaceUnavailableToCaller
+          folds in shows the SAME canon sentence Launch's own disable reads
+          (DENIED.WORKSPACE_NOT_AVAILABLE) — one paragraph, never printed
+          twice when more than one arm is true at once. This is also the ONE
+          place the sentence renders for New Run: Launch disables through the
+          rail's own `workspaceUnavailable` boolean, with no text of its own,
+          precisely so it is never shown here AND in the rail together. */}
+      {selectedWorkspaceUnavailable && (
         <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
       )}
       {selectedNotAdmitted && (

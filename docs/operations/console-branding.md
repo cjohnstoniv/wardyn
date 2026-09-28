@@ -53,6 +53,6 @@ the ratio), `link_not_https`, `invalid_link`, `logo_too_large`,
 `invalid_logo`. Every save is audited as `branding.write` and a removal as
 `branding.delete` (see [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
 
-Branding is not part of `wardyn site-config apply` yet; set it from the card
+Branding is not part of `wardyn site-config set` yet; set it from the card
 or with the routes above.
 

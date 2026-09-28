@@ -29,6 +29,37 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// runsPGPoolIsolated gives the caller its own freshly-migrated throwaway
+// database instead of runsPGPool's shared WARDYN_TEST_PG target (#983 part 3).
+// The audit-chain whole-table verifiers (VerifyAuditChain reads every row)
+// live on the shared database when they use runsPGPool — so a -p 4 run
+// against internal/api, internal/db and internal/store together lets one of
+// two brief windows on that shared database produce a row with NO hash at
+// all, which a concurrent whole-chain verify (or another -count rep) then
+// reads as "seq=N row carries no hash": internal/db's own
+// TestMigrateRestoresADisabledChainTrigger (migrate_pg_test.go, via its
+// shared-DB pgPool) disables the chain trigger outright for the span of the
+// test, and this package's own F11 probes (auditchain_f11_probe_pg_test.go)
+// insert under `session_replication_role = replica`, which bypasses the same
+// trigger. (auditchain_pg_test.go's TestPG_AuditChain_DetectsTamperedMiddleRow
+// disables a DIFFERENT trigger — audit_events_no_update — to REWRITE a row
+// in place, which produces a hash MISMATCH on that one row, never a missing
+// hash; it is not a source of this failure shape.) This is a real race, not
+// deterministic, so a single green run proves nothing. Every test in
+// auditchain_pg_test.go, auditchain_f11_probe_pg_test.go,
+// store_devices_federation_pg_test.go and store_devices_origin_pg_test.go
+// uses this instead of runsPGPool, mirroring the per-package
+// throwaway-database pattern #983a already used (internal/api's
+// throwawayPGPool, internal/db's probeSchemaPool).
+func runsPGPoolIsolated(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := throwawayDatabase(t)
+	if err := db.Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return pool
+}
+
 // runsPGPool connects + migrates against the live substrate, skipping cleanly
 // when WARDYN_TEST_PG is unset (plain CI). It returns the concrete *pgxpool.Pool
 // so it can be passed straight to the store functions. Mirrors the connect/
@@ -289,7 +320,7 @@ func TestPG_UpdateRunStateIf_ConditionalTransition(t *testing.T) {
 }
 
 // TestPG_UpdateRunStateIfIdle_TOCTOU covers finding N3: the idle-guarded CAS must
-// no-op when updated_at has advanced past the snapshot (an active `wardyn attach`
+// no-op when updated_at has advanced past the snapshot (an active `wardyn run attach`
 // TouchRun landed between the reaper's scan and its stop), and apply when it has
 // not. Guarding only on state=RUNNING (UpdateRunStateIf) would clobber the
 // now-active run; UpdateRunStateIfIdle adds the `updated_at <= notAfter` guard.

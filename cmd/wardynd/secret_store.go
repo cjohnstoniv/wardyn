@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
@@ -77,9 +78,15 @@ func readPlatformKey(path, ageKey string) (*age.X25519Identity, error) {
 	if strings.TrimSpace(ageKey) == "" {
 		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE is set but WARDYN_AGE_KEY is not — the platform key separates the boot keys from a durable age key; in store mode they already live in the organisation's store, so unset it")
 	}
-	key, err := readAgeKeyFile(path)
-	if err != nil {
+	b, err := cliutil.ReadSecretFile("WARDYN_PLATFORM_KEY_FILE", path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE: %w", err)
+	}
+	var key string
+	if err == nil {
+		if key, err = parseAgeKeyFileContent(path, b); err != nil {
+			return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE: %w", err)
+		}
 	}
 	if key == "" {
 		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE %s does not exist or holds no age identity — mint one with `wardynd -gen-age-key`", path)

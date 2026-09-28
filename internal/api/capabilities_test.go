@@ -225,6 +225,16 @@ type capStore struct {
 	// general s.err every other method checks — so a test can fail JUST the
 	// restriction read and see whether that alone can turn into an allow.
 	restrictErr error
+
+	// grantsForReads / enfReads / restrictReads count ListCapabilityGrantsFor,
+	// GetCapabilityEnforcement and ListCapabilityRestrictions calls — the three
+	// reads a capBatch memoizes for its whole life (capabilities.go's own
+	// "once per batch" comments). A page that stamps N rows through ONE shared
+	// batch (withCapBatch) must leave each of these at 1 regardless of N; a
+	// stamper that built its own batch per row would show N instead.
+	grantsForReads int
+	enfReads       int
+	restrictReads  int
 }
 
 func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
@@ -304,6 +314,7 @@ func (s *capStore) ListGroupDenyGrants(_ context.Context, capability string) ([]
 }
 
 func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
+	s.grantsForReads++
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -330,6 +341,7 @@ func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []st
 }
 
 func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	s.enfReads++
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -340,6 +352,7 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 }
 
 func (s *capStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	s.restrictReads++
 	if s.restrictErr != nil {
 		return nil, s.restrictErr
 	}

@@ -29,8 +29,8 @@ type sshHealthz struct {
 	HostKeyFingerprint string `json:"host_key_fingerprint"`
 }
 
-// sshCmd returns the cobra command for `wardyn ssh <run-id>`. It is a
-// SEPARATE command from `wardyn attach` on purpose: attach uses the admin
+// sshCmd returns the cobra command for `wardyn run ssh <run-id>`. It is a
+// SEPARATE command from `wardyn run attach` on purpose: attach uses the admin
 // bearer over a WebSocket, ssh uses a registered public key over the real SSH
 // protocol — different credentials that must never silently switch on a flag.
 func sshCmd(client clientFn) *cobra.Command {
@@ -69,7 +69,7 @@ external tool that dials the sandbox itself.
 	return cmd
 }
 
-// sshTarget is `wardyn ssh --json`'s output: everything an external tool needs
+// sshTarget is `wardyn run ssh --json`'s output: everything an external tool needs
 // to dial a sandbox over the gateway. Port is always populated (22 when the
 // advertised address names none) so a consumer never has to apply ssh's
 // default itself; Command is the exact `ssh` invocation --print would show.

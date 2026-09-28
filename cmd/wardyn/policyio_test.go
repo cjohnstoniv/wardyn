@@ -48,7 +48,7 @@ auto_stop_after_sec: 900
 }
 
 // TestReadPolicyFile_RejectsUnknownSpecField pins that readPolicyFile
-// (backing `policy create -f` / `policy update -f`) decodes the spec
+// (backing `policy set -f`) decodes the spec
 // strictly, so a misspelled field fails at authoring time instead of
 // silently vanishing. Covers both the bare-spec shape and the full-body
 // {"name":...,"spec":{...}} shape.
@@ -70,7 +70,7 @@ func TestReadPolicyFile_RejectsUnknownSpecField(t *testing.T) {
 
 // TestReadPolicyFile_ToleratesStrayTopLevelKeys guards the negative: a file
 // produced by `policy get --json` (id/created_at/updated_at alongside
-// name/spec) must still round-trip into `policy update -f` — only the SPEC is
+// name/spec) must still round-trip into `policy set -f` — only the SPEC is
 // decoded strict, not the enclosing body.
 func TestReadPolicyFile_ToleratesStrayTopLevelKeys(t *testing.T) {
 	dir := t.TempDir()

@@ -1481,7 +1481,8 @@ func TestPolicyDeleteCmd(t *testing.T) {
 	}
 }
 
-func TestPolicyCreateCmd_FromFile(t *testing.T) {
+// policy set with no positional id creates a new policy (POST).
+func TestPolicySetCmd_NoIDCreates(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "from-file"})
 
 	// A full-body JSON file ({"name":..., "spec":{...}}).
@@ -1489,8 +1490,13 @@ func TestPolicyCreateCmd_FromFile(t *testing.T) {
 	file := dir + "/policy.json"
 	writeFile(t, file, `{"name":"from-file","spec":{"min_confinement_class":"CC2","first_use_approval":true}}`)
 
-	if err := execCmd(t, "policy", "create", "-f", file, "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("policy create returned error: %v", err)
+	root := rootCmd()
+	out := &strings.Builder{}
+	root.SetArgs([]string{"policy", "set", "-f", file, "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("policy set returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodPost || got.path != "/api/v1/policies" {
@@ -1507,9 +1513,16 @@ func TestPolicyCreateCmd_FromFile(t *testing.T) {
 	if spec["min_confinement_class"] != "CC2" {
 		t.Errorf("spec min_confinement_class = %v, want CC2", spec["min_confinement_class"])
 	}
+	// Pins the verb word itself (not just the HTTP method): a no-id set must
+	// say "created", never "updated".
+	if !strings.Contains(out.String(), "created policy") {
+		t.Errorf("output = %q, want it to say \"created policy\"", out.String())
+	}
 }
 
-func TestPolicyUpdateCmd_NameOverride(t *testing.T) {
+// policy set with a positional id replaces that policy (PUT) — the same
+// upsert verb, dispatched by whether an id was given.
+func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "renamed"})
 
 	dir := t.TempDir()
@@ -1518,8 +1531,13 @@ func TestPolicyUpdateCmd_NameOverride(t *testing.T) {
 	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
 
 	polID := uuid.New()
-	if err := execCmd(t, "policy", "update", polID.String(), "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("policy update returned error: %v", err)
+	root := rootCmd()
+	out := &strings.Builder{}
+	root.SetArgs([]string{"policy", "set", polID.String(), "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("policy set returned error: %v", err)
 	}
 	got := srv.last()
 	want := "/api/v1/policies/" + polID.String()
@@ -1531,27 +1549,50 @@ func TestPolicyUpdateCmd_NameOverride(t *testing.T) {
 	if body["name"] != "renamed" {
 		t.Errorf("name = %v, want renamed (the --name override)", body["name"])
 	}
+	// N1: pins the verb word itself — an id given must say "updated", never
+	// "created", independent of what the HTTP method/path assertions above
+	// already catch (those alone left `verb = "created"` on the id-given path
+	// undetected).
+	if !strings.Contains(out.String(), "updated policy") {
+		t.Errorf("output = %q, want it to say \"updated policy\"", out.String())
+	}
+	if strings.Contains(out.String(), "created policy") {
+		t.Errorf("output = %q, must not say \"created policy\" when a policy-id was given", out.String())
+	}
 }
 
-// create requires -f; cobra MarkFlagRequired must reject its absence.
-func TestPolicyCreateCmd_RequiresFile(t *testing.T) {
-	if err := execCmd(t, "policy", "create", "--token", "tok"); err == nil {
+// set requires -f; cobra MarkFlagRequired must reject its absence.
+func TestPolicySetCmd_RequiresFile(t *testing.T) {
+	if err := execCmd(t, "policy", "set", "--token", "tok"); err == nil {
 		t.Error("expected error when -f is missing, got nil")
 	}
 }
 
 // A bare-spec file with no name and no --name override must error.
-func TestPolicyCreateCmd_NameRequired(t *testing.T) {
+func TestPolicySetCmd_NameRequired(t *testing.T) {
 	dir := t.TempDir()
 	file := dir + "/policy.json"
 	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
 
-	err := execCmd(t, "policy", "create", "-f", file, "--token", "tok")
+	err := execCmd(t, "policy", "set", "-f", file, "--token", "tok")
 	if err == nil {
 		t.Fatal("expected error when no name is provided, got nil")
 	}
 	if !strings.Contains(err.Error(), "policy name is required") {
 		t.Errorf("error = %q, want policy name is required", err)
+	}
+}
+
+// A --policy-id-shaped positional arg that isn't a UUID fails locally before
+// any request — set's own id parse, mirroring parseID's other call sites.
+func TestPolicySetCmd_RejectsMalformedID(t *testing.T) {
+	dir := t.TempDir()
+	file := dir + "/policy.json"
+	writeFile(t, file, `{"name":"x","min_confinement_class":"CC1"}`)
+
+	err := execCmd(t, "policy", "set", "not-a-uuid", "-f", file, "--token", "tok")
+	if err == nil || !strings.Contains(err.Error(), "invalid policy id") {
+		t.Fatalf("err = %v, want an invalid policy id error", err)
 	}
 }
 
@@ -1672,15 +1713,15 @@ func TestPolicyListCmd_JSON(t *testing.T) {
 	}
 }
 
-func TestPolicyCreateCmd_JSON(t *testing.T) {
+func TestPolicySetCmd_JSON(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, types.RunPolicy{ID: uuid.New(), Name: "from-file"})
 
 	dir := t.TempDir()
 	file := dir + "/policy.json"
 	writeFile(t, file, `{"name":"from-file","spec":{"min_confinement_class":"CC2"}}`)
 
-	if err := execCmd(t, "policy", "create", "-f", file, "--json", "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("policy create --json returned error: %v", err)
+	if err := execCmd(t, "policy", "set", "-f", file, "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("policy set --json returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodPost || got.path != "/api/v1/policies" {
@@ -2393,5 +2434,119 @@ func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
 				t.Fatalf("%s unexpected-arg exited 0 — cobra.NoArgs is declared but not enforced", name)
 			}
 		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// #206: attach/ssh move under `run`, clean break (no top-level alias)
+// --------------------------------------------------------------------------
+
+// TestTopLevelAttachAndSSHAreGone pins the clean break the owner ruled for on
+// issue #206 ("no alias commands"): the old bare `wardyn attach`/`wardyn ssh`
+// spellings must fail as an unknown command, not
+// silently keep working, or a script written against the old tree would pass
+// this suite for the wrong reason.
+func TestTopLevelAttachAndSSHAreGone(t *testing.T) {
+	for _, verb := range []string{"attach", "ssh"} {
+		t.Run(verb, func(t *testing.T) {
+			err := execCmd(t, verb, uuid.New().String())
+			if err == nil {
+				t.Fatalf("wardyn %s exited 0 — the old top-level command must be gone, not merely undocumented", verb)
+			}
+			if !strings.Contains(err.Error(), "unknown command") {
+				t.Errorf("error = %q, want an unknown-command refusal", err)
+			}
+		})
+	}
+}
+
+// TestRunAttachAndSSHAreReachable pins the other half: the same two leaves
+// now answer under `run`. Each is driven far enough past cobra's own routing
+// to prove the LEAF ran (its own client-side validation fired), not just that
+// a group with that name exists.
+func TestRunAttachAndSSHAreReachable(t *testing.T) {
+	if err := execCmd(t, "run", "attach", "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "invalid run id") {
+		t.Errorf("run attach = %v, want attachCmd's own invalid-run-id refusal", err)
+	}
+	if err := execCmd(t, "run", "ssh", "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "invalid run id") {
+		t.Errorf("run ssh = %v, want sshCmd's own invalid-run-id refusal", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// #206: `wardyn sessions list`
+// --------------------------------------------------------------------------
+
+func TestSessionsListCmd(t *testing.T) {
+	revoked := time.Now().Add(-time.Hour)
+	aliceID, bobID := uuid.New(), uuid.New()
+	srv := newCmdServer(t, http.StatusOK, []types.APIToken{
+		{ID: aliceID, Principal: "alice", Role: "member", Name: "laptop", CreatedAt: time.Now()},
+		{ID: bobID, Principal: "bob", Role: "admin", Name: "ci", CreatedAt: time.Now(), RevokedAt: &revoked},
+	})
+
+	root := rootCmd()
+	out := &strings.Builder{}
+	root.SetArgs([]string{"sessions", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("sessions list returned error: %v", err)
+	}
+	got := srv.last()
+	if got.method != http.MethodGet || got.path != "/api/v1/tokens" {
+		t.Errorf("got %s %s, want GET /api/v1/tokens", got.method, got.path)
+	}
+	if got.auth != "Bearer tok" {
+		t.Errorf("auth = %q, want Bearer tok", got.auth)
+	}
+	if !strings.Contains(out.String(), "alice") || !strings.Contains(out.String(), "active") {
+		t.Errorf("output = %q, want it to list alice as active", out.String())
+	}
+	if !strings.Contains(out.String(), "bob") || !strings.Contains(out.String(), "revoked") {
+		t.Errorf("output = %q, want it to list bob as revoked", out.String())
+	}
+	// The id must print in full (not short()'d): it is what DELETE
+	// /api/v1/tokens/{id} takes, so a truncated id would break list -> copy -> revoke.
+	if !strings.Contains(out.String(), aliceID.String()) || !strings.Contains(out.String(), bobID.String()) {
+		t.Errorf("output = %q, want both full token ids present", out.String())
+	}
+}
+
+func TestSessionsListCmd_JSON(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []types.APIToken{
+		{Principal: "alice", Role: "member", Name: "laptop", CreatedAt: time.Now()},
+	})
+
+	root := rootCmd()
+	out := &strings.Builder{}
+	root.SetArgs([]string{"sessions", "list", "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("sessions list --json returned error: %v", err)
+	}
+	var toks []types.APIToken
+	if err := json.Unmarshal([]byte(out.String()), &toks); err != nil {
+		t.Fatalf("output not JSON: %v (%s)", err, out.String())
+	}
+	if len(toks) != 1 || toks[0].Principal != "alice" {
+		t.Errorf("decoded %+v, want one token for alice", toks)
+	}
+}
+
+// A non-2xx from GET /api/v1/tokens must surface as the same *sdk.APIError
+// every other CLI call maps to a process exit code, not a generic decode
+// error — pinning listAllAPITokens's decisive-error path.
+func TestSessionsListCmd_APIError(t *testing.T) {
+	srv := newCmdServer(t, http.StatusForbidden, map[string]string{"error": "forbidden"})
+
+	err := execCmd(t, "sessions", "list", "--url", srv.URL, "--token", "tok")
+	var ae *sdk.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("err = %v, want *sdk.APIError", err)
+	}
+	if ae.Status != http.StatusForbidden {
+		t.Errorf("Status = %d, want 403", ae.Status)
 	}
 }

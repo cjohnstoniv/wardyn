@@ -57,6 +57,10 @@ DEX_PORT=5557
 WORK_DIR="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-02c}"
 PF_PID_FILE="${WORK_DIR}/v02c-dex-port-forward.pid"
 
+# shellcheck source=../lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"
+# v02c's own tag/color differ from common.sh's default — kept as a local
+# override defined AFTER sourcing (common.sh's own contract for this case).
 die() { printf '\n\033[1;31mv02c: %s\033[0m\n' "$*" >&2; exit 1; }
 
 preflight() {

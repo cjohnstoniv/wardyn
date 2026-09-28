@@ -82,7 +82,7 @@ fi
 
 # ── the CLI ────────────────────────────────────────────────────────────────
 # The tier installed NO host binary: the only command path was `compose exec`,
-# which is in-container and root-only, so `wardyn ssh` had no client and
+# which is in-container and root-only, so `wardyn run ssh` had no client and
 # `wardyn secret set` (A5's own remedy) was unreachable.
 # ARCHITECTURE. The payload carries a COMPILED Go binary, so neither package is
 # arch-independent. Both were first written as `Architecture: all` / `BuildArch:

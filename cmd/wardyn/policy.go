@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,8 +21,9 @@ import (
 // policyCmd manages run policies in the control plane. Policies are gated to
 // authenticated humans (SSO session or admin token) — dedicated admin-role
 // gating is planned, not yet enforced. The server validates every spec before
-// persisting it (a bad spec is rejected with HTTP 400). create/update read the
-// policy body from a JSON or YAML file; `render` converts either to canonical JSON.
+// persisting it (a bad spec is rejected with HTTP 400). `set` reads the policy
+// body from a JSON or YAML file (creating or replacing, per whether a
+// <policy-id> is given); `render` converts either to canonical JSON.
 func policyCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "policy",
@@ -91,63 +93,54 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	var createFile, createName string
-	var createJSON bool
-	create := &cobra.Command{
-		Use:   "create -f <file.json>",
-		Short: "Create a policy from a JSON file ({\"name\":..., \"spec\":{...}})",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			body, err := readPolicyFile(createFile, createName)
-			if err != nil {
-				return err
-			}
-			p, err := client().CreatePolicy(cmd.Context(), body)
-			if err != nil {
-				return err
-			}
-			if createJSON {
-				return emitJSON(cmd.OutOrStdout(), p)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "created policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
-			return nil
-		},
-	}
-	create.Flags().StringVarP(&createFile, "file", "f", "", "path to a JSON or YAML policy body (use '-' for stdin)")
-	create.Flags().StringVar(&createName, "name", "", "policy name (overrides/supplies the name in the file)")
-	create.Flags().BoolVar(&createJSON, "json", false, "emit the created policy as JSON")
-	_ = create.MarkFlagRequired("file")
-
-	var updateFile, updateName string
-	var updateJSON bool
-	update := &cobra.Command{
-		Use:   "update <policy-id> -f <file.json>",
-		Short: "Replace a policy's name and spec from a JSON file",
-		Args:  cobra.ExactArgs(1),
+	var setFile, setName string
+	var setJSON bool
+	set := &cobra.Command{
+		Use:   "set [policy-id] -f <file.json>",
+		Short: "Create a policy (no id) or replace one by id, from a JSON file ({\"name\":..., \"spec\":{...}})",
+		Long: "One upsert verb, like `secret set` and `site-config set`: no positional argument\n" +
+			"creates a new policy; a <policy-id> replaces that policy's name and spec.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := parseID("policy", args[0])
+			// Validate a given id BEFORE reading/parsing the file: a malformed
+			// id is a client-side mistake independent of the file's contents,
+			// and should fail the same way regardless of whether the file
+			// itself would also have been rejected.
+			var id uuid.UUID
+			hasID := len(args) == 1
+			if hasID {
+				var err error
+				id, err = parseID("policy", args[0])
+				if err != nil {
+					return err
+				}
+			}
+			body, err := readPolicyFile(setFile, setName)
 			if err != nil {
 				return err
 			}
-			body, err := readPolicyFile(updateFile, updateName)
+			var p types.RunPolicy
+			verb := "created"
+			if hasID {
+				verb = "updated"
+				p, err = client().UpdatePolicy(cmd.Context(), id, body)
+			} else {
+				p, err = client().CreatePolicy(cmd.Context(), body)
+			}
 			if err != nil {
 				return err
 			}
-			p, err := client().UpdatePolicy(cmd.Context(), id, body)
-			if err != nil {
-				return err
-			}
-			if updateJSON {
+			if setJSON {
 				return emitJSON(cmd.OutOrStdout(), p)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "updated policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s policy %s (%q, min %s)\n", verb, p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
 		},
 	}
-	update.Flags().StringVarP(&updateFile, "file", "f", "", "path to a JSON or YAML policy body (use '-' for stdin)")
-	update.Flags().StringVar(&updateName, "name", "", "policy name (overrides/supplies the name in the file)")
-	update.Flags().BoolVar(&updateJSON, "json", false, "emit the updated policy as JSON")
-	_ = update.MarkFlagRequired("file")
+	set.Flags().StringVarP(&setFile, "file", "f", "", "path to a JSON or YAML policy body (use '-' for stdin)")
+	set.Flags().StringVar(&setName, "name", "", "policy name (overrides/supplies the name in the file)")
+	set.Flags().BoolVar(&setJSON, "json", false, "emit the resulting policy as JSON")
+	_ = set.MarkFlagRequired("file")
 
 	del := &cobra.Command{
 		Use:   "delete <policy-id>",
@@ -166,7 +159,7 @@ func policyCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(list, get, getDefault, create, update, del, policyRenderCmd())
+	cmd.AddCommand(list, get, getDefault, set, del, policyRenderCmd())
 	return subcommandGroup(cmd)
 }
 
@@ -283,7 +276,7 @@ func readPolicyFile(path, nameOverride string) (sdk.PolicyRequest, error) {
 
 // decodeSpecStrict decodes canonical JSON into a RunPolicySpec, rejecting any
 // field the type doesn't recognize (DisallowUnknownFields) — the same shape as
-// the server's own strict validator. Shared by readPolicyFile (create/update),
+// the server's own strict validator. Shared by readPolicyFile (`policy set`),
 // the --policy-file branch of `run`, and policyRenderCmd, so a misspelled spec
 // field fails identically wherever it's authored.
 func decodeSpecStrict(raw []byte) (types.RunPolicySpec, error) {

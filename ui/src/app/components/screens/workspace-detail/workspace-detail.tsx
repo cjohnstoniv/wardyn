@@ -22,7 +22,7 @@ import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
 import { AVAILABILITY } from "../../../lib/availability-copy";
-import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities";
+import { useMyCapabilities } from "../../../lib/capabilities";
 import { DENIED } from "../../../lib/permissions-copy";
 import { Button } from "../../ui/button";
 import { AvailabilityControl } from "../../wardyn/availability-control";
@@ -34,7 +34,7 @@ import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
-import { resolvedModelProviders, workspaceModelProviderUnavailable } from "../new-run/wizard-types";
+import { resolvedModelProviders, workspaceUnavailableToCaller } from "../new-run/wizard-types";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
@@ -350,21 +350,20 @@ export function WorkspaceDetailScreen() {
 
   const kindMeta = kindMetaOf(ws.kind) ?? KIND_META.local_dir;
   const image = imageRow(ws);
-  // #922 (UT-7c): "Start a run" only NAVIGATES to New Run (it launches
-  // nothing itself), so disabling it here costs nothing a member could not
-  // already reach a different way — but it is the one place on this page
-  // that ever pointed at launching AGAINST this workspace specifically, so it
-  // is where the person-side "isn't available to you" consequence belongs.
-  // Two independent reasons fold into the SAME generic sentence (see
-  // DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment for why neither ever
-  // names the resource): this workspace itself carries no allow naming the
-  // caller (capabilityAllowed's existing "workspace" narrowing, the same
-  // signal workspace-card.tsx's own selectedWorkspaceUngranted reads), or it
-  // is pinned to a model provider the caller's own filtered list doesn't
-  // carry.
-  const workspaceUnavailable =
-    (!operator && !capabilityAllowed(caps, "workspace", ws.id)) ||
-    workspaceModelProviderUnavailable(ws, resolvedModelProviders(shellStatus));
+  // #922 (UT-7c, widened by #1267): "Start a run" only NAVIGATES to New Run
+  // (it launches nothing itself), so disabling it here costs nothing a member
+  // could not already reach a different way — but it is the one place on
+  // this page that ever pointed at launching AGAINST this workspace
+  // specifically, so it is where the person-side "isn't available to you"
+  // consequence belongs. Every arm folds into the SAME generic sentence (see
+  // DENIED.WORKSPACE_NOT_AVAILABLE's own doc comment for why none of them
+  // ever names the resource): a plain ungranted workspace, a per-value
+  // "Available to" restriction, a git-provider pin the caller lacks
+  // (available_to_you, #1267/#1250), or a model-provider pin the caller's own
+  // filtered list doesn't carry. This page never isAgent-gated the
+  // model-provider arm (unlike New Run, it has no run-type context of its
+  // own), so `isAgent=true` keeps that unconditional.
+  const workspaceUnavailable = workspaceUnavailableToCaller(ws, caps, resolvedModelProviders(shellStatus), true);
 
   return (
     <div className="mx-auto max-w-[1000px] px-6 py-5">

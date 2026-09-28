@@ -354,7 +354,7 @@ func TestValidateBedrockBaseURL_PlainHTTPOnlyWithTestEndpoints(t *testing.T) {
 // Plain http:// is refused at every door that writes one unless
 // WARDYN_ALLOW_TEST_ENDPOINTS acknowledges a test deployment, and stored as
 // written when it does — the kind SSO walk's fake bedrock-runtime serves no TLS.
-// The MDM door is `wardyn site-config apply`: the file decoded strictly, as the
+// The MDM door is `wardyn site-config set`: the file decoded strictly, as the
 // CLI does, and sent through the SDK's PutSiteConfig.
 func TestValidateModelProviders_BedrockHTTPNeedsTestHatch(t *testing.T) {
 	const fakeURL = "http://wardyn-awsssofake.wardyn.svc.cluster.local:8090"

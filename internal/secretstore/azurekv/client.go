@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -326,9 +327,9 @@ func (r tokenResp) parse(from string) (string, time.Duration, error) {
 // federated credential. The projected token is re-read at every exchange:
 // the kubelet refreshes it in place.
 func (c *client) fromFederatedToken(ctx context.Context) (string, time.Duration, error) {
-	b, err := os.ReadFile(c.federatedTokenFile)
+	b, err := cliutil.ReadSecretFile("WARDYN_AZURE_FEDERATED_TOKEN_FILE", c.federatedTokenFile)
 	if err != nil {
-		return "", 0, fmt.Errorf("read the federated token file: %w", err)
+		return "", 0, err
 	}
 	assertion := strings.TrimSpace(string(b))
 	if assertion == "" {

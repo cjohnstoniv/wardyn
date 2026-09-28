@@ -6,7 +6,7 @@
 #   wardyn run --agent claude-code --interactive --json \
 #     --policy-file examples/policies/remote-workspace.yaml   # -> prints the run, including its id
 #   wardyn run wait-ready <id> --json                         # waits past RUNNING for the clone to land
-#   wardyn ssh <id> --json                                    # {host, port, username, host_key_fingerprint, command}
+#   wardyn run ssh <id> --json                                # {host, port, username, host_key_fingerprint, command}
 #
 # Point the external tool at the printed target. See docs/SSH.md "Other tools
 # over SSH" for what each command prints and why `run wait-ready` is the step

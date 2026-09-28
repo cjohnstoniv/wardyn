@@ -50,7 +50,7 @@ wardyn secret set upstream-proxy-url          # paste: http://<host-gateway>:180
 # 3. Reference it from the operator-wide site config (or the Host proxy step in
 #    Getting Started).
 wardyn site-config get > corp-baseline.json   # edit upstream_proxy_secret_ref
-wardyn site-config apply corp-baseline.json
+wardyn site-config set corp-baseline.json
 ```
 
 Verify from inside a run: an approved request to an allowed host should return a real HTTP status

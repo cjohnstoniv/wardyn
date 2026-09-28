@@ -61,12 +61,9 @@ ok()  { echo "ok: $*"; }
 # X and step summary are its signal, not a "Still failing" comment on the
 # shared e2e-lane issue, which would mask a real e2e regression as queue
 # hygiene noise.
-# daemon-proxy-secret-kind is exempt TEMPORARILY (PR #1245 review F2): it has
-# never run, so watching it (and therefore release.yml's watched=, which
-# guard 13 below keeps identical) from day one would block a release on a
-# job that might fail deterministically. Drop this exemption and add it to
-# notify-new-lanes.needs + release.yml's watched= together, once it has gone
-# green on a real nightly run.
+# daemon-proxy-secret-kind (T-59, #719) went green on its first real nightly
+# run (workflow_dispatch, 2026-09-28, run 36377937351) and is now in
+# notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 # test-e2e-concurrent (#697, T-37): new tonight, never run — watching it from
 # day one would block a release on a job that might fail deterministically the
 # first time it actually meets a hosted runner's docker/compose. Add it back to
@@ -80,8 +77,11 @@ ok()  { echo "ok: $*"; }
 # or Docker execution was available to prove them here — see each script's
 # own header). Add all three back to notify-new-lanes' needs (and drop them
 # from here) once each has gone green on a real scheduled run.
+# provider-subscription-docker-pg (#677 T-17) went green on its first real
+# nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
+# notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check daemon-proxy-secret-kind test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"

@@ -192,7 +192,7 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // whether the secret UpstreamProxySecretRef/EgressRedirects/ScmHosts name is
 // actually present, not only on whether those fields are set. After the
 // documented reset+apply recovery (`wardyn site-config get > f` before a
-// reset, `wardyn site-config apply f` after) with the referenced secret never
+// reset, `wardyn site-config set f` after) with the referenced secret never
 // restored, "info" ("every run inherits it") would read as fully configured
 // while the credentialed path is dead. It must grade "warn" and name the
 // missing secret.

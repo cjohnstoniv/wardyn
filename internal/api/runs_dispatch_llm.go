@@ -259,7 +259,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		// EROFS trying to mkdir under a read-only ~/.claude. Point CLAUDE_CONFIG_DIR at
 		// a writable path that agent-run populates from the read-only mount (creds +
 		// ~/.claude.json). Set on the sandbox env so BOTH agent-run and an interactive
-		// `wardyn attach` shell inherit it.
+		// `wardyn run attach` shell inherit it.
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 	} else if managed {
 		// Managed subscription (compose, no host ~/.claude mount): same wire posture

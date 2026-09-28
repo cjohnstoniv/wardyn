@@ -213,7 +213,7 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // reaper), AND the run has no open request within its wait (RL-5, hold-aware
 // idle stop).
 // This closes the reaper's idleness TOCTOU: the idle scan reads updated_at in a
-// snapshot, but an active `wardyn attach` TouchRun (which bumps updated_at while
+// snapshot, but an active `wardyn run attach` TouchRun (which bumps updated_at while
 // leaving state=RUNNING) can land between snapshot and stop. Guarding only on
 // state=RUNNING would then stop the now-active run, defeating the keepalive.
 // Passing the snapshot's updated_at as notAfter makes a run touched after the

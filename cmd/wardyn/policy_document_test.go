@@ -29,8 +29,8 @@ func TestPolicyCommands_RejectAdditionalDocumentBeforeRequest(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "policy.yaml")
 	writeFile(t, file, "allowed_domains: [example.com]\n---\nfirst_use_approval: always_deny\n")
 	for _, args := range [][]string{
-		{"policy", "create", "-f", file, "--name", "test"},
-		{"policy", "update", uuid.NewString(), "-f", file, "--name", "test"},
+		{"policy", "set", "-f", file, "--name", "test"},
+		{"policy", "set", uuid.NewString(), "-f", file, "--name", "test"},
 		{"policy", "render", "-f", file},
 		{"run", "--agent", "claude-code", "--policy-file", file},
 	} {
