@@ -325,7 +325,15 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 	// in-place edit (e.g. the preflight dry-run's grant filter) leaked into every
 	// subsequent run. Cloning at this single seam fixes every caller at once.
 	if policyID == nil {
-		return ceiling.Spec.Clone(), nil, nil
+		spec := ceiling.Spec.Clone()
+		// A ceiling's azure_devops_capabilities is a bound, not a grant: handed
+		// to a member as their spec it would replace the row's default_profile
+		// with the widest list they may choose. Only a choice the member (or a
+		// selected row) made is honoured.
+		if !s.isOperator(ctx) {
+			spec.AzureDevOpsCapabilities = nil
+		}
+		return spec, nil, nil
 	}
 	p, err := s.cfg.Store.GetPolicy(ctx, *policyID)
 	if err != nil {

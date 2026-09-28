@@ -136,6 +136,10 @@ type adoEntraRun struct {
 	tokenMode        types.ADOTokenMode
 	credentialSource types.CredentialSource
 	caps             []adoscope.Capability
+	// capsFromPolicy records that caps came from the run policy's
+	// azure_devops_capabilities rather than the row's default_profile, so a
+	// refusal names the source the operator has to edit.
+	capsFromPolicy bool
 	// ceiling is the row's CapabilityCeiling at dispatch. It is not part of the
 	// snapshot — the resolver reads the LIVE ceiling — but a profile already
 	// outside it is refused here rather than authored and refused on first use.
@@ -154,6 +158,25 @@ func (a adoEntraRun) snapshot() adoEntraScopeSnapshot {
 		TokenMode:        string(a.tokenMode),
 		Capabilities:     slices.Clone(a.caps),
 	}
+}
+
+// withPolicyCapabilities puts the run policy's azure_devops_capabilities in
+// place of the row's default_profile. It only CHOOSES: authorADOEntraInjection
+// still refuses a choice outside the row's ceiling, and the resolver re-checks
+// the live ceiling on every request. An empty choice keeps the default.
+func (a adoEntraRun) withPolicyCapabilities(picked []adoscope.Capability) adoEntraRun {
+	if len(picked) > 0 {
+		a.caps, a.capsFromPolicy = slices.Clone(picked), true
+	}
+	return a
+}
+
+// capsSource names where the run's capabilities came from, for a refusal.
+func (a adoEntraRun) capsSource() string {
+	if a.capsFromPolicy {
+		return "run policy's azure_devops_capabilities"
+	}
+	return "provider row's default_profile"
 }
 
 // resolveADOEntraRun decides whether THIS run is on the per-person Azure DevOps
@@ -480,6 +503,7 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if !on {
 		return adoEntraLane{injections: injections}, true
 	}
+	ado = ado.withPolicyCapabilities(policy.AzureDevOpsCapabilities)
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {
 		return adoEntraLane{injections: injections}, false
@@ -520,13 +544,15 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	}
 	if _, err := adoscope.ScopesFor(ado.caps); err != nil {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_not_grantable",
-			"This run's Azure DevOps provider row grants a capability Wardyn will not mint a credential for: "+err.Error())
+			"This run's Azure DevOps capabilities (from the "+ado.capsSource()+") name a capability Wardyn will not mint a credential for: "+err.Error())
 	}
 	// Empty is NOT within anything: a run granted nothing has no business
 	// holding a credential.
 	if len(ado.caps) == 0 || !subsetOf(ado.caps, ado.ceiling) {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling",
-			"This run's Azure DevOps default profile names a capability outside the provider row's own ceiling")
+			fmt.Sprintf("This run was not launched: its Azure DevOps capabilities %v (from the %s) are not all inside "+
+				"the provider row's capability_ceiling %v. Nothing outside the ceiling is ever granted — narrow the "+
+				"capabilities, or ask an administrator to widen the ceiling.", ado.caps, ado.capsSource(), ado.ceiling))
 	}
 	if caCertPEM == "" || caKeyPEM == "" {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "no_run_certificate_authority",

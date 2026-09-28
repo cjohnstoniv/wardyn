@@ -65,6 +65,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A run policy can choose a run's Azure DevOps capabilities (#1363).** A new
+  `azure_devops_capabilities` field replaces the provider row's `default_profile` for the runs a
+  policy governs, so a saved policy works as a saved access profile (for example
+  `["read", "code_write", "pr"]` or `["read", "policy_admin"]`), and the console's policy editor
+  sets it as a grouped checklist. It chooses only within the row's `capability_ceiling`: a run naming a
+  capability outside it is refused at launch, and an entry the catalogue cannot grant is a `400`
+  with reason `ado_capability_unknown`. A member's choice is intersected with their governance
+  ceiling's own list; that list is a bound, never a grant. Absent keeps today's behaviour.
+  docs/AZURE-DEVOPS.md now says that opening a pull request needs `pr`, not `code_write`.
 - **The User view picks a user type (#912).** With more than one user type configured, the User
   view side of the console switch becomes a dropdown, preselecting the admin's last choice; the
   eyebrow it shows while looking through a type reopens the same picker without leaving the view.

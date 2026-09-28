@@ -219,7 +219,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			clampWarnings = append(clampWarnings, warns...)
 		}
 		if err := validatePolicySpec(spec); err != nil {
-			writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
+			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
 		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
