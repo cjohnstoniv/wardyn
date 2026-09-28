@@ -505,18 +505,18 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	}
 	ephemeralDirs, seededImageOwner, code, seedErr := s.seedRequestWorkspace(ctx, spec, req)
 	if seedErr != nil {
-		writeError(w, code, "workspace_id: "+seedErr.Error())
+		writeErrorReason(w, code, reasonWorkspaceSeedFailed, "workspace_id: "+seedErr.Error())
 		return nil, false
 	}
 	if s.denyUserSeededImage(w, r, seededImageOwner, req.Image) {
 		return nil, false
 	}
 	if msg := s.validateImageBuildRequest(*req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidImageBuildRequest, msg)
 		return nil, false
 	}
 	if code, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
-		writeError(w, code, "workspace: "+err.Error())
+		writeErrorReason(w, code, reasonWorkspaceSourcesInvalid, "workspace: "+err.Error())
 		return nil, false
 	}
 	// The caller-scoped twin of the onboarding gate above: onboarded is not the
@@ -524,7 +524,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	// policy naming a host path directly never passes through the workspace_id
 	// door that answers the second one.
 	if code, err := s.authorizeSpecWorkspaceSources(ctx, r, *spec); err != nil {
-		writeError(w, code, "workspace: "+err.Error())
+		writeErrorReason(w, code, reasonWorkspaceSourcesUnauthorized, "workspace: "+err.Error())
 		return nil, false
 	}
 	// Both provider gates sit at this chokepoint, over the RESOLVED spec's repos

@@ -339,14 +339,14 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		var cerr error
 		caps, cerr = s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
-			writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, "runner capabilities unavailable", cerr))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", cerr))
 			return "", false
 		}
 	}
 
 	enforced, err := enforcedConfinement(spec, reqCC, caps.ConfinementClasses)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return "", false
 	}
 
@@ -365,7 +365,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		// floor unchanged when nothing advertised meets it, so THIS check is what
 		// still 422s that case exactly as it did before the default rule existed.
 		if enforced != "" && !slices.Contains(caps.ConfinementClasses, enforced) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassUnsupported, fmt.Sprintf(
 				"runner %q cannot enforce confinement_class %s (available: %s)",
 				caps.Driver, enforced, classesOrNone(caps.ConfinementClasses)))
 			return "", false
@@ -377,7 +377,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	// spire provider can later accept them without an API change.
 	if checker, ok := s.cfg.Identity.(grantChecker); ok {
 		if err := checker.CheckGrants(spec.EligibleGrants); err != nil {
-			writeError(w, http.StatusUnprocessableEntity,
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunGrantsRequireSPIRE,
 				"policy requires the spire identity provider: "+err.Error())
 			return "", false
 		}

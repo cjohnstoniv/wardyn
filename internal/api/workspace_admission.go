@@ -140,7 +140,7 @@ func (s *Server) admitRepoSources(w http.ResponseWriter, r *http.Request, repos 
 	operator := s.isOperator(r.Context())
 	for _, repo := range repos {
 		if msg := admissionRefusal(sc, repo, operator); msg != "" {
-			writeError(w, admissionRefusalStatus(operator), msg)
+			writeErrorReason(w, admissionRefusalStatus(operator), reasonWorkspaceRepoNotAdmitted, msg)
 			return true
 		}
 	}
@@ -184,7 +184,7 @@ func (s *Server) writeAdmissionLaunchRefusal(w http.ResponseWriter, r *http.Requ
 	if !errors.Is(err, errRepoNotAdmitted) {
 		return false
 	}
-	writeError(w, admissionRefusalStatus(s.isOperator(r.Context())),
+	writeErrorReason(w, admissionRefusalStatus(s.isOperator(r.Context())), reasonWorkspaceRepoNotAdmitted,
 		strings.TrimPrefix(err.Error(), errRepoNotAdmitted.Error()+": "))
 	return true
 }

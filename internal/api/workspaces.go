@@ -456,11 +456,11 @@ func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.W
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceRequestInvalid, msg)
 		return
 	}
 	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSSHSourcesNotReady, msg)
 		return
 	}
 	// Onboarding is the first door a repository comes through, so BOTH provider
@@ -503,7 +503,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.
 	if msg := s.userSourcesAllowed(r, owner, req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -610,15 +610,15 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceRequestInvalid, msg)
 		return
 	}
 	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSSHSourcesNotReady, msg)
 		return
 	}
 	if msg := s.userSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
 		return
 	}
 	// Over the INCOMING sources, not the stored ones: an edit is how a member
@@ -907,7 +907,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	// already exists.
 	ws = s.repairStaleWorkspaceRuns(r.Context(), ws)
 	if ws.ActiveRunID != nil {
-		writeError(w, http.StatusConflict, fmt.Sprintf(workspaceDelete409ActiveRun, *ws.ActiveRunID))
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceDeleteActiveRun, fmt.Sprintf(workspaceDelete409ActiveRun, *ws.ActiveRunID))
 		return
 	}
 	staleImage := ws.ImageRef

@@ -157,12 +157,20 @@ if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
 ```
 
 **Coverage is being phased in lane by lane (#204, #656), not uniform yet.**
-Today the three credential-injection resolve arms behind `GET
+The three credential-injection resolve arms behind `GET
 /api/v1/internal/injection/{grantID}` — Azure DevOps, AWS SSO and Bedrock
-bearer — send a reason on every refusal; most other routes, including
-deciding an Azure DevOps approval, still send `error` alone, so
-`apiErr.Reason == ""` does not mean "no error", only "this route has not been
-converted yet". Every lane's reasons are drawn from the same closed set
+bearer — send a reason on every refusal, and #656 slice 1 has now converted
+`GET/POST /approvals` (list, decide, push-content review) and its
+`/paths` route, `POST/GET /runs` (create validation and the list filters),
+run kill, and the workspace create/update/admission/env-as-code/providers
+routes. Most OTHER routes still send `error` alone, so `apiErr.Reason == ""`
+does not mean "no error", only "this route has not been converted yet". Two
+refusals are DELIBERATELY still bare even on a converted route: an AWS
+Bedrock SSO renewal AWS never answered (an outage, not a class the console's
+sign-in door should open over), and a push-content approval's 404 for "someone
+else's approval" (which must stay byte-identical to a genuinely missing one, or
+the reason itself becomes an existence oracle). Every lane's reasons are drawn
+from the same closed set
 (`internal/api/reasons.go`), so a reason two lanes share (the dispatch-time-
 snapshot family below, or the hold-chain terminal/exhausted pair) always
 means the same thing regardless of which lane sent it:
@@ -185,6 +193,23 @@ means the same thing regardless of which lane sent it:
 | `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
 | `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
+| `invalid_approval_state` / `invalid_run_id` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api`. |
+| `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals`, `GET /runs` and `GET /runs/policy-history`. |
+| `approval_not_found` | The named approval does not exist, or the caller may not see it (the existence-oracle-safe 404 `notFoundIf` also sends, bare, for a genuinely missing one — see the push-content exception above). |
+| `approval_run_ended` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, or the body did not decode. |
+| `invalid_decision_scope` / `decision_scope_until_needs_expiry` / `decision_expiry_in_past` / `decision_expiry_too_far` / `decision_expiry_without_until` | The `decision_scope`/`decision_expires_at` shape rules (0-3) on a decide call. |
+| `decision_scope_always_unavailable` / `decision_always_no_workspace_link` / `decision_always_invalid_host` / `decision_always_workspace_gone` / `decision_always_host_builtin` / `decision_always_host_denied` | The operator-only `decision_scope=always` persistence chain (rules 5-7): no store to persist to, the run names no workspace, the host does not parse, the workspace is gone, or the host is built-in-routed or on the reject list. |
+| `egress_second_human_local_mode` | `WARDYN_EGRESS_SECOND_HUMAN` cannot be enforced in local mode (nobody is authenticated to prove a second human decided). |
+| `invalid_push_scope` / `invalid_push_path_list` / `run_store_unavailable` / `push_content_unattended` / `push_path_list_store_unavailable` / `push_path_list_count_unavailable` / `push_path_list_cap_reached` / `push_not_held` / `push_path_lists_require_postgres` | Push-content review (`approvals_push.go`, `GET /approvals/{id}/paths`): a malformed raise, an unattended run's push refused rather than held, a per-run path-list cap, or a route that needs a capability this backend lacks. |
+| `workspace_seed_failed` / `invalid_image_build_request` / `workspace_sources_invalid` / `workspace_sources_unauthorized` | `POST /runs`' `workspace_id` resolution: the workspace could not be seeded into the run spec, its image-build fields conflict, its sources fail structural validation, or the caller may not launch against one of them. |
+| `runner_capabilities_unavailable` / `confinement_class_conflict` / `confinement_class_unsupported` / `run_grants_require_spire` | `POST /runs`' confinement-class resolution and the SPIRE-only-grants check (invariant 5). |
+| `agent_required` / `agent_not_enabled` / `run_task_reserved` / `confinement_class_unknown` / `task_mode_unknown` / `interactive_start_unknown` / `tool_approvals_unknown` / `tool_approvals_hold_unsupported_agent` / `tool_approvals_hold_interactive_conflict` / `integration_not_ai_provider` / `run_field_too_long` / `run_field_control_char` | `POST /runs`' request-shape validation (`decodeAndValidateCreateRun`): one reason per closed-enum field, plus the agent/integration/text-field checks. |
+| `run_kill_already_terminal` / `run_kill_state_changed` | `POST /runs/{id}/kill`: the run was already terminal, or moved to another state between the read and the write. |
+| `workspace_repo_not_admitted` | The repository is not on this deployment's admitted list (`workspace_admission.go`), at create/update and at launch. |
+| `workspace_envcode_no_local_dir` / `workspace_envcode_no_profile` | `GET /workspaces/{id}/env-as-code`: the workspace has no `local_dir` source, or no scanned profile, to emit from. |
+| `workspace_providers_invalid` / `workspace_providers_stale` | `PUT` on a workspace's provider block: the submitted block fails validation, or `If-Match` is stale. |
+| `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
+| `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
 
 ## Renamed in 0.8
 
