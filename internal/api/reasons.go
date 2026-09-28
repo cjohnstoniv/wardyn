@@ -991,6 +991,25 @@ const (
 	reasonADOAccessAboveCeiling   = "ado_access_above_ceiling"
 )
 
+// reasonReservedPrincipal is the SAME value as authFailedReservedPrincipal
+// (oidc.DenialReservedPrincipal) — a literal here so the docs guard, which
+// only reads this file, can see it (#656 slice 3).
+const reasonReservedPrincipal = "reserved_principal"
+
+// /internal/scan-results/{runID} (scanresult.go).
+const (
+	reasonScanFactsInvalid     = "scan_facts_invalid"
+	reasonScanUploadSuperseded = "scan_upload_superseded"
+)
+
+// POST /policies/grade (policy_grade.go) — a dry-run grading preview,
+// distinct from the real policy CRUD door (reasonPolicyRequestInvalid) even
+// though both run validatePolicySpec.
+const reasonPolicyGradeSpecInvalid = "policy_grade_spec_invalid"
+
+// The AI Run Composer's profile synthesis (profile.go).
+const reasonSynthesizedProfileInvalid = "synthesized_profile_invalid"
+
 // The user-drive resolver's own closed enum (user_drives_resolve.go) members
 // that reach writeDriveError's wire body. driveUnavailableGroups,
 // driveUnavailableUnknown and driveUnavailableGovernance stay declared beside

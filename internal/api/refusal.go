@@ -39,7 +39,10 @@ var strictRefusals bool
 func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision) bool {
 	ref, ok := authz.Lookup(d.Reason)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "internal error: unregistered refusal reason")
+		// The SAME generic fallback writeServerError uses (#656 slice 3): this
+		// is a programming error (a door used an unregistered reason), never a
+		// caller-facing one, so the wire says only "server-side, not yours".
+		writeErrorReason(w, http.StatusInternalServerError, reasonInternalError, "internal error: unregistered refusal reason")
 		s.recordRefusal(r.Context(), r, d)
 		return true
 	}

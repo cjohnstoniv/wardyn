@@ -75,7 +75,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 	if err := json.Unmarshal(raw, &facts); err != nil {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "parse: " + err.Error()})))
-		writeError(w, http.StatusBadRequest, "invalid scan facts: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonScanFactsInvalid, "invalid scan facts: "+err.Error())
 		return
 	}
 	profile := workspacescan.DeriveProfile(facts)
@@ -88,7 +88,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 	if errors.Is(err, store.ErrNotFound) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"source.scan", sourceID.String(), "failure", mustJSON(map[string]any{"detail": "superseded scan upload (fence mismatch)"})))
-		writeError(w, http.StatusConflict, "scan upload superseded: another scan owns this source")
+		writeErrorReason(w, http.StatusConflict, reasonScanUploadSuperseded, "scan upload superseded: another scan owns this source")
 		return
 	}
 	if err != nil {
