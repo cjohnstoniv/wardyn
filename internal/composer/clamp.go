@@ -196,9 +196,9 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 // clampADOCapabilities bounds azure_devops_capabilities. The field can WIDEN a run past its Azure
 // DevOps row's default_profile (up to the row's ceiling, with no approval), so a proposal may only
 // choose within what the operator's policy itself names: a silent ceiling drops the proposal's
-// choice (the run keeps the row's default_profile), an unset proposal inherits the ceiling's, and a
-// set one is intersected with it. An empty intersection inherits the ceiling's rather than going
-// empty, because empty reads as the row's default_profile, which the ceiling may not cover.
+// choice, and a set one is intersected with the ceiling's list. The ceiling's list is a BOUND, never
+// a grant: an unset proposal stays unset and an empty intersection goes unset, and either way the
+// run keeps the row's default_profile — never wider than the member's own choice or that default.
 func clampADOCapabilities(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
 	if len(ceiling.AzureDevOpsCapabilities) == 0 {
 		if len(out.AzureDevOpsCapabilities) > 0 {
@@ -219,11 +219,8 @@ func clampADOCapabilities(out *types.RunPolicySpec, ceiling types.RunPolicySpec,
 	if len(dropped) > 0 {
 		warns = append(warns, fmt.Sprintf("dropped %d Azure DevOps capability(ies) not in operator policy: %s", len(dropped), strings.Join(dropped, ",")))
 	}
-	if len(kept) == 0 {
-		if len(out.AzureDevOpsCapabilities) == 0 {
-			warns = append(warns, "azure_devops_capabilities inherited from the operator's policy")
-		}
-		kept = slices.Clone(ceiling.AzureDevOpsCapabilities)
+	if len(kept) == 0 && len(out.AzureDevOpsCapabilities) > 0 {
+		warns = append(warns, "azure_devops_capabilities dropped: nothing chosen is in the operator policy's list, so the run keeps the provider's default")
 	}
 	out.AzureDevOpsCapabilities = kept
 	return warns

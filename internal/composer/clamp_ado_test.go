@@ -32,8 +32,15 @@ func TestClamp_ADOCapabilities(t *testing.T) {
 		t.Error("the clamped spec aliases an argument's slice")
 	}
 
-	if got, _ := Clamp(types.RunPolicySpec{}, ceiling, 0); !slices.Equal(got.AzureDevOpsCapabilities, ceiling.AzureDevOpsCapabilities) {
-		t.Errorf("unset proposal = %v, want the ceiling's", got.AzureDevOpsCapabilities)
+	// The ceiling's list is a bound, never a grant: nothing chosen, or nothing
+	// chosen inside it, leaves the field unset (the row's default_profile).
+	got, warns = Clamp(types.RunPolicySpec{}, ceiling, 0)
+	if got.AzureDevOpsCapabilities != nil || hasWarn(warns, "azure_devops") {
+		t.Errorf("unset proposal = %v (warns %v), want unset and no warning", got.AzureDevOpsCapabilities, warns)
+	}
+	got, warns = Clamp(types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{pa}}, ceiling, 0)
+	if got.AzureDevOpsCapabilities != nil || !hasWarn(warns, "azure_devops_capabilities dropped") {
+		t.Errorf("disjoint proposal = %v (warns %v), want unset with a warning", got.AzureDevOpsCapabilities, warns)
 	}
 	silent := operatorCeiling(t)
 	got, warns = Clamp(proposed, silent, 0)
