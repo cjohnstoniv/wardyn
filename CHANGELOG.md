@@ -35,8 +35,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exposes none of that surface. A local install (loopback `http://` control plane) has no internal
   listener and is unchanged. Every shipped caller already dials the internal listener (compose,
   Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
-  still dials the console and now gets `404` on every call: restart such runs
+  still dials the console and now gets `404` on every call. On Docker, restart such runs
   (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
+  On Kubernetes the restart refuses them (`revive_unsupported`, #1342): stop them and start a new
+  run instead.
 
 ### Added
 
@@ -266,6 +268,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
+  substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
+  substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
+  `409` and reason `revive_unsupported`, and each such run's result in
+  `POST /api/v1/admin/runs/restart` now carries the same `reason` beside its `error`
+  (`runner.ErrReviveUnsupported`'s text, unchanged). The upgrade notes for #1263 and #606, the
+  proxy-facing TLS section of OPERATIONS.md and the run-lifetime page promised that a run
+  dispatched before 0.7.12 could be restarted; on Kubernetes they now say to stop it and start a
+  new run.
 - **Docker names the cause when the proxy sidecar exits at config load (#1051).** A proxy that
   refused its rendered config at start used to surface as "proxy has no IP" when the run was
   created. The Docker driver now watches a new proxy until it has stayed up for a second and fails
@@ -442,7 +453,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exactly the standing runs "Restart with current limits" exists for. The config's control-plane
   URL and CA are now set to the deployment's current pair before it is loaded; every other field
   is loaded as rendered, so an unknown field, another run's config or an invalid current hop is
-  still refused before anything is minted or replaced.
+  still refused before anything is minted or replaced. This is Docker only: on Kubernetes revive
+  and the admin restart are refused for every run (`revive_unsupported`, #1342).
 - **An ended run can be extended and revived while its files are kept (#1061).** A run whose
   end passed is stopped and kept for `WARDYN_ENDED_RUN_GRACE`, and the design promised Extend +
   Revive during that grace, but extending it answered 409 and revive refused it. Its owner (or a
@@ -2203,7 +2215,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   applies the proxy's rule, refusing to start on `http://` to a non-loopback host or on `https://`
   without a readable CA file. The chart no longer grants the runs namespace wardynd's `http` port:
   since 0.7.12 proxies use the internal port. **Upgrading:** stop any run dispatched before 0.7.12
-  before you upgrade, because it has no route back afterwards. If you run the ingest outside
+  before you upgrade, because it has no route back afterwards. The admin restart cannot rescue one
+  on the chart (`revive_unsupported`, #1342): a run missed here is stopped and a new run started. If you run the ingest outside
   compose, set `WARDYN_CONTROL_PLANE_URL` to the internal listener and point
   `WARDYN_CONTROL_PLANE_CA_FILE` at the published file. THREAT-MODEL B6 no longer lists a plaintext
   residual for current-version callers.

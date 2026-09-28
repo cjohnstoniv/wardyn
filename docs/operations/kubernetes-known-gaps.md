@@ -32,6 +32,13 @@ driver, not a guess:
   resolves hostnames, matching the Compose substrate's proxy-only egress posture —
   parity, not a new gap, but the *mechanism* (a present-but-unreachable loopback
   resolver vs. Compose's no-resolver-at-all) is k8s-specific.
+- ⛔ **No revive or restart with current limits.** The substrate implements no
+  `runner.ProxyReviver`: the agent pod pins the proxy pod's IP, so a new proxy
+  pod could not be reached. `POST /runs/{id}/revive` and each run in
+  `POST /admin/runs/restart` are refused with 409, reason `revive_unsupported`
+  (`runner.ErrReviveUnsupported`), and nothing changes. A run whose proxy is out
+  of date, including one dispatched before 0.7.12, is stopped and a new run
+  started instead ([run lifetime](run-lifetime.md)).
 - 🟡 **No per-pod PIDs limit.** Kubernetes has no per-container "pids" resource
   the way Docker's `--pids-limit` does — a run's `ResourceLimits.PidsLimit` is
   accepted but not enforced, and wardynd logs a warning naming the run id each

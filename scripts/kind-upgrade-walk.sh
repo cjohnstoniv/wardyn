@@ -86,18 +86,20 @@
 # CHANGELOG.md [Unreleased] "Once the control-plane hop is TLS, the console
 # listener refuses /api/v1/internal/*" and docs/OPERATIONS.md's proxy-facing
 # TLS section: such a proxy "gets 404 on every call after an upgrade (on the
-# chart it has no route back at all ...)"; the operator restarts such runs or
-# stops them ("stop any run dispatched before 0.7.12 before you upgrade",
-# CHANGELOG.md [Unreleased], the #606 entry). Nothing documents the upgrade
+# chart it has no route back at all ...)"; on Kubernetes the operator stops
+# such runs and starts new ones, because the restart refuses them ("stop any
+# run dispatched before 0.7.12 before you upgrade", CHANGELOG.md [Unreleased],
+# the #606 entry; #1342). Nothing documents the upgrade
 # itself ending the run, and its token
 # only lapses an hour on (runTokenLapseAfter). So the walk asserts: the run
 # still reads RUNNING on the SAME two pods (neither ended, lost nor
 # re-dispatched by the upgrade), GET /admin/runs/proxy-window lists it outside
 # the supported window (proxy_release '' — started before migration 0084),
-# and the operator's stop ends it cleanly: KILLED, both pods gone. The bulk
-# restart's answer is recorded as evidence only: on Kubernetes the substrate
-# implements no runner.ProxyReviver, so it refuses rather than re-points the
-# proxy.
+# the documented refusal holds: on Kubernetes the substrate implements no
+# runner.ProxyReviver, so the single-run revive answers 409 and the bulk
+# restart's result for the run is not ok, both with reason revive_unsupported
+# and runner.ErrReviveUnsupported's text, and neither touches the pods; and
+# the operator's stop ends it cleanly: KILLED, both pods gone.
 #
 # Usage: scripts/kind-upgrade-walk.sh   (needs docker, kind, kubectl, helm, jq, curl)
 # CLUSTER overrides the cluster name (default kind-upgrade-walk); refuses to
@@ -387,8 +389,22 @@ code=$(api GET /api/v1/admin/runs/proxy-window)
 [[ "${code}" == "200" ]] && jq -e --arg id "${CARRIED_RUN_ID}" 'any(.outside[]; .run_id == $id and .proxy_release == "")' "${WORK}/resp.json" >/dev/null \
   && pass "GET /admin/runs/proxy-window lists it outside the supported window (proxy_release '')" \
   || fail "expected GET /admin/runs/proxy-window to list ${CARRIED_RUN_ID} outside the window; answered ${code}: $(cat "${WORK}/resp.json")"
+# The documented refusal (docs/operations/kubernetes-known-gaps.md, #1342):
+# status, reason and runner.ErrReviveUnsupported's text, on both doors.
+revive_refusal="runner: this substrate cannot replace a sandbox's proxy"
 code=$(api POST /api/v1/admin/runs/restart "{\"run_ids\":[\"${CARRIED_RUN_ID}\"]}")
-echo "evidence: POST /admin/runs/restart answered ${code}: $(cat "${WORK}/resp.json")"
+[[ "${code}" == "200" ]] && jq -e --arg id "${CARRIED_RUN_ID}" --arg e "${revive_refusal}" \
+  '.results | length == 1 and (.[0] | .run_id == $id and .ok == false and .reason == "revive_unsupported" and .error == $e and (.lost_again // false) == false)' \
+  "${WORK}/resp.json" >/dev/null \
+  && pass "POST /admin/runs/restart refuses it: ok=false, reason revive_unsupported" \
+  || fail "expected POST /admin/runs/restart to refuse ${CARRIED_RUN_ID} with reason revive_unsupported; answered ${code}: $(cat "${WORK}/resp.json")"
+code=$(api POST "/api/v1/runs/${CARRIED_RUN_ID}/revive")
+[[ "${code}" == "409" ]] && jq -e --arg e "${revive_refusal}" '.reason == "revive_unsupported" and .error == $e' "${WORK}/resp.json" >/dev/null \
+  && pass "POST /runs/{id}/revive refuses it: 409, reason revive_unsupported" \
+  || fail "expected POST /runs/${CARRIED_RUN_ID}/revive to answer 409 revive_unsupported; answered ${code}: $(cat "${WORK}/resp.json")"
+[[ "$(pod_uid "${AGENT_POD}")" == "${AGENT_UID_BEFORE}" && "$(pod_uid "${PROXY_POD}")" == "${PROXY_UID_BEFORE}" ]] \
+  && pass "the refusals changed nothing: the same v${FROM_VERSION} pods are still there" \
+  || fail "the refused restart changed the carried run's pods: agent=$(pod_uid "${AGENT_POD}") proxy=$(pod_uid "${PROXY_POD}")"
 kubectl -n wardyn-runs logs "${PROXY_POD}" --all-containers --tail=5 2>&1 | sed 's/^/evidence: carried proxy log: /' || true
 code=$(api POST "/api/v1/runs/${CARRIED_RUN_ID}/kill")
 [[ "${code}" == "200" || "${code}" == "202" ]] || fail "POST /runs/${CARRIED_RUN_ID}/kill answered ${code}: $(cat "${WORK}/resp.json")"
