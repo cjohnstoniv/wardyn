@@ -122,6 +122,7 @@ it("shows the Added/Last used meta line only for a row that holds a credential",
   ]);
   renderCard(s);
   const card = await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
   expect(within(card).getByText(/^Added /)).toBeInTheDocument();
   // The unconnected row (nothing ever stored) gets no meta line at all —
   // its own "Your key goes to …" line is the only second line it renders.
