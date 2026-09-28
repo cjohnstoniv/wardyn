@@ -407,7 +407,7 @@ func TestGovernanceApply_EmptyInstallReproducesState(t *testing.T) {
 }
 
 // TestGovernanceApply_RejectsUnknownField pins the same strict-decode
-// contract drive apply and site-config apply both take: apply upserts exactly
+// contract drive apply and site-config set both take: each upserts exactly
 // what the file states, so a typo'd key must be a parse error, not a silently
 // dropped field.
 func TestGovernanceApply_RejectsUnknownField(t *testing.T) {

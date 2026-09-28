@@ -352,7 +352,7 @@ go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "build wardyn CLI failed"
 # keystrokes; it only occupies the writer slot until killed below.
 mkfifo "${TMPDIR}/web_stdin"
 exec 5<>"${TMPDIR}/web_stdin"
-WARDYN_URL="${BASE}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMPDIR}/wardyn" attach "${RUN_ID}" \
+WARDYN_URL="${BASE}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMPDIR}/wardyn" run attach "${RUN_ID}" \
   <"${TMPDIR}/web_stdin" >"${TMPDIR}/web_attach.log" 2>&1 &
 WEB_PID=$!
 

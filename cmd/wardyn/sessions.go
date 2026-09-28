@@ -4,9 +4,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // sessionsCmd is D16's admin surface for "revoke a human now" — see
@@ -57,6 +66,94 @@ func sessionsCmd(client clientFn) *cobra.Command {
 	revoke.Flags().StringVar(&sub, "sub", "", "revoke this principal's active sessions (the OIDC sub/email)")
 	revoke.Flags().BoolVar(&all, "all", false, "revoke every active session, for every principal")
 
-	cmd.AddCommand(revoke)
+	cmd.AddCommand(revoke, sessionsListCmd(client))
 	return subcommandGroup(cmd)
+}
+
+// sessionsListCmd lists every API token in the deployment — the nearest
+// enumerable stand-in for "active sessions" that exists: an OIDC session
+// cookie is a stateless signed value with no server-side row (see this file's
+// own doc comment), so there is nothing to list there, but `revoke`'s own
+// --all already treats a token as "a human's session in another form" and
+// GET /api/v1/tokens is the one place that population is actually listable.
+//
+// Raw HTTP, not the SDK: pkg/client's own package doc (client.go) lists
+// /api/v1/tokens among the admin-tier families it deliberately does not
+// wrap. attach.go's mintAttachTicket follows the same pattern for its own
+// deliberately-unwrapped family.
+func sessionsListCmd(client clientFn) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List every API token in the deployment (the nearest enumerable analog to a session)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			toks, err := listAllAPITokens(cmd.Context(), client())
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				if toks == nil {
+					toks = []types.APIToken{}
+				}
+				return emitJSON(cmd.OutOrStdout(), toks)
+			}
+			tw := newTab(cmd.OutOrStdout())
+			fmt.Fprintln(tw, "PRINCIPAL\tROLE\tNAME\tCREATED\tLAST_USED\tSTATE")
+			for _, t := range toks {
+				state := "active"
+				if t.RevokedAt != nil {
+					state = "revoked"
+				}
+				lastUsed := "-"
+				if t.LastUsedAt != nil {
+					lastUsed = t.LastUsedAt.Format(time.RFC3339)
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					t.Principal, t.Role, t.Name, t.CreatedAt.Format(time.RFC3339), lastUsed, state)
+			}
+			return tw.Flush()
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	return cmd
+}
+
+// listAllAPITokens fetches GET /api/v1/tokens directly — see sessionsListCmd's
+// doc comment for why this bypasses the SDK. Mirrors mintAttachTicket's own
+// direct-request shape (attach.go), but a non-2xx here is always decisive
+// (this route exists on every deployment new enough to have `sessions`), so
+// it is always returned as an *sdk.APIError rather than treated as
+// inconclusive.
+func listAllAPITokens(ctx context.Context, c *sdk.Client) ([]types.APIToken, error) {
+	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/tokens"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	req.Header.Set("Accept", "application/json")
+	hc := c.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
+	}
+	var toks []types.APIToken
+	if err := json.Unmarshal(body, &toks); err != nil {
+		return nil, fmt.Errorf("decode /api/v1/tokens response: %w", err)
+	}
+	return toks, nil
 }

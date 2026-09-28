@@ -33,7 +33,7 @@ var (
 	getSizeFn         = term.GetSize
 )
 
-// attachCmd returns the cobra command for `wardyn attach <run-id>`.
+// attachCmd returns the cobra command for `wardyn run attach <run-id>`.
 //
 // It connects to the interactive attach WebSocket endpoint
 // (GET /api/v1/runs/{id}/attach) using the admin bearer token, puts the local

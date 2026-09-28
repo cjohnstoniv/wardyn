@@ -210,7 +210,7 @@ intended, not a failure.
 
 ## SSH keys
 
-`wardyn ssh-key ensure` registers your key; `wardyn ssh <run-id>` attaches to
+`wardyn ssh-key ensure` registers your key; `wardyn run ssh <run-id>` attaches to
 a run you can reach. The full surface — registering, connecting, sftp, port
 forwarding, VS Code Remote-SSH, scripted access — is
 [SSH.md](SSH.md).

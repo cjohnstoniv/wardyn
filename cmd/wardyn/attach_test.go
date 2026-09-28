@@ -622,7 +622,7 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 	}
 	for _, id := range hostile {
 		t.Run(id, func(t *testing.T) {
-			err := execCmd(t, "attach", "--", id)
+			err := execCmd(t, "run", "attach", "--", id)
 			if err == nil {
 				t.Fatalf("%q was accepted", id)
 			}

@@ -1272,6 +1272,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
+- **`wardyn sessions list` (#206).** `sessions revoke` had no companion read: an operator deciding
+  whether to cut a human's access had no CLI way to see what is actually live. An OIDC session
+  cookie itself is a stateless signed value with no server-side row (see `sessions revoke`'s own
+  doc comment), so there is nothing to enumerate there — but `revoke --all`'s own text already
+  treats a `wdn_` API token as "a human's session in another form", and `GET /api/v1/tokens` is
+  the one place that population is actually listable. `list` prints principal/role/name/created/
+  last-used/state (`--json` for the raw array).
 
 - **Settings → Model providers lists the org's model providers (#536).** In the Admin view,
   `/admin/settings` shows one row per provider: its name, its kind, what each person provides,
@@ -3206,7 +3213,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   its default JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
   script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
-- **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
+- **The CLI's noun-verb tree lands: `attach`/`ssh` move under `run`, and `secret`/`policy`/
+  `site-config` share one upsert verb (#206), clean break, no alias period.** Wardyn has no users
+  yet (owner ruling, #205/#203/#206: "no alias commands"), so these land directly.
+  **Renamed in 0.8:** `wardyn attach <run-id>` → `wardyn run attach <run-id>`; `wardyn ssh <run-id>`
+  → `wardyn run ssh <run-id>` (`--print`/`--config`/`--json` unchanged). `wardyn policy create -f`
+  and `wardyn policy update <id> -f` collapse into one upsert verb, `wardyn policy set [id] -f`:
+  no positional id creates (the old `create`'s POST), a `<policy-id>` replaces it (the old
+  `update`'s PUT) — the same dispatch `git` uses for a name that may or may not already exist.
+  `wardyn site-config apply <file>` → `wardyn site-config set <file>` (`secret set` already used
+  this verb, so all three upsert doors now read alike). A script or alias keyed on any of the old
+  spellings fails at the CLI's own "unknown command" refusal, not a server error — there is no
+  dual-emission window to catch it during. Wardyn has no users yet
   (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
   a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to
   catch it during. Rows written before the upgrade keep the name they were written with, so a query

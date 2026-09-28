@@ -5,7 +5,7 @@
 #   wardyn run --agent claude-code --image ubuntu:24.04 --task-mode exec \
 #     --task 'echo hello from a governed sandbox' --policy-file examples/policies/sandbox.yaml --wait
 #
-# YAML is accepted anywhere a JSON RunPolicySpec is (--policy-file, policy create -f).
+# YAML is accepted anywhere a JSON RunPolicySpec is (--policy-file, policy set -f).
 # `wardyn policy render -f examples/policies/sandbox.yaml` prints the canonical JSON.
 
 # Egress allowlist. Empty = the sandbox can reach NOTHING (default-deny at the

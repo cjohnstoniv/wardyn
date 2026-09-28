@@ -5,7 +5,7 @@ surface. This is the field list; [`examples/policies/`](../examples/policies/) i
 the worked set, and `wardyn policy render -f <file>` converts YAML→JSON and
 rejects a misspelled field before you launch.
 
-The spec is the same object everywhere: `--policy-file`, `policy create/update -f`,
+The spec is the same object everywhere: `--policy-file`, `policy set -f`,
 an inline policy on a create-run request, and `WARDYN_DEFAULT_POLICY`. Unknown
 fields are refused (`DisallowUnknownFields`), so JSON carries no comments — use
 YAML if you want them.

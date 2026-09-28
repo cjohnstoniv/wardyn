@@ -251,10 +251,10 @@ log "wardynd healthy"
 # site-config.json is a full-document REPLACE, so re-applying the same file on
 # every tick is a safe no-op, not accumulation.
 if [ -f "${SITE_CONFIG}" ]; then
-  compose exec -T wardynd /usr/local/bin/wardyn site-config apply "${SITE_CONFIG}" \
-    || warn "wardyn-desktop.sh: site-config apply failed (non-fatal — the stack is up; see docker compose -p wardyn-desktop logs wardynd)"
+  compose exec -T wardynd /usr/local/bin/wardyn site-config set "${SITE_CONFIG}" \
+    || warn "wardyn-desktop.sh: site-config set failed (non-fatal — the stack is up; see docker compose -p wardyn-desktop logs wardynd)"
 else
-  log "No ${SITE_CONFIG} delivered yet — skipping site-config apply"
+  log "No ${SITE_CONFIG} delivered yet — skipping site-config set"
 fi
 
 log "wardyn-desktop: up (${BASE_URL})"

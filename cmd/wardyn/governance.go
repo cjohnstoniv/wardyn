@@ -94,7 +94,7 @@ func governanceApplyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read governance document: %w", err)
 			}
-			// Strict decode, the same shape drive apply and site-config apply
+			// Strict decode, the same shape drive apply and site-config set
 			// both take: a key this file mistypes must surface as a parse
 			// error, not silently vanish from what ApplyGovernance then sends.
 			var doc sdk.GovernanceDocument

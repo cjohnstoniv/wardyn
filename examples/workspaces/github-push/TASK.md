@@ -94,7 +94,7 @@ demo.json):
    the only route to those names. (Those are exact-name denies — see
    docs/POLICIES.md for what that does and doesn't cover.)
 8. Try adding an `ssh_key` grant for `github.com` to this same policy
-   (`eligible_grants`) and write it back with `wardyn policy update` (or
+   (`eligible_grants`) and write it back with `wardyn policy set` (or
    `create`, for a copy). It is refused with **400**: a brokered forge is
    single-lane, so a policy may not declare both a `github_token` grant and an
    `ssh_key` grant for `github.com` at once (`validateGrantLaneExclusivity`).
