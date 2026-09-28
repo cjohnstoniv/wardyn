@@ -131,14 +131,14 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         }),
       ],
       truncated: false,
-      // Round 2: mirrors the mock's own worked example (13 shown rows + 4
+      // Mirrors the mock's own worked example (13 shown rows + 4
       // older + 1 killed = "Your runs · 18") — here 3 shown + 4 + 1 = 8.
       hiddenOlder: 4,
       hiddenKilled: 1,
     });
     renderScreen();
     await screen.findByText("Needs a look");
-    // Round 2: "Your runs · N" counts every run the caller owns, before
+    // "Your runs · N" counts every run the caller owns, before
     // filters/ageing — the shown rows plus the two hidden counts, not just
     // runsList.length (home-runs-1197-packet.html:672, design §2.1).
     expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
@@ -149,7 +149,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByText("Completed", { exact: true })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Needs you/ })).toBeInTheDocument();
 
-    // Review F6: the design's fixed section order (H-1/H-6) — Needs you,
+    // the design's fixed section order (H-1/H-6) — Needs you,
     // then Running, then Ended today — as a DOM-order assertion, not just
     // "each one exists somewhere". The reviewer's swap mutation
     // (runs.tsx: Needs/Running lines) survived every existing test because
@@ -163,7 +163,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(runningIdx).toBeLessThan(endedIdx);
   });
 
-  it("review round 2: a lease-ended row shows the square glyph and reads 'ended … · ran …', not 'started …'", async () => {
+  it("a lease-ended row shows the square glyph and reads 'ended … · ran …', not 'started …'", async () => {
     const startedAt = new Date(Date.now() - 3600_000).toISOString();
     const lostAt = new Date(Date.now() - 1800_000).toISOString();
     listRunsFilteredMock.mockResolvedValue({
@@ -184,7 +184,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     renderScreen();
     await screen.findByText("Lease ended mid-flight");
     expect(screen.getByText("Ended at its end time")).toBeInTheDocument();
-    // Round 2: `ended_at` is absent on a lease-ended run — lost_at stands in
+    // `ended_at` is absent on a lease-ended run — lost_at stands in
     // for it, or the meta line falls back to "started …" like a live run.
     expect(screen.getByTitle(/^acme\/widgets · ended .* · ran /)).toBeInTheDocument();
     expect(screen.queryByTitle(/started/)).toBeNull();
@@ -236,7 +236,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("Fix flaky auth tests");
   });
 
-  it("F1: a refetch (search) keeps the filter bar mounted and its input focused — only the rows region shows a skeleton", async () => {
+  it("a refetch (search) keeps the filter bar mounted and its input focused — only the rows region shows a skeleton", async () => {
     listRunsFilteredMock.mockResolvedValueOnce({
       runs: [run()],
       truncated: false,
@@ -269,7 +269,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByLabelText("Search runs")).toBe(search);
   });
 
-  it("F1: a slower, now-stale response cannot overwrite a newer one", async () => {
+  it("a slower, now-stale response cannot overwrite a newer one", async () => {
     listRunsFilteredMock.mockResolvedValueOnce({
       runs: [run()],
       truncated: false,
@@ -310,7 +310,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByText("ab result")).toBeInTheDocument();
   });
 
-  it("F2: workspace-detail's 'Start a run' (openNewRun route state) redirects to /runs/new — the REAL RunsScreen, not a stub", async () => {
+  it("workspace-detail's 'Start a run' (openNewRun route state) redirects to /runs/new — the REAL RunsScreen, not a stub", async () => {
     function LocationProbe() {
       return <div data-testid="location">{useLocation().pathname}</div>;
     }

@@ -3,9 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Round 2 review residual on F4: nothing submitted the composer, so
-// `source: "composer"` (runs-composer.tsx:45) could be deleted and every
-// existing suite stayed green (FINAL-PR-1253.md round 2, F4). This pins the
+// This pins the
 // composer's own launch, end to end: it must reach New run's route state
 // with BOTH the typed task and `source: "composer"` — the flag New run
 // reads to skip the clone banner's false copy.
@@ -25,7 +23,7 @@ function LocationProbe() {
   return <div data-testid="prefill">{JSON.stringify(state?.prefill ?? null)}</div>;
 }
 
-describe("RunsComposer — 'Start a run' (review F4)", () => {
+describe("RunsComposer — 'Start a run'", () => {
   it("sends source: 'composer' alongside the typed task, so New run skips the clone banner", async () => {
     render(
       <MemoryRouter initialEntries={["/runs"]}>

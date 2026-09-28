@@ -8,7 +8,7 @@
 // channel the run header's "Start a run like this one" already rides
 // (RunPrefill via route state — wizard-types.ts) rather than a new one: task
 // and workspace arrive exactly as a clone's would, with no policy/state
-// overlay beyond them. Review F4: this is not a clone (no source run), so
+// overlay beyond them. This is not a clone (no source run), so
 // the prefill carries `source: "composer"`, which New run reads to skip its
 // clone banner (the only change this needed there).
 import * as React from "react";
@@ -41,7 +41,7 @@ export function RunsComposer() {
         workspaces: workspaceId === NO_WORKSPACE ? [] : [{ workspaceId }],
       },
       inlinePolicy: false,
-      // Review F4: no source run, so New run must not show the clone banner.
+      // no source run, so New run must not show the clone banner.
       source: "composer",
     };
     void navigate("/runs/new", { state: { prefill } });

@@ -12,7 +12,7 @@ import {
   serializeRunsFilters,
 } from "./runs-filters";
 
-// Review F6: DEFAULT_RUNS_FILTERS.endedWithin as a hand-typed literal, not
+// DEFAULT_RUNS_FILTERS.endedWithin as a hand-typed literal, not
 // read back through the constant — the test right below this one compared
 // parseRunsFilters' output against DEFAULT_RUNS_FILTERS itself, a tautology
 // that cannot catch the constant changing (the reviewer's M2b mutation, 7d

@@ -69,14 +69,14 @@ export function RunsScreen() {
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  // Review F1: whether ANY fetch has ever landed. Only the very first load
+  // whether ANY fetch has ever landed. Only the very first load
   // shows the full-page skeleton (design.md §2.1's "Loading" state); every
   // later one (a filter/search change, a view switch) is a REFETCH, and must
   // not unmount the filter bar under it — see the render below.
   const [loadedOnce, setLoadedOnce] = React.useState(false);
   const [earlierOpen, setEarlierOpen] = React.useState(false);
 
-  // Review F1: a slow response for an earlier keystroke's request must not
+  // a slow response for an earlier keystroke's request must not
   // land after, and overwrite, a newer one's. Each call gets the next id;
   // only the fetch whose id is still current when it settles is applied.
   const requestIdRef = React.useRef(0);
@@ -171,7 +171,7 @@ export function RunsScreen() {
   // "no match", never as first-run.
   const trueEmpty =
     status === "ready" && runsList.length === 0 && nothingHidden && runsFiltersAreDefault(filters);
-  // Review F1: the full-page skeleton is for the FIRST load only. A later
+  // the full-page skeleton is for the FIRST load only. A later
   // "loading" (a filter/search change re-running fetchRuns) is a refetch —
   // the filter bar (and its focused input) stays mounted; `refetching` below
   // swaps in a rows-only skeleton under it instead.
@@ -181,7 +181,7 @@ export function RunsScreen() {
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(filters);
 
-  // Round 2 (lead decision, following the mock): N counts every run the
+  // N counts every run the
   // caller owns, BEFORE filters and ageing (home-runs-1197-packet.html:672,
   // S.RUNS_DESC_USER(sc.length)) — not just the rows this fetch happens to
   // show. Under the default filters the two hidden counts (the ageing
@@ -280,7 +280,7 @@ function RunsSection({ title, runs }: { title: string; runs: AgentRun[] }) {
   return (
     <section aria-labelledby={id}>
       <div className="mb-2 flex items-center gap-2">
-        {/* Review F11 (axe heading-order): PageHeader's title is the page's
+        {/* Axe heading-order: PageHeader's title is the page's
             one h1 — a section heading directly under it must be h2, not h3. */}
         <h2 id={id} className="label-eyebrow">
           {title}
@@ -317,7 +317,7 @@ function RunsCollapsibleSection({
         className="mb-2 flex items-center gap-2 label-eyebrow"
       >
         {/* The mock's own caret (home-runs-1197-packet.html:585), rotated
-            open — review F11. */}
+            open. */}
         <span
           aria-hidden="true"
           className={cn("text-[10px] transition-transform", open && "rotate-90")}
