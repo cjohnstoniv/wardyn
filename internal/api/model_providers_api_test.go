@@ -563,9 +563,10 @@ func TestSetupStatusModelProviders(t *testing.T) {
 	})
 }
 
-// TestSetupStatusNilBlockIsToday is the golden for "additive only" on the one
-// document every person reads: with no provider block there is no new key, for
-// either tier, and the member body keeps exactly the keys it had.
+// TestSetupStatusNilBlockIsToday is the golden for "no provider block": the
+// ONE thing the console tells that shape apart from an empty grant by (#541
+// fix review; setup.go's `omitzero`) is an absent model_providers key, never
+// `[]`, and every other key stays exactly what it had, for either tier.
 func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	srv := modelProvidersStatusSrv(t, types.SiteConfig{}, &capStore{})
 	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
@@ -574,7 +575,10 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 		"member": doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "").Body.String(),
 	} {
 		if strings.Contains(body, "model_providers") {
-			t.Errorf("%s /setup/status grew model_providers with no provider block: %s", name, body)
+			t.Errorf("%s /setup/status: model_providers should be absent with no provider block: %s", name, body)
+		}
+		if strings.Contains(body, "provider_access") {
+			t.Errorf("%s /setup/status grew provider_access with no provider block: %s", name, body)
 		}
 	}
 	var st map[string]any
@@ -589,6 +593,50 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	if got := slices.Sorted(maps.Keys(st)); !slices.Equal(got, want) {
 		t.Errorf("member /setup/status keys = %v\nwant today's %v", got, want)
 	}
+}
+
+// TestSetupStatusModelProvidersAbsentVsEmpty pins both shapes side by side
+// (#541 fix review): a caller granted nothing under a REAL provider block
+// reads `[]` (an admin who set providers up, just not for them); a caller
+// under no block at all gets no model_providers key (an admin who has not
+// started). Both
+// grade to CONNECTIONS.SUMMARY_NOT_SET_UP client-side, but the console's own
+// providerMode (`!= null`) — whether "Your model key" (the legacy BYOK door)
+// still applies — depends on telling the two facts apart on the wire.
+func TestSetupStatusModelProvidersAbsentVsEmpty(t *testing.T) {
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+
+	t.Run("no block at all: absent", func(t *testing.T) {
+		srv := modelProvidersStatusSrv(t, types.SiteConfig{}, &capStore{})
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
+		var st struct {
+			ModelProviders json.RawMessage `json:"model_providers"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st.ModelProviders != nil {
+			t.Errorf("model_providers = %s, want the key absent", st.ModelProviders)
+		}
+	})
+
+	t.Run("a block exists, granting this caller nothing: empty array", func(t *testing.T) {
+		site := types.SiteConfig{
+			ModelProviders: providerBlock(keyProvider("anthropic", "claude-code")),
+			AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey, Disabled: true}),
+		}
+		srv := modelProvidersStatusSrv(t, site, &capStore{})
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
+		var st struct {
+			ModelProviders json.RawMessage `json:"model_providers"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if string(st.ModelProviders) != "[]" {
+			t.Errorf("model_providers = %s, want []", st.ModelProviders)
+		}
+	})
 }
 
 // TestRunCreateUnderAnUnservingProviderBlock pins the transition (#528): once

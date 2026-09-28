@@ -117,13 +117,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
-	// A hold that ran out is counted on its OWN series, at the one moment the
-	// control plane learns of it: the expiry happens in the sidecar, and the
-	// approval row deliberately stays PENDING (the sign-in is still wanted), so
-	// this decision row is the only signal that reaches here.
-	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout {
-		s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
-	}
+	s.countReauthTimeout(dl)
 
 	// Optional outbound content-inspection summary rides the same decision. When
 	// present it becomes a SEPARATE, content-free llm.scan.* audit event so the
