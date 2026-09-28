@@ -2254,7 +2254,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     evicted pod does not provide, which is also why user-drive persistence is
     the prerequisite direction for closing this rather than a k8s-specific
     reimplementation of each behavior individually. See
-    [Kubernetes: known gaps](../docs/OPERATIONS.md#kubernetes-known-gaps).
+    [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md).
 59. **A run's rendered proxy config — its run token, per-run MITM CA private
     key and (when configured) the operator's upstream-proxy credential — is
     held in two places: the running proxy's memory, and one sealed database
