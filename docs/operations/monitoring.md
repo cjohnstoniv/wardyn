@@ -11,38 +11,39 @@ the event stream for SIEMs — metrics carry no per-run detail.
 ```mermaid
 flowchart LR
     audit["audit_events<br/>write"] --> pg[("Postgres<br/>primary trail")]
+    audit --> sinks["SIEM fan-out<br/>WARDYN_AUDIT_SINKS"]
     audit -->|store down| spool["local JSONL<br/>spool"]
-    spool --> pg
+    spool -->|drain| pg
     spool -.-> torn["spool_torn_total"]
-    pg --> sinks["SIEM fan-out<br/>WARDYN_AUDIT_SINKS"]
+    spool -.-> quarantine["spool_quarantined_total"]
     sinks -.-> drop["sink_drops_total"]
-    pg -.-> quarantine["spool_quarantined_total"]
 ```
 
 ## Counters and gauges
 
 | Name | What it counts |
 | --- | --- |
-| Runs by terminal state, approval decisions by outcome, egress denies, credential mints, sandbox launch-latency sum/count | The base counters — every one only moves on success |
+| Runs by terminal state, approval decisions by outcome, egress denies, credential mints, sandbox launch-latency sum/count | The base counters — every one only moves on success, so two gauges sit beside them: a dead store and an idle cluster otherwise scrape identically |
 | `wardyn_store_up` | Gauge, 1 when Postgres answers the same bounded ping `/readyz` makes. A *ping*, not proof of work: a reachable pool can still fail individual queries |
 | `wardyn_audit_spool_lines` | Gauge. Audit events waiting in the local JSONL fallback spool. A value that never returns to 0 means the drain loop isn't working; mid-drain it can read lower than the file's line count |
 | `wardyn_audit_spool_quarantined_total` | Events the store permanently refused, moved aside by the drain. Non-zero means the trail is missing those events even though the spool drained |
 | `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable — a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never reach the quarantine count, since they never parsed far enough to be replayed |
 | `wardyn_audit_sink_drops_total{sink}` | Events an off-box SIEM sink dropped (buffer overflow or retry exhaustion), even though Postgres — the primary — still got the row. Non-zero means SIEM-side loss only |
 | `wardyn_drive_refusals_total{reason}` | Runs refused their user drive, by reason — a signal for the drive-claim allocator, not the audit pipeline |
-| `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`/`spent`/`transport_error`/`unavailable` |
-| `wardyn_groundtruth_observed_total`, `_dropped_total`, `_dropped_unmapped_total`, `_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. Only here — `/healthz` publishes the verdict (`state`, `last_heartbeat`, `reason`, `missing_kinds`) only, not the volume. Omitted entirely when no sensor has ever beaten |
-| `wardyn_auth_failed_suppressed_total` | `auth.fail` audit rows the rate limiter dropped — the trail is capped at roughly one row per second, so past a small burst it undercounts. **Alert on this series, not the audit row count**: flat rows with this climbing is the attack |
+| `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`/`spent`/`transport_error`/`unavailable` — the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check already make, graphable without grepping the audit trail |
+| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. Only here — they used to ride the anonymous `/healthz`, which handed the fleet's kernel-event volume to anyone who could reach the port. `/healthz` now publishes the VERDICT only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence still names the unmapped-drop count for an operator reading a broken correlation. Omitted entirely when no sensor has ever beaten |
+| `wardyn_auth_failed_suppressed_total` | `auth.fail` audit rows the rate limiter dropped. The trail is capped at roughly one row per second, so past a small burst it stops describing the volume it is bounding — **a credential-stuffing run reads quieter than a handful of typos**. **Alert on this series, not the audit row count**: flat rows with this climbing is the attack |
 | `wardyn_auth_store_errors_total` | Requests an authentication lane couldn't decide because its store read failed and answered `500` — no audit row exists for these (no authenticated principal to attribute one to) |
 
-`wardyn_sso_refresh_total{spent}` increments ONCE per refresh token AWS
+`wardyn_sso_refresh_total{outcome="spent"}` increments ONCE per refresh token AWS
 retires, at the `CreateToken` call that discovers it (the
 `invalid_grant`/`expired_token`/`invalid_client`/`unauthorized_client`
 codes). Every later dispatch on that same token exits at an earlier,
-uncounted short-circuit. So the series reads "how many distinct sessions AWS
-retired," not "how many times people hit a dead one." A climbing
-`transport_error`/`unavailable` series is the SSO-OIDC endpoint itself in
-trouble.
+UNCOUNTED short-circuit — the in-memory dead-mark check, before
+`CreateToken` is ever called again. So the series reads "how many
+distinct sessions AWS retired," not "how many times people hit a dead
+one." A climbing `transport_error`/`unavailable` series is the SSO-OIDC
+endpoint itself in trouble.
 
 ## Why two counters exist beside `wardyn_store_up`
 

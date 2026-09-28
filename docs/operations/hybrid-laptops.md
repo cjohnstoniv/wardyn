@@ -4,9 +4,9 @@
 
 This is the org-side half of [DESKTOP.md's Enrolling into an org control
 plane](../DESKTOP.md#enrolling-into-an-org-control-plane): an org control
-plane can enrol member-mode laptops (topology m′) and receive their audit
-rows. It is issue #103's phase-one seam, not the full hybrid rollout — no
-run ever places on the org cluster because a laptop enrolled.
+plane this Helm chart or compose stack runs can enrol member-mode laptops
+(topology m′) and receive their audit rows. It's issue #103's phase-one
+seam — no run ever places on the org cluster because a laptop enrolled.
 
 ## Minting a token
 

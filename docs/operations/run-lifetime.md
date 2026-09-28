@@ -12,13 +12,16 @@ flowchart LR
     running["RUNNING"] -->|ends_at passes| kept["KEPT<br/>agent stopped, proxy gone"]
     running -->|kill| gone["torn down"]
     kept -->|grace expires| gone
-    kept -->|revive| running
+    kept -->|extend, revive| running
 ```
 
 ## Capturing the lease
 
 *The long-holds design (RL-0..RL-11) landed across 0.8; this page covers
-what is actually wired today.*
+what is actually wired today. The diagram's `kept -> revive -> running`
+edge is narrower than it looks: only an interactive run, extended past
+its own end and still inside its files grace, is eligible
+(`reviveEligible`, `internal/api/run_revive.go`, #1061).*
 
 Every run captures a **lease** at create:
 
@@ -29,7 +32,8 @@ Every run captures a **lease** at create:
 - A decision-wait budget (`wait_budget_sec`).
 
 A run keeps the limits it captured at create even if the profile that
-produced them changes later.
+produced them changes later. Extending or shortening the lease is bounded
+by what was captured, not by the profile's current shape.
 
 ## Extend
 

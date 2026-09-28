@@ -13,7 +13,7 @@ extended by `kind`:
 
 | Field | What it holds |
 | --- | --- |
-| `secrets[]` | Each a role, a store REF (a name, never a value), and its **delivery**: `proxy_header` (the header + format the proxy presents on the wire, so the sandbox never holds the credential). A secret on a closed kind may declare NO delivery, meaning that kind's own hand-written transport carries it (`github_app`'s brokered halves, `git_host`'s clone credentials). At most one `proxy_header` secret per row, and every such secret targets the row's whole egress list |
+| `secrets[]` | Each a role, a store REF (a name, never a value), and its **delivery**. `proxy_header` is the header + format the proxy presents on the wire, so the sandbox never holds the credential (the proxy injects one credential header per host). A secret on a closed kind may declare NO delivery, meaning that kind's own hand-written transport carries it (`github_app`'s brokered halves, `git_host`'s clone credentials). At most one `proxy_header` secret per row, and every such secret targets the row's whole egress list |
 | `egress[]` | Where the system lives; why a host is reachable for a granted run instead of being hand-listed in every workspace |
 | `config{}` | Non-secret knobs, key-validated per closed kind (`github_app` ⇒ `app_id`/`installation_id`/`host`); an unknown key on a closed kind 400s by name |
 
@@ -21,11 +21,6 @@ The type also models `resident_file`/`resident_env` for the closed kinds
 whose own transport needs them. An operator may not DECLARE one. There's
 no generic lane that materializes a named secret into a sandbox path or
 env var, so a write naming one is refused.
-
-`kind` is the ONE field that says what this connects to, and the closed
-set is the ONLY writable set: `github_app`, `git_host`. Each has behavior
-in code (`capabilitiesFor`), so a new one is a code change, and a write
-naming anything else 400s with the accepted list.
 
 **Model access is not an integration (0.8).** The four AI kinds —
 `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key`
@@ -48,7 +43,7 @@ set is the ONLY writable set:
 | Kind | Note |
 | --- | --- |
 | `github_app`, `git_host` | Each has behavior in code (`capabilitiesFor`); a new one is a code change, and a write naming anything else 400s with the accepted list |
-| `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Left the closed set in 0.8 — see "Model access is not an integration" below |
+| `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Left the closed set in 0.8 — see "Model access is not an integration" above |
 | Generic kinds (`"jira"`, `"artifactory"`, …) | A 0.5 carry-over — no longer writable, though a row stored under an earlier release still loads, still sits in `SiteConfig`, and is still injected by `internal/api/integrations_run.go` |
 | `azure_openai` | Gone as a kind (also a 0.5 carry-over) |
 
@@ -98,9 +93,10 @@ Configuring an integration grants nothing by itself.
   there regardless).
 - A header-delivering integration authors one `api_key` grant per host
   through the ordinary proxy-side injection path. **Except** on a host
-  that serves a model: a model vendor's API, a configured gateway, the
-  boot Bedrock hosts, or any model provider row's own host
-  (`modelServingHosts`, `internal/api/llmcred.go`).
+  that serves a model (`modelServingHosts`, `internal/api/llmcred.go`): a
+  model vendor's API, a configured gateway, the boot Bedrock hosts, or
+  any model provider row's own host. That last case covers a custom
+  endpoint, a route-through gateway, or a Bedrock row's regional hosts.
 - On a model-serving host the credential is skipped and audited
   (`run.requirement.skip`, reason `model_host`) instead: a model
   credential comes only from the run's model provider (0.8, #547). An
@@ -149,18 +145,21 @@ owner's own key, token or sign-in, or by nothing.
 - Dispatch drops every other model credential its policy carries
   (`resolveProviderLane`, `internal/api/runs_dispatch_provider.go`).
 - Nor may an `env_secret` grant set a variable a model credential rides
-  in. Nor may it set one a provider arm sets (`modelEnvNames`,
-  `internal/api/provider_env.go`: `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID`,
-  `ANTHROPIC_CUSTOM_HEADERS`, the Foundry, Vertex and Anthropic-on-AWS
-  variables, and each arm's base-URL, model, region and config
-  variables). Such a grant is refused with a 422 at create and Review,
-  naming the grant and the variable, and dispatch refuses the run again
-  if one arrives another way.
+  in, or a provider arm sets (`modelEnvNames`,
+  `internal/api/provider_env.go`, table below). Such a grant is refused
+  with a 422 at create and Review, naming the grant and the variable, and
+  dispatch refuses the run again if one arrives another way.
 - Every other `env_secret` grant is placed as before, and with no block
   nothing changes. What follows is the path of a deployment with no
   block.
+
+| Group | Refused variables |
+| --- | --- |
+| Core | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID`, `ANTHROPIC_CUSTOM_HEADERS` |
+| Foundry | `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_RESOURCE`, `CLAUDE_CODE_USE_FOUNDRY` |
+| Vertex | `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_VERTEX_PROJECT_ID` |
+| Anthropic-on-AWS | `ANTHROPIC_AWS_API_KEY`, `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_PROFILE` |
+| Every arm | Its own base-URL, model, region and config variables |
 
 **No integration chooses a run's model credential (0.8).** A run naming
 one (`integration_id`) is refused with a `422` at create and Review
@@ -259,11 +258,13 @@ doesn't turn recording on or off.
 | Model providers a member may name | Narrows |
 | Git providers their work may come from | Narrows |
 | Stored policies a member may select | Narrows |
-| Feature: SSH key / API token at all | About the member rather than a run |
+| Whether they may add an **SSH key** or mint an **API token** at all (`feature`) | About the member rather than a run |
 
-Eight of the nine *narrow* — until you enforce one, members keep exactly
-the powers they had, and a deny bites even before you do. Base images are
-the one that *widens*.
+([Capabilities: what one member, or one group, may
+do](../OPERATIONS.md#capabilities-what-one-member-or-one-group-may-do)
+has the kind table.) Eight of the nine *narrow* — until you enforce one,
+members keep exactly the powers they had, and a deny bites even before
+you do. Base images are the one that *widens*.
 
 A permission always bounds what the **member** chose and never what you
 pre-authorized. Model providers are the one exception. The answer to "can

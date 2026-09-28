@@ -12,7 +12,7 @@ unbranded Wardyn console, byte for byte.
 | Field | What it does |
 | --- | --- |
 | Organisation name | Sets how the product name reads: `<Company> Wardyn` (`prefix`) or `Wardyn for <Company>` (`suffix`). Replaces the wordmark on the sign-in page, the top bar and the browser tab title (Admin view keeps its ` admin` suffix there) |
-| Primary colour + text on primary | Hex pair, must reach 4.5:1 (WCAG AA). Dark mode uses its own pair: set one explicitly, or let Wardyn derive it (the primary mixed toward white until it reaches 4.5:1 against the dark background, with dark text); a set pair is held to the same 4.5:1 |
+| Primary colour + text on primary | Hex pair, must reach 4.5:1 (WCAG AA). Dark mode uses its own pair: set one explicitly, or let Wardyn derive it — the primary mixed toward white until it reaches 4.5:1 against the dark background, with dark text. A set pair is held to the same 4.5:1 |
 | Logo | SVG or PNG, at most 512 KB (a PNG at most 4096 pixels a side). Replaces the mark on the sign-in page, the top bar and the browser tab icon |
 | Support link (optional) | `https://` only, shown in the header to everyone signed in; opens in a new tab with `rel="noopener noreferrer"` |
 

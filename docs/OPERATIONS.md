@@ -209,7 +209,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM
 #    the age key does not match. Also verify an application secret, which a
 #    row count cannot prove: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts without a
-#    decrypt error (see "Rotating the age key"):
+#    decrypt error (see docs/operations/secrets-and-keys.md "Rotating the age key"):
 wardyn run --agent claude-code --workspace <workspace-id>
 #    and, if this deployment allocates user drives, that a drive came back with
 #    its bytes rather than as a fresh empty volume — step 5 is the only thing

@@ -3,12 +3,14 @@
 # Exercising member mode as an admin
 
 You have an admin session and you want to see what a member sees. There
-are two ways; they answer different questions, and they compose. *(Route
-and field names below predate the 0.8 rename sweep — see [Renamed in
-0.8](../OPERATIONS.md#renamed-in-08) for the current route
-(`POST /me/view`); this section's own copy is repointed in #620.)*
+are two ways; they answer different questions, and they compose.
 
 ## 1. The switch — the User view
+
+*Route, field and audit-action names below predate the 0.8 rename sweep
+— see [Renamed in 0.8](../OPERATIONS.md#renamed-in-08) for the current
+`POST /me/view` route and `/me` keys; this section's own copy is
+repointed in #620.*
 
 The **Console view** switch beside the wordmark offers **Admin view** |
 **User view** to a signed-in SSO admin. Choosing **User view** sets a flag
@@ -125,7 +127,7 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 
 | Action | Behaviour |
 | --- | --- |
-| Minting an API token (`POST /me/tokens`) | REFUSES instead of clamping, with `409`: a token carries a role stamp re-derived from your REAL role at your next sign-in, so one minted "as a member" would quietly become an admin credential that outlives the mode. Exit first |
+| Minting an API token (`POST /me/tokens`) | REFUSES instead of clamping, with `409`. A token carries a role stamp re-derived from your REAL role at your next sign-in, so one minted "as a member" would quietly become an admin credential that outlives the mode. Exit first |
 | Registering an SSH key (`POST /me/ssh-keys`) | Allowed in the mode; the key is stored **capped** (migration `0070_ssh_key_view_capped`) — a member key for good. Your sign-in re-stamp leaves its role at `user`, and the SSH gateway never grants it the admin override, even while you are an admin. It reaches your own runs and nothing else. A break-glass key that reaches other people's runs is registered outside the mode |
 
 > **It shows you what a member SEES. It is not proof that a member is
@@ -138,7 +140,7 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 >    never the group tier.
 > 2. **Credentials you already hold are not clamped — the mode is
 >    per-SESSION.** The SSH gateway reads the role stamped on the KEY in
->    the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`), so an
+>    the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`). So an
 >    admin in member mode still holds the admin override on other
 >    people's runs over SSH. By the identical argument, any `wdn_` API
 >    token you already hold keeps its own stamped role (the token lane
@@ -165,13 +167,14 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 >
 > **Ceiling 4, and the other posture.** The *second* posture — **Preview
 > as a new user** — is what shows the not-signed-in state. It's reached
-> from the Permissions header in the **Admin view**, not offered from
-> inside the User view, and not at all on a deployment whose roster row is
-> `shared` (there is nothing for the preview to hide) or against a
-> pre-0.7.5 daemon (`user_preview_available`, `internal/api/me.go`, is
-> ANDed with the caller's EFFECTIVE (clamped) admin tier — the same clamp
-> that made ceiling 4 true in the first place, so the button is gone the
-> instant either posture clamps `isOperator`/`isSecurityOperator` false).
+> from the Permissions header in the **Admin view**. It's not offered
+> from inside the User view, and not at all on a deployment whose roster
+> row is `shared` (there is nothing for the preview to hide) or against a
+> pre-0.7.5 daemon. (`user_preview_available`, `internal/api/me.go`, is
+> ANDed with the caller's EFFECTIVE (clamped) admin tier. That's the same
+> clamp that made ceiling 4 true in the first place, so the button is
+> gone the instant either posture clamps
+> `isOperator`/`isSecurityOperator` false.)
 > Inside that second posture the ceiling reads the other way round: your
 > sign-in is *hidden, not removed*, and a rolling upgrade (ceiling 3)
 > hides nothing at all.
@@ -187,11 +190,13 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 > the same session cookie as the mode, as a second `omitempty` bool with
 > no codec bump. A replica still running 0.7.4 ignores it: it shows you
 > your OWN credential AND does not refuse harness-login, so *"sign-in is
-> refused inside the preview"* does not hold mid-upgrade. In the other
-> direction a 0.7.5 console POSTing `no_credential` to a 0.7.4 replica
-> gets a `400` from the strict body decode (`DisallowUnknownFields`), the
-> mode is NOT entered, and the button says so — the switch keeps working
-> throughout, because the console sends the key only for the new posture.
+> refused inside the preview"* does not hold mid-upgrade.
+>
+> In the other direction a 0.7.5 console POSTing `no_credential` to a
+> 0.7.4 replica gets a `400` from the strict body decode
+> (`DisallowUnknownFields`), and the mode is NOT entered — the button
+> says so. The switch keeps working throughout, because the console
+> sends the key only for the new posture.
 > Finish the rollout before you rely on what you see.
 
 Note the name collision: the `WARDYN_USER_DESKTOP` environment variable

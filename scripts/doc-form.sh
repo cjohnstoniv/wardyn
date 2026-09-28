@@ -20,7 +20,10 @@
 # paragraph share = non-blank, non-fenced lines that are not a bullet,
 # numbered step, table row, heading or blockquote, divided by all non-blank,
 # non-fenced lines. Fenced code is excluded entirely (neither side of the
-# ratio) since it isn't prose.
+# ratio) since it isn't prose. Table cells and blockquote text don't count
+# toward paragraph share (rule 4 wants them there instead), but their words
+# still count against the sentence-length cap — a 39-word sentence hiding in
+# a table cell is exactly the prose creep rule 5 is for.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -35,7 +38,20 @@ MEASURED_ONLY=(
   docs/ENV.md
   docs/AUDIT-ACTIONS.md
 )
-ASSERTED_DOCS=(docs/operations/*.md)
+# Named, not a glob: a lane adding a new page under docs/operations/ should
+# not find itself gated by this list until it is deliberately added here.
+ASSERTED_DOCS=(
+  docs/operations/build-images.md
+  docs/operations/console-branding.md
+  docs/operations/hybrid-laptops.md
+  docs/operations/integrations.md
+  docs/operations/kubernetes-known-gaps.md
+  docs/operations/launch-presets.md
+  docs/operations/member-mode.md
+  docs/operations/monitoring.md
+  docs/operations/run-lifetime.md
+  docs/operations/secrets-and-keys.md
+)
 MAX_PARAGRAPH_SHARE=50
 MAX_SENTENCE_WORDS=35
 
@@ -93,6 +109,21 @@ def prose_text(line):
     heading, quote and fence lines never reach this — they aren't prose."""
     m = BULLET.match(line)
     return line[m.end():] if m else line
+
+
+def quote_text(line):
+    """Strip one leading blockquote marker ('>' plus an optional space),
+    same shape as prose_text for bullets."""
+    return re.sub(r'^\s*>\s?', '', line, count=1)
+
+
+def table_cells(line):
+    """Split a table row into its cell text, for independent sentence
+    checks. Splits on unescaped '|' only (`\\|` inside a cell, e.g. an
+    alternation like `-to=vaultkv\\|azurekv`, is not a cell boundary), and
+    drops the empty leading/trailing cells a row's outer pipes produce."""
+    parts = re.split(r'(?<!\\)\|', line)
+    return [c.strip() for c in parts if c.strip() and not re.match(r'^:?-+:?$', c.strip())]
 
 
 EMPHASIS = re.compile(r'\*{1,2}|_{1,2}')
@@ -184,6 +215,16 @@ def analyze(path):
             if kind == 'bullet' and BULLET.match(raw):
                 flush_block()
             block_lines.append(prose_text(raw))
+        elif kind == 'quote':
+            block_lines.append(quote_text(raw))
+        elif kind == 'table':
+            # Each cell is checked on its own: a table row is data, not a
+            # flowing paragraph, so joining cells together (or joining rows)
+            # would manufacture sentences that were never written as one.
+            flush_block()
+            for cell in table_cells(raw):
+                block_lines.append(cell)
+                flush_block()
         else:
             flush_block()
     flush_block()
@@ -212,8 +253,15 @@ for path in asserted_paths + measured_paths:
 
 print()
 print(f"=== doc-form assertions ({len(asserted_paths)} docs brought into form) ===")
+if not asserted_paths:
+    print("  no pages named in ASSERTED_DOCS — nothing to assert")
 for path in asserted_paths:
-    r = analyze(path)
+    try:
+        r = analyze(path)
+    except FileNotFoundError:
+        print(f"  FAIL {path}: file not found")
+        fail = 1
+        continue
     ok = True
     if r['share'] > max_share:
         print(f"  FAIL {path}: paragraph share {r['share']:.0f}% (max {max_share:.0f}%)")

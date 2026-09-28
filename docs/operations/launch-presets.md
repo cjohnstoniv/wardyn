@@ -2,11 +2,11 @@
 
 # Launch presets
 
-A launch preset is a named, versioned bundle of `POST /runs` fields (image,
-repo, workspace, drive, a stored `policy_id` or an `inline_policy`). A
-non-console launcher — a portal button, a CI dispatcher — sends the preset
-name plus the per-launch fields instead of the whole spec. A preset grants
-nothing beyond what the caller's own ceiling already allows.
+A launch preset is a named, versioned bundle of `POST /runs` fields
+(image, repo, workspace, drive, a stored `policy_id` or an
+`inline_policy` with its `ui_apps` and ports). A non-console launcher
+sends the preset name plus the per-launch fields instead of the whole
+spec. A preset grants nothing beyond the caller's own ceiling.
 
 ## Sending a preset
 

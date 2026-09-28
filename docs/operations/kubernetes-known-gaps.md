@@ -30,9 +30,9 @@ flowchart LR
 | ⛔ No BYOI or devcontainer builds | A `wardyn-byoi/`-prefixed image ref is refused before any pod is created — ephemeral containers can't honor the selftest-then-task double-exec BYOI needs (`internal/runner/k8s/errors.go`'s `errBYOIUnsupported`, `internal/runner/k8s/exec.go`). `WARDYN_ENVBUILD` devcontainer builds are Docker-only for the same reason, unaffected by `k8s.enabled` |
 | ⛔ No `local_dir` / host-path workspace mounts | A policy with any `WorkspaceMounts` entry fails the run closed with a clear error (`internal/runner/k8s/sandbox.go`'s `errMountsUnsupported`) — a k8s pod has no path back to an arbitrary directory on wardynd's own host. Git-clone workspaces (`WorkspaceRepos`) are unaffected; only a *local directory* source is refused |
 | ⛔ No `~/.aws` / `~/.claude` host staging | The same `errMountsUnsupported` refusal covers the RESIDENT-COPY credential path — there's no host filesystem to stage from. Use proxy-side injection instead: managed-subscription OAuth injection and the Bedrock AWS SSO exchange are substrate-agnostic (they happen at `wardyn-proxy`), so they work unchanged on k8s |
-| 🟡 No in-sandbox DNS | Every sandbox pod is `DNSPolicy: DNSNone` with a single nameserver, `127.0.0.1` — nothing listens there, so a DNS query fails FAST (connection refused) rather than a real timeout. Only the pinned `wardyn-proxy` sidecar resolves hostnames, matching the Compose substrate's proxy-only egress posture — parity, not a new gap, but the mechanism is k8s-specific |
-| 🟡 No per-pod PIDs limit | Kubernetes has no per-container "pids" resource the way Docker's `--pids-limit` does — a run's `ResourceLimits.PidsLimit` is accepted but not enforced, and wardynd logs a warning naming the run id each time. **Recommendation:** set the node-level kubelet `podPidsLimit` as a cluster-wide fork-bomb backstop |
-| 🟡 No k8s ground-truth correlator | The Tetragon host-sensor → ground-truth pipeline has no k8s-substrate equivalent. A k8s deployment gets the NetworkPolicy-enforced boundary (proven live by the boot-time egress canary) but not the independent kernel-level corroboration Compose + Tetragon provides |
+| 🟡 No in-sandbox DNS | Every sandbox pod is `DNSPolicy: DNSNone` with a single nameserver, `127.0.0.1` — nothing listens there, so a DNS query fails FAST (connection refused) rather than a real timeout (`internal/runner/k8s/sandbox.go`). Only the pinned `wardyn-proxy` sidecar resolves hostnames, matching the Compose substrate's proxy-only egress posture — parity, not a new gap, but the mechanism is k8s-specific |
+| 🟡 No per-pod PIDs limit | Kubernetes has no per-container "pids" resource the way Docker's `--pids-limit` does — a run's `ResourceLimits.PidsLimit` is accepted but not enforced, and wardynd logs a warning naming the run id each time. **Recommendation:** set the node-level kubelet `podPidsLimit` (or your distribution's `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb backstop |
+| 🟡 No k8s ground-truth correlator | The Tetragon host-sensor → ground-truth pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the `groundtruth` Compose profile) has no k8s-substrate equivalent. A k8s deployment gets the NetworkPolicy-enforced boundary (proven live by the boot-time egress canary) but not the independent kernel-level corroboration Compose + Tetragon provides |
 | ⛔ A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses boot outright | Unless the canary pod actually ran and could not connect — see "The boot-time egress canary" below |
 | 🟡 `replicas` stays 1 on k8s exactly as everywhere else | See [One replica, by construction](../OPERATIONS.md#one-replica-by-construction); the masking registry is still in-process, per-pod |
 
@@ -94,9 +94,11 @@ cluster.
 
 **What the proof does not cover:** the kind conformance evidence is from
 the busybox conformance-agent image on runc (CC1), and `emptyDir` metering
-of ephemeral-container writes is unmeasured under gVisor and Kata. The live
-kind SSO walk separately exercises a real `agent-run` boot on the
-`emptyDir`-backed `/tmp` and `/home/agent/work`, on runc — manual and
+of ephemeral-container writes is unmeasured under gVisor and Kata.
+
+The live kind SSO walk separately exercises a real `agent-run` boot — the
+aws-sso sign-in sandbox and a real claude-code run — on the
+`emptyDir`-backed `/tmp` and `/home/agent/work`, on runc. It's manual and
 self-skipping, not CI (see `docs/TEST-GAPS.md`).
 
 ### The mechanism's remaining gap, precisely
@@ -124,8 +126,9 @@ self-skipping, not CI (see `docs/TEST-GAPS.md`).
      siblings itself. The sandbox ref is the agent pod name, so the run
      id needs no live pod to read it from.
    - Second: the sweep lists the per-run Secret and both NetworkPolicies
-     as well as the pods, so a run whose agent AND proxy pods are both
-     gone is still reachable, not stranded.
+     as well as the pods. A run whose agent AND proxy pods are both gone
+     (a deleted node takes them together) is still reachable, not
+     stranded.
 2. **The kubelet measures periodically** (~10s housekeeping), so a fast
    enough burst can overshoot the limit before the next tick catches it.
 3. **With neither a policy-authored `disk_mib` nor a `default_disk_mib`**

@@ -253,7 +253,7 @@ secretStore:
     # account, whose policy covers only <kvPrefix>/platform/* — wardynd reads
     # and writes its own signing, session and SSH host keys as this role, and
     # everything else as role, whose policy then leaves platform/ out
-    # (docs/OPERATIONS.md, "Two Vault roles"). Empty = one role for both.
+    # (docs/operations/secrets-and-keys.md, "Two Vault roles"). Empty = one role for both.
     rolePlatform: ""
     tokenAudience: vault
     tokenExpirationSeconds: 3600
