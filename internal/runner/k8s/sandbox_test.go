@@ -1329,14 +1329,13 @@ func TestCreateSandbox_NoDiskMiBLeavesEphemeralStorageAbsent(t *testing.T) {
 // a knob the sidecar reads from its own environment is unreachable on this
 // substrate unless CreateSandbox copies it in.
 //
-// That is worse than "off": the operator sets
-// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
+// That is worse than "off": the operator sets the pat scope of
+// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
 // it, docs say it confines PAT pushes, and on Kubernetes the proxy never saw it.
 // The list is runner.ProxySidecarEnvKnobs, shared with the docker driver, so a
 // knob added later cannot land on one substrate only.
 func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
-	t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", "on")
-	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "false")
+	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "app:false,pat:on")
 	t.Setenv("WARDYN_LLM_SCAN", "off")
 	// The re-auth hold's budget (0.7.6): how long the proxy parks a sandbox's
 	// AWS SSO credential exchange while its owner signs in again. Unreachable on
@@ -1361,10 +1360,9 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 		got[e.Name] = e.Value
 	}
 	for name, want := range map[string]string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": "on",
-		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS":     "false",
-		"WARDYN_LLM_SCAN":                         "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":        "45s",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
+		"WARDYN_LLM_SCAN":                      "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1386,7 +1384,6 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 // inheriting a knob nobody set.
 func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	for _, k := range []string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_LLM_SCAN",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",

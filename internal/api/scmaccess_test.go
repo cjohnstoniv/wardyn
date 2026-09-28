@@ -416,7 +416,7 @@ func TestGitCredentialRefusalMatchesCanon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read canon doc: %v", err)
 	}
-	// The row: "| Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | git_credential: ... |"
+	// The row: "| Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | you are not connected ... |"
 	// Take the LAST pipe-delimited cell of the line naming "Not connected, at run create".
 	var canon string
 	for _, line := range strings.Split(string(raw), "\n") {

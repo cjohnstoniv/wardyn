@@ -135,8 +135,9 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 // a hand-copied one that can drift.
 var proxySidecarEnvKnobNames = []string{
 	"WARDYN_LLM_SCAN",
+	// #203 folds the former WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into this
+	// one name's {app,pat} scope — one knob to forward, not two.
 	"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
-	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
 	// The mid-run credential re-auth hold's budget. A knob missing from this
 	// list is not "default", it is UNREACHABLE on a managed substrate.
 	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",

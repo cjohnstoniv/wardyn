@@ -395,7 +395,7 @@ func TestPushHoldAbsentRulesAskNothing(t *testing.T) {
 // branch-namespace switch ON, for a GitLab host and an Azure DevOps one: a
 // review path must hold wherever a deny path would refuse.
 func TestPushHoldOnTheTokenLane(t *testing.T) {
-	t.Setenv(envEnforcePATBranchNS, "true")
+	setPATBranchNS(t, "true")
 	for _, c := range []struct {
 		host, path, repo string
 	}{

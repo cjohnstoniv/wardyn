@@ -106,14 +106,14 @@ func exitCodeFor(err error) int {
 // cleartext: plain http:// to a NON-loopback wardynd puts the fleet-wide
 // credential on the wire on every request (and on the attach WebSocket, which
 // inherits the same --url). Advisory only, never a refusal — a TLS-terminating
-// reverse proxy or a CI-internal topology is legitimate; WARDYN_ALLOW_PLAINTEXT
+// reverse proxy or a CI-internal topology is legitimate; WARDYN_CLI_ALLOW_PLAINTEXT
 // silences it.
 //
 // ponytail: fourth inline loopback predicate in the tree (internal/api/http.go,
 // cmd/wardynd/main.go, internal/egress/proxy/policy.go) — all unexported and
 // server-side. Consolidate only if a fifth appears.
 func warnPlaintextToken(w io.Writer, rawURL, token string) {
-	if token == "" || cliutil.EnvBool("WARDYN_ALLOW_PLAINTEXT", false) {
+	if token == "" || cliutil.EnvBool("WARDYN_CLI_ALLOW_PLAINTEXT", false) {
 		return
 	}
 	u, err := url.Parse(rawURL)
@@ -125,7 +125,7 @@ func warnPlaintextToken(w io.Writer, rawURL, token string) {
 		return
 	}
 	fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
-		"use https://, or set WARDYN_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+		"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
 }
 
 func rootCmd() *cobra.Command {

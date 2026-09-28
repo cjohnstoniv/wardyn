@@ -126,7 +126,8 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Push branch-namespace confinement, OFF unless the operator opted this proxy
-	// in with WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS (PATBranchNSEnforced).
+	// in with the pat scope of WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (PATBranchNSEnforced;
+	// #203 folds the standalone WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into it).
 	// Opted in, it is the SAME confinement the App lane applies (confinePush,
 	// same rule sources), so a run's git_push_any_branch still opts out. A
 	// refusal happens BEFORE patToken, so the refused request mints nothing.

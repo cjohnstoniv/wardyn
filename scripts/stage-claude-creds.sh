@@ -147,7 +147,28 @@ echo "sanitized: MCP servers + mcpOAuth tokens stripped from the sandbox copy"
 # on the wire — a non-empty placeholder only lets `claude` treat itself as logged in
 # and start cleanly. (Blanking to "" risks claude reading itself as logged out; a
 # present-but-inert sentinel string starts cleanly and carries no secret.)
-if [[ "$(printf '%s' "${WARDYN_SUBSCRIPTION_INJECT:-}" | tr '[:upper:]' '[:lower:]')" != "off" ]]; then
+#
+# #203: match wardynd's own word list (cliutil.EnvBool) instead of a bare
+# "off" literal. The two used to disagree — this script recognized only the
+# exact word "off" as the escape hatch, while wardynd's disableSubInject
+# already treated "0"/"false"/"no" the same as "off" — so WARDYN_SUBSCRIPTION_INJECT=0
+# (say) left the daemon expecting a REAL resident credential (the escape-hatch
+# behavior) while this script still staged the inert sentinel: the mismatch
+# breaks subscription auth for anyone who did not spell the hatch "off"
+# exactly. A garbage value now fails loud (exit 2), matching cliutil.EnvBool's
+# own fail-closed contract, instead of silently taking the safe branch and
+# masking the typo.
+inject_word="$(printf '%s' "${WARDYN_SUBSCRIPTION_INJECT:-}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+sanitize=1
+case "${inject_word}" in
+  ""|1|true|yes|on) sanitize=1 ;;
+  0|false|no|off) sanitize=0 ;;
+  *)
+    echo "stage-claude-creds.sh: invalid WARDYN_SUBSCRIPTION_INJECT=\"${WARDYN_SUBSCRIPTION_INJECT:-}\"; want one of 1/true/yes/on or 0/false/no/off (same word list wardynd's cliutil.EnvBool uses)" >&2
+    exit 2
+    ;;
+esac
+if [[ "${sanitize}" = 1 ]]; then
   CJ="${DEST}/.claude/.credentials.json"
   if [[ -f "${CJ}" ]]; then
     python3 - "${CJ}" <<'PY'
@@ -171,7 +192,7 @@ PY
     echo "sentinel: staged .credentials.json sanitized (refresh token blanked, access token replaced with an inert placeholder, expiry pinned; proxy injects the live token)"
   fi
 else
-  echo "escape hatch: WARDYN_SUBSCRIPTION_INJECT=off — staging a REAL resident credential (can go stale; re-run to refresh)"
+  echo "escape hatch: WARDYN_SUBSCRIPTION_INJECT=${WARDYN_SUBSCRIPTION_INJECT} — staging a REAL resident credential (can go stale; re-run to refresh)"
 fi
 
 # Owner-only: the agent runs as uid 1000; on a typical dev box that IS this user.

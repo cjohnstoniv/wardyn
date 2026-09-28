@@ -906,6 +906,42 @@ hatch for a CA delivered your own way (e.g. `extraEnv` + `secretKeyRef`
 pointing `WARDYN_TRUSTED_CA_FILE` at a path a volume you wire yourself
 mounts, rather than this chart's own ConfigMap).
 
+## Daemon egress proxy
+
+`WARDYN_DAEMON_PROXY_URL` (plain) and `WARDYN_DAEMON_PROXY_SECRET` (a file
+holding a proxy URL that may embed `user:pass@`) route `wardynd`'s own
+outbound calls — OIDC discovery/JWKS, audit webhooks, GitHub App token
+minting, AWS SSO renewal, Entra directory sync — through a forward proxy; see
+[docs/ENV.md](../../../docs/ENV.md). The plain form is `env.WARDYN_DAEMON_PROXY_URL`;
+for the credentialed form, `daemonProxySecret.existingSecret` mounts a Secret
+**you manage** (this chart never creates or reads it) read-only and wires
+`WARDYN_DAEMON_PROXY_SECRET` at the mounted path:
+
+```bash
+kubectl create secret generic wardyn-daemon-proxy -n wardyn \
+  --from-literal=proxy-url='http://user:pass@proxy.corp.example:3128'
+helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
+  --set daemonProxySecret.existingSecret=wardyn-daemon-proxy \
+  ...
+```
+
+`existingSecretKey` (default `proxy-url`) names the key inside it.
+`defaultMode` (default `0440`, octal) is a chart-render-time default, not a
+boot-time guarantee — `wardynd`'s own `daemonProxySecretMode` rule
+(`cmd/wardynd/daemon_proxy.go`) independently refuses only a group- or
+world-**writable** file at boot, and refuses **other**-readable only when the
+file is owned by `wardynd`'s own non-root uid. A Kubernetes Secret volume is
+always root-owned, never `wardynd`'s uid, so that second refusal never fires
+here: `0440`, `0400` and even a wider `0644`/`0444` all boot. Under this
+chart's own `podSecurityContext.fsGroup` the kubelet additionally ORs in
+group-read regardless of `defaultMode`, so `0400` and `0440` are the SAME
+mode `wardynd` actually opens (`0440`) — `0400` only differs without an
+`fsGroup` of your own. An operator-set `env.WARDYN_DAEMON_PROXY_SECRET` always
+wins over the Secret-backed path — the escape hatch for a Vault Agent / CSI
+shape via `extraVolumes` instead. Setting both `daemonProxySecret.existingSecret`
+and a `WARDYN_DAEMON_PROXY_URL` renders fine, but `wardynd` itself refuses to
+boot on it: the two name one proxy two different ways.
+
 ## Split SSH exposure
 
 `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second

@@ -355,18 +355,23 @@ type gitCredentialErrorBody struct {
 const gitCredentialRefusalReason = "git_credential"
 
 // gitCredentialNotConnectedRefusal is §7.1's composed sentence, BYTE-EXACT
-// including its "git_credential: " prefix (pinned by
-// TestGitCredentialRefusalMatchesCanon, which parses the canon table the way
-// ado-entra-copy.test.ts parses §7): the person has never captured a session
-// for the row.
-const gitCredentialNotConnectedRefusal = "git_credential: you are not connected to Azure DevOps — connect and start the run again"
+// (pinned by TestGitCredentialRefusalMatchesCanon, which parses the canon
+// table the way ado-entra-copy.test.ts parses §7): the person has never
+// captured a session for the row.
+//
+// #659 Q1 (owner decision, 2026-09-28): the sentence no longer carries a
+// "git_credential: " prefix — the 422 body's own Reason field already sends
+// "git_credential" separately, so the prefix double-encoded the same fact.
+// The owner's approval stands in for the mock round; the canon row
+// (docs/design/ado-entra-prompt.md §7.1) and this test change together.
+const gitCredentialNotConnectedRefusal = "you are not connected to Azure DevOps — connect and start the run again"
 
 // gitCredentialEndedRefusal / gitCredentialConsentRefusal are §7.1's two
 // expired_signin sentences, by cause (scmAccessCauseEnded /
 // scmAccessCauseConsentNeeded) — pinned by the same canon test.
 const (
-	gitCredentialEndedRefusal   = "git_credential: your Azure DevOps connection ended — connect and start the run again"
-	gitCredentialConsentRefusal = "git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
+	gitCredentialEndedRefusal   = "your Azure DevOps connection ended — connect and start the run again"
+	gitCredentialConsentRefusal = "your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —

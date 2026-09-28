@@ -205,8 +205,8 @@ type RunPolicySpec struct {
 	ToolRules []ToolRule `json:"tool_rules,omitempty"`
 	// GitPushAnyBranch turns OFF branch-namespace confinement for THIS run's
 	// brokered pushes — on the GitHub App lane (on by default) and the git_pat
-	// lane where the operator opted in (WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS,
-	// off by default). One field, both brokers. By default the proxy git-broker
+	// lane where the operator opted in (the pat scope of
+	// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS, off by default). One field, both brokers. By default the proxy git-broker
 	// forwards a push only when every ref lives under
 	// refs/heads/wardyn/<run-id>/, so an agent can't rewrite main — right for
 	// an autonomous run, wrong for a sandbox a HUMAN drives through an external

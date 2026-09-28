@@ -320,16 +320,18 @@ services:
       # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
       WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
-      # internal/runner.ProxySidecarEnvKnobs copies these three from wardynd's
+      # internal/runner.ProxySidecarEnvKnobs copies these from wardynd's
       # OWN process env into every proxy sidecar it creates (docker Env / k8s
       # pod Env — one shared list, both drivers). They read wardynd's env only,
       # never compose's own; unforwarded here, setting them in the operator's
       # shell before `docker compose up` did nothing — the knob was
       # UNREACHABLE, not "off" (docs/ENV.md WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS
-      # / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS / WARDYN_LLM_SCAN already
-      # documents the container-runner forward; this is the missing host hop).
+      # / WARDYN_LLM_SCAN already documents the container-runner forward; this
+      # is the missing host hop). #203 folds the former, standalone
+      # WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS into WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's
+      # {app,pat} scope, so this is now one line, not two.
       # Empty default in all of them: each var's own reader (cmd/wardyn-proxy's
-      # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSSwitch) treats an
+      # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSScopes) treats an
       # unset OR explicitly-empty value as "leave the compiled default" — the
       # re-auth hold's budget included (credentialReauthBudget clamps and falls
       # back on anything it cannot parse) — so
@@ -337,7 +339,6 @@ services:
       # are indistinguishable and all resolve to the same safe default.
       WARDYN_LLM_SCAN: "${WARDYN_LLM_SCAN:-}"
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
-      WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
       # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off"): "off"
       # restores the pre-0.7.6 behaviour for NEW dispatches only. Empty

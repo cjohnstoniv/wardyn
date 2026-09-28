@@ -12,7 +12,7 @@ import (
 )
 
 // NO_PROXY hardcoded the literal "wardyn-proxy" while WARDYN_PROXY_URL
-// is operator-overridable (-proxy-url / WARDYN_PROXY_URL_OVERRIDE). With an
+// is operator-overridable (-proxy-url / WARDYN_SANDBOX_PROXY_URL). With an
 // override the sandbox's own HTTP_PROXY names a host that is NOT in its
 // NO_PROXY, so anything inside the sandbox reaching the proxy's local
 // /wardyn/... routes through a proxy-aware client tried to reach the proxy
