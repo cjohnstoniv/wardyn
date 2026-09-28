@@ -519,3 +519,51 @@ describe("WorkspaceCard — extra selections from a multi-workspace clone", () =
     expect(patch).toHaveBeenCalledWith({ workspaces: [] });
   });
 });
+
+// #1267: the server's own available_to_you, which folds the per-value
+// "Available to" restriction and a git-provider pin in alongside the
+// workspace capability and model-provider arms this card already read —
+// neither of which a plain capability/modelProviders fixture below could
+// ever produce on its own, so a card that ignored the flag would pass every
+// other describe block in this file and still miss the workspace this pins.
+describe("WorkspaceCard — reads the server's available_to_you (#1267)", () => {
+  function flaggedWorkspace(availableToYou: boolean): Workspace {
+    return {
+      id: "ws-flagged",
+      name: "trading-desk",
+      kind: "repo",
+      source: "acme/trading-desk",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+      available_to_you: availableToYou,
+    };
+  }
+
+  it("names the consequence when available_to_you is false, though nothing else here would flag it", () => {
+    const ws = flaggedWorkspace(false);
+    renderCard({ workspaces: [ws], state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] } });
+    expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+    expect(screen.getByText(DENIED.WORKSPACE_CHIP, { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("says nothing when available_to_you is true", () => {
+    const ws = flaggedWorkspace(true);
+    renderCard({ workspaces: [ws], state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] } });
+    expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
+    expect(screen.queryByText(DENIED.WORKSPACE_CHIP)).toBeNull();
+  });
+
+  it("falls back to the pre-#1267 client check when the field is absent (an older server)", () => {
+    const ws: Workspace = {
+      id: "ws-absent", name: "trading-desk", kind: "repo", source: "acme/trading-desk",
+      status: "scanned", created_at: "", updated_at: "",
+    };
+    renderCard({
+      workspaces: [ws],
+      state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
+      caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false },
+    });
+    expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+  });
+});

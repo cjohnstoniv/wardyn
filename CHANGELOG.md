@@ -36,17 +36,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reasons now show consistently everywhere: the workspace picker's own advisory line, a workspace's
   own page ("Start a run"), and the Workspaces list (both the Workspace and Model columns) — each
   reason renders in exactly one place, never twice on the same screen.
-  **Known gap, disclosed rather than silently shipped:** a workspace's own PER-VALUE "Available to:
-  Only these" restriction (set from its own admin editor) is invisible to a member's console —
-  `GET /me/capabilities` carries the caller's own allow rows but no per-value restricted bit, so a
-  workspace restricted that way (with the kind-wide switch left off, the common case) reads as
-  available here and Launch stays enabled; the server still refuses it at launch. Tracked in #1267
-  (a per-value signal the caller's own console can safely read).
-  The git-provider-pinned case (`Uses Azure DevOps (contoso), which isn't available to you.`) is not
-  built either — `GET /me/scm-access` only covers per-user Azure DevOps rows, so absence there is
-  ambiguous for a shared-PAT row or a GitHub App; tracked in #1250.
-  A repo-kind workspace's own server-side handling (it drops the repo silently and proceeds, rather
-  than refusing the way this console now blocks Launch) is tracked separately in #1259.
+  **Known gap, disclosed rather than silently shipped:** a repo-kind workspace's own server-side
+  handling (it drops the repo silently and proceeds, rather than refusing the way this console now
+  blocks Launch) is tracked separately in #1259.
+
+- **A member-safe `available_to_you` on every workspace closes the two gaps #922's own disclosure
+  named (#1267, closing #1250's design note too).** Each row of `GET /workspaces` and
+  `GET /workspaces/{id}` now carries `available_to_you`: a boolean computed by the SAME decide step
+  the launch path runs, over the workspace's own capability, the git-provider row its repo sources
+  resolve to (the identical derivation the launch door's `denyUserWorkspaceProviders` uses), and,
+  only when a model-provider block exists, its model-provider pin. It is always `true` for an
+  operator, and it carries no restriction contents and no other caller's grants — one derived bit,
+  never the "Only..." list itself. The New Run picker card, New Run's own Launch gate, the
+  Workspaces list and a workspace's own "Start a run" now read it when present, falling back to the
+  #922 client-only check against an older server. This makes visible, for the first time, a
+  workspace restricted by its own "Available to: Only these" control with the kind-wide switch left
+  off (the common case), and a workspace pinned to a git-provider row the caller isn't granted —
+  both previously invisible until the server refused the launch.
 
 - **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
   registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one

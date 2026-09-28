@@ -261,6 +261,16 @@ type Workspace struct {
 	Status    WorkspaceStatus `json:"status"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	// AvailableToYou is #1267: a member-safe, per-row, per-CALLER bit — would
+	// the SAME decide path a launch runs admit THIS workspace for the person
+	// reading it? Computed fresh at every GET /workspaces and GET
+	// /workspaces/{id} read (internal/api's workspaceAvailableToCaller), never
+	// stored, never accepted on a write. Always true for an operator. Carries
+	// no restriction contents and no other caller's grants — one derived bit,
+	// so a plain member can see a kind-wide switch, a per-value "Available to:
+	// Only these" restriction, or a pinned git/model provider they lack refuse
+	// them, before Launch ever tries and the server has to say so.
+	AvailableToYou bool `json:"available_to_you"`
 }
 
 // Integration kinds. An integration is a BASE COMPONENT extended by kind: a

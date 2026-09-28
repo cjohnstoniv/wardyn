@@ -270,6 +270,28 @@ describe("WorkspaceDetailScreen — Start a run, the model-provider arm (#922)",
   });
 });
 
+// #1267: the server's own available_to_you — a per-value "Available to"
+// restriction and a git-provider pin, neither of which this page's own two
+// local checks (capabilityAllowed, workspaceModelProviderUnavailable) could
+// ever answer for on their own (no grant, no llm_cred pin at all here).
+describe("WorkspaceDetailScreen — Start a run, reads the server's available_to_you (#1267)", () => {
+  it("disables Start a run when available_to_you is false, though no other reason here applies", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ available_to_you: false }));
+    renderDetail("ws-1", false);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("This workspace isn't available to you.")).toBeInTheDocument();
+  });
+
+  it("stays enabled when available_to_you is true", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ available_to_you: true }));
+    renderDetail("ws-1", false);
+    const button = await screen.findByRole("button", { name: /^start a run$/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
+  });
+});
+
 describe("WorkspaceDetailScreen — image row: three honest variants, never a /build fetch to find out", () => {
   it("standard sandbox image: no base_image, nothing detected — no Rebuild action", async () => {
     getWorkspaceMock.mockResolvedValue(ws());

@@ -347,6 +347,26 @@ func (s *recordTierStore) GetSiteConfig(context.Context) (types.SiteConfig, erro
 	return types.SiteConfig{}, nil
 }
 
+// ListCapabilityGrantsFor/GetCapabilityEnforcement/ListCapabilityRestrictions
+// are the same #338 class of fix, for the same reason: #1267's
+// available_to_you stamp reads them on every GET /workspaces{,/{id}} now.
+// Empty/unenforced keeps this fixture's narrowing kinds allowed by default.
+func (s *recordTierStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *recordTierStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return nil, nil
+}
+func (s *recordTierStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return nil, nil
+}
+
+// ListGroupDenyGrants answers no rows: the stale-group-snapshot fallback a
+// security-admin session's request can take (capabilitySubjects).
+func (s *recordTierStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 // TestRecordWorkspaceIsSuperAdminOnly is the tier decision for
 // POST /workspaces/{id}/record, and it is a TIER decision rather than a guard.
 //

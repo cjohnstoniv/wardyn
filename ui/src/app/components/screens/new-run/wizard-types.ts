@@ -153,34 +153,60 @@ export function resolvedModelProviders(
   return status.model_providers;
 }
 
-// #922: the STRONGER answer New Run's own Launch button needs, folding both
-// person-side "isn't available to you" reasons into one boolean — an
-// ungranted workspace (capabilityAllowed's existing "workspace" narrowing) or
-// one pinned to a model provider the caller's own filtered list doesn't carry
-// (workspaceModelProviderUnavailable, above). Both arms answer DENIED.WORKSPACE_NOT_AVAILABLE
-// wherever this is read (workspace-card.tsx's own advisory line, the rail's
-// own `workspaceUnavailable` prop, workspace-detail.tsx, workspaces.tsx) —
-// one sentence, never two different ones for the same reason.
+// #922 (widened by #1267, which also closes #1250): the STRONGER answer New
+// Run's own Launch button needs, folding every person-side "isn't available
+// to you" reason into one boolean. Both arms answer
+// DENIED.WORKSPACE_NOT_AVAILABLE wherever this is read (workspace-card.tsx's
+// own advisory line, the rail's own `workspaceUnavailable` prop,
+// workspace-detail.tsx, workspaces.tsx) — one sentence, never two different
+// ones for the same reason.
 //
-// KNOWN GAP, disclosed rather than silently shipped (see the PR body and
-// CHANGELOG for tracking): capabilityAllowed only answers "denied" when the
-// WORKSPACE KIND's enforcement switch is on (a caller with no matching allow,
-// `caps.enforcement.workspace`). A single workspace individually restricted
-// via its own "Available to: Only these" control (the per-VALUE bit
-// AvailabilityControl writes) with the kind switch left off — the common
-// case — is invisible here: GET /me/capabilities carries the caller's own
-// allow rows but no per-value restricted signal, so this reads "available"
-// and Launch stays enabled; the server still refuses it at launch
-// (capBatch.decide's step 3 treats a restricted value as enforced regardless
-// of the switch). No member-safe carrier exists for this today — see the PR
-// body and CHANGELOG for what's tracked to fix it, and #1018 for the
-// adjacent existence-oracle gap.
+// When the server sends `ws.available_to_you` (#1267), it is the SAME decide
+// path launch runs, over the workspace's own capability, the git-provider row
+// its repo sources resolve to, and — only when a model-provider block
+// exists — its model-provider pin. That folds in strictly more than this
+// function used to see: the per-VALUE "Available to: Only these" restriction
+// (the kind-wide switch left off, the common case #1249's own review found
+// invisible) and a git-provider pin the caller lacks (#1250), neither of
+// which `capabilityAllowed`/`workspaceModelProviderUnavailable` alone could
+// ever answer for.
+//
+// isAgent RECOMBINES it rather than trusting it outright: available_to_you
+// folds the model-provider arm in whenever a block exists, full stop, but a
+// Shell/exec run never asks the server's model-provider door either (#1249
+// review F2 — createDoorIsModelRun/needsModel), so a model-only pin must not
+// gate one. There is no per-arm breakdown on the wire to read instead, so a
+// non-agent run recombines: the workspace's OWN capability (still directly
+// checkable) settles it on its own when it fails; otherwise, when the local
+// run-type-independent model check already explains a `false`, this run type
+// treats it as available; when it does not, only a git-provider pin — which
+// DOES apply to every run type (runs.go's denyUserWorkspaceProviders) — can
+// be the reason, so it stays unavailable. Residual, disclosed rather than
+// silently shipped: a workspace restricted on BOTH a git-provider pin and a
+// model-provider pin at once, for a non-agent run, is under-restricted here
+// (it reads available) — a rare compound admin configuration; the server's
+// own launch gate still refuses the git-provider pin regardless of what New
+// Run shows.
+//
+// Absent `available_to_you` (an older server) falls back to the pre-#1267
+// answer verbatim: a plain ungranted workspace, or a model-provider pin,
+// isAgent-gated as it always was.
 export function workspaceUnavailableToCaller(
   ws: Workspace,
   caps: MeCapabilities | null,
   modelProviders: { id: string }[] | undefined,
+  isAgent: boolean,
 ): boolean {
-  return !capabilityAllowed(caps, "workspace", ws.id) || workspaceModelProviderUnavailable(ws, modelProviders);
+  if (ws.available_to_you === undefined) {
+    return (
+      !capabilityAllowed(caps, "workspace", ws.id) ||
+      workspaceModelProviderUnavailable(ws, isAgent ? modelProviders : undefined)
+    );
+  }
+  if (ws.available_to_you) return false;
+  if (isAgent) return true;
+  if (!capabilityAllowed(caps, "workspace", ws.id)) return true;
+  return !workspaceModelProviderUnavailable(ws, modelProviders);
 }
 
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
