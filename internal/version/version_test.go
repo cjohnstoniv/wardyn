@@ -47,14 +47,14 @@ func TestString_DevBuild(t *testing.T) {
 
 	t.Run("clean", func(t *testing.T) {
 		stubBuildInfo(t, "80852d67fabcdef0123456789", false, true)
-		if got, want := String(), Version + "+80852d67f"; got != want {
+		if got, want := String(), Version+"+80852d67f"; got != want {
 			t.Fatalf("String() = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("dirty", func(t *testing.T) {
 		stubBuildInfo(t, "80852d67fabcdef0123456789", true, true)
-		if got, want := String(), Version + "+80852d67f-dirty"; got != want {
+		if got, want := String(), Version+"+80852d67f-dirty"; got != want {
 			t.Fatalf("String() = %q, want %q", got, want)
 		}
 	})
