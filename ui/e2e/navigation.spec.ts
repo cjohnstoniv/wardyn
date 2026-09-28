@@ -200,7 +200,7 @@ test.describe("navigation + shell", () => {
     await expect(sidebarLink(page, "Settings")).toHaveCount(0);
     await navTo(page, "Your account");
     await expect(page).toHaveURL(/\/account$/);
-    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
   });
 

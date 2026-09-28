@@ -104,6 +104,11 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5
+  # credentials.test.tsx's aliceRow fixture (added_at/last_used_at): passthrough
+  # display data only, rendered through relativeTime/absoluteTime — no
+  # assertion compares the rendered string against the clock, so the literal
+  # dates themselves never go stale.
+  ["ui/src/app/components/screens/credentials.test.tsx"]=2
 )
 
 fail=0

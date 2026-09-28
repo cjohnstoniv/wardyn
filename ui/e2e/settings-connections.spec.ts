@@ -6,7 +6,7 @@
 import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 
 // E2E coverage for Settings' Host card and Model provider card
-// (src/app/components/screens/settings/{settings-screen,connection-cards}.tsx)
+// (src/app/components/screens/settings/{admin-settings-screen,connection-cards}.tsx)
 // — X2-F1/F3/F23. corp-network.spec.ts was deleted in b97afcdc "for when
 // Settings gains the Host card"; Settings has had one since. fixtures.ts's
 // mockMemberRole comment used to cite that dead file as the precedent for
@@ -14,12 +14,17 @@ import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute } fr
 //
 // Settings replaced the old standalone corp-network step's own e2e: the Host
 // card SUMMARIZES the deployment's proxy posture and LINKS into the same
-// Corporate network step the old page tested directly (settings-screen.tsx's
+// Corporate network step the old page tested directly (admin-settings-screen.tsx's
 // header comment) — this spec proves the summary, the link, and the
 // redirect-probe BYPASS verdict the linked step renders. It does not re-walk
 // the whole corp-network gate ladder (steps.test.ts/corp-network-step.test.tsx
 // already do that against a mock); this is what only an e2e can prove: the
 // real wiring, against the real seeded backend.
+//
+// M-5 (#636) split Settings in two: Host and Model provider both stayed in
+// Admin Settings (/admin/settings), so the tests below are unchanged except
+// the one that used to check /account for a member — Host isn't there at all
+// any more.
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -54,20 +59,16 @@ test.describe("Settings — Host card", () => {
     await expect(hostCard.getByText("Direct", { exact: true })).toBeVisible();
   });
 
-  test("a member sees no Internet row and no Corporate proxy landing", async ({ page }) => {
+  // M-5 (#636) moved Host to Admin Settings only — a member's Your account has
+  // no Host card at all now, so there is no Internet row or proxy landing to
+  // hide there any more; this supersedes the old per-row hiding test.
+  test("a member's Your account has no Host card at all", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
     await navToRoute(page, "/account");
 
-    await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
-    // Fix pass (review F3): the Host h3 above paints immediately, before the
-    // site-config read that gates Internet/the button resolves — an absence
-    // asserted right after it is "not yet", not "never". Wait for the fetch
-    // to actually land first.
-    await page.waitForLoadState("networkidle");
-    // Image builder/Recording store are NOT operator-gated (checks_redacted
-    // is a server-side fact this mocked /me splice never touches) — only
-    // Internet and the proxy landing button are.
+    await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Host" })).toHaveCount(0);
     await expect(page.getByText("Internet")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Corporate proxy & egress" })).toHaveCount(0);
   });

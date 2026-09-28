@@ -49,12 +49,14 @@ const POLL_MS = 1500;
 const FALLBACK_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Can THIS role open `path`? Mirrors App.tsx's <Route> tiers: a user's
-// reachable surface is wider than their nav (/secrets, /account and /ssh-keys
-// have no sidebar entry but are theirs), nothing under /admin is theirs, and
+// reachable surface is wider than their nav (/secrets and /account have no
+// sidebar entry but are theirs), nothing under /admin is theirs, and
 // /admin/providers is for an actual admin only — a security admin manages
 // Drives, so /admin/drives stays theirs. Not a route guard — the server is the
 // gate — only the answer to "does this page still belong to who signed in".
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account", "/ssh-keys"];
+// M-5 (#636) deleted /ssh-keys with no alias — SshKeysPane is mounted once
+// now, in /account, which already covers it.
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account"];
 const OPERATOR_ONLY_PREFIXES = ["/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(`${p}/`));

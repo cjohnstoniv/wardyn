@@ -18,6 +18,7 @@ import {
   Fingerprint,
   FolderOpen,
   HardDrive,
+  KeyRound,
   Lock,
   Menu,
   Play,
@@ -41,7 +42,7 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -333,6 +334,11 @@ const ADMIN_NAV: NavItem[] = [
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
   { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   { to: "/admin/permissions", label: "Permissions", icon: Users },
+  // Credentials (CS-8, design F-1) sits right after Permissions — both name
+  // who may act. securityOps server-side, so both admin tiers see it (a
+  // security admin has no Settings and no Secrets, so this page can't live
+  // in either).
+  { to: "/admin/credentials", label: CREDENTIALS_NAV_TITLE, icon: KeyRound },
   // User types (0.8, UT-7a) sits beside Permissions — the subject it and
   // Governance name. securityOps server-side, so both admin tiers see it.
   { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },

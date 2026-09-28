@@ -162,53 +162,13 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// X3-F1 / X3-F4 — the console used to read a member's REDACTED body as facts
-// about the deployment. This render-only case supplies barrier classes the
-// none-runner backend cannot advertise:
-// redactSetupStatusForUser zeroes the runner struct (Driver "" — the Go zero
-// value, not the "none" sentinel), empties checks, and now says so with
-// checks_redacted.
-async function mockMemberSetupStatus(page: import("@playwright/test").Page): Promise<void> {
-  await page.route("**/api/v1/setup/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.checks = [];
-    json.providers = [];
-    json.secrets = { present: [] };
-    json.checks_redacted = true;
-    // The point of the shape: the driver NAME is withheld while the classes
-    // survive the redaction. The harness backend may itself report none, so
-    // the fixture supplies a live pair when it does.
-    const classes: string[] = json.runner?.confinement_classes ?? [];
-    json.runner = { driver: "", confinement_classes: classes.length > 0 ? classes : ["CC1", "CC2"] };
-    await route.fulfill({ response, json });
-  });
-}
-
-test.describe("member console — a redacted body is not a deployment fact", () => {
-  test("Settings claims neither a missing runner nor an off image builder", async ({ page }) => {
-    await mockMemberRole(page);
-    await mockMemberSetupStatus(page);
-    await gotoConsole(page);
-    await navToRoute(page, "/account");
-
-    await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
-    // #1200 — the Host card is the shared TierPicker's DISPLAY mode now: a
-    // read-only statement of what this host has installed, never a
-    // radiogroup (nobody picks a default here). The card and its
-    // `-runner docker` fix are for a host that genuinely has none.
-    await expect(page.getByText("No sandbox runner")).toHaveCount(0);
-    await expect(page.getByText("-runner docker")).toHaveCount(0);
-    await expect(page.getByRole("radiogroup", { name: "Barrier tier" })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Wall/ })).toHaveCount(0);
-    await expect(page.getByText("Wall", { exact: true })).toBeVisible();
-    // The row itself is gone, not merely its Off sentence — the deployment's
-    // builder posture was never told to this caller.
-    await expect(page.getByText("Image builder")).toHaveCount(0);
-    await expect(page.getByText(/devcontainer builds and --image wraps are unavailable/)).toHaveCount(0);
-  });
-
+// M-5 (#636) moved the "redacted body is not a deployment fact" Settings case
+// this describe used to carry — Host left /account entirely, so there is
+// nothing left there for a redacted body to leak into (settings-connections
+// .spec.ts's "a member's Your account has no Host card at all" is the split's
+// replacement). This lone survivor never belonged to that title; it's its own
+// now.
+test.describe("member console — runs empty state", () => {
   test("an empty board offers the member's own next move, not the operator funnel", async ({ page }) => {
     await asRealMember(page);
     await page.route(/\/api\/v1\/runs(\?|$)/, (route) =>
