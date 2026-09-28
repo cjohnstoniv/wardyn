@@ -239,6 +239,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run has no sandbox to read (state="+string(run.State)+")")
 		return
 	}
+	if run.PausedAt != nil {
+		writeError(w, http.StatusConflict, runPausedReadMsg)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), runFilesTimeout)
 	defer cancel()

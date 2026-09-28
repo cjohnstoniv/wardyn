@@ -1385,3 +1385,38 @@ func TestFreezeSandbox_MissingRefIsIdempotent(t *testing.T) {
 		t.Errorf("ThawSandbox of a missing ref: %v", err)
 	}
 }
+
+// TestFreezeSandbox_RefusesARuntimeOtherThanRunc: the driver enforces the
+// per-class freeze rule on the container itself, not only by contract. A ref
+// whose effective runtime is not runc — pinned to runsc, or a default runtime
+// that is not runc — is refused with runner.ErrFreezeUnsupported and left
+// running; a caller that skipped Capabilities.Freeze still cannot pause it.
+func TestFreezeSandbox_RefusesARuntimeOtherThanRunc(t *testing.T) {
+	for _, tc := range []struct {
+		name, pinned, daemonDefault string
+	}{
+		{"pinned runsc", "runsc", "runc"},
+		{"default runtime runsc", "", "runsc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newTestDriver(f)
+			ctx := context.Background()
+			sb, err := d.CreateSandbox(ctx, testSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			f.mu.Lock()
+			f.containers[sb.Ref].host.Runtime = tc.pinned
+			f.info.DefaultRuntime = tc.daemonDefault
+			f.mu.Unlock()
+			if err := d.FreezeSandbox(ctx, sb.Ref); !errors.Is(err, runner.ErrFreezeUnsupported) {
+				t.Fatalf("FreezeSandbox = %v, want runner.ErrFreezeUnsupported", err)
+			}
+			if agent := f.containers[sb.Ref]; agent.state != nil && agent.state.Paused {
+				t.Fatal("a non-runc container was paused")
+			}
+		})
+	}
+}

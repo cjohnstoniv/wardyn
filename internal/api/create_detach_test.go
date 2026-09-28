@@ -91,6 +91,7 @@ func (s *createDetachStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, 
 }
 
 func (s *createDetachStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+func (s *createDetachStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error  { return nil }
 func (s *createDetachStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }

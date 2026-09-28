@@ -138,28 +138,40 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	kept.EndsAt = &end
 	finished := newRun(types.RunCompleted)
 	finished.EndsAt = &end
-	for _, r := range []types.AgentRun{live, kept, finished} {
+	rebootLost := newRun(types.RunRunning)
+	rebootLost.EndsAt, rebootLost.WaitBudgetSec = &end, 600
+	for _, r := range []types.AgentRun{live, kept, finished, rebootLost} {
 		persistRun(t, ctx, pool, r)
 	}
 	if _, err := pg.MarkRunEnded(ctx, kept.ID, end); err != nil {
 		t.Fatalf("MarkRunEnded: %v", err)
 	}
+	// A run lost to a reboot can still move its end — extending it is how it
+	// becomes revivable again (F1, long-holds design rev 4 §2.3). Only
+	// LostEnded (MarkRunEnded, above) blocks the write.
+	if _, err := pg.MarkRunLost(ctx, rebootLost.ID, types.LostReboot, time.Now().UTC(), 0); err != nil {
+		t.Fatalf("MarkRunLost: %v", err)
+	}
 
 	for _, tc := range []struct {
 		name     string
-		id       uuid.UUID
-		fromEnd  *time.Time
-		fromWait int
-		want     bool
+		id         uuid.UUID
+		fromLimits types.RunLimits
+		fromEnd    *time.Time
+		fromWait   int
+		want       bool
 	}{
-		{"a stale end", live.ID, &later, 600, false},
-		{"a stale wait", live.ID, &end, 60, false},
-		{"a kept run", kept.ID, &end, 0, false},
-		{"a terminal run", finished.ID, &end, 0, false},
-		{"the values read", live.ID, &end, 600, true},
-		{"the same values again", live.ID, &end, 600, false},
+		{"a stale end", live.ID, types.RunLimits{}, &later, 600, false},
+		{"a stale wait", live.ID, types.RunLimits{}, &end, 60, false},
+		// The gate was read from limits a re-clamp has since tightened.
+		{"stale limits", live.ID, types.RunLimits{UserChangesLimits: true}, &end, 600, false},
+		{"a kept run", kept.ID, types.RunLimits{}, &end, 0, false},
+		{"a terminal run", finished.ID, types.RunLimits{}, &end, 0, false},
+		{"a reboot-lost run", rebootLost.ID, types.RunLimits{}, &end, 600, true},
+		{"the values read", live.ID, types.RunLimits{}, &end, 600, true},
+		{"the same values again", live.ID, types.RunLimits{}, &end, 600, false},
 	} {
-		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromEnd, tc.fromWait, &later, 1200, nil)
+		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromLimits, tc.fromEnd, tc.fromWait, &later, 1200, nil)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
 		}
@@ -171,13 +183,13 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	if moved.EndsAt == nil || !moved.EndsAt.Equal(later) || moved.WaitBudgetSec != 1200 {
 		t.Errorf("run = ends %v wait %d; want %v and 1200", moved.EndsAt, moved.WaitBudgetSec, later)
 	}
-	if got, err := pg.SetRunEndAndWait(ctx, live.ID, &later, 1200, nil, 1200, nil); err != nil || !got {
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, types.RunLimits{}, &later, 1200, nil, 1200, nil); err != nil || !got {
 		t.Fatalf("to No end: %v, %v; want true", got, err)
 	}
 	if moved, _ := pg.GetRun(ctx, live.ID); moved.EndsAt != nil {
 		t.Errorf("ends_at = %v, want NULL (no end)", moved.EndsAt)
 	}
-	if got, err := pg.SetRunEndAndWait(ctx, live.ID, nil, 1200, &end, 1200, nil); err != nil || !got {
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, types.RunLimits{}, nil, 1200, &end, 1200, nil); err != nil || !got {
 		t.Errorf("from No end: %v, %v; want true — a NULL end compares as the value read", got, err)
 	}
 }
@@ -227,7 +239,7 @@ func TestPG_EndedRunExtensionHonorsTheKeptMark(t *testing.T) {
 		{"the grace has run out", keptAt(endedAt, endedAt.Add(testEndedGrace)), false},
 		{"the mark read, inside the grace", keptAt(endedAt, now), true},
 	} {
-		got, err := pg.SetRunEndAndWait(ctx, r.ID, r.EndsAt, r.WaitBudgetSec, &later, r.WaitBudgetSec, tc.ended)
+		got, err := pg.SetRunEndAndWait(ctx, r.ID, r.RunLimits, r.EndsAt, r.WaitBudgetSec, &later, r.WaitBudgetSec, tc.ended)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
 		}
@@ -245,7 +257,7 @@ func TestPG_EndedRunExtensionHonorsTheKeptMark(t *testing.T) {
 	live := newRun(types.RunRunning)
 	live.EndsAt = &later
 	persistRun(t, ctx, pool, live)
-	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, &later, live.WaitBudgetSec, &now, live.WaitBudgetSec, keptAt(endedAt, now)); err != nil || ok {
+	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, live.RunLimits, &later, live.WaitBudgetSec, &now, live.WaitBudgetSec, keptAt(endedAt, now)); err != nil || ok {
 		t.Errorf("a live run under the ended condition = %v, %v; want false", ok, err)
 	}
 }

@@ -125,23 +125,25 @@ func (s *leaseStore) MarkRunEndingSoon(_ context.Context, _ uuid.UUID, endsAt ti
 	return true, nil
 }
 
-// SetRunEndAndWait mirrors the PG predicate, EndedKept included. beforeSetEnd
-// runs first, outside the lock: what lands between the handler's decision and
-// this write.
-func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *store.EndedKept) (bool, error) {
+// SetRunEndAndWait mirrors the PG predicate, EndedKept and the limits compare
+// included. beforeSetEnd runs first, outside the lock: what lands between the
+// handler's decision and this write.
+func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromLimits types.RunLimits, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *store.EndedKept) (bool, error) {
 	if s.beforeSetEnd != nil {
 		s.beforeSetEnd()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.run.EndsAt
-	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
 	keptOK := s.run.LostReason != types.LostEnded
 	if ended != nil {
 		keptOK = !keptOK && s.run.LostAt.Equal(ended.LostAt) && s.run.LostAt.After(ended.KeptAfter)
 	}
-	if !sameEnd || fromWait != s.run.WaitBudgetSec || !keptOK || s.state.IsTerminal() {
+	if !sameEnd(fromEnd, s.run.EndsAt) || fromWait != s.run.WaitBudgetSec || fromLimits != s.run.RunLimits ||
+		!keptOK || s.state.IsTerminal() {
 		return false, nil
+	}
+	if !sameEnd(toEnd, s.run.EndsAt) {
+		s.run.EndTightenedAt = nil
 	}
 	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
 	return true, nil

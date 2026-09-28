@@ -84,6 +84,8 @@ func (s *supersedeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref stri
 	return nil
 }
 
+func (s *supersedeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error { return nil }
+
 // QueryAuditEvents: the RUN READ path asks for a run's events to project its UI
 // apps (effectiveUIApps, runs_policy.go), and an unimplemented promoted method
 // on a double is a nil-pointer panic rather than the logged error that read path
