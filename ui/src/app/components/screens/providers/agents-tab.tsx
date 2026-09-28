@@ -189,11 +189,15 @@ function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
   );
 }
 
-// The providers set up for this agent — disabled ones included, the same count
-// the Model providers list's "no model provider is set up" notice reads: an off
-// provider is still set up, and may still be this agent's default.
+// The providers that can serve this agent's runs: turned on, and used by it.
+// A turned-off provider is never a candidate at run create
+// (chooseModelProvider, internal/api), so it is neither offered as a default
+// nor counted as the only one; when every provider serving the agent is off,
+// the row reads G1. Packet MP-C draws no off case — this follows the server.
+// The Model providers list counts off providers as set up on purpose: it is the
+// page where they are turned back on.
 function servingProviders(providers: ModelProvider[], harnessId: string): ModelProvider[] {
-  return providers.filter((p) => p.harnesses?.some((h) => h.harness === harnessId));
+  return providers.filter((p) => !p.disabled && p.harnesses?.some((h) => h.harness === harnessId));
 }
 
 function providerName(p: ModelProvider): string {
@@ -227,7 +231,7 @@ function DefaultProviderField({
   if (serving.length === 0) {
     return (
       <Field label={AGENTS.FIELD_DEFAULT_PROVIDER}>
-        <p className="text-body text-muted-foreground">{AGENTS.NO_PROVIDER(harness.display)}</p>
+        <p className="text-body text-info">{AGENTS.NO_PROVIDER(harness.display)}</p>
       </Field>
     );
   }
@@ -240,8 +244,10 @@ function DefaultProviderField({
   }
   return (
     <Field label={AGENTS.FIELD_DEFAULT_PROVIDER} htmlFor={id} hint={AGENTS.DEFAULT_HINT}>
+      {/* A stored default that is off (or gone) is not an option, so the select
+          shows the placeholder until a serving provider is chosen. */}
       <Select
-        value={row.default_provider ?? ""}
+        value={serving.some((p) => p.id === row.default_provider) ? row.default_provider : ""}
         disabled={!operator}
         onValueChange={(v) => onUpdate({ ...row, default_provider: v })}
       >

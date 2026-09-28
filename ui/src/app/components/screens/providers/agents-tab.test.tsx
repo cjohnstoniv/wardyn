@@ -471,11 +471,39 @@ describe("AgentsTab — the default model provider (G1–G4)", () => {
     expect(body.agents.find((a: { id: string }) => a.id === "claude-code").default_provider).toBeUndefined();
   });
 
-  it("G2 counts a turned-off provider as set up, and names it by its kind label when unnamed", async () => {
+  // A turned-off provider can't serve a run (chooseModelProvider skips it), so
+  // the tab doesn't offer or count one. Packet MP-C draws no off case; this
+  // follows the server.
+  it("G1 in text-info: every provider serving the agent is turned off", async () => {
     withProviders([{ ...ANTHROPIC_KEY, disabled: true }]);
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const claude = await screen.findByTestId("agent-row-claude-code");
+    const line = within(claude).getByText(AGENTS.NO_PROVIDER("Claude Code"));
+    expect(line.className.split(/\s+/)).toContain("text-info");
+    expect(within(claude).queryByText(/the only provider/)).toBeNull();
+  });
+
+  it("G2 counts only turned-on providers, and names one by its kind label when unnamed", async () => {
+    withProviders([ANTHROPIC_KEY, { ...GATEWAY, disabled: true }]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
     expect(within(claude).getByText("Anthropic API key — the only provider Claude Code can use.")).toBeInTheDocument();
+    expect(within(claude).queryByRole("combobox")).toBeNull();
+  });
+
+  it("G3 offers only turned-on providers, and a stored default that is off shows the placeholder", async () => {
+    withProviders([{ ...GATEWAY, disabled: true }, ANTHROPIC_KEY, BEDROCK]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"g3off"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    const select = within(claude).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` });
+    expect(select).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
+    await userEvent.click(select);
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["Anthropic API key", "Bedrock (prod) · Amazon Bedrock"]);
   });
 
   it("G3: several providers are a select showing the stored default, with the hint", async () => {
@@ -546,8 +574,6 @@ describe("AgentsTab — the default model provider (G1–G4)", () => {
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     expect(screen.queryByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO })).toBeNull();
-    expect(screen.queryByRole("radio", { name: AGENTS.SOURCE_PER_USER })).toBeNull();
-    expect(screen.queryByText(AGENTS.FIELD_SOURCE)).toBeNull();
     expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
   });
 

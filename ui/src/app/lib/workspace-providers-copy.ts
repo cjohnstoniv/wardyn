@@ -15,7 +15,7 @@
 // their own.
 //
 // workspace-providers-copy.test.ts PARSES §7.2-§7.5 + §7.7 back out of the
-// prompt doc and compares all 98 keys below against them (§7.6 is STAGING —
+// prompt doc and compares all 94 keys below against them (§7.6 is STAGING —
 // field-report strings owned by other lanes — and is excluded, the way this
 // doc's own header says: `/^### 7\.[2-57]\b/`), so a swapped hyphen, a dropped
 // ellipsis or a new doc row fails a gate instead of shipping.
@@ -233,11 +233,6 @@ export const AGENTS = {
   MECHANISM_NONE: "None — the image brings its own",
   MECHANISM_BEDROCK_BEARER: "Bearer key",
   MECHANISM_BEDROCK_SSO: "SSO sign-in",
-  FIELD_SOURCE: "Credential",
-  SOURCE_SHARED: "Shared",
-  SOURCE_SHARED_HINT: "One credential, captured by an admin, backs every run.",
-  SOURCE_PER_USER: "Per person",
-  SOURCE_PER_USER_HINT: "Each person signs in to AWS themselves. Their runs use their own session; an expiry affects one person.",
   FIELD_SSO_START_URL: "AWS access portal start URL",
   // Replaces the login pane's start-URL FIELD when the sign-in runs under a
   // per_user row: the server signs in against the row's stored sso_start_url and

@@ -15,7 +15,7 @@ import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-pa
 // precedent, user-drives-copy.test.ts's parseFrozenTables()): this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
 // workspace-providers-prompt.md §7.2-§7.5 + §7.7 back out of the doc and
-// compares all 99 keys. A swapped hyphen, a dropped ellipsis, a reworded
+// compares all 94 keys. A swapped hyphen, a dropped ellipsis, a reworded
 // clause, a new doc row or a deleted one all fail here rather than shipping.
 //
 // §7.6 is STAGING (field-report strings owned by other lanes, parsed by
@@ -53,8 +53,9 @@ const PLURALISED = ["SAVED_NARROWED(n)", "CARD_PROVIDERS(n)", "CARD_AGENTS(n)", 
 const NAMESPACES: Record<string, unknown>[] = [PROVIDERS, PROVIDER_MEMBER, AGENTS];
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (61 / 3 / 35, #125: AGENTS lost OPEN_RUN_CTA; #539: seven
-// mechanism-radio keys out, five default-provider keys in); the completeness
+// collide (61 / 3 / 30, #125: AGENTS lost OPEN_RUN_CTA; #539: twelve
+// mechanism-radio and credential-toggle keys out, five default-provider keys
+// in); the completeness
 // test below is what keeps that true.
 const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
@@ -62,9 +63,9 @@ const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("workspace-providers-copy — §7.2-§7.5 + §7.7 parsed out of the prompt doc", () => {
   // #125: OPEN_RUN_CTA retired with the held "Open run" screen — 102 -> 101.
-  // #539: the Agents tab's default provider — 101 -> 99.
-  it("finds all 99 frozen keys in the doc (§7.6 excluded)", () => {
-    expect(doc.size).toBe(99);
+  // #539: the Agents tab's default provider — 101 -> 94.
+  it("finds all 94 frozen keys in the doc (§7.6 excluded)", () => {
+    expect(doc.size).toBe(94);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

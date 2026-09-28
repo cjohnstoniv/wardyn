@@ -453,12 +453,11 @@ Settings card). Top to bottom:
    `DRIVE_CEILING_TITLE`; `FIELD_DRIVES_ENABLED` switch, `FIELD_MAX_DRIVE` with `MAX_DRIVE_HINT` and
    `CEILING` as the plain note; then `UserDrivesCard` as the link out; `SAVE_CTA` teal.
 5. **Agents** — `AGENTS_TITLE` / `AGENTS_LEAD`; one row per catalog id + one per image-map key: display
-   name, `Switch` `FIELD_ENABLED` (reused from `PROVIDERS`); body: `FIELD_MECHANISM` radio grouped by vendor over the
-   existing lane titles (impossible pairs disabled with the catalog reason), `FIELD_SOURCE`
-   `Segmented` `SOURCE_SHARED` / `SOURCE_PER_USER` (the second disabled off `bedrock_sso` with
-   `PER_USER_UNAVAILABLE`), `FIELD_SSO_START_URL` when `per_user`, and the signed-in admin's own
-   `Model access` chip with its action (`SIGN_IN_AWS`, `outline` here, opens `HarnessLoginPane` in
-   place);
+   name, `Switch` `FIELD_ENABLED` (reused from `PROVIDERS`); body: `FIELD_DEFAULT_PROVIDER` in one of
+   packet MP-C's four states (G1 `NO_PROVIDER`, G2 `ONLY_PROVIDER`, G3 a select of `DEFAULT_OPTION`
+   with `DEFAULT_HINT`, G4 `MECHANISM_NONE`), and the signed-in admin's own `Model access` chip with its
+   action (`SIGN_IN_AWS`, `outline` here, opens `HarnessLoginPane` in place). The mechanism radio, the
+   credential toggle and the start URL moved to the model provider (#539);
    `S.MODEL_FOOTER` as the plain note; `SAVE_CTA` teal.
 
 **The funnel step** `providers` in "Your work" before `workspaces`: heading `STEP_HEADING`, the
@@ -843,11 +842,6 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `MECHANISM_NONE` | None — the image brings its own |
 | `MECHANISM_BEDROCK_BEARER` | Bearer key |
 | `MECHANISM_BEDROCK_SSO` | SSO sign-in |
-| `FIELD_SOURCE` | Credential |
-| `SOURCE_SHARED` | Shared |
-| `SOURCE_SHARED_HINT` | One credential, captured by an admin, backs every run. |
-| `SOURCE_PER_USER` | Per person |
-| `SOURCE_PER_USER_HINT` | Each person signs in to AWS themselves. Their runs use their own session; an expiry affects one person. |
 | `FIELD_SSO_START_URL` | AWS access portal start URL |
 | `SSO_START_URL_MANAGED` | Your admin set this organization's access portal. Your sign-in uses it — there is nothing to enter here. |
 | `ADMIN_OWN_CHIP_NOTE` | This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses. |
