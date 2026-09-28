@@ -105,7 +105,7 @@ beforeEach(() => {
 });
 
 describe("ExplainGrid — the request", () => {
-  it("asks for the type by its id, across main's ten kinds in order", async () => {
+  it("asks for the type by its id, across main's nine kinds in order", async () => {
     answer([]);
     renderGrid();
     await screen.findByTestId("explain-grid");
@@ -115,7 +115,6 @@ describe("ExplainGrid — the request", () => {
       "workspace",
       "image",
       "agent",
-      "integration",
       "workspace_provider",
       "model_provider",
       "feature",
@@ -331,22 +330,6 @@ describe("ExplainGrid — families (G-1, G-3)", () => {
     expect(within(await row("workspace_provider", "*")).getByText(EXPLAIN.ALL_GIT_PROVIDERS)).toBeInTheDocument();
     expect(within(await row("model_provider", "*")).getByText(EXPLAIN.ALL_MODEL_PROVIDERS)).toBeInTheDocument();
     expect(within(await row("policy", "*")).getByText(EXPLAIN.ALL_POLICIES)).toBeInTheDocument();
-  });
-
-  it("hides Model integrations while its only row is the default, and shows it once a grant gives it a second", async () => {
-    answer([{ kind: "integration", value: "*", state: "everyone" }]);
-    renderGrid();
-    await screen.findByTestId("explain-grid");
-    expect(screen.queryByText(KIND.integration.label)).not.toBeInTheDocument();
-    cleanup();
-
-    answer([
-      { kind: "integration", value: "*", state: "everyone" },
-      { kind: "integration", value: "int-1", state: "this_type" },
-    ]);
-    renderGrid();
-    expect(await screen.findByText(KIND.integration.label)).toBeInTheDocument();
-    expect(within(await row("integration", "*")).getByText(EXPLAIN.ALL_INTEGRATIONS)).toBeInTheDocument();
   });
 });
 

@@ -14,14 +14,13 @@ compares it with its namespace in both directions.
 - Each capability kind is one family, headed by its Permissions label (`KIND[kind].label`,
   `permissions-copy.ts`). The kind's default (`*`) row comes first, then one row for each value a
   grant names or "Available to" restricts. That is the order `GET /permissions/explain` returns.
-  Nine of the ten kinds always render; Model integrations (`integration`) is retiring
-  (`KIND.integration` says so) and renders only once a grant or restriction gives it a row beyond
-  its default (G-1) — its lone `*` row alone would be noise on every type.
+  Every kind renders. (G-1 hid Model integrations, `integration`, while its only row was the
+  default; 0.8 retired that kind with the AI integrations, so there is nothing left to hide.)
 - A row is the state chip, then the value. Tones follow the packet: This type is green (`success`),
   Blocked is red (`danger`), and Everyone, Not available and Admins only are grey (`neutral`, and the
   row text is muted).
 - The default (`*`) row of every kind names itself: `ALL_WORKSPACES`, `ALL_IMAGES` and
-  `SSH_AND_TOKENS` for the three packet A drew, and `ALL_{family}` for the other seven (G-3). A value
+  `SSH_AND_TOKENS` for the three packet A drew, and `ALL_{family}` for the other six (G-3). A value
   shows by its name when a list the caller can read names it: a workspace, a stored policy, an agent
   the console knows, or a model provider (super admins only, since that roster is `operatorOnly`,
   unless the row already carries a server `label`). A git provider row and a model provider row carry
@@ -78,7 +77,6 @@ compares it with its namespace in both directions.
 | `ALL_EGRESS_HOSTS` | the `egress_host` kind's `*` row | All egress hosts |
 | `ALL_SECRETS` | the `secret` kind's `*` row | All secrets |
 | `ALL_AGENTS` | the `agent` kind's `*` row | All agents |
-| `ALL_INTEGRATIONS` | the `integration` kind's `*` row | All model integrations |
 | `ALL_GIT_PROVIDERS` | the `workspace_provider` kind's `*` row | All git providers |
 | `ALL_MODEL_PROVIDERS` | the `model_provider` kind's `*` row | All model providers |
 | `ALL_POLICIES` | the `policy` kind's `*` row | All stored policies |

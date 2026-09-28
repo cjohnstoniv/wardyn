@@ -4,8 +4,8 @@
 // Package vaultkv is Wardyn's Vault client and what it serves: the KV v2
 // external store (credential-storage design §2.3a.1), and the Transit KEK
 // (transit.go, §2.3). In store mode each credential's value lives in the
-// organisation's Vault (OpenBao is a supported, API-compatible endpoint), and
-// the Postgres row is a pointer to it. Wardyn does no at-rest cryptography
+// organisation's Vault (OpenBao is a supported, API-compatible endpoint);
+// the Postgres row is only a pointer. Wardyn does no at-rest cryptography
 // for such a row.
 //
 // Path scheme, under the mount and a per-install prefix:
@@ -14,23 +14,24 @@
 //	<prefix>/operator/<name>              owner "" (operator-namespace credentials)
 //	<prefix>/people/<owner-b32>/<name>    every other owner
 //
-// owner-b32 is base32hex (RFC 4648 §7), lowercase, unpadded: one path segment
-// that can never hold a "/" and that an operator (and -reconcile) can reverse.
+// owner-b32 is base32hex (RFC 4648 §7), lowercase, unpadded: one path
+// segment that can never hold a "/", reversible by an operator (and
+// -reconcile).
 //
-// The binding that replaces local mode's associated data is a pair: the path
-// is DERIVED from the row's (owned_by, name) and a row naming any other path
-// is refused; then the value's custom_metadata must name the same owner and
-// name. A pointer moved under another person's row therefore derives a path
-// that holds nothing, or a value bound to someone else: a refusal either way.
+// The binding replacing local mode's associated data is a pair: the path is
+// DERIVED from the row's (owned_by, name), and a row naming any other path
+// is refused; the value's custom_metadata must then name the same owner and
+// name. A pointer moved under another person's row derives a path holding
+// nothing, or a value bound to someone else — a refusal either way.
 //
-// With a second Kubernetes-auth role (RolePlatform, the recommended
-// configuration) wardynd holds two tokens: the platform role's reaches only
-// <prefix>/platform/, the other role's everything else, so a leak of the
-// credentials token reaches no signing or session key (design §2.13 b).
+// With a second Kubernetes-auth role (RolePlatform, recommended) wardynd
+// holds two tokens: the platform role reaches only <prefix>/platform/, the
+// other role everything else, so a leaked credentials token reaches no
+// signing or session key (design §2.13 b).
 //
-// Wardyn only ever calls data/ and metadata/ (and auth/): never destroy/,
-// undelete/ or a DELETE on data/, so the policy grants none of them. "Remove"
-// is DELETE metadata/, which drops every version.
+// Wardyn only ever calls data/ and metadata/ (and auth/) — never destroy/,
+// undelete/ or DELETE on data/ — so the policy grants none of them. "Remove"
+// is DELETE metadata/, dropping every version.
 package vaultkv
 
 import (
@@ -90,9 +91,9 @@ type Store struct {
 
 var _ secretstore.External = (*Store)(nil)
 
-// New validates cfg, logs in and checks that a KV v2 engine is mounted at
-// cfg.Mount. A store that cannot log in, or whose mount does not exist, refuses
-// to be built, so boot fails closed (K11) instead of the first write. The
+// New validates cfg, logs in and checks a KV v2 engine is mounted at
+// cfg.Mount. A store that can't log in, or whose mount doesn't exist, refuses
+// to be built — boot fails closed (K11) instead of the first write. The
 // token is kept alive until ctx ends.
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err := validSegments(cfg.Mount); err != nil {
@@ -117,9 +118,9 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A KV v2 mount answers GET <mount>/config; a mistyped mount, or an engine
-	// not yet enabled, answers 404. Asked as WARDYN_VAULT_ROLE only: the
-	// platform role's policy reaches <prefix>/platform/ alone.
+	// A KV v2 mount answers GET <mount>/config; a mistyped mount or a
+	// not-yet-enabled engine answers 404. Asked as WARDYN_VAULT_ROLE only —
+	// the platform role's policy reaches <prefix>/platform/ alone.
 	status, err := c.call(ctx, http.MethodGet, cfg.Mount+"/config", nil, nil)
 	if err == nil && status == http.StatusNotFound {
 		err = fmt.Errorf("no KV v2 engine is mounted there (GET %s/config answered 404)", cfg.Mount)
@@ -151,9 +152,8 @@ func loggedIn(ctx context.Context, cfg Config) (*client, error) {
 	return c, nil
 }
 
-// as is the client a call on rel (a path, or a list directory, under the
-// mount) is made with: the platform role's for the platform kind, when that
-// role is configured.
+// as picks the client a call on rel is made with: the platform role's, for
+// a platform-kind path, when that role is configured.
 func (s *Store) as(rel string) *client {
 	if s.platform != nil && strings.HasPrefix(rel, s.prefix+"/platform/") {
 		return s.platform
@@ -167,9 +167,9 @@ func (s *Store) Name() string { return Name }
 // Describe implements secretstore.External.
 func (s *Store) Describe() string { return "Vault at " + s.c.base.Host }
 
-// validSegments accepts a "/"-separated path whose every segment is non-empty,
-// not "." or "..", and made of [A-Za-z0-9._-]. Anything else could change
-// which path Vault's router resolves.
+// validSegments accepts a "/"-separated path whose every segment is
+// non-empty, not "." or "..", and [A-Za-z0-9._-] only — anything else could
+// change which path Vault's router resolves.
 func validSegments(p string) error {
 	if p == "" {
 		return fmt.Errorf("is empty")
@@ -189,8 +189,8 @@ func validSegments(p string) error {
 
 func kind(owner, name string) string { return secretstore.Kind(owner, name) }
 
-// rel is the path under the mount DERIVED from the row. It is the only way
-// this store ever computes where a value lives.
+// rel is the path under the mount, DERIVED from the row — the only way this
+// store computes where a value lives.
 func (s *Store) rel(owner, name string) (string, error) {
 	if strings.Contains(name, "/") {
 		return "", fmt.Errorf("secret name %q cannot be a Vault path: it holds a \"/\"", name)
@@ -218,9 +218,9 @@ func (s *Store) Ref(owner, name, _ string) (string, error) {
 	return s.ref(rel), nil
 }
 
-// derive returns the derived path for the row and refuses a recorded ref
-// that names any other (design rule 16): a pointer moved or forged by a
-// database writer never selects where a read goes.
+// derive returns the derived path and refuses a recorded ref naming any
+// other (design rule 16): a pointer moved or forged by a database writer
+// never selects where a read goes.
 func (s *Store) derive(owner, name, ref string) (string, error) {
 	rel, err := s.rel(owner, name)
 	if err != nil {
@@ -233,8 +233,8 @@ func (s *Store) derive(owner, name, ref string) (string, error) {
 }
 
 // binding is the custom_metadata a value for (owner, name) carries. Vault
-// refuses an empty metadata value, so the operator's "" owner is written as no
-// wardyn-owner key at all; the kind (platform/operator vs people) says which.
+// refuses an empty metadata value, so the operator's "" owner is written as
+// no wardyn-owner key; kind says which.
 func binding(owner, name string) map[string]string {
 	m := map[string]string{metaName: name, metaKind: kind(owner, name), metaFormat: "v2"}
 	if owner != "" {
@@ -244,8 +244,8 @@ func binding(owner, name string) map[string]string {
 }
 
 // bound checks the value's own custom_metadata against the row, key by key
-// (other keys the organisation adds are left alone). A wardyn-format other
-// than v2 is a value this wardynd does not know how to read.
+// (other organisation-added keys are left alone). A wardyn-format other than
+// v2 is a value this wardynd can't read.
 func bound(meta map[string]string, owner, name string) error {
 	want := binding(owner, name)
 	for _, k := range []string{metaOwner, metaName, metaKind, metaFormat} {
@@ -286,9 +286,8 @@ func (s *Store) metadata(ctx context.Context, rel string) (m kvMeta, found bool,
 
 // Put implements secretstore.External. It writes the binding metadata first
 // (so a value is never readable without it), then the value with a
-// check-and-set on the version it read: a concurrent writer fails the write
-// instead of being overwritten silently. createOnly refuses when a value is
-// already there.
+// check-and-set on the version read: a concurrent writer fails instead of
+// being silently overwritten. createOnly refuses when a value already exists.
 func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, createOnly bool) (string, error) {
 	rel, err := s.rel(owner, name)
 	if err != nil {
@@ -359,8 +358,8 @@ func (s *Store) Get(ctx context.Context, owner, name, ref string) ([]byte, error
 	if err := bound(r.Data.Metadata.CustomMetadata, owner, name); err != nil {
 		return nil, err
 	}
-	// A data map with no "value" key is refused like a value that is not
-	// base64: read as zero bytes, it would let a boot key be minted over.
+	// A data map with no "value" key is refused like a non-base64 value:
+	// read as zero bytes, it would let a boot key be minted over.
 	raw, ok := r.Data.Data["value"]
 	v, err := base64.StdEncoding.DecodeString(raw)
 	if !ok || err != nil {
@@ -386,7 +385,7 @@ func (s *Store) Check(ctx context.Context, owner, name, ref string) error {
 }
 
 // Delete implements secretstore.External: every version and the metadata go.
-// The path is always DERIVED from (owner, name), never taken from the row, so
+// The path is always DERIVED from (owner, name), never taken from the row —
 // a forged pointer can never make Wardyn delete someone else's value.
 func (s *Store) Delete(ctx context.Context, owner, name, _ string) error {
 	rel, err := s.rel(owner, name)
@@ -398,8 +397,8 @@ func (s *Store) Delete(ctx context.Context, owner, name, _ string) error {
 }
 
 // Walk implements secretstore.External by listing the three kinds under the
-// prefix. A people/ segment that does not decode is still reported, with the
-// raw path as its name.
+// prefix. An undecodable people/ segment is still reported, with the raw
+// path as its name.
 func (s *Store) Walk(ctx context.Context) ([]secretstore.ExternalEntry, error) {
 	var out []secretstore.ExternalEntry
 	for _, k := range []string{"platform", "operator", "people"} {

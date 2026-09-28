@@ -1,26 +1,22 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package recordmode is the deterministic core of Wardyn's "Recording Mode": it
-// OBSERVES what a fully-open (allow-all-egress, broad-grant) run actually used —
-// purely from already-captured audit events — and SYNTHESIZES a tightened,
-// least-privilege RunPolicySpec the operator can review and promote.
+// Package recordmode is the deterministic core of Wardyn's "Recording Mode": it OBSERVES what a
+// fully-open (allow-all-egress, broad-grant) run actually used — purely from already-captured audit
+// events — and SYNTHESIZES a tightened, least-privilege RunPolicySpec the operator can review and promote.
 //
-// PURITY: the two entry points are pure functions of their inputs (audit
-// events, grants, the run in; values out) — no database, network, clock, or
-// global state, so synthesis is a function of captured evidence, not of
-// anything an in-sandbox agent can influence after the fact.
+// PURITY: the two entry points are pure functions of their inputs (audit events, grants, the run
+// in; values out) — no database, network, clock, or global state, so synthesis is a function of
+// captured evidence, not of anything an in-sandbox agent can influence after the fact.
 //
-// DETERMINISM: every set is de-duplicated and SORTED, egress decision counts
-// are sums, and Synthesize iterates already-sorted fields, so equal evidence
-// always yields byte-identical output.
+// DETERMINISM: every set is de-duplicated and SORTED, egress decision counts are sums, and
+// Synthesize iterates already-sorted fields, so equal evidence always yields byte-identical output.
 //
-// HONESTY: Recording Mode tightens from evidence but deliberately does NOT
-// auto-author everything — it never auto-wildcards a domain, it forces
-// allow_all_egress=false and first_use_approval=true so the tightened policy
-// fails toward human escalation rather than silent denial, and it does not
-// synthesize WorkspaceMounts or an exec/connect/file allowlist, surfacing
-// kernel ground-truth as warnings/Observations instead.
+// HONESTY: Recording Mode tightens from evidence but deliberately does NOT auto-author everything —
+// it never auto-wildcards a domain, it forces allow_all_egress=false and first_use_approval=true so
+// the tightened policy fails toward human escalation rather than silent denial, and it does not
+// synthesize WorkspaceMounts or an exec/connect/file allowlist, surfacing kernel ground-truth as
+// warnings/Observations instead.
 package recordmode
 
 import (
@@ -38,15 +34,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Audit action discriminators this package reads. The egress.* values are
-// derived from the egress.Decision enum so they stay in lockstep with the wire
-// values the proxy actually emits (handlePostDecision writes "egress."+decision).
+// Audit action discriminators this package reads, derived from the egress.Decision enum so they
+// stay in lockstep with the wire values the proxy emits (handlePostDecision writes "egress."+decision).
 const (
-	actionEgressAllow   = "egress." + string(egress.Allow)
-	actionEgressDeny    = "egress." + string(egress.Deny)
-	actionEgressPending = "egress." + string(egress.Pending)
-	// actionCredentialMint is the broker's mint audit action (broker.auditMint).
-	actionCredentialMint = "credential.mint"
+	actionEgressAllow    = "egress." + string(egress.Allow)
+	actionEgressDeny     = "egress." + string(egress.Deny)
+	actionEgressPending  = "egress." + string(egress.Pending)
+	actionCredentialMint = "credential.mint" // broker's mint audit action (broker.auditMint)
 )
 
 // Audit outcome values (the audit_events.outcome CHECK domain).
@@ -55,67 +49,47 @@ const (
 	outcomeFailure = "failure"
 )
 
-// mountTargetPrefixes are the in-container paths a host WorkspaceMount may be
-// mounted under. A captured sensitive write under one is the only signal a
-// pure function has that the recording MAY have used a mount — the audit
-// streams carry no mount config — so this is a heuristic that triggers an
-// operator warning, never an auto-authored mount.
+// mountTargetPrefixes are the in-container paths a host WorkspaceMount may be mounted under. A
+// captured sensitive write under one is the only signal a pure function has that the recording MAY
+// have used a mount, so this triggers an operator warning, never an auto-authored mount.
 var mountTargetPrefixes = []string{"/home/agent", "/work", "/workspace"}
 
-// DomainObservation is one egress host the run actually reached, with the HTTP
-// method set observed at the proxy and the per-decision counts. Methods is
-// de-duplicated and sorted; counts are sums over every decision for the host.
+// DomainObservation is one egress host the run actually reached, with the HTTP method set observed
+// at the proxy and the per-decision counts. Methods is de-duplicated and sorted; counts are sums
+// over every decision for the host.
 type DomainObservation struct {
-	// Host is the lowercased, trimmed egress hostname (no port).
-	Host string `json:"host"`
-	// Methods is the de-duplicated, sorted set of HTTP methods observed (an
-	// upper-cased "CONNECT" appears for tunneled TLS). May be empty when the
-	// proxy only saw opaque CONNECTs without a method or recorded none.
-	Methods []string `json:"methods,omitempty"`
-	// AllowCount/DenyCount/PendingCount are the number of egress.allow/deny/
-	// pending decisions recorded for this host.
-	AllowCount   int `json:"allow_count"`
-	DenyCount    int `json:"deny_count"`
-	PendingCount int `json:"pending_count"`
-	// ApprovalCount is the subset of AllowCount RELEASED by a live first-use
-	// approval rather than the standing policy. CleanReplay treats any of
-	// these as caught: approving mid-replay must not earn a green the
-	// standing policy didn't.
+	Host string `json:"host"` // lowercased, trimmed egress hostname (no port)
+	// Methods is the de-duplicated, sorted set of HTTP methods observed (an upper-cased "CONNECT"
+	// appears for tunneled TLS); may be empty when the proxy only saw opaque CONNECTs.
+	Methods      []string `json:"methods,omitempty"`
+	AllowCount   int      `json:"allow_count"` // number of egress.allow/deny/pending decisions recorded for this host
+	DenyCount    int      `json:"deny_count"`
+	PendingCount int      `json:"pending_count"`
+	// ApprovalCount is the subset of AllowCount RELEASED by a live first-use approval rather than the
+	// standing policy. CleanReplay treats any of these as caught: approving mid-replay must not earn
+	// a green the standing policy didn't.
 	ApprovalCount int `json:"approval_count"`
 }
 
-// Observations is the deterministic aggregate of what a run actually used,
-// computed purely from its already-captured audit events. Every slice is
-// de-duplicated and sorted, so equal evidence yields equal Observations.
+// Observations is the deterministic aggregate of what a run actually used, computed purely from its
+// already-captured audit events. Every slice is de-duplicated and sorted, so equal evidence yields equal Observations.
 type Observations struct {
-	// Domains is the per-host egress aggregate (deduped, sorted by host).
-	Domains []DomainObservation `json:"domains,omitempty"`
-	// MintedGrantIDs is the deduped, sorted set of grant ids the run SUCCESSFULLY
-	// minted a credential for (credential.mint with outcome=success). A denied or
-	// failed mint is NOT included — it did not actually yield a credential.
+	Domains []DomainObservation `json:"domains,omitempty"` // per-host egress aggregate (deduped, sorted by host)
+	// MintedGrantIDs is the deduped, sorted set of grant ids the run SUCCESSFULLY minted a credential
+	// for (credential.mint with outcome=success); a denied or failed mint is NOT included.
 	MintedGrantIDs []uuid.UUID `json:"minted_grant_ids,omitempty"`
-	// ExecArgv0s is the deduped, sorted set of argv[0] (program paths) the kernel
-	// sensor observed the run exec.
-	ExecArgv0s []string `json:"exec_argv0s,omitempty"`
-	// FileWrites is the deduped, sorted set of sensitive file paths the kernel
-	// sensor observed the run write.
-	FileWrites []string `json:"file_writes,omitempty"`
-	// Connects is the deduped, sorted set of "ip:port" destinations the kernel
-	// sensor observed the run connect to.
-	Connects []string `json:"connects,omitempty"`
-	// Anomalies is the deduped, sorted set of human-readable signals a
-	// least-privilege synthesis must NOT silently bless: an egress.deny during
-	// open recording, a dynamic-linker exec, a failed/escape kernel connect,
-	// and the sensor dropping events as unmapped while this capture ran.
+	ExecArgv0s     []string    `json:"exec_argv0s,omitempty"` // deduped, sorted argv[0] the kernel sensor observed the run exec
+	FileWrites     []string    `json:"file_writes,omitempty"` // deduped, sorted sensitive file paths the kernel sensor observed the run write
+	Connects       []string    `json:"connects,omitempty"`    // deduped, sorted "ip:port" destinations the kernel sensor observed the run connect to
+	// Anomalies is the deduped, sorted set of human-readable signals a least-privilege synthesis must
+	// NOT silently bless: an egress.deny during open recording, a dynamic-linker exec, a
+	// failed/escape kernel connect, and the sensor dropping events as unmapped during this capture.
 	Anomalies []string `json:"anomalies,omitempty"`
 }
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
-
-// sensorCorrelatedNothingAnomaly is the one anomaly sourced from the sensor's
-// own counters rather than from this run's events. It says what the counters
-// PROVE and no more: the count is cumulative since the sensor started, so the
-// sentence does not claim it happened during this capture.
+// sensorCorrelatedNothingAnomaly is the one anomaly sourced from the sensor's own counters rather
+// than from this run's events. It says what the counters PROVE and no more: the count is cumulative
+// since the sensor started, so the sentence does not claim it happened during this capture.
 //
 // DRAFT (M2 canon pending)
 const sensorCorrelatedNothingAnomaly = "the kernel sensor was alive during this capture and correlated none " +
@@ -123,21 +97,14 @@ const sensorCorrelatedNothingAnomaly = "the kernel sensor was alive during this 
 	"the run-correlation is broken, or activity reached the kernel outside every sandbox — this capture has no " +
 	"kernel corroboration either way"
 
-// KernelWindow is what the host's eBPF sensor said about ITSELF while this
-// capture was running — the one fact a capture's own audit events cannot
-// carry. Must be scoped to the capture's window: the sensor is host-wide and
-// its heartbeat global, so a beat from days later is not evidence about this
-// capture. The zero value (no heartbeat inside the window) says nothing,
-// which is the honest answer for a host with no sensor.
+// KernelWindow is what the host's eBPF sensor said about ITSELF while this capture was running —
+// the one fact a capture's own audit events cannot carry. Must be scoped to the capture's window:
+// the sensor is host-wide and its heartbeat global, so a beat from days later is not evidence about
+// this capture. The zero value (no heartbeat inside the window) is the honest answer for a host with no sensor.
 type KernelWindow struct {
-	// Beat is true when a sensor heartbeat landed inside the capture window.
-	Beat bool
-	// DroppedUnmapped is that beat's cumulative count of kernel events the
-	// sensor refused to forward because they correlated to no run.
-	DroppedUnmapped uint64
-	// ObservedTotal is that beat's cumulative count of kernel events the sensor
-	// DID bind to a run.
-	ObservedTotal uint64
+	Beat            bool   // true when a sensor heartbeat landed inside the capture window
+	DroppedUnmapped uint64 // that beat's cumulative count of kernel events refused as correlating to no run
+	ObservedTotal   uint64 // that beat's cumulative count of kernel events the sensor DID bind to a run
 }
 
 // domainAgg is the mutable per-host accumulator used while capturing.
@@ -146,8 +113,8 @@ type domainAgg struct {
 	allow, deny, pending, approval int
 }
 
-// egressData is the JSON shape of an egress.* audit event's Data (the map
-// handlePostDecision marshals: {host,port,method,path,rule_source,approval_id}).
+// egressData is the JSON shape of an egress.* audit event's Data (handlePostDecision marshals
+// {host,port,method,path,rule_source,approval_id}).
 type egressData struct {
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
@@ -156,24 +123,21 @@ type egressData struct {
 	RuleSource string `json:"rule_source"`
 }
 
-// mintData is the subset of a credential.mint audit event's Data we read
-// (broker.auditMint marshals {grant_id, scope, approval_id?, jti?}).
+// mintData is the subset of a credential.mint audit event's Data we read (broker.auditMint marshals
+// {grant_id, scope, approval_id?, jti?}).
 type mintData struct {
 	GrantID string `json:"grant_id"`
 }
 
-// Capture aggregates one run's already-captured audit events into a deduped,
-// sorted Observations. Pure and input-order independent: reads only the
-// egress.*, credential.mint, and kernel.* streams, ignoring any other action.
+// Capture aggregates one run's already-captured audit events into a deduped, sorted Observations.
+// Pure and input-order independent: reads only the egress.*, credential.mint, and kernel.* streams.
 //
-// confined distinguishes an OPEN (learning) recording, where a deny is a real
-// anomaly, from a CONFINED replay, where a deny is the containment proof
-// working as designed — still captured on the per-host DomainObservation, but
-// not landed in Anomalies.
+// confined distinguishes an OPEN (learning) recording, where a deny is a real anomaly, from a
+// CONFINED replay, where a deny is the containment proof working as designed — still captured on
+// the per-host DomainObservation, but not landed in Anomalies.
 //
-// kernel carries the one anomaly this run's OWN events cannot show: the
-// sensor's unmapped-drop count while the capture was running. See
-// KernelWindow.
+// kernel carries the one anomaly this run's OWN events cannot show: the sensor's unmapped-drop
+// count while the capture was running. See KernelWindow.
 func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Observations {
 	domains := map[string]*domainAgg{}
 	minted := map[uuid.UUID]bool{}
@@ -187,8 +151,7 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 		case actionEgressAllow, actionEgressDeny, actionEgressPending:
 			captureEgress(ev, domains, anomalies, confined)
 		case actionCredentialMint:
-			// Only a SUCCESSFUL mint actually yielded a credential the run used.
-			if ev.Outcome == outcomeSuccess {
+			if ev.Outcome == outcomeSuccess { // only a SUCCESSFUL mint actually yielded a credential the run used
 				captureMint(ev, minted)
 			}
 		case groundtruth.ActionProcessExec:
@@ -200,17 +163,11 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 		}
 	}
 
-	// The ONE anomaly this run's own events can never carry: an unmapped
-	// kernel event correlated to NO run, so it never reaches this function's
-	// own event loop.
-	//
-	// The condition is drops AND NOTHING CORRELATED, not drops alone:
-	// DroppedUnmapped is cumulative over the sensor's whole process lifetime
-	// and counts every kernel event on the HOST that bound to no Wardyn run
-	// (the daemon, sshd, cron), so it is non-zero within seconds on any box
-	// that does anything. Paired with ObservedTotal == 0 it means the one
-	// thing the counters can prove: the sensor saw kernel events and bound
-	// NONE of them to any run.
+	// The ONE anomaly this run's own events can never carry: an unmapped kernel event correlated to
+	// NO run never reaches this function's own event loop. Condition is drops AND NOTHING
+	// CORRELATED, not drops alone — DroppedUnmapped is cumulative over the sensor's whole process
+	// lifetime and is non-zero within seconds on any box that does anything; paired with
+	// ObservedTotal == 0 it means the sensor saw kernel events and bound NONE of them to any run.
 	if kernel.Beat && kernel.DroppedUnmapped > 0 && kernel.ObservedTotal == 0 {
 		anomalies[fmt.Sprintf(sensorCorrelatedNothingAnomaly, kernel.DroppedUnmapped)] = true
 	}
@@ -225,10 +182,9 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 	}
 }
 
-// captureEgress folds one egress.* decision into the per-host aggregate and,
-// for an OPEN recording only, records an anomaly for a deny — a deny during a
-// CONFINED replay is the containment proof working as intended, not an
-// anomaly.
+// captureEgress folds one egress.* decision into the per-host aggregate and, for an OPEN recording
+// only, records an anomaly for a deny — a deny during a CONFINED replay is the containment proof
+// working as intended, not an anomaly.
 func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool, confined bool) {
 	var d egressData
 	_ = json.Unmarshal(ev.Data, &d) // best-effort: a malformed body still has Target
@@ -253,9 +209,8 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 	switch ev.Action {
 	case actionEgressAllow:
 		agg.allow++
-		// Scoped to exactly this (allow) branch: "approval:denied" and
-		// "approval:pending" share the "approval:" prefix but land on the
-		// deny/pending actions, never here.
+		// Scoped to exactly this branch: "approval:denied"/"approval:pending" share the "approval:"
+		// prefix but land on the deny/pending actions, never here.
 		if strings.HasPrefix(strings.TrimSpace(d.RuleSource), "approval:") {
 			agg.approval++
 		}
@@ -270,8 +225,8 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 			}
 			anomalies[fmt.Sprintf("egress.deny to %s during open recording (rule_source=%s)", host, rs)] = true
 		}
-		// confined: still captured on the per-host DomainObservation (agg.deny)
-		// — a plain containment observation, not an anomaly.
+		// confined: still captured on the per-host DomainObservation (agg.deny) — a plain
+		// containment observation, not an anomaly.
 	}
 }
 
@@ -298,22 +253,16 @@ func captureExec(ev types.AuditEvent, execs, anomalies map[string]bool) {
 	if argv0 != "" {
 		execs[argv0] = true
 	}
-	// Trust the sensor's loader flag, but also re-derive it (defense in
-	// depth): the ld-linux/mmap execve-hook bypass is surfaced, never assumed
-	// absent.
+	// Trust the sensor's loader flag, but also re-derive it (defense in depth): the ld-linux/mmap
+	// execve-hook bypass is surfaced, never assumed absent.
 	if d.Loader || groundtruth.IsDynamicLinker(argv0) {
 		anomalies[fmt.Sprintf("dynamic-linker exec (loader) argv=[%s] — ld-linux/mmap execve-hook bypass surface", strings.Join(d.Argv, " "))] = true
 	}
 }
 
-// captureConnect records a connect destination and flags a FAILED connect (a
-// reach to the cloud metadata IP — the only destination the mapper stamps
-// outcome=failure).
-//
-// It does NOT look for correlation=unmapped: an unmapped event bound to no
-// run never reaches this function's events, which are already scoped to one
-// run. That signal is instead the sensor's dropped_unmapped counter, which
-// Capture reads from KernelWindow.
+// captureConnect records a connect destination and flags a FAILED connect (a reach to the cloud
+// metadata IP — the only destination the mapper stamps outcome=failure). It does NOT look for
+// correlation=unmapped: that signal is the sensor's dropped_unmapped counter, read via KernelWindow.
 func captureConnect(ev types.AuditEvent, connects, anomalies map[string]bool) {
 	var d groundtruth.EventData
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
@@ -343,25 +292,18 @@ func captureFileWrite(ev types.AuditEvent, files map[string]bool) {
 	}
 }
 
-// CleanReplay is the server-side verdict for a CONFINED replay (Workstream B):
-// true iff the capture is clean FOR WHAT WAS REPLAYED. It is pure and takes
-// exactly the evidence the verdict is defined over — the caller (only ever
-// meaningful for a settled `recorded` capture; the caller gates on that) is
-// responsible for calling this only once a replay has finalized.
+// CleanReplay is the server-side verdict for a CONFINED replay (Workstream B): true iff the capture
+// is clean FOR WHAT WAS REPLAYED. Pure; meaningful only for a settled `recorded` capture, which the
+// caller gates on before calling this.
 //
-// clean iff, across every observed domain: zero DenyCount, zero PendingCount,
-// and zero ApprovalCount (no allow was released by a live first-use approval
-// — approving mid-replay must not earn a green the standing policy didn't;
-// the honest loop is approve, then replay again) — AND the capture itself was
-// not truncated (maxCaptureAuditEvents, workspace_run.go). Hard-walled denies
-// count as caught like any other DenyCount; CleanReplay has no way to (and
-// does not try to) distinguish them.
+// clean iff, across every observed domain: zero DenyCount, zero PendingCount, and zero
+// ApprovalCount (no allow was released by a live first-use approval — approving mid-replay must not
+// earn a green the standing policy didn't; the honest loop is approve, then replay again) — AND the
+// capture itself was not truncated (maxCaptureAuditEvents, workspace_run.go). Hard-walled denies
+// count as caught like any other DenyCount.
 //
-// Empty obs (nothing was observed) with truncated=false is clean: there is
-// nothing that disqualifies it. "Clean" does NOT mean "nothing could go
-// wrong" — a replay the operator ends early earns the same verdict as a full
-// one if nothing else caught it; the caller names that caveat, this function
-// only reports what the evidence shows.
+// Empty obs with truncated=false is clean. "Clean" does NOT mean "nothing could go wrong" — a
+// replay the operator ends early earns the same verdict as a full one if nothing else caught it.
 func CleanReplay(obs []DomainObservation, truncated bool) bool {
 	if truncated {
 		return false
@@ -374,31 +316,27 @@ func CleanReplay(obs []DomainObservation, truncated bool) bool {
 	return true
 }
 
-// Synthesize derives a tightened, least-privilege RunPolicySpec from the
-// Observations of an open run plus the run's grant catalog and the run itself.
-// It is pure and deterministic, and returns the spec alongside human-readable
-// warnings explaining every tightening decision and everything it deliberately
-// did NOT auto-author. See the package doc for the honesty guarantees.
+// Synthesize derives a tightened, least-privilege RunPolicySpec from the Observations of an open
+// run plus the run's grant catalog and the run itself. Pure and deterministic; returns the spec
+// alongside human-readable warnings explaining every tightening decision and everything it
+// deliberately did NOT auto-author. See the package doc for the honesty guarantees.
 func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.AgentRun) (types.RunPolicySpec, []string) {
 	var warnings []string
 	var spec types.RunPolicySpec
 
 	// ── Egress allowlist: EXACT hosts that were actually ALLOWED. ──
-	// A host that was only denied or only held pending is NOT added — promoting a
-	// denied host would WIDEN past what the open run was permitted. Never wildcard.
+	// A host only denied or only held pending is NOT added — promoting a denied host would WIDEN
+	// past what the open run was permitted. Never wildcard.
 	var allowed []string
 	for _, d := range obs.Domains {
 		switch {
 		case d.AllowCount > 0:
 			allowed = append(allowed, d.Host)
 		case d.DenyCount > 0:
-			// A recording session is allow-all, so an observed denial here is
-			// something no run-wide policy would produce — the two live causes
-			// are the unconditional builtin blocks (metadata/private-IP) and a
-			// permanent `always`-scoped workspace deny (Phase 4), which a
-			// record session's allow-all does NOT override. Name both, so an
-			// operator staring at a missing allowlist entry looks in the right
-			// place instead of re-scanning the policy that isn't the cause.
+			// A recording session is allow-all, so an observed denial is either the unconditional
+			// builtin blocks (metadata/private-IP) or a permanent `always`-scoped workspace deny
+			// (Phase 4), which allow-all does NOT override — name both so an operator isn't
+			// re-scanning the policy that isn't the cause.
 			warnings = append(warnings, fmt.Sprintf("host %s observed but only DENIED (never allowed) — a builtin block or a permanent workspace deny, not this session's policy; excluded from allowed_domains", d.Host))
 		default: // pending only
 			warnings = append(warnings, fmt.Sprintf("host %s observed but only PENDING (never allowed); excluded from allowed_domains", d.Host))
@@ -407,34 +345,26 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 	sort.Strings(allowed)
 	spec.AllowedDomains = allowed
 	if len(allowed) == 0 {
-		// F4-F1 (Appendix A V8): policy.go's AllowedDomains carries no
-		// `omitempty`, so a nil slice would serialize as `allowed_domains:
-		// null` — the "Synthesized profile" drawer's own TypeError on a run
-		// that most needed profiling. nil -> [] here, once, at the producer,
-		// rather than leaving every consumer to guard it.
+		// policy.go's AllowedDomains carries no `omitempty`, so a nil slice would serialize as
+		// `allowed_domains: null` — nil -> [] here, once, at the producer.
 		spec.AllowedDomains = []string{}
 		warnings = append(warnings, "no allowed egress observed; synthesized spec denies ALL egress (allow_all_egress=false, empty allowlist) — confirm the run genuinely needed none")
 	}
-	// DeniedDomains is never synthesized: a recording only ever proves what WAS
-	// reached, never what should stay blocked, so promoting one would be a
-	// guess dressed up as an observation. Not fail-open — a workspace's own
-	// permanent deny list still applies at replay time, folded in at run
-	// creation regardless of what this spec carries — but say so, or the
-	// synthesized spec reads as a complete envelope when it is allow-only.
+	// DeniedDomains is never synthesized: a recording only proves what WAS reached, never what
+	// should stay blocked. Not fail-open — a workspace's own permanent deny list still applies at
+	// replay time — but say so, or the synthesized spec reads as a complete envelope when it is allow-only.
 	warnings = append(warnings, "denied_domains are never synthesized from a recording; a promoted policy inherits only the workspace's own permanent deny list, applied at run creation")
 
 	// ── Forced invariants (mitigate the recording's inherent under-coverage). ──
-	// The snapshot can only prove what the run HAPPENED to use, never the full set
-	// it may need, so we fail toward human escalation, not silent denial.
-	spec.AllowAllEgress = false // recordings exist to REMOVE allow-all.
-	// Unknown (un-recorded) hosts escalate to a human, not silently fail. Use
-	// deny_with_review (raise + retry) — the direct successor to the legacy
-	// forced-true; not wait_for_review, so a replay never hangs unattended.
+	// The snapshot can only prove what the run HAPPENED to use, never the full set it may need, so
+	// we fail toward human escalation, not silent denial.
+	spec.AllowAllEgress = false // recordings exist to REMOVE allow-all
+	// Unknown (un-recorded) hosts escalate to a human: deny_with_review (raise + retry), not
+	// wait_for_review, so a replay never hangs unattended.
 	spec.FirstUseApproval = types.FirstUseDenyWithReview
-	spec.AllowedMethods = nil // method capture is brittle; do not over-restrict.
-	// A recording carries no lifetime signal, and the reaper skips on <= 0 — so
-	// leaving this at its zero value would synthesize a never-reaped spec that
-	// holds its minted credentials indefinitely. Mirror the workspace-run cap.
+	spec.AllowedMethods = nil // method capture is brittle; do not over-restrict
+	// A recording carries no lifetime signal, and the reaper skips on <= 0 — mirror the
+	// workspace-run cap rather than synthesize a never-reaped spec.
 	spec.AutoStopAfterSec = 3600
 	warnings = append(warnings, "auto_stop_after_sec defaulted to 3600 (1h idle); the recording carries no lifetime signal — widen it, or set -1 for a deliberate never-reap session")
 
@@ -456,14 +386,11 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 			warnings = append(warnings, fmt.Sprintf("minted grant %s not found among run grants; omitted from eligible_grants", id))
 			continue
 		}
-		// NEVER carry a shared-subscription sentinel into a stored profile. The
-		// sentinel resolves to ONE operator's live Anthropic OAuth token at the
-		// injection sink, so copying it here would turn a recorded run into a
-		// durable, shareable, policy-id-addressable grant on that person's personal
-		// credential — usable by anyone who can launch a run against the profile,
-		// long after the recording. A "least-privilege profile" carrying that is
-		// mis-sold by its own name. The sink refuses off-posture anyway; this stops
-		// the grant being written down at all.
+		// NEVER carry a shared-subscription sentinel into a stored profile: it resolves to ONE
+		// operator's live Anthropic OAuth token at the injection sink, so copying it here would turn
+		// a recorded run into a durable, shareable, policy-id-addressable grant on that person's
+		// personal credential, usable by anyone who can launch a run against the profile. The sink
+		// refuses off-posture anyway; this stops the grant being written down at all.
 		if gs.Kind == types.GrantAPIKey && grantNamesOAuthSentinel(gs) {
 			warnings = append(warnings, fmt.Sprintf("minted grant %s injects a subscription OAuth sentinel; omitted from eligible_grants (a stored profile must not carry a live subscription credential)", id))
 			continue
@@ -504,8 +431,8 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 	return spec, warnings
 }
 
-// githubPermSummary renders a github_token grant scope's permissions map as a
-// sorted "k:v" list for an operator-facing warning (mirrors risk.go's parsing).
+// githubPermSummary renders a github_token grant scope's permissions map as a sorted "k:v" list for
+// an operator-facing warning (mirrors risk.go's parsing).
 func githubPermSummary(scope json.RawMessage) string {
 	var s struct {
 		Permissions map[string]string `json:"permissions"`
@@ -532,8 +459,8 @@ func mountTargetPrefix(p string) string {
 	return ""
 }
 
-// buildDomains converts the per-host accumulator into the sorted DomainObservation
-// slice (hosts sorted; each host's methods deduped+sorted).
+// buildDomains converts the per-host accumulator into the sorted DomainObservation slice (hosts
+// sorted; each host's methods deduped+sorted).
 func buildDomains(m map[string]*domainAgg) []DomainObservation {
 	if len(m) == 0 {
 		return nil
@@ -572,14 +499,11 @@ func sortedUUIDs(set map[uuid.UUID]bool) []uuid.UUID {
 	})
 }
 
-// grantNamesOAuthSentinel reports whether an api_key grant's scope names one of
-// the SENTINEL secret names that resolve to a live Anthropic OAuth token rather
-// than to a stored secret (see types.SubscriptionOAuthSecret / ManagedOAuthSecret,
-// a person's own wardyn-provider-<uid>-oauth, and the injection sink in
-// internal/api/injection.go).
-//
-// Unparseable scope reads as "yes": a grant whose scope we cannot inspect is not
-// a grant to write into a durable least-privilege profile.
+// grantNamesOAuthSentinel reports whether an api_key grant's scope names one of the SENTINEL secret
+// names that resolve to a live Anthropic OAuth token rather than a stored secret (see
+// types.SubscriptionOAuthSecret / ManagedOAuthSecret, a person's own wardyn-provider-<uid>-oauth,
+// and the injection sink in internal/api/injection.go). Unparseable scope reads as "yes": a grant
+// whose scope we cannot inspect is not a grant to write into a durable least-privilege profile.
 func grantNamesOAuthSentinel(gs types.GrantSpec) bool {
 	var scope struct {
 		SecretName string `json:"secret_name"`

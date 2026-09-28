@@ -25,25 +25,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// attachShellScript is docker session.go's attachShell script, byte-identical
-// in its shell logic (tmux persistent session, bash fallback, sh last
-// resort — see internal/runner/docker/session.go's attachShell doc for the
-// full rationale) but reshaped for k8s's exec subresource, which has NO Env
-// field: PodExecOptions carries Stdin/Stdout/Stderr/TTY/Container/Command
-// only, so TERM/LANG/LC_ALL ride as shell-level `export` statements ahead of
-// the same tmux/bash/sh chain instead of a separate Env list. Duplicated
-// rather than hoisted: docker's attachShell lives in a `//go:build docker`
-// file this package cannot import, and internal/runner's tagless files are
-// outside this lane's touch scope. Keep the shell chain in lockstep with
-// docker's attachShell if that ever changes.
+// attachShellScript mirrors docker session.go's attachShell script
+// (tmux persistent session, bash fallback, sh last resort) but reshaped for
+// k8s's exec subresource, which has no Env field: TERM/LANG/LC_ALL ride as
+// shell-level `export` statements ahead of the chain instead of a separate
+// Env list. Duplicated rather than hoisted, since docker's attachShell lives
+// in a `//go:build docker` file this package cannot import — keep the two in
+// lockstep if the shell chain ever changes.
 const attachShellScript = `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
 if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
 
-// resolveExecContainer picks the container Attach/ExecStream target: the
-// ephemeral "wardyn-agent" exec container if Exec has already added one
-// (so an attach/exec-stream shares the real task's environment), else the
-// pod's main placeholder container (an interactive run with no task exec'd
-// yet, or ExecStream opened before any Exec).
+// resolveExecContainer picks the Attach/ExecStream target: the ephemeral
+// "wardyn-agent" exec container if Exec already added one (so the session
+// shares the real task's environment), else the pod's main placeholder
+// container.
 func resolveExecContainer(pod *corev1.Pod) string {
 	for _, ec := range pod.Spec.EphemeralContainers {
 		if ec.Name == execContainerName {
@@ -53,13 +48,13 @@ func resolveExecContainer(pod *corev1.Pod) string {
 	return mainContainerName
 }
 
-// Attach opens a NEW interactive exec (attachShellScript, via the exec
-// subresource — NOT k8s's native "attach" subresource, which targets a pod's
-// existing main process rather than starting a fresh one) inside the running
-// sandbox and returns a live PTY runner.Session. Mirrors docker's Attach: a
-// distinct, human-owned stream, never registered as the tracked agent exec,
-// bounded by the sandbox's existing NetworkPolicy confinement (invariant 3 —
-// no new network path opens; the stream flows apiserver -> kubelet -> pod).
+// Attach opens a new interactive exec (attachShellScript, via the exec
+// subresource — not k8s's native "attach" subresource, which targets a pod's
+// existing main process rather than starting a fresh one). Mirrors docker's
+// Attach: a distinct, human-owned stream, never registered as the tracked
+// agent exec. INVARIANT 3: bounded by the sandbox's existing NetworkPolicy
+// confinement — no new network path opens; the stream flows apiserver ->
+// kubelet -> pod.
 func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptions) (runner.Session, error) {
 	if ref == "" {
 		return nil, errors.New("k8s: attach: empty sandbox ref")
@@ -99,12 +94,10 @@ func (s *k8sSession) Resize(_ context.Context, cols, rows uint16) error {
 func (s *k8sSession) Close() error { return s.stream.close() }
 
 // ExecStream launches spec.Argv inside ref as a fresh, streamable exec via
-// the exec subresource — repeatable against the same ref (unlike Exec's
-// one-shot ephemeral container; see substrate.Substrate.ExecStream's doc).
-// Env rides the same shell-export prefix trick Attach uses (the exec
-// subresource has no Env field) ONLY when spec.Env is non-empty, so the
-// common case (no exec-scoped env) runs argv directly with no shell
-// dependency in the target image.
+// the exec subresource — repeatable against the same ref, unlike Exec's
+// one-shot ephemeral container. Env rides the same shell-export prefix trick
+// Attach uses only when spec.Env is non-empty, so the common case runs argv
+// directly with no shell dependency in the target image.
 func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	if len(spec.Argv) == 0 {
 		return nil, errors.New("k8s: exec stream: empty argv")
@@ -130,7 +123,7 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 	}
 
 	// Present, never nil, so callers can read it uniformly without a TTY
-	// check — mirrors docker's ExecStream (see ExecSession.Stderr's doc).
+	// check — mirrors docker's ExecStream.
 	var stderr io.Reader = bytes.NewReader(nil)
 	if stream.stderrR != nil {
 		stderr = stream.stderrR
@@ -146,11 +139,11 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 }
 
 // envWrapScript builds `export K='V' ...; exec 'argv0' 'argv1' ...` so
-// exec-scoped env survives the exec subresource's lack of an Env field.
-// Every value is single-quoted (POSIX-safe: an embedded single quote is
-// closed, backslash-escaped, and reopened, the standard shQuote trick), so
-// argv/env values containing spaces, globs, or shell metacharacters pass
-// through literally.
+// exec-scoped env survives the exec subresource's lack of an Env field. Every
+// value is single-quoted (the standard shQuote trick: an embedded quote is
+// closed, backslash-escaped, and reopened), so values containing spaces,
+// globs, or shell metacharacters pass through literally rather than
+// executing.
 func envWrapScript(env []string, argv []string) string {
 	var b strings.Builder
 	b.WriteString("export")
@@ -174,14 +167,12 @@ func envWrapScript(env []string, argv []string) string {
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // newExecutor builds the exec-subresource request and wraps it in a
-// websocket-primary/SPDY-fallback Executor — the same recipe kubectl exec
-// uses (NewFallbackExecutor(websocket, spdy), falling back on an upgrade
-// failure). Deferring to d.execFactory when set (the test seam — see
-// Driver.execFactory's doc) lets Attach/ExecStream be driven end to end
-// against a fake remotecommand.Executor: the fake clientset backs
-// Pods().Get for container resolution, but has no HTTP server behind it for
-// the exec subresource itself, so a real SPDY/WebSocket dial from a test
-// would just fail to connect rather than exercise anything.
+// websocket-primary/SPDY-fallback Executor, the same recipe kubectl exec
+// uses. Defers to d.execFactory when set (the test seam) so Attach/ExecStream
+// can be driven end to end against a fake remotecommand.Executor: the fake
+// clientset backs Pods().Get for container resolution but has no HTTP server
+// behind it for the exec subresource itself, so a real dial from a test would
+// just fail to connect.
 func (d *Driver) newExecutor(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error) {
 	if d.execFactory != nil {
 		return d.execFactory(podName, container, cmd, stdin, tty)
@@ -217,12 +208,11 @@ func (d *Driver) newExecutor(podName, container string, cmd []string, stdin, tty
 	return exec, nil
 }
 
-// k8sStream bridges remotecommand's push-based StreamWithContext (it takes
-// an io.Reader/io.Writer trio and blocks until the exec ends) to the
-// pull-based io.Reader/io.WriteCloser shapes runner.Session and
-// runner.ExecSession need — an io.Pipe per direction, fed by one background
-// goroutine running the executor, exactly mirroring how docker's ExecStream
-// bridges its hijacked connection via stdcopy into the same shape.
+// k8sStream bridges remotecommand's push-based StreamWithContext (an
+// io.Reader/io.Writer trio, blocking until the exec ends) to the pull-based
+// io.Reader/io.WriteCloser shapes runner.Session and runner.ExecSession need
+// — an io.Pipe per direction, fed by one background goroutine, mirroring how
+// docker's ExecStream bridges its hijacked connection via stdcopy.
 type k8sStream struct {
 	stdinW  *io.PipeWriter
 	stdoutR *io.PipeReader
@@ -231,8 +221,8 @@ type k8sStream struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
-	// exitCode/exitErr are set once, before done closes; safe to read after
-	// <-done with no further synchronization (happens-before via the channel).
+	// Set once, before done closes; safe to read after <-done (happens-before
+	// via the channel).
 	exitCode int
 	exitErr  error
 }
@@ -320,9 +310,9 @@ func (s *k8sStream) close() error {
 // termSizeQueue is a remotecommand.TerminalSizeQueue backed by a buffered
 // channel: only the latest pushed size matters, so push drops any
 // not-yet-consumed size before enqueueing the new one. stop signals Next to
-// return nil (the TerminalSizeQueue contract for "monitoring has stopped")
-// WITHOUT ever closing the data channel — push must stay panic-safe even
-// after a concurrent close (Resize and Close can race from different
+// return nil (the TerminalSizeQueue "monitoring has stopped" contract)
+// without ever closing the data channel — push must stay panic-safe even
+// under a concurrent close (Resize and Close can race from different
 // goroutines), which closing q.ch outright would not be.
 type termSizeQueue struct {
 	ch        chan remotecommand.TerminalSize

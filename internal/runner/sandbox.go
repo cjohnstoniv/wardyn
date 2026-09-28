@@ -15,22 +15,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
-// Sandbox-launch primitives shared by every substrate (SECURITY-RELEVANT where
-// noted): pure data/string transforms a future non-Docker substrate needs
-// byte-identical, hoisted verbatim out of internal/runner/docker into this
-// TAGLESS file so no substrate re-derives (and risks drifting) the agent
-// contract.
+// Sandbox-launch primitives shared by every substrate (SECURITY-RELEVANT
+// where noted): pure data/string transforms a future non-Docker substrate
+// needs byte-identical, hoisted into this TAGLESS file so no substrate
+// re-derives (and risks drifting) the agent contract.
 
 // ProxyListenPort is the port wardyn-proxy listens on inside the per-run
 // internal network/namespace. The agent's ONLY reachable address.
 const ProxyListenPort = 3128
 
 // Conservative platform resource defaults, applied when a Resources field is
-// zero. They exist so EVERY agent sandbox is capped even when policy sets
-// nothing: without them one runaway or prompt-injected agent can OOM-kill the
-// host, fork-bomb the host PID space, or fill host storage and take sibling
-// runs down with it (the basic multi-tenant safety controls — see
-// types.ResourceLimits). A policy value always overrides.
+// zero, so EVERY agent sandbox is capped even when policy sets nothing:
+// without them one runaway or prompt-injected agent can OOM-kill the host,
+// fork-bomb the host PID space, or fill host storage and take sibling runs
+// down with it (see types.ResourceLimits). A policy value always overrides.
 const (
 	DefaultCPUMillis int64 = 2000 // 2 vCPU
 	DefaultMemoryMiB int64 = 4096 // 4 GiB hard memory cap
@@ -46,10 +44,9 @@ const (
 // SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE point at, since those vars
 // REPLACE the client trust store. Keep in lockstep with install_mitm_ca in
 // deploy/images/common/agent-run-lib.sh. No-op when WARDYN_MITM_CA_PEM is
-// unset. The idle loop (not `exec sleep infinity`) is TERM-aware: as PID 1,
-// `sleep` ignores SIGTERM, so a bare sleep would wait out the full kill
-// timeout instead of exiting promptly; exits 143/130, not 0, so an
-// out-of-band stop still reads as a signal kill downstream.
+// unset. The idle loop is TERM-aware: as PID 1, a bare `sleep` ignores
+// SIGTERM and would wait out the full kill timeout; this exits 143/130, not
+// 0, so an out-of-band stop still reads as a signal kill downstream.
 const AgentIdleScript = `d=/tmp/wardyn
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
@@ -74,19 +71,18 @@ while :; do sleep 3600 & wait $!; done`
 
 // knownNonVaultRuntimes are OCI runtime families known to NOT boot a
 // per-sandbox KVM VM: runc/crun/sysbox share the host kernel, and runsc
-// (gVisor) is a userspace-kernel sandbox (the Wall/CC2 tier). Named as literal
-// strings (rather than the docker package's runtimeRunsc/runtimeSysbox
-// constants) so this tagless package never imports a build-tag-gated one. A
-// substrate's CC3 pin naming one of these is a silent downgrade and is
-// refused even under an explicit pin — unlike an unrecognized runtime name,
-// which the operator is trusted to vouch for.
+// (gVisor) is a userspace-kernel sandbox (the Wall/CC2 tier). Named as
+// literal strings so this tagless package never imports a build-tag-gated
+// one. A substrate's CC3 pin naming one of these is a silent downgrade and
+// is refused even under an explicit pin — unlike an unrecognized runtime
+// name, which the operator is trusted to vouch for.
 var knownNonVaultRuntimes = []string{"runc", "crun", "sysbox", "runsc"}
 
-// IsKnownNonVaultRuntime reports whether name is a runtime positively known to
-// deliver less than a VM boundary (the CC3/Vault floor guard). Prefix match so
-// "runc"/"crun-foo"/"sysbox-runc"/"runsc-*" are all caught. Note "krun" is NOT
-// matched by the "crun" family (different leading byte), so libkrun (crun +
-// libkrun, a real KVM microVM) stays eligible for CC3.
+// IsKnownNonVaultRuntime reports whether name is a runtime positively known
+// to deliver less than a VM boundary (the CC3/Vault floor guard). Prefix
+// match, so "runc"/"crun-foo"/"sysbox-runc"/"runsc-*" are all caught. "krun"
+// is NOT matched by the "crun" family (different leading byte), so libkrun
+// (a real KVM microVM) stays eligible for CC3.
 func IsKnownNonVaultRuntime(name string) bool {
 	for _, fam := range knownNonVaultRuntimes {
 		if strings.HasPrefix(name, fam) {
@@ -106,13 +102,13 @@ func IsKnownNonVaultRuntime(name string) bool {
 //	wardyn-rec -cast-dir <dir> [-out-dir <mount>] [-upload-url <proxy route>] -run <id> -- <agent argv...>
 //
 // uploadURL is the DEFAULT delivery path (the proxy's brokered recording
-// route), which lets the control plane MASK secrets before persisting the
-// cast. outDir is the shared-mount fallback: no cross-run isolation, and its
-// cast is UNMASKED since wardyn-rec holds no secret values. The two are
-// MUTUALLY EXCLUSIVE — when uploadURL is set, -out-dir is dropped entirely so
-// an unmasked cast can never reach the API-served replay store.
+// route), letting the control plane MASK secrets before persisting the cast.
+// outDir is the shared-mount fallback: no cross-run isolation, and its cast
+// is UNMASKED since wardyn-rec holds no secret values. The two are MUTUALLY
+// EXCLUSIVE — when uploadURL is set, -out-dir is dropped so an unmasked cast
+// can never reach the API-served replay store.
 //
-// Callers should only invoke this when recording is enabled.
+// Only called when recording is enabled.
 func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv []string) []string {
 	out := []string{
 		"wardyn-rec",

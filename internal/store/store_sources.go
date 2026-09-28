@@ -19,8 +19,8 @@ import (
 )
 
 // store_sources.go — the three-tier split's tier-1 (sources library) and
-// tier-2 (base-image catalog) storage, plus the workspace HYDRATE pass that
-// turns attachments back into the derived read-only view
+// tier-2 (base-image catalog) storage, plus the workspace HYDRATE pass
+// turning attachments back into the derived read-only view
 // (Sources/BaseImage/Profile/Status) and the folded EffectiveRequirements.
 
 // Sources (tier 1)
@@ -154,8 +154,8 @@ func (s PG) workspacesOrphanedBySource(ctx context.Context, id uuid.UUID) ([]str
 // attachment referencing it (?force=1) UNLESS that would leave a workspace
 // with zero attachments (workspacesOrphanedBySource) — '[]' must stay
 // unreachable (STORE-1). The check and the detach are two statements, so this
-// only narrows (never closes, STORE-2) the race against a concurrent attach;
-// same residual race as the detach=false path below.
+// only narrows, never closes (STORE-2), the race against a concurrent
+// attach; same residual race as the detach=false path below.
 func (s PG) DeleteSource(ctx context.Context, id uuid.UUID, detach bool) error {
 	if detach {
 		orphaned, err := s.workspacesOrphanedBySource(ctx, id)
@@ -314,7 +314,7 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // PASSTHROUGH path a workspace/run resolves its base-image spec through,
 // which always derives an auto-placeholder name — applying EXCLUDED.name
 // unconditionally would silently rename an operator's custom-named row back
-// to that placeholder. See UpdateBaseImageName for the actual rename path.
+// to that placeholder. See UpdateBaseImageName for the rename path.
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -551,8 +551,8 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 		}
 		src, found := sources[*att.SourceID]
 		if !found {
-			// Dangling: contribute nothing here; the mount gate is where this
-			// surfaces loudly. Status reads error — a run against it WILL fail.
+			// Dangling: contributes nothing here; the mount gate surfaces it
+			// loudly. Status reads error — a run against it WILL fail.
 			status = types.WorkspaceError
 			continue
 		}
@@ -580,11 +580,11 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 	}
 	ws.Sources = derived
 
-	// primaryIdentity names the source behind ws.Sources[0] — derived the same
+	// primaryIdentity names the source behind ws.Sources[0], derived the same
 	// way resolveWorkspaceImage reads "primary", so MergeProfiles attributes
 	// HasDevcontainer/HasDockerfile from that exact attachment, not merely the
 	// first one that happened to scan. Empty when Sources[0] is ephemeral or
-	// there are no sources, which MergeProfiles reads as "no devcontainer".
+	// there are no sources, read by MergeProfiles as "no devcontainer".
 	var primaryIdentity string
 	if len(derived) > 0 {
 		switch derived[0].Type {

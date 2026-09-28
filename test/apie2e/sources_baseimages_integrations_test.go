@@ -272,8 +272,8 @@ func (d integrationDoc) roleSecret(role string) string {
 }
 
 // TestIntegrations_ListAndPutBack drives the integrations surface over
-// raw HTTP (no SDK coverage): a present anthropic-api-key secret derives a
-// LEGACY row with no write path of its own; GET /integrations lists it (the
+// raw HTTP (no SDK coverage): present github-app-id and github-app-key secrets
+// derive a LEGACY github_app row with no write path of its own; GET /integrations lists it (the
 // "detail" a client reads — there is no separate GET /integrations/{id}
 // route, so a client's detail view is one entry picked out of the list);
 // PUT is a full replacement that persists the row (source flips legacy ->
@@ -287,11 +287,13 @@ func TestIntegrations_ListAndPutBack(t *testing.T) {
 	ctx := context.Background()
 	base := h.srv.URL + "/api/v1/integrations"
 
-	const secretName = "anthropic-api-key"
-	if err := h.sdk.SetSecret(ctx, secretName, "sk-ant-apie2e-"+uuid.NewString()); err != nil {
-		t.Fatalf("SetSecret: %v", err)
+	const appIDSecret, appKeySecret = "github-app-id", "github-app-key"
+	for _, name := range []string{appIDSecret, appKeySecret} {
+		if err := h.sdk.SetSecret(ctx, name, "apie2e-"+uuid.NewString()); err != nil {
+			t.Fatalf("SetSecret %s: %v", name, err)
+		}
+		t.Cleanup(func() { _ = h.sdk.DeleteSecret(context.Background(), name) })
 	}
-	t.Cleanup(func() { _ = h.sdk.DeleteSecret(context.Background(), secretName) })
 
 	status, raw := doAdmin(t, http.MethodGet, base, nil)
 	if status != http.StatusOK {
@@ -303,16 +305,16 @@ func TestIntegrations_ListAndPutBack(t *testing.T) {
 	if err := json.Unmarshal(raw, &list); err != nil {
 		t.Fatalf("decode integrations list: %v (body=%s)", err, raw)
 	}
-	idx := slices.IndexFunc(list.Integrations, func(in integrationDoc) bool { return in.ID == "anthropic_api_key" })
+	idx := slices.IndexFunc(list.Integrations, func(in integrationDoc) bool { return in.ID == "github_app" })
 	if idx < 0 {
-		t.Fatalf("integrations list missing the anthropic_api_key legacy row: %+v", list.Integrations)
+		t.Fatalf("integrations list missing the github_app legacy row: %+v", list.Integrations)
 	}
 	legacy := list.Integrations[idx]
 	if legacy.Source != "legacy" {
-		t.Fatalf("anthropic_api_key source = %q, want legacy (not yet adopted)", legacy.Source)
+		t.Fatalf("github_app source = %q, want legacy (not yet adopted)", legacy.Source)
 	}
-	if legacy.Kind != "anthropic_api_key" || legacy.roleSecret("api_key") != secretName {
-		t.Fatalf("anthropic_api_key legacy row = %+v", legacy)
+	if legacy.Kind != "github_app" || legacy.roleSecret("app_key") != appKeySecret {
+		t.Fatalf("github_app legacy row = %+v", legacy)
 	}
 
 	t.Cleanup(func() { doAdmin(t, http.MethodDelete, base+"/"+legacy.ID, nil) })
@@ -321,12 +323,15 @@ func TestIntegrations_ListAndPutBack(t *testing.T) {
 	// write path a legacy row has (adopt is gone), so this single call both
 	// stores the row and proves it editable. Round-trip the legacy row's own
 	// fields plus one real change.
-	const newDocs = "https://docs.anthropic.com/apie2e-test"
+	const newDocs = "https://docs.github.com/apie2e-test"
 	putBody, _ := json.Marshal(map[string]any{
 		"name": legacy.Name, "kind": legacy.Kind,
-		"secrets": []map[string]any{{"role": "api_key", "secret_name": secretName,
-			"delivery": map[string]string{"mode": "proxy_header", "header": "x-api-key", "format": "%s"}}},
-		"docs": newDocs,
+		"secrets": []map[string]any{
+			{"role": "app_id", "secret_name": appIDSecret},
+			{"role": "app_key", "secret_name": appKeySecret},
+		},
+		"config": map[string]string{"host": "github.com"},
+		"docs":   newDocs,
 	})
 	status, raw = doAdmin(t, http.MethodPut, base+"/"+legacy.ID, putBody)
 	if status != http.StatusOK {
@@ -348,7 +353,7 @@ func TestIntegrations_ListAndPutBack(t *testing.T) {
 	if err := json.Unmarshal(raw, &list); err != nil {
 		t.Fatalf("decode integrations list: %v (body=%s)", err, raw)
 	}
-	idx = slices.IndexFunc(list.Integrations, func(in integrationDoc) bool { return in.ID == "anthropic_api_key" })
+	idx = slices.IndexFunc(list.Integrations, func(in integrationDoc) bool { return in.ID == "github_app" })
 	if idx < 0 || list.Integrations[idx].Docs != newDocs || list.Integrations[idx].Source != "stored" {
 		t.Fatalf("integrations list after PUT = %+v, want the persisted docs on a stored row", list.Integrations)
 	}

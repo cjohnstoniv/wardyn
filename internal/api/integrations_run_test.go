@@ -251,7 +251,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 
 // Two workspaces requiring the SAME integration, or an integration whose host
 // a policy already credentialed, must not stack two api_key grants on one host
-// — the same rule ensureLLMGrant/applyWorkspaceCreds follow.
+// — the same rule applyRequiredSecretGrant follows.
 func TestIntegrationFold_NeverDoubleGrantsAHost(t *testing.T) {
 	integ := feedIntegration()
 	integ.Egress = []string{"artifactory.corp.internal"}

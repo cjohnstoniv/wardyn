@@ -110,12 +110,10 @@ func TestResolveBedrockAuth_Ready(t *testing.T) {
 // cmp.Or(ws.Model, model)): a picked workspace/container's WorkspaceBedrockRef
 // beats the operator's global BedrockRegion/BedrockModel, in both the effective
 // env AND the resulting regional egress hosts. This dispatch-level machinery is
-// still fully wired (dispatchParams.BedrockRef, resolveLLMTransport); the
-// PRODUCER of a non-nil ref from a real onboarded workspace's LLMCred binding is
-// foldRunIntegration (llmcred.go), covered by
-// TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionModel
-// in workspace_creds_test.go. This test exercises resolveBedrockAuth directly
-// with a literal ref to isolate the override math.
+// still wired (dispatchParams.BedrockRef, resolveLLMTransport), though nothing
+// produces a non-nil ref since the AI-integration fold was deleted (#547); the
+// conversion to model providers deletes the type. This test exercises
+// resolveBedrockAuth directly with a literal ref to isolate the override math.
 func TestResolveBedrockAuth_WorkspaceRefOverridesGlobal(t *testing.T) {
 	s := fullyConfiguredBedrockServer() // global: us-east-1 / us.anthropic...
 	ws := &types.WorkspaceBedrockRef{Region: "eu-central-1", Model: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"}

@@ -80,13 +80,15 @@ export const S = {
   BEDROCK_CONFIG_NOTE:
     "Region and model come from the daemon's own config (WARDYN_BEDROCK_REGION / WARDYN_BEDROCK_MODEL) — set them where wardynd starts, not here.",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
-  // DRAFT (M2 canon pending) — a per_user Bedrock row is declared on the
-  // Agents tab, and its sign-in is per person (the connected check below
-  // reads the CALLER's own model_access, not a deployment-wide fact) — this
-  // note says so rather than leaving the card silent about where the lane
-  // actually lives.
+  // DRAFT (M2 canon pending) — a per_user Bedrock row's sign-in is per person
+  // (the connected check below reads the CALLER's own model_access, not a
+  // deployment-wide fact), and this note says so. The Agents tab no longer
+  // declares such a lane (#539): a new per-person lane is a model provider,
+  // so the note points there — "under Model providers" is AGENTS.NO_PROVIDER's
+  // own wording — and stays true on an install still running an older
+  // per_user roster row.
   BEDROCK_PER_USER_NOTE:
-    "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
+    "This lane is per person: each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's. A new per-person lane is set up under Model providers.",
   // DRAFT (M2 canon pending) — U-02: not_applicable is the shared
   // admin-token principal's own answer (no session of its own, ever) —
   // reading the deployment-wide `!!bedrockRow` fact instead paints a green
@@ -111,7 +113,7 @@ export const S = {
   // one on the card. Unconditional on role (mirrors BEDROCK_PER_USER_NOTE),
   // since the fact is true of whoever owns the row, operator included.
   BEDROCK_BEARER_OWN_NOTE:
-    "This lane is per person: it is declared on the Agents tab, and each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's.",
+    "This lane is per person: each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's. A new per-person lane is set up under Model providers.",
   // DRAFT (M2 canon pending) — PR #352 review, finding 4: the disabled field's
   // own reason, for the row shape where it stays operator-only (a shared row,
   // or no row at all — deriveIntegrations' default). Without this the only
@@ -448,13 +450,12 @@ export function ModelProviderCard({
   // only decides whether to offer a lane that would fail.
   const sharedSubBlocked = status.auth.shared_subscription_allowed === false;
 
-  // The claude-code roster row is per_user Bedrock SSO
-  // — declared on the Agents tab, where each person signs in for themselves.
-  // Read independently here on purpose: this card reads the server's settled
-  // answer (status.harnesses), while the Agents tab reads the same `harness`
-  // prop for the DRAFT being edited — but both share ONE predicate,
-  // isPerUserSsoRow (workspace-providers-copy.ts), so the three-part
-  // test (enabled/mechanism/credential_source) can't drift into two answers.
+  // The claude-code roster row is per_user Bedrock SSO, where each person
+  // signs in for themselves.
+  // This card reads the server's settled answer (status.harnesses) through
+  // the ONE predicate every such reader shares, isPerUserSsoRow
+  // (lib/model-access.ts), so the three-part test
+  // (enabled/mechanism/credential_source) can't drift into two answers.
   // See that function's comment for why `enabled !== false` is
   // load-bearing, not decorative.
   const perUserSso = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserSsoRow(h));

@@ -13,9 +13,9 @@ import (
 )
 
 // PushContentMaxPaths caps the review-matched paths a PushContentScope names.
-// PathsTotal carries the exact count; the complete list rides beside the scope
-// as a PushPathList and is stored per approval, never in the scope (the dedup
-// key) or a refusal body.
+// PathsTotal carries the exact count; the complete list rides beside the
+// scope as a PushPathList, stored per approval, never in the scope (the
+// dedup key) or a refusal body.
 const PushContentMaxPaths = 10
 
 // The bounds of a PushPathList: at most PushPathListMaxPaths paths and
@@ -26,10 +26,10 @@ const (
 )
 
 // PushPathList is a held push's complete review-matched path list, sorted and
-// bounded: every path when Truncated is false, otherwise the first ones that
-// fit the bounds. The sidecar sends it beside the push_content
-// requested_scope; the control plane verifies it against that scope
-// (VerifyAgainst) and keeps it immutable per approval.
+// bounded: every path when Truncated is false, else the first ones that fit
+// the bounds. Sent by the sidecar beside the push_content requested_scope; the
+// control plane verifies it against that scope (VerifyAgainst) and keeps it
+// immutable per approval.
 type PushPathList struct {
 	Paths     []string `json:"paths"`
 	Truncated bool     `json:"truncated"`
@@ -54,9 +54,9 @@ const pushPathListSlack = 4096
 // VerifyAgainst checks l is the list s was built from: sorted, distinct and
 // within bounds, opening with every one of s.Paths, and — unless Truncated —
 // exactly PathsTotal paths whose digest is s.PathsDigest. A truncated list
-// must also have been cut by a bound: PushPathListMaxPaths paths, or within
-// pushPathListSlack of PushPathListMaxBytes. Which path follows the cut is
-// still the sidecar's word; nothing the scope carries names it.
+// must also have been cut by a bound (PushPathListMaxPaths paths, or within
+// pushPathListSlack of PushPathListMaxBytes); which path follows the cut is
+// still the sidecar's word, since nothing the scope carries names it.
 func (l PushPathList) VerifyAgainst(s PushContentScope) error {
 	size := 0
 	for _, p := range l.Paths {
@@ -97,26 +97,26 @@ func PushPathsDigest(paths []string) string {
 // The dedup key is the whole scope: approval.RequestApproval and the partial
 // unique index from migration 0022 both compare it, so two raises of the same
 // push collapse into one PENDING row. What makes it the right key is Commits
-// plus PathsDigest. Commits are content addresses, so a repack of the same
-// commits — git's retry after an approval — yields the same scope where a pack
-// digest would not. PathsDigest covers EVERY review-matched path, not just the
-// ten Paths names, so two pushes whose first ten matches agree are still two
-// questions.
+// plus PathsDigest: commits are content addresses, so a repack of the same
+// commits (git's retry after an approval) yields the same scope where a pack
+// digest would not, and PathsDigest covers every review-matched path, not
+// just the ten Paths names, so two pushes whose first ten matches agree are
+// still two questions.
 type PushContentScope struct {
 	// Repo is the repository as the run's grant names it: "github.com/<owner>/<repo>"
-	// on the GitHub App lane, "<host>/<path>" on the git_pat lane (for Azure
-	// DevOps, "dev.azure.com/<org>/<project>/_git/<repo>").
+	// on the GitHub App lane, "<host>/<path>" on the git_pat lane (Azure DevOps:
+	// "dev.azure.com/<org>/<project>/_git/<repo>").
 	Repo string `json:"repo"`
-	// Branch is the ref the push updates, "refs/heads/…". A push that updates
-	// several names them all, sorted and joined by ", ".
+	// Branch is the ref the push updates, "refs/heads/…"; several names join
+	// sorted by ", ".
 	Branch string `json:"branch"`
 	// ActsAs is the credential the forwarded push authenticates with, as
 	// "<grant kind>:<grant id>" — "github_token:<uuid>" or "git_pat:<uuid>".
 	ActsAs string `json:"acts_as"`
 	// Paths are the first PushContentMaxPaths review-matched paths, sorted,
-	// each named as git names it with core.quotePath on (the sidecar's
-	// quotePath), so every path is valid UTF-8 on the wire. A path ending in
-	// "/" is a directory the push does not carry.
+	// each git-quoted (core.quotePath on, the sidecar's quotePath) so every
+	// path is valid UTF-8 on the wire. A path ending in "/" is a directory the
+	// push does not carry.
 	Paths []string `json:"paths"`
 	// PathsTotal is how many paths matched a review pattern in all.
 	PathsTotal int `json:"paths_total"`
@@ -128,8 +128,8 @@ type PushContentScope struct {
 
 	// ActsAsKind and ActsAsLabel are SERVER-SET: the control plane resolves
 	// ActsAs against the run's own grants and stamps them before the row is
-	// stored, and refuses a raise that carries either (a sidecar's word on who
-	// a push acts as is not taken). ActsAsKind is one of the PushActsAs*
+	// stored, refusing a raise that carries either — a sidecar's word on who a
+	// push acts as is not taken. ActsAsKind is one of the PushActsAs*
 	// constants; ActsAsLabel is the principal the console names.
 	ActsAsKind  string `json:"acts_as_kind,omitempty"`
 	ActsAsLabel string `json:"acts_as_label,omitempty"`

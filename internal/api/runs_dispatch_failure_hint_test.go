@@ -126,12 +126,13 @@ func TestLaunchRecordRun_GrantWriteFailure_HintsCarryNoDriverText(t *testing.T) 
 		ws:       types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
 		grantErr: errors.New(driverText),
 	}}
+	fake.ws.Requirements, fake.site = grantingRequirement()
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	// The api-key branch, whose CreateGrant then fails (as in
+	// A required integration's grant, whose CreateGrant then fails (as in
 	// TestLaunchRecordRun_CreateGrantFailureFinalizesRun).
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"artifactory-token": []byte("tok")}}
 	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
 	srv := New(cfg)
 

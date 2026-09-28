@@ -172,7 +172,8 @@ func TestRunModelProviderDoors(t *testing.T) {
 		denied       bool   // an authz.denied capability_model_provider row
 		wantProvider string // #532: the 422's provider and kind; "" when the refusal names no provider
 		wantKind     types.ModelProviderKind
-		credential   bool // #532: reason model_credential — only a refusal the caller's own stored credential repairs
+		credential   bool   // #532: reason model_credential — only a refusal the caller's own stored credential repairs
+		reason       string // a field refusal's own reason, when it carries one
 	}{
 		{name: "a requested provider the member is not granted", site: twoKeys, cs: &capStore{enf: enforced},
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
@@ -207,7 +208,7 @@ func TestRunModelProviderDoors(t *testing.T) {
 			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
 		{name: "integration_id under a provider block", site: withIntegration, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","integration_id":"corp-anthropic","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration},
+			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration, reason: reasonIntegrationIDRetired},
 		{name: "a disabled default with one other candidate", cs: &capStore{}, operator: true,
 			site: types.SiteConfig{
 				ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), func() types.ModelProvider {
@@ -258,9 +259,10 @@ func TestRunModelProviderDoors(t *testing.T) {
 				// and `kind`; `reason` rides only on a credential refusal, since
 				// the console answers it with a sign-in and a relaunch. Absent
 				// on the 403s (denyMemberField), the field-validation 4xxs
-				// (mpRunNoIntegration/mpRunNoBlock/mpRunNoModel/mpRunBadID) and
-				// the no-provider-named refusals (mpRunChoose).
-				wantReason := ""
+				// (mpRunNoBlock/mpRunNoModel/mpRunBadID) and the
+				// no-provider-named refusals (mpRunChoose). mpRunNoIntegration
+				// carries its own field reason, integration_id_retired.
+				wantReason := tc.reason
 				if tc.credential {
 					wantReason = llmRefusalAuditReason
 				}

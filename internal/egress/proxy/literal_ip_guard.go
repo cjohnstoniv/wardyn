@@ -3,22 +3,18 @@
 
 package proxy
 
-// The unconditional literal-IP guard evaluate applies at step 0 — INCLUDING
-// the non-canonical spellings a resolver accepts and net.ParseIP does not.
+// SECURITY: the unconditional literal-IP guard evaluate applies at step 0 — INCLUDING the non-canonical
+// spellings a resolver accepts and net.ParseIP does not.
 //
-// net.ParseIP is not a complete answer to "is this a literal IP?" on TWO
-// axes: (1) inet_aton(3) — and therefore glibc getaddrinfo and most
-// libc-linked upstreams — accepts dotted-triple, dotted-double, bare 32-bit,
-// hex and octal spellings Go's net.ParseIP refuses (127.1, 0x7f000001,
-// 2130706433 all read as 127.0.0.1; 0251.0376.0.1 reads as 169.254.0.1, a
-// DIFFERENT blocked range); (2) net.ParseIP returns nil for a
-// ZONE-SUFFIXED IPv6 literal ("fe80::1%eth0") that netip.ParseAddr parses
-// and net.Dial dials.
+// net.ParseIP is incomplete on TWO axes: (1) inet_aton(3) — and so glibc getaddrinfo and most libc-linked
+// upstreams — accepts dotted-triple, dotted-double, bare 32-bit, hex and octal spellings net.ParseIP
+// refuses (127.1, 0x7f000001, 2130706433 all read as 127.0.0.1; 0251.0376.0.1 reads as 169.254.0.1, a
+// DIFFERENT blocked range); (2) net.ParseIP returns nil for a ZONE-SUFFIXED IPv6 literal ("fe80::1%eth0")
+// that netip.ParseAddr parses and net.Dial dials.
 //
-// Left unvetted, those spellings walk past step 0 as ordinary "hostnames"
-// and, with a corp upstream configured, are handed over verbatim — SSRF to
-// loopback/metadata through the one hop the threat model says the guard
-// still covers.
+// Left unvetted, those spellings walk past step 0 as ordinary "hostnames" and, with a corp upstream
+// configured, are handed over verbatim — SSRF to loopback/metadata through the one hop the threat model
+// says the guard still covers.
 
 import (
 	"net"
@@ -29,22 +25,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// literalIPGuard is evaluate's step 0: an agent-named LITERAL address that is
-// blocked (private/loopback/link-local/metadata) is denied BEFORE policy and
-// BEFORE first-use approval, so an approval can never be raisable for these
-// ranges (invariant 3). Hostnames that RESOLVE to blocked ranges are caught
-// by VetHost at step 4, after policy/approval. Returns (trustedLiteralIP,
-// nil) to continue and (nil, log) to deny.
+// literalIPGuard is evaluate's step 0. INVARIANT 3: an agent-named LITERAL address that is blocked
+// (private/loopback/link-local/metadata) is denied BEFORE policy and BEFORE first-use approval, so an
+// approval can never be raisable for these ranges. Hostnames that RESOLVE to blocked ranges are caught by
+// VetHost at step 4, after policy/approval. Returns (trustedLiteralIP, nil) to continue, (nil, log) to deny.
 //
-// trustedLiteralIP is the ONE deliberate exception: a literal IP the operator
-// explicitly typed into an EXACT AllowedDomains entry carries no
-// DNS-rebinding risk (no hostname behind it to rebind), so it also skips
-// VetHost at step 4. Only blockPrivate OFF the proxy's own subnets and
-// control-plane host qualifies — loopback, link-local/metadata, NAT64, or a
-// sidecar docker-network neighbour is still denied regardless.
+// trustedLiteralIP is the ONE deliberate exception: a literal IP the operator explicitly typed into an
+// EXACT AllowedDomains entry carries no DNS-rebinding risk (no hostname behind it to rebind), so it also
+// skips VetHost. Only blockPrivate OFF the proxy's own subnets and control-plane host qualifies — loopback,
+// link-local/metadata, NAT64, or a sidecar docker-network neighbour is still denied regardless.
 //
-// The non-canonical arm is DENY-ONLY (see nonCanonicalLiteralIP): a spelling
-// the operator did not type can never inherit an allowed_domains grant.
+// The non-canonical arm is DENY-ONLY (see nonCanonicalLiteralIP): a spelling the operator didn't type can
+// never inherit an allowed_domains grant.
 func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.IP, *egress.DecisionLog) {
 	deny := func() (net.IP, *egress.DecisionLog) {
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
@@ -59,9 +51,8 @@ func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.I
 		}
 		return nil, nil
 	}
-	// The spellings net.ParseIP refuses and a real dialer accepts (see the
-	// package comment) — what finally dials sees the address the canonical
-	// spelling names, so the guard has to as well.
+	// Spellings net.ParseIP refuses but a real dialer accepts (see package comment) — what finally dials
+	// sees the address the canonical spelling names, so the guard must too.
 	if ip := nonCanonicalLiteralIP(host); ip != nil {
 		if kind, _ := isBlockedIP(ip); kind != blockNone {
 			return deny()
@@ -70,13 +61,11 @@ func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.I
 	return nil, nil
 }
 
-// nonCanonicalLiteralIP is the single gap-filler beside an existing
-// net.ParseIP check: the address host names in a spelling net.ParseIP
-// REFUSES and something downstream accepts — the inet_aton IPv4 forms
-// (nonCanonicalIPv4) and the zone-suffixed IPv6 literal (zonedIPv6Literal).
-// Nil for every spelling net.ParseIP already accepts and for an ordinary
-// hostname. Both consumers — evaluate's step 0 and egressTarget's upstream
-// branch — DENY on it; nothing else reads it, so it widens nothing.
+// nonCanonicalLiteralIP is the single gap-filler beside an existing net.ParseIP check: the address host
+// names in a spelling net.ParseIP REFUSES and something downstream accepts — inet_aton IPv4 forms
+// (nonCanonicalIPv4) and the zone-suffixed IPv6 literal (zonedIPv6Literal). Nil for every spelling
+// net.ParseIP already accepts and for an ordinary hostname. SECURITY: both consumers — evaluate's step 0
+// and egressTarget's upstream branch — DENY on it; nothing else reads it, so it widens nothing.
 func nonCanonicalLiteralIP(host string) net.IP {
 	if ip := nonCanonicalIPv4(host); ip != nil {
 		return ip
@@ -84,15 +73,13 @@ func nonCanonicalLiteralIP(host string) net.IP {
 	return zonedIPv6Literal(host)
 }
 
-// zonedIPv6Literal returns the address a ZONE-SUFFIXED IPv6 literal names —
-// "fe80::1%eth0", and the RFC 6874 authority spelling "fe80::1%25eth0" a URI
-// carries it in — and nil for anything else. net.ParseIP has no zone syntax
-// and returns nil for both, while netip.ParseAddr parses them and net.Dial
-// dials them, so that is the parser this guard must agree with.
+// zonedIPv6Literal returns the address a ZONE-SUFFIXED IPv6 literal names — "fe80::1%eth0", and the RFC
+// 6874 authority spelling "fe80::1%25eth0" a URI carries it in — nil otherwise. net.ParseIP has no zone
+// syntax and returns nil for both, while netip.ParseAddr parses and net.Dial dials them, so that's the
+// parser this guard must agree with.
 //
-// The zone is dropped from the returned address: a zone selects which
-// INTERFACE an address is reached on, never a different address, and
-// isBlockedIP judges the address. Dropping it also keeps this arm deny-only.
+// The zone is dropped from the returned address: a zone selects which INTERFACE is reached, never a
+// different address, and isBlockedIP judges the address. Dropping it also keeps this arm deny-only.
 func zonedIPv6Literal(host string) net.IP {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" || net.ParseIP(h) != nil {
@@ -108,12 +95,10 @@ func zonedIPv6Literal(host string) net.IP {
 	return net.IP(addr.WithZone("").AsSlice())
 }
 
-// nonCanonicalIPv4 returns the IPv4 address host names under inet_aton(3)
-// semantics when host is a numeric literal that net.ParseIP REFUSES, and nil
-// otherwise (including for every spelling net.ParseIP already accepts). Read
-// only through nonCanonicalLiteralIP, whose two consumers deny — a
-// non-canonical spelling can never inherit an operator's allowed_domains
-// grant (those are authored, and matched, in canonical form).
+// nonCanonicalIPv4 returns the IPv4 address host names under inet_aton(3) semantics when host is a numeric
+// literal net.ParseIP REFUSES, nil otherwise (including every spelling net.ParseIP already accepts). Read
+// only through nonCanonicalLiteralIP, whose two consumers deny — a non-canonical spelling can never
+// inherit an allowed_domains grant (authored and matched in canonical form).
 func nonCanonicalIPv4(host string) net.IP {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" || net.ParseIP(h) != nil {
@@ -131,9 +116,8 @@ func nonCanonicalIPv4(host string) net.IP {
 		}
 		vals = append(vals, v)
 	}
-	// inet_aton: with n parts, the LAST absorbs the remaining 5-n bytes of the
-	// address (so "127.1" is 127.0.0.1 and "2130706433" is the whole word) and
-	// every earlier part must fit in one byte.
+	// inet_aton: with n parts, the LAST absorbs the remaining 5-n bytes (so "127.1" is 127.0.0.1 and
+	// "2130706433" is the whole word); every earlier part must fit in one byte.
 	n := len(vals)
 	last := vals[n-1]
 	if last >= uint64(1)<<(8*(5-n)) {
@@ -150,9 +134,8 @@ func nonCanonicalIPv4(host string) net.IP {
 	return net.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr))
 }
 
-// inetAtonPart parses one component of an inet_aton literal: 0x-prefixed
-// hexadecimal, 0-prefixed octal, or decimal. Anything else makes the whole
-// host an ordinary hostname.
+// inetAtonPart parses one inet_aton component: 0x-prefixed hex, 0-prefixed octal, or decimal. Anything
+// else makes the whole host an ordinary hostname.
 func inetAtonPart(s string) (uint64, bool) {
 	base := 10
 	switch {

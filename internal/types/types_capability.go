@@ -9,33 +9,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// CapabilitySubjectType names WHO a capability grant is written against
-// (migration 0042). Closed and complete — its DB CHECK is pinned against these
-// constants by internal/db's TestClosedEnumChecksMatchConstants.
+// CapabilitySubjectType names WHO a capability grant is written against.
+// Closed and complete — its DB CHECK is pinned against these constants by
+// internal/db's TestClosedEnumChecksMatchConstants.
 type CapabilitySubjectType string
 
 const (
-	// CapabilitySubjectUser is one human, named by either their lowercased OIDC
-	// "sub" or their email — a grant on EITHER matches, so an admin can write
-	// down the identity they actually know rather than the one the IdP prefers.
+	// CapabilitySubjectUser is one human, named by lowercased OIDC "sub" or
+	// email — either matches, so an admin can record whichever identity they
+	// actually know.
 	CapabilitySubjectUser CapabilitySubjectType = "user"
 	// CapabilitySubjectGroup is one entry of the login-time union of the ID
-	// token's roles+groups claims (see oidc.Session.Groups). Entra App Roles are
-	// grantable through this without any extra configuration.
+	// token's roles+groups claims (oidc.Session.Groups); Entra App Roles are
+	// grantable through this with no extra config.
 	CapabilitySubjectGroup CapabilitySubjectType = "group"
-	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
-	// that emits no usable groups claim. Subject is "" for this type.
+	// CapabilitySubjectAll is every signed-in human, the baseline when an IdP
+	// emits no usable groups claim. Subject is "" for this type.
 	CapabilitySubjectAll CapabilitySubjectType = "all"
-	// CapabilitySubjectUserType is everyone of one user type, named by the
-	// type's id (UserType.ID). A person holds exactly one type, stamped at
-	// sign-in. For the governance ceiling and drives it is a tier between
-	// group and all; for capability grants it is one more subject, so a DENY
-	// written against a type is a wall no user or group allow lifts.
+	// CapabilitySubjectUserType is everyone of one user type (UserType.ID); a
+	// person holds exactly one, stamped at sign-in. It sits between group and
+	// all for governance ceilings/drives; for grants it's one more subject,
+	// so a DENY on a type is a wall no user or group allow lifts.
 	CapabilitySubjectUserType CapabilitySubjectType = "user_type"
 )
 
-// Valid reports whether t is one of the four subject types. Used to reject a
-// garbage value at the API write boundary, mirroring ApprovalScope.Valid.
+// Valid rejects a garbage subject type at the API write boundary, mirroring
+// ApprovalScope.Valid.
 func (t CapabilitySubjectType) Valid() bool {
 	switch t {
 	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll, CapabilitySubjectUserType:
@@ -60,18 +59,16 @@ func (e CapabilityEffect) Valid() bool {
 	return e == CapabilityAllow || e == CapabilityDeny
 }
 
-// CapabilityGrant is one row of the permissioning grant list (migration 0042):
-// "subject S may (or may not) use capability C at value V".
+// CapabilityGrant is one row of the permissioning grant list: "subject S may
+// (or may not) use capability C at value V".
 //
-// Capability is a PLAIN STRING here, not a typed enum, and that is deliberate:
-// the closed kind set lives in exactly one Go slice in internal/api
-// (capabilityKinds) and is validated at the write boundary, so a fifth kind is
-// a constant plus a call site with no schema change. A stored kind this binary
-// does not know is inert — no resolver ever asks for it.
+// Capability is a PLAIN STRING, not an enum, deliberately: the closed kind
+// set lives in one Go slice (internal/api's capabilityKinds) and is checked
+// at the write boundary, so a new kind needs no schema change. An unknown
+// kind is simply inert.
 //
-// Value's meaning is per kind: a host or "*.suffix" for egress_host, an exact
-// secret name / workspace uuid / image ref for the others, and "*" is the
-// per-kind wildcard everywhere.
+// Value's meaning is per kind: host or "*.suffix" for egress_host, else an
+// exact secret name/workspace uuid/image ref; "*" is always the wildcard.
 type CapabilityGrant struct {
 	ID          uuid.UUID             `json:"id"`
 	SubjectType CapabilitySubjectType `json:"subject_type"`

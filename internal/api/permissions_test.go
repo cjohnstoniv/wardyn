@@ -446,3 +446,21 @@ func TestPermissionsWritesRefuseMembers(t *testing.T) {
 		t.Fatalf("GET /me/capabilities = %d, want 200: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestMarkInertGrants_RetiredKind: a stored grant of a retired kind
+// ("integration", #547) can never match anything and cannot be re-saved, so
+// it reads as inert — the value rule alone would pass a plain id through.
+func TestMarkInertGrants_RetiredKind(t *testing.T) {
+	srv := New(Config{})
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/permissions", nil)
+	views := srv.markInertGrants(r, []types.CapabilityGrant{
+		{Capability: "integration", Value: "corp-openai"},
+		{Capability: capAgent, Value: "claude-code"},
+	})
+	if !views[0].Inert {
+		t.Error("a retired-kind grant must read as inert")
+	}
+	if views[1].Inert {
+		t.Error("a live kind's canonical grant must not read as inert")
+	}
+}

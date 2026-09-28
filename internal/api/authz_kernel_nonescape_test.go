@@ -44,7 +44,7 @@ var kernelDoors = map[string][]string{
 	// run.create (and its dry run): the request's own fields, then the inline
 	// policy's entries, then the image a workspace seeds and the git rows its
 	// repos resolve to, then the model provider it will use.
-	"denyUserRequest":            {"capAgent", "capImage", "capIntegration", "capPolicy", "capWorkspace"},
+	"denyUserRequest":            {"capAgent", "capImage", "capPolicy", "capWorkspace"},
 	"narrowUserInlinePolicy":     {"capEgressHost", "capSecret", "capWorkspace"},
 	"denyUserSeededImage":        {"capImage"},
 	"denyUserWorkspaceProviders": {"capWorkspaceProvider"},
@@ -68,9 +68,8 @@ var kernelDoors = map[string][]string{
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.
-	"handleListIntegrations":         {"capIntegration"},
 	"handleListPolicies":             {"capPolicy"},
-	"handleSetupStatus":              {"capAgent", "capIntegration"},
+	"handleSetupStatus":              {"capAgent"},
 	"setupModelProviders":            {"capAgent"},
 	"setupModelProviderState":        {"capModelProvider"},
 	"computeSCMAccessRowsFor":        {"capWorkspaceProvider"},
@@ -289,7 +288,6 @@ var kernelLaunchFields = []kernelLaunchField{
 	{capImage, "ghcr.io/acme/tool:1", "runs.image", "image"},
 	{capWorkspace, kernelWorkspaceID.String(), "runs.workspace", "workspace_id"},
 	{capAgent, "claude-code", "runs.agent", "agent"},
-	{capIntegration, "int-kernel", "runs.integration", "integration_id"},
 	{capPolicy, kernelPolicyID.String(), "runs.policy", "policy_id"},
 }
 

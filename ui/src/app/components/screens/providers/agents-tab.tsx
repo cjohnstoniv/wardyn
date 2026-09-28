@@ -3,16 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Agents tab of /providers (§5c.4) — one row per harness-catalog id (+ any
-// custom WARDYN_AGENT_IMAGES rows already stored, preserved unedited): a Switch
-// (enabled), a mechanism radio over the model card's own lanes (reused, folded
-// to the catalog's coarse values — the impossible-pair reasons are the SAME
-// verbatim strings the model-provider capability table already carries,
-// lib/integrations.ts's IMPOSSIBLE), a credential-source toggle (per_user
-// offered only for bedrock_sso), the SSO start URL when per_user applies, and —
-// on the claude-code row only (SetupStatus.model_access is scoped to it
+// The Agents tab of /providers (§5c.4, design §5.3) — one row per harness-catalog
+// id (+ any custom WARDYN_AGENT_IMAGES rows already stored, preserved unedited):
+// a Switch (enabled), the row's default model provider (packet MP-C's G1–G4),
+// and — on the claude-code row only (SetupStatus.model_access is scoped to it
 // server-side) — the SIGNED-IN ADMIN'S OWN model-access chip (their own
-// credential, C4.2): outline action, never a second teal.
+// credential, C4.2): outline action, never a second teal. The mechanism radio,
+// the credential toggle and the AWS start URL live on the provider now.
 //
 // This tab is a SEPARATE resource from the Git/Storage tabs (SiteConfig's
 // agent_providers block, its own GET/PUT), so it fetches and saves itself —
@@ -20,13 +17,17 @@
 // riding the parent screen's WorkspaceProviders draft/save.
 //
 // Every user-visible string here is workspace-providers-copy.ts's AGENTS/
-// PROVIDERS (§7.7, frozen) or reused canon it names. This file adds none.
+// PROVIDERS (§7.7, frozen) or reused canon it names (MODEL_PROVIDERS.KIND,
+// RAIL_PROVIDER.PLACEHOLDER). This file adds none.
 import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { agentProviders as api, type AgentProvider, type AgentProviders } from "../../../lib/api/agent-providers";
-import { AI_TYPES, IMPOSSIBLE, type AiType } from "../../../lib/integrations";
+import { modelProviders as providersApi, type ModelProvider } from "../../../lib/api/model-providers";
+import { IMPOSSIBLE, type AiType } from "../../../lib/integrations";
+import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
+import { RAIL_PROVIDER } from "../../wardyn/copy/new-run-rail";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
@@ -36,8 +37,6 @@ import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
   AGENTS,
-  AGENTS_DRAFT,
-  isPerUserSsoRow,
   MODEL_ACCESS_ACTIONABLE,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
@@ -45,15 +44,13 @@ import {
   modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { isLikelyStartUrl } from "../settings/harness-login-pane";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
-import { useRovingRadio } from "../../wardyn/use-roving-radio";
 
 // The two catalog agents whose declared lane folds to a coarse ai-integration
 // type harness.go's ProviderTypes checks against (harnessCatalog); a
@@ -71,49 +68,21 @@ export function agentCapabilityFor(id: string): AgentCapability | undefined {
   return undefined;
 }
 
-interface MechChoice {
-  value: string;
-  label: string;
-  /** Set = disabled, and this is why — the catalog's own verbatim reason
-   *  (harness.go's reasonX* constants, mirrored client-side in IMPOSSIBLE so
-   *  the impossibility text can't drift from the capability table it names). */
-  reason?: string;
-}
-
-// The row's candidate mechanisms, flattened rather than nested: the model
-// card's three top-level lanes (subscription/api key/Bedrock) plus Bedrock's
-// four sub-choices, one flat list — reusing the SAME lane titles
-// (lib/integrations.ts's AI_TYPES) and the SAME bedrock labels
-// (workspace-providers-copy.ts's AGENTS.MECHANISM_BEDROCK_*).
-function mechanismChoices(harness: SetupHarnessTool): MechChoice[] {
-  if (harness.no_managed_auth) return [{ value: "none", label: AGENTS.MECHANISM_NONE }];
-  const cap = agentCapabilityFor(harness.id);
-  const reasonFor = (t: AiType) => (cap ? IMPOSSIBLE[t]?.[cap] : undefined);
-  return [
-    { value: "anthropic_subscription", label: AI_TYPES.anthropic_subscription.title, reason: reasonFor("anthropic_subscription") },
-    { value: "anthropic_api_key", label: AI_TYPES.anthropic_api_key.title, reason: reasonFor("anthropic_api_key") },
-    { value: "openai_api_key", label: AI_TYPES.openai_api_key.title, reason: reasonFor("openai_api_key") },
-    { value: "bedrock_bearer", label: AGENTS.MECHANISM_BEDROCK_BEARER, reason: reasonFor("bedrock") },
-    { value: "bedrock_sso", label: AGENTS.MECHANISM_BEDROCK_SSO, reason: reasonFor("bedrock") },
-    { value: "bedrock_env", label: AGENTS.MECHANISM_BEDROCK_ENV, reason: reasonFor("bedrock") },
-    { value: "bedrock_aws_dir", label: AGENTS.MECHANISM_BEDROCK_AWS_DIR, reason: reasonFor("bedrock") },
-  ];
-}
+// The mechanism a freshly enabled catalog row is seeded with: the roster still
+// requires one (validateAgentMechanism's agent400NeedsLane) although the tab no
+// longer offers the choice — the first lane, in this order, that the agent can
+// actually speak (the catalog's impossible pairs, mirrored in IMPOSSIBLE).
+const SEED_MECHANISMS: [string, AiType][] = [
+  ["anthropic_subscription", "anthropic_subscription"],
+  ["anthropic_api_key", "anthropic_api_key"],
+  ["openai_api_key", "openai_api_key"],
+  ["bedrock_bearer", "bedrock"],
+];
 
 function defaultMechanism(harness: SetupHarnessTool): string {
-  const choices = mechanismChoices(harness);
-  return (choices.find((c) => !c.reason) ?? choices[0]).value;
-}
-
-// F4-F9 (Appendix A V8): a bedrock_sso row declared "Per person" with no
-// start URL is a guaranteed 400 (agent_providers.go's
-// validateAgentCredentialSource) — the Git tab already withholds Save for
-// its own invalid rows (invalidGitRow, providers-screen.tsx); this is the
-// same rule for this tab. NOT gated on `enabled`: the server validates every
-// stored row it is handed, on or off (the git-tab precedent, display.tsx's
-// own comment on gitRowInvalid).
-export function agentRowInvalid(row: AgentProvider): boolean {
-  return row.mechanism === "bedrock_sso" && row.credential_source === "per_user" && !isLikelyStartUrl(row.sso_start_url ?? "");
+  if (harness.no_managed_auth) return "none";
+  const cap = agentCapabilityFor(harness.id);
+  return (SEED_MECHANISMS.find(([, t]) => !(cap && IMPOSSIBLE[t]?.[cap])) ?? SEED_MECHANISMS[0])[0];
 }
 
 // The row to EDIT: the stored row if one exists, else a fresh one seeded with a
@@ -142,19 +111,14 @@ function rowEnabled(agents: AgentProvider[], harness: SetupHarnessTool): boolean
   return stored ? !stored.disabled : harness.enabled !== false;
 }
 
-// per_user is captured for an AWS SSO sign-in ONLY (validateAgentCredentialSource,
-// and PER_USER_UNAVAILABLE says so). A STORED row pairing it with any other
-// mechanism — OR pairing bedrock_sso with a SHARED credential_source — is a
-// row the admin can neither see nor clear: "Per person" painted active AND
-// disabled (or simply not offered), the start-URL/pin fields hidden, and all
-// four re-PUT verbatim by the next unrelated Save.
-//
-// So all four are dropped ON LOAD whenever credential_source isn't actually
-// "per_user" on a bedrock_sso row — the SAME one clause the mechanism radio's
-// own onChange and the Shared button already clear on an edit — the row
-// renders `shared`, and the next Save writes what the admin was shown. A row
-// that carries none of the four is returned UNTOUCHED, which is what keeps a
-// custom WARDYN_AGENT_IMAGES row byte-for-byte.
+// per_user is captured for an AWS SSO sign-in ONLY (validateAgentCredentialSource).
+// A STORED row pairing it with any other mechanism — OR pairing bedrock_sso with
+// a SHARED credential_source — would be re-PUT verbatim by the next unrelated
+// Save and refused 400, and this tab no longer shows those fields, so the admin
+// could not clear them. All four are dropped ON LOAD whenever credential_source
+// isn't actually "per_user" on a bedrock_sso row. A row that carries none of
+// the four is returned UNTOUCHED, which keeps a custom WARDYN_AGENT_IMAGES row
+// byte-for-byte; a valid per_user bedrock_sso row round-trips unchanged.
 function normalizeAgentRow(a: AgentProvider): AgentProvider {
   if (a.mechanism === "bedrock_sso" && a.credential_source === "per_user") return a;
   if (
@@ -202,9 +166,7 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
 // The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
 // the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
 // CTA, which opens the shell's one door (#544 — this tab mounted its own pane
-// before). Shared between the ordinary bottom placement and the prominent
-// per_user banner at the top of the row (Appendix A finding 4) — the content is
-// identical, only the wrapper around it differs.
+// before).
 function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
   const door = useModelAccessDoor();
   return (
@@ -227,10 +189,100 @@ function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
   );
 }
 
+// The providers that can serve this agent's runs: turned on, and used by it.
+// A turned-off provider is never a candidate at run create
+// (chooseModelProvider, internal/api), so it is neither offered as a default
+// nor counted as the only one; when every provider serving the agent is off,
+// the row reads G1. Packet MP-C draws no off case — this follows the server.
+// The Model providers list counts off providers as set up on purpose: it is the
+// page where they are turned back on.
+function servingProviders(providers: ModelProvider[], harnessId: string): ModelProvider[] {
+  return providers.filter((p) => !p.disabled && p.harnesses?.some((h) => h.harness === harnessId));
+}
+
+function providerName(p: ModelProvider): string {
+  return p.name || MODEL_PROVIDERS.KIND[p.kind] || p.id;
+}
+
+// Packet MP-C's G1–G4. One candidate is a static line (QC-1) and writes
+// nothing; several are a select (QC-5) over the row's default_provider.
+function DefaultProviderField({
+  harness,
+  row,
+  providers,
+  operator,
+  onUpdate,
+}: {
+  harness: SetupHarnessTool;
+  row: AgentProvider;
+  providers: ModelProvider[];
+  operator: boolean;
+  onUpdate: (next: AgentProvider) => void;
+}) {
+  const id = `agent-${harness.id}-default-provider`;
+  if (harness.no_managed_auth) {
+    return (
+      <Field label={AGENTS.FIELD_DEFAULT_PROVIDER}>
+        <p className="text-body text-muted-foreground">{AGENTS.MECHANISM_NONE}</p>
+      </Field>
+    );
+  }
+  const serving = servingProviders(providers, harness.id);
+  // A stored default that is not among the turned-on providers (turned off
+  // for an incident) is never hidden behind G1 or G2: the server refuses every
+  // run of this agent until another default is chosen (chooseModelProvider),
+  // so the row keeps the one control that gets out of that state.
+  const offDefault = !!row.default_provider && !serving.some((p) => p.id === row.default_provider);
+  if (serving.length === 0) {
+    return (
+      <Field label={AGENTS.FIELD_DEFAULT_PROVIDER}>
+        {offDefault ? (
+          // Nothing is on to choose instead, so the list's own A7 line says
+          // what is true here (MODEL_PROVIDERS.OFF_STILL_DEFAULT).
+          <p className="text-body text-warning">{MODEL_PROVIDERS.OFF_STILL_DEFAULT(harness.display)}</p>
+        ) : (
+          <p className="text-body text-info">{AGENTS.NO_PROVIDER(harness.display)}</p>
+        )}
+      </Field>
+    );
+  }
+  if (serving.length === 1 && !offDefault) {
+    return (
+      <Field label={AGENTS.FIELD_DEFAULT_PROVIDER}>
+        <p className="text-body text-foreground">{AGENTS.ONLY_PROVIDER(providerName(serving[0]), harness.display)}</p>
+      </Field>
+    );
+  }
+  return (
+    <Field label={AGENTS.FIELD_DEFAULT_PROVIDER} htmlFor={id} hint={AGENTS.DEFAULT_HINT}>
+      {/* A stored default that is off is not an option, so the select shows
+          the placeholder until a turned-on provider is chosen — with one on,
+          too (the one-click switch out of an incident). */}
+      <Select
+        value={serving.some((p) => p.id === row.default_provider) ? row.default_provider : ""}
+        disabled={!operator}
+        onValueChange={(v) => onUpdate({ ...row, default_provider: v })}
+      >
+        <SelectTrigger id={id} aria-label={`${AGENTS.FIELD_DEFAULT_PROVIDER} — ${harness.display}`}>
+          <SelectValue placeholder={RAIL_PROVIDER.PLACEHOLDER} />
+        </SelectTrigger>
+        <SelectContent>
+          {serving.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {AGENTS.DEFAULT_OPTION(providerName(p), MODEL_PROVIDERS.KIND[p.kind] ?? p.kind)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
 function Row({
   harness,
   row,
   enabled,
+  providers,
   modelAccess,
   operator,
   onUpdate,
@@ -240,60 +292,15 @@ function Row({
   /** rowEnabled's answer — the server's roster, never `!row.disabled` on a row
    *  resolvedRow invented. */
   enabled: boolean;
+  providers: ModelProvider[];
   modelAccess?: SetupModelAccess;
   operator: boolean;
   onUpdate: (next: AgentProvider) => void;
 }) {
-  const choices = mechanismChoices(harness);
-  const perUserAvailable = row.mechanism === "bedrock_sso";
-  const credentialSource = row.credential_source || "shared";
-  // U-03 (blind review lens-U): the SERVER's settled row, never the unsaved
-  // draft — `harness` is this build's /setup/status read, `row` is the
-  // draft being edited. A live CTA (the banner, or a suppressed start-URL
-  // prompt) on a draft that hasn't been saved yet leads straight to
-  // harnesscred.go's 400: it reads the STORED row's start URL, which is
-  // still empty (or still someone else's) until Save + a status refresh.
-  // R-01 (review): shares isPerUserSsoRow with connection-cards.tsx's
-  // perUserSso — same three-part test (enabled/mechanism/credential_source),
-  // one predicate instead of two that can drift.
-  const perUserSaved = isPerUserSsoRow(harness);
-
-  // F4-F13 (Appendix A V8): the credential-source group had no roving
-  // tabindex or arrow keys — two role="radio" Buttons were each their own
-  // Tab stop (wardyn/use-roving-radio.ts, the connection-cards.tsx/
-  // git-tab.tsx precedent). This group nests no expanded body, so only the
-  // roving half applies here.
-  //
-  // R-1 (blind review, fix pass): useRovingRadio's moveTo() calls onSelect
-  // unconditionally — it has no notion of a disabled item. "Per person" is
-  // disabled off a non-bedrock_sso row (perUserAvailable, below), a guard
-  // the MOUSE path enforces (the Button's own `disabled`) but the keyboard
-  // path bypassed: ArrowRight/End on "Shared" wrote credential_source:
-  // "per_user" on e.g. a codex-cli row, which agentRowInvalid never checks
-  // (bedrock_sso only) — Save stayed enabled over a guaranteed
-  // agent400PerUser 400. Fix: a 1-item group off a non-bedrock_sso row, so
-  // every arrow key folds to index 0 (a no-op re-select of "Shared") —
-  // credentialSource can only BE "per_user" when perUserAvailable is true
-  // (normalizeAgentRow's own invariant), so this never hides the checked item.
-  const sourceGroup = useRovingRadio(perUserAvailable ? 2 : 1, credentialSource === "shared" ? 0 : 1, (i) =>
-    i === 0
-      ? onUpdate({ ...row, credential_source: undefined, sso_start_url: undefined, sso_account_id: undefined, sso_role_name: undefined })
-      : onUpdate({ ...row, credential_source: "per_user" }),
-  );
-
-  // C4.2 is claude-code only (modelAccess is scoped server-side). #158: it now
+  // C4.2 is claude-code only (modelAccess is scoped server-side). #158: it
   // renders for not_applicable too — MODEL_ACCESS_CHIP_LABEL carries a real,
-  // neutral label for it (finding 5's old exclusion existed only because that
-  // label didn't exist, which made the block an empty chip with
-  // ADMIN_OWN_CHIP_NOTE still under it; a real label makes it an honest claim
-  // instead).
+  // neutral label for it.
   const showModelAccess = harness.id === "claude-code" && !!modelAccess;
-  // Prominence (finding 4): a per_user row with something actionable to do
-  // moves this block to the TOP of the row instead of its usual spot at the
-  // bottom — the legacy Settings door stops being the one an admin reaches
-  // for right after declaring the lane. Gated on perUserSaved (U-03), not
-  // the draft's credentialSource: prominence promises a working CTA.
-  const modelAccessProminent = showModelAccess && perUserSaved && MODEL_ACCESS_ACTIONABLE.has(modelAccess!.state);
 
   return (
     <div className="rounded-lg border border-border" data-testid={`agent-row-${harness.id}`}>
@@ -328,175 +335,8 @@ function Row({
         </div>
       ) : (
         <div className="space-y-4 p-3">
-          {/* Appendix A finding 4: declaring the lane (this tab) and
-              authenticating to it (Settings → Model provider) were on
-              different screens with no link between them. Under a per_user
-              row with something actionable to do, the admin's own sign-in
-              moves to the TOP of the row, in a tinted panel that says WHY —
-              the legacy Settings door stops being the one reached for. */}
-          {modelAccessProminent && (
-            <div
-              className="rounded-lg border border-warning/30 bg-warning-subtle p-3"
-              data-testid="per-user-sign-in-banner"
-            >
-              {/* role="status" covers ONLY the title/body pair — NOT
-                  ModelAccessSignIn below and the button that opens the door. */}
-              <div role="status">
-                <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
-                <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
-              </div>
-              <div className="mt-2">
-                <ModelAccessSignIn access={modelAccess!} />
-              </div>
-            </div>
-          )}
-
-          {choices.length > 1 ? (
-            <Field label={AGENTS.FIELD_MECHANISM} hint={AGENTS.MECHANISM_HINT}>
-              <div role="radiogroup" aria-label={AGENTS.FIELD_MECHANISM} className="space-y-1.5">
-                {choices.map((c) => (
-                  <label key={c.value} className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      className="mt-0.5"
-                      name={`mechanism-${harness.id}`}
-                      checked={row.mechanism === c.value}
-                      disabled={!operator || !!c.reason}
-                      onChange={() =>
-                        onUpdate(
-                          c.value === "bedrock_sso"
-                            ? { ...row, mechanism: c.value }
-                            : {
-                                ...row,
-                                mechanism: c.value,
-                                credential_source: undefined,
-                                sso_start_url: undefined,
-                                sso_account_id: undefined,
-                                sso_role_name: undefined,
-                              },
-                        )
-                      }
-                    />
-                    <span>
-                      <span className="block text-body font-medium text-foreground">{c.label}</span>
-                      {c.reason && <span className="block text-meta text-muted-foreground">{c.reason}</span>}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </Field>
-          ) : (
-            <p className="text-body text-muted-foreground">{AGENTS.MECHANISM_NONE_HINT}</p>
-          )}
-
-          {!harness.no_managed_auth && (
-            <Field label={AGENTS.FIELD_SOURCE}>
-              {/* role=radiogroup + role=radio, not two bare buttons: this is
-                  a one-of-two form choice exactly like the mechanism picker above
-                  it, and selection was conveyed by the `variant` styling alone —
-                  a screen-reader user could not tell which source was chosen.
-                  Buttons keep the mock's segmented look (Segmented itself is an
-                  aria-pressed control every other screen's suite asserts, so it
-                  is not the primitive to re-point here); role + aria-checked is
-                  what AT reads, and a button is keyboard-operable already. */}
-              <div role="radiogroup" aria-label={AGENTS.FIELD_SOURCE} className="flex gap-2" {...sourceGroup.containerProps}>
-                <Button
-                  type="button"
-                  role="radio"
-                  aria-checked={credentialSource === "shared"}
-                  size="sm"
-                  variant={credentialSource === "shared" ? "secondary" : "outline"}
-                  disabled={!operator}
-                  tabIndex={sourceGroup.itemProps(0).tabIndex}
-                  ref={sourceGroup.itemProps(0).radioRef}
-                  onClick={() =>
-                    onUpdate({
-                      ...row,
-                      credential_source: undefined,
-                      sso_start_url: undefined,
-                      sso_account_id: undefined,
-                      sso_role_name: undefined,
-                    })
-                  }
-                >
-                  {AGENTS.SOURCE_SHARED}
-                </Button>
-                <Button
-                  type="button"
-                  role="radio"
-                  aria-checked={credentialSource === "per_user"}
-                  size="sm"
-                  variant={credentialSource === "per_user" ? "secondary" : "outline"}
-                  disabled={!operator || !perUserAvailable}
-                  title={perUserAvailable ? undefined : AGENTS.PER_USER_UNAVAILABLE}
-                  tabIndex={sourceGroup.itemProps(1).tabIndex}
-                  ref={sourceGroup.itemProps(1).radioRef}
-                  onClick={() => onUpdate({ ...row, credential_source: "per_user" })}
-                >
-                  {AGENTS.SOURCE_PER_USER}
-                </Button>
-              </div>
-              <p className="mt-1 text-meta text-muted-foreground">
-                {credentialSource === "per_user" ? AGENTS.SOURCE_PER_USER_HINT : AGENTS.SOURCE_SHARED_HINT}
-              </p>
-              {!perUserAvailable && <p className="text-meta text-muted-foreground">{AGENTS.PER_USER_UNAVAILABLE}</p>}
-            </Field>
-          )}
-
-          {perUserAvailable && credentialSource === "per_user" && (
-            <>
-              <Field label={AGENTS.FIELD_SSO_START_URL} hint={AGENTS.SSO_START_URL_HINT} htmlFor={`agent-${row.id}-sso-start-url`}>
-                <Input
-                  id={`agent-${row.id}-sso-start-url`}
-                  value={row.sso_start_url ?? ""}
-                  disabled={!operator}
-                  aria-invalid={agentRowInvalid(row)}
-                  onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value.trim() })}
-                  placeholder="https://my-org.awsapps.com/start"
-                  className="font-mono"
-                />
-              </Field>
-              {agentRowInvalid(row) && (
-                <p className="-mt-2 text-xs leading-snug text-danger">{AGENTS_DRAFT.SSO_START_URL_REQUIRED}</p>
-              )}
-              {/* The roster pin (Appendix A finding 1, ask 1): optional, ADMIN-OWNED like the
-                  start URL above it — set together, or left blank, never
-                  independently (agent400SSOPinPair). */}
-              <Field
-                label={AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID}
-                hint={AGENTS_DRAFT.SSO_ACCOUNT_ID_HINT}
-                htmlFor={`agent-${row.id}-sso-account-id`}
-              >
-                <Input
-                  id={`agent-${row.id}-sso-account-id`}
-                  value={row.sso_account_id ?? ""}
-                  disabled={!operator}
-                  onChange={(e) => onUpdate({ ...row, sso_account_id: e.target.value.trim() })}
-                  placeholder="111111111111"
-                  className="font-mono"
-                />
-              </Field>
-              <Field
-                label={AGENTS_DRAFT.FIELD_SSO_ROLE_NAME}
-                hint={AGENTS_DRAFT.SSO_ROLE_NAME_HINT}
-                htmlFor={`agent-${row.id}-sso-role-name`}
-              >
-                <Input
-                  id={`agent-${row.id}-sso-role-name`}
-                  value={row.sso_role_name ?? ""}
-                  disabled={!operator}
-                  onChange={(e) => onUpdate({ ...row, sso_role_name: e.target.value.trim() })}
-                  placeholder="BedrockRunner"
-                  className="font-mono"
-                />
-              </Field>
-            </>
-          )}
-
-          {/* The SIGNED-IN ADMIN'S OWN chip (C4.2), NOT prominent: an ordinary
-              claude-code row (shared credential, or per_user with nothing
-              actionable) keeps the block at the bottom, exactly as before. */}
-          {showModelAccess && !modelAccessProminent && (
+          <DefaultProviderField harness={harness} row={row} providers={providers} operator={operator} onUpdate={onUpdate} />
+          {showModelAccess && (
             <div className="border-t border-border pt-3">
               <ModelAccessSignIn access={modelAccess!} />
             </div>
@@ -547,6 +387,9 @@ export function AgentsTab({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
+  // GET /model-providers: what each row's default can name. Read-only here —
+  // Settings → Model providers owns that document.
+  const [providers, setProviders] = React.useState<ModelProvider[]>([]);
   // #217 — the snapshot `draft` started from, same role as providers-screen's
   // own `original`: what "Copy my changes" and the unsaved-navigation guard
   // both diff against. This tab is its own resource with its own Save, so it
@@ -563,9 +406,9 @@ export function AgentsTab({
   const load = React.useCallback(() => {
     setStatus("loading");
     setSavedElsewhere(false);
-    api
-      .getAgentProviders()
-      .then((snap) => {
+    Promise.all([api.getAgentProviders(), providersApi.getModelProviders()])
+      .then(([snap, mp]) => {
+        setProviders(mp.providers.providers ?? []);
         const normalized = normalizeAgentProviders(snap.providers);
         setDraft(normalized);
         setOriginal(normalized);
@@ -577,9 +420,6 @@ export function AgentsTab({
   React.useEffect(load, [load]);
 
   const agents = draft?.agents ?? [];
-  // F4-F9: any stored row the server is guaranteed to 400 withholds Save —
-  // the Git tab's own invalidGitRow precedent.
-  const invalidAgentRow = agents.some(agentRowInvalid);
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
   useUnsavedGuard("agents-tab", changedLines.length > 0, () => JSON.stringify(draft, null, 2));
@@ -636,10 +476,9 @@ export function AgentsTab({
       setOriginal(normalized);
       setEtag(result.etag);
       toast.success(PROVIDERS.SAVED_TOAST);
-      // The staleness root cause (Appendix A finding 4): modelAccess is the
-      // PARENT's /setup/status read, never this tab's own — right after
-      // declaring per_user the admin's own door renders whatever that read
-      // last saw, which can predate this save. Re-fire it on every success —
+      // modelAccess and harnesses are the PARENT's /setup/status read, never
+      // this tab's own, and a save (a switch, a default) changes what that
+      // read reports. Re-fire it on every success —
       // ONLY that read (onStatusRefresh), never the parent's whole
       // onRetryRoster/load(), which would also reset the Git/Storage draft
       // sitting on the OTHER two tabs (A-01).
@@ -725,6 +564,7 @@ export function AgentsTab({
             harness={h}
             row={resolvedRow(agents, h)}
             enabled={rowEnabled(agents, h)}
+            providers={providers}
             modelAccess={h.id === "claude-code" ? modelAccess : undefined}
             operator={operator}
             onUpdate={(next) => updateRow(h.id, next)}
@@ -751,7 +591,7 @@ export function AgentsTab({
               {REAUTH_DIALOG.WRITE_DROPPED}
             </span>
           )}
-          <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
+          <Button disabled={!operator || saving} onClick={save}>
             {PROVIDERS.SAVE_CTA}
           </Button>
         </div>

@@ -3,11 +3,10 @@
 
 package db
 
-// Audit-trigger CATALOG inspection: what pg_trigger and pg_proc actually say
-// about the triggers on audit_events, as opposed to what the migrations
-// intended to install. The three readers here are what ensureAuditTriggers
-// and the boot posture report ask before deciding whether the append-only
-// hardening is really in force.
+// Audit-trigger CATALOG inspection: what pg_trigger and pg_proc actually say about the triggers on
+// audit_events, as opposed to what the migrations intended to install. The three readers here are what
+// ensureAuditTriggers and the boot posture report ask before deciding whether the append-only hardening is
+// really in force.
 
 import (
 	"context"
@@ -15,20 +14,17 @@ import (
 	"sort"
 )
 
-// auditImpostorTriggers returns the SHIPPED-NAMED triggers on audit_events
-// that are bound to something other than the function the migrations bind
-// them to, keyed by trigger name with the offending function as
-// `<schema>.<name>`. Empty when every shipped trigger is the one Wardyn
-// created, and when the table does not exist.
+// auditImpostorTriggers returns the SHIPPED-NAMED triggers on audit_events bound to something other than
+// the function the migrations bind them to, keyed by trigger name with the offending function as
+// `<schema>.<name>`. Empty when every shipped trigger is the one Wardyn created, and when the table
+// doesn't exist.
 //
-// The schema is part of the comparison: matching on proname alone would
-// accept a forger's own `audit_events_chain()` created earlier on the
-// search_path. The shipped function always lives in the table's own schema.
+// SECURITY: schema is part of the comparison — matching on proname alone would accept a forger's own
+// `audit_events_chain()` created earlier on the search_path. The shipped function always lives in the
+// table's own schema.
 //
-// Not caught: the shipped function's BODY replaced in place via CREATE OR
-// REPLACE FUNCTION — same name and schema, identical catalog. That's a
-// behavioural question the boot canary answers instead (a rolled-back
-// synthetic append asserting the row actually chains).
+// Not caught: the shipped function's BODY replaced in place via CREATE OR REPLACE FUNCTION (same name and
+// schema, identical catalog) — a behavioural question the boot canary answers instead.
 func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[string]string, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
@@ -44,8 +40,7 @@ func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[strin
 	}
 	sort.Strings(names)
 
-	// One read, decided in Go, against the expectation map above.
-	var tgnames, funcs, funcSchemas, tableSchemas []string
+	var tgnames, funcs, funcSchemas, tableSchemas []string // one read, decided in Go, against the expectation map above
 	if err := db.QueryRow(ctx, `
 		SELECT COALESCE(array_agg(t.tgname::text   ORDER BY t.tgname), ARRAY[]::text[]),
 		       COALESCE(array_agg(p.proname::text  ORDER BY t.tgname), ARRAY[]::text[]),
@@ -75,31 +70,25 @@ func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[strin
 	return out, nil
 }
 
-// auditForeignTriggers returns the non-internal triggers on audit_events
-// that Wardyn does not ship and that are not DISABLED, split into the two
-// classes that matter. Returns nothing when the table does not exist.
+// auditForeignTriggers returns the non-internal, non-DISABLED triggers on audit_events that Wardyn doesn't
+// ship, split into the two classes that matter. Returns nothing when the table doesn't exist.
 //
-// tamperCapable is the class that defeats the whole audit design: a ROW-level
-// BEFORE INSERT trigger. It's handed NEW and whatever it returns is what
-// Postgres stores, so it can rewrite any field or vanish the event, leaving
-// a row that is internally consistent and passes VerifyAuditChain. This
-// holds whether the trigger sorts before or after audit_events_chain (name
-// order is not a defense), so every foreign row-level BEFORE INSERT trigger
-// is refused regardless of name.
+// SECURITY: tamperCapable is the class that defeats the whole audit design — a ROW-level BEFORE INSERT
+// trigger. It's handed NEW and whatever it returns is what Postgres stores, so it can rewrite any field or
+// vanish the event, leaving a row that's internally consistent and passes VerifyAuditChain. Holds whether
+// the trigger sorts before or after audit_events_chain (name order is not a defense), so every foreign
+// row-level BEFORE INSERT trigger is refused regardless of name.
 //
-// other is every remaining foreign trigger — AFTER, statement-level, or
-// bound to another event — none of which can alter the stored row, so it's
-// reported rather than refused (a deployment may legitimately hang a
-// replication or notify trigger here).
+// other is every remaining foreign trigger — AFTER, statement-level, or bound to another event — none of
+// which can alter the stored row, so it's reported rather than refused (a deployment may legitimately hang
+// a replication or notify trigger here).
 //
-// The filter here is any state except 'D', deliberately not reusing
-// auditTriggerNames' 'O'/'A' filter: for a FOREIGN trigger, 'R'
-// (replica-only) is ARMED for exactly the `session_replication_role =
-// replica` bypass window the audit design names as the threat (a forging
-// trigger parked at 'R' would otherwise slip past this refusal, and still
-// get hash-chained by the shipped ENABLE ALWAYS chain trigger). 'D' alone
-// stays excluded: a disabled trigger fires for nothing, and re-arming it
-// needs the TRIGGER privilege AuditDDLProtected already reports on.
+// SECURITY: the filter is any state except 'D', deliberately not reusing auditTriggerNames' 'O'/'A' filter
+// — for a FOREIGN trigger, 'R' (replica-only) is ARMED for exactly the `session_replication_role = replica`
+// bypass window the audit design names as the threat (a forging trigger parked at 'R' would otherwise slip
+// past this refusal, and still get hash-chained by the shipped ENABLE ALWAYS chain trigger). 'D' alone
+// stays excluded: a disabled trigger fires for nothing, and re-arming it needs the TRIGGER privilege
+// AuditDDLProtected already reports on.
 func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapable, other []string, err error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
@@ -109,9 +98,8 @@ func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapa
 		return nil, nil, nil
 	}
 	shipped := append([]string{auditChainTrigger}, auditAppendOnlyTriggers...)
-	// pg_trigger.tgtype is the bitmask from Postgres's own trigger.h:
-	// 1 = FOR EACH ROW, 2 = BEFORE, 4 = INSERT. So (tgtype & 3) = 3 is a
-	// row-level BEFORE trigger and (tgtype & 4) <> 0 means it fires on INSERT.
+	// pg_trigger.tgtype bitmask (Postgres trigger.h): 1=FOR EACH ROW, 2=BEFORE, 4=INSERT. So (tgtype&3)=3
+	// is a row-level BEFORE trigger and (tgtype&4)<>0 means it fires on INSERT.
 	const rowBeforeInsert = `(tgtype & 3) = 3 AND (tgtype & 4) <> 0`
 	if err := db.QueryRow(ctx, `
 		SELECT COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE `+rowBeforeInsert+`), ARRAY[]::text[]),
@@ -127,21 +115,17 @@ func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapa
 	return tamperCapable, other, nil
 }
 
-// auditTriggerNames returns the FIRING row/statement triggers on
-// audit_events, or nil when the table does not exist. Disabled is treated as
-// absent on purpose: DISABLE TRIGGER leaves the catalog row in place, so a
-// mere existence check would pass on a table where it never fires.
+// auditTriggerNames returns the FIRING row/statement triggers on audit_events, or nil when the table
+// doesn't exist. Disabled is treated as absent on purpose: DISABLE TRIGGER leaves the catalog row in
+// place, so a mere existence check would pass on a table where it never fires.
 //
-// Firing is tgenabled 'O' (shipped state) OR 'A' (ALWAYS, a HARDENING that
-// also fires under session_replication_role = replica — the bypass the
-// sweep's rule 3 exists to catch, store.auditChainWalk). Reading 'A' as
-// absent would make the next boot silently revert it to plain 'O' (or refuse
-// the boot outright once append-only is ALWAYS). 'D' and 'R' (replica-only)
-// stay absent, correctly.
+// SECURITY: firing is tgenabled 'O' (shipped state) OR 'A' (ALWAYS, a HARDENING that also fires under
+// session_replication_role = replica — the bypass the sweep's rule 3 exists to catch). Reading 'A' as
+// absent would make the next boot silently revert it to plain 'O' (or refuse the boot once append-only is
+// ALWAYS). 'D' and 'R' (replica-only) stay absent, correctly.
 //
-// This is only the READ half: restoreAlwaysTriggers is the WRITE half, and
-// the two must keep agreeing that 'A' is a hardening to preserve, never a
-// deviation to normalize (every migration's CREATE TRIGGER yields plain 'O').
+// READ half only: restoreAlwaysTriggers is the WRITE half, and the two must keep agreeing that 'A' is a
+// hardening to preserve, never a deviation to normalize (every migration's CREATE TRIGGER yields plain 'O').
 func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bool, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {

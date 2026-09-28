@@ -5,17 +5,16 @@ package proxy
 
 // push_rules on the Azure DevOps REST door.
 //
-// The git broker is not the only way a per-person Azure DevOps run can put
-// content in a repository: Git Pushes - Create takes files inline in a JSON
-// body, and other REST routes write content without naming a branch
-// (internal/adoscope's ClassifyContent). With push rules set, the REST gate
-// answers every such request the way the git door answers a push, and
-// BEFORE any capability escalation, so nobody is asked to grant a capability
-// for a write the rules refuse: a REST push is read path by path
-// (adoscope.ParsePush) and denied, held for admin review (holdPush), or
-// passed to the capability check; a push the gate can't read whole is
-// refused outright (brokered:git:push-uninspectable), the REST counterpart
-// of the git door refusing a ref update with no pack.
+// The git broker isn't the only way a per-person Azure DevOps run can write
+// repository content: Git Pushes - Create takes files inline in a JSON body,
+// and other REST routes write content with no named branch
+// (adoscope.ClassifyContent). With push rules set, the REST gate answers
+// such a request the way the git door answers a push, and BEFORE any
+// capability escalation, so nobody is asked to grant a capability for a
+// write the rules refuse: a REST push is read path by path
+// (adoscope.ParsePush) and denied, held for review, or passed to the
+// capability check; a push the gate can't read whole is refused outright,
+// the REST counterpart of the git door refusing a ref update with no pack.
 //
 // A REST push names no commit until the service creates one, so the held
 // approval's commits field carries the SHA-256 of the request body instead.
@@ -32,9 +31,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 )
 
-// restChangeMode marks a REST push path for the matcher as not a regular
-// file, so a pattern matching beneath it also matches — a REST change may
-// name a folder, and a folder rename moves everything under it.
+// restChangeMode marks a REST push path as not a regular file, so a pattern
+// matching beneath it also matches a REST change naming a folder (a rename
+// moves everything under it).
 const restChangeMode = "rest"
 
 // governADOContent applies the run's push rules to one Azure DevOps REST

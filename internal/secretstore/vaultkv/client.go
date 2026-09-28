@@ -117,9 +117,8 @@ func newClient(cfg Config) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A clone of the boot transport keeps WARDYN_DAEMON_PROXY_URL and its
-	// NO_PROXY; the TLS config is always this client's own, never shared with
-	// another transport.
+	// Cloning the boot transport keeps WARDYN_DAEMON_PROXY_URL/NO_PROXY; the
+	// TLS config is always this client's own, never shared with another transport.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = tlsCfg
 	c := &client{
@@ -162,12 +161,10 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 	return cfg, nil
 }
 
-// call makes one API call with the current token. A 401/403 re-authenticates
-// (a rotated token file, an expired login) and retries once; a transient
-// failure is retried with backoff. The HTTP status is returned alongside a
-// nil error only for 2xx, and for a 404 to a GET, which callers interpret as
-// "nothing there". A 404 to a write or a DELETE is an error: Vault answers
-// one when no engine is mounted at the path, and nothing was stored or removed.
+// call makes one API call with the current token, re-authenticating once on
+// a 401/403 and retrying transient failures with backoff. A nil error pairs
+// with the status for 2xx and for a GET 404 ("nothing there"); a write/DELETE
+// 404 is an error, since that means no engine is mounted at the path.
 func (c *client) call(ctx context.Context, method, path string, in, out any) (int, error) {
 	status, err := c.retrying(ctx, method, path, in, out, true)
 	if s := statusOf(err); s == http.StatusForbidden || s == http.StatusUnauthorized {
@@ -269,10 +266,8 @@ type authResp struct {
 	} `json:"auth"`
 }
 
-// login obtains a fresh token. Kubernetes auth re-reads the projected service
-// account token every time (the kubelet refreshes it in place); token-file
-// re-reads the file (a Vault Agent sink rotates it) and looks the token up to
-// learn its TTL. Nothing is cached from the file between logins.
+// login obtains a fresh token, re-reading the source file every time (the
+// kubelet or a Vault Agent sink rotates it in place) rather than caching it.
 func (c *client) login(ctx context.Context) error {
 	switch c.authMode {
 	case AuthKubernetes:

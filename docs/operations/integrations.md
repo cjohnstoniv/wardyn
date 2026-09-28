@@ -13,9 +13,9 @@ extended by `kind`:
 
 | Field | What it holds |
 | --- | --- |
-| `secrets[]` | Each a role, a store REF (a name, never a value), and its **delivery**: `proxy_header` (the header + format the proxy presents on the wire, so the sandbox never holds the credential). A secret on a closed kind may declare NO delivery, meaning that kind's own hand-written transport carries it (`github_app`'s brokered halves, `git_host`'s clone credentials, Bedrock's AWS env). At most one `proxy_header` secret per row, and every such secret targets the row's whole egress list |
+| `secrets[]` | Each a role, a store REF (a name, never a value), and its **delivery**: `proxy_header` (the header + format the proxy presents on the wire, so the sandbox never holds the credential). A secret on a closed kind may declare NO delivery, meaning that kind's own hand-written transport carries it (`github_app`'s brokered halves, `git_host`'s clone credentials). At most one `proxy_header` secret per row, and every such secret targets the row's whole egress list |
 | `egress[]` | Where the system lives; why a host is reachable for a granted run instead of being hand-listed in every workspace |
-| `config{}` | Non-secret knobs, key-validated per closed kind (bedrock ⇒ `region`/`model`/`auth_lane`, `github_app` ⇒ `app_id`/`installation_id`/`host`, `anthropic_subscription` ⇒ `lane`); an unknown key on a closed kind 400s by name |
+| `config{}` | Non-secret knobs, key-validated per closed kind (`github_app` ⇒ `app_id`/`installation_id`/`host`); an unknown key on a closed kind 400s by name |
 
 The type also models `resident_file`/`resident_env` for the closed kinds
 whose own transport needs them. An operator may not DECLARE one. There's
@@ -23,11 +23,32 @@ no generic lane that materializes a named secret into a sandbox path or
 env var, so a write naming one is refused.
 
 `kind` is the ONE field that says what this connects to, and the closed
+set is the ONLY writable set: `github_app`, `git_host`. Each has behavior
+in code (`capabilitiesFor`), so a new one is a code change, and a write
+naming anything else 400s with the accepted list.
+
+**Model access is not an integration (0.8).** The four AI kinds —
+`anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key`
+— left the closed set.
+
+- A write naming one is refused, pointing at Settings → Model providers
+  (`validateIntegrationWrite`, `internal/api/integrations_write.go`), and
+  `default_for` is no longer a writable field.
+- A stored AI row stays in `SiteConfig` for the conversion to model
+  providers to read. It is left out of the effective set every resolver
+  reads instead (`effectiveIntegrations`, `internal/api/integrations.go`),
+  so it grants nothing: not to a run, not through a workspace
+  requirement, not as a redirect token.
+- No AI row is derived from the operator's own model credentials any
+  more either.
+
+`kind` is the ONE field that says what this connects to, and the closed
 set is the ONLY writable set:
 
 | Kind | Note |
 | --- | --- |
-| `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key`, `github_app`, `git_host` | Each has behavior in code (`capabilitiesFor`); a new one is a code change, and a write naming anything else 400s with the accepted list |
+| `github_app`, `git_host` | Each has behavior in code (`capabilitiesFor`); a new one is a code change, and a write naming anything else 400s with the accepted list |
+| `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Left the closed set in 0.8 — see "Model access is not an integration" below |
 | Generic kinds (`"jira"`, `"artifactory"`, …) | A 0.5 carry-over — no longer writable, though a row stored under an earlier release still loads, still sits in `SiteConfig`, and is still injected by `internal/api/integrations_run.go` |
 | `azure_openai` | Gone as a kind (also a 0.5 carry-over) |
 
@@ -74,16 +95,22 @@ Configuring an integration grants nothing by itself.
 - Once granted, its hosts join the run's egress allowlist
   unconditionally, even under `allow_all_egress` (the proxy's credential
   injector doesn't honor allow-all, so the exact-host entry has to be
-  there regardless). A header-delivering integration authors one
-  `api_key` grant per host through the ordinary proxy-side injection
-  path.
+  there regardless).
+- A header-delivering integration authors one `api_key` grant per host
+  through the ordinary proxy-side injection path. **Except** on a host
+  that serves a model: a model vendor's API, a configured gateway, the
+  boot Bedrock hosts, or any model provider row's own host
+  (`modelServingHosts`, `internal/api/llmcred.go`).
+- On a model-serving host the credential is skipped and audited
+  (`run.requirement.skip`, reason `model_host`) instead: a model
+  credential comes only from the run's model provider (0.8, #547). An
+  integration write that would present its credential on such a host is
+  refused. A `secret:<name>` requirement is skipped the same way, always
+  — its grant was the agent's model host — so it grants nothing
+  (`skipRequiredSecret`, `internal/api/runs_create_requirements.go`).
 - An operator with fifty integrations configured and a workspace that
   names none of them gets a run whose spec is byte-identical to having
-  none. That's true for this `integration:<id>` fold, but not for **model
-  access** (see "Model access resolves" below). Absent a more specific
-  binding, an AI-provider integration marked `DefaultFor: agent_runs`
-  still folds into the run, even one with no workspace at all
-  (`resolveRunIntegration`, `internal/api/llmcred.go`).
+  none.
 
 That fold degrades silently by design. A workspace may state an
 `integration:<id>` requirement before the integration exists, and a
@@ -121,7 +148,6 @@ owner's own key, token or sign-in, or by nothing.
   operator key serves it.
 - Dispatch drops every other model credential its policy carries
   (`resolveProviderLane`, `internal/api/runs_dispatch_provider.go`).
-
 - Nor may an `env_secret` grant set a variable a model credential rides
   in. Nor may it set one a provider arm sets (`modelEnvNames`,
   `internal/api/provider_env.go`: `ANTHROPIC_API_KEY`,
@@ -133,27 +159,23 @@ owner's own key, token or sign-in, or by nothing.
   naming the grant and the variable, and dispatch refuses the run again
   if one arrives another way.
 - Every other `env_secret` grant is placed as before, and with no block
-  nothing changes. The tiers below are the path of a deployment with no
+  nothing changes. What follows is the path of a deployment with no
   block.
 
-A Claude run's model access is not configured per run. It resolves, in
-order (`resolveRunIntegration`, `internal/api/llmcred.go`):
+**No integration chooses a run's model credential (0.8).** A run naming
+one (`integration_id`) is refused with a `422` at create and Review
+(`decodeAndValidateCreateRun`, `internal/api/runs_create_validate.go`).
 
-1. An explicit integration named on the run (`integration_id`).
-2. Else the primary workspace's `LLMCred.IntegrationRef` binding.
-3. Else the operator's `DefaultFor: agent_runs` integration — the one
-   stored integration marked as the site-wide default for agent runs, of
-   any AI-provider kind.
+- A workspace's `LLMCred.IntegrationRef` pin and an integration's
+  `DefaultFor: agent_runs` mark are inert: the conversion to model
+  providers reads them, nothing else does.
+- Record, verify and build sessions no longer mint an `api_key` grant
+  from an operator secret either (`recordSessionModelAccess`,
+  `internal/api/record_model_provider.go`). What an operator's stored
+  model key used to reach through those paths, a person's own credential
+  on a model provider reaches now.
 
-- A workspace binding that names something — even something stale or
-  miscategorized — is the operator's SPECIFIC choice and does not cascade
-  to the site-wide default. That would be a credential surprise, not a
-  convenience.
-- Launch and preflight resolve this identically (`foldRunIntegration`),
-  so Review cannot preview access the run won't get.
-
-**When none of the three tiers resolves, that is not the same as no
-access.** Below the Integration system, dispatch's own transport
+**That is not the same as no access.** Dispatch's own transport
 resolution (`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`)
 still credentials the run from whatever GLOBAL provider config exists,
 independent of any integration or workspace binding:
@@ -163,10 +185,9 @@ independent of any integration or workspace binding:
   that the run's agent is `claude-code` and a captured token exists,
   never that any integration names it) injects proxy-side.
 - A global Bedrock config (`WARDYN_BEDROCK_REGION`+`WARDYN_BEDROCK_MODEL`,
-  [ENV.md](../ENV.md)) still credentials Bedrock calls when no
-  workspace/integration selection overrides it (`resolveBedrockAuth`,
-  `internal/api/runs_bedrock.go` — a selection wins only the fields it
-  sets).
+  [ENV.md](../ENV.md)) still credentials Bedrock calls
+  (`resolveBedrockAuth`, `internal/api/runs_bedrock.go`).
+- An `api_key` grant the run's own policy carries is injected as before.
 
 - The `agent == "claude-code"` gate means the managed-subscription
   fallback isn't universal: a `codex-cli` run with a connected managed
@@ -208,12 +229,11 @@ WITH A PROVIDER CONNECTED reads "Resolved at launch." and an invitation
 to press Preflight, until Preflight has run.
 
 That's deliberate: a roster can't tell which lane a run resolves — the
-run's policy, its workspace binding, and the folded run/workspace/default
-integration all move it. An answer given before the run is described
-could be confidently wrong in either direction, which is the defect this
-replaced. With no model provider connected the rail shows the no-provider
-warning instead, and
-the Preflight hint doesn't render. A run that makes no model call (a
+run's policy and the deployment's global model configuration both move
+it. An answer given before the run is described could be confidently
+wrong in either direction, which is the defect this replaced. With no
+model provider connected the rail shows the no-provider warning instead,
+and the Preflight hint doesn't render. A run that makes no model call (a
 shell command) shows no Credentials row at all.
 
 **Recording** reads `/healthz`. A stock Helm install leaves
@@ -246,13 +266,15 @@ the powers they had, and a deny bites even before you do. Base images are
 the one that *widens*.
 
 A permission always bounds what the **member** chose and never what you
-pre-authorized — the `integration` kind gates the integration a member
-names on the run, and nothing else. The provider a workspace is pinned to
-and your site-wide `DefaultFor: agent_runs` default are yours, so they
-still reach every run, granted or not; gating them would let one `all`
-deny row strip the deployment's model access. What bounds those is the
-assigned governance profile's egress: its denied hosts are re-asserted at
-dispatch and withhold every credential lane that would reach one.
+pre-authorized. Model providers are the one exception. The answer to "can
+I fence a model provider" is the `model_provider` kind. It bounds the
+provider a run names, the one its workspace pins, and the agent's
+default alike — because every model credential is the person's own.
+
+The assigned governance profile's egress still applies on top: its
+denied hosts are re-asserted at dispatch and withhold every credential
+lane that would
+reach one.
 
 Governance profiles also carry the limits that are not choices at all:
 `max_concurrent_runs`, and the two launch modes a profile can refuse

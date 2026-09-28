@@ -75,8 +75,8 @@ type provider struct {
 	refreshTO time.Duration
 	now       func() time.Time
 
-	// refreshMu serializes delegateRefresh across concurrent Current() callers
-	// (B11a-F7), and guards the two fields below. See refreshOnce.
+	// refreshMu serializes delegateRefresh across concurrent Current() callers,
+	// and guards the two fields below. See refreshOnce.
 	refreshMu      sync.Mutex
 	lastRefreshAt  time.Time
 	lastRefreshErr error

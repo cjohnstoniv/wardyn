@@ -12,12 +12,11 @@ import (
 )
 
 // scopesSupported reads the provider discovery document's scopes_supported,
-// or (nil, false) when the document is unreadable or the key is absent/empty.
-// Shared by providerGatesGroupsScope and validateExtraScopes so "can this
-// provider's advertised scopes even be asked" is answered identically in both
-// places: scopes_supported is OPTIONAL in OIDC discovery, so a real,
-// spec-compliant provider may omit it, and that absence is not evidence of
-// anything — never grounds to warn OR to refuse boot.
+// or (nil, false) when unreadable or absent/empty. Shared by
+// providerGatesGroupsScope and validateExtraScopes so both answer "can this
+// provider's advertised scopes even be asked" identically: scopes_supported
+// is OPTIONAL in OIDC discovery, so its absence is never grounds to warn or
+// refuse boot.
 func scopesSupported(provider *gooidc.Provider) ([]string, bool) {
 	var meta struct {
 		ScopesSupported []string `json:"scopes_supported"`
@@ -29,19 +28,17 @@ func scopesSupported(provider *gooidc.Provider) ([]string, bool) {
 }
 
 // providerGatesGroupsScope reports whether this provider's discovery document
-// advertises a `groups` scope that the authorization request does not ask for —
-// the single condition both halves of the warning (warnUnrequestedGroupsScope,
-// its login-time twin warnMergedMapNeedsGroupsScope in groups_scope.go) are
-// keyed on, computed in one place so they can never disagree about a
-// provider's posture.
+// advertises a `groups` scope the authorization request does not ask for —
+// the single condition both halves of the warning (warnUnrequestedGroupsScope
+// and its login-time twin in groups_scope.go) key on, computed once so they
+// can never disagree.
 //
-// A discovery document this build cannot read, or one that publishes no
-// scopes_supported at all, is NOT evidence that the provider gates `groups`:
-// both answer false rather than guess and cry wolf on every login screen that
-// follows. `requested` already carrying `groups` (Config.ExtraScopes, #1101)
-// answers false unconditionally — asked for, so there is nothing left to warn
-// about — which is also how configuring that scope silences BOTH warnings
-// with no separate switch.
+// A discovery document this build cannot read, or one with no
+// scopes_supported at all, is NOT evidence the provider gates `groups`: both
+// answer false rather than guess and cry wolf on every login screen.
+// `requested` already carrying `groups` (Config.ExtraScopes) also answers
+// false unconditionally, which is how configuring that scope silences BOTH
+// warnings with no separate switch.
 func providerGatesGroupsScope(provider *gooidc.Provider, requested []string) bool {
 	if slices.Contains(requested, groupsScope) {
 		return false // asked for; there is nothing to warn about
@@ -50,20 +47,19 @@ func providerGatesGroupsScope(provider *gooidc.Provider, requested []string) boo
 	return ok && slices.Contains(supported, groupsScope)
 }
 
-// validateExtraScopes checks Config.ExtraScopes (WARDYN_OIDC_EXTRA_SCOPES,
-// #1101) against the provider's discovery scopes_supported, once at BOOT
-// rather than at every login: an unsupported scope must refuse boot with a
-// named reason, never surface as invalid_scope at a human's login — exactly
-// the failure asking blind risks (Entra defines no such scopes and rejects
-// any it does not recognise outright, locking out every human on an upgrade
+// validateExtraScopes checks Config.ExtraScopes (WARDYN_OIDC_EXTRA_SCOPES)
+// against the provider's discovery scopes_supported, once at BOOT rather than
+// at every login: an unsupported scope must refuse boot with a named reason,
+// never surface as invalid_scope at a human's login (Entra rejects any scope
+// it does not recognise outright, locking out every human on an upgrade
 // nobody opted into).
 //
-// A provider that publishes NO scopes_supported at all is not refused: the
-// list is OPTIONAL in OIDC discovery, so an absent one is not proof the scope
-// is unsupported, only that this provider does not say — refusing boot on
-// that absence would punish deployments that did nothing wrong. It WARNS
-// instead and trusts the operator's own configuration, the same asymmetry
-// providerGatesGroupsScope draws from an absent list.
+// A provider publishing NO scopes_supported at all is not refused: the list
+// is OPTIONAL in OIDC discovery, so its absence only means this provider
+// doesn't say, not that the scope is unsupported — refusing boot there would
+// punish deployments that did nothing wrong. It WARNS instead and trusts the
+// operator's own configuration, the same asymmetry providerGatesGroupsScope
+// draws from an absent list.
 func validateExtraScopes(provider *gooidc.Provider, extra []string) error {
 	if len(extra) == 0 {
 		return nil

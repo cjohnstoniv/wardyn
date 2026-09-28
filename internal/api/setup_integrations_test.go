@@ -17,10 +17,10 @@ import (
 // capabilities}]}) and, critically, that the raw response bytes never
 // contain a stored secret VALUE — only its name.
 func TestHandleListIntegrations_ShapeAndNoSecretValues(t *testing.T) {
-	const secretValue = "sk-ant-super-secret-value-must-never-leak"
+	const secretValue = "github-app-key-super-secret-value-must-never-leak"
 	h := newHarness(t)
 	cfg := baseTestConfig(h, &fakeSiteConfigStore{})
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte(secretValue)}}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{secretGitHubAppID: []byte("123"), secretGitHubAppKey: []byte(secretValue)}}
 	srv := New(cfg)
 
 	w := do(t, srv, http.MethodGet, "/api/v1/integrations", adminToken, "")
@@ -39,27 +39,27 @@ func TestHandleListIntegrations_ShapeAndNoSecretValues(t *testing.T) {
 	}
 	var row *SetupIntegration
 	for i := range got.Integrations {
-		if got.Integrations[i].ID == "anthropic_api_key" {
+		if got.Integrations[i].ID == "github_app" {
 			row = &got.Integrations[i]
 		}
 	}
 	if row == nil {
-		t.Fatalf("expected an anthropic_api_key entry, got %+v", got.Integrations)
+		t.Fatalf("expected a github_app entry, got %+v", got.Integrations)
 	}
 	if row.Source != "legacy" {
 		t.Errorf("source = %q, want legacy", row.Source)
 	}
-	if row.RoleSecret("api_key") != "anthropic-api-key" {
+	if row.RoleSecret("app_key") != secretGitHubAppKey {
 		t.Errorf("secrets = %+v, want the secret NAME only", row.Secrets)
 	}
-	var modelAPI *Capability
+	var clone *Capability
 	for i := range row.Capabilities {
-		if row.Capabilities[i].ID == "model_api" {
-			modelAPI = &row.Capabilities[i]
+		if row.Capabilities[i].ID == "clone:app" {
+			clone = &row.Capabilities[i]
 		}
 	}
-	if modelAPI == nil || modelAPI.State != CapAvailable {
-		t.Errorf("model_api capability = %+v, want available (the secret is stored)", modelAPI)
+	if clone == nil || clone.State != CapAvailable {
+		t.Errorf("clone:app capability = %+v, want available (both secrets are stored)", clone)
 	}
 }
 

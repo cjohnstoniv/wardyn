@@ -5,21 +5,19 @@
 
 // Package k8s implements the runner/substrate.Substrate contract against the
 // Kubernetes API: an L1 (packet-filter) confinement substrate alongside the
-// docker package's L0 (structural, no-default-route) substrate. Where docker
-// proves confinement by never giving the agent a route off-host, this
-// substrate proves it with a Kubernetes NetworkPolicy default-denying the
-// agent's egress except the wardyn-proxy sidecar — and, because a
-// NetworkPolicy object existing is not proof it is enforced, a boot-time
-// two-phase canary (see canary.go) positively confirms the deny actually
-// takes effect on THIS cluster before the substrate will advertise any
+// docker package's L0 (structural, no-default-route) substrate. This
+// substrate proves confinement with a NetworkPolicy default-denying the
+// agent's egress except the wardyn-proxy sidecar — and since a NetworkPolicy
+// object existing is not proof it's enforced, a boot-time two-phase canary
+// (canary.go) confirms the deny actually takes effect before advertising any
 // Confinement Class. See internal/runner/substrate's package doc for the full
-// L0-vs-L1 contract this substrate upholds.
+// L0-vs-L1 contract.
 //
-// Sandbox shape: one Secret (the proxy's config JSON — API-readable pod specs
-// make secretKeyRef the only safe place for it), two NetworkPolicies (agent
-// and proxy, created before any pod exists), a proxy pod, and an agent pod
-// whose main container idles until Exec adds an ephemeral container to run
-// the real task — ephemeral containers are add-only, so unlike docker's
+// Sandbox shape: one Secret (proxy config JSON — secretKeyRef is the only
+// safe place for it, since pod specs are API-readable), two NetworkPolicies
+// (agent and proxy, created before any pod exists), a proxy pod, and an agent
+// pod whose main container idles until Exec adds an ephemeral container to
+// run the real task — ephemeral containers are add-only, so unlike docker's
 // re-execable `docker exec`, Exec here is one-shot per sandbox (see exec.go).
 package k8s
 
@@ -42,58 +40,48 @@ import (
 )
 
 // handlerRunscPrefix is the gVisor OCI-runtime-handler family name, the same
-// floor guard the docker driver applies to its CC2 runtime probe (there:
-// runtimeRunsc). A RuntimeClass's .Handler — not its object Name, which is an
-// arbitrary operator-chosen label — is what actually says which low-level
-// runtime it invokes.
+// floor guard the docker driver applies to its CC2 probe. A RuntimeClass's
+// .Handler — not its arbitrary operator-chosen object Name — says which
+// low-level runtime it invokes.
 const handlerRunscPrefix = "runsc"
 
-// Config configures the k8s Driver. Mirrors the docker driver's Config shape
-// where the concepts overlap (ProxyImage, ConfinementRuntimes); k8s-specific
-// knobs (Namespace, ImagePullSecret, AllowUnenforcedNetPol) are new.
+// Config configures the k8s Driver. Mirrors the docker driver's Config where
+// concepts overlap; Namespace/ImagePullSecret/AllowUnenforcedNetPol are new.
 type Config struct {
 	// Namespace is the k8s namespace every sandbox is created in. Resolved by
 	// register.go's resolveNamespace before reaching here; New defaults an
-	// empty value to "default" defensively (the direct-driver-caller case
-	// mirrors docker's Config.withDefaults).
+	// empty value to "default" defensively.
 	Namespace string
 	// ProxyImage is the wardyn-proxy sidecar image — ALSO the image the
-	// boot-time egress canary launches (with -egress-canary instead of its
-	// normal entrypoint args).
+	// boot-time egress canary launches (with -egress-canary).
 	ProxyImage string
 	// ImagePullSecret optionally names a pre-existing Secret (imagePullSecrets)
-	// threaded onto every pod this substrate creates (agent, proxy, canary).
+	// threaded onto every pod this substrate creates.
 	ImagePullSecret string
 	// Record mirrors the docker driver's Config.Record: when true, Exec wraps
-	// the agent argv with wardyn-rec (see exec.go's recordCmd) delivering via
-	// the masked brokered proxy upload. When false, Exec runs argv unwrapped,
-	// so no upload is attempted and no brokered:recording decision is logged.
-	// The image contract is unchanged either way — images still ship
+	// the agent argv with wardyn-rec, delivering via the masked brokered
+	// proxy upload; when false, Exec runs argv unwrapped. Images always ship
 	// wardyn-rec; this only gates whether Exec invokes it.
 	Record bool
 	// ConfinementRuntimes maps a Confinement Class to the RuntimeClass NAME
-	// (a k8s object name, operator-chosen) that enforces it — WARDYN_CONFINEMENT_MAP's
-	// k8s form. Unlike docker (whose runtime family names are a stable,
-	// well-known convention `docker info` reports), a k8s RuntimeClass's
-	// object name carries no platform convention Wardyn could safely guess:
-	// CC2/CC3 are therefore ONLY advertised when explicitly pinned here (see
-	// Classes). May be nil.
+	// that enforces it — WARDYN_CONFINEMENT_MAP's k8s form. Unlike docker's
+	// stable runtime family names, a RuntimeClass object name carries no
+	// platform convention Wardyn can safely guess, so CC2/CC3 are advertised
+	// ONLY when explicitly pinned here. May be nil.
 	ConfinementRuntimes map[types.ConfinementClass]string
-	// AllowUnenforcedNetPol is WARDYN_K8S_ALLOW_UNENFORCED_NETPOL: when the
-	// boot-time canary proves the cluster's CNI does NOT enforce
-	// NetworkPolicy, downgrade that from a fail-closed boot refusal to a loud
-	// warning. Even then, ClassSupport.NetworkPolicy/StructuralEgress both
+	// AllowUnenforcedNetPol is WARDYN_K8S_ALLOW_UNENFORCED_NETPOL: downgrades
+	// a canary-proven unenforced NetworkPolicy from a fail-closed boot refusal
+	// to a loud warning. ClassSupport.NetworkPolicy/StructuralEgress still
 	// stay false — an opted-out substrate must never read as confined.
 	AllowUnenforcedNetPol bool
 	// AckAmbientDefaultDeny is WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY: on a
-	// managed, multi-tenant cluster where a platform team already applies a
-	// baseline default-deny NetworkPolicy, phase A of the boot-time canary
-	// (which applies no policy of its own) fails in exactly that shape —
-	// reaches Running, exits 1 — and construction refuses to boot with no
-	// override at all (B1). This flag acknowledges that shape as expected
-	// rather than a Wardyn misconfiguration; see canary.go's runEgressCanary.
-	// Never a proof of enforcement: ClassSupport.NetworkPolicy stays false
-	// either way (see NetworkPolicyAcknowledged instead).
+	// managed cluster where a platform team already applies a baseline
+	// default-deny NetworkPolicy, the canary's phase A (which applies no
+	// policy of its own) fails in exactly that shape and construction
+	// otherwise refuses to boot. This flag acknowledges that shape as
+	// expected rather than a Wardyn misconfiguration. Never proof of
+	// enforcement: ClassSupport.NetworkPolicy stays false either way (see
+	// NetworkPolicyAcknowledged instead).
 	AckAmbientDefaultDeny bool
 }
 
@@ -114,26 +102,22 @@ type Driver struct {
 	apiserverHostPort string
 
 	// netPolEnforced is the boot-time canary's verdict, fixed at construction
-	// (re-running the canary per Classes()/healthz call would create pods on
-	// every poll). netPolOptedOut records WHY it may be false even though
-	// construction succeeded (AllowUnenforcedNetPol), for diagnostics only —
-	// ClassSupport.NetworkPolicy is netPolEnforced either way.
+	// (re-running per Classes()/healthz call would create pods on every poll).
+	// netPolOptedOut records WHY it may be false despite success
+	// (AllowUnenforcedNetPol), diagnostics only.
 	netPolEnforced bool
 	netPolOptedOut bool
-	// netPolAcked is B1's third boot-time outcome: the operator acknowledged
-	// an ambient-default-deny-shaped phase-A failure (AckAmbientDefaultDeny)
-	// rather than the canary actually proving Wardyn's own policy is
-	// enforced. Deliberately SEPARATE from netPolEnforced, never folded into
-	// it — an acknowledged risk is not proof, and ClassSupport.NetworkPolicy
-	// must never overclaim (see its doc). Surfaced as
-	// ClassSupport.NetworkPolicyAcknowledged instead.
+	// netPolAcked: the operator acknowledged an ambient-default-deny-shaped
+	// phase-A failure (AckAmbientDefaultDeny) rather than the canary proving
+	// enforcement. Deliberately SEPARATE from netPolEnforced — an acknowledged
+	// risk is not proof, and ClassSupport.NetworkPolicy must never overclaim.
+	// Surfaced as ClassSupport.NetworkPolicyAcknowledged instead.
 	netPolAcked bool
 
 	// execFactory is the test seam newExecutor (session.go) defers to when
-	// set: it replaces the real SPDY/WebSocket-fallback executor build (which
-	// dials the apiserver over HTTP and cannot run against a fake clientset)
-	// with a caller-supplied remotecommand.Executor. Nil in production and in
-	// newWithClient's default construction — only tests ever set it.
+	// set: replaces the real SPDY/WebSocket-fallback executor (which dials
+	// the apiserver over HTTP and can't run against a fake clientset) with a
+	// caller-supplied remotecommand.Executor. Nil in production.
 	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 }
 
@@ -141,9 +125,9 @@ var _ substrate.Substrate = (*Driver)(nil)
 
 // New constructs a Driver against the cluster client-go's standard config
 // loading resolves (in-cluster, else kubeconfig), running the boot-time
-// egress canary before returning. Fails closed: a canary that cannot reach a
-// verdict, or one that proves NetworkPolicy is unenforced without
-// AllowUnenforcedNetPol, refuses construction entirely (see canary.go).
+// egress canary before returning. Fails closed: an indeterminate canary, or
+// one proving NetworkPolicy unenforced without AllowUnenforcedNetPol, refuses
+// construction entirely (see canary.go).
 func New(cfg Config) (*Driver, error) {
 	restCfg, err := loadRestConfig()
 	if err != nil {
@@ -157,10 +141,8 @@ func New(cfg Config) (*Driver, error) {
 }
 
 // clientQPS and clientBurst replace client-go's 5/10 default, which one
-// readiness poll (k8sPollInterval) consumes on its own: two overlapping starts
-// then starve every other pod and Secret call. Setting QPS also makes the
-// clientset build ONE shared limiter instead of a 5/10 bucket per API group.
-// Fixed, not configurable: nothing would set a knob.
+// readiness poll consumes on its own: two overlapping starts would starve
+// every other pod and Secret call. Fixed, not configurable — nothing sets a knob.
 // ponytail: a shared pod informer replaces the Get polls if ~45 concurrent
 // task runs per replica ever saturate this.
 const (
@@ -179,7 +161,7 @@ func newClientset(restCfg *rest.Config) (*kubernetes.Clientset, error) {
 }
 
 // newWithClient is the seam unit tests use to inject a fake clientset (and a
-// synthetic rest.Config — only its Host field matters here, for the canary's
+// synthetic rest.Config — only its Host field matters, for the canary's
 // dial target).
 func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.Config, cfg Config) (*Driver, error) {
 	cfg.withDefaults()
@@ -212,28 +194,22 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 }
 
 // logWarnUnenforcedNetPolOptOut is the loud, unmissable warning the
-// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL opt-out must emit at construction (the
-// A0 contract correction): naming exactly what is going unconfined, so an
+// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL opt-out must emit at construction: an
 // operator who set the override cannot miss that every sandbox this Driver
 // creates runs with UNCONFINED egress until it is unset.
 func logWarnUnenforcedNetPolOptOut() {
-	// Wrapped across lines: enabling -tags k8s in
-	// .golangci.yml's build-tags for the first time surfaced this as the
-	// tree's one pre-existing lll violation — wardynd never ran the k8s
-	// build through that gate before. Content unchanged.
 	msg := "wardynd: k8s NetworkPolicy is NOT enforced on this cluster (the boot-time egress canary connected despite a deny-all policy) and WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 — proceeding anyway: " +
 		"every sandbox this substrate creates has UNCONFINED egress, not the L1 confinement Wardyn normally requires. Classes stay advertised, but NetworkPolicy and StructuralEgress both report false — " +
 		"this substrate will never read as confined on /healthz. Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL and fix the cluster's CNI/NetworkPolicy support to restore real confinement."
 	slog.Warn(msg)
 }
 
-// logWarnAckAmbientDefaultDeny is B1's loud, unmissable warning when
+// logWarnAckAmbientDefaultDeny is the loud, unmissable warning when
 // WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 let boot proceed past a phase-A
-// failure shaped like an ambient default-deny NetworkPolicy: the canary
-// never actually proved Wardyn's own policy is enforced (phase B never ran),
-// only that the operator has accepted that as this cluster's expected
-// baseline. Mirrors logWarnUnenforcedNetPolOptOut's contract — an operator
-// who set the override cannot miss that this is an acknowledgment, not proof.
+// failure shaped like an ambient default-deny NetworkPolicy: the canary never
+// proved Wardyn's own policy is enforced (phase B never ran), only that the
+// operator accepted that as this cluster's expected baseline. Mirrors
+// logWarnUnenforcedNetPolOptOut's contract — an acknowledgment, not proof.
 func logWarnAckAmbientDefaultDeny() {
 	msg := "wardynd: k8s egress canary phase A failed in exactly the shape an ambient (platform-applied) default-deny NetworkPolicy " +
 		"produces, and WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 — proceeding anyway: phase B (the deny-all test that would actually prove " +
@@ -248,10 +224,9 @@ func (d *Driver) Name() string { return driverName }
 
 // Classes reports the Confinement Classes this substrate can enforce. CC1 is
 // unconditional: reaching this point already proves the canary passed or the
-// operator explicitly opted out (see New). CC2/CC3 each require an explicit
-// WARDYN_CONFINEMENT_MAP pin (see Config.ConfinementRuntimes's doc) resolving
-// to a RuntimeClass that exists and whose .Handler passes the class's floor
-// guard — never overclaim, never silently downgrade.
+// operator opted out (see New). CC2/CC3 each require an explicit
+// WARDYN_CONFINEMENT_MAP pin resolving to a RuntimeClass that exists and
+// whose .Handler passes the class's floor guard.
 func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 	classes := []types.ConfinementClass{types.CC1}
 	resolved := map[types.ConfinementClass]string{types.CC1: "k8s/(default)"}
@@ -282,59 +257,46 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		Resolved:         resolved,
 		StructuralEgress: false, // this substrate proves L1, never L0 (see package doc)
 		NetworkPolicy:    d.netPolEnforced,
-		// NetworkPolicyAcknowledged (B1): the operator accepted an
-		// ambient-default-deny-shaped canary failure rather than the canary
-		// proving enforcement — see netPolAcked's doc. Never true at the same
-		// time NetworkPolicy is true (the two verdicts are mutually exclusive
-		// outcomes of the same boot-time canary).
+		// The operator accepted an ambient-default-deny-shaped canary failure
+		// rather than the canary proving enforcement (netPolAcked). Never true
+		// at the same time as NetworkPolicy — mutually exclusive canary outcomes.
 		NetworkPolicyAcknowledged: d.netPolAcked,
-		// Exec (see exec.go's recordCmd) wraps the ephemeral-container argv
-		// with wardyn-rec, delivering via the masked brokered proxy upload —
-		// the only path this substrate supports (mounts, and so any
-		// shared-volume delivery, are impossible on k8s; see SandboxSpec's
-		// Recording doc) — but only when Config.Record is on. Mirrors
-		// docker's hardening.go: advertising recording a Record=false
-		// substrate never performs would make the site-config probe warn
-		// about a cast that was never going to be uploaded.
+		// Exec (exec.go's recordCmd) wraps the ephemeral-container argv with
+		// wardyn-rec via the masked brokered proxy upload — the only path
+		// this substrate supports, since mounts (and shared-volume delivery)
+		// are impossible on k8s — but only when Config.Record is on, so a
+		// Record=false substrate never advertises an upload it won't perform.
 		SessionRecording: d.cfg.Record,
-		// D4: this substrate binds a member's drive — ensureDrivePVC creates or
-		// adopts the claim and applyDriveToPod attaches it (drives.go,
-		// sandbox.go). The control plane reads this to admit a drive-carrying
-		// run at create and at preflight, so it is true only while that path
-		// exists: declaring it without the mount is a run that previews green
-		// and fails at dispatch, and TestCreateSandbox_MountsAUserDrive pins
-		// the two together.
+		// This substrate binds a member's drive: ensureDrivePVC creates/adopts
+		// the claim and applyDriveToPod attaches it. True only while that path
+		// exists — TestCreateSandbox_MountsAUserDrive pins the two together,
+		// since declaring it without the mount previews green and fails at dispatch.
 		UserDrives: true,
-		// This substrate delivers a root-owned managed file: managedFileVolumes
-		// (managed_files.go) projects each one out of the per-run Secret as a
-		// read-only kubelet tmpfs whose directory is a mount point, so the file
-		// is in place, root-owned and unreplaceable, before any container in the
-		// pod starts. True only while that path exists, for UserDrives' reason.
+		// Delivers a root-owned managed file: managedFileVolumes projects each
+		// one out of the per-run Secret as a read-only kubelet tmpfs mount
+		// point, in place and unreplaceable before any container starts. True
+		// only while that path exists, for UserDrives' reason.
 		ManagedFiles: true,
 		// A run's disk_mib becomes the agent container's
-		// resources.limits[ephemeral-storage] (naming.go's resourceRequirements),
-		// where the kubelet enforces it by EVICTING the pod — measured
-		// periodically, and the write is never refused. Not `filesystem`: nothing
-		// here binds a byte.
+		// resources.limits[ephemeral-storage]; the kubelet enforces it by
+		// EVICTING the pod (measured periodically; the write is never
+		// refused). Not `filesystem` — nothing here binds a byte.
 		//
 		// That limit alone binds the wrong container: the agent runs in an
-		// ephemeral container the kubelet does not meter at all, so the budget
-		// sits on an idle main container nothing writes in. ephemeralScratchVolumes NARROWS that — two
-		// emptyDirs, at /tmp and the agent's workdir, each carrying disk_mib as its
-		// sizeLimit and counted toward the pod's ephemeral-storage total whichever
-		// container writes them. A narrowing, not a close: what the agent writes
-		// elsewhere (the rest of $HOME including the toolchain caches; any authored
-		// target outside the workdir) is still on the ephemeral container's
-		// unmetered layer, and that function names the full residual. `eviction`
-		// here therefore means those two paths, not every byte the agent writes.
+		// ephemeral container the kubelet doesn't meter, so the budget sits on
+		// an idle main container nothing writes in. ephemeralScratchVolumes
+		// NARROWS that with two emptyDirs (/tmp, workdir) carrying disk_mib as
+		// sizeLimit. A narrowing, not a close: what the agent writes elsewhere
+		// (rest of $HOME, toolchain caches, any authored target outside the
+		// workdir) is still on the unmetered layer. `eviction` here means
+		// those two paths, not every byte the agent writes.
 		EphemeralDiskEnforcement: types.StorageEnforcementEviction,
 	}, nil
 }
 
 // runtimeClassHandler resolves a RuntimeClass's .Handler by name, treating
 // "not found" as "" (no error) so Classes can fail-closed-omit that class
-// rather than fail the whole call — the same asymmetry docker's
-// capabilitiesForWith uses between "absent" and "genuine probe error".
+// rather than fail the whole call.
 func (d *Driver) runtimeClassHandler(ctx context.Context, name string) (string, error) {
 	rc, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
