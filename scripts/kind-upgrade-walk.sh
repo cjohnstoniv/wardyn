@@ -293,7 +293,9 @@ grep -q "converted stored secrets to envelope v1" <<<"${logs}" \
 step "confirming the secret written under v${FROM_VERSION} still reads back under tip"
 code=$(api GET "/api/v1/secrets")
 [[ "${code}" == "200" ]] || { cat "${WORK}/resp.json" >&2; die "GET /secrets under tip answered ${code}"; }
-jq -e --arg n "${SECRET_NAME}" 'any(.[]; .name == $n)' "${WORK}/resp.json" >/dev/null \
+# GET /secrets answers {"names": [...], "mine": [...]} (handleListSecrets): the
+# admin's own namespace is `mine`, a list of bare names.
+jq -e --arg n "${SECRET_NAME}" 'any(.mine[]; . == $n)' "${WORK}/resp.json" >/dev/null \
   && pass "secret ${SECRET_NAME} still present after the conversion" \
   || fail "expected ${SECRET_NAME} to still be listed after the upgrade"
 
