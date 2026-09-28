@@ -146,7 +146,7 @@ type SandboxSpec struct {
 	// driver-level callers (conformance suite, cmd/wardyn-runner) — that's why
 	// NotifyWaiting rather than the field is what drivers call.
 	OnWaiting func(detail string) `json:"-"`
-	// Interactive marks a run that comes up idle for `wardyn attach` (no task
+	// Interactive marks a run that comes up idle for `wardyn run attach` (no task
 	// exec'd); drivers prepare the workspace on the idle main process (e.g.
 	// clone the repo) so the attach shell isn't empty. A non-interactive run
 	// ignores it.

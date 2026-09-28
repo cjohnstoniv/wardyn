@@ -1490,7 +1490,12 @@ func TestPolicySetCmd_NoIDCreates(t *testing.T) {
 	file := dir + "/policy.json"
 	writeFile(t, file, `{"name":"from-file","spec":{"min_confinement_class":"CC2","first_use_approval":true}}`)
 
-	if err := execCmd(t, "policy", "set", "-f", file, "--url", srv.URL, "--token", "tok"); err != nil {
+	root := rootCmd()
+	out := &strings.Builder{}
+	root.SetArgs([]string{"policy", "set", "-f", file, "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
 		t.Fatalf("policy set returned error: %v", err)
 	}
 	got := srv.last()
@@ -1508,6 +1513,11 @@ func TestPolicySetCmd_NoIDCreates(t *testing.T) {
 	if spec["min_confinement_class"] != "CC2" {
 		t.Errorf("spec min_confinement_class = %v, want CC2", spec["min_confinement_class"])
 	}
+	// Pins the verb word itself (not just the HTTP method): a no-id set must
+	// say "created", never "updated".
+	if !strings.Contains(out.String(), "created policy") {
+		t.Errorf("output = %q, want it to say \"created policy\"", out.String())
+	}
 }
 
 // policy set with a positional id replaces that policy (PUT) — the same
@@ -1521,7 +1531,12 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	writeFile(t, file, `{"min_confinement_class":"CC1"}`)
 
 	polID := uuid.New()
-	if err := execCmd(t, "policy", "set", polID.String(), "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"); err != nil {
+	root := rootCmd()
+	out := &strings.Builder{}
+	root.SetArgs([]string{"policy", "set", polID.String(), "-f", file, "--name", "renamed", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
 		t.Fatalf("policy set returned error: %v", err)
 	}
 	got := srv.last()
@@ -1533,6 +1548,16 @@ func TestPolicySetCmd_WithIDUpdates(t *testing.T) {
 	_ = json.Unmarshal(got.body, &body)
 	if body["name"] != "renamed" {
 		t.Errorf("name = %v, want renamed (the --name override)", body["name"])
+	}
+	// N1: pins the verb word itself — an id given must say "updated", never
+	// "created", independent of what the HTTP method/path assertions above
+	// already catch (those alone left `verb = "created"` on the id-given path
+	// undetected).
+	if !strings.Contains(out.String(), "updated policy") {
+		t.Errorf("output = %q, want it to say \"updated policy\"", out.String())
+	}
+	if strings.Contains(out.String(), "created policy") {
+		t.Errorf("output = %q, must not say \"created policy\" when a policy-id was given", out.String())
 	}
 }
 
@@ -2416,9 +2441,9 @@ func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
 // #206: attach/ssh move under `run`, clean break (no top-level alias)
 // --------------------------------------------------------------------------
 
-// TestTopLevelAttachAndSSHAreGone pins the clean break the owner ruled for
-// (#206: "no alias commands" — REPLAN.md Owner decisions #6): the old bare
-// `wardyn attach`/`wardyn ssh` spellings must fail as an unknown command, not
+// TestTopLevelAttachAndSSHAreGone pins the clean break the owner ruled for on
+// issue #206 ("no alias commands"): the old bare `wardyn attach`/`wardyn ssh`
+// spellings must fail as an unknown command, not
 // silently keep working, or a script written against the old tree would pass
 // this suite for the wrong reason.
 func TestTopLevelAttachAndSSHAreGone(t *testing.T) {
@@ -2454,9 +2479,10 @@ func TestRunAttachAndSSHAreReachable(t *testing.T) {
 
 func TestSessionsListCmd(t *testing.T) {
 	revoked := time.Now().Add(-time.Hour)
+	aliceID, bobID := uuid.New(), uuid.New()
 	srv := newCmdServer(t, http.StatusOK, []types.APIToken{
-		{Principal: "alice", Role: "member", Name: "laptop", CreatedAt: time.Now()},
-		{Principal: "bob", Role: "admin", Name: "ci", CreatedAt: time.Now(), RevokedAt: &revoked},
+		{ID: aliceID, Principal: "alice", Role: "member", Name: "laptop", CreatedAt: time.Now()},
+		{ID: bobID, Principal: "bob", Role: "admin", Name: "ci", CreatedAt: time.Now(), RevokedAt: &revoked},
 	})
 
 	root := rootCmd()
@@ -2479,6 +2505,11 @@ func TestSessionsListCmd(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "bob") || !strings.Contains(out.String(), "revoked") {
 		t.Errorf("output = %q, want it to list bob as revoked", out.String())
+	}
+	// The id must print in full (not short()'d): it is what DELETE
+	// /api/v1/tokens/{id} takes, so a truncated id would break list -> copy -> revoke.
+	if !strings.Contains(out.String(), aliceID.String()) || !strings.Contains(out.String(), bobID.String()) {
+		t.Errorf("output = %q, want both full token ids present", out.String())
 	}
 }
 

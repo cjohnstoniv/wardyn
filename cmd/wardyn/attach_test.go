@@ -634,7 +634,7 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn attach` mints a single-use
+// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn run attach` mints a single-use
 // attach ticket with whatever token is configured (POST
 // /runs/{id}/attach/ticket, owner-or-admin) and dials with it, instead of
 // dialing the WS route directly with a bearer that route's fallback lane

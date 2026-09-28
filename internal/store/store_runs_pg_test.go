@@ -289,7 +289,7 @@ func TestPG_UpdateRunStateIf_ConditionalTransition(t *testing.T) {
 }
 
 // TestPG_UpdateRunStateIfIdle_TOCTOU covers finding N3: the idle-guarded CAS must
-// no-op when updated_at has advanced past the snapshot (an active `wardyn attach`
+// no-op when updated_at has advanced past the snapshot (an active `wardyn run attach`
 // TouchRun landed between the reaper's scan and its stop), and apply when it has
 // not. Guarding only on state=RUNNING (UpdateRunStateIf) would clobber the
 // now-active run; UpdateRunStateIfIdle adds the `updated_at <= notAfter` guard.

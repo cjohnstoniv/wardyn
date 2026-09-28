@@ -3,7 +3,7 @@
 
 //lint:file-ignore SA1019 This file CONTAINS the compatibility fold: it reads
 // the deprecated SiteConfig.ArtifactOverrides field precisely so a PUT body (or
-// a `wardyn site-config apply` file) saved before EgressRedirects existed keeps
+// a `wardyn site-config set` file) saved before EgressRedirects existed keeps
 // working. foldLegacyArtifactOverrides is the fold; deprecating the field is
 // what tells NEW callers to use EgressRedirects instead.
 
@@ -449,7 +449,7 @@ func auditInternalHostSuffixes(hosts []types.InternalHost) []string {
 
 // foldLegacyArtifactOverrides folds a legacy request body's ArtifactOverrides
 // into EgressRedirects for exactly ONE release: PUT /site-config is a
-// whole-document replace and `wardyn site-config apply` takes a file an
+// whole-document replace and `wardyn site-config set` takes a file an
 // operator may have saved in the old shape — without this fold, applying a
 // saved-and-reapplied legacy document would silently WIPE every redirect
 // (decodeStrict still accepts the field on the wire since the deprecated
@@ -755,7 +755,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// is carried forward from the stored document below — so a submitted value is
 	// IGNORED, never refused. GET emits this key (it is a plain field of the same
 	// types.SiteConfig this handler persists), so every honest client echoes it
-	// back: `wardyn site-config get > f` / `wardyn site-config apply f`, the
+	// back: `wardyn site-config get > f` / `wardyn site-config set f`, the
 	// MDM-delivered /etc/wardyn/site-config.json that deploy/desktop re-applies on
 	// EVERY boot, and every console save that spreads the GET document. Rejecting
 	// the key outright 400ed all three; rejecting only a value that names a
@@ -767,7 +767,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// the submitted value unconditionally, so a body can never SET, CLEAR or MOVE
 	// the server's mark whatever it says. What the caller gets instead of a 400 is
 	// a true report — onboarding_completed_at_ignored in the response, beside
-	// dangling_secret_refs, which `wardyn site-config apply` prints as a warning
+	// dangling_secret_refs, which `wardyn site-config set` prints as a warning
 	// the way it prints the integrations one, so the drop is never silent.
 	// Computed HERE, against the SAME read the carry-forward below uses, so it
 	// cannot race another writer (SEAM-1).
@@ -877,7 +877,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// AFTER the ETag above, which must hash the stored document.
 	saved.EffectiveScmHosts = effectiveScmHosts(saved)
 	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
-	// `site-config apply` (or the console's own PUT round trip) sees the live
+	// `site-config set` (or the console's own PUT round trip) sees the live
 	// switch immediately rather than a dropped field until the next GET. A
 	// COPY, never a mutation through the pointer — `saved` came straight back
 	// from the store and may be the same object a concurrent reader holds.
@@ -908,7 +908,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 // /site-config deliberately returns the bare types.SiteConfig, not this type —
 // both signals are freshly-computed, PUT-time-only facts, never persisted, so
 // neither must ever round-trip through a `site-config get` capture back into a
-// later `site-config apply` body.
+// later `site-config set` body.
 type siteConfigPutResponse struct {
 	types.SiteConfig
 	DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
@@ -919,7 +919,7 @@ type siteConfigPutResponse struct {
 	// carried forward, so this is a REPORT of a dropped value, never a
 	// refusal (see handlePutSiteConfig). It is what the capture/reset/apply
 	// and MDM every-boot flows see instead of a 400, and `wardyn
-	// site-config apply` prints it as a warning.
+	// site-config set` prints it as a warning.
 	OnboardingCompletedAtIgnored bool `json:"onboarding_completed_at_ignored,omitempty"`
 	// AppliesFrom names WHEN this write takes effect, because the honest answer
 	// is not "now": the egress proxy sidecar loads its compiled config once at

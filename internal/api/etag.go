@@ -11,7 +11,7 @@
 //
 // The ETag is a content hash, never a stored version column: no migration, and
 // correct for any writer through the same Get/Put pair (including `wardyn
-// site-config apply`), with nothing new to keep in sync.
+// site-config set`), with nothing new to keep in sync.
 package api
 
 import (

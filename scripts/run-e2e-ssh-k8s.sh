@@ -25,7 +25,7 @@
 #     second principal's MEMBER key is refused on a run it does not own and
 #     the refusal is audited, while a third principal's ADMIN-role key reaches
 #     that same run with data.override=true on the ssh.authenticate row
-#   - in-place promotion (#131): a `wardyn attach` client mints its own
+#   - in-place promotion (#131): a `wardyn run attach` client mints its own
 #     ticket and holds the terminal over the WEB WebSocket, a second `ssh -tt`
 #     joins and is admitted read-only (the notice on ITS stderr), the web
 #     holder drops, and the ssh client is promoted on the SAME socket — the
@@ -340,7 +340,7 @@ fi
 
 # ── 8. in-place promotion (#131): web holds, ssh observes read-only, web
 #    drops, ssh is promoted on its own socket ─────────────────────────────
-# `wardyn attach` is the exact client the console's terminal uses: it mints
+# `wardyn run attach` is the exact client the console's terminal uses: it mints
 # its own single-use ticket (POST /runs/{id}/attach/ticket) and dials the WS
 # attach endpoint with it. Built once here, on the host — the CLI talks
 # straight to BASE, exactly like `ssh_run` above; it needs no image and no
@@ -389,7 +389,7 @@ else
   fail "promotion: ssh observer never saw the read-only notice on stderr (log: $(cat "${TMPDIR}/ssh2_err.log"))"
 fi
 
-# Drop the web holder. `wardyn attach` wires SIGTERM to a clean detach
+# Drop the web holder. `wardyn run attach` wires SIGTERM to a clean detach
 # (cmd/wardyn/attach.go's runAttach / signal.NotifyContext).
 kill "${WEB_PID}" >/dev/null 2>&1 || true
 wait "${WEB_PID}" 2>/dev/null || true

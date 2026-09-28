@@ -138,7 +138,7 @@ Three videos of the series have no page to film. **V11 (CI & headless)** is a
 policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
 and its artifacts; **V12 (audit & attach)** is three terminals each holding
 `ssh <run-uuid>@127.0.0.1 -p 2222` with a different key; **V13 (your terminal,
-our cluster)** is `kubectl`, `wardyn ssh` and one `ssh` session against a
+our cluster)** is `kubectl`, `wardyn run ssh` and one `ssh` session against a
 Kubernetes sandbox. Playwright cannot drive any of them.
 
 ```sh

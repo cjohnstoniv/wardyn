@@ -8,7 +8,7 @@
 # ORCHESTRATOR drives the PTY over the WS-attach channel. There is no in-sandbox
 # oracle execution. This file records the drive script the orchestrator performs,
 # mirroring the `expects:` block in task.yaml, so a human can reproduce it by hand
-# via `wardyn attach <run-id>`:
+# via `wardyn run attach <run-id>`:
 #
 #   1. Prove the PTY is live and evaluates shell arithmetic:
 #        echo wardyn-pty-$((6*7))

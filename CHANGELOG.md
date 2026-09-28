@@ -3215,16 +3215,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
 - **The CLI's noun-verb tree lands: `attach`/`ssh` move under `run`, and `secret`/`policy`/
   `site-config` share one upsert verb (#206), clean break, no alias period.** Wardyn has no users
-  yet (owner ruling, #205/#203/#206: "no alias commands"), so these land directly.
-  **Renamed in 0.8:** `wardyn attach <run-id>` → `wardyn run attach <run-id>`; `wardyn ssh <run-id>`
-  → `wardyn run ssh <run-id>` (`--print`/`--config`/`--json` unchanged). `wardyn policy create -f`
+  yet (owner ruling on #206: "no alias commands"), so these land directly. Renamed:
+  `wardyn attach <run-id>` → `wardyn run attach <run-id>`; `wardyn ssh <run-id>` →
+  `wardyn run ssh <run-id>` (`--print`/`--config`/`--json` unchanged). `wardyn policy create -f`
   and `wardyn policy update <id> -f` collapse into one upsert verb, `wardyn policy set [id] -f`:
   no positional id creates (the old `create`'s POST), a `<policy-id>` replaces it (the old
-  `update`'s PUT) — the same dispatch `git` uses for a name that may or may not already exist.
-  `wardyn site-config apply <file>` → `wardyn site-config set <file>` (`secret set` already used
-  this verb, so all three upsert doors now read alike). A script or alias keyed on any of the old
-  spellings fails at the CLI's own "unknown command" refusal, not a server error — there is no
-  dual-emission window to catch it during. Wardyn has no users yet
+  `update`'s PUT). `wardyn site-config apply <file>` → `wardyn site-config set <file>` (`secret
+  set` already used this verb, so all three upsert doors now read alike). A script or alias keyed
+  on any of the old spellings fails at the CLI's own "unknown command" refusal, not a server
+  error — there is no dual-emission window to catch it during.
+- **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
   (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
   a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to
   catch it during. Rows written before the upgrade keep the name they were written with, so a query

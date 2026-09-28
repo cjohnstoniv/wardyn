@@ -99,7 +99,11 @@ func sessionsListCmd(client clientFn) *cobra.Command {
 				return emitJSON(cmd.OutOrStdout(), toks)
 			}
 			tw := newTab(cmd.OutOrStdout())
-			fmt.Fprintln(tw, "PRINCIPAL\tROLE\tNAME\tCREATED\tLAST_USED\tSTATE")
+			// ID prints in FULL, not short() — it is the id DELETE
+			// /api/v1/tokens/{id} (an admin's own revoke door) takes, so
+			// truncating it here would break the obvious list -> copy -> revoke
+			// flow the same way short()'s own doc warns against for run/policy ids.
+			fmt.Fprintln(tw, "ID\tPRINCIPAL\tROLE\tNAME\tCREATED\tLAST_USED\tSTATE")
 			for _, t := range toks {
 				state := "active"
 				if t.RevokedAt != nil {
@@ -109,8 +113,8 @@ func sessionsListCmd(client clientFn) *cobra.Command {
 				if t.LastUsedAt != nil {
 					lastUsed = t.LastUsedAt.Format(time.RFC3339)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					t.Principal, t.Role, t.Name, t.CreatedAt.Format(time.RFC3339), lastUsed, state)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					t.ID, t.Principal, t.Role, t.Name, t.CreatedAt.Format(time.RFC3339), lastUsed, state)
 			}
 			return tw.Flush()
 		},
@@ -144,15 +148,17 @@ func listAllAPITokens(ctx context.Context, c *sdk.Client) ([]types.APIToken, err
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// Same 2 KiB error-body cap pkg/client's own maxErrBody uses (unexported,
+		// so mirrored here — see mintAttachTicket's identical local constant in
+		// attach.go): an error body is diagnostic display, never the payload, so
+		// a hostile or oversized one must not be read in full.
+		const maxSessionsErrBody = 2048
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxSessionsErrBody))
 		return nil, &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
 	}
 	var toks []types.APIToken
-	if err := json.Unmarshal(body, &toks); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&toks); err != nil {
 		return nil, fmt.Errorf("decode /api/v1/tokens response: %w", err)
 	}
 	return toks, nil

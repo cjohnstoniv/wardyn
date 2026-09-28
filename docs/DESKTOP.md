@@ -178,7 +178,7 @@ explicitly is not; and compose serves the console and the UI relay on a
 
 ### Named gap: the browser lane is not available on this tier
 
-`wardyn ssh` works on a managed laptop as of 0.7. The **browser** half of
+`wardyn run ssh` works on a managed laptop as of 0.7. The **browser** half of
 UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN`
 commented out rather than pretending otherwise.
 
