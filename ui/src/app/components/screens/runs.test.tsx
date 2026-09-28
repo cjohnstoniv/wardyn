@@ -131,11 +131,17 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         }),
       ],
       truncated: false,
-      hiddenOlder: 0,
-      hiddenKilled: 0,
+      // Round 2: mirrors the mock's own worked example (13 shown rows + 4
+      // older + 1 killed = "Your runs · 18") — here 3 shown + 4 + 1 = 8.
+      hiddenOlder: 4,
+      hiddenKilled: 1,
     });
     renderScreen();
     await screen.findByText("Needs a look");
+    // Round 2: "Your runs · N" counts every run the caller owns, before
+    // filters/ageing — the shown rows plus the two hidden counts, not just
+    // runsList.length (home-runs-1197-packet.html:672, design §2.1).
+    expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
     expect(screen.getByText("Needs your approval")).toBeInTheDocument();
     expect(screen.getByText("Still running")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { exact: true }).length).toBeGreaterThan(0);
@@ -155,6 +161,33 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(needsIdx).toBeGreaterThanOrEqual(0);
     expect(needsIdx).toBeLessThan(runningIdx);
     expect(runningIdx).toBeLessThan(endedIdx);
+  });
+
+  it("review round 2: a lease-ended row shows the square glyph and reads 'ended … · ran …', not 'started …'", async () => {
+    const startedAt = new Date(Date.now() - 3600_000).toISOString();
+    const lostAt = new Date(Date.now() - 1800_000).toISOString();
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [
+        run({
+          id: "lost1",
+          task: "Lease ended mid-flight",
+          state: "RUNNING",
+          created_at: startedAt,
+          lost_reason: "ended",
+          lost_at: lostAt,
+        }),
+      ],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen();
+    await screen.findByText("Lease ended mid-flight");
+    expect(screen.getByText("Ended at its end time")).toBeInTheDocument();
+    // Round 2: `ended_at` is absent on a lease-ended run — lost_at stands in
+    // for it, or the meta line falls back to "started …" like a live run.
+    expect(screen.getByTitle(/^acme\/widgets · ended .* · ran /)).toBeInTheDocument();
+    expect(screen.queryByTitle(/started/)).toBeNull();
   });
 
   it("the ageing note hides a 2-day-old killed run, and Include killed shows it", async () => {
