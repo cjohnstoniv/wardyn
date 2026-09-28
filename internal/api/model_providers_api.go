@@ -104,7 +104,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	block := normalizeModelProviders(&body)
 	if err := validateModelProviders(block, s.cfg.AllowTestEndpoints); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
 		return
 	}
 	ctx := r.Context()
@@ -118,15 +118,15 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedModelProviders(existing))) {
-		writeError(w, http.StatusPreconditionFailed, mp412Stale)
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonSiteConfigStale, mp412Stale)
 		return
 	}
 	if msg := stillDefaultRefusal(existing.AgentProviders, block); msg != "" {
-		writeError(w, http.StatusBadRequest, "invalid model providers: "+msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+msg)
 		return
 	}
 	if err := validateModelProviderImagePrereqs(block, existing.ModelProviders, imageOK); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
 		return
 	}
 	assignModelProviderUIDs(block, existing.ModelProviders)

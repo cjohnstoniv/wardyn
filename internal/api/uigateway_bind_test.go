@@ -246,7 +246,7 @@ func TestUIGateway_BindRefusalIsAuditedWithItsReason(t *testing.T) {
 		}
 	}
 	for key, want := range map[string]string{
-		"reason":         uiBindReasonNotSameSite,
+		"reason":         reasonUIGatewayBindNotSameSite,
 		"sec_fetch_site": "cross-site",
 		"origin":         "https://blog.example.com",
 	} {
@@ -254,7 +254,7 @@ func TestUIGateway_BindRefusalIsAuditedWithItsReason(t *testing.T) {
 			t.Fatalf("no ui.authorize/denied row with %s=%q: %s", key, want, h.audit.dataReasons())
 		}
 	}
-	if !h.audit.hasDataValue("reason", uiBindReasonOriginNotConsole) {
+	if !h.audit.hasDataValue("reason", reasonUIGatewayBindOriginNotConsole) {
 		t.Fatalf("no row for the non-console Origin: %s", h.audit.dataReasons())
 	}
 }

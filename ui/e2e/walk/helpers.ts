@@ -412,9 +412,9 @@ export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> 
   // wait?], signin-progress.tsx), not by filtering on STEP_DOWNLOAD_ACTIVE's
   // label text: that text only matches while the row is ALSO in the active
   // state, so a text filter plus an attribute check must both land on the same
-  // poll — on the small (16-64 MiB) cold-pull layer #891 now uses, the active
-  // window is short enough that the two can straddle it and the assertion
-  // times out on a real cold pull. Position is stable regardless of state.
+  // poll — the rate-limited cold pull (scripts/lib/kind-sso-walk-cold-pull.sh)
+  // keeps the row active for seconds, not minutes, so the two could straddle
+  // it and time out on a real cold pull. Position is stable regardless of state.
   const downloadStep = progress.getByRole("listitem").nth(1);
   await expect(
     downloadStep,

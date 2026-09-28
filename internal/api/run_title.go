@@ -48,7 +48,7 @@ func (s *Server) handleSetRunTitle(w http.ResponseWriter, r *http.Request) {
 	}
 	titler, ok := s.cfg.Store.(store.RunTitler)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "this store cannot rename a run")
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunTitleStoreUnavailable, "this store cannot rename a run")
 		return
 	}
 	title := strings.TrimSpace(req.Title)
@@ -67,11 +67,13 @@ func (s *Server) handleSetRunTitle(w http.ResponseWriter, r *http.Request) {
 // boundary, not a second copy of it for the rename door.
 func validateRunTitle(w http.ResponseWriter, title string) bool {
 	if n := utf8.RuneCountInString(title); n > maxRunTitleLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(runFieldTooLongRefusal, "title", n, maxRunTitleLen))
+		// The SAME cause create-run's own title-length check answers
+		// (reasonRunFieldTooLong, #656 slice 1) — one trust boundary, one reason.
+		writeErrorReason(w, http.StatusBadRequest, reasonRunFieldTooLong, fmt.Sprintf(runFieldTooLongRefusal, "title", n, maxRunTitleLen))
 		return false
 	}
 	if !runFieldCharsAllowed(title, false) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(runFieldControlCharRefusal, "title"))
+		writeErrorReason(w, http.StatusBadRequest, reasonRunFieldControlChar, fmt.Sprintf(runFieldControlCharRefusal, "title"))
 		return false
 	}
 	return true

@@ -74,7 +74,7 @@ func (s *Server) mountDeviceRoutes(r chi.Router) {
 func (s *Server) deviceStoreOr501(w http.ResponseWriter) (store.DeviceStore, bool) {
 	ds, ok := s.cfg.Store.(store.DeviceStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "device enrolment requires the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonDeviceEnrolmentUnavailable, "device enrolment requires the Postgres store backend")
 	}
 	return ds, ok
 }
@@ -94,7 +94,7 @@ func (s *Server) handleMintEnrolmentToken(w http.ResponseWriter, r *http.Request
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
-		writeError(w, http.StatusUnprocessableEntity, "name: required, at most 200 bytes, no control characters")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDeviceEnrolmentTokenNameInvalid, "name: required, at most 200 bytes, no control characters")
 		return
 	}
 	raw := newBearer(enrolmentTokenPrefix)
@@ -145,7 +145,7 @@ func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := ds.RevokeDevice(r.Context(), id, s.cfg.Now().UTC())
-	if notFoundIf(w, err, "device") {
+	if notFoundIf(w, err, "device", reasonDeviceNotFound) {
 		return
 	}
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *Server) handleRevokeEnrolmentToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	t, err := ds.RevokeEnrolmentToken(r.Context(), id, s.cfg.Now().UTC())
-	if notFoundIf(w, err, "enrolment token") {
+	if notFoundIf(w, err, "enrolment token", reasonEnrolmentTokenNotFound) {
 		return
 	}
 	if err != nil {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, navToRoute } from "./fixtures";
 
 // #584: a key added in the user view is capped at member rights for good, and
 // the SSH keys screen says so with a chip. The bearer-token harness cannot sign
@@ -53,12 +53,14 @@ test.describe("SSH keys — capped-key chip", () => {
 
       await gotoConsole(page);
       await navToRoute(page, "/account");
+      await expandCard(page, "Your SSH keys");
       const row = page.getByRole("row").filter({ hasText: KEY_NAME });
       await expect(row).toBeVisible();
       await expect(row.getByText(CHIP)).toHaveCount(0);
 
       capped = true;
       await page.reload();
+      await expandCard(page, "Your SSH keys");
       const chip = page.getByRole("row").filter({ hasText: KEY_NAME }).getByText(CHIP);
       await expect(chip).toBeVisible();
       await expect(page.locator(`[title="${TOOLTIP}"]`)).toHaveText(CHIP);

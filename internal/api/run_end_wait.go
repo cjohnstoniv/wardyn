@@ -52,21 +52,25 @@ type runEndWaitResponse struct {
 }
 
 // endWaitPlan is a PATCH decided against the run as read: what to write, or
-// why not. A refusal carries the audit row it is recorded under.
+// why not. A refusal carries the audit row it is recorded under, and its wire
+// reason (#656 slice 3).
 type endWaitPlan struct {
 	resp                    runEndWaitResponse
 	endChanged, waitChanged bool
 	status                  int
 	refusal                 string
+	refusalReason           string
 	refusedAction           string
 }
 
-func (p *endWaitPlan) refuse(status int, action, msg string) {
-	p.status, p.refusedAction, p.refusal = status, action, msg
+func (p *endWaitPlan) refuse(status int, action, reason, msg string) {
+	p.status, p.refusedAction, p.refusalReason, p.refusal = status, action, reason, msg
 }
 
 // gateRefusal is the refusal for a change only the user_changes_limits gate
-// allows.
+// allows. reasonRunLimitsGateDenied is shared by all 4 fields this can name —
+// the SAME cause (the gate, not the deployment's run-limits shape) regardless
+// of which field triggered it, which is exactly what the message names.
 func gateRefusal(what string) string {
 	return what + " needs your admin to let you change your run's limits; you can still extend it within the limit"
 }
@@ -88,24 +92,24 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	case present == nil && msg == "":
 		return
 	case msg != "":
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	case !present["ends_at"] && !present["wait_budget_sec"]:
-		writeError(w, http.StatusBadRequest, "set ends_at, wait_budget_sec or both")
+		writeErrorReason(w, http.StatusBadRequest, reasonRunEndWaitNeitherField, "set ends_at, wait_budget_sec or both")
 		return
 	case present["wait_budget_sec"] && req.WaitBudgetSec == nil:
-		writeError(w, http.StatusBadRequest, "wait_budget_sec must be a number of seconds")
+		writeErrorReason(w, http.StatusBadRequest, reasonRunWaitBudgetNotANumber, "wait_budget_sec must be a number of seconds")
 		return
 	case isTerminalRunState(run.State):
-		writeError(w, http.StatusConflict, "run has already finished (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
 		return
 	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
-		writeError(w, http.StatusConflict, "run has ended and its files are no longer kept; its end cannot be moved")
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
 		return
 	}
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "this store cannot change a run's end")
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunEndWaitStoreUnavailable, "this store cannot change a run's end")
 		return
 	}
 
@@ -114,17 +118,17 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	actorType, actor := actorFromRequest(r)
 	if p.status == http.StatusForbidden {
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, p.refusedAction, run.ID.String(),
-			"denied", mustJSON(map[string]any{"reason": p.refusal})))
+			"denied", mustJSON(map[string]any{"reason": p.refusalReason})))
 	}
 	if p.refusal != "" {
-		writeError(w, p.status, p.refusal)
+		writeErrorReason(w, p.status, p.refusalReason, p.refusal)
 		return
 	}
 	if p.endChanged && (p.resp.EndsAt == nil || (run.EndsAt != nil && p.resp.EndsAt.After(*run.EndsAt))) {
 		if ref := s.extendRefusal(r, run); ref != nil {
 			s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
 				"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": ref.reason})))
-			writeError(w, ref.status, ref.msg)
+			writeErrorReason(w, ref.status, ref.reason, ref.msg)
 			return
 		}
 	}
@@ -136,7 +140,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if !applied {
-			writeError(w, http.StatusConflict, "run changed while this was being decided; reload it and try again")
+			writeErrorReason(w, http.StatusConflict, reasonRunEndWaitChanged, "run changed while this was being decided; reload it and try again")
 			return
 		}
 	}
@@ -188,16 +192,16 @@ func (p *endWaitPlan) planEnd(cur, asked *time.Time, l types.RunLimits, now time
 		switch {
 		case cur == nil:
 		case !l.AllowNoEnd:
-			p.refuse(http.StatusForbidden, "run.end.set", "No end is not allowed for this run")
+			p.refuse(http.StatusForbidden, "run.end.set", reasonRunEndNoEndNotAllowed, "No end is not allowed for this run")
 		case !l.UserChangesLimits:
-			p.refuse(http.StatusForbidden, "run.end.set", gateRefusal("Setting No end"))
+			p.refuse(http.StatusForbidden, "run.end.set", reasonRunLimitsGateDenied, gateRefusal("Setting No end"))
 		default:
 			p.resp.EndsAt, p.endChanged = nil, true
 		}
 		return
 	}
 	if !asked.After(now) {
-		p.refuse(http.StatusBadRequest, "run.end.set", "ends_at must be in the future; to end the run now, kill it")
+		p.refuse(http.StatusBadRequest, "run.end.set", reasonRunEndMustBeFuture, "ends_at must be in the future; to end the run now, kill it")
 		return
 	}
 	end := asked.UTC()
@@ -212,10 +216,10 @@ func (p *endWaitPlan) planEnd(cur, asked *time.Time, l types.RunLimits, now time
 		return
 	case cur != nil && end.After(*cur), l.UserChangesLimits:
 	case cur == nil:
-		p.refuse(http.StatusForbidden, "run.end.set", gateRefusal("Setting an end on a run with no end"))
+		p.refuse(http.StatusForbidden, "run.end.set", reasonRunLimitsGateDenied, gateRefusal("Setting an end on a run with no end"))
 		return
 	default:
-		p.refuse(http.StatusForbidden, "run.end.set", gateRefusal("Moving this run's end earlier"))
+		p.refuse(http.StatusForbidden, "run.end.set", reasonRunLimitsGateDenied, gateRefusal("Moving this run's end earlier"))
 		return
 	}
 	p.resp.EndsAt, p.endChanged = &end, true
@@ -223,7 +227,7 @@ func (p *endWaitPlan) planEnd(cur, asked *time.Time, l types.RunLimits, now time
 
 func (p *endWaitPlan) planWait(cur, asked int, l types.RunLimits, deploymentWait time.Duration) {
 	if asked < 1 {
-		p.refuse(http.StatusBadRequest, "run.wait_budget.set", "wait_budget_sec must be at least 1")
+		p.refuse(http.StatusBadRequest, "run.wait_budget.set", reasonRunWaitBudgetTooSmall, "wait_budget_sec must be at least 1")
 		return
 	}
 	ceiling := waitCeilingSec(l, deploymentWait)
@@ -241,7 +245,7 @@ func (p *endWaitPlan) planWait(cur, asked int, l types.RunLimits, deploymentWait
 		return
 	}
 	if !l.UserChangesLimits {
-		p.refuse(http.StatusForbidden, "run.wait_budget.set", gateRefusal("Changing how long this run waits for a decision"))
+		p.refuse(http.StatusForbidden, "run.wait_budget.set", reasonRunLimitsGateDenied, gateRefusal("Changing how long this run waits for a decision"))
 		return
 	}
 	p.resp.WaitBudgetSec, p.waitChanged = asked, true

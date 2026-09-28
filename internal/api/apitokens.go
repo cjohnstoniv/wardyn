@@ -520,7 +520,7 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 		return
 	}
 	revoked, err := s.cfg.Store.RevokeAPIToken(r.Context(), id, principal, s.cfg.Now().UTC())
-	if notFoundIf(w, err, "api token") {
+	if notFoundIf(w, err, "api token", reasonAPITokenNotFoundEntity) {
 		return
 	}
 	if err != nil {
