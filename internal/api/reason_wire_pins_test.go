@@ -34,6 +34,35 @@ func TestDecideApproval_MemberOnMissingApproval_ReasonLiteral(t *testing.T) {
 	}
 }
 
+// TestDecideApproval_ForeignRunVsMissing_ReasonParity (#656 M2/N1, round-2
+// review) closes the gap TestDecideApproval_MemberOnMissingApproval_ReasonLiteral
+// leaves open: that test only hits the missing-approval arm at approvals.go:594.
+// This one hits the SIBLING arm at :600 — an approval that exists, whose kind
+// passes, but whose run the caller does not own — and proves it answers
+// BYTE-IDENTICALLY to a genuinely missing approval. If :600 ever lost its
+// reason while :594 kept it, a foreign approval would answer bare while a
+// missing one answered approval_not_found: a reopened existence oracle this
+// test is the one thing that would catch.
+func TestDecideApproval_ForeignRunVsMissing_ReasonParity(t *testing.T) {
+	f := newScopeFixture(t) // seeds one egress_domain approval on a run owned by f.memberID
+	id := f.seedEgress(t, "registry.npmjs.org")
+	foreign := ssoSession(t, "sub-n1-foreign-member", "foreign@corp.example", oidc.RoleUser)
+
+	wForeign := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve", foreign, "")
+	wMissing := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.NewString()+"/approve", foreign, "")
+
+	if wForeign.Code != http.StatusNotFound {
+		t.Fatalf("foreign-run decide: status = %d, want 404; body=%s", wForeign.Code, wForeign.Body.String())
+	}
+	if got := errorReason(wForeign); got != "approval_not_found" {
+		t.Errorf("foreign-run decide: reason = %q, want the literal \"approval_not_found\"; body=%s", got, wForeign.Body.String())
+	}
+	if wForeign.Code != wMissing.Code || wForeign.Body.String() != wMissing.Body.String() {
+		t.Errorf("foreign vs missing must answer byte-identically: foreign=%d %s; missing=%d %s",
+			wForeign.Code, wForeign.Body.String(), wMissing.Code, wMissing.Body.String())
+	}
+}
+
 // TestKillRun_AlreadyTerminal_ReasonLiteral (#656 M2) pins the LITERAL wire
 // reason on POST /runs/{id}/kill against an already-COMPLETED run, not just
 // the Go constant — a silent rename of reasons.go's value must fail this.
