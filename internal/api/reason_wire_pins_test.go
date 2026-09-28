@@ -34,13 +34,13 @@ func TestDecideApproval_MemberOnMissingApproval_ReasonLiteral(t *testing.T) {
 	}
 }
 
-// TestDecideApproval_ForeignRunVsMissing_ReasonParity (#656 M2/N1, round-2
-// review) closes the gap TestDecideApproval_MemberOnMissingApproval_ReasonLiteral
-// leaves open: that test only hits the missing-approval arm at approvals.go:594.
-// This one hits the SIBLING arm at :600 — an approval that exists, whose kind
+// TestDecideApproval_ForeignRunVsMissing_ReasonParity (#656) closes the gap
+// TestDecideApproval_MemberOnMissingApproval_ReasonLiteral leaves open: that
+// test only hits decide's missing-approval arm. This one hits the SIBLING
+// not-your-run arm — an approval that exists, whose kind
 // passes, but whose run the caller does not own — and proves it answers
-// BYTE-IDENTICALLY to a genuinely missing approval. If :600 ever lost its
-// reason while :594 kept it, a foreign approval would answer bare while a
+// BYTE-IDENTICALLY to a genuinely missing approval. If that arm ever lost its
+// reason while the missing-approval arm kept it, a foreign approval would answer bare while a
 // missing one answered approval_not_found: a reopened existence oracle this
 // test is the one thing that would catch.
 func TestDecideApproval_ForeignRunVsMissing_ReasonParity(t *testing.T) {
