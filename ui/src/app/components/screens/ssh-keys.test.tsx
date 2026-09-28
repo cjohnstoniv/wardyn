@@ -26,13 +26,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   },
 }));
 
-let mockCaps: MeCapabilities = {
-  grants: [],
-  enforcement: {},
-  session_groups: [],
-  groups_snapshot_stale: false,
-  restricted_values: {},
-};
+let mockCaps: MeCapabilities = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
 vi.mock("../../lib/api/permissions", () => ({
   permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
 }));
@@ -278,7 +272,7 @@ describe("SshKeysPane — capped-key chip", () => {
 describe("SshKeysPane — ssh_key feature not available", () => {
   beforeEach(() => {
     listKeysMock.mockResolvedValue([]);
-    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, restricted_values: {} };
+    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
   });
 
   it("disables Add key with the sentence when the feature is enforced and not granted", async () => {

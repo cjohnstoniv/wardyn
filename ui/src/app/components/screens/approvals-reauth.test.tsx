@@ -58,7 +58,6 @@ const caps: MeCapabilities = {
   enforcement: {},
   session_groups: [],
   groups_snapshot_stale: false,
-  restricted_values: {},
 };
 vi.mock("../../lib/api/permissions", () => ({
   permissions: { getMyCapabilities: () => Promise.resolve(caps) },

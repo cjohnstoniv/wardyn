@@ -164,7 +164,6 @@ export const permissions = {
       enforcement: body.enforcement ?? {},
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
-      restricted_values: body.restricted_values ?? {},
     };
   },
 

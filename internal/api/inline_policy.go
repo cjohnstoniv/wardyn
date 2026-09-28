@@ -82,13 +82,7 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	capWarns, capDrops, cerr := s.narrowUserInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 	if cerr != nil {
-		var refused *errUngrantedWorkspaceRepo
-		if errors.As(cerr, &refused) { // #1259: refuse, not a 500
-			s.refuse(w, r, authz.Deny(authz.ReasonCapabilityWorkspace, "runs.workspace",
-				"you are not granted workspace "+refused.wsID+" — ask an admin for access, or launch without a workspace"))
-			return types.RunPolicySpec{}, nil, false
-		}
-		writeServerError(w, r, "resolve capability", cerr)
+		s.refuseOrErrorCapabilityResolution(w, r, cerr)
 		return types.RunPolicySpec{}, nil, false
 	}
 	warns = append(warns, capWarns...)
@@ -483,10 +477,10 @@ type capDrop struct {
 //
 // Drops, never rejects, exactly as filterUserGrants does — with a warning per
 // drop, so preflight/Review names what will not be there before launch, and a
-// capDrop so the audit stream records it — except an ungranted workspace_repos
-// entry (#1259, errUngrantedWorkspaceRepo), a second door onto
-// req.workspace_id's own REFUSAL. Otherwise a member whose whole allowlist is
-// ungranted gets a run with no member-authored egress, not a 403.
+// capDrop so the audit stream records it, except an ungranted workspace_repos entry
+// (#1259, errUngrantedWorkspaceRepo): a second door onto req.workspace_id's own REFUSAL.
+// An otherwise-ungranted allowlist still gets a run with no member-authored egress, not
+// a 403: the run's admin-authored egress is still there and is what the task usually needs.
 //
 // Under an operator ceiling of allow_all_egress the allowlist is not the gate
 // at all (composer.Clamp leaves AllowAllEgress set and the proxy allows any
