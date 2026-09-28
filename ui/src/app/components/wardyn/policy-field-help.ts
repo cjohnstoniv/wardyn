@@ -164,8 +164,12 @@ export const FIELD_HELP = {
   },
   push_rules: {
     what: "Content rules for this run's brokered git pushes — WHAT a push may touch, alongside git_push_any_branch's WHERE.",
+    // Corrected copy (#57 packet, §2(a)): the old text — "Stored and validated
+    // only — no matcher reads deny_paths yet" — went stale the moment #179
+    // shipped enforcement, and never mentioned require_review_paths/hold_seconds
+    // at all. This is the mock's canon sentence, verbatim.
     values:
-      "deny_paths (glob-shaped patterns, e.g. \".github/workflows/**\") + max_inspect_pack_mib (0-64). Stored and validated only — no matcher reads deny_paths yet. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
+      "deny_paths (refused) + require_review_paths (held for an admin's decision) — path patterns anchored at the repository root, ** crosses segments — plus max_inspect_pack_mib (0-64, default 32) and hold_seconds (0-600, default 120). Enforced on every brokered git lane. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
     doc: "push_rules--pushrulesspec",
     snippet: { deny_paths: [".github/workflows/**"] },
   },

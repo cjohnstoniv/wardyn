@@ -286,8 +286,8 @@ export interface RunPolicySpec {
   // RunPolicySpec.PushRules). Undefined/omitted means no rules at all — a
   // policy that sets this while the run's only git grant is ssh_key is legal
   // but unenforceable, and the Review rail's risk grade says so as a warning,
-  // never a refusal. Read-only in the console — operator/member-authored via
-  // the API/YAML, no editor here yet.
+  // never a refusal. Authored via PushRulesSection (policy-push-rules.tsx,
+  // #57) beside the raw JSON, same as tool_rules.
   push_rules?: PushRulesSpec;
 }
 

@@ -405,6 +405,32 @@ describe("PolicyPanel — the tool_rules section", () => {
   });
 });
 
+// #57: PushRulesSection sits beside ToolRulesSection, reading/writing the same
+// document. These prove it is actually wired into the panel (round-trips
+// through the real textarea) — policy-push-rules.test.tsx covers the section's
+// own behaviour (validation, warnings, malformed-document safety) in isolation.
+describe("PolicyPanel — the push_rules section", () => {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+  function currentSpec(): RunPolicySpec {
+    return JSON.parse(specBox().value) as RunPolicySpec;
+  }
+
+  it("renders alongside the tool_rules section, not in place of it", () => {
+    render(<Harness initial={VALID} />);
+    expect(screen.getByText("Tool rules")).toBeInTheDocument();
+    expect(screen.getByText("Push rules")).toBeInTheDocument();
+  });
+
+  it("adding a deny path writes it into the SAME spec document the textarea holds", async () => {
+    render(<Harness initial={VALID} />);
+    // Two "Add path" buttons exist (Deny, then Hold for review) — the first is Deny's.
+    await user.click(screen.getAllByRole("button", { name: "Add path" })[0]);
+    await user.type(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
+    expect(currentSpec().push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
+  });
+});
+
 // The rail's one line. It names the tools on purpose: a bare count says nothing
 // about which calls still stop for a human.
 describe("toolRulesSummary", () => {
