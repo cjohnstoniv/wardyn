@@ -10,9 +10,29 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
+// InternalPathPrefix is the run-token and sensor-bearer surface every proxy and
+// the ground-truth ingest call: the only API routes the internal listener serves.
+const InternalPathPrefix = "/api/v1/internal/"
+
 // Handler returns the console listener's handler: the chi router, mounted
-// under Config.BasePath when one is set.
-func (s *Server) Handler() http.Handler { return underBasePath(s.cfg.BasePath, s.router) }
+// under Config.BasePath when one is set. Once the proxy hop is TLS
+// (ControlPlaneCAPEM set) the console answers InternalPathPrefix with the same
+// 404 the internal listener gives console routes: every internal caller is
+// pinned to InternalHandler's listener, so a run token or sensor bearer
+// arriving here came from somewhere that is not one (#1263).
+func (s *Server) Handler() http.Handler {
+	h := http.Handler(s.router)
+	if s.cfg.ControlPlaneCAPEM != "" {
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, InternalPathPrefix) {
+				http.NotFound(w, r)
+				return
+			}
+			s.router.ServeHTTP(w, r)
+		})
+	}
+	return underBasePath(s.cfg.BasePath, h)
+}
 
 // InternalHandler returns the chi router at the host root, for the
 // proxy-facing TLS listener. Runs dial that listener directly, never through

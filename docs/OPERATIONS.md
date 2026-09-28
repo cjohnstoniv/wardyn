@@ -4025,15 +4025,23 @@ it.
   refuses to start on a non-loopback `http://` URL or an `https://` URL with no
   readable CA file; a server its CA did not sign gets no request. It reads the
   CA once, so restart it after a CA rotation.
-- **What is not on this hop.** The console listener still serves
-  `/api/v1/internal/*` in plaintext, because the test harnesses
-  (`test/e2e/e2e.sh`, `scripts/test-drive.sh`) call it there and the internal
-  listener is never published to the host. No shipped component calls it: the
-  proxy and the ingest both refuse a non-loopback `http://` URL. The chart no
-  longer grants the runs namespace the `http` port, so a proxy dispatched
-  before 0.7.12 has no route back after an upgrade to 0.8; stop such runs
-  before upgrading. The proxy authenticates to `wardynd` with its run token
-  (bearer, not mTLS — `threatmodel/THREAT-MODEL.md` B6).
+- **The console listener refuses the internal surface.** While the internal
+  listener runs, `WARDYN_LISTEN` answers every `/api/v1/internal/*` request
+  with the same `404` the internal listener gives a console route (under
+  `WARDYN_BASE_PATH` too), so a run token or the ground-truth bearer is only
+  ever accepted over the pinned hop, and an Ingress or reverse proxy in front
+  of the console exposes none of that surface. A local install (loopback
+  `http://` control plane) has no internal listener and keeps serving it on
+  the console. Every shipped caller dials `WARDYN_CONTROL_PLANE_URL`, the
+  internal listener: each run's proxy (both runners hand it that URL in its
+  sealed config, and brokered sidecar uploads go through the proxy) and the
+  ingest. A proxy dispatched before 0.7.12 still dials `http://wardynd:8080`
+  and gets `404` on every call after an upgrade (on the chart it has no route
+  back at all: the runs namespace is never granted the `http` port); restart
+  such runs with `POST /api/v1/admin/runs/restart`, which hands the proxy the
+  current URL and CA, or stop them before upgrading. The proxy authenticates
+  to `wardynd` with its run token (bearer, not mTLS —
+  `threatmodel/THREAT-MODEL.md` B6).
 
 ### Serving the console under a sub-path
 
