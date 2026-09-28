@@ -36,7 +36,7 @@ function formatDuration(startIso: string, endIso: string): string {
 function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   const parts: string[] = [repoLabel(run).text];
   if (adminView) parts.push(ownerLabel(run.created_by, own));
-  // Round 2: a lease-ended run (lost_reason "ended") has no ended_at — its
+  // A lease-ended run (lost_reason "ended") has no ended_at — its
   // own end time is lost_at (runs-model.ts's endedAtMs makes the same
   // choice, for the same reason) — so without this it still reads "started
   // …" like a live run, even though rowPresentation already renders it grey.

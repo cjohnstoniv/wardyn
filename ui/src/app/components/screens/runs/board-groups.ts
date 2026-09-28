@@ -55,5 +55,5 @@ export function repoLabel(run: AgentRun): { text: string; mono: boolean } {
   return text ? { text, mono: true } : { text: NO_REPO, mono: false };
 }
 
-// shortId (the Run ID column) was removed here — #1197 L3 review F12: the
+// shortId (the Run ID column) was removed here: the
 // Run ID moved to the run page (design.md §4); nothing on this page reads it.

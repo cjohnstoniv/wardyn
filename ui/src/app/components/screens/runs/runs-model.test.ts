@@ -103,7 +103,7 @@ describe("rowPresentation — lost (H-7 seam: no Revive action built here)", () 
   });
 });
 
-describe("rowPresentation — a lease-ended run (review F5)", () => {
+describe("rowPresentation — a lease-ended run", () => {
   it("reads grey 'Ended at its end time', never the live blue Running word — even though state is still RUNNING", () => {
     const r = run({ state: "RUNNING", lost_reason: "ended", lost_at: new Date(NOW - 3600_000).toISOString() });
     expect(rowPresentation(r, false)).toMatchObject({
@@ -115,7 +115,7 @@ describe("rowPresentation — a lease-ended run (review F5)", () => {
   });
 });
 
-describe("rowPresentation — STARTING/PENDING carry the substrate's stage line (review F8)", () => {
+describe("rowPresentation — STARTING/PENDING carry the substrate's stage line", () => {
   it("STARTING with a status_detail gets it as the subword", () => {
     const r = run({ state: "STARTING", status_detail: "image: Pulling: acme/agent:latest", status_reason: "Pulling" });
     expect(rowPresentation(r, false).subword).toBeTruthy();
@@ -165,7 +165,7 @@ describe("glyphKindFor — the shape half of the colour/glyph rule", () => {
     expect(glyphKindFor("grey", "Archived", "ARCHIVED")).toBe("square-outline");
   });
 
-  it("review round 2 F5: a lease-ended row (state still RUNNING) gets the square outline, not the pulsing dot", () => {
+  it("a lease-ended row (state still RUNNING) gets the square outline, not the pulsing dot", () => {
     // rowPresentation gives it grey + "Ended at its end time" while `state`
     // stays RUNNING (see runs-model.ts's own note) — the RUNNING check must
     // not win the shape decision for this word.
@@ -220,7 +220,7 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
     expect(s.running.map((x) => x.id)).toEqual(["run-1"]);
   });
 
-  it("#1197 L4 (H-3): by=owner (reauth/ado_consent/lost, Admin view only) lands in waitingOwner, not decide or running", () => {
+  it("by=owner (reauth/ado_consent/lost, Admin view only) lands in waitingOwner, not decide or running", () => {
     const reauth = run({ id: "w1", state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } });
     const lost = run({ id: "w2", state: "RUNNING", attention: { kind: "lost", by: "owner", pending: 0 } });
     const s = sectionRuns([reauth, lost], NOW);
@@ -229,7 +229,7 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
     expect(s.running).toEqual([]);
   });
 
-  // Review F5: a lease-ended run (state still RUNNING, lost_reason "ended")
+  // a lease-ended run (state still RUNNING, lost_reason "ended")
   // must land in the ENDED buckets, not Running — and its age is keyed on
   // lost_at (the lease end), not ended_at (absent) or updated_at.
   it("a lease-ended run is bucketed as over, keyed on lost_at, never in running", () => {

@@ -55,7 +55,7 @@ export function isLiveRunState(state: RunState): boolean {
  * real ceiling is enforced — same as today).
  */
 export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentation {
-  // Review F5: a lease-ended run (lost_reason "ended") stays RUNNING until
+  // a lease-ended run (lost_reason "ended") stays RUNNING until
   // the ended-run grace stops it, but it has no network and is already OVER
   // — the server excludes it from the live set (store_runs_filtered.go's
   // runLiveSQL) and the cockpit for the same run says "This run ended at its
@@ -109,7 +109,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
       return {
         hue: "blue",
         word: RUNS_ROW_WORD.STARTING,
-        // Review F8: the substrate's own stage line ("Downloading the
+        // the substrate's own stage line ("Downloading the
         // image" etc, design.md §2.2's STARTING/PENDING subline) — dropped
         // when the rewrite moved off run-card.tsx, which rendered it.
         subword: statusDetailSentence(run.status_detail, run.status_reason) || undefined,
@@ -211,7 +211,7 @@ export function sectionRuns(runs: readonly AgentRun[], now: number = Date.now())
     } else if (section === "waitingOwner") {
       waitingOwner.push(run);
     } else if (run.lost_reason === "ended") {
-      // Review F5: over, even though `state` is still RUNNING (see
+      // over, even though `state` is still RUNNING (see
       // rowPresentation's own note above).
       over.push(run);
     } else if (!isTerminalRunState(run.state)) {
