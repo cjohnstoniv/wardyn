@@ -240,9 +240,13 @@ as a bad ticket and a `ui.authorize` / `denied` audit row
 (`reason: "ticket not bound to this browser"`), before the ticket is spent,
 and clears the binding it uses. The bind itself answers only the console:
 the browser must label the fetch `Sec-Fetch-Site: same-site` (an attacker's
-page is `cross-site`, a relayed app is `same-origin`), and with SSO its
-`Origin` must be the console's own origin (scheme and host) from
-`WARDYN_OIDC_REDIRECT_URL`. A refused bind is audited as `ui.authorize` /
+page is `cross-site`, a relayed app is `same-origin`), and when
+`WARDYN_OIDC_REDIRECT_URL` is set (compose always sets it) its `Origin` must be
+the console's own origin (scheme and host) from that URL. A console URL on
+loopback also matches the other loopback names at the same scheme and port, so
+a compose console opened at `http://127.0.0.1:8080` binds against the default
+`http://localhost:8080/auth/callback`; another port is another process and is
+refused. A refused bind is audited as `ui.authorize` /
 `denied` with `reason` `bind_not_same_site` or `bind_origin_not_console` plus
 the `sec_fetch_site` and `origin` the browser sent, since the console itself can
 only report that the gateway did not accept it.
