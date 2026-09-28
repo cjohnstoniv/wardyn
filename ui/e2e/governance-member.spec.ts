@@ -11,8 +11,9 @@ import type { Page } from "@playwright/test";
 // Split out of governance.spec.ts (#209): the member's own view of a
 // governance ceiling. Every case here is route-spliced or role-mocked, never
 // dependent on the real "walled" profile governance.spec.ts's authoring walk
-// writes to Postgres — see this file's own header comment for why the field
-// these splices patch can never arrive from a real request on this harness.
+// writes to Postgres — see the mockAssignedCeiling comment below (around
+// line 39) for why the field these splices patch can never arrive from a
+// real request on this harness.
 test.describe.configure({ mode: "serial" });
 
 const NAME = "walled";

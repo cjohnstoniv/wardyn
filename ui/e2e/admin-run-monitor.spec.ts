@@ -18,7 +18,7 @@ import { OPEN_IN_USER_VIEW } from "../src/app/components/wardyn/copy/console-vie
 // identity provider): both views, the URL decides, so "Open in user view" only
 // navigates. The SSO path (POST /me/member-mode, then reload) is pinned in
 // open-in-user-view.test.tsx. The viewer's subject is spliced onto /me so this
-// spec's own runs are "the admin's own", the idiom runs.spec.ts's
+// spec's own runs are "the admin's own", the idiom runs-cockpit.spec.ts's
 // credential-door case uses. Each test makes its own runs, so none of the
 // shared fixtures change hands.
 

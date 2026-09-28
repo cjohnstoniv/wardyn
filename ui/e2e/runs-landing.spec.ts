@@ -9,10 +9,12 @@
 // week" expands, the ageing note + Include killed, no match then Clear,
 // 400px with no horizontal scroll, and light/dark renders.
 //
-// The 9-fixture seeded backend (runs.spec.ts) proves the real GET /runs wire
-// end to end; this file needs precise attention/ended_at combinations no
-// seed script produces, so every scenario here fully replaces the GET /runs
-// response via page.route — same technique runs.spec.ts's own splices use,
+// The 9-fixture seeded backend (scripts/e2e-backend.sh, consumed by
+// runs.spec.ts/runs-header.spec.ts/runs-detail.spec.ts/runs-cockpit.spec.ts)
+// proves the real GET /runs wire end to end; this file needs precise
+// attention/ended_at combinations no seed script produces, so every scenario
+// here fully replaces the GET /runs response via page.route — same
+// technique runs-header.spec.ts's and runs-detail.spec.ts's own splices use,
 // just for the list endpoint instead of the detail one.
 import { test, expect, asRealMember, gotoConsole, sidebarLink } from "./fixtures";
 import type { Page } from "@playwright/test";
@@ -296,7 +298,7 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     // gotoConsole's own sidebar-settle wait needs the full-width nav (the
     // shell collapses to a hamburger menu below its breakpoint) — resize
     // AFTER landing, same order every other narrow-viewport case in this
-    // codebase uses (e.g. runs.spec.ts's failure-hint-chip narrow cases).
+    // codebase uses (e.g. runs-header.spec.ts's failure-hint-chip narrow cases).
     await gotoConsole(page);
     await page.setViewportSize({ width: 400, height: 800 });
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();

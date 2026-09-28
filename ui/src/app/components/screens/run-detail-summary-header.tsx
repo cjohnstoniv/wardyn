@@ -231,8 +231,8 @@ export function SummaryHeader({
           element gets none of the shrink and a sibling with real content (the
           repo/workspace group) absorbs the whole deficit instead.
           min-w-[160px] makes the floor the width trade is measured against
-          (runs.spec.ts) an enforced CSS invariant, not a fixture that happens
-          not to reach the squeeze. */}
+          (runs-detail.spec.ts) an enforced CSS invariant, not a fixture that
+          happens not to reach the squeeze. */}
       <h1
         className="min-w-[160px] flex-1 truncate text-sm font-semibold text-foreground"
         title={run.task || undefined}
@@ -352,17 +352,18 @@ export function SummaryHeader({
       )}
 
       {/* Confinement + interactive-attach: NOT secondary —
-          (governance.spec.ts:473, security admin reaching a run they don't
-          own) reads "Interactive" vs "Interactive — attachable" as the
-          security-visible fact that a caller cannot open a PTY on someone
-          else's run, and the run's own ConfinementChip is the ONLY place a
-          run's tier shows at all — the header's global chip is gone, so
-          there is no width gate here either. A `hidden … lg:flex` treatment
-          here would be survivable only while an app-shell global BarrierChip
-          still covered <1024; with that gone, every width below 1024 must
-          show tier and attachability somewhere on the run page. The bar
-          wraps, so showing these costs a line, not information — and
-          runs.spec.ts's width loop measures 800px alongside 1024/1280/1536. */}
+          (governance.spec.ts's "nor reaching INTO a run they do not own:
+          attach is not offered") reads "Interactive" vs "Interactive —
+          attachable" as the security-visible fact that a caller cannot open
+          a PTY on someone else's run, and the run's own ConfinementChip is
+          the ONLY place a run's tier shows at all — the header's global chip
+          is gone, so there is no width gate here either. A `hidden …
+          lg:flex` treatment here would be survivable only while an
+          app-shell global BarrierChip still covered <1024; with that gone,
+          every width below 1024 must show tier and attachability somewhere
+          on the run page. The bar wraps, so showing these costs a line, not
+          information — and runs-detail.spec.ts's width loop measures 800px
+          alongside 1024/1280/1536. */}
       <div className="flex shrink-0 items-center gap-2">
         {run.model_provider_id && <RunProviderChip id={run.model_provider_id} />}
         <ConfinementChip value={run.confinement_class} />
@@ -440,7 +441,7 @@ export function SummaryHeader({
             above: this bar is already at its width floor (the header's own
             extensive comments document xl=1280 as the tightest single-row
             budget), and a labelled button here reproduced regression 1
-            (Kill's right edge pushed off-screen at 1280 — runs.spec.ts's
+            (Kill's right edge pushed off-screen at 1280 — runs-detail.spec.ts's
             width loop). title/aria-label carry the same word a label would.
             Hidden while renaming — the edit row (below the bar, outside this
             overflow-hidden flex row) replaces it rather than sitting beside

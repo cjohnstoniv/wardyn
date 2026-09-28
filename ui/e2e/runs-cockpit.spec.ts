@@ -14,9 +14,9 @@ import type { Page } from "@playwright/test";
 // the Add-widget catalog, the failure block's sizing, the attach card's
 // /healthz handling, focus mode's Escape key, and the model-credential
 // refusal door — against the seeded 9-fixture backend runs.spec.ts's own top
-// comment maps out (fixture N -> state). The focus-mode case creates and
-// cleans up its own run row rather than touching a seeded fixture; nothing
-// else in this file mutates state at all.
+// comment maps out (fixture N -> state). The focus-mode case forces the
+// oldest seeded run to RUNNING and does not restore it — it deletes only the
+// approval row it inserts; nothing else in this file mutates state at all.
 test.describe.configure({ mode: "serial" });
 
 // Open the Runs screen and wait for the seeded page to render. PENDING
