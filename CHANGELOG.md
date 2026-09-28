@@ -151,6 +151,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   status word, and at most one action button (Review / Sign in), reading the server's own projected
   `attention` field instead of a client-side approvals join. An ageing note ("Showing the last 7
   days. N older runs are hidden.") links to widen the window or include killed runs.
+- **The Admin view of the Runs page gets its own sections, an Everyone/Mine switch, saved views and
+  grouping (#1197).** "Waiting on the owner" sits beside "Needs a decision" for a run only its owner
+  can act on (a sign-in hold or a lost sandbox) — an admin can decide an approval, never someone
+  else's sign-in. A "Whose runs" filter narrows the Admin view to the caller's own runs via the
+  server's existing `owner=me`, defaulting to Everyone. "Save view" names the current URL in the
+  browser's own storage (up to 10), alongside four built-in views (Default, Failed this week,
+  Killed, By workspace); picking one never changes Everyone/Mine, which is who's asking, not
+  something a view remembers. "Group by" (Sections / Workspace / Title) replaces the time sections
+  with one section per workspace or title, both saved in the URL like every other filter.
 
 - **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
   all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
