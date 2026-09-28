@@ -36,7 +36,14 @@
 # service, so wardynd's own `networks: [wardyn]` and its three loopback
 # `ports:` (the API/UI, SSH gateway and UI-sandbox gateway) are reset here
 # and re-declared on the anchor instead — the anchor is what now actually
-# holds those bindings, wardynd merely shares them.
+# holds those bindings, wardynd merely shares them. A `network_mode:
+# service:` container gets no DNS name of its own, so the anchor carries the
+# `wardynd` alias: each run's proxy dials `https://wardynd:8443`, the name
+# wardynd's internal certificate covers.
+#
+# Joining `kind` also exposes wardynd's listeners to that network. On a
+# hosted runner the only other member is this job's own kind node, and the
+# org's pods sit behind its NetworkPolicy.
 services:
   netns-anchor:
     # Digest-pinned: the same alpine:3.20 digest test/hybrid-walk/
@@ -48,7 +55,8 @@ services:
     command: ["sleep", "infinity"]
     restart: unless-stopped
     networks:
-      - wardyn
+      wardyn:
+        aliases: [wardynd]
     ports:
       - "127.0.0.1:${WARDYN_UP_PORT:-8080}:8080"
       - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"
