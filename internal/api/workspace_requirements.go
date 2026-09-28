@@ -127,16 +127,16 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 		Requirements map[string]types.WorkspaceRequirement `json:"requirements"`
 	}
 	scopedWorkspaceWrite(s, w, r, "workspace.requirements.write",
-		func(req body) (map[string]types.WorkspaceRequirement, string) {
+		func(req body) (map[string]types.WorkspaceRequirement, string, string) {
 			if len(req.Requirements) > maxWorkspaceRequirements {
-				return nil, fmt.Sprintf("too many requirements (max %d)", maxWorkspaceRequirements)
+				return nil, reasonWorkspaceRequirementsInvalid, fmt.Sprintf("too many requirements (max %d)", maxWorkspaceRequirements)
 			}
 			for _, key := range sortedKeys(req.Requirements) {
 				if msg := validateWorkspaceRequirement(key, req.Requirements[key]); msg != "" {
-					return nil, msg
+					return nil, reasonWorkspaceRequirementsInvalid, msg
 				}
 			}
-			return req.Requirements, ""
+			return req.Requirements, "", ""
 		},
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.

@@ -55,6 +55,17 @@ func TestSessionCodecBoundary_NeverAuthenticatesNeverServerErrors(t *testing.T) 
 			payload: fmt.Sprintf(`{"v":1,"sub":"sub-07","email":"m@corp.example","role":"member","ut":"standard","expiry":%q}`, exp),
 		},
 		{
+			// P2-4: `uvt` (the member-view type, SetUserView's field) must be read
+			// only under the current codec, exactly like `ut` above -- not merely
+			// untrusted because "member" is a retired role word. This payload is
+			// otherwise a COMPLETE, valid-shaped v2 session (real role, real type,
+			// mm true, a real uvt), forged onto v1, so the only thing standing
+			// between it and an authenticated member-view request is the version
+			// check itself.
+			name:    "codec v1 cookie with a forged mm+uvt (member view)",
+			payload: fmt.Sprintf(`{"v":1,"sub":"sub-07","email":"m@corp.example","role":%q,"ut":"standard","mm":true,"uvt":"portfolio-manager","expiry":%q}`, oidc.RoleUser, exp),
+		},
+		{
 			// A current-version cookie with no type at all — the corrupt/short
 			// payload case, distinct from the version mismatch above.
 			name:    "codec v2 cookie with no ut",

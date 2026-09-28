@@ -4,7 +4,7 @@
  */
 
 import type { Page, WebSocketRoute } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, navToRoute } from "./fixtures";
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pane-copy";
 
@@ -82,6 +82,7 @@ async function openClaudeDoor(page: Page): Promise<Door> {
 
   await gotoConsole(page);
   await navToRoute(page, "/admin/settings");
+  await expandCard(page, "Model provider");
   await page.locator("#lane-subscription").click();
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Sign in to Claude" })).toBeVisible();

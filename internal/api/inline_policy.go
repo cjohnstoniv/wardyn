@@ -71,7 +71,7 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits.MaxEphemeralDiskMiB)
 	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
-		writeError(w, code, errPrefix+gerr.Error())
+		writeErrorReason(w, code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())
 		return types.RunPolicySpec{}, nil, false
 	}
 	spec.EligibleGrants = kept
@@ -156,7 +156,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
-		writeError(w, http.StatusBadRequest, "specify either policy_id or inline_policy, not both")
+		writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyXOR, "specify either policy_id or inline_policy, not both")
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 
@@ -187,7 +187,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// maxAllowedDomainsPerSpec and capBatch). A cap that only fires
 		// afterwards bounds the stored policy and not the request.
 		if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
+			writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
@@ -219,11 +219,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			clampWarnings = append(clampWarnings, warns...)
 		}
 		if err := validatePolicySpec(spec); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
+			writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
 		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
-			writeError(w, code, "invalid inline_policy: "+err.Error())
+			writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
 		// The size half for the inline arm, the same helper the stored arm calls
@@ -254,7 +254,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusBadRequest, "policy_id not found")
+			writeErrorReason(w, http.StatusBadRequest, reasonPolicyIDNotFound, "policy_id not found")
 			return types.RunPolicySpec{}, nil, nil, false
 		}
 		writeServerError(w, r, "resolve policy", err)
@@ -324,7 +324,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
 	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
-		writeError(w, code, "invalid policy: "+err.Error())
+		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 	return spec, policyID, storedWarns, true

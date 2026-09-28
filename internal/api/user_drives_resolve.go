@@ -149,9 +149,10 @@ func ceilingUnavailableReason(err error) string {
 // answered (an allocation, or null for none).
 //
 // driveUnavailableUserType and driveUnavailableUnmountable also reach
-// writeDriveError's wire body below, so THEIR literals live in reasons.go
-// (#656 slice 2 review round: TestReasonDocsMatchReasonsGo only reads that
-// file). driveUnavailableUnknown and driveUnavailableGovernance never leave
+// writeDriveError's wire body below, so THEIR literals live in
+// reasons_routes.go (#656 slice 2 review round, moved again in slice 3's
+// file split: TestReasonDocsMatchReasonsGo reads both reasons files).
+// driveUnavailableUnknown and driveUnavailableGovernance never leave
 // this GET /me field — only writeServerError's generic path answers a store
 // failure or an unresolved ceiling on the wire, carrying no reason at all —
 // so they stay local and undocumented in the Reason table on purpose

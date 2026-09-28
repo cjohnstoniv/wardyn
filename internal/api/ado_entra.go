@@ -382,7 +382,7 @@ func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 // response has already been written.
 func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEntraConfig, bool) {
 	if s.cfg.ADOEntra == nil {
-		writeError(w, http.StatusNotFound, adoSignInUnconfiguredRefusal)
+		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
 		return ADOEntraConfig{}, false
 	}
 	cfg, found, err := s.cfg.ADOEntra(r.Context())
@@ -391,7 +391,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 		return ADOEntraConfig{}, false
 	}
 	if !found {
-		writeError(w, http.StatusNotFound, adoSignInUnconfiguredRefusal)
+		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
 		return ADOEntraConfig{}, false
 	}
 	if err := cfg.validate(); err != nil {
@@ -402,7 +402,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 	// application's id_token cannot be bound to this session, so a sign-in
 	// against one must never be started at all.
 	if !cfg.isLoginApplication() {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(adoSignInForeignAppRefusal, cfg.ClientID))
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInForeignApp, fmt.Sprintf(adoSignInForeignAppRefusal, cfg.ClientID))
 		return ADOEntraConfig{}, false
 	}
 	// The override is validated here too, not only where a URL is composed, so
@@ -436,7 +436,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	subject := oidcHumanFromContext(r.Context())
 	if subject == "" {
-		writeError(w, http.StatusForbidden, adoSignInNoSessionRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
 	cfg, ok := s.resolveADOEntra(w, r)
@@ -445,12 +445,12 @@ func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	asked, err := adoRequestedScopes(r.URL.Query(), cfg.Scopes)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInScopeInvalid, err.Error())
 		return
 	}
 	prompt, err := adoRequestedPrompt(r.URL.Query())
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInPromptInvalid, err.Error())
 		return
 	}
 
@@ -553,17 +553,17 @@ func (s *Server) consumeADOCookies(w http.ResponseWriter, r *http.Request) (nonc
 	stateCookie, err := r.Cookie(s.consoleCookieName(adoStateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam == "" ||
 		subtle.ConstantTimeCompare([]byte(stateParam), []byte(stateCookie.Value)) != 1 {
-		http.Error(w, "invalid state parameter", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackCookiesInvalid, "invalid state parameter")
 		return "", "", false
 	}
 	nonceCookie, err := r.Cookie(s.consoleCookieName(adoNonceCookieName))
 	if err != nil || nonceCookie.Value == "" {
-		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackCookiesInvalid, "missing nonce cookie")
 		return "", "", false
 	}
 	pkceCookie, err := r.Cookie(s.consoleCookieName(adoPKCECookieName))
 	if err != nil || pkceCookie.Value == "" {
-		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackCookiesInvalid, "missing pkce cookie")
 		return "", "", false
 	}
 	s.clearADOCookie(w, adoStateCookieName)
@@ -582,7 +582,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	subject := oidcHumanFromContext(ctx)
 	if subject == "" {
-		writeError(w, http.StatusForbidden, adoSignInNoSessionRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
 	cfg, ok := s.resolveADOEntra(w, r)
@@ -606,7 +606,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, "missing code parameter", http.StatusBadRequest)
+		writeErrorReason(w, http.StatusBadRequest, reasonADOCallbackMissingCode, "missing code parameter")
 		return
 	}
 
@@ -643,9 +643,9 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(ctx, "wardynd: azure devops sign-in identity binding failed",
 			slog.String("row", cfg.RowID), slog.String("reason", reason))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "identity_binding", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": reasonADOCallbackIdentityBinding, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+"identity_binding", http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reasonADOCallbackIdentityBinding, http.StatusFound)
 		return
 	}
 
@@ -657,9 +657,9 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		// #659 Q2: redirected, not a bare 502 text page — see the identity_binding
 		// arm above.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": reasonADOCallbackUnusableGrant, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
-		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+"unusable_grant", http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reasonADOCallbackUnusableGrant, http.StatusFound)
 		return
 	}
 	blob := adoEntraBlob{
@@ -682,11 +682,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": reasonStoreError, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		// #659 Q2: redirected, not a bare 500 text page — see the
 		// identity_binding arm above.
-		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+"store_error", http.StatusFound)
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reasonStoreError, http.StatusFound)
 		return
 	}
 	// Stored: this sign-in is now the credential, and the one it replaced is not.

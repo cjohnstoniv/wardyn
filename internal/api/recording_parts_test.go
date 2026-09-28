@@ -156,7 +156,7 @@ func TestUploadRecordingPart_RefusesAboveThePartLimit(t *testing.T) {
 			_ = json.Unmarshal(ev.Data, &refused)
 		}
 	}
-	if refused["reason"] != recordingPartLimitReason || refused["part"] != float64(types.RecordingMaxParts+1) {
-		t.Errorf("refusal audit data = %v, want reason %q and the part", refused, recordingPartLimitReason)
+	if refused["reason"] != reasonRecordingPartLimit || refused["part"] != float64(types.RecordingMaxParts+1) {
+		t.Errorf("refusal audit data = %v, want reason %q and the part", refused, reasonRecordingPartLimit)
 	}
 }

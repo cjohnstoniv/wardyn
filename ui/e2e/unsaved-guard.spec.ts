@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, sidebarLink } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, sidebarLink } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { UNSAVED } from "../src/app/lib/unsaved-copy";
 import type { Page } from "@playwright/test";
@@ -42,6 +42,7 @@ async function gotoDirtyProviders(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/settings$/);
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
+  await expandCard(page, "Workspace providers");
   await card.getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/providers$/);
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();

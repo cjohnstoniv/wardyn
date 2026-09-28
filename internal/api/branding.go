@@ -43,17 +43,9 @@ const (
 	brandLogoPathFmt = "/api/v1/branding/logo?v=%s"
 )
 
-// The named reasons a refused write carries (errorBody.Reason), one per rule.
-const (
-	brandReasonOrgName    = "invalid_org_name"
-	brandReasonNameFormat = "invalid_name_format"
-	brandReasonColour     = "invalid_colour"
-	brandReasonContrast   = "low_contrast"
-	brandReasonLink       = "link_not_https"
-	brandReasonLinkShape  = "invalid_link"
-	brandReasonLogoSize   = "logo_too_large"
-	brandReasonLogo       = "invalid_logo"
-)
+// The named reasons a refused write carries (errorBody.Reason), one per rule,
+// are declared in reasons_routes.go (brandReason* — #656 review round: the
+// docs guard only reads the two reasons files).
 
 // mountBrandingRoutes: the two reads the sign-in page needs are anonymous (the
 // reader has not signed in), the Support link is for signed-in people, and
@@ -194,7 +186,7 @@ func (s *Server) handleGetBrandingLogo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
-		writeError(w, http.StatusNotFound, "this console is not branded")
+		writeErrorReason(w, http.StatusNotFound, reasonBrandingNotBranded, "this console is not branded")
 		return
 	}
 	contentType := b.LogoType
@@ -241,7 +233,7 @@ func refuse(reason, format string, a ...any) *brandingRefusal {
 func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 	bs, has := s.cfg.Store.(store.BrandingStore)
 	if !has {
-		writeError(w, http.StatusNotImplemented, "branding requires the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonBrandingStoreUnavailable, "branding requires the Postgres store backend")
 		return
 	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, brandingBodyMax))
@@ -252,14 +244,14 @@ func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 				"logo: Upload an image under 512 KB (SVG or PNG).")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "read request body: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonBrandingBodyUnreadable, "read request body: "+err.Error())
 		return
 	}
 	var req brandingRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return
 	}
 	b, refusal := validateBranding(req)
@@ -300,7 +292,7 @@ func brandingAuditData(b types.Branding) map[string]any {
 func (s *Server) handleDeleteBranding(w http.ResponseWriter, r *http.Request) {
 	bs, has := s.cfg.Store.(store.BrandingStore)
 	if !has {
-		writeError(w, http.StatusNotImplemented, "branding requires the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonBrandingStoreUnavailable, "branding requires the Postgres store backend")
 		return
 	}
 	removed, err := bs.DeleteBranding(r.Context())

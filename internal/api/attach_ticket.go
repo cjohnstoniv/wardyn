@@ -160,21 +160,22 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	//
 	// 404, byte-identical to the foreign-member deny getRunAuthorized writes —
 	// same no-existence-oracle rule, so probing run ids through this route
-	// still learns nothing. Audited under its OWN reason, not "not_owner": an
-	// auditor should be able to see a security admin refused a foreign PTY
-	// without inferring it from the path.
+	// still learns nothing, including its wire reason (AsIf, #656 slice 3).
+	// Audited under its OWN reason, not "not_owner": an auditor should be able
+	// to see a security admin refused a foreign PTY without inferring it from
+	// the path.
 	if !s.isOperator(r.Context()) && run.CreatedBy != principalFromRequest(r) {
-		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID))
+		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run
 	// is useless, so refuse to mint one (clean 409 now beats a WS error later).
 	if run.State != types.RunRunning {
-		writeError(w, http.StatusConflict, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
 	if runIsKept(run) {
-		writeError(w, http.StatusConflict, "run has ended; cannot attach")
+		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
 		return
 	}
 	at, principal := actorFromRequest(r)
@@ -191,7 +192,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, s.cfg.Now())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
-		writeError(w, http.StatusInternalServerError, "mint attach ticket failed")
+		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -237,12 +238,12 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 			// database error to an as-yet-unauthenticated caller — but DO log it,
 			// or the operator sees a bare 500 with no cause anywhere.
 			slog.ErrorContext(r.Context(), "wardynd: attach ticket lookup failed", "run_id", id, "err", err)
-			writeError(w, http.StatusInternalServerError, "attach ticket lookup failed")
+			writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
 			return
 		}
 		if !ok {
 			s.auditAttachDenied(r, id, "unknown", "invalid, expired, or already-used attach ticket")
-			writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
+			writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ta)))

@@ -24,10 +24,13 @@ type APIError struct {
 	Reason string
 }
 
-// newAPIError builds an *APIError from a non-2xx status and its raw body,
+// NewAPIError builds an *APIError from a non-2xx status and its raw body,
 // parsing the server's {"error", "reason"} envelope once so every call site
-// need not repeat it.
-func newAPIError(status int, raw []byte) *APIError {
+// — this package's own transport, and the CLI's own raw net/http calls that
+// bypass it (WebSocket dial handshakes, an attach-ticket mint, a plain
+// non-2xx read; #656 final review round L4) — need not repeat the parse and
+// risk leaving Reason empty.
+func NewAPIError(status int, raw []byte) *APIError {
 	e := &APIError{Status: status, Body: string(raw)}
 	var env struct {
 		Reason string `json:"reason"`

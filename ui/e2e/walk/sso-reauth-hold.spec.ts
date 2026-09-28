@@ -271,7 +271,11 @@ async function openAdminLoginPane(page: Page): Promise<void> {
   }).toPass({ timeout: 90_000 });
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  // Wait for the dialog to show its Start button or its steps before choosing:
+  // isVisible() does not wait, and a dialog still mounting reads as "no Start
+  // button" and leaves the sign-in unstarted (helpers.ts's openLoginPane).
   const start = page.getByRole("button", { name: "Start login" });
+  await expect(start.or(page.getByTestId("signin-progress").first()).first()).toBeVisible({ timeout: 60_000 });
   if (await start.isVisible().catch(() => false)) await start.click();
 }
 

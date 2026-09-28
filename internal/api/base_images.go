@@ -109,7 +109,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 		entry.Name = lastPathSegment(entry.Image, nil)
 	}
 	if msg := validateBaseImageWrite(entry); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonBaseImageWriteInvalid, msg)
 		return
 	}
 	created, err := s.cfg.Store.UpsertBaseImage(r.Context(), entry)
@@ -164,13 +164,13 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.cfg.Store.DeleteBaseImage(r.Context(), id, force); err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			writeError(w, http.StatusConflict, fmt.Sprintf(
+			writeErrorReason(w, http.StatusConflict, reasonBaseImageInUse, fmt.Sprintf(
 				"base image is used by %d workspace(s): %s — repoint them first, or pass ?force=1 (they fall back to the derived recommended build)",
 				len(names), strings.Join(names, ", ")))
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "no such base image")
+			writeErrorReason(w, http.StatusNotFound, reasonBaseImageNotFound, "no such base image")
 			return
 		}
 		writeServerError(w, r, "delete base image", err)

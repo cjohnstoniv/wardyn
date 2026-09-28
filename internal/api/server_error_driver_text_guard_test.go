@@ -89,7 +89,7 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// break TestRunResources_ExecStreamUnsupported_Returns501, which pins the
 	// sentinel staying in the 501 body so the console/operator can tell this
 	// case apart from the no-runner-configured guard beside it.
-	"run_resources.go:Server.handleRunResources:writeError": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
+	"run_resources.go:Server.handleRunResources:writeErrorReason": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501 (#656 slice 3: now carries reasonRunInspectExecStreamUnsupported too)",
 	// #445: the runner/substrate text in a failed dispatch's hint is
 	// deliberately operator-useful (ImagePullBackOff, a missing secret, a
 	// runtime's own refusal) and is not store/driver text;
