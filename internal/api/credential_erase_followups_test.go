@@ -136,6 +136,12 @@ func TestDeleteSecret_AuditsUnresolvedOwner(t *testing.T) {
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("DELETE ?owner=%s = %d %s, want 422", c.owner, w.Code, w.Body.String())
 			}
+			// #656 slice 2 review round S4: pin the LITERAL wire reason
+			// (ownerRefusalReason's answer reaching writeErrorReason), not
+			// just the audit row's reason field asserted below.
+			if got := errorReason(w); got != c.reason {
+				t.Errorf("wire reason = %q, want the literal %q; body=%s", got, c.reason, w.Body.String())
+			}
 			rows, data := actionRows(t, h.audit.events, "secret.delete")
 			if len(rows) != 1 || rows[0].Outcome != "denied" || rows[0].Target != "npm-token" ||
 				len(data[0]) != 1 || data[0]["reason"] != c.reason {

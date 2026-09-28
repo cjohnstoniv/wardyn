@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -1728,6 +1729,29 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 	}
 }
 
+// lockedBuffer is a bytes.Buffer safe to install behind the process-global
+// slog default — see its one use below. slog.SetDefault is PROCESS-global:
+// for as long as it is installed, any run-watcher goroutine an earlier test
+// in this package left running also writes into it. A bare bytes.Buffer made
+// that a data race with the String() read below — red under `-race` whenever
+// such a goroutine happened to log inside this window, green otherwise (#1278).
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 // TestPreviewUnmountableDriveCountsNoRefusal is POST /drives/preview is a
 // DISPLAY READ by an admin about somebody else, and it ran the LAUNCH DOOR's
 // refusal writer.
@@ -1757,7 +1781,7 @@ func TestPreviewUnmountableDriveCountsNoRefusal(t *testing.T) {
 	}
 	srv, _ := driveShareServer(newStore(), []string{root}) // AdminToken wired, so /metrics answers
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -1793,5 +1817,14 @@ func TestPreviewUnmountableDriveCountsNoRefusal(t *testing.T) {
 	if got := refusalBody(t, lw); got != previewBody {
 		t.Errorf("the preview and the launch door disagree on the sentence:\n preview = %q\n launch  = %q\n"+
 			"an admin diagnosing a member's drive must read the sentence that member reads, not a paraphrase", previewBody, got)
+	}
+	// #656 slice 2 review round S4: pin the preview's f.reason LITERALLY, and
+	// that it matches the launch door's — the class, not only the sentence,
+	// must be the SAME answer to the SAME question.
+	if got := errorReason(w); got != "home_missing" {
+		t.Errorf("preview reason = %q, want the literal \"home_missing\"; body=%s", got, w.Body.String())
+	}
+	if pr, lr := errorReason(w), errorReason(lw); pr != lr {
+		t.Errorf("preview and launch reasons disagree: preview=%q launch=%q", pr, lr)
 	}
 }

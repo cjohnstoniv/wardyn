@@ -542,7 +542,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 		// ("the configuration changed between then and now"), which is untrue
 		// for a store blip: nothing changed, the roster just could not be read
 		// (#518). A 500 here blames the actual cause instead.
-		writeError(w, http.StatusInternalServerError, loggedMsg(ctx, "get site config", err))
+		writeErrorReason(w, http.StatusInternalServerError, reasonRosterUnreadable, loggedMsg(ctx, "get site config", err))
 		return false
 	}
 	// Under a model-provider block the run's provider decides its lane, and
@@ -587,6 +587,8 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// again in a moment".
 	msg := llmMechanismRefusal(row, selected, ok, lanes.bedrock.ssoRefreshFailure)
 	if lanes.bedrock.ssoRefreshFailure == awsSSORefreshUnavailableSentence && row.Mechanism == types.AgentMechanismBedrockSSO {
+		// #656: deliberately still a bare writeError — TestCreateRun_AnUnansweredRenewalIsRefusedWithoutTheClass
+		// pins that an outage carries NO reason, so the console's sign-in door never opens over "try again".
 		writeError(w, http.StatusUnprocessableEntity, msg)
 		return false
 	}

@@ -113,6 +113,13 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 				if w.Code != http.StatusForbidden || !containsAll(w.Body.String(), "groups_snapshot_stale", "sign in again") {
 					t.Errorf("writeCeilingError = %d %q; want 403 naming groups_snapshot_stale and the remedy", w.Code, w.Body.String())
 				}
+				// #656 slice 2 review round S4: pin the LITERAL wire reason,
+				// not just the Go constant (or a Contains match against the
+				// message, which embeds the same word for a human reader and
+				// would still pass even if the `reason` field were dropped).
+				if got := errorReason(w); got != "groups_snapshot_stale" {
+					t.Errorf("reason = %q, want the literal \"groups_snapshot_stale\"; body=%s", got, w.Body.String())
+				}
 				return
 			}
 			if err != nil {

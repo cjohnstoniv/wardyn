@@ -541,7 +541,7 @@ test.describe("governance — the security admin's console (real per-person toke
       expect(before).not.toBe("");
       const refused = await consoleAPI(page, "PUT", path, { value: "e2e-replacement-must-not-be-stored" });
       expect(refused.status, refused.text).toBe(403);
-      expect(JSON.parse(refused.text)).toEqual({ error: "secret name is reserved for platform internals" });
+      expect(JSON.parse(refused.text)).toEqual({ error: "secret name is reserved for platform internals", reason: "secret_name_reserved" });
       expect(sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'")).toBe(before);
       expect(sql("SELECT count(*) FROM secrets WHERE name = 'aws-access-key-id'")).toBe("1");
     } finally {

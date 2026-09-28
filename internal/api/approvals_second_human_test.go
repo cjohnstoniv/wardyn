@@ -344,6 +344,10 @@ func TestSecondHuman_FailsClosedWhenTheRunCannotBeRead(t *testing.T) {
 				if !strings.Contains(w.Body.String(), wantMsg) {
 					t.Errorf("%s: body = %s, want the fail-closed message %q", verb, w.Body.String(), wantMsg)
 				}
+				// #656 M2: pin the LITERAL wire reason, not just the Go constant.
+				if !strings.Contains(w.Body.String(), `"reason":"run_unreadable"`) {
+					t.Errorf("%s: body = %s, want reason \"run_unreadable\"", verb, w.Body.String())
+				}
 				if strings.Contains(w.Body.String(), localMsg) {
 					t.Errorf("%s: the LOCAL-MODE 503 answered instead of the fail-closed one — this test is "+
 						"pinning the wrong branch: %s", verb, w.Body.String())

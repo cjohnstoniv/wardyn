@@ -40,6 +40,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`GET/POST /approvals` (list, decide, `/paths`), the internal sidecar's push-content raise
+  route, `POST /runs` and `POST /runs/preflight` (create validation, the resolved-spec
+  workspace-source checks), `GET /runs` (list filters), run kill, workspace delete, and the
+  workspace create/update/admission/env-as-code/providers routes now send a machine-readable
+  `reason` on every refusal (#656 slice 1), the same `{"error","reason"}` shape #204 shipped for
+  the Azure DevOps/AWS SSO/Bedrock-bearer credential lanes — and every `parseListPage` list route
+  (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`,
+  `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …) now shares `invalid_limit_param`/
+  `invalid_offset_param` for a bad `?limit=`/`?offset=`. `client.APIError.Reason` and
+  `docs/sdk.md`'s closed reason set (`internal/api/reasons.go`) cover the new routes; the CLI/SDK
+  behavior is otherwise unchanged. Two refusals are deliberately still bare: an unanswered AWS
+  Bedrock SSO renewal (an outage, not an actionable class) and a push-content approval's
+  foreign-owner 404 (must stay byte-identical to a missing approval's).
+- **`/site-config` (including its probe and egress-redirect routes), `/governance`, `/secrets`,
+  `/people`, `/access`, `/permissions`, `/admin/delegates`, `/setup/integrations`,
+  `/setup/onboarding-complete`, `/sessions/revoke`, `/ssh-keys` (self-service and admin), and the
+  user-drive doors (allocation, reclaim, the naming/bind previews, and the launch-time drive
+  resolver) now send the same machine-readable `reason` on every refusal (#656 slice 2).**
+  `refuseDrive`'s existing metric/audit reason (its closed set now declared in
+  `internal/api/reasons.go`, already used for `wardyn_drive_refusals_total`) now also reaches the
+  wire, and `groups_snapshot_stale` is the SAME registered reason as `authz.ReasonGroupsSnapshotStale`
+  — a literal in `reasons.go`, not a reference, so the docs⟷reasons.go guard can see it, tied to
+  authz's value by a documented `TestNoAdHocAuthz` exception rather than a second copy invented for
+  this package. `docs/sdk.md`'s reason table covers the new routes.
 - **New Run picks the model provider (#542).** When a provider block serves the chosen agent, the
   rail lists every provider you may use for it, with its kind, your connection state and where
   the credential lives during the run, and the run is sent with the one you pick. The agent's
@@ -107,6 +131,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
   operator edits it by hand; the "Runs that share a title are grouped together" hint is gone, since
   exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
   owner, showing a "Renamed" toast and the new title in place, with no reload.
+
+- **The run page shows its lease, offers Revive when a sandbox is lost, and Revive-from-row moves a
+  lost run straight to Running (#580, #1197 L5).** A live run's own "Ends" row shows its end time
+  with an Extend menu (+1 day, +1 week, or as far as the captured limit allows) — always available,
+  since extending is the lease — plus a "Change…" dialog, the "No end" hint, and a
+  wait-for-a-decision control for whoever the captured `user_changes_limits` gate (or operator
+  standing) admits; every action is hidden, not just refused, for a viewer who is neither the
+  owner nor a super admin. Warnings land at 24h/1h/10 minutes before the end, both as a run-page
+  banner (Extend 1 day / Change end… / Dismiss) and as an amber "Ends in…" word on the run's own
+  board row, which now also offers Revive directly for a lost run in Needs you. A run whose lease
+  ran out offers Extend-and-revive for an interactive run; a task run's own agent cannot be
+  revived (it ran once, at dispatch, and extending changes nothing observable), so it offers only
+  End run, with no claim that extending would bring it back. A run lost to a reboot offers
+  Revive/Extend/End run with copy naming whether Claude Code's own conversation continues or
+  another harness starts fresh; one lost to a control-plane outage shows only the outage's own
+  sentence, not the reboot copy; and one lost on Kubernetes (no revive there in 0.8) offers only
+  End run. A terminal run (after End run, or once a lease-ended run's grace expires) shows none of
+  this. A paused run (waiting on a decision, or idle — its minutes floored at the server's own
+  630 s) offers Resume now, and a tightened profile's own note sits alongside whichever of the
+  above is showing. The admin view gets its own "Older limits" chip and bulk "Restart with current
+  limits" (`GET /admin/runs/proxy-window`, `POST /admin/runs/restart`, both existing, operator-only
+  routes), batched under the server's own 100-run limit, whose result stays on screen even after a
+  fully successful restart empties the list it was drawn from. Nothing here changes what the
+  server enforces. Two known gaps, both disclosed rather than guessed at: the ended state's "files
+  are kept until…" omits the exact date, since the grace deadline isn't on the wire (#1320); and a
+  loosened admin limit has no note, since nothing distinguishes it from an ordinary cap on the wire
+  (#1322). The New Run "Ends" picker itself cannot be built at all yet — `POST /runs` has no end
+  field (#1319).
 
 - **Helm: `WARDYN_DAEMON_PROXY_SECRET` from an operator-managed Secret (#719).** New chart value
   `daemonProxySecret.existingSecret` (+ `existingSecretKey`, `mountPath`, `defaultMode`) mounts a
@@ -1213,6 +1265,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the organisation skips the rows it already holds.
 
 ### Added
+
+- **A long run's session recording now reaches the control plane while the run is still going
+  (#577).** `wardyn-rec` tails its own asciicast and uploads it in parts, every 24 hours or as soon
+  as 32 MiB is waiting (half the 64 MiB upload cap, leaving masking room to lengthen a part): each
+  part is the cast's header line followed by whole event lines, so each is a valid asciicast v2
+  document and no event is split between two masked uploads. Part 1 is the same request a short
+  run has always made; part 2 onward goes through the proxy's recording route as
+  `PUT /wardyn/v1/recordings/{run}/parts/{n}` and is stored beside it. The replay and the
+  Recordings list join the parts into one cast; a part whose header differs from part 1's (an
+  earlier cast of the same run) ends the join. A run past 64 MiB of terminal output used to lose
+  its whole recording to a 413 at exit, and a run lost before exit lost all of it; now at most the
+  span since the last part is lost. A `.log` fallback recording still uploads whole at exit. A
+  run's cast is stored as at most 2048 parts; a higher part is refused (413, audited
+  `recording.upload` with `reason: part_limit`) and not stored. Each upload's deadline now grows
+  with its size (20 seconds plus the body at 2 Mbit/s), so a full part is not held to 20 seconds.
 
 - **Console branding (#1125).** A super admin sets the organisation's name, how the product name
   reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an

@@ -4,6 +4,7 @@
 package recording
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -31,7 +32,8 @@ type Authorizer func(r *http.Request, runIDPrefix string) bool
 // are enforced equal (case-insensitive, on the run-id prefix) before
 // authorize runs, so a caller can't request .../runs/A/recording/B to read
 // run B's cast under an authorization scoped to run A. Both checks collapse
-// to the same 404 (no existence oracle). Store errors produce 500.
+// to the same 404 (no existence oracle). Store errors produce 500. A bare run
+// id is served joined across its tail-uploaded parts (OpenJoined).
 func Handler(store Store, authorize Authorizer) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/{runID}", func(w http.ResponseWriter, req *http.Request) {
@@ -42,7 +44,11 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}
-		rc, err := store.OpenCast(req.Context(), key)
+		open := store.OpenCast
+		if key == prefix {
+			open = func(ctx context.Context, key string) (io.ReadCloser, error) { return OpenJoined(ctx, store, key) }
+		}
+		rc, err := open(req.Context(), key)
 		if errors.Is(err, ErrNotFound) {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return

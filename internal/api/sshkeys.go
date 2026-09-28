@@ -88,7 +88,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	pk, comment, msg := parseSSHAuthorizedKeyLine(req.PublicKey)
 	if msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyInvalid, msg)
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -105,7 +105,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		// principalFromRequest resolves to their OIDC sub — can register a
 		// key that will ever work. Reject before writing one that would sit
 		// dead in the store forever (docs/SSH.md's admin-token/CI-only note).
-		writeError(w, http.StatusUnprocessableEntity,
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyRequiresHuman,
 			"a key registered with the admin token can never authorize an SSO-signed-in human's run — sign in to the console and add the key from Your account instead")
 		return
 	}
@@ -116,7 +116,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(existing) >= sshMaxKeysPerPrincipal {
-		writeError(w, http.StatusUnprocessableEntity,
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyCapReached,
 			fmt.Sprintf("too many registered keys (max %d) — remove one first", sshMaxKeysPerPrincipal))
 		return
 	}
@@ -158,7 +158,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if revoked {
-			writeError(w, http.StatusForbidden, "sign in again before registering an SSH key")
+			writeErrorReason(w, http.StatusForbidden, reasonSSHKeyRevokedSession, "sign in again before registering an SSH key")
 			return
 		}
 	}
@@ -185,7 +185,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		// does not own it — key-squatting reconnaissance. See docs/SSH.md's
 		// remediation section and THREAT-MODEL.md's residual for the
 		// operator-side fix (there is no self-service one by design).
-		writeError(w, http.StatusConflict, "unable to register this key")
+		writeErrorReason(w, http.StatusConflict, reasonSSHKeyRegistrationRefused, "unable to register this key")
 		return
 	}
 	if err != nil {
@@ -219,7 +219,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteSSHKey(w http.ResponseWriter, r *http.Request) {
 	fp, err := url.PathUnescape(chi.URLParam(r, "fingerprint"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid fingerprint encoding")
+		writeErrorReason(w, http.StatusBadRequest, reasonSSHKeyFingerprintInvalidEncoding, "invalid fingerprint encoding")
 		return
 	}
 	principal := principalFromRequest(r)

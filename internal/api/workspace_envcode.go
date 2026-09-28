@@ -45,7 +45,7 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	}
 	localDirs := workspaceSourcesOfType(ws, types.WorkspaceSourceTypeLocalDir)
 	if len(localDirs) == 0 {
-		writeError(w, http.StatusUnprocessableEntity,
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceEnvcodeNoLocalDir,
 			"env-as-code can only be written to disk for a workspace with a local_dir source (a repo/ephemeral-only "+
 				"workspace has no host path — use GET /workspaces/{id}/env-as-code and commit the files yourself)")
 		return
@@ -79,7 +79,7 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.Workspace) (map[string]string, bool) {
 	profile, ok := workspaceProfile(ws)
 	if !ok {
-		writeError(w, http.StatusUnprocessableEntity, "workspace has no scanned profile to emit from")
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceEnvcodeNoProfile, "workspace has no scanned profile to emit from")
 		return nil, false
 	}
 	// Fold the operator-wide artifact-registry redirects (URL-only) into the

@@ -48,7 +48,7 @@ func (s *Server) projectRecordingMeta(r *http.Request, runs []types.AgentRun) {
 	}
 	ctx := r.Context()
 	for i := range runs {
-		size, tail, err := s.cfg.RecordingStore.StatAndTail(ctx, runs[i].ID.String(), recordingMetaTailBytes)
+		size, tail, err := recording.StatJoined(ctx, s.cfg.RecordingStore, runs[i].ID.String(), recordingMetaTailBytes)
 		if err != nil {
 			// ErrNotFound is the ordinary "no recording" case. Any other error
 			// (a store outage) is not logged per-run either — that would flood
