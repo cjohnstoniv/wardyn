@@ -11,10 +11,11 @@
 // every fact this bar carries fits in one row's width down at `lg` (1024px).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Check, Clock, Link as LinkIcon, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
+import { Check, Clock, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { AgentBadge, AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
@@ -24,7 +25,13 @@ import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
 import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { RUN_FACTS } from "../wardyn/copy/door";
-import { isTerminalStatusReason, statusDetailChip, statusDetailSentence } from "./run-status-detail";
+import {
+  isTerminalStatusReason,
+  PENDING_NO_DETAIL,
+  statusDetailChip,
+  statusDetailSentence,
+} from "./run-status-detail";
+import { titleFromTask } from "./new-run/wizard-types";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states
@@ -75,6 +82,7 @@ export function SummaryHeader({
   linkCopied = false,
   onKill,
   onClone,
+  onRename,
 }: {
   run: AgentRun;
   terminal: boolean;
@@ -111,8 +119,20 @@ export function SummaryHeader({
   // so it belongs here instead. Optional so the header stays renderable
   // without a parent that owns navigation (the unit tests below).
   onClone?: () => void;
+  // Rename (#1197 L2): owner only (this component's own `owned` check below),
+  // absent for anyone else — same optional-prop shape as onClone, so the
+  // header stays renderable with no parent that owns the write.
+  onRename?: (title: string) => void;
 }) {
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
+  // Rename's edit mode. The trigger button lives in the action cluster
+  // below; the edit FORM renders as its own full-width row under the whole
+  // bar (see the JSX near the bottom of this component) rather than inline
+  // anywhere in this overflow-hidden, xl:flex-nowrap row — both the h1's
+  // slot and the action cluster were tried and measured too narrow to hold
+  // an editable input without pushing Kill off-screen (review round 2, D2).
+  const [renaming, setRenaming] = React.useState(false);
+  const [draftTitle, setDraftTitle] = React.useState("");
   // Claim "attachable" only under the SAME owner-or-admin predicate
   // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
   // && !owned`) — otherwise a member sees this chip promise attachability and
@@ -126,12 +146,31 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked
-  // status_detail for every run that is not STARTING (except a FAILED one whose
-  // reason IS the failure) — and the header gates on STARTING anyway, because a
-  // FAILED run's header already says why in the failure_hint chip below, and two
-  // chips narrating one ending is how a bar this crowded loses the one that
-  // matters.
-  const statusChip = run.state === "STARTING" ? statusDetailChip(run.status_detail, run.status_reason) : "";
+  // status_detail for every run that is not STARTING (PENDING included —
+  // projectStatusDetail's `default` branch in runs_status_detail.go blanks it
+  // for PENDING exactly like every other non-STARTING state) except a FAILED
+  // one whose reason IS the failure — and the header gates on STARTING/PENDING
+  // anyway, because a FAILED run's header already says why in the failure_hint
+  // chip below, and two chips narrating one ending is how a bar this crowded
+  // loses the one that matters.
+  //
+  // #125: PENDING's own first tick carries no status_detail at all — the
+  // ordinary derivation below would render nothing — so that ONE case reaches
+  // for PENDING_NO_DETAIL instead. The moment status_detail carries a real
+  // stage line (today, only ever once the run has moved to STARTING) this
+  // falls through to the ordinary STARTING/PENDING derivation, which
+  // supersedes it.
+  const pendingQueued = run.state === "PENDING" && !run.status_detail?.trim();
+  // SF-25: PENDING's own first tick gets no header chip at all — the mock
+  // (packet-4.html state 3) has only the reused Pending badge (RunStateBadge,
+  // above) plus PENDING_NO_DETAIL as a visible line below the bar (the
+  // `pendingQueued` block near the end of this component); a same-page
+  // "Queued" info chip would say the badge's own fact a second time.
+  const statusChip = pendingQueued
+    ? ""
+    : run.state === "STARTING" || run.state === "PENDING"
+      ? statusDetailChip(run.status_detail, run.status_reason)
+      : "";
 
   // This is a stable e2e hook, scoping "Interactive"/"Fence" text
   // assertions to this bar rather than the whole page (both strings are
@@ -152,6 +191,7 @@ export function SummaryHeader({
   // (min-h, not h, below xl) only on widths narrower than this console's
   // primary target.
   return (
+    <>
     <div
       data-testid="run-summary-header"
       // overflow-hidden — the single-line xl+ row still floors near
@@ -395,6 +435,39 @@ export function SummaryHeader({
             </span>
           </Chip>
         )}
+        {/* Rename (#1197 L2): owner only, any run state — unlike Clone below,
+            not gated on `terminal`. Icon-only, like the copy-link button
+            above: this bar is already at its width floor (the header's own
+            extensive comments document xl=1280 as the tightest single-row
+            budget), and a labelled button here reproduced regression 1
+            (Kill's right edge pushed off-screen at 1280 — runs.spec.ts's
+            width loop). title/aria-label carry the same word a label would.
+            Hidden while renaming — the edit row (below the bar, outside this
+            overflow-hidden flex row) replaces it rather than sitting beside
+            it, which is what pushed Kill off-screen at every width while
+            open (review round 2, D2). */}
+        {onRename && owned && !renaming && (
+          <button
+            type="button"
+            onClick={() => {
+              // F3 (review round 2): never seed from the WHOLE task —
+              // runHeadline's own fallback chain (title, then task, then
+              // "—") means an untitled run with a long or multi-line task
+              // seeded a draft the server would refuse on Save (a title
+              // caps at 200 chars and refuses a newline), and a task-less
+              // run seeded the literal "—". Same first-line/80-char/
+              // word-boundary default New Run itself prefills from, or the
+              // run's own trimmed title when it has one.
+              setDraftTitle(run.title?.trim() || titleFromTask(run.task ?? ""));
+              setRenaming(true);
+            }}
+            title={RUN_COCKPIT.rename}
+            aria-label={RUN_COCKPIT.rename}
+            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <Pencil className="size-4" />
+          </button>
+        )}
         {/* Tab order clone -> kill: outline, never the header's one
             danger slot, and Kill stays disabled (not hidden) rather than
             hiding so the two sit side by side on a terminal run. */}
@@ -422,5 +495,55 @@ export function SummaryHeader({
         />
       </div>
     </div>
+    {/* Rename's edit row (#1197 L2 review round 2, D2): a FULL-WIDTH row
+        under the bar, outside its overflow-hidden xl:flex-nowrap flex
+        row — matching the mock's own layout (packet:742, the heading's own
+        slot replaced by a wrapping, width:100% form). Rendered here, not
+        inline in the action cluster, because it measured 250-380px wider
+        than that cluster has room for at 1280/1536 (run-rename.spec.ts's
+        own width assertions pin the fix), and the h1's slot was tried and
+        rejected too (the input shrank to ~26px, unusable). */}
+    {renaming && onRename && (
+      <form
+        className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          // F5 (review round 2): an emptied draft is Cancel, not a "renamed
+          // to blank" success — the mock's own handler only submits `if
+          // (v)` (packet.js), and a false RENAMED toast for a clear the
+          // operator likely did not intend is worse than a quiet close.
+          if (draftTitle.trim()) onRename(draftTitle.trim());
+          setRenaming(false);
+        }}
+      >
+        <label htmlFor="run-rename-title" className="text-xs font-medium text-muted-foreground">
+          Title
+        </label>
+        <Input
+          id="run-rename-title"
+          autoFocus
+          maxLength={200}
+          className="h-8 min-w-[240px] flex-1"
+          value={draftTitle}
+          onChange={(e) => setDraftTitle(e.target.value)}
+        />
+        <Button type="submit" size="sm">
+          Save
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setRenaming(false)}>
+          Cancel
+        </Button>
+      </form>
+    )}
+    {/* SF-25: the mock (packet-4.html state 3) has no header chip for this
+        case at all — only the reused Pending badge above and this sentence,
+        byte-exact to PENDING_NO_DETAIL, as a visible line a touch device can
+        actually read (there is no tooltip to open). */}
+    {pendingQueued && (
+      <p data-testid="run-summary-secondary" className="border-b border-border bg-card px-4 py-1.5 text-body text-muted-foreground">
+        {PENDING_NO_DETAIL}
+      </p>
+    )}
+    </>
   );
 }

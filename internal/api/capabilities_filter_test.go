@@ -20,7 +20,11 @@ import (
 
 // TestCapFilterEqualsAllowedPerID: capFilter(ids) is exactly the ids the
 // one-value resolver allows, in input order, for every kind, caller and grant
-// state — the list half can never disagree with the door that refuses.
+// state — the list half can never disagree with the door that refuses. That
+// includes a restricted value ("Available to: Only..."), which makes its kind
+// count as enforced even while the switch is off: without that state here, a
+// Filter blind to restrictions agreed with the door on every other row
+// (design G6, the Filter half).
 func TestCapFilterEqualsAllowedPerID(t *testing.T) {
 	allow, deny := types.CapabilityAllow, types.CapabilityDeny
 	ids := []string{"alpha", "beta", "api.example.com", "*.example.com", "alpha"}
@@ -48,15 +52,18 @@ func TestCapFilterEqualsAllowedPerID(t *testing.T) {
 	}
 	for _, kind := range capabilityKinds {
 		for gname, gs := range grantSets {
-			for _, enforced := range []bool{false, true} {
+			for _, state := range []struct{ enforced, restricted bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
 				for cname, ctx := range callers {
-					st := &capStore{grants: gs(kind), enf: map[string]bool{kind: enforced}}
+					st := &capStore{grants: gs(kind), enf: map[string]bool{kind: state.enforced}}
+					if state.restricted {
+						st.restricted = map[string]map[string]bool{kind: {"alpha": true, "api.example.com": true}}
+					}
 					srv := capServer(st)
 					var want []string
 					for _, id := range ids {
 						ok, err := srv.capSeamAllowed(ctx, kind, id)
 						if err != nil {
-							t.Fatalf("%s/%s/%v/%s: capSeamAllowed(%q): %v", kind, gname, enforced, cname, id, err)
+							t.Fatalf("%s/%s/%+v/%s: capSeamAllowed(%q): %v", kind, gname, state, cname, id, err)
 						}
 						if ok {
 							want = append(want, id)
@@ -64,10 +71,10 @@ func TestCapFilterEqualsAllowedPerID(t *testing.T) {
 					}
 					got, err := srv.capFilter(ctx, kind, ids)
 					if err != nil {
-						t.Fatalf("%s/%s/%v/%s: capFilter: %v", kind, gname, enforced, cname, err)
+						t.Fatalf("%s/%s/%+v/%s: capFilter: %v", kind, gname, state, cname, err)
 					}
 					if !slices.Equal(got, want) {
-						t.Errorf("%s/%s/enforced=%v/%s: capFilter = %q, want %q", kind, gname, enforced, cname, got, want)
+						t.Errorf("%s/%s/%+v/%s: capFilter = %q, want %q", kind, gname, state, cname, got, want)
 					}
 				}
 			}

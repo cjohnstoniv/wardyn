@@ -419,6 +419,9 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	if g.TTLSeconds < 0 {
 		return fmt.Errorf("eligible_grants[%d]: negative ttl_seconds", i)
 	}
+	if g.OwnerOnly && (g.Kind == types.GrantGitHubToken || g.Kind == types.GrantCloudSTS) {
+		return fmt.Errorf("eligible_grants[%d]: owner_only applies only to a grant that names a stored secret, not %q", i, g.Kind)
+	}
 	// A github_token grant's scope ({repos, permissions}) is otherwise only
 	// checked at MINT time inside the broker, so a malformed permission key
 	// surfaces as a run-time mint failure instead of an immediate 400. Run the
@@ -484,12 +487,21 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	// WRITE time — fail closed so a policy can never exfiltrate
 	// wardyn-signing-key/session-key as a git password. The broker sink
 	// (mintGitPAT) enforces the same invariant defense-in-depth.
+	//
+	// nameSinkReservedSecret, not sinkReservedSecret (#1048): this kind returns
+	// the raw value into the sandbox, same as env_secret/llm_inspection below,
+	// so it needs the WIDER guard that also refuses a wardyn-provider-*-key
+	// name — sinkReservedSecret alone let one through at write time (the
+	// broker's own reservedBrokerSecret still refused it at mint, so nothing
+	// leaked, but the run failed at clone time with no 400 up front). api_key
+	// stays on the narrower sinkReservedSecret above: the provider arm
+	// legitimately names a -key there.
 	if g.Kind == types.GrantGitPAT {
 		_, secretName, _, derr := gitPATScopeFields(g.Scope)
 		if derr != nil {
 			return fmt.Errorf("eligible_grants[%d]: git_pat scope invalid: %w", i, derr)
 		}
-		if sinkReservedSecret(secretName) {
+		if nameSinkReservedSecret(secretName) {
 			return fmt.Errorf("eligible_grants[%d]: git_pat references reserved secret name %q", i, secretName)
 		}
 	}
@@ -499,12 +511,15 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 	// of the SSH-over-443 providers Wardyn supports (github.com / dev.azure.com)
 	// so the run never asks for a resident key for an unroutable host. Fail
 	// closed at WRITE time; the broker sink (mintSSHKey) re-checks the secrets.
+	//
+	// nameSinkReservedSecret, not sinkReservedSecret (#1048) — same reasoning
+	// as git_pat above: a resident key/known_hosts value, so the wider guard.
 	if g.Kind == types.GrantSSHKey {
 		host, keyRef, _, khRef, derr := sshKeyScopeFields(g.Scope)
 		if derr != nil {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key scope invalid: %w", i, derr)
 		}
-		if sinkReservedSecret(keyRef) || sinkReservedSecret(khRef) {
+		if nameSinkReservedSecret(keyRef) || nameSinkReservedSecret(khRef) {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key references a reserved secret name", i)
 		}
 		if _, ok := sshOver443Endpoint(host); !ok {
@@ -713,6 +728,12 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	// an operator authoring a reserved name gets a 400 instead of a run whose
 	// scanner silently covers one fewer value than they asked for.
 	for i, name := range li.WorkspaceSecretNames {
+		// #1048: an impossible name (upper-case, a leading space, a unicode
+		// hyphen, a path) used to pass write time and just cover one fewer
+		// value at dispatch, silently — the same gap env_secret had.
+		if !secretNameRE.MatchString(name) {
+			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is not a valid secret name", i, name)
+		}
 		if nameSinkReservedSecret(name) {
 			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is a reserved platform-internal secret name", i, name)
 		}

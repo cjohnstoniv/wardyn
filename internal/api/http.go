@@ -404,7 +404,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	// admin token. Both halves get it because a token is a token — an operator
 	// who has not configured SSO can still hold one (they simply cannot MINT
 	// one; see handleCreateAPIToken, which requires a verified human).
-	admin := s.apiTokenAuth(next, s.adminAuth(next))
+	admin := s.delegatedTokenAuth(next, s.apiTokenAuth(next, s.adminAuth(next))) // wdg_: delegation.go
 	if s.cfg.OIDC == nil {
 		return admin
 	}
@@ -414,6 +414,9 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	// to the admin bearer path.
 	return s.cfg.OIDC.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if sub := oidc.PrincipalFromContext(r.Context()); sub != "" {
+			if s.refuseReservedPrincipal(w, r, sub, sessionInvalidMsg) { // a pre-#1162 session
+				return
+			}
 			// CSRF: this is the COOKIE-authenticated lane — the browser attaches
 			// the session to any request a page can cause, so a cross-origin
 			// mutation must be refused BEFORE the handler runs (csrf.go states
@@ -550,9 +553,9 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // empty role, so this is defense-in-depth, not a real path).
 func (s *Server) isOperator(ctx context.Context) bool {
 	// A device request carries no OIDC human, which the next branch reads as
-	// the admin token. A daemon is never an operator, so refuse it first —
-	// whatever file the handler asking was written in.
-	if _, isDevice := deviceFromContext(ctx); isDevice {
+	// the admin token. A daemon, or a portal acting for a person, is never an
+	// operator, so refuse it first — whatever file the handler was written in.
+	if neverOperator(ctx) {
 		return false
 	}
 	if oidcHumanFromContext(ctx) == "" {
@@ -593,7 +596,7 @@ func (s *Server) isOperator(ctx context.Context) bool {
 //     workspace list, policies.go's four read-redaction sites, and helpers.go's
 //     ownsRunOrAdmin — each commented at its own site.
 func (s *Server) isSecurityOperator(ctx context.Context) bool {
-	if _, isDevice := deviceFromContext(ctx); isDevice {
+	if neverOperator(ctx) {
 		return false // the same refusal isOperator makes first
 	}
 	if oidcHumanFromContext(ctx) == "" {
@@ -702,7 +705,7 @@ const (
 	csrfActor = "wardyn/csrf"
 	// oidcCallbackActor is the SSO sign-in callback, refusing a login the
 	// IdP approved because of what the role map makes of it (a user type
-	// that is ambiguous or does not exist).
+	// that is ambiguous or does not exist), or a reserved subject.
 	oidcCallbackActor = "wardyn/oidcCallback"
 )
 

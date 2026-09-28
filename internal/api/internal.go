@@ -937,7 +937,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
+	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience, claims.OperatorOwned)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return

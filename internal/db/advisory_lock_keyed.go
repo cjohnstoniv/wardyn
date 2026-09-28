@@ -18,23 +18,17 @@ import (
 )
 
 // LoginSupersedeLockClass is the classid half of a TWO-argument advisory lock
-// key — pg_advisory_lock(int4,int4) — whose objid is one person's actor string
-// folded to an int32 (store.LoginLocker). It serializes ONE person's concurrent
-// sign-in launches: the supersede pass, the run insert and the second supersede
-// pass are independent statements, so without it two launches each read the
-// other as not-yet-existing, both survive, and the person is left with two live
-// sandboxes each holding a captured AWS SSO session (harnesscred_supersede.go
-// names the interleaving). Per-person, so two different people's sign-ins never
-// contend on the KEY, and taken with the BLOCKING AdvisoryLockKeyed rather than
-// TryAdvisoryLock: the loser of a sign-in race must run AFTER the winner, not
-// instead of it — skipping the supersede is the defect.
+// key (objid = one person's actor string folded to int32, store.LoginLocker).
+// Serializes ONE person's concurrent sign-in launches: without it, two
+// launches' independent supersede/insert/supersede statements can each read
+// the other as not-yet-existing, leaving two live sandboxes each holding a
+// captured AWS SSO session (harnesscred_supersede.go). Taken BLOCKING (not
+// TryAdvisoryLock): the loser must run AFTER the winner, not skip the
+// supersede.
 //
-// A SEPARATE key space from every int64 key in db.go, not a near-miss of one.
-// Measured on Postgres 16 rather than assumed — `SELECT locktype, classid,
-// objid, objsubid FROM pg_locks WHERE locktype='advisory'` after taking one of
-// each reports the one-argument bigint form with objsubid 1 and this
-// two-argument form with objsubid 2 — so the two forms cannot conflict whatever
-// the numbers are. Any stable value works.
+// A separate key space from db.go's int64 keys, confirmed on Postgres 16 (the
+// one- and two-argument advisory-lock forms carry different objsubid, so they
+// cannot collide whatever the numbers are).
 const LoginSupersedeLockClass int32 = 0x574C474E // ASCII "WLGN"
 
 // SecretRowLockClass is the classid of the TRANSACTION-scoped two-argument
@@ -50,115 +44,74 @@ const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
 // inserts serialize, so the per-run cap it counts is the cap it enforces.
 const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 
-// LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take a
-// keyed lock — the in-process slot, the pool connection and the lock itself —
-// before giving up. A caller that runs out of it is REFUSED (retry), not let
-// through unlocked: a wait that expires is the concurrent burst the lock exists
-// to serialize (#505). Only ErrAdvisoryLockNoCapacity proceeds unlocked.
-//
-// 5s, the same value and the same reasoning as AuditChainLockTimeout: the
-// legitimate wait here is one other launch doing a handful of indexed
-// statements, so 5s absorbs a deep queue before it ever gives up on a lock it
-// would have got.
+// LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
+// a keyed lock (in-process slot + pool connection + the lock itself) before
+// being REFUSED (retry) rather than let through unlocked — a burst timing out
+// is exactly what the lock exists to serialize (#505); only
+// ErrAdvisoryLockNoCapacity proceeds unlocked. 5s, same value and reasoning as
+// AuditChainLockTimeout: enough to absorb a deep queue of the handful of
+// indexed statements a rival launch does.
 var LoginSupersedeLockWait = 5 * time.Second
 
 // ErrAdvisoryLockNoCapacity is AdvisoryLockKeyed's one STRUCTURAL refusal: the
-// pool cannot spare advisoryLockFreeConnsNeeded connections, which on a pool at
-// the documented floor (2) is every call, not a burst. Its caller proceeds
-// unlocked and says so on the audit trail; every OTHER error is a wait or a
-// database fault, and its caller refuses.
+// pool can't spare advisoryLockFreeConnsNeeded connections (every call, on a
+// pool at the documented floor of 2). The caller proceeds unlocked and audits
+// it; every other error is a wait or a database fault, and refuses.
 var ErrAdvisoryLockNoCapacity = errors.New("db: pool cannot spare a connection for an advisory lock")
 
-// advisoryLockAcquireWait bounds the POOL ACQUIRE specifically, and it is short
-// on purpose.
-//
-// Neither lock_timeout nor the total budget's tail covers this: a pool with no
-// free connection does not ERROR on Acquire, it BLOCKS until the context ends,
-// so without a bound of its own an exhausted pool turns an optional lock into a
-// stall — and wardynd sets no http.Server WriteTimeout and mounts no
-// TimeoutHandler (cmd/wardynd/boot_serve.go), so a request context dies only
-// when the client disconnects. The capacity check below has just observed spare
-// connections, so a wait here means a burst arrived in between; the lock is
-// optional, and the honest move is to give it up at once rather than queue for
-// it while holding the in-process slot.
+// advisoryLockAcquireWait bounds the POOL ACQUIRE specifically and is short on
+// purpose: Acquire on an exhausted pool BLOCKS rather than errors, and wardynd
+// sets no request-level write timeout, so an unbounded wait here would turn an
+// optional lock into a stall. The capacity check just above has already seen
+// spare connections, so a wait here means a burst arrived in between — give up
+// at once rather than queue while holding the in-process slot.
 const advisoryLockAcquireWait = 250 * time.Millisecond
 
-// advisoryLockFreeConnsNeeded is how many connections the pool must have to
-// spare before a keyed lock is taken at all: ONE for the hold, and at least one
-// for the guarded work, which needs the pool AGAIN while the hold is live
-// (api.launchHarnessLoginRun reads the caller's live runs and inserts the new
-// one between acquire and release).
+// advisoryLockFreeConnsNeeded: connections the pool must have spare before a
+// keyed lock is taken at all — ONE for the hold, one more for the guarded work
+// itself (which needs the pool again while the hold is live). Without this
+// check the lock self-deadlocks at the documented minimum pool size (2): the
+// hold takes the one connection left, and the guarded work then blocks on
+// Acquire with nothing to wait for. Below the threshold this reports
+// ErrAdvisoryLockNoCapacity and the caller proceeds unlocked, on the record,
+// rather than wedged.
 //
-// Without this check the lock self-deadlocks at the pool size operators are
-// actually told to use. docs/ENV.md's WARDYN_PG_DSN row asks for "at least 2,
-// and at least 4 with the ground-truth rotator enabled", and that same row is
-// what makes the arithmetic tight: the single-instance lock holds one
-// connection for the whole process lifetime, the ground-truth rotator's leader
-// election holds another once acquired, and the lifecycle reaper borrows one
-// per tick. At pool_max_conns=2 on a serving daemon exactly one connection is
-// left — a hold would take it and the guarded work would then block on Acquire
-// with nothing to wait for. Below the threshold this reports
-// ErrAdvisoryLockNoCapacity instead, and the caller audits it and proceeds
-// unlocked: a 2-connection deployment is left exactly as unserialized as it
-// was before this lock existed — on the record — rather than wedged by it.
-//
-// A snapshot, and racy by nature — another goroutine may take the connection a
-// microsecond later. That is acceptable only because of the two guards around
-// it: advisoryLockGate caps this process's own holds at one, so the check never
-// races its own siblings, and advisoryLockAcquireWait bounds the loser of any
-// other race to a quarter second.
+// A racy snapshot, acceptable only because of the two guards around it:
+// advisoryLockGate caps this process at one hold (so the check never races its
+// own siblings), and advisoryLockAcquireWait bounds any other race to 250ms.
 const advisoryLockFreeConnsNeeded = 2
 
 // advisoryLockGate caps a PROCESS at one keyed-lock hold at a time, so the
-// connections this pins never scale with sign-in concurrency: one, or none,
-// whatever the traffic.
-//
-// It is about CONNECTIONS, not keys, which is why it is one slot shared by
-// every key rather than one slot per key. Different people's sign-ins fold to
-// different objids and never contend on the lock itself, so before this gate
-// existed N simultaneous sign-ins pinned N connections and starved the very
-// queries they were guarding: at pool_max_conns=3 two people were enough to
-// wedge every database-backed request in the daemon, not just their own.
-// Cross-replica correctness is untouched — the database lock is still what
-// serializes two wardynd instances, and this only decides how many of THIS
-// process's goroutines may hold one at a time.
-//
-// Waiting here holds nothing but a channel slot, which is the whole point: the
-// shape it replaces queued on the database while pinning a connection. Callers
-// must not take a keyed lock re-entrantly — one goroutine holding the slot and
-// asking for it again would wait out its own budget. Nothing does: the sign-in
-// launch and the credential capture each take it exactly once, and the
-// capture's other lock (api.lockAWSSSOOwner) is an in-process mutex on a
-// different key, always taken second.
+// connections it pins never scale with sign-in concurrency. It gates
+// CONNECTIONS, not keys — one slot shared by every key — because before this
+// existed, N simultaneous sign-ins (different objids, no contention on the
+// lock itself) pinned N connections and starved the very queries they
+// guarded: at pool_max_conns=3, two people wedged the whole daemon.
+// Cross-replica correctness is untouched (the database lock still serializes
+// two wardynd instances); this only bounds one process's own concurrency.
+// Never taken re-entrantly: the sign-in launch and the credential capture each
+// take it exactly once.
 var advisoryLockGate = make(chan struct{}, 1)
 
 // AdvisoryLockKeyed takes the SESSION-level TWO-argument advisory lock
-// (class, obj) on a connection borrowed from pool, waiting up to wait in TOTAL
-// and returning an error if it cannot. It is TryAdvisoryLock's blocking sibling
-// — same acquire and release shape — for work that must be SERIALIZED rather
-// than skipped.
+// (class, obj) on a connection borrowed from pool, waiting up to wait in
+// TOTAL. TryAdvisoryLock's blocking sibling, for work that must be SERIALIZED
+// rather than skipped.
 //
-// Every arm is bounded — the in-process slot (another hold did not finish
-// inside the budget), pool capacity (checked, then bounded at 250ms), and the
-// lock wait itself. ErrAdvisoryLockNoCapacity (the capacity check) is the one
-// error a caller may treat as "proceed unlocked"; every other one means the
-// work was not serialized and must not run.
+// Every arm is bounded (in-process slot, pool capacity checked then bounded at
+// 250ms, the lock wait itself). ErrAdvisoryLockNoCapacity is the one error a
+// caller may treat as "proceed unlocked"; every other one means the work was
+// not serialized and must not run. Pins exactly one pool connection for one
+// hold, at most one per process (advisoryLockGate).
 //
-// WHAT IT PINS, plainly: exactly one pool connection, for the duration of one
-// hold, and at most one per process at any moment (advisoryLockGate). None at
-// all when the pool cannot spare advisoryLockFreeConnsNeeded.
+// SET LOCAL lock_timeout scopes server-side to a short transaction (so it
+// never leaks onto the pooled connection), but the LOCK itself is
+// session-level and outlives that commit — the caller's guarded work is
+// several independent statements after this returns, which a
+// transaction-scoped lock could not cover. A lock-wait timeout fires with the
+// distinguishable SQLSTATE 55P03 (AuditChainLockTimeout's note).
 //
-// The lock wait is ALSO enforced server-side by lock_timeout, which fires only
-// on a lock WAIT (never on a slow-but-progressing statement) and reports the
-// distinguishable SQLSTATE 55P03; AuditChainLockTimeout's note carries the
-// measurement. SET LOCAL is transaction-scoped, so the acquire runs inside a
-// short transaction for the sole purpose of scoping that setting — nothing
-// leaks onto the pooled connection. The LOCK is session-level and therefore
-// outlives the commit, which is the whole point: the caller's guarded work is
-// several independent statements AFTER this returns, and a transaction-scoped
-// lock could not cover them.
-//
-// Call the returned release (deferred, on every path) to unlock, hand the
+// Call the returned release (deferred, every path) to unlock, hand the
 // connection back and free the in-process slot — skipping it strands both for
 // the life of the process. Only for work of BOUNDED duration.
 func AdvisoryLockKeyed(ctx context.Context, pool *pgxpool.Pool, class, obj int32, wait time.Duration) (release func(), err error) {
@@ -187,9 +140,8 @@ func AdvisoryLockKeyed(ctx context.Context, pool *pgxpool.Pool, class, obj int32
 		return nil, fmt.Errorf("db: acquire advisory lock conn: %w", err)
 	}
 	unlock := func() {
-		// Unlock on a background context: ctx is typically cancelled at shutdown,
-		// exactly when releasing matters most. Best-effort — the lock also dies
-		// with the session when the conn is finally closed.
+		// Background context: ctx is typically cancelled at shutdown, exactly
+		// when releasing matters most (best-effort; also dies with the conn).
 		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, class, obj) //nolint:errcheck // best-effort release
 		conn.Release()
 		ungate()
@@ -200,8 +152,8 @@ func AdvisoryLockKeyed(ctx context.Context, pool *pgxpool.Pool, class, obj int32
 		ungate()
 		return nil, fmt.Errorf("db: begin advisory lock tx: %w", err)
 	}
-	// SET takes no bind parameters, so the value is formatted in — an integer
-	// derived from the caller's duration, never caller text.
+	// SET takes no bind parameters; the value formatted in is an integer
+	// derived from wait, never caller text.
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, wait.Milliseconds())); err != nil {
 		tx.Rollback(ctx) //nolint:errcheck // the conn is released either way
 		conn.Release()

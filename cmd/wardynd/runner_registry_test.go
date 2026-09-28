@@ -12,10 +12,12 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
 // rrFlags is the minimum bootFlags buildRunnerFromFlags and componentsInfo
@@ -55,6 +57,43 @@ func TestBuildRunnerFromFlags_UnknownFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `-runner "bogus"`) || !strings.Contains(err.Error(), "not registered") {
 		t.Fatalf("want fail-closed registry-miss error naming -runner, got: %v", err)
+	}
+}
+
+// TestBuildRunnerFromFlags_RecordFollowsRecordingStore is the #1113
+// boot-level pin: WARDYN_RECORDING_STORE (*f.recordingSel) must reach the
+// substrate's registration Deps.Record — the boundary a driver's register.go
+// reads to build its own Config.Record (internal/runner/k8s and
+// internal/runner/docker's buildConfig, each pinned separately by their own
+// register_test.go). A spy substrate captures the Deps buildRunnerFromFlags
+// actually passes, so this test needs no live cluster or daemon and holds
+// tag-free.
+func TestBuildRunnerFromFlags_RecordFollowsRecordingStore(t *testing.T) {
+	const spyName = "recordspy-1113"
+	spyErr := errors.New("recordspy: refuses to construct (captures Deps only)")
+	var got substrate.Deps
+	substrate.Register(spyName, func(d substrate.Deps) (substrate.Substrate, error) {
+		got = d
+		return nil, spyErr
+	})
+
+	for _, tt := range []struct {
+		store string
+		want  bool
+	}{
+		{"off", false},
+		{"pg", true},
+		{"fs", true},
+	} {
+		store := tt.store
+		f := rrFlags(spyName)
+		f.recordingSel = &store
+		if _, _, err := buildRunnerFromFlags(f, nil, nil); !errors.Is(err, spyErr) {
+			t.Fatalf("recording store %q: buildRunnerFromFlags error = %v, want the spy's refusal (proves the spy was actually reached)", store, err)
+		}
+		if got.Record != tt.want {
+			t.Errorf("recording store %q: Deps.Record = %v, want %v", store, got.Record, tt.want)
+		}
 	}
 }
 

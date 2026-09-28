@@ -79,6 +79,12 @@ const (
 	maxPushHoldKeys = 256
 )
 
+// pushHoldSecond is what one of push_rules.hold_seconds lasts. A var (not a
+// const) purely so a test that waits for a push hold to run out need not wait
+// a real second; TestPushHoldSecond_ProductionValueUnchanged pins it, and
+// TestPushHoldRefusesOnTimeout still waits the real one.
+var pushHoldSecond = time.Second
+
 // pushTarget is what a held push's approval names besides its paths and
 // commits: the repository as the run's grant names it, and the credential the
 // forwarded push authenticates with.

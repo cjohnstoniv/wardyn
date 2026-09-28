@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_ReclampRunLimits pins migration 0086 through the re-clamp surface:
+// TestPG_ReclampRunLimits pins migration 0095 through the re-clamp surface:
 // which runs the sweep lists, the write landing only against the limits, end
 // and wait read (never on a kept or terminal run), end_tightened_at reading
 // back, and a person moving the end clearing it.
@@ -101,11 +101,11 @@ func TestPG_ReclampRunLimits(t *testing.T) {
 	}
 
 	// A PATCH decided against the limits before the re-clamp cannot land.
-	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, limits, &cut, 600, &end, 600); err != nil || ok {
+	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, limits, &cut, 600, &end, 600, nil); err != nil || ok {
 		t.Errorf("PATCH against the old limits = %v, %v; want false", ok, err)
 	}
 	sooner := now.Add(24 * time.Hour)
-	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, tight, &cut, 600, &sooner, 600); err != nil || !ok {
+	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, tight, &cut, 600, &sooner, 600, nil); err != nil || !ok {
 		t.Fatalf("PATCH against the current limits = %v, %v; want true", ok, err)
 	}
 	if got, _ := pg.GetRun(ctx, live.ID); got.EndTightenedAt != nil {

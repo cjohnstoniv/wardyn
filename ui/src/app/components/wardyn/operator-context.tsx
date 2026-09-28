@@ -102,6 +102,13 @@ export interface MeIdentity {
   // tiers above).
   userDrive: UserDriveMeta;
 
+  // 0.8 (UT-7a) — the caller's OWN user type, from GET /me's `user_type`.
+  // Rides the shell's one /me read so the user's Getting started page needs
+  // no second round trip. null for a caller with none — the admin token,
+  // local mode, or a pre-0.8 daemon — which every consumer treats as "no
+  // type to introduce", never a guess at Standard user.
+  userType: UserTypeMeta | null;
+
   // #162 — the network-confinement posture ConfinementChip (primitives.tsx)
   // and ConfinementPostureBanner (confinement-posture.tsx) both read.
   //
@@ -175,6 +182,13 @@ export interface UserDriveMeta {
 
 const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "", unavailable: "" };
 
+// 0.8 (UT-7a) — see MeIdentity.userType.
+export interface UserTypeMeta {
+  id: string;
+  name: string;
+  description?: string;
+}
+
 // See MeIdentity.confinementPosture for the fail-quiet rationale.
 export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "unknown" | "";
 
@@ -188,6 +202,7 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   principal: "",
   memberLocalDirRoot: null,
   userDrive: NO_USER_DRIVE,
+  userType: null,
   confinementPosture: "",
   demoVideoBaseUrl: undefined,
 };
@@ -203,6 +218,7 @@ export function OperatorProvider({
   userDrive = null,
   userDriveDeniedByProfile = "",
   userDriveUnavailable = "",
+  userType = null,
   confinementPosture = "",
   demoVideoBaseUrl = undefined,
   children,
@@ -224,6 +240,9 @@ export function OperatorProvider({
    *  Defaults to "" ("nothing is wrong") so every existing caller that passes
    *  only the first two keeps today's behaviour. */
   userDriveUnavailable?: string;
+  /** GET /me's `user_type` — see MeIdentity.userType. Optional, defaulting
+   *  null, so every existing caller keeps today's behaviour. */
+  userType?: UserTypeMeta | null;
   /** #162 — see MeIdentity.confinementPosture above. Optional, defaulting ""
    *  (no posture reported), so every existing caller keeps today's silent
    *  behaviour. */
@@ -255,10 +274,11 @@ export function OperatorProvider({
       principal,
       memberLocalDirRoot,
       userDrive: drive,
+      userType,
       confinementPosture,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, principal, memberLocalDirRoot, drive, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, principal, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -266,6 +286,11 @@ export function OperatorProvider({
 // The member's local_dir root constraint label — see MeIdentity.memberLocalDirRoot above.
 export function useMemberLocalDirRoot(): string | null {
   return React.useContext(MeIdentityContext).memberLocalDirRoot;
+}
+
+// The caller's own user type — see MeIdentity.userType above.
+export function useUserType(): UserTypeMeta | null {
+  return React.useContext(MeIdentityContext).userType;
 }
 
 // This caller's own drive and the profile door beside it — see

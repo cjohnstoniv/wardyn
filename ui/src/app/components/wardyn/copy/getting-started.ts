@@ -8,7 +8,19 @@
 // the sole reader.
 export const MEMBER_GETTING_STARTED = {
   TITLE: "Getting started",
-  SUBTITLE: "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.",
+  // UT-7a: introduces the caller's own user type by name (packet B's "You're
+  // set up as a Portfolio manager: {description}", without the article — a
+  // type name is admin-typed, and "a Engineer" reads wrong). name/description
+  // are the SESSION's stamped type (health.ts's Me.user_type); every SSO
+  // sign-in stamps one, Standard user at the least. undefined only for a
+  // caller with none (the admin token, local mode), which keeps the original
+  // sentence. An empty description reads the same as none, and a trailing
+  // period on one is dropped so the sentence never ends "..".
+  SUBTITLE: (typeName?: string, typeDescription?: string): string => {
+    if (!typeName) return "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.";
+    const about = typeDescription?.trim().replace(/\.+$/, "");
+    return `You're set up as ${typeName}${about ? `: ${about}` : ""}. Your admin set the ceiling; you run inside it.`;
+  },
   UNREACHABLE_TITLE: "Couldn't reach Wardyn.",
   UNREACHABLE_BODY:
     "Nothing below is marked done until it can be checked — a broken connection is not a finished step.",
@@ -78,20 +90,8 @@ export const RUNS_MEMBER_EMPTY = {
   GUIDE: MEMBER_GETTING_STARTED.TITLE,
 } as const;
 
-// #160 — TitleGroup's second chip row (runs/title-group.tsx): what a group's
-// runs are waiting on, one counted chip per reason instead of a bare count.
-// `n` is always the GROUP's count for that reason — CONSOLE-RULES §10's "say
-// how many", never "some runs need attention".
-export const RUNS_WAIT = {
-  HELD: (n: number) => `${n} awaiting confirmation`,
-  REAUTH: (n: number) => `${n} awaiting AWS sign-in`,
-  STARTING: (n: number) => `${n} waiting to start`,
-  // Absent while anything else waits; a single UNCOUNTED chip, and only once
-  // the approvals fetch has resolved enough to know the group is really clean.
-  NONE: "Nothing waiting",
-  // The pre-fetch window: nothing derived from the approvals fetch may paint
-  // before it resolves, so this stands alone rather than reading as "nothing
-  // is held" (the empty-Map default's lie).
-  CHECKING: "Checking…",
-} as const;
+// RUNS_WAIT (title-group.tsx's per-group wait chip) was removed here —
+// #1197 L3 review F12: title-group.tsx is gone (the Runs landing page
+// groups by need then time, not by title), and it was RUNS_WAIT's only
+// consumer.
 

@@ -21,8 +21,10 @@
 // The listener has exactly ONE authentication mechanism and never falls
 // through to the console's session cookie or admin bearer:
 //
-//	POST /runs/{id}/attach-ticket  (existing, owner-or-admin, single-use, 30s)
-//	  → GET <ui-origin>/__wardyn/enter?run=&app=&ticket=
+//	POST /runs/{id}/attach/ticket  (existing, owner-or-admin, single-use, 30s)
+//	  → POST <ui-origin>/__wardyn/bind (console fetch; binds the ticket to
+//	    this browser, uigateway_bind.go)
+//	  → POST <ui-origin>/__wardyn/enter (form: run, app, ticket; or the GET form)
 //	  → cookie wardyn_ui_sess (HttpOnly, SameSite=Lax, Path=/r/<run-id>/<app>/)
 //	  → 302 /r/<run-id>/<app>/<app path>  … every later request rides the cookie
 //
@@ -31,9 +33,12 @@
 //
 // Cookies are not port-scoped, so a shared hostname would let sandbox content
 // see console cookies and vice versa: every forwarded request has ALL wardyn_*
-// cookies plus Authorization and ?ticket stripped, and every response has
-// Set-Cookie: wardyn_* dropped (cookie tossing). Both directions are pinned by
-// tests in uigateway_test.go.
+// cookies plus Authorization and ?ticket stripped (and any other cookie the
+// operator's UICookiePolicy strips), and every response has Set-Cookie:
+// wardyn_* dropped (cookie tossing), along with any Set-Cookie carrying a
+// Domain attribute or no name (uiSetCookieAllowed, uigateway_cookies.go). Both
+// directions are pinned by tests in uigateway_test.go and
+// uigateway_cookies_test.go.
 //
 // No content is recorded. ui.authorize/ui.start/ui.open/ui.close say that a human
 // opened and closed an app; there is no keystroke, screen or page capture on
@@ -107,6 +112,11 @@ const (
 	// command string in policy — the policy names an app, the IMAGE decides
 	// what that means.
 	uiLauncherPrefix = "/usr/local/bin/wardyn-ui-"
+	// maxUIEnterFormBytes bounds the POST hand-off's form body (run uuid, app
+	// name, ticket token — a few hundred bytes at most), the same
+	// http.MaxBytesReader pattern the rest of internal/api uses for small
+	// bodies (e.g. harnesscred_launch.go).
+	maxUIEnterFormBytes = 4 << 10
 )
 
 // uiGatewayEnabled reports whether the gateway is configured. Empty listen
@@ -131,17 +141,27 @@ func (s *Server) uiSandboxHealthz() map[string]any {
 	return map[string]any{
 		"enabled":            true,
 		"enter_url_template": s.uiEnterURLTemplate(),
+		// enter_post_url is enter_url_template's base with no query string at
+		// all: the console builds an auto-submitted POST form against it
+		// (run/app/ticket as form fields) so the ticket never lands in a URL,
+		// browser history, or a reverse-proxy access log.
+		"enter_post_url": s.uiEnterBaseURL(),
 		// host_mode says whether each run gets its own origin
 		// (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) or every run shares one — the
 		// residual an operator has to know about, published rather than buried.
 		"host_mode": s.cfg.UIOriginTemplate != "",
+		// bind_url is the console's pre-enter fetch (uigateway_bind.go): enter
+		// refuses a ticket this browser did not bind first. Same {run}
+		// placeholder rule as enter_post_url in host mode.
+		"bind_url": s.uiBindURL(),
 	}
 }
 
-// uiEnterURLTemplate builds the enter URL with {run}/{app}/{ticket}
-// placeholders. In host mode the origin template already carries {run}; in
-// path mode the advertised base is shared by every run.
-func (s *Server) uiEnterURLTemplate() string {
+// uiEnterBaseURL builds the enter endpoint's URL with no query string, the
+// shared base for both the GET template and the POST hand-off. In host mode
+// the origin template already carries {run}; in path mode the advertised base
+// is shared by every run.
+func (s *Server) uiEnterBaseURL() string {
 	base := s.cfg.UIOriginTemplate
 	if base == "" {
 		base = s.cfg.UIAdvertiseURL
@@ -151,7 +171,13 @@ func (s *Server) uiEnterURLTemplate() string {
 		// second flag; boot warns that this is almost never externally right.
 		base = "http://" + s.cfg.UIListenAddr
 	}
-	return strings.TrimSuffix(base, "/") + uiEnterPath + "?run={run}&app={app}&ticket={ticket}"
+	return strings.TrimSuffix(base, "/") + s.uiBasePath() + uiEnterPath
+}
+
+// uiEnterURLTemplate builds the enter URL with {run}/{app}/{ticket}
+// placeholders, for the GET form of the hand-off (kept for compatibility).
+func (s *Server) uiEnterURLTemplate() string {
+	return s.uiEnterBaseURL() + "?run={run}&app={app}&ticket={ticket}"
 }
 
 // UIGatewayHandler returns the gateway's http.Handler, or nil when the gateway
@@ -169,7 +195,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 	if !s.uiGatewayEnabled() {
 		return nil
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return underBasePath(s.uiBasePath(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Referrer-Policy on EVERY response: the enter URL carries a ticket in
 		// its query, and a referrer leak would hand it to whatever the app
 		// links to. No CSP/X-Frame-Options here — this origin serves the
@@ -179,38 +205,81 @@ func (s *Server) UIGatewayHandler() http.Handler {
 		switch {
 		case r.URL.Path == uiEnterPath:
 			s.handleUIEnter(w, r)
+		case r.URL.Path == uiBindPath:
+			s.handleUIBind(w, r)
 		case strings.HasPrefix(r.URL.Path, uiRunPrefix):
 			s.handleUIRelay(w, r)
 		default:
 			writeError(w, http.StatusNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		}
-	})
+	}))
 }
 
 // enter: redeem the ticket, re-check, set the cookie
 
-// handleUIEnter is the ticket handoff:
+// handleUIEnter is the ticket handoff, in two forms that share one path:
 //
-//	GET /__wardyn/enter?run=<uuid>&app=<name>&ticket=<token>
+//	GET  /__wardyn/enter?run=<uuid>&app=<name>&ticket=<token>   (compatibility)
+//	POST /__wardyn/enter   body: run=<uuid>&app=<name>&ticket=<token>
+//	     (application/x-www-form-urlencoded)
 //
-// It consumes the single-use attach ticket (the SAME one the web terminal
-// uses — no second ticket type), then RE-CHECKS everything the ticket cannot
+// Both consume the single-use attach ticket (the SAME one the web terminal
+// uses — no second ticket type), then RE-CHECK everything the ticket cannot
 // prove on its own against freshly-loaded state: owner-or-admin for THIS run
 // (the ticket's stamped role/principal, as handleAttachWS does), the run still
 // RUNNING with a sandbox, and the app actually declared in the run's EFFECTIVE
-// policy. Only then does a cookie exist.
+// policy. Only then does a cookie exist. uiEnterCommon holds that one path;
+// this function only extracts the three fields from the right place and picks
+// the redirect status (302 for GET, 303 for POST — a POST must not be
+// silently retried as a GET against the relay path).
+//
+// CSRF, in two halves. The ticket stops a page that does not hold a
+// freshly-minted, still-valid ticket for THIS run from forging a session for
+// someone ELSE's run — it is single-use, ~30s-TTL, bound to one run and one
+// principal, and mintable only by an already-authenticated owner-or-admin call
+// to POST /runs/{id}/attach/ticket (behind the console's own CSRF guard).
+// csrf.go (this package) says explicitly that its same-origin guard does not,
+// and is not meant to, cover this listener.
+//
+// The ticket alone does NOT stop login CSRF: a user minting a ticket for their
+// OWN run and driving a victim's browser through this hand-off, by a link or
+// an auto-submitted form, onto a session for the attacker's app. The browser
+// binding does (uigateway_bind.go): both forms refuse a ticket this browser
+// did not bind from the console first, before the ticket is spent.
 func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		q := r.URL.Query()
+		s.uiEnterCommon(w, r, q.Get("run"), q.Get("app"), q.Get("ticket"), http.StatusFound)
+	case http.MethodPost:
+		// No mixed mode: a ticket in the query on a POST is refused outright
+		// rather than silently accepted, so there is exactly one place a caller
+		// can put it and exactly one place it can leak from.
+		if r.URL.Query().Has("ticket") {
+			writeError(w, http.StatusBadRequest, "the ticket must be a form field, not a query parameter, on POST")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxUIEnterFormBytes)
+		if err := r.ParseForm(); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid form body")
+			return
+		}
+		s.uiEnterCommon(w, r, r.PostForm.Get("run"), r.PostForm.Get("app"), r.PostForm.Get("ticket"), http.StatusSeeOther)
+	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
-	q := r.URL.Query()
-	runID, err := uuid.Parse(q.Get("run"))
+}
+
+// uiEnterCommon is the one consume-then-re-check path GET and POST both run;
+// see handleUIEnter. redirectStatus is 302 for the GET form and 303 for the
+// POST form (a POST hand-off must not be replayable as a GET against the
+// relay path by a browser that retries the redirect with the original method).
+func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, app, ticket string, redirectStatus int) {
+	runID, err := uuid.Parse(runRaw)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or missing run id")
 		return
 	}
-	app := q.Get("app")
 	// Host binding (host mode only): the cookie about to be set is scoped to
 	// THIS origin, so an enter served on the wrong host would mint a session
 	// the run's own origin never sees — and would put one run's cookie on
@@ -218,11 +287,20 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
 		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "wrong host for run", "host": r.Host})
-		writeError(w, http.StatusForbidden, "this run's UI apps are served on a different host")
+		writeError(w, http.StatusForbidden, "This run's UI apps are served on a different host")
 		return
 	}
 
-	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, q.Get("ticket"), runID, s.cfg.Now())
+	// Checked before the ticket is consumed, so an unbound hand-off never
+	// reaches the store or spends a ticket. The refusal is the bad-ticket one,
+	// byte for byte; only the audit reason says which it was.
+	if !s.uiTicketBound(w, r, ticket) {
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
+			map[string]any{"reason": "ticket not bound to this browser"})
+		writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
+		return
+	}
+	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, ticket, runID, s.cfg.Now())
 	if err != nil {
 		// A store failure is not a bad ticket (attach_ticket.go's own rule):
 		// say so, log it, and never leak the database error to a caller who has
@@ -248,7 +326,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// authorization signal, exactly as in handleAttachWS.
 	if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
-			map[string]any{"reason": "not the run owner"})
+			ta.withVia(map[string]any{"reason": "not the run owner"}))
 		writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
 		return
 	}
@@ -259,7 +337,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// A kept run is RUNNING with its agent stopped: nothing to open.
 	if runIsKept(run) {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
-			map[string]any{"reason": "run has ended"})
+			ta.withVia(map[string]any{"reason": "run has ended"}))
 		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
 		return
 	}
@@ -279,7 +357,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
-			map[string]any{"reason": "app not declared in the run's policy ui_apps"})
+			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
 		writeError(w, http.StatusForbidden, "no UI app named "+strconv.Quote(app)+" is declared in this run's policy ui_apps")
 		return
 	}
@@ -293,15 +371,15 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
 		Value:    s.encodeUISession(sess),
-		Path:     uiCookiePath(runID, declared.Name),
+		Path:     s.uiBasePath() + uiCookiePath(runID, declared.Name),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.cfg.OIDCSecureCookies,
 		Expires:  now.Add(ttl),
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		map[string]any{"app": declared.Name, "port": declared.Port})
-	http.Redirect(w, r, uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
+		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))
+	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
 }
 
 // uiRunOrigin returns the host this run's apps must be served on in HOST mode
@@ -361,8 +439,28 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	_ = s.markPresent(r.Context(), runID, types.ActorHuman, sess.Principal, "presence")
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	s.uiReverseProxy().ServeHTTP(w, r.WithContext(ctx))
+	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
 }
+
+// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say).
+// ReverseProxy copies an interim response's headers straight onto the writer
+// and never runs ModifyResponse for it, so without this uiStripOutbound's
+// rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and
+// hijack reachable through http.ResponseController.
+type uiInterimWriter struct{ http.ResponseWriter }
+
+func (w uiInterimWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 {
+		uiFilterSetCookie(w.Header())
+	} else {
+		// ReverseProxy clears the header map after each 1xx, which takes the
+		// gateway's own Referrer-Policy with it; put it back on the final response.
+		w.Header().Set("Referrer-Policy", "no-referrer")
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
 // transport) on first use. Per-request state — which run, which port — rides
@@ -372,7 +470,7 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 	s.uiProxyOnce.Do(func() {
 		s.uiProxy = &httputil.ReverseProxy{
 			Rewrite:        s.uiRewrite,
-			ModifyResponse: uiStripOutbound,
+			ModifyResponse: s.uiStripOutbound,
 			ErrorHandler:   uiErrorHandler,
 			// Flush immediately: the relayed apps are interactive (an editor's
 			// long-poll, a dev server's HMR stream), and a buffered write on a
@@ -418,7 +516,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	// The app sees a plain loopback Host, which is what it is bound to and what
 	// its own CSRF/host checks expect — never the run id we dial by.
 	pr.Out.Host = "localhost:" + strconv.Itoa(sess.Port)
-	uiStripInbound(pr.Out)
+	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
 }
 
 // uiStripInbound is the sandbox-ward half of the header hygiene. Cookies are
@@ -426,8 +524,9 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 // hostname — including the console's session on a shared-host deployment — to
 // a request bound for sandbox-authored code. They come off here, along with
 // Authorization (same reason) and any ?ticket (single-use, but a ticket in an
-// app's access log is still a ticket in a log).
-func uiStripInbound(out *http.Request) {
+// app's access log is still a ticket in a log). Every other cookie is the
+// operator's policy (UICookiePolicy; the default forwards it).
+func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	out.Header.Del("Authorization")
 	out.Header.Del("Proxy-Authorization")
 	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
@@ -441,8 +540,13 @@ func uiStripInbound(out *http.Request) {
 		kept := make([]string, 0, strings.Count(raw, ";")+1)
 		for _, seg := range strings.Split(raw, ";") {
 			seg = strings.TrimSpace(seg)
-			name, _, _ := strings.Cut(seg, "=")
-			if seg != "" && !uiIsWardynCookie(name) {
+			// A segment with no '=' is a NAMELESS cookie (RFC 6265bis sends
+			// just its value), so it matches only what the policy says of "".
+			name, _, ok := strings.Cut(seg, "=")
+			if !ok {
+				name = ""
+			}
+			if seg != "" && policy.forwards(name) {
 				kept = append(kept, seg)
 			}
 		}
@@ -461,32 +565,71 @@ func uiStripInbound(out *http.Request) {
 // uiStripOutbound is the browser-ward half: an app in the sandbox must not be
 // able to set, overwrite or delete a wardyn_* cookie in the operator's browser
 // (cookie tossing — a sandbox-set wardyn_ui_sess or console session cookie
-// would be an authentication attack, not a rendering quirk).
-func uiStripOutbound(resp *http.Response) error {
-	raw := resp.Header.Values("Set-Cookie")
-	if len(raw) == 0 {
-		return nil
-	}
-	kept := make([]string, 0, len(raw))
-	for _, sc := range raw {
-		name, _, _ := strings.Cut(sc, "=")
-		if !uiIsWardynCookie(strings.TrimSpace(name)) {
-			kept = append(kept, sc)
-		}
-	}
-	resp.Header.Del("Set-Cookie")
-	for _, sc := range kept {
-		resp.Header.Add("Set-Cookie", sc)
+// would be an authentication attack, not a rendering quirk), nor set one that
+// escapes its own host (uiSetCookieAllowed), nor register a service worker
+// that controls more than its own app (uiConfineServiceWorker).
+func (s *Server) uiStripOutbound(resp *http.Response) error {
+	uiFilterSetCookie(resp.Header)
+	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
+		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
+	} else {
+		resp.Header.Del("Service-Worker-Allowed")
 	}
 	return nil
+}
+
+// uiConfineServiceWorker caps the scope of any service worker an app registers
+// at the app's own relay prefix. In path mode every run shares one origin, and
+// a worker registered at "/" would see every later request to it: other runs'
+// apps and the enter hand-off itself.
+//
+// The browser caps a registration's scope at the script's own directory, which
+// through this relay is always inside the app's prefix, unless the script's
+// response carries Service-Worker-Allowed. So the header is the one way out,
+// and the relay owns it: it is removed from every response, and on the
+// worker-script fetch itself (Service-Worker: script, sent by the browser) it
+// is set to the app's own prefix. That keeps an app that registers its worker
+// at its own root working (editors do), and nothing it sends can widen it. The
+// browser enforces the cap on the script response, so it holds whatever the
+// app's pages do.
+//
+// Rejected: refusing worker scripts outright, which breaks editors whose
+// webviews need one; and a CSP worker-src on the app's pages, which rides a
+// document the app writes, also governs the dedicated workers editors depend
+// on, and does not see the scope a registration asks for.
+func uiConfineServiceWorker(req *http.Request, h http.Header, prefix string) {
+	h.Del("Service-Worker-Allowed")
+	if req.Header.Get("Service-Worker") == "script" {
+		h.Set("Service-Worker-Allowed", prefix)
+	}
+}
+
+// uiFilterSetCookie keeps only the Set-Cookie values uiSetCookieAllowed passes.
+func uiFilterSetCookie(h http.Header) {
+	raw := h.Values("Set-Cookie")
+	if len(raw) == 0 {
+		return
+	}
+	h.Del("Set-Cookie")
+	for _, sc := range raw {
+		if uiSetCookieAllowed(sc) {
+			h.Add("Set-Cookie", sc)
+		}
+	}
 }
 
 // uiIsWardynCookie matches the reserved cookie namespace case-insensitively.
 // Browsers treat cookie names case-sensitively, so a "WARDYN_" cookie is a
 // different cookie and harmless — stripping it anyway costs nothing and
-// removes a class of near-miss confusion.
+// removes a class of near-miss confusion. The __Host- and __Secure- spellings
+// are the same namespace: under secure cookies the console's own session is
+// __Host-wardyn_session (oidc.CookieName), and on a shared hostname the
+// browser sends it here too.
 func uiIsWardynCookie(name string) bool {
-	return strings.HasPrefix(strings.ToLower(name), uiCookiePrefix)
+	n := strings.ToLower(name)
+	n = strings.TrimPrefix(n, "__host-")
+	n = strings.TrimPrefix(n, "__secure-")
+	return strings.HasPrefix(n, uiCookiePrefix)
 }
 
 // dial: one exec per connection

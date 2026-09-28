@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -79,7 +80,7 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 //     enrolment token is exactly that kind of long-lived, replayable
 //     credential, dispatched with a request to orgURL, and a plaintext URL
 //     would send it in cleartext to any peer on the path. allowPlaintextListen
-//     (WARDYN_ALLOW_PLAINTEXT_LISTEN) is the SAME override refusePlaintextListen
+//     (WARDYN_LISTEN_ALLOW_PLAINTEXT) is the SAME override refusePlaintextListen
 //     already uses for wardynd's own listen address — one escape hatch, not a
 //     second one to keep in sync.
 //
@@ -109,7 +110,7 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 		return fmt.Errorf("refusing to start: WARDYN_ORG_URL %q is not https:// and its host is not loopback — "+
 			"the device credential travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
 			"sends that credential in cleartext to any peer on the path; use https://, point WARDYN_ORG_URL at a "+
-			"loopback host for local testing, or set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", orgURL)
+			"loopback host for local testing, or set WARDYN_LISTEN_ALLOW_PLAINTEXT=true to override", orgURL)
 	}
 	return nil
 }
@@ -176,7 +177,7 @@ func validateSSOOnlyPosture(ssoOnly, oidcConfigured bool, adminToken string, loc
 // empty operator allowlist is not a default — it is an ambiguity in which every
 // person the IdP lets in silently holds the admin token's power. Refuse, with
 // WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST as the explicit override (the
-// WARDYN_ALLOW_PLAINTEXT_LISTEN precedent). UNCONDITIONAL — not conditioned on
+// WARDYN_LISTEN_ALLOW_PLAINTEXT precedent). UNCONDITIONAL — not conditioned on
 // the bind address the way the plaintext rule is: a loopback bind bounds who can
 // reach the port, not who the IdP authenticates.
 //
@@ -339,10 +340,13 @@ func plural(n int, one, many string) string {
 // hand EVERY run the same host, silently turning per-run isolation back into
 // the shared origin it exists to replace.
 //
+// The inbound cookie policy must parse (api.ParseUICookiePolicy): a typo there
+// would otherwise boot with a policy the operator did not write.
+//
 // The TLS posture is taken rather than re-derived so this listener answers to
 // the SAME plaintext refusal the console does (refusePlaintextListen): the
 // relay session cookie is a bearer credential, and it travels on this address.
-func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string, posture tlsPosture, allowPlaintextListen bool) error {
+func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate, stripCookies string, posture tlsPosture, allowPlaintextListen bool) error {
 	if uiListen == "" {
 		return nil // off: nothing to validate, no listener, no new surface
 	}
@@ -363,7 +367,18 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 			"every run would share one origin while the deployment claims per-run isolation; "+
 			"use e.g. \"https://run-{run}.ui.example.com\", or unset it for the documented shared-origin mode", originTemplate)
 	}
+	if _, err := api.ParseUICookiePolicy(stripCookies); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
 	return nil
+}
+
+// uiCookiePolicy is WARDYN_UI_SANDBOX_STRIP_COOKIES for api.Config. The error
+// is dropped because validateUISandboxConfig already refused boot on it; with
+// the gateway off the policy is never read.
+func uiCookiePolicy(raw string) api.UICookiePolicy {
+	p, _ := api.ParseUICookiePolicy(raw)
+	return p
 }
 
 // validateBootPosture runs the flag-only posture refusals (UI-sandbox gateway,
@@ -383,7 +398,10 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 // failed OIDC discovery leaves nil), and neither exists this early in boot.
 // It is still called directly, at its own later point in run().
 func validateBootPosture(f *bootFlags, posture tlsPosture) error {
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}
 	return validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen)

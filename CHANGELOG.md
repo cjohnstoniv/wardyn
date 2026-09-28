@@ -8,8 +8,401 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **`git_pat`/`ssh_key` grants refuse a `wardyn-provider-*` secret name at write time (#1048).**
+  Those two kinds return a stored secret's raw value into the sandbox, so they need the same
+  wider reserved-name guard `env_secret`/`llm_inspection` already used (`nameSinkReservedSecret`)
+  — they were checking the narrower `sinkReservedSecret` instead, which does not cover a
+  per-person model-provider `-key` name (deliberately, for the `api_key` sink's own legitimate use
+  of it). The broker's own mint guard (`reservedBrokerSecret`) already refused it, so nothing
+  leaked; a policy naming one used to fail at clone time inside the run instead of getting a 400
+  up front. `env_secret`'s `secret_name` and `llm_inspection.workspace_secret_names` now also
+  refuse a name that does not match the secret-name format (`secretNameRE`) at write time, instead
+  of silently resolving one fewer value at dispatch.
+
+### Added
+
+- **A trusted portal can manage runs for the person signed in to it (#1142).** A super admin
+  registers the portal (`POST /api/v1/admin/delegates`: its identity-provider client id and one
+  group); the portal then trades the person's own live identity-provider token for a ten-minute,
+  non-refreshable delegated token at `POST /api/v1/token` (RFC 8693 token exchange). The token
+  acts as the person at ordinary user reach — an admin gets no admin reach through it — on a fixed
+  set of run routes (create, preflight, list, read, extend, stop, attach ticket, `GET /me`); every
+  other route answers `403` `delegation_scope`. No impersonation; delegation is recorded as
+  delegation: every audit row it causes has the person as actor and the portal in `data.via`, each
+  exchange writes `delegation.exchange`, and a run it launches carries `created_via`. Revoking the
+  portal, or `POST /sessions/revoke` for the person, ends its tokens on their next request; runs it
+  launched keep running. Migration `0094_delegates` adds the `delegates` and `delegated_tokens`
+  tables, `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`; nothing that
+  worked before newly fails. See OPERATIONS.md, "Delegated run management (portals)".
+- **A run's title is now renameable, and no longer required to launch one (#1197 L2).**
+  `PATCH /runs/{id}/title` lets the run's owner change its title in any run state — owner only,
+  audited as `run.title.set` with the old and new values. New Run's Title field is optional and
+  prefills from the task's own first line (up to 80 characters, cut at a word boundary) until the
+  operator edits it by hand; the "Runs that share a title are grouped together" hint is gone, since
+  exact-title grouping is retired by the #1197 redesign. The run page gets a Rename control for the
+  owner, showing a "Renamed" toast and the new title in place, with no reload.
+
+- **Helm: `WARDYN_DAEMON_PROXY_SECRET` from an operator-managed Secret (#719).** New chart value
+  `daemonProxySecret.existingSecret` (+ `existingSecretKey`, `mountPath`, `defaultMode`) mounts a
+  Secret you manage yourself — never one this chart creates — read-only and points
+  `WARDYN_DAEMON_PROXY_SECRET` at the mounted file, the credentialed escape hatch for
+  `WARDYN_DAEMON_PROXY_URL`. Empty `existingSecret` (the default) renders no volume and no env —
+  byte-identical to before this existed. An `env.WARDYN_DAEMON_PROXY_SECRET` entry always overrides
+  (the Vault Agent / CSI path via `extraVolumes` instead). See the chart README, "Daemon egress
+  proxy".
+
+### Changed
+
+- **Settings' Host card is a compact, read-only barrier picker instead of the full Getting-started
+  matrix (#1200).** A new shared `TierPicker` component lists only the tiers this host has installed,
+  each with a one-line strength and an info popover, plus a "Compare barriers" dialog holding the full
+  table for reference — never the governance floor (that's stated in Governance, where it's set, and
+  in each person's own picker, where it binds). The card still shows the canon "No sandbox runner"
+  danger card and its fix line when nothing can launch, and the k8s Runner/Egress-containment rows on
+  a Kubernetes driver, exactly as the Getting-started funnel does. The Governance profile editor gains
+  an "Allowed barriers" control: one radio over the existing `min_confinement_class` ceiling field, so
+  an admin sets the floor without hand-editing the ceiling's JSON.
+- **New Run's Barrier control and member Getting-started's barrier summary now obey the caller's
+  governance ceiling (#1200), exactly where the server would enforce it — never an admin's inline
+  launch (never clamped) or an unassigned member's saved policy (not raised to the deployment
+  default).** A tier the ceiling forbids or the host can't build is dropped from the Barrier control
+  rather than shown disabled; one qualifying tier collapses to a decided row, worded "set by your
+  admin" only when the governance ceiling actually did the narrowing; none qualifying names the
+  requirement (reusing the same `/dev/kvm` reason Getting started's picker computes for Vault).
+- **The UI-sandbox gateway's enter hand-off gains a `POST` form, beside the existing `GET` (#1220).**
+  `POST <ui-origin>/__wardyn/enter` takes `run`/`app`/`ticket` as an
+  `application/x-www-form-urlencoded` body instead of a query string, runs the exact same
+  consume-then-re-check path as `GET` (owner-or-admin, `RUNNING`, kept-run `409`, the declared app),
+  sets the same `wardyn_ui_sess` cookie, and answers `303` to the relay path (`GET` still answers
+  `302`, unchanged). A ticket in the query string on a `POST` is refused outright — no mixed mode.
+  `/healthz`'s `ui_sandbox` block gains `enter_post_url` (the enter URL with no query string at all)
+  beside the existing `enter_url_template`. The console's run-detail **Open** button now submits a
+  hidden auto-submitted form built from `enter_post_url` instead of `window.open`-ing a URL, so the
+  single-use ticket never lands in a URL, browser history, or a reverse-proxy access log. `GET`
+  stays for compatibility.
+- **`_FILE` boot secrets now refuse a second trailing line ending (#720).** `WARDYN_PG_DSN_FILE`,
+  `WARDYN_AGE_KEY_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`,
+  `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+  and `WARDYN_PG_MIGRATE_DSN_FILE` (introduced in 0.7.12) trimmed exactly one trailing line ending
+  and kept everything else verbatim — including a second one, silently left on the end of the
+  value. A file that now ends in two newlines (or a newline plus a bare `\r`) refuses boot instead,
+  naming the var. **Upgrade note:** if a 0.7.12+ install's `_FILE` source ever picked up a doubled
+  trailing newline (e.g. a Vault Agent template appending one to a value that already ends in one),
+  it booted before and refuses now; trim the file to end in exactly one line ending.
+
+- **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
+  params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
+  (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,
+  `workspace` and `q` (capped at 400 bytes) — reorder and narrow the listing for the upcoming
+  home/runs redesign; with none of them present the endpoint answers exactly as before. `view=user`
+  now forces `owner=me` for EVERY caller, including an admin or security-operator token (previously
+  only a member was scoped). Two new response headers, `X-Wardyn-Hidden-Older` and
+  `X-Wardyn-Hidden-Killed`, report how
+  many rows the `ended_within` window and the 24h killed-run default hid. `GET /approvals` gains the
+  same opt-in `?view=user`, which scopes the queue to the caller's own runs' approvals for every
+  caller. Every `AgentRun` now carries `ended_at` (migration `0092_agent_runs_ended_at`), stamped by
+  the run's terminal state transition; a lease-ended run's end time is still its lease end
+  (`lost_at`), not this column.
+
+- **One server-side hold/attention rule replaces the console's own client-side copy (#1197).**
+  A PENDING row on `GET /approvals` now carries `held` and, for a bounded hold, `held_until`
+  (`internal/approval.Hold` — a verbatim port of the console's former `isHeld`, same three windows).
+  Each live run returned from `GET /runs?view=` (and from the new `GET /me/attention`) now carries
+  `attention: {kind, by, pending}` — what it is waiting on, and who, in the caller's own console
+  view, can clear it: `by:"you"` only when the caller's own real decide-path verdict (`mayDecide`,
+  mirroring `decide()`'s own gates) would actually let them act, else `by:"admin"` for a member who
+  cannot, or `by:"owner"` for a `credential_reauth`/lost-run revive outside the User view. New
+  `GET /me/attention?view=user|admin` returns `{needs_you, pending_approvals}` — the shell's two nav
+  badges in one small object, replacing two unscoped ~1000-row reads. The console's `isHeld` is now a
+  one-line reader of the wire fields; every client-side hold window constant is gone.
+- **The Runs page is rebuilt as one calm page, grouped by need then time (#1197).** A "Start a run"
+  composer (User view), a filter bar that lives in the URL (search / status / ended-within /
+  workspace / include-killed), and sections in a fixed order — Needs you (Admin view: Needs a
+  decision), Running, Ended today, Earlier this week (collapsed), then day buckets once a filter
+  widens past 7 days — replace the old Board/Table density switch, title grouping and the per-row
+  kebab menu. One row anatomy throughout: a glyph, the title (a real link), a muted meta line, the
+  status word, and at most one action button (Review / Sign in), reading the server's own projected
+  `attention` field instead of a client-side approvals join. An ageing note ("Showing the last 7
+  days. N older runs are hidden.") links to widen the window or include killed runs.
+
+- **A launch that answers 2xx now navigates straight to the run page, in the same tick, warnings and
+  all (#125).** `use-launch.ts`'s `launch` no longer holds the New Run screen behind an "Open run"
+  button while a 201's advisory `warnings[]` sit listed in the rail; it always calls
+  `navigate('/runs/:id', { state: { launchWarnings } })`, and the removed hold's `OPEN_RUN_CTA` is
+  gone with it. The run page reads the warnings out of router state and renders them in the rail's
+  own advisory-block shape, dismissible, with a note that they will not survive a reload. A PENDING
+  run with no `status_detail` yet now says "Queued — Wardyn is getting this run ready." under the
+  status chip (widened from STARTING-only to STARTING || PENDING) instead of showing nothing, until
+  the server's own stage line replaces it. `createRun` drops the 5-minute `LAUNCH_DEADLINE_MS` and
+  rides the plain default deadline instead, now that `POST /runs` dispatches asynchronously (#121);
+  `preflightRun` is unchanged.
+
 ### Fixed
 
+- **`WARDYN_BEDROCK_BASE_URL` on a wardyn-proxy sidecar's own subnet now refuses boot instead of
+  denying every model call (#1198).** The proxy's SSRF guard never lifts an address on any subnet
+  its own interfaces sit on, so a Bedrock PrivateLink endpoint resolving onto the docker
+  control-plane network's subnet used to have every model call denied at dispatch time, with the
+  SDK misreading the denial as a malformed Bedrock response. `wardynd` now resolves the
+  variable's host once, at boot, and refuses to start when the resolved address falls inside the
+  control-plane network's subnet, naming the variable, the address, the subnet and a remedy. The
+  same failure can also land on a run's own per-run network — that subnet is allocated fresh per
+  run and can't be predicted at boot, so an address inside Docker's own built-in
+  default-address-pools instead logs a WARN naming the `daemon.json` remedy. Kubernetes logs a
+  WARN too (the per-run proxy pod's CIDR is not reliably known at boot); an unresolvable host
+  also WARNs and proceeds.
+
+- **Interactive runs on agent-base, agent-vscode and agent-novnc stay up (#1186).** Both drivers
+  run `agent-run --idle` as an interactive run's main process, and agent-base's `agent-run` stub
+  answered `--idle` with its usage text and exit 64, so the sandbox died within a second and the
+  UI gateway's launcher then failed with "container is not running". agent-vscode inherited the
+  stub when it moved onto agent-base; agent-novnc always had it. The stub now implements mode 3
+  itself: it prepares the workspace, writes the prep-done marker, and idles until TERM or INT.
+
+- **Cancelling a sign-in or run that is still starting now stops its sandbox create (#1182).** A kill
+  of a STARTING run left its in-flight sandbox create running until its own readiness wait expired
+  (up to about 3 minutes on Kubernetes), holding its pods and the node's room, so a retry could sit
+  "Waiting for a machine with room" and time out. The kill now cancels the create, and the
+  substrate's rollback removes what it had made. On Kubernetes the client rate limit is raised from
+  client-go's 5/10 per API group to one shared 50 QPS / burst 100 limiter, and a readiness wait that
+  times out under client-side throttling now names the pod's reason (for example
+  "Unschedulable … Insufficient cpu") instead of "client rate limiter Wait returned an error".
+- **The AWS SSO reauth-hold docker tests now start the agent image the way a Bedrock SSO run
+  does (#1193, refs #1185).** They bind-mounted a host-written `~/.aws` over the image's home and
+  ran `claude` directly, so a red run read as "the pinned Claude Code CLI cannot resolve an SSO
+  profile" while real runs were minting role credentials all along (the kind SSO walk's pinned
+  identity case). The files now arrive as dispatch sends them (`WARDYN_AWS_SSO_CONFIG_B64`,
+  materialized by the image's own `agent-run`) with the env dispatch writes, so a break in that
+  delivery path fails them. The tolerance measurement now fits inside `go test`'s default
+  timeout and removes its agent container instead of leaving it holding the parked call.
+- **The operator sandbox sweep (`POST /api/v1/admin/sandboxes/sweep`) now
+  recovers a KILLED run whose kill tail never finished (#710).** That route is
+  the sweep's only caller: it does not run at boot or on a timer, so recovery
+  happens when an operator (or their scheduler) calls it. `killTeardownTail`
+  runs detached after the KILLED transition wins its CAS, and a shutdown past
+  its grace or a crash could kill it mid-cascade — leaving the run correctly
+  marked KILLED but with no `run.kill` audit row, its sandbox possibly still
+  live, and its credentials possibly still un-revoked, including runs whose
+  tail died before ever reaching `KillSandbox` (`SandboxRef` empty, nothing for
+  the existing sandbox-ref probe to find). The sweep now re-runs the idempotent
+  kill teardown for any KILLED row old enough that its own tail could not still
+  be running (`killTailRecoveryGrace`, past `killCascadeTimeout`) and whose
+  audit trail has no successful `run.kill` row, however long that trail is. A
+  row younger than the grace is left alone so a genuinely in-flight tail is
+  never entered twice, and a hung site-config probe reclaimed to KILLED (its
+  own `site_config.probe.kill` row, never `run.kill`) is not treated as an
+  abandoned kill.
+- **Key-encryption follow-ups from the Transit KEK review (#980).** An aborted `wardynd -rewrap`
+  now writes a `secret.rewrap` event (`outcome` `failure`, `reason` `aborted`, `secrets` 0, since
+  nothing is committed), even when the run was canceled — under Transit it has already made
+  decrypt calls Vault's audit device records. A Vault Transit error answer (a deleted key, a
+  revoked policy, a missing mount) is now reported as the key service's error with Vault's status
+  and message, not as a moved or forged row; an unreachable Vault stays transient. The Vault token
+  file and the Kubernetes service-account token file now get the `_FILE` mode rule on every read:
+  a group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
+  refused; root-owned Secret-volume and CSI files, and the 0644 file Vault Agent writes as its own
+  uid, are still read.
+- **Session revocation also removes registered SSH keys (#154).** Admins and security admins
+  can remove a person's keys through `DELETE /people/{principal}/ssh-keys`. Deleted or changed
+  keys cannot open new SSH channels on an existing connection; already-open channels continue
+  until they close or their run is torn down. Registrations in flight cannot escape the session
+  cutoff. Partial revocations audit the completed counts. `POST /sessions/revoke` naming an
+  email that resolves to no known subject (an SSO-only person with no token and no owned
+  workspace) now answers `500` with the actionable refusal after the session cutoff still
+  commits, instead of a silent `204` — intentional: the cutoff cannot be undone by a failed
+  directory lookup, and the caller needs to be told to name the subject exactly rather than
+  believe the sweep found nothing to do.
+- **Two replicas booting at once no longer end on different boot keys (#754).** With
+  `-allow-multi-instance`, two wardynd replicas starting against an empty store could each
+  generate the identity signing key (or the OIDC, UI, SSH host key, or internal hop CA) and
+  each write it; the one whose write was overwritten served with a key no other replica held.
+  A boot key is now created only under a Postgres advisory lock and read again under it, so
+  every replica ends on the one stored value; a replica that cannot take the lock fails its
+  boot instead of creating a key unlocked. A single-instance daemon is unchanged — its
+  instance lock already excludes any other replica.
+- **An opt-in live test lane could no longer print `ok` and exit 0 while proving nothing.**
+  `internal/testlive`'s `Require` used to skip on a missing credential or an expired AWS SSO
+  token even after its own gate variable was set to `1`; it now fails loudly (`Fatalf`) once
+  the operator has opted in, and only an unset gate still skips. The 9 opt-in lane scripts
+  (`kind-sso-walk.sh`, `compose-sso-roles.sh`, the `run-e2e-*` family, `test/e2e/e2e.sh`) now
+  exit 77 on a self-skip via `scripts/lib/common.sh`'s new `skip_lane`, never 0, and nightly's
+  kind-SSO-walk job asserts on that exit code instead of grepping the skip sentence. The
+  install.sh compose-fetch integrity test no longer skips permanently behind an unset,
+  ticket-named variable — it now pins today's accepted-risk state by default and flips to
+  enforcing the fix once `WARDYN_EXPECT_COMPOSE_DIGEST=1` says a digest exists (#463).
+- **`ui-e2e` runs its specs in concurrent lanes and hardens four specs that flaked in CI (#469).**
+  `scripts/run-ui-e2e.sh`'s default (all-spec) invocation now runs isolated backends concurrently
+  (`WARDYN_E2E_LANES`, 1-3, defaulting to 1 locally and 3 in CI), each with its own
+  console/UI-sandbox/internal-TLS listener ports and database, picked the same way the single-lane
+  default already picks a free port rather than a fixed one — never a guessed offset from another
+  lane's port. Bringing a lane's backend
+  down now only ever stops the PID it started (`e2e-backend.sh` no longer `fuser -k`s a port).
+  `setup-gate.spec.ts`'s remaining "pick your barrier" checks and `episode-catalog.spec.ts`'s
+  multi-user first paint get more slack on a loaded CI host, and `workspaces.spec.ts` unroutes
+  before its member-delete describe block tears down so a poll in flight cannot fail a finished
+  test.
+- **A PR based on a `<kind>/<issue#>-<slug>` lane branch got no CI checks at all** — `ci.yml`'s
+  `pull_request` trigger filtered on `branches:`, which matches the PR's base, not its head; the
+  0.8 working practice stacks PRs on other lane branches, not `main`, so those PRs ran no checks
+  (`gh pr checks` reported none). The filter is removed from `pull_request:`; `push:` stays narrow
+  (#211).
+- **The base agent image no longer warns on every Node start when no corporate CA was staged
+  (#1114).** `NODE_EXTRA_CA_CERTS` pointed straight at `/corp-ca/corp-ca.pem`, which only exists
+  on a build with a corp CA staged, so a default build's Node processes printed
+  `Warning: Ignoring extra certs ... load failed` on first TLS use. `NODE_EXTRA_CA_CERTS` now
+  points at `/corp-ca/node-extra-ca.pem`, created empty on a default build (Node finds zero certs,
+  stays silent) and copied from the staged CA otherwise (unchanged trust behaviour).
+- **`wardyn secret list` no longer drops the caller's own secrets (#1107).** The server has
+  always returned `{"names":[...],"mine":[...]}`, but the SDK's `ListSecretsPage` decoded only
+  `names`, so a member who stored their own secret never saw it in the CLI. A new
+  `ListSecretsScoped`/`ListSecretsScopedPage` pair decodes both (the existing `ListSecrets(Page)`
+  signatures are unchanged); `wardyn secret list` now prints the union of both lists with each
+  name's scope, and **`--json` now emits the server's `{"names":[...],"mine":[...]}` object
+  instead of a bare array of names** — a breaking change to that flag's output shape.
+- **Revive, admin restart and extension work on runs dispatched before the TLS control-plane hop
+  (#994).** Those runs' rendered proxy config names an `http://` control plane that the proxy's
+  config loader now refuses, so all three answered 409 "the run's proxy config does not load" for
+  exactly the standing runs "Restart with current limits" exists for. The config's control-plane
+  URL and CA are now set to the deployment's current pair before it is loaded; every other field
+  is loaded as rendered, so an unknown field, another run's config or an invalid current hop is
+  still refused before anything is minted or replaced.
+- **An ended run can be extended and revived while its files are kept (#1061).** A run whose
+  end passed is stopped and kept for `WARDYN_ENDED_RUN_GRACE`, and the design promised Extend +
+  Revive during that grace, but extending it answered 409 and revive refused it. Its owner (or a
+  super admin, with the owner's authority re-checked) can now move its end into the future within
+  the run's captured limits, then revive it: a new proxy under the owner's current denies, then its
+  agent started behind it. The grace stays counted from when the run ended, so extending never keeps
+  files longer; both writes are conditional on the exact ended mark and a live grace, and the claim
+  re-checks the grace and the new end, so an expiry or a kill that lands first wins. The bulk
+  restart still refuses it, and a task run's revive is refused.
+- **A model provider's sign-in is confirmed from the stored credential, and the strip keeps a
+  pin-contradicted session's action (#993).** `provider_access` rows now carry `source_run_id`, the
+  sign-in run the caller's own stored AWS or Claude capture for that provider came from, stamped by
+  the server. The console confirms a provider sign-in by that stamp, so a capture whose audit row was
+  only spooled no longer ends in "The sandbox reported a capture the server does not have", and a
+  row naming another run is refused. A session for another account/role than the provider pins now
+  shows the server's action naming both pairs on the provider strip, as the legacy strip did.
+- **`make dco` now audits merge commits too, and PR ranges end at the PR head (#1070).**
+  `--no-merges` hid every merge's `Signed-off-by` trailer, including 76 unsigned human merges
+  on main since the 0.7.12 fork; it had also become a workaround for `ci.yml` passing
+  `BASE..HEAD` on `pull_request`, where `HEAD` is GitHub's synthetic, unsigned test-merge tip.
+  PR ranges now end at `pull_request.head.sha`, and the only exemption left is
+  `DCO_ALLOW_GITHUB_MERGES=1`, which excuses a merge commit committed by
+  `GitHub <noreply@github.com>` (push and merge_group only, where GitHub makes such merges
+  itself).
+- **Credential erase and expiry follow-ups (#977).** The daily expiry sweep now reads the table
+  in bounded pages (rows and time) and moves past a row it cannot delete, so rows the store keeps
+  refusing no longer hold up the ones after them; each such row is audited
+  `credential.expired.delete` `failure` every day it is kept, and a failed scan writes one row
+  too. An erase refused for a blank principal (`400`) or a principal naming nobody or several
+  people (`422`) is audited `credential.erase` `denied`, and the same `422` on
+  `DELETE /secrets/{name}?owner=` is audited `secret.delete` `denied`; the statuses are unchanged.
+  `/me/scm-access` and setup status no longer give a `not_configured` Azure DevOps row the cause
+  `row_is_newer`: now that a dead or erased sign-in is deleted, "you signed in before your admin
+  turned Azure DevOps on" could be false. OPERATIONS.md lists the full offboarding order.
+- **Runs no longer attempt a recording upload when recording is off (#1113).** Both the k8s and
+  docker substrates registered `Config.Record: true` unconditionally, so an install with
+  `WARDYN_RECORDING_STORE=off` still wrapped every `Exec` with `wardyn-rec`, still attempted the
+  brokered upload on every run, and still logged a `brokered:recording` deny for a feature that was
+  switched off. `Config.Record` on both drivers now follows the boot recording-store selection
+  (off skips the recorder wrap entirely — no upload attempt; `pg`/`fs` wrap and upload exactly as
+  before). The image contract is unchanged — agent images still ship `wardyn-rec`.
+- **`make release-check` now propagates a Postgres-suite failure (#1068).** The Postgres-gated
+  `if` chained `test-report-pg` and `test-race-pg` with plain `;` in one shell, so the `if`'s
+  exit status was whichever submake ran last — a `test-report-pg` failure was silently swallowed
+  whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
+  The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
+  survives.
+- **The sign-in door's "Downloading the image" step now lights on Kubernetes (#807).** The kubelet
+  reports an image pull as `ContainerCreating`, so a cold pull on a cluster showed the first step
+  for its whole length. The runner now reads the starting pod's Events (at most once a second,
+  only while the container is being created) and reports a pull in the Docker runner's words. The
+  chart's namespaced Role gains one verb, `events: list`. **If you write the Role yourself
+  (`k8s.rbac.create=false`), add `events: list` on upgrade** — without it the read fails closed and
+  pulls keep reading as "Setting up the container". Nothing an Event says is shown: it only chooses
+  between two sentences Wardyn wrote.
+- **A transient stop failure no longer tears down a kept run (#1060, refs #1005).** When a run's
+  end or a lost-run cut could not stop its proxy (a Docker daemon timing out, say), the run was
+  torn down outright, removing the agent container and the files it was being kept for, on the
+  same failing daemon. Only a substrate that cannot keep a sandbox (Kubernetes) still tears down.
+  Any other failure keeps the run, with its approvals cancelled and broker credentials revoked,
+  and marks its containment unresolved: `run.lost` / `run.ended` carry `containment:
+  "unresolved"`, and the run's new `containment_error` / `containment_error_at` fields
+  (migration `0088_agent_runs_containment_error`) hold the error. The lease sweep retries the
+  stop every pass. `run.containment.reassert` records a repeat failure and the resolution, which
+  clears both fields. On Docker a failed proxy stop now escalates to a kill. If the proxy survives
+  that too, a lost run's agent is stopped. Neither step removes a container.
+- **Untagged builds no longer report the last release's version (#1105).** `wardyn --version`,
+  the daemon's startup log and `/healthz` now report `<version>+<commit>` (and `-dirty` if the
+  working tree had uncommitted changes) for any build that isn't the release build itself, taken
+  from `runtime/debug.ReadBuildInfo()`. A release build (release.yml's binaries job and its
+  Dockerfile.wardynd image, both stamped with `-ldflags -X` at build time) still reports the bare
+  release string byte-exact.
+- **The sign-in (harness-login) sandbox now gets its own small resource default (#1100).** It
+  launched with no `Resources` of its own, so it fell back to `runner.DefaultCPUMillis`/
+  `DefaultMemoryMiB` (2 vCPU / 4 GiB) — sized for an agent run, not a CLI device-code flow — and a
+  namespace `LimitRange` sized for a small node could refuse the pod outright, stranding a
+  member's own sign-in. `WARDYN_HARNESS_LOGIN_CPU_MILLIS`/`WARDYN_HARNESS_LOGIN_MEMORY_MIB` now
+  default the sign-in run to 500m/512Mi, configurable, and still capped by the acting principal's
+  governance ceiling like every run.
+
+- **A proxy-only revive on Docker works on Docker Engine 28, and a failed one no longer leaves the
+  run's proxy gone for good (#1133).** The revive re-creates the proxy at the address the agent's
+  hosts entry pins, and Engine 28 accepts a pinned address only on a network created with a
+  subnet; the per-run network named none, so every revive there failed ("user specified IP address
+  is supported only when connecting to networks with user configured subnets"). The per-run
+  network is now created asking for a subnet, the one the daemon itself picks from its address
+  pools. The old proxy was also removed before the new one was created, so a failed replace left
+  nothing holding the run's proxy config and MITM CA, and the run could only be re-launched. The
+  old proxy is now put back, stopped, under its name: the run is still lost, with no egress, but
+  it can be revived again. A run started before this release keeps a subnet-less network, so on
+  Engine 28 its revive still fails, and it is restored the same way.
+- **A run refused for its model provider is audited at create and Review (#987).** The 422s for a
+  provider that does not exist, is off, does not serve the agent, is not chosen among several, has
+  no usable credential of the caller's, or would sit beside a policy grant setting a model
+  credential were written with no audit row; only the not-granted 403 and dispatch's own refusals
+  were. Each now writes one `authz.denied` row with the new reason `model_provider_unavailable`
+  (target `runs.model_provider`, with `provider`, `kind` and, for a credential the caller can
+  repair, `remedy` `model_credential`). The 422 body is unchanged, and the not-granted refusal stays
+  its one `capability_model_provider` row.
+- **Rolling back to 0.7.11 over a converted database is explained, not mistaken for a wrong age
+  key (#674).** 0.7.11 fails closed over envelope v1 rows with `… age decrypt: failed to read
+  header: parsing age header: file is empty` or `… unexpected intro: "…"`, which reads like a key
+  problem. OPERATIONS "Upgrades" now names both endings and says: do not replace the key; start
+  0.7.12 or later again, or restore the pre-upgrade dump. `TestPG_OldBinaryAgainstV1Store` boots
+  the published 0.7.11 image over a converted store to pin it, and `TestPG_UpgradeFrom_0_7_12`
+  upgrades a database as 0.7.12 left it (its `0065_secret_envelope_v1` backport included) and
+  checks that a second boot changes nothing.
+- **A non-interactive `--workspace` launch under a declared mechanism is refused at create and
+  Review, not after it boots (#767).** `POST /runs`/`/runs/preflight` never set `run.WorkspaceID`
+  from a launch's `workspace_id` — that column is the trusted scan/verify/record linkage. But the
+  create-time mechanism gate and its model-access advisory read the request's own `workspace_id` as
+  that same scan signal, so a non-interactive `wardyn run --workspace <id>` skipped the gate: a
+  launch whose lane did not satisfy the org's declared mechanism got a 201, booted, and only then
+  failed — dispatch already checked it and failed it closed. Review showed no refusal, and its
+  advisory and residency grade described the run as getting no model credential when it is a model
+  run. Both create-time checks now ask the same question dispatch does for this door.
+- **A user whose admin already stored a demo secret, or configured real model access another way,
+  is no longer refused a Getting Started demo their own console has no way to explain (#850).** Two
+  gates behind `needsSecret`/`needsModel` read fields a user's redacted setup status always empties
+  regardless of the real deployment state: `secrets.present` (so a demo referencing the console's
+  own seed secret never unlocked, even once the exact name was stored) and a client-only "is there a
+  model path" check that misses an API key or a host CLI login (both invisible post-redaction). The
+  redaction now keeps presence of the demo catalog's own public seed-secret names, and the
+  console's readiness/demo-gating checks fall back to the server's own `llm_ready` verdict — already
+  computed from the unredacted facts and already carried on the wire for exactly this reason.
+- **Every user-visible refusal sentence now starts with a capital letter (#585).** About twenty
+  server-side sentences a person can end up reading — an AWS SSO pin refusal, an Azure DevOps
+  resolve or dispatch refusal, the dead-model-access and pin-contradicted sentences, the UI
+  gateway's wrong-host refusal — started mid-sentence lower case (`"this run's model access is
+  configured as…"`), because each was written as its own sentence at the source but assembled from
+  fragments that read fine concatenated and wrong stood alone. Capitalized at each sentence's
+  source const (mid-sentence embeds, like the remedy clause spliced into the middle of another
+  sentence, are untouched); the matching console/e2e fixtures and the workspace-providers mock
+  doc were updated to the same byte-exact text. A new guard test
+  (`TestRefusalSentenceConstsStartCapitalized`) fails on any lower-case regression.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
@@ -128,6 +521,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
   decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
   proxy reporting that nobody answered, not real agent activity (#570).
+- **The remaining disabled Setup controls explained themselves only through a hover
+  title (#497).** The "Done with this one" and "Next" footer buttons, and the phase
+  rail's step buttons (both the full and icon-only compact rail), disabled a refused
+  move but said why only in a tooltip a keyboard or touch user never sees. The reason
+  now renders as visible text next to the control (the icon-only compact rail, with no
+  room for a caption, carries it in the button's accessible name and keeps the tooltip).
+  A New Run preflight error with no message no longer reads "Preflight failed Preflight
+  failed." to a screen reader; it now says "No reason was given."
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
@@ -156,9 +557,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an about:blank tab straight away, and on a first launch the person sat on it while the sign-in
   image downloaded. The dialog now stays put and shows three steps: starting the sign-in sandbox,
   downloading the sign-in image ("Can take a few minutes the first time." — no runner reports pull
-  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which only
-  the Docker runner does — on Kubernetes the kubelet reports `ContainerCreating` through a pull, so the
-  first step stays lit), and waiting for the provider. Once the provider's page is
+  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which the
+  Docker runner reports directly — on Kubernetes the step lights through the namespaced `events: list`
+  read added in #807, and falls back to reading `ContainerCreating` without it), and waiting for the
+  provider. Once the provider's page is
   ready, an "Open AWS sign-in" (or "Open Claude sign-in") button opens it, with the device code
   beside it and a copy-link fallback; the tab still has its `opener` severed. A failed image pull
   shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps
@@ -315,6 +717,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `internal/gitpack`'s own ceilings (object count, inflated bytes, tree entries, changed paths) now
   refuses with `413`/`brokered:git:push-too-large` instead of `415`/`brokered:git:push-uninspectable`,
   since it names the same fix as an oversized push: fewer commits at a time.
+- **The published tree no longer cites the author's private machine or gitignored review
+  directories.** `CHANGELOG.md`'s R1–R7 hardening-pass ledger, `ROADMAP.md`'s punt list, the
+  Azure DevOps / user-drives / Workspace Providers design prompts, several probe tests' "copy this
+  file in" run instructions, and two demo e2e specs' script citations all pointed a reader at the
+  author's private plan and verify-run directories or the gitignored review-notes tree, which
+  exist only on one machine. The citation guard (`cmd/wardynd/citation_guard_test.go`) now reds
+  on any new one, over tracked Markdown and non-test Go comments (#461).
+- **The Admin audit trail and recordings screens' "Open run" links left the Admin view.**
+  `/admin/audit` and `/admin/recordings` hard-coded their run link to the User-view path
+  (`/runs/:id`), so clicking it on a single-operator install opened the owner cockpit instead
+  of the admin monitor, and an admin-only SSO token had the link refused outright. Both now
+  route through `runPath(view, id)`, the same helper `/admin/runs` and `/admin/approvals`
+  already use, so the link stays in the view it was opened from (#876).
+- **A red `build`/`test-pg` job named only `make: *** [Makefile:195: test-report] Error 1`, hiding
+  which test failed or why the package didn't compile behind an artifact download.**
+  `scripts/test-report.sh` now prints the failing test names, the compiler's own error text on a
+  compile failure, and the panic or last output lines of a package that failed outside any test (a
+  `-timeout`, a panic in `init`, `os.Exit` in `TestMain`) directly in the job log, with a script
+  test pinning all three. A new
+  `make lint` gate (`scripts/check-workflow-artifacts.sh`) catches an `actions/upload-artifact`
+  step with an empty `path` before it ships (#374's exact shape). `run-e2e-ssh-k8s.sh`'s
+  no-cluster-installed skip now prints a greppable `SKIPPED no-install` marker for future nightly
+  wiring to assert on (#669).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
@@ -392,6 +817,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The kind SSO walk's Playwright project is `walk`, not `live` (#467).** "Live" named three
+  different things in this tree (the kind SSO walk, the Docker task orchestrator under
+  `test/e2e/live/`, and the real-tenant `internal/testlive`/`live-local` harness); this rename
+  disambiguates the first. `ui/e2e/live/` moves to `ui/e2e/walk/`, the Playwright project is now
+  `walk` (`pnpm exec playwright test --project=walk --list`), and the walk's own env vars
+  (`WARDYN_E2E_LIVE_BASE_URL` and the walk's internal exports/inputs) are now `WARDYN_E2E_WALK_BASE_URL`
+  and `WARDYN_WALK_*`. Chromium's `testIgnore` now also drops `live-local/**` explicitly as
+  defence-in-depth — those specs already self-skip by filename, so this changes no behavior on
+  its own. The
+  `test/e2e/live` → `test/e2e/tasks` orchestrator rename stays deferred (it collides with the
+  fixture corpus already at that path — a directory restructuring, not a mechanical rename).
 - **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
   Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
   and never its value; its `purpose` is now `boot`, so `migrate` is left to
@@ -533,6 +969,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
   snapshot through a context memo. A build with no store now refuses a widening kind at every door.
+- **`WARDYN_ALLOW_UNENFORCEABLE_CAPS`, `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and
+  `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` now parse through the shared `cliutil.EnvBool`
+  that `wardynd`'s other booleans use, instead of comparing against the literal string
+  `1`.** `true`/`yes`/`on` now enable each switch (previously silently ignored — only
+  `1` worked), and a value that is neither truthy nor falsey now fails boot with an
+  error naming the variable, instead of being silently treated as off. A deployment
+  that set one of these to `true` and got no effect was hitting this bug, not a
+  disabled feature (#202).
+- **`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_ALLOW_MEMBER_ENV_SECRET` and
+  `WARDYN_ALLOW_AGENT_TELEMETRY` now refuse a bad value at boot.** A value that is
+  neither truthy nor falsey (`treu`, say) used to be read silently as off; `wardynd` now
+  exits 2 at startup naming the variable, in every auth mode. Accepted values are
+  unchanged (#202).
 - **Every authorization refusal goes through one emitter and one registry (#736).** `internal/authz` holds the
   closed `authz.denied` reason set, each reason's effect and status, and the serializable `Decision`
   (schema `authz/v1`); every door refuses through one `refuse`, and a guard test fails on an
@@ -543,7 +992,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
   `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
   `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
-  now (`/ssh-keys` stays until M-5, and `/demos` until M-6). Every in-app link, the sidebar's
+  now (`/ssh-keys` was deleted the same way by M-5 below, and `/demos` stays until M-6). Every in-app link, the sidebar's
   Policies/Governance/Permissions/Audit/Recordings entries, the account-menu and sidebar Settings
   links (which now land on `/admin/settings` for an admin tier and `/account` for a user), the
   first-run model-provider "Connect →" doors (`/admin/settings`), the "New policy", "Drives",
@@ -552,6 +1001,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Recordings library" now render only for the tier whose Admin view screen they open, so a user
   never gets a link to a page that refuses them. The operator docs' console-screen citations are
   re-pointed too. A stale bookmark or link falls through to the console's ordinary catch-all.
+- **The unsplit Settings screen is split per view (M-5, #636).** `/admin/settings` (Admin view)
+  and `/account` (User view) now mount their own screens instead of the same one: Admin Settings
+  keeps Host, the admin Model providers list, the shared Model provider credential card, Providers
+  and User drives, and gains an **Admin SSH keys** card — super admins only — for the override keys
+  that reach other people's runs. Your account keeps a person's own model connection, Azure DevOps
+  and Your SSH keys. A security admin who reaches `/admin/settings` from a stale link now gets a
+  refusal naming the tier, with nothing fetched, instead of the old unsplit screen's redacted
+  leftovers. `/ssh-keys` is deleted, clean break, no alias — every in-app link now points at
+  `/account`, which already carries the same pane. Two SSH-key strings changed: the capped-key chip
+  reads "User access" (was "Member access", frozen by #584) and its tooltip now points at the new
+  Admin SSH keys card; the pane's own description no longer says "no admin view of anyone else's",
+  which collided with the console's own Admin view — it now reads "admins can't list anyone else's".
 - **A held tool call now waits the operator's real approval ceiling (RL-1, #566).**
   `wardyn-toolgate`'s `-deadline` and Claude Code's `MCP_TOOL_TIMEOUT` were hardcoded, so
   raising `WARDYN_APPROVAL_EXPIRY_AFTER` on the daemon did not change how long a parked tool
@@ -594,6 +1055,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
+- **Three route families renamed for one consistent shape (#658), each old path kept as a chi
+  alias for one minor: `GET /runs/{id}/attach-holder` → `attach/holder`, `POST
+  /runs/{id}/attach-ticket` → `attach/ticket`, `POST /runs/{id}/profile` → `profile/synthesize`.**
+  The SDK and CLI now call the new paths. The Helm chart's `userDrives.enabled` is renamed to
+  `drives.enabled` (a clean break, no alias — see `deploy/helm/wardyn/README.md`'s "User drives"
+  section); a `helm upgrade --reuse-values` from an older release must set `drives` explicitly,
+  and the chart refuses to render while `userDrives.enabled` is still `true`. The nested reclaim
+  switch follows the same rename, `drives.reclaim.enabled` (see "Storage reclaim" below).
+  See `docs/sdk.md`'s "Renamed in 0.8" table.
 - **The Helm chart and the compose stack give `wardynd` 70 seconds to stop (#554).** An orderly
   stop drains HTTP for up to 15s (waiting for background work even if that drain times out), waits
   up to 35s for detached work (a run launch, a superseded sign-in's teardown), then flushes the
@@ -610,8 +1080,156 @@ and does not yet follow semantic versioning (interfaces are not stable).
   host. `make lint` gains `scripts/check-fixture-dates.sh`, which fails a test file that gains a
   literal date.
 
+- A managed laptop whose audit table is reset so that its seq restarts, and which then writes up to or
+  past its old forwarding cursor before the forwarder runs, no longer halts forwarding with a 422
+  `chain_mismatch` (#520). The forwarder's cursor now keeps the row hash the organisation
+  acknowledged beside the seq (`org_federation.last_forwarded_row_hash`, migration
+  `0086_org_federation_row_hash`); when the laptop's row at that seq is gone or carries another hash,
+  the forwarder resends from the new genesis and the organisation records a
+  `device.audit.chain_reset`. A laptop upgrading onto this migration resends once from the start;
+  the organisation skips the rows it already holds.
+
 ### Added
 
+- **Console branding (#1125).** A super admin sets the organisation's name, how the product name
+  reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an
+  optional dark-mode pair (derived when unset), a logo (SVG or PNG, at most 512 KB) and an optional
+  https Support link from a new Branding card in Admin view Settings. The sign-in page, the top bar,
+  the browser tab title and the tab icon follow it; the danger, warning, success and info colours
+  and the Admin view cue are never brandable. wardynd stores the record (migration
+  `0091_branding`), validates every save server-side with a named reason (`invalid_colour`,
+  `low_contrast` with the ratio, `link_not_https`, `logo_too_large`, `invalid_logo`, …), rebuilds
+  an uploaded SVG from an allowlist and refuses one that can run script or fetch, serves the logo
+  from `'self'` with its validated type and `nosniff`, and audits `branding.write` /
+  `branding.delete`. The Content-Security-Policy is unchanged, and an unbranded console renders
+  exactly as before. New routes: `GET /api/v1/branding` and `/branding/logo` (anonymous, the
+  public subset), `GET /branding/settings` (signed in), `PUT`/`DELETE /branding/settings` (admin).
+
+- **Admin-minted API tokens and people set up before their first sign-in (#1157).** An admin or
+  `security_admin` can create a person keyed by their identity provider's `sub` (`POST /people`),
+  mint them a `wdn_` token (`POST /people/{principal}/tokens`) and list their tokens
+  (`GET /people/{principal}/tokens`). The token carries the role and user type the person's sign-in
+  would derive from their email, with their groups marked unknown. Its requests are that person's:
+  their runs, their secrets, their drive. `minted_by` on the token row and the
+  `person.token.create` audit row name both parties. A person's first sign-in attaches by subject
+  alone, never by email. Only an admin may mint for an admin or `security_admin`. An admin-minted
+  token whose role the person's sign-in would change is revoked rather than re-stamped. Migration
+  `0090_people_and_token_minted_by` adds the `people` table and `api_tokens.minted_by`. See
+  [Tokens for a person who never signs in](docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in).
+
+- **User types screen: list, editor, and "What this type gets" (#618).** A new admin screen at
+  `/admin/user-types` lists every org-defined user type and edits its name, description and sign-in
+  priority. Each type's editor shows the ceiling and run limits (read-only) of the governance
+  profile assigned to it, and a "What this type gets" grid answering every resource family for that
+  type (everyone / this type / blocked / admins only / not available), backed by
+  `GET /permissions/explain`. A restricted resource the type isn't listed for names who it is for, a
+  block carries the wall note, and a row written for the type can be removed from the grid. Each
+  family carries an Add button that opens Permissions' own "Add a grant" dialog with Who and
+  Capability fixed, and `GET /permissions/explain` rows now carry a non-secret display `label` for a
+  git provider or model provider value (its kind and organisation or host, or its own name), so a
+  security admin reads the same words an operator does instead of an id. The
+  Permissions, Governance and Drive-allocation "Who" pickers now offer "User type" alongside
+  User/Group/Everyone, with a closed picker of the org's types rather than free text, and an
+  existing row names the type by its name; adding a deny for a user type asks to confirm first,
+  since no person or group allow overrides it. The People step's add-mapping form offers a type
+  picker once more than the built-in Standard user exists. `/me`'s `user_type` now carries a
+  `description`; the user's own Getting started page reads "You're set up as {type}" with the type's
+  description. `GET /runs/{id}` carries `user_type_name`, so a run's Identity panel shows "Ran as
+  {type}" to its owner as well as to admins.
+
+- **Console e2e suite hardening (#728).** Every spec built on `fixtures.ts`'s shared `test` now
+  fails if its page throws an uncaught JS error or trips the Content-Security-Policy, not only
+  when a spec happened to assert on one — a per-spec allowlist covers the rare case where that
+  noise is the thing under test. `approvals.spec.ts` gained a seeded PENDING `credential_reauth`
+  row covering the reauth title, its one sign-in door, and no Approve/Deny — and that killing its
+  run cancels it, on the hermetic backend every PR runs (mirroring the live kind-SSO walk's own
+  case). `workspace-detail.tsx`'s `approveHosts` re-fetch-before-merge is now covered: a write
+  landing while its confirm dialog sits open survives instead of being silently reverted by a
+  stale-`ws` PUT. `make ui-typecheck` now also loads the `demo` and `screenshots` Playwright
+  projects' spec files (`--list`), the same cheap "does it even load" check it already ran for
+  `live`.
+- **New admin read: `GET /permissions/explain` (#739).** For one named `user`, `group` or
+  `user_type` subject, it answers each capability kind's state — everyone, this type, blocked,
+  admins only, or not available — at the default plus every specific resource a grant names or
+  "Available to" restricts (those rows carry `restricted: true`). Each state is the grant
+  resolver's own answer, including the kind's enforcement switch, a value's restriction and any
+  broader deny that covers the resource. It reads only the rows that name that exact subject or
+  `all`: it does not look up a user's groups or type, so a group or type deny that blocks the
+  person does not show on their grid. A user type that doesn't exist is refused (`400`). It is the
+  data the user type editor's "What this type gets" screen reads. Admin and `security_admin`
+  only, like the rest of `/permissions`.
+- **Launch presets (#1143).** An admin names a bundle of existing run fields with
+  `PUT /api/v1/presets/{name}`, and a launcher starts it with `POST /runs {"preset": "<name>",
+  "title": …, "task": …}` instead of a full spec. The server expands the preset and runs the
+  unchanged create path, so the caller's own ceiling, grants, secrets and drive apply as they
+  would to the explicit request; only `title`, `task` and an optional `preset_version` pin may accompany `preset`; any other field is refused. Presets are
+  versioned, every write is audited (`preset.create`/`update`/`delete`), the run records
+  `preset` and `preset_version`, and `wardyn preset get/apply` round-trips them. Migration
+  `0087_launch_presets`.
+- **`wardyn governance get`/`apply` round-trip governance profiles and their assignments as a
+  file (#1108).** `GET /api/v1/governance` and its writes had no CLI or SDK coverage; `governance
+  get > governance.json` prints every profile and assignment, and `governance apply
+  governance.json` upserts them — a profile **by name** (its unique handle), an assignment by its
+  own natural key (subject_type, subject) — over the existing profile and assignment write routes,
+  no new route added. A profile in the file but absent server-side is created; one present
+  server-side but absent from the file is left alone unless `--prune` is passed, which also removes
+  an omitted assignment (assignments before profiles, so a still-referenced profile never trips the
+  delete-while-assigned refusal). An unknown field is refused (strict decode). `governance get > f
+  && governance apply f` is a no-op: an unchanged profile or assignment is skipped rather than
+  re-written, so a repeat apply issues no writes and records no audit rows. New SDK methods
+  `GetGovernance`/`ApplyGovernance` (`pkg/client`).
+
+- **Runs can be refused while the host is short of memory or overloaded.** With
+  `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB` or `WARDYN_HOST_MAX_LOAD1` set, every launch (new run, record,
+  harness sign-in, source scan, site-config probe) answers 503 `host_capacity_refused` with the
+  measured reason and `Retry-After` before any run exists, and records a `host_capacity.refuse`
+  audit row naming the door. Both default to `0`, off.
+- **Serve the console and API under a sub-path behind a reverse proxy: `WARDYN_BASE_PATH`
+  (#1154).** Set it (e.g. `/wardyn`; Helm `basePath`) and `wardynd` mounts the console, API,
+  sign-in and health routes under the prefix and answers 404 outside it; the proxy forwards the
+  path unchanged. One console bundle serves at any prefix: it is built with relative asset URLs,
+  reads the base from the served `index.html` (an attribute, so the CSP is unchanged) and builds
+  every API, sign-in, terminal and recording URL from one helper. Cookies are scoped to the base,
+  boot refuses a malformed value or a `WARDYN_OIDC_REDIRECT_URL` outside it, and `/healthz`'s
+  `ui_sandbox.enter_url_template` carries it in shared-origin mode. Unset, nothing changes.
+- **Stored-credential metadata and an admin inventory (#591).** A run's credential sink now
+  stamps `last_used_at` on the person's stored model-provider credential it resolves (at most
+  once a minute per row). `GET /api/v1/model-providers/credentials` (admin or `security_admin`)
+  lists each person × provider credential with its state, store, when it was added and last
+  used, plus counts; it reads row metadata only, never a value. Each person's
+  `provider_access` rows on `GET /setup/status` gain `added_at` and `last_used_at` for their
+  own credential.
+
+- **Keeping people's credentials: an admin Credentials page, and an admin can erase a person's
+  whole namespace (#592).** A new `/admin/credentials` page, both admin tiers, lists who holds a
+  credential for each model provider and lets an admin erase one (offboarding), on top of the
+  metadata (#591, above) and erase route (`DELETE /people/{principal}/credentials`, 0.8) that
+  already shipped. `GET /api/v1/model-providers/credentials` rows now also carry `email` and
+  `provider_name` (both non-secret, additive) so a `security_admin` — who has no route to the
+  model-provider roster or an identity directory — can read the table well enough to offboard
+  from it. Erase is confirmed by typing the person's email; it is offered per listed person, and
+  by email or subject for someone whose only stored credentials are secrets. `GET
+  /api/v1/setup/status` gains `credential_storage` (`local`, `key_service`, `vault` or
+  `key_vault`) — never a host, path or vault name — kept for every signed-in person (unlike the
+  admin-only `checks`), so the key dialog's storage notice can say where a credential actually
+  goes. The key dialog also gains a Write-only field chip, a stored-value hint on Replace, and a
+  confirm on Remove (today it deleted on the first click). The erase route's `?owner=`-shaped
+  refusal is now its own sentence (it takes no `?owner=`), and a transient store failure on save
+  is its own 503, distinct from "no store configured".
+
+- **The key services now have a live suite (T-33, #693).** `make test-kek-conformance` runs the
+  Vault Transit key-encryption key and the Vault KV store against the official `hashicorp/vault`
+  and `openbao/openbao` dev images, and the PR `conformance` job runs it. It checks that a wrap is
+  bound to its row, that rotation and `min_decryption_version` retire old versions, and that
+  `-rewrap` resumes and is idempotent. A deleted key is refused outright; a paused server is
+  transient within a minute and blocks boot. Every read is one decrypt in the server's audit log.
+  `make test-kek-conformance-kind` installs Vault from its Helm chart on kind and logs in with
+  Kubernetes auth. It stores one secret of each kind and runs the key-encryption-key suite; the
+  nightly `kek-conformance` job runs both. A skipped test fails either run. New unit and Postgres
+  cases pin the first-boot seam: under the local key, Transit and both external stores, a tampered
+  or lost value is never reported as not-found, and boot mints no platform key over one. They also
+  check that Kubernetes auth re-reads the service-account token at each login, and that the Vault
+  client's TLS config is its own.
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
@@ -1089,7 +1707,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `run.end.set` / `run.wait_budget.set` by the system with `reason: "limits_tightened"`, and the run
   carries `end_tightened_at` for the run page's banner until a person moves the end again. A
   `PATCH /runs/{id}` decided against limits a re-clamp has since tightened now answers 409 instead of
-  landing. Migration `0086_agent_runs_end_tightened` adds the column.
+  landing. Migration `0095_agent_runs_end_tightened` adds the column.
 - **The run page shows disk used, with a warning at 80% where a cap is enforced (#578).**
   `GET /api/v1/runs/{id}/resources` gains `disk_used_bytes` (space occupied now, read through the
   same in-sandbox exec as its other metrics — not `disk_written_bytes`' running write total) and
@@ -1101,7 +1719,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   filesystem costs only the disk reading. The Sandbox widget's Disk row shows a used/cap bar and
   colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
   used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
-  migration `0087_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
+  migration `0096_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
 - **The governance profile editor gets a Run limits section (#579).** The seven run-limit fields
   (#567) — longest and default end, allow no end, longest and default wait, whether people may
   change either, and pause-after-idle — are now editable on the profile editor, alongside the
@@ -1126,7 +1744,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin), and the last open request being decided, cancelled or expired. The run page's files and
   resources reads answer 409 on a paused run rather than wake it. The run carries `paused_at`,
   `paused_reason` (`waiting` or `idle`) and `active_at` on the wire. Audited as `run.pause` and
-  `run.resume`. A paused run is not contained: kill still is. Migration `0088_agent_runs_pause` adds
+  `run.resume`. A paused run is not contained: kill still is. Migration `0097_agent_runs_pause` adds
   the three columns.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
@@ -1222,6 +1840,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   User-view pages belong to a person. `/` lands by view: an SSO admin in the Admin view, and a
   single-operator install in the Admin view's setup until onboarding is done. The setup gate
   now sends an admin to `/admin/setup`. The old paths still work until they move.
+- **The console shows a held push, its files, and who may decide it (#181).** A brokered
+  git push that matches `push_rules.require_review_paths` is a new approval kind
+  (`push_content`) with its own card — repository, branch, who it acts as, and up to ten
+  files under review (displayed unquoted even where git's `core.quotePath` sent one); the
+  audit row carries the list's digest, and the audit export inlines the full list.
+  Admins/security-admins decide it directly (no scope menu); everyone else sees the same
+  card and no controls. The New Run rail gets a "Push rules" section ("N paths denied · M
+  paths held for review") when
+  a policy sets them, and a note when the run is unattended. A `push_rules.deny_paths` refusal
+  is never a held request — it's named distinctly in the audit trail instead.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just
@@ -1233,8 +1861,175 @@ and does not yet follow semantic versioning (interfaces are not stable).
   happens at the next tagged release — this lands the pipeline, not a pushed
   image.
 
+- **The Azure DevOps kind profile and the compose role matrix now run nightly (#476).**
+  `.github/workflows/nightly.yml` gains two jobs: `kind-sso-ado-walk` brings up its own kind
+  cluster (`wardyn-ado` / `:8580`, `WARDYN_KIND_SSO_PROFILE=ado`) and drives
+  `scripts/kind-sso-walk.sh`'s Azure DevOps profile — the console signing in against a fake Entra
+  tenant, the member's login capturing their Azure DevOps credential, and their run redeeming it
+  (REST + `git ls-remote`) through the proxy's gate and broker; `compose-sso-roles` drives
+  `scripts/compose-sso-roles.sh` against both compose-shaped SSO deployments (`mprime`,
+  `compose-sso`), hermetic and local. Both jobs assert their script's own closing `PASS` line
+  rather than trusting a bare exit code, the same load-bearing check `kind-sso-walk` already uses —
+  an unset gate variable makes either script self-skip and exit 0, which would otherwise be a
+  permanently green job proving nothing. Both are wired into the nightly failure notifier.
+
 ### Security
 
+- **The UI-sandbox enter ticket is bound to the browser that minted it, and a relayed app can no
+  longer register a service worker outside its own path (#1241).** Before, any user could mint an
+  enter ticket for their own run and push another person's browser through the hand-off with a
+  link or an auto-submitted form, landing it in their app; in path mode that app then shared an
+  origin with the victim's own apps. The console's **Open** now makes one credentialed fetch to
+  the new `POST <ui-origin>/__wardyn/bind` first, which sets an `HttpOnly`, `SameSite=Strict`
+  binding cookie on the UI origin, and `GET` and `POST` enter both refuse a ticket that arrives
+  without it (the bad-ticket `403`, plus a `ui.authorize` / `denied` row with reason
+  `ticket not bound to this browser`). The bind answers only a same-site fetch and, with SSO, only
+  the console's own origin (scheme and host); a refused bind is audited with its reason. The one-site
+  rule means the relay can no longer sit on a registrable domain of its own, so a relayed page can
+  plant `Domain=` cookies the console reads (#1258). `/healthz`'s `ui_sandbox` block gains `bind_url`, and the console's CSP
+  `connect-src` names that one URL. **Breaking:** the console and the UI origin must now be the
+  same site (one registrable domain, one scheme; `localhost` and `127.0.0.1` differ), and a script
+  that drives enter must bind first (docs/UI-SANDBOXES.md §3). The relay also removes
+  `Service-Worker-Allowed` from every app response and sets it to the app's own
+  `/r/<run>/<app>/` prefix on a worker-script fetch. docs/OPERATIONS.md now recommends host mode
+  (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) for any install with more than one user, and the threat
+  model's shared-origin residual no longer claims it was confined to one person's browser.
+
+- **Under TLS the console's cookies carry the `__Host-` prefix (#1258).** The session, the sign-in's
+  one-time cookies and the Azure DevOps sign-in's are now `__Host-wardyn_session`,
+  `__Host-wardyn_oidc_state` and so on: `Secure`, `Path=/`, no `Domain`. A browser refuses to store
+  such a cookie from any other host, so a page on a sibling host under the console's registrable
+  domain (a relayed UI-sandbox app among them) can no longer plant a session or sign-in state the
+  console reads. The unprefixed names are never read under TLS. The prefix forces `Path=/`, so under
+  `WARDYN_BASE_PATH` these cookies are no longer scoped to the base. Plain-HTTP installs keep the
+  old names and paths, since a browser refuses `__Host-` there; OPERATIONS.md "Console cookies under
+  TLS" and threat-model residual 18 state what that leaves open. The UI gateway strips and drops the
+  `__Host-` and `__Secure-` spellings of `wardyn_*` cookies as it does the plain ones.
+- **A sign-in whose identity-provider subject names a reserved principal is refused (#1162).**
+  Authorization compares a caller's principal to the admin token's (`admin-token`), the local-mode
+  operator's and a device's, so an identity provider that let a user pick their `sub` could
+  produce a human treated as that identity — owning every run the admin token created. The SSO
+  callback now refuses a subject equal to `admin-token`, the configured `WARDYN_LOCAL_OPERATOR`,
+  or starting with `local:` or `device:` (trimmed and case-folded), before role derivation, with
+  the generic sign-in error and an `auth.fail` row (`wardyn/oidcCallback`, reason
+  `reserved_principal`). A session cookie or `wdn_` API token carrying such a principal, issued
+  before this change, is refused with `401` and the same reason on every request; with OIDC
+  configured, a stored SSH key under one is refused at the gateway (`ssh.authenticate` failure),
+  while local-mode and admin-token-only SSH keep working. The revive/restart/extend owner
+  re-check now exempts a run by its recorded `operator_owned` flag instead of `created_by ==
+  "admin-token"`, so a person's run named like the admin token is re-checked; an admin-token run
+  created before 0.8 (flag unset) is re-checked too when a signed-in admin revives it, so under an
+  enforced kind it needs an allow row for everyone, its user type or `admin-token`; the admin
+  token reviving its own run is unaffected. A guard test now fails on any new
+  comparison against the admin token's principal string outside a reviewed allow-list. If a local
+  install moves to SSO with a custom `WARDYN_LOCAL_OPERATOR`, keep the variable set: that seat is
+  reserved only while it is configured.
+
+- **The UI-sandbox gateway drops a sandbox app's `Set-Cookie` that carries a `Domain` attribute, and
+  can keep other hosts' HttpOnly cookies away from the app (#1158).** A relayed app confined to its
+  own origin never needs `Domain=`; with it, the app's server on a relay host under a shared parent
+  domain could set a cookie every sibling host receives. Any `Domain` attribute, in any case or
+  spacing, now drops the whole `Set-Cookie`, as does one with no name (a browser stores it as a
+  nameless cookie and sends its value back verbatim, so `=wardyn_ui_sess=x` came back named as the
+  relay's session cookie). These rules now also apply to a `1xx` response such as `103 Early Hints`,
+  whose headers the reverse proxy used to copy through unfiltered. The new
+  `WARDYN_UI_SANDBOX_STRIP_COOKIES` sets which inbound cookies reach the app: `allow:<names>` forwards
+  only those, `deny:<names>` strips them (`prefix*` for a prefix); `allow:__Host-*` is the choice the
+  browser itself guarantees host-only. Unset, every cookie except `wardyn_*` is forwarded, as before.
+  With the gateway on, boot refuses a malformed value and an `allow:` entry naming a `wardyn_*`
+  cookie, which is never forwarded. Both controls act on headers only: the relayed page's own
+  JavaScript can still set a `Domain=<parent>` cookie and read non-HttpOnly sibling cookies through
+  `document.cookie`. The relay shares its registrable domain with the console (#1241 requires one
+  site), so keep anything else whose non-HttpOnly cookies matter off that domain; the console's own
+  cookies are the open case (#1258). See docs/UI-SANDBOXES.md, "Header hygiene".
+
+- **A kept run's token is refused at every `/internal` door the moment the run is kept (#1176).**
+  A run its lease ended, or one lost to a reboot or an outage, stays `RUNNING` with its identity
+  unrevoked (a run-wide revoke would also refuse the fresh token a revive mints), so the token
+  its stopped proxy still holds used to pass `internalAuth`'s liveness gate: the credential-mint,
+  injection, approval and decision doors kept answering it until it lapsed, up to an hour after
+  its last renewal. The gate now refuses a kept run with `403 run is lost` and audits
+  `authz.denied` with the new reason `run_kept` (the kept reason rides beside it as
+  `lost_reason`), as token renew already did. The three tail-upload doors keep their five-minute
+  grace, counted from when the run was kept. Revive is unchanged: it still mints a fresh token for
+  the new proxy and retires the old one by its jti.
+- **No proxy container holds the run token, the MITM CA key or the upstream-proxy credential at
+  rest (#1176).** The Docker driver used to hand the proxy sidecar its rendered config in its
+  environment (`WARDYN_PROXY_CONFIG_JSON`), and kept an ended or lost run's stopped proxy for the
+  whole grace window (7 days by default) so a revive could read it back; anyone with Docker access
+  could `docker inspect` it. Now:
+  - The driver writes the config to the proxy's stdin once at start
+    (`WARDYN_PROXY_CONFIG_STDIN`), so neither the container's config nor its environment carries
+    it. The proxy exits non-zero when no config arrives, and the container has no restart policy.
+  - A kept run's proxy is stopped and removed, not kept.
+  - A revive rebuilds the proxy from a new per-run `run_proxy_configs` row (migration
+    `0093_run_proxy_configs`). The
+    row is sealed with AES-256-GCM under a new `wardyn-run-config-key` boot key, which the secret
+    store keeps under its key-encryption key like every boot key. The row is deleted when the run
+    goes terminal, with a purge at boot and on the orphan-sweep cadence as the backstop. The
+    revive keeps the run's MITM CA, so an agent still running after an outage keeps trusting its
+    new proxy.
+  - Kubernetes is unchanged: it already stages the config from a per-run Secret into an in-memory
+    volume (#688), and never keeps a run.
+  - **Upgrading:** a run started before this release has no stored config and cannot be revived
+    (`409`); start a new run. `WARDYN_PROXY_IMAGE` must name a proxy from this release or later:
+    an older proxy does not read stdin and exits at start. The nightly e2e and `test-drive.sh` no
+    longer read a run token out of the proxy container, because there is none to read. Their
+    direct run-token upload and post-kill probes are dropped, and Go tests cover them.
+- **The Kubernetes proxy sidecar's config no longer reaches it as an environment variable
+  (#688).** The Kubernetes driver's `WARDYN_PROXY_CONFIG_JSON` env var, resolved via `secretKeyRef`,
+  kept the run token and MITM CA key out of the API-readable pod spec, but a secret-backed env
+  var still lands in the container's own process environment — visible to `kubectl exec ... env`,
+  `/proc/<pid>/environ`, and any env-var credential scanner, which several enterprise security
+  reviews flag regardless of how the value was resolved. On Kubernetes, a nonroot init container
+  (the same proxy image) now stages the config out of a Secret volume that projects only the
+  config key (mode 0440) into a shared in-memory `emptyDir`, as an owner-only (0400) file; the
+  main proxy container mounts only that file, read-only, and reads it via `-config` — no env var
+  carries it at all. Docker is unchanged (tracked separately, waiting on #1051/#1059). **Upgrade
+  note:** run this wardynd with the wardyn-proxy image from the same release. An older proxy image
+  has no `-stage-config-src`, so its init container exits and every Kubernetes run starts with no
+  egress (it fails closed rather than erroring at create).
+- **An Admin-view browser session no longer starts runs (#639).** `POST /runs` and
+  `POST /runs/preflight` answer `409` with reason `admin_view` and "Runs start in the user view. Use
+  User view at the top of the console to start one." when an SSO session of an admin or security
+  admin is in the Admin view. The User view, users, the admin token and `wdn_` tokens launch as
+  before, so the CLI and CI are unaffected; a request that carries the session cookie is refused
+  even if it also carries a bearer.
+- **`wardyn-tetragon-ingest` posts over TLS, pinned to wardynd's internal CA (#606).** The
+  ground-truth sidecar sent its audit-write-only bearer (`aud=wardyn-groundtruth`) to wardynd's
+  console listener in plaintext (`http://wardynd:8080`), so a peer on the path could capture it and
+  forge ground-truth events until it rotated. It now defaults to the internal TLS listener
+  (`https://wardynd:8443`) and trusts wardynd's internal CA alone, read from the new
+  `WARDYN_CONTROL_PLANE_CA_FILE`. wardynd writes that certificate at boot as `control-plane-ca.pem`
+  beside `WARDYN_GROUNDTRUTH_TOKEN_FILE`, which compose already shares with the ingest. The ingest
+  applies the proxy's rule, refusing to start on `http://` to a non-loopback host or on `https://`
+  without a readable CA file. The chart no longer grants the runs namespace wardynd's `http` port:
+  since 0.7.12 proxies use the internal port. **Upgrading:** stop any run dispatched before 0.7.12
+  before you upgrade, because it has no route back afterwards. If you run the ingest outside
+  compose, set `WARDYN_CONTROL_PLANE_URL` to the internal listener and point
+  `WARDYN_CONTROL_PLANE_CA_FILE` at the published file. THREAT-MODEL B6 no longer lists a plaintext
+  residual for current-version callers.
+- **A secret grant can opt out of the operator-row fallback with `owner_only` (#1106).** An
+  `api_key`, `git_pat`, `ssh_key` or `env_secret` grant marked `"owner_only": true` resolves its
+  secret from the run owner's own row only; a member with none is refused at launch with a named
+  reason instead of being served the operator row of that name, and a row removed after launch is
+  refused at mint. A grant without the flag keeps the fallback. A run with no person behind it
+  (the admin token, local mode) reads the operator row as its own; that is decided from what
+  authenticated the creating request, recorded on the run (migration
+  `0089_agent_runs_operator_owned`, false for every existing run) and signed into the run's token,
+  never from the creator's name, so a person whose sign-in subject is spelled `admin-token` is
+  still a person. An `owner_only` on a pairing
+  in the deployment ceiling or a governance profile binds a member's proposal for it, and a
+  profile may not drop it. `credential.mint` (`git_pat`, `ssh_key`) and `run.env_secret.resolve`
+  now record `secret_scope` (`own` or `operator`). **Upgrading:** upgrade the proxy image
+  together with wardynd before marking any grant `owner_only` — an older proxy refuses a policy
+  carrying the key, so such a run fails at proxy start.
+- **Storing a named policy no longer checks its secret grants against the operator namespace
+  (#1123).** `POST`/`PUT /api/v1/policies` refused a grant naming a secret the admin had not
+  stored as an operator row, forcing the very fallback row a per-person credential must not
+  have. A stored policy's secret references are now checked for shape only; existence is checked
+  at run-create in the run owner's namespace, as before. An inline policy submitted with a run
+  keeps its existence check.
 - **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
   Both resolve an authored secret name through the run owner's namespace, falling back to the
   operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
@@ -1291,6 +2086,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
   0 and mark themselves non-dumpable at start, so a crash writes no core file and another
   process of the same user cannot read their memory or environment.
+- **A derived Azure DevOps or AWS SSO access token is now held to the stored-key lease too
+  (#1083).** Both arms advertise an access token's own expiry, which can outlast the ten-minute
+  lease #589 gave stored keys, so a token minted just before a credential was erased or refused
+  could go on being served for up to its own hour. Both now cap the advertised expiry at
+  `min(token expiry, stored-key lease)`, and every cached Azure DevOps access token for an owner
+  is evicted the moment their credential is — on erase, on the daily expiry sweep, and when a
+  dead sign-in (`invalid_grant`) is deleted — so a stale cache entry can no longer outlive the
+  credential it was derived from.
 - **Security-API follow-ups (#724).** The sign-in help link is `https://` only: a new `http://`
   link is refused at save, and one already stored surfaces as the setup warning
   `sign_in_help_url` (#489). A second enabled Azure DevOps (Entra) row stored before the write
@@ -1474,7 +2277,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `device.enrolment_token.revoke` — admin or `security_admin`, and on the CLI as `wardyn device
   enrol-token-list` / `enrol-token-revoke <id>`. A leaked token no longer stays redeemable for its
   full 72 hours.
-
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
@@ -1593,6 +2395,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **A session that ends mid-page no longer throws the page away (#483).** The console keeps the
+  page and asks you to sign in again over it, by SSO or admin token. Signed back in as the same
+  person, you carry on where you were, with everything you typed still there; a save that hit the
+  expiry is not re-sent, and the screen tells you to save again. If your role no longer reaches
+  the page you can copy your changes and go to Runs. If a different person signs in, the page
+  reloads fresh for them. "Not now" leaves the page read-only under a bar with Sign in. The full
+  sign-in screen now shows a signed-out notice as a warning, not an error, and always lands on
+  Runs.
 - **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
   `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
   stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits
@@ -1651,6 +2461,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The storage behind a deleted drive can now be reclaimed — and this DESTROYS DATA, so it is off
+  by default.** Deleting a drive removed its row and deleting an allocation stopped the mount;
+  neither deleted a byte, and nothing in the product could even name the volume or claim left
+  behind. `POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim <drive-id> --subject <s>
+  --yes`) destroys the storage object one person's allocation resolved to, irreversibly. Four rails
+  hold it: on Kubernetes the daemon does not hold the `delete` verb on claims at all unless the new
+  Helm value `drives.reclaim.enabled` is set (**default `false`** — leave it off and the Role is
+  byte-for-byte what it was, and every attempt ends in the apiserver's own 403); the route is
+  super-admin only; it is refused `409` while a run still holds the object, while a reclaim is
+  already in flight, or when the object answering to that name is not this drive's (the driver
+  re-checks the same identity labels the mount path refuses on, on both substrates); and every
+  attempt that reaches the substrate — successes, `409` refusals and failures alike — is audited as `drive.reclaim`, naming the
+  drive, the person, the backend, the object and what became of it. A share (`host_path`,
+  `k8s_pvc_static`) is refused `422`: Wardyn did not create that object and never deletes it, and
+  there is no recursive delete in this product at any privilege. There is **no console button** — a
+  destructive confirmation is a screen and this one has no approved mock, so the API and the CLI are
+  the whole surface. Runbook: docs/OPERATIONS.md, "Reclaiming a departed person's storage".
+
 - **A user drive readable by root but not by the agent user is refused, not launched.** The daemon's
   own `os.Stat` in `internal/api/user_drives_run.go` ran as root, so a share only the daemon (not the
   sandboxed uid 1000) could read passed create, preflight and `/me` and only failed once the run was
@@ -1665,7 +2493,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   diagnostics and logs); the new var is a **file path** instead, read once at
   boot — the daemon's proxy transport is installed before the database connects
   and before the secret store exists, so a secret-store reference cannot be
-  resolved here. The file's mode must be `0600` or tighter, and boot refuses if
+  resolved here. A group- or world-writable file is refused, and boot refuses if
   both vars are set rather than picking one silently. See `docs/ENV.md`.
   This resolves 0.7.6's known gap that `WARDYN_DAEMON_PROXY_URL` had no credentialed-proxy
   form.
@@ -2025,6 +2853,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The per-user Bedrock remedy no longer tells a bearer caller the opposite of the truth.**
+  Under a `per_user` row whose roster mechanism is `bedrock_bearer` (#153), the setup-check
+  credential sentence still read "a credential — your own AWS sign-in ...; this deployment gives
+  each person their own, so ... a bedrock-api-key bearer secret ... cannot carry your runs" — the
+  bearer is exactly what carries a bearer-row caller's runs, and storing one is the remedy, not
+  something the sentence should warn away from. `bedrockProviderRow` (`setup_checks.go`) now reads
+  the row's own mechanism, threaded through a new `SetupBedrock.PerUserBearer` field
+  (`runs_bedrock_probe.go`), and branches: an SSO row keeps the sign-in sentence unchanged, and a
+  bearer row now reads "a credential — your own Bedrock API key bearer (set it with `wardyn secret
+  set bedrock-api-key`); this deployment gives each person their own, so storing one is what
+  carries your runs — an AWS sign-in, a read-only ~/.aws mount and aws-access-key-id +
+  aws-secret-access-key cannot". The sibling `llm_provider` row (`llmProviderCheck`) carried the
+  same defect — it told any `per_user` caller with no provider connected to sign in to AWS
+  regardless of the row's mechanism — and now branches on `PerUserBearer` the same way.
+
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
   (`ephemeralScratchVolumes`), and dispatch's toolchain env now points `GOTMPDIR`, `GOMODCACHE` and
@@ -2058,7 +2901,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   signal, never defaulted — a snapshot this build could not fully enumerate still reads as
   incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
   human who never signs in again.
-
 - **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
   `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
   string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
@@ -2094,7 +2936,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
   lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
   example line now sits beside the existing bind, and `docs/ENV.md` states the limit. (#135)
-
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
   so a restart wiped the mark and the credential graded "renewable" again — the exact credential
@@ -2290,6 +3131,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
+- **The launch advisory does not survive a reload (#125).** A launched run's advisory `warnings[]`
+  ride router state onto the run page, which is gone the moment that page reloads; the durable
+  record stays the `run.create` audit row's own clamp warnings, on the Audit tab. Still open at 0.8.
 - **A run's autonomy posture omits the egress dispatch adds after the gate.** `resolveRunAutonomy`
   grades every lane `unionRunEgress` adds, but not the model-provider hosts egress dispatch resolves
   from global configuration afterward — a Bedrock run's `bedrock-runtime.<region>.amazonaws.com`, for
@@ -2315,6 +3159,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Upgrading
 
+- **Under TLS every SSO human is signed out once (#1258).** The session cookie is renamed
+  `__Host-wardyn_session` and the old `wardyn_session` is never read, so each human signs in again at
+  their next request. Plain-HTTP installs, admin-token and API-token auth are unaffected.
 - **`wardyn workspace get` now prints the one-line table by default (#200).** A script that parsed
   its default JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
@@ -2339,6 +3186,52 @@ and does not yet follow semantic versioning (interfaces are not stable).
   chart alias (`WARDYN_OIDC_ROLE_MAP`/`WARDYN_OIDC_DEFAULT_ROLE` still accepting `member`,
   `WARDYN_MEMBER_MODE` and its sibling `WARDYN_MEMBER_*` variables) keeps working and warns at
   boot through 0.8.x; it is removed in 0.9.
+- **Five overlapping/collided env vars renamed, clean break, no alias period (#203).** Wardyn has
+  no users yet (owner ruling, #205/#203/#206), so these land directly: no
+  `cliutil.EnvAlias` compatibility shim and no boot warning naming the old spelling. Setting the
+  old name after upgrading is simply inert — nothing refuses boot over it, it is just not read.
+  `WARDYN_ALLOW_PLAINTEXT` (CLI) → `WARDYN_CLI_ALLOW_PLAINTEXT`; `WARDYN_ALLOW_PLAINTEXT_LISTEN`
+  (daemon) → `WARDYN_LISTEN_ALLOW_PLAINTEXT`; the two were named alike but meant different things.
+  `WARDYN_PROXY_URL_OVERRIDE` → `WARDYN_SANDBOX_PROXY_URL`, naming what it sets rather than what it
+  overrides. `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` folds into
+  `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s new `{app,pat}` scope — one push branch-namespace control
+  split by credential kind is now one var: a bare value (the same word list as before) still binds
+  the App lane only, exactly as it did before the merge; `app:<word>,pat:<word>` sets either or both
+  lanes explicitly, and a scope left unnamed keeps its own pre-merge default (App on, PAT off).
+  `WARDYN_SUBSCRIPTION_INJECT` keeps its name, but `scripts/stage-claude-creds.sh`'s parser is
+  realigned to the same on/off word list `wardynd` itself uses (`cliutil.EnvBool`) instead of
+  recognizing only the literal `off` — the two readers of that one var disagreed on 3 of its 4 "off"
+  spellings, which could silently mis-stage a credential; a garbage value now exits 2 there too,
+  matching `wardynd`'s own fail-closed contract instead of guessing. `WARDYN_RUNNER_TARGET` keeps
+  its name, moved to `docs/ENV.md`'s Test / internal-only section (it was never operator
+  configuration). Full old → new table: `docs/ENV.md`'s "Renamed in 0.8" section.
+- **If you set `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` to an enable word, git_pat pushes are
+  UNCONFINED after this upgrade until you set `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=pat:on` (#203).**
+  The old name is no longer read anywhere and no longer forwarded to the proxy sidecar, so an
+  install that relied on it opting the PAT lane in silently falls back to that lane's own default,
+  OFF — nothing refuses boot, and the only signal is that the proxy's boot INFO line
+  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS (pat scope) is on`) simply stops appearing. Translate the
+  old pair as `app:<old App value>,pat:<old PAT value>` (for example, if you had left the App lane
+  at its default and set only the PAT lane on, the equivalent single value is `app:on,pat:on`, or
+  just `pat:on` since the App lane's default is unchanged). Confirm the fix took by watching for
+  that same boot INFO line. Upgrade the proxy image together with wardynd: a 0.7.x proxy sidecar
+  behind a 0.8 wardynd (for example a pinned `WARDYN_PROXY_IMAGE`) reads the merged value with its
+  own old, bare-word-only parser — any `app:`/`pat:`-scoped value reads as garbage there, so it
+  enforces the App lane and logs a warning while the PAT lane stays at its own old default, OFF,
+  regardless of what the scoped value asked for.
+
+### Added
+
+- **Opt-in extra OIDC scopes, `WARDYN_OIDC_EXTRA_SCOPES` (#1101).** The authorization request was
+  fixed at `openid profile email`, so a `WARDYN_OIDC_ROLE_MAP` row keyed on a `groups` claim value
+  decided nothing on an IdP that gates that claim behind an explicit scope grant. This CSV
+  (default empty, unchanged) appends scopes to the request — most commonly `groups` — validated at
+  **boot** against the provider's own discovery `scopes_supported`: an unadvertised scope refuses
+  boot by name rather than failing every human's login with `invalid_scope`. A provider that
+  publishes no `scopes_supported` at all is not refused (that field is optional in OIDC
+  discovery); boot warns and requests it unchecked. Configuring `groups` also silences the
+  existing boot- and login-time warnings about a `groups`-keyed role-map row on a
+  `groups`-scope-gating provider — the scope is now actually being asked for.
 
 ## [0.7.12] — 2026-09-23
 
@@ -5852,9 +6745,8 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   (all at or before v0.7.1 — 0.7.2 fixed none of them), **5 had WORSENED and
   are fixed in this release** (the Kubernetes orphan sweep, `-race -tags k8s`,
   and the Compose envelope forwards, all named above), and **7 needed a deeper
-  probe than a re-read**. The triage sheet is operator-local and untracked
-  (`local/v072/R2-quickpass.md`), so this list is the shipped record of it. The
-  53 carried rows are the honest number for "known, unreviewed at 0.7".
+  probe than a re-read**. The triage sheet itself is not published, so this
+  list is the shipped record of it. The 53 carried rows are the honest number for "known, unreviewed at 0.7".
 - **Two browser rows could not be delivered by the harness.** The Playwright
   agent-roster spec cannot drive "a member signs in to AWS SSO and launches" or
   "an expired shared credential is refused with the named sentence": capability
@@ -5898,7 +6790,7 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   once at the top of this section and repeated here because it is the largest
   single caveat: the `400`/`412`/`422` bodies and the new console copy are
   constants awaiting the maintainer's canon sitting, tracked on an
-  operator-local sheet (`local/v072/M2-canon-sheet.md`). Four of them already
+  unpublished sheet. Four of them already
   diverge from the design prompt's staging, including the terminal's `Ctrl+]`
   exit chord. Tests assert through the constants, so adopting the canon is a
   one-file diff that moves no behaviour.
@@ -5945,61 +6837,17 @@ git PATs.
 - **Governance profiles** — a named policy ceiling an admin can ASSIGN to a person, to an SSO group, or to everyone, so a contractor group and a platform team can hold genuinely different limits on one install. A profile REPLACES the site-wide default rather than composing with it. - **A security-admin role**, and a console that can be delegated to it — the second admin tier governs the verdict (profiles, permissions, egress decisions, token inventory, audit verification) and deliberately does NOT reach into a run. - A governance profile can cap **how many runs one person has going at once**, and self-service secrets gain the per-owner cap the sibling surfaces already had. - An admin can fence **which agents and which model providers** a member may name on their own run, as two more permission kinds on the existing Permissions page. - **User drives** — an admin registers persistent storage and allocates it to people, groups or everyone; a member mounts theirs per run at `/home/agent/drive`, **read-only unless allowed**, and the server resolves which drive belongs to the signed-in caller. Registering a drive on a host path is fenced by `WARDYN_USER_DRIVE_HOST_ROOTS`, unset and therefore closed by default. - **Git PATs for non-GitHub forges are never resident** — `agent-run` rewrites a granted host to a plain-HTTP broker path, the proxy mints server-side and injects Basic auth itself, and the grant ids are withheld from the sandbox env. `WARDYN_GIT_PAT_BROKER=off` restores the old lane; there is deliberately **no automatic fallback**.   - The lane is on by default and, until this release candidate, **was not actually running**: "the switch resolved into a setting nothing read, and the lane was carried by an internal per-launch flag no launch path ever set". - An operator can trust a corporate TLS-inspecting proxy's root CA (`WARDYN_TRUSTED_CA_FILE`), delivered on compose, the desktop profile and the Helm chart. - An operator can declare internal hostnames allowed to resolve to private/CGNAT addresses (`SiteConfig.internal_hosts`), and can tell a corporate proxy **which destinations to skip** (`upstream_proxy_no_proxy`). - Bedrock can be reached through a **VPC (PrivateLink) endpoint** (`WARDYN_BEDROCK_BASE_URL`), with full model ARNs documented as accepted identifiers. - An operator can point the API-key model-access lane at an **internal gateway** (`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL`). - **A member can bring their own model API key** and set and remove their own secrets — it works in their own runs with no admin setup and is never reachable from anyone else's run. - The **People step becomes an acting surface**: an admin adds, edits and deletes `WARDYN_OIDC_ROLE_MAP` role mappings live from the console, guarded by a posture-flip acknowledgement and a lockout refusal. - Console `tool_rules`: a per-tool allow / hold / deny editor in the policy panel, a "What this run can do" line on the New run rail, and audit rows that read **Decided by rule** with the verbatim `rule_source`. - **A blocked egress request now says WHICH rule blocked it** — `X-Wardyn-Egress-Reason` carries the decision log's own rule source (`policy:default-deny`, `approval:denied`, `builtin:private-ip`, …). - Wardyn reports whether the Kubernetes NetworkPolicy that isolates sandboxes is **actually enforced** (`/healthz`'s `network_policy` field, plus a boot-time audit event on an unenforced-but-allowed cluster). - **Helm `image.digest`** — the blessed Kubernetes path no longer has to float on a mutable tag. - External clients can drive a sandbox over the SSH gateway: `wardyn ssh-key ensure|list`, `wardyn run wait-ready <id> --json`, `wardyn ssh <id> --json`, plus the per-run `git_push_any_branch` opt-out. - **A browser desktop (noVNC) is a shipped image variant** (`deploy/images/novnc/`, `make agent-image-novnc`) — local build only, and it changed no server code. - A fresh install **remembers being set up server-side** (`POST /setup/onboarding-complete`), so a different browser — or a different admin — lands past the funnel too. - `threatmodel/AGENT-THREAT-MODEL.md` — a portable threat model for agent systems generally, carrying twice as many non-mitigated verdicts as mitigated ones. 
 ### Hardening pass
 
-0.7 was reviewed before release rather than after. Seven independent verification
-runs (R1–R7) were opened over the release candidate, one per subject area, staffed
-with blind reviewer agents working from a written brief. Six of them produced ledgers;
-the seventh (R2, the run plane) was abandoned before its first round finished, and that
-gap is stated below rather than averaged away. Every finding the six recorded is in a
-ledger, and every fix claim names the command that proves it. This section is the
-arithmetic out of those ledgers, the contract changes an operator will notice, and what
-is still open. **The bullets in the sections below this one are the individual fixes
-those runs produced.**
+0.7 was reviewed before release rather than after, in seven subject areas (R1–R7): authz +
+governance, the run plane, egress + credentials, the UI console, ops / install / CLI, docs + the
+threat model, and user drives. This section is the arithmetic out of that review, the contract
+changes an operator will notice, and what is still open. **The bullets in the sections below this
+one are the individual fixes it produced.**
 
-Read the table with two qualifications, both load-bearing:
-
-- **"Fixed" mostly means fix-claimed, not reviewer-verified.** Six of the seven runs
-  ended `INCONCLUSIVE (budget)`: the fix wave landed, the gates were re-run green on
-  the release candidate (`make ci` 24/24 plus the PostgreSQL lane, `gate exit=0 tree
-  776c1065` and `gate exit=0 tree 0e8a751d`), but a second blind reviewer round to
-  confirm the fixes was not funded. Only R1 carries reviewer-verified fixes (101 of
-  them), and even there the 62 final-wave fixes are "fixed-unverified, gate-green".
-- **"Open" is almost entirely Low/Info residue** deliberately left for 0.7.1, listed
-  in `local/review-0.7/FOLLOW-UPS-0.7.1.md`. Only one open finding is above Low (a
-  single R7 Medium). The ten `deferred` findings are the ones to read: two of them are
-  **High** (R3 F055, R4 F107) and both are named under Residuals below.
-
-| Run | Subject | Critical | High | Medium | Low | Info | Total | Fixed | Disputed | Deferred | Open | Verdict | Source |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **R1** | authz + governance | 11 | 41 | 117 | 124 | 58 | **351** | 163 (101 verified-fixed + 62 fix-claimed) | 3 rejected | 3 | 182 | INCONCLUSIVE (budget) — 65 unverified | `local/review-0.7/runs/R1-REPORT.md` §0 — 351 = 284 on the re-init ledger + 67 carried from the deep ledger |
-| **R2** | run plane | 0 | 0 | 0 | 0 | 0 | **0** | 0 | 0 | 0 | 0 | not reviewed — the round was abandoned before ingest and the ledger is empty (its report's verdict string reads APPROVED over zero findings) | `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/report.md` |
-| **R3** | egress + credentials | 2 | 32 | 62 | 45 | 23 | **164** | 95 fix-claimed | 0 | 1 | 68 | INCONCLUSIVE (budget) — 56 unverified | `~/.claude/verify-runs/wardyn-0.7-r3-20260904-161453/report.md` |
-| **R4** | UI console | 0 | 17 | 46 | 67 | 16 | **146** | 57 fix-claimed | 0 | 6 | 83 | INCONCLUSIVE (budget) — 51 unverified | `~/.claude/verify-runs/wardyn-0.7-r4-20260904-160926/report.md` |
-| **R5** | ops / install / CLI | 0 | 12 | 125 | 84 | 17 | **238** | 137 fix-claimed | 0 | 0 | 101 | INCONCLUSIVE (budget) — 96 unverified | `~/.claude/verify-runs/wardyn-0.7-r5-20260903-202842/report.md` |
-| **R6** | docs + threat model | 0 | 8 | 62 | 57 | 7 | **134** | 70 fix-claimed | 0 | 0 | 64 | INCONCLUSIVE (budget) — 45 unverified | `~/.claude/verify-runs/wardyn-0.7-r6-20260903-202659/report.md` |
-| **R7** | user drives | 1 | 7 | 41 | 44 | 14 | **107** | 44 fix-claimed | 4 disputed | 0 | 59 | INCONCLUSIVE (budget) — 27 unverified | `~/.claude/verify-runs/wardyn-0.7-r7-20260903-160043/report.md` |
-| | **Total** (arithmetic over the rows above; not read from any single file) | **14** | **117** | **453** | **421** | **135** | **1140** | **566** | **7** | **10** | **557** | | |
-
-R2 is the one subject area 0.7 did not verify: its abandoned round banked 18 lens files with 75 untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info), which are 0.7.1's first triage (`local/review-0.7/FOLLOW-UPS-0.7.1.md`). Nothing in this release claims to have reviewed the run plane.
-
-Full verdict strings, verbatim from each report's `## Final Verdict`:
-
-- R1 — `VERIFY wardyn-0.7-r1-std-20260905-214053 INCONCLUSIVE (budget) — 65 unverified (mode: repo) (tools changed r1: ledger.py, references/convergence.md) 386dc19`
-  · source: `local/review-0.7/runs/R1-REPORT.md:5`, also `~/.claude/verify-runs/wardyn-0.7-r1-std-20260905-214053/report.md:3428`
-- R2 — `VERIFY wardyn-0.7-r2-20260904-161449 APPROVED (mode: repo) 3a46853`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/report.md:46`
-- R3 — `VERIFY wardyn-0.7-r3-20260904-161453 INCONCLUSIVE (budget) — 56 unverified (mode: repo) (tools changed r1: ledger.py) 3a46853`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r3-20260904-161453/report.md:2239`
-- R4 — `VERIFY wardyn-0.7-r4-20260904-160926 INCONCLUSIVE (budget) — 51 unverified (mode: repo) (tools changed r1: ledger.py, references/convergence.md) 3a46853`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r4-20260904-160926/report.md:1994`
-- R5 — `VERIFY wardyn-0.7-r5-20260903-202842 INCONCLUSIVE (budget) — 96 unverified (mode: repo) (tools changed r1: ledger.py, review_round.js) 020b09d`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r5-20260903-202842/report.md:3232`
-- R6 — `VERIFY wardyn-0.7-r6-20260903-202659 INCONCLUSIVE (budget) — 45 unverified (mode: repo) (tools changed r1: ledger.py, review_round.js) 020b09d`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r6-20260903-202659/report.md:1964`
-- R7 — `VERIFY wardyn-0.7-r7-20260903-160043 INCONCLUSIVE (budget) — 27 unverified 386dc19`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r7-20260903-160043/report.md:1521`
-
-
-
+Across the six areas whose review produced a ledger: 1140 findings total (14 Critical, 117 High, 453
+Medium, 421 Low, 135 Info), 566 fixed, 7 disputed, 10 deferred, 557 open. The gates were re-run
+green on the release candidate (`make ci` 24/24 plus the PostgreSQL lane). "Open" is almost
+entirely Low/Info residue; only one open finding is above Low (a single R7 Medium). What "fixed"
+does and does not mean, and the two deferred High findings, are under Known gaps below.
 
 #### Contract and compatibility changes
 
@@ -6411,6 +7259,19 @@ proceed.
 
 Six episodes of the walkthrough series were re-recorded on this release and ship as its assets (01, 02, 03a, 03b, 03d, 05). The rest are being re-recorded on 0.7 and are uploaded to this same release as each take passes; until then their rows in the README and the console read *coming soon*, and no 0.6.0 footage is linked, because the console it shows has changed.
 
+#### Known gaps
+
+- **The run plane (R2) was not reviewed for 0.7.** Its 75 untriaged candidate rows (4 High, 36
+  Medium, 26 Low, 9 Info) are 0.7.1's first triage. Nothing in this release claims to have
+  reviewed the run plane.
+- **"Fixed" mostly means fix-claimed, not reviewer-verified.** Every fix is gate-green on the
+  release candidate, but only R1 carries reviewer-verified fixes (101 of them), and its 62
+  final-wave fixes are gate-green only. Unverified fix claims: R3 56, R4 51, R5 96, R6 45, R7 27;
+  R3's re-check covered Critical and High findings only.
+- **Low/Info residue is deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
+- **Two High findings are deferred** — R3 F055 and R4 F107, both named under Known residuals
+  below.
+
 #### Known residuals and owner-gated items
 
 **Owner-gated — the release does not claim them.**
@@ -6421,17 +7282,9 @@ Six episodes of the walkthrough series were re-recorded on this release and ship
 - **R3's one open High, F055, was fixed after the counts above were taken** (`fix/v0.7-f055`, merged 41079162): a name that did not resolve was audited as the private-IP guard; it is now audited as itself. The R3 row still counts it as open.
 - **Twenty-four of R1's first-run claims carry a wrong `fix_elsewhere` annotation.** The fixes and their evidence are real; the claim script that stamped them had a column bug. The annotations were left as they are rather than rewritten.
 - **PF-48 — resident credential lanes sit above the ceiling re-assertion.** "Resident credential lanes (`WARDYN_GIT_PAT_GRANTS` with the broker off, `WARDYN_SSH_GRANTS`) are marshalled into the sandbox ABOVE the re-assertion phase, so a ceiling-denied host's PAT or key is still resident and exfiltratable through other egress. Named, not closed." The code says the same: they "are marshalled into env at `applyDispatchModeEnv`, above this phase … a resident credential for a denied host still meets that deny on every named dial." - **PF-1 residual — an unassigned member still selects stored policies unclamped.** "Closing it deployment-wide is an `all`-subject assignment, by design." The governance code keys every refusal on `ceiling.Profile != nil`, "never on the ceiling's contents — an UNASSIGNED member is byte-for-byte today here (PF-1's stated residual)". - **An egress redirect's `to` cannot be an IPv6 literal.** R3 F005, severity Info, **status `open`**: "No site-config field can name an IPv6 literal: `hostrules.HostOf` cuts at the first ':' inside the brackets … Every such value is rejected at PUT with 'invalid URL'/'invalid host'; the operator has no spelling that works." Pre-existing, unrelated to this campaign, unfixed. Use a hostname or an IPv4 literal. - **The redirect probe's SNI swap has one edge it can green wrongly.** The probe now "dials the target while presenting the original hostname, which is what a real run does" (fixed, `CHANGELOG.md:402`, with `WARDYN_PROBE_TO_CONNECT`). The residual: "The narrow edge is an **Ecosystem** redirect whose `To` is a literal IP: the agent's tool dials the To address directly, so its SNI is the To IP, and the probe's From-SNI swap would green a config the real tool fails." `redirectProbeTo` still fires the swap on `net.ParseIP(toHost) != nil` alone and reads no redirect kind. "Confirm on the real-mirror walk before changing probe code." - **F055 — a DNS failure is still reported as an SSRF deny, and closing it is an owner decision.** R3 F055, severity **High**, status **`deferred-proposed`**: "A DNS/resolver failure is audited and reported to the sandbox as an SSRF private-IP deny, with a remediation instruction to widen the SSRF guard." It is deferred because the fix is all canon surface: "The fix REQUIRES a new quoted audit decision string in the decision stream (`builtin:resolve-failed`), a new row in `docs/UI-SANDBOXES.md`'s `rule_source` table, and a new operator-facing `X-Wardyn-Egress-Detail` sentence / 403 body". Recorded as an owner decision: "F055 [High] is `deferred-proposed` (canon-strings law) and is an OWNER decision (FOLLOW-UPS P0)." **One of exactly two High-severity findings in the whole campaign that ship neither fixed nor rejected** (the other is R4 F107, below). - **R4 F107 — a failed sign-out looks identical to a successful one.** Severity **High**, status **`deferred-proposed`**: "A failed sign-out is reported only to the devtools console, so the human sees the sign-in gate while the HttpOnly SSO session stays alive … a page reload re-enters the console through the still-valid session cookie without any credential being presented." It is deferred with the other five R4 items that need new console copy under the canon rule: "R4 DEFERRED-PROPOSED six (owner mock round; new copy/state under canon rule (c)): R4-F009 preflight `setup_items` in the rail, R4-F052 the four `user_drive_unavailable` sentences …, R4-F070 security-tier probes surface, R4-F093 preview `home_subject`/`warning` rows, R4-F107 sign-out-failed strings, R4-F144 terminal keyboard-trap chord." - **R4 F144 — the cockpit terminal is a WCAG 2.1.2 keyboard trap.** Severity Medium, status `deferred-proposed`: "Keyboard focus cannot leave the cockpit terminal … Tab, Shift+Tab and Escape all stay in the PTY textarea." Deferred with the same six; it is the one on that list with an accessibility-conformance name attached. 
-**Closed since the handoff was written — do not re-publish these.**
+**Closed since the release candidate — do not re-publish these.**
 
-- **The ssh cockpit widget predicate.** `local/HANDOFF-0.7-RELEASE.md:142-146` says the widget is owner-only while `ConnectSSHCard`'s `mayAttach` is owner-or-admin. That is no longer true in the tree: `widget-registry.ts:189-192` now reads `ctx.run.state === "RUNNING" && ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator)` with the comment "run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin", and `run-detail.tsx:580-584` asserts "all three must agree". What survives is a **test** gap — R4 F129, "The SSH widget's owner-only availability gate has no test, and the canvas suite is constructed to avoid it", status `fix-claimed`, verification `unverified-budget`. 
-**Verification debt owed before 0.7.1 can claim "reviewed".**
-
-Quoted from `local/review-0.7/FOLLOW-UPS-0.7.1.md:19` (P1) and :28 (P4), and §"Deferred review work" (30-45):
-
-- **R2 (run plane) — NO review in 0.7.** The one subject area with no verification at all. 75 candidate rows (4 High, 36 Medium, 26 Low, 9 Info) sit untriaged in `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/inbox/round-1`.
-- **R5 — 137 fix claims unverified by reviewer**; **R6 — 70**; **R3 — no blind round 2** (a Critical/High-only adversarial pass was the 0.7 substitute); **R4 — no round 2**, 51 unverified; **R7 — round 2 dropped** by owner decision ("treat R7 like R5/R6"), 27 claims unverified; **R1 — 62 wave fixes "fixed-unverified, gate-green"**.
-- **Low/Info residue, all runs, deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
-
+- **The ssh cockpit widget predicate.** The release candidate's notes said the widget is owner-only while `ConnectSSHCard`'s `mayAttach` is owner-or-admin. That is no longer true in the tree: `widget-registry.ts:189-192` now reads `ctx.run.state === "RUNNING" && ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator)` with the comment "run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin", and `run-detail.tsx:580-584` asserts "all three must agree". What survives is a **test** gap — R4 F129, "The SSH widget's owner-only availability gate has no test, and the canvas suite is constructed to avoid it", status `fix-claimed`, verification `unverified-budget`. 
 **Published threat-model residuals.** `threatmodel/THREAT-MODEL.md` §5 now lists 39;
 `v0.6.6` listed 27. **#28–#39 are new in 0.7.** The ones a 0.7 operator should read
 before turning a 0.7 feature on:

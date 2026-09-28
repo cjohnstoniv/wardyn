@@ -48,3 +48,8 @@ export function useTheme() {
   if (!ctx) throw new Error("useTheme must be used within ThemeProvider");
   return ctx;
 }
+
+/** The theme in effect, or the dark default outside a provider — for a view that only reads it. */
+export function useThemeName(): Theme {
+  return React.useContext(Ctx)?.theme ?? "dark";
+}

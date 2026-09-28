@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunPause pins migration 0088 through the pause surface: the presence
+// TestPG_RunPause pins migration 0097 through the pause surface: the presence
 // stamp, the pause mark's compare on the presence clock, on a still-open
 // request (waiting) and on no open request (idle), the columns reading back on
 // the run, clearing, and an end clearing a pause.
@@ -180,7 +180,7 @@ func TestPG_RunPause_ClearedByLostAndRevive(t *testing.T) {
 		t.Fatalf("force a stale pause mark: %v", err)
 	}
 
-	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot, nil); err != nil || !ok {
 		t.Fatalf("MarkRunRevived = %v, %v; want true", ok, err)
 	}
 	revived, err := pg.GetRun(ctx, run.ID)
@@ -249,7 +249,7 @@ func TestPG_RunPause_SurvivesALiveRestart(t *testing.T) {
 		t.Fatalf("MarkRunPaused = %v, %v; want true", ok, err)
 	}
 
-	if ok, err := pg.MarkRunRevived(ctx, run.ID, ""); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, "", nil); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(live) = %v, %v; want true", ok, err)
 	}
 	restarted, err := pg.GetRun(ctx, run.ID)

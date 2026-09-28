@@ -9,7 +9,7 @@
 // boolean LimitRows and the save/cancel/error plumbing through the whole
 // screen; this file mounts the editor directly so the number rows don't need
 // a profiles table around them.
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -318,5 +318,57 @@ describe("ProfileEditor — the autonomy rubric round-trips", () => {
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     const call = updateProfileMock.mock.calls[0][1];
     expect(call.limits.autonomy_rubric).toBeUndefined();
+  });
+});
+
+// #1200 §3a — "Allowed barriers": one radio over the SAME min_confinement_class
+// field the JSON spec authors, so the two controls can never disagree.
+describe("ProfileEditor — Allowed barriers (T-7)", () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+  });
+
+  it("reads the loaded profile's floor and shows its summary sentence", () => {
+    // GREENFIELD's ceiling carries min_confinement_class: "CC2".
+    renderEditor();
+    expect(screen.getByRole("button", { name: "Wall", pressed: true })).toBeInTheDocument();
+    expect(
+      screen.getByText("Wall and Vault are allowed under this profile; Fence is not."),
+    ).toBeInTheDocument();
+  });
+
+  it("a new profile's starter (Minimal template) floors at Wall", () => {
+    renderEditor(null);
+    expect(screen.getByRole("button", { name: "Wall", pressed: true })).toBeInTheDocument();
+  });
+
+  it("picking Vault writes CC3 into the same spec the JSON textarea shows, and saves it", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderEditor();
+
+    await userEvent.click(screen.getByRole("button", { name: "Vault" }));
+    expect(screen.getByRole("button", { name: "Vault", pressed: true })).toBeInTheDocument();
+    expect(
+      screen.getByText("Only Vault is allowed under this profile — every run is forced onto it."),
+    ).toBeInTheDocument();
+    // The JSON textarea (PolicyPanel) reflects the same write.
+    expect((screen.getByLabelText("Spec (JSON)") as HTMLTextAreaElement).value).toContain(
+      '"min_confinement_class": "CC3"',
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock).toHaveBeenCalledWith(
+      GREENFIELD.id,
+      expect.objectContaining({ ceiling: expect.objectContaining({ min_confinement_class: "CC3" }) }),
+    );
+  });
+
+  it("disables the control while the JSON is unparseable, rather than silently no-oping a click", async () => {
+    renderEditor();
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    const textarea = screen.getByLabelText("Spec (JSON)");
+    fireEvent.change(textarea, { target: { value: "{ not json" } });
+    expect(screen.getByRole("button", { name: "Vault" })).toBeDisabled();
   });
 });

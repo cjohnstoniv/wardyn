@@ -26,8 +26,8 @@ var ErrPushPathListCap = errors.New("store: this run has stored its limit of pus
 type PushPathListStore interface {
 	// RecordPushPathList stores approvalID's list once, for runID. A second
 	// call for the same approval stores nothing and reports false; a list
-	// past the run's limit stores nothing and returns ErrPushPathListCap. The
-	// count and the insert are one step: concurrent calls for a run serialize.
+	// past the run's limit returns ErrPushPathListCap. Count and insert are
+	// one step, so concurrent calls for a run serialize.
 	RecordPushPathList(ctx context.Context, approvalID, runID uuid.UUID, l types.PushPathList, limit int) (bool, error)
 	// GetPushPathList returns approvalID's list, or ErrNotFound.
 	GetPushPathList(ctx context.Context, approvalID uuid.UUID) (types.PushPathList, error)
@@ -38,9 +38,8 @@ type PushPathListStore interface {
 var _ PushPathListStore = PG{}
 
 func (s PG) RecordPushPathList(ctx context.Context, approvalID, runID uuid.UUID, l types.PushPathList, limit int) (bool, error) {
-	// READ COMMITTED, pinned: the count after the lock must see the rows the
-	// previous holder committed, which a REPEATABLE READ snapshot taken by the
-	// lock statement itself would not.
+	// READ COMMITTED, pinned: the count after the lock must see rows the
+	// previous holder committed, which a REPEATABLE READ snapshot would not.
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return false, err

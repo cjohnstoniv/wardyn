@@ -10,19 +10,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// SpendApprovalOnce spends a `once` Azure DevOps capability approval: it writes
-// jti into the row's minted_jti if, and only if, nothing has spent it yet.
-// spent=false means another request already did (or the row is not an approved,
-// once-scoped, control-plane-raised escalation) and the caller must not forward.
+// SpendApprovalOnce spends a `once` Azure DevOps capability approval: it
+// writes jti into the row's minted_jti if, and only if, nothing has spent it
+// yet. spent=false means another request already did (or the row is not an
+// approved, once-scoped escalation) and the caller must not forward. The
+// empty-minted_jti condition is the whole exactly-once argument: two
+// concurrent re-resolves both reach this UPDATE, Postgres serialises them on
+// the row, and the second finds the column already written.
 //
-// The empty-minted_jti condition is the whole exactly-once argument: two
-// concurrent re-resolves both reach this UPDATE, Postgres serialises them on the
-// row, and the second finds the column already written. It is the credential mint's own
-// write-back column, so "approval X let request Z through" is the same join
-// "approval X minted credential Z" already is.
-//
-// Not part of the Store interface, for ResolveReauthApproval's reason: the api
-// package type-asserts for it, and a store without it spends nothing.
+// Not part of the Store interface (see ResolveReauthApproval): the api
+// package type-asserts for it.
 func (s PG) SpendApprovalOnce(ctx context.Context, id uuid.UUID, jti string) (bool, error) {
 	if jti == "" {
 		return false, fmt.Errorf("store: SpendApprovalOnce: an empty jti would leave the approval unspent")

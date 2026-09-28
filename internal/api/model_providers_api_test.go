@@ -237,6 +237,36 @@ func TestModelProvidersPut(t *testing.T) {
 	})
 }
 
+// TestModelProvidersPutIgnoresAClientSuppliedUID pins the SAME rule
+// TestSiteConfigDoorCarriesModelProviders proves for PUT /site-config
+// ("a named block keeps its stored UID and ignores the body's") to THIS door,
+// PUT /model-providers. assignModelProviderUIDs is the one shared gate both
+// doors call (model_providers.go), so the guarantee already holds — but before
+// this test, only the site-config door had a door-level pin of it. A change
+// that broke only this door's call to assignModelProviderUIDs (or skipped it)
+// would have passed every existing test.
+func TestModelProvidersPutIgnoresAClientSuppliedUID(t *testing.T) {
+	stored := providerBlock(keyProvider("anthropic", "claude-code"))
+	assignModelProviderUIDs(stored, nil)
+	realUID := stored.Providers[0].UID
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{ModelProviders: stored}}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+		`{"providers":[{"id":"anthropic","uid":"forged","kind":"anthropic_api_key"},`+
+			`{"id":"openai","uid":"also-forged","kind":"openai_api_key","disabled":true}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body=%s", w.Code, w.Body.String())
+	}
+	got := fake.putSeen.ModelProviders.Providers
+	if got[0].UID != realUID {
+		t.Errorf("uid = %q, want the stored %q — a submitted uid must never be trusted on this door", got[0].UID, realUID)
+	}
+	if got[1].UID == "" || got[1].UID == "also-forged" {
+		t.Errorf("a new provider's uid = %q, want a server-minted one, never the body's", got[1].UID)
+	}
+}
+
 // TestModelProvidersPutKeepsDefaults: removing a default's provider, or
 // unticking the agent it defaults, is refused (E8); turning it off is not.
 func TestModelProvidersPutKeepsDefaults(t *testing.T) {
@@ -526,8 +556,9 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"age_key", "auth", "bedrock", "checks", "checks_redacted", "deployment", "harnesses", "has_runs", "host_proxy",
-		"llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm", "secrets",
+		"age_key", "auth", "bedrock", "checks", "checks_redacted", "credential_storage", "deployment", "harnesses",
+		"has_runs", "host_proxy", "llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm",
+		"secrets",
 	}
 	if got := slices.Sorted(maps.Keys(st)); !slices.Equal(got, want) {
 		t.Errorf("member /setup/status keys = %v\nwant today's %v", got, want)

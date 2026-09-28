@@ -25,11 +25,17 @@
 #   WARDYN_E2E_TOKEN         admin bearer token (default: wardyn-e2e-token)
 #   WARDYN_E2E_ADDR          listen address   (default: :8088)
 #   WARDYN_E2E_UI_ADDR       UI-sandbox gateway listen address (default: :8089) — must differ from WARDYN_E2E_ADDR
+#   WARDYN_E2E_INTERNAL_ADDR proxy-facing internal TLS listen address (default: :8443) — wardynd binds
+#                            this whenever -control-plane-url is https (the default), regardless of
+#                            ADDR/UI_ADDR; a caller running more than one instance on one host (the
+#                            per-screen fanout, run-ui-e2e.sh's lanes) must give each its own
 #   WARDYN_E2E_PG_CONTAINER  psql container   (default: wardyn-test-pg) — used for SQL state seeding
 #   WARDYN_E2E_PG_DBNAME     e2e database name (default: wardyn_e2e)
 #   WARDYN_E2E_AGE_KEY       pinned age identity (default: unset, mint a fresh one per `up`)
 #   WARDYN_E2E_SKIP_BUILD    1 reuses the built .e2e-bin/wardynd instead of rebuilding it
 #   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist instead of rebuilding it
+#   WARDYN_E2E_BASE_PATH     serve under this WARDYN_BASE_PATH (e.g. /wardyn) behind test/basepathproxy
+#   WARDYN_E2E_PROXY_ADDR    that proxy's listen address (default: :8090); only with WARDYN_E2E_BASE_PATH
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,6 +64,14 @@ AGE_KEY="${WARDYN_E2E_AGE_KEY:-}"
 # differ from ADDR or wardynd refuses to boot. The per-screen fanout gives
 # each instance its own ports, so override this alongside WARDYN_E2E_ADDR.
 UI_ADDR="${WARDYN_E2E_UI_ADDR:-:8089}"
+# wardynd's proxy-facing internal TLS listener (-internal-listen /
+# WARDYN_INTERNAL_LISTEN, cmd/wardynd/boot_flags.go): it runs whenever
+# -control-plane-url is https, which is the daemon's own default, so it binds
+# unconditionally regardless of ADDR/UI_ADDR. Give it the same per-instance
+# override ADDR/UI_ADDR already get, or two isolated instances on one host
+# (the per-screen fanout, run-ui-e2e.sh's lanes) both fight over the fixed
+# :8443 default and the second one's `up` dies on the bind.
+INTERNAL_ADDR="${WARDYN_E2E_INTERNAL_ADDR:-:8443}"
 PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 # Derive the URL port by splitting on the LAST colon, so every documented ADDR
@@ -65,12 +79,20 @@ PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 # -> 80. (The old ${ADDR#*:} stripped through the FIRST colon and never inserted
 # the ':' separator for non-':PORT' shapes, e.g. 'http://localhost9000'.)
 BASE_URL="http://localhost:${ADDR##*:}"
+# Base-path mode (#1154): wardynd serves under WARDYN_BASE_PATH, so every call
+# this script makes to it carries the prefix, and test/basepathproxy fronts it
+# the way an operator's reverse proxy would. Empty = the default, unchanged.
+BASE_PATH="${WARDYN_E2E_BASE_PATH:-}"
+PROXY_ADDR="${WARDYN_E2E_PROXY_ADDR:-:8090}"
+DAEMON_URL="${BASE_URL}${BASE_PATH}"
 BIN_DIR="${REPO_ROOT}/.e2e-bin"
 # PID/log keyed by listen port so multiple isolated instances (the per-screen e2e
 # fanout: own port + own DB each) never kill or clobber each other.
 _PORT="${ADDR#*:}"
 PID_FILE="${BIN_DIR}/wardynd-${_PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${_PORT}.log"
+PROXY_PID_FILE="${BIN_DIR}/basepathproxy-${_PORT}.pid"
+PROXY_LOG_FILE="${BIN_DIR}/basepathproxy-${_PORT}.log"
 
 # log() uses WARDYN_LOG_TAG="[e2e]" set before sourcing common.sh above.
 die()  { printf '\033[1;31m[e2e:err]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -82,9 +104,9 @@ api() {  # api METHOD PATH [JSON_BODY]
   local method="$1" path="$2" body="${3:-}"
   if [[ -n "${body}" ]]; then
     curl -fsS -X "${method}" -H "Authorization: Bearer ${TOKEN}" \
-      -H 'Content-Type: application/json' -d "${body}" "${BASE_URL}${path}"
+      -H 'Content-Type: application/json' -d "${body}" "${DAEMON_URL}${path}"
   else
-    curl -fsS -X "${method}" -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}${path}"
+    curl -fsS -X "${method}" -H "Authorization: Bearer ${TOKEN}" "${DAEMON_URL}${path}"
   fi
 }
 
@@ -99,6 +121,9 @@ cmd_build() {
   log "Building wardynd (none runner; no -tags docker needed) + wardyn CLI"
   go build -o "${BIN_DIR}/wardynd" ./cmd/wardynd
   go build -o "${BIN_DIR}/wardyn"  ./cmd/wardyn
+  if [[ -n "${BASE_PATH}" ]]; then
+    go build -o "${BIN_DIR}/basepathproxy" ./test/basepathproxy
+  fi
   # Always rebuild the UI bundle on a non-skip build so the served app reflects
   # the current ui/src (reusing a stale ui/dist silently serves old UI — a real
   # footgun when iterating on the composer). Set WARDYN_E2E_NO_UI_BUILD=1 to reuse
@@ -129,8 +154,8 @@ cmd_build() {
 }
 
 cmd_wait() {
-  log "Waiting for ${BASE_URL}/healthz"
-  if ! wait_healthy "${BASE_URL}" 60 0.5; then
+  log "Waiting for ${DAEMON_URL}/healthz"
+  if ! wait_healthy "${DAEMON_URL}" 60 0.5; then
     cat "${LOG_FILE}" 2>/dev/null | tail -30
     die "wardynd did not become healthy"
   fi
@@ -205,6 +230,9 @@ cmd_up() {
   # skips. The fake account (222222222222) never needs to be real: no bearer
   # key/SSO session/host dir is configured either, so every OTHER Bedrock
   # credential path here is still "not configured", unchanged.
+  if [[ -n "${BASE_PATH}" ]]; then
+    export WARDYN_BASE_PATH="${BASE_PATH}"
+  fi
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     WARDYN_RUNNER_TARGET=docker \
     WARDYN_BEDROCK_REGION="us-east-1" \
@@ -214,56 +242,61 @@ cmd_up() {
       -listen "${ADDR}" \
       -ui-sandbox-listen "${UI_ADDR}" \
       -ui-sandbox-advertise "http://localhost:${UI_ADDR##*:}" \
+      -internal-listen "${INTERNAL_ADDR}" \
       -ui-dir "${REPO_ROOT}/ui/dist" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"
   cmd_wait
+  if [[ -n "${BASE_PATH}" ]]; then
+    "${BIN_DIR}/basepathproxy" -listen "${PROXY_ADDR}" -target "${BASE_URL}" -prefix "${BASE_PATH}" \
+      >"${PROXY_LOG_FILE}" 2>&1 &
+    echo $! > "${PROXY_PID_FILE}"
+    log "Waiting for the base-path proxy on ${PROXY_ADDR}"
+    wait_healthy "http://localhost:${PROXY_ADDR##*:}${BASE_PATH}" 40 0.25 || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
+  fi
   cmd_seed
   log "Seeded backend ready:"
-  log "  URL:   ${BASE_URL}"
-  log "  token: ${TOKEN}"
+  log "  URL:   ${DAEMON_URL}"
+  if [[ -n "${BASE_PATH}" ]]; then
+    log "  proxy: http://localhost:${PROXY_ADDR##*:}${BASE_PATH}/"
+  fi
   log "  logs:  ${LOG_FILE}"
 }
 
 cmd_down_quiet() {
-  if [[ -f "${PID_FILE}" ]]; then
-    local pid; pid="$(cat "${PID_FILE}")"
-    kill "${pid}" >/dev/null 2>&1 || true
-    rm -f "${PID_FILE}"
+  if [[ -f "${PROXY_PID_FILE}" ]]; then
+    kill "$(cat "${PROXY_PID_FILE}")" >/dev/null 2>&1 || true
+    rm -f "${PROXY_PID_FILE}"
   fi
-  # Free ONLY this instance's listen port (do NOT broad-kill every .e2e-bin/wardynd
-  # — that would tear down sibling instances during the per-screen e2e fanout).
-  local port="${ADDR#*:}"
-  # Both listeners: the UI-sandbox gateway's port has the same lifecycle as the
-  # console's, so leaving it held would make the NEXT `up` fail to bind exactly
-  # the way the console port used to (see the wait loop below).
-  local ui_port="${UI_ADDR##*:}"
-  if command -v fuser >/dev/null 2>&1; then
-    fuser -k "${port}/tcp" >/dev/null 2>&1 || true
-    fuser -k "${ui_port}/tcp" >/dev/null 2>&1 || true
-  fi
+  [[ -f "${PID_FILE}" ]] || return 0
+  local pid; pid="$(cat "${PID_FILE}")"
+  rm -f "${PID_FILE}"
+  kill -0 "${pid}" 2>/dev/null || return 0
 
-  # WAIT for the port to actually be free, rather than guessing.
-  #
-  # This was `sleep 0.3`, and run-ui-e2e.sh brings a fresh backend up per spec
-  # file on the SAME port, so the next `up` raced a socket the kill had not
-  # finished releasing. It flaked two ways, both seen: the new wardynd fails to
-  # bind (run-ui-e2e reports "backend up failed for <spec>" and scores the whole
-  # file as failed), or it binds while the dying process still answers, and the
-  # spec loads against a backend that stops mid-run.
+  # Stop ONLY the process this script itself started and tracked in
+  # PID_FILE — never a port-based kill (no `fuser -k`). A port-based kill can
+  # hit an unrelated process that happens to be listening on the same number,
+  # which on a shared box is someone else's session, not this run's backend.
+  # wardynd is a single process with no children, so once IT exits, the
+  # kernel releases every socket it held (ADDR, UI_ADDR, INTERNAL_ADDR)
+  # together — there is nothing left to free port-by-port.
+  kill -TERM "${pid}" 2>/dev/null || true
+
+  # WAIT for the process itself to exit, rather than guessing or polling the
+  # port. This was `sleep 0.3`, and run-ui-e2e.sh brings a fresh backend up
+  # per spec file on the SAME port, so the next `up` raced a socket the TERM
+  # had not finished releasing. Escalate to KILL after 5s so a wedged process
+  # cannot wedge the next `up` forever.
   local waited=0
-  while [[ ${waited} -lt 50 ]]; do
-    if command -v fuser >/dev/null 2>&1; then
-      fuser "${port}/tcp" >/dev/null 2>&1 || return 0
-    else
-      sleep 0.3
-      return 0
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [[ ${waited} -ge 50 ]]; then
+      kill -KILL "${pid}" 2>/dev/null || true
+      break
     fi
     sleep 0.1
     waited=$((waited + 1))
   done
-  log "port ${port} still busy after 5s — continuing; the next bind may fail"
 }
 
 cmd_down() {
@@ -277,6 +310,18 @@ cmd_down() {
 # crucially COMPLETED, the state that previously crashed the console.
 cmd_seed() {
   log "Seeding deterministic fixtures via API + SQL"
+  # Match fixtures.ts's synthetic per-person tokens; never persist the bearer.
+  psql_e2e -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256)
+VALUES
+  ('69800000-0000-4000-8000-000000000001', 'e2e-member', 'member@e2e.wardyn.invalid',
+   'user', 'standard', '[]', false, 'e2e member',
+   encode(sha256(convert_to('wdn_' || repeat('1', 64), 'UTF8')), 'hex')),
+  ('69800000-0000-4000-8000-000000000002', 'e2e-security-admin', 'security-admin@e2e.wardyn.invalid',
+   'security_admin', 'standard', '[]', false, 'e2e security admin',
+   encode(sha256(convert_to('wdn_' || repeat('2', 64), 'UTF8')), 'hex'))
+ON CONFLICT (id) DO NOTHING;
+SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,
   # not the first-run funnel (which has its own specs and mocks) — and this
   # backend deliberately runs with NO runner, whose permanent runner:fail would
@@ -290,12 +335,15 @@ cmd_seed() {
   # wizard, which would clamp the audit-derived tool_approvals seeded below
   # right back to "auto" and defeat the fidelity this fixture exists to pin.
   local agents=(claude-code codex-cli claude-code claude-code claude-code claude-code claude-code claude-code claude-code)
-  # Fixtures 0 and 1 deliberately SHARE a title so the Runs board actually has a
-  # group to render — a title held by only one run is not a group (runs.tsx's
-  # titleGroups), so without a repeat the grouping path would go unexercised.
-  # The rest stay untitled on purpose: that is the legacy/CLI/system-run shape,
-  # and it must keep rendering by task (runHeadline).
-  local titles=("e2e group" "e2e group" "" "" "" "" "" "" "")
+  # #1197 L3: every fixture is untitled — that is the legacy/CLI/system-run
+  # shape, and it must keep rendering by task (board-groups.ts's rowHeadline).
+  # Fixtures 0 and 1 used to deliberately SHARE a title ("e2e group") to
+  # exercise the old Runs board's title-GROUPING path (runs.tsx's
+  # titleGroups) — #1197 D2 removed grouping-by-title from this page
+  # entirely (it groups by need-then-time now), so that shared title has no
+  # feature left to exercise, and every row here is addressed by its own task
+  # text (runs.spec.ts's openRuns and its per-row click tests all rely on it).
+  local titles=("" "" "" "" "" "" "" "" "")
   for i in "${!agents[@]}"; do
     # review C-02: fixture 4 (rn=5, fixed to COMPLETED below) carries a
     # NON-DEFAULT audit-derived field (tool_approvals) on its own run.create
@@ -314,11 +362,22 @@ cmd_seed() {
     api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null
   done
   # Diversify states deterministically by created order so specs can target them.
+  # #1197 L3: a real terminal transition always stamps ended_at in the same
+  # statement (migration 0092, store.go's UPDATE ... ended_at=CASE WHEN ...) —
+  # this raw SQL bypasses that write path, so it stamps it here too. Without
+  # it every terminal fixture (rn 5-9) carries ended_at=NULL, which the Runs
+  # landing page's default 7-day ended_within window then reads as "outside
+  # every window" (store_runs_filtered.go's ageWindowSQL: NULL comparisons
+  # never satisfy >=) and drops silently instead of showing or counting as
+  # hidden — a seed-script artifact a real backend can't produce (the store's
+  # comment on killedVisibleSQL calls a NULL ended_at on a terminal row
+  # "should not happen past migration 0092").
   psql_e2e >/dev/null <<'SQL' || true
 WITH ordered AS (
   SELECT id, row_number() OVER (ORDER BY created_at) AS rn FROM agent_runs
 )
-UPDATE agent_runs a SET state = v.state
+UPDATE agent_runs a SET state = v.state,
+  ended_at = CASE WHEN v.state IN ('COMPLETED','STOPPED','FAILED','KILLED','ARCHIVED') THEN now() ELSE NULL END
 FROM ordered o
 JOIN (VALUES
   (1,'PENDING'),(2,'STARTING'),(3,'RUNNING'),(4,'WAITING_FOR_CONFIRMATION'),

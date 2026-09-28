@@ -18,10 +18,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDispatch_TokenBearingRedirect_ProxySidecarBoots (B10-F1) closes the one
+// TestDispatch_TokenBearingRedirect_ProxySidecarBoots closes the one
 // seam that let a producer/consumer contradiction ship: dispatch writes a
 // token-bearing redirect's allowlist entry PORT-QUALIFIED ("artifactory.corp:443",
-// F106) while the paired injection rule host is BARE ("artifactory.corp" — what
+// never bare) while the paired injection rule host is BARE ("artifactory.corp" — what
 // buildInjector's exact-allowlist binding requires), and NO test ever fed one
 // producer's output to the consumer. AllowedExactHost consulted only the
 // port-less map, so buildInjector errored, NewServer errored, and
@@ -75,7 +75,7 @@ func TestDispatch_TokenBearingRedirect_ProxySidecarBoots(t *testing.T) {
 	t.Cleanup(cp.Close)
 
 	if !spec.ProxyConfig.Injection[0].Rule.RequireTLS {
-		t.Error("the https:// redirect's injection rule has require_tls=false (B10-F5)")
+		t.Error("the https:// redirect's injection rule has require_tls=false")
 	}
 
 	pc := spec.ProxyConfig
@@ -103,7 +103,7 @@ func TestDispatch_TokenBearingRedirect_ProxySidecarBoots(t *testing.T) {
 }
 
 // TestDispatch_CleartextRedirect_LeavesRequireTLSUnset is the negative control on
-// the B10-F5 producer half: `require_tls` is derived from the transport the
+// the producer half: `require_tls` is derived from the transport the
 // OPERATOR spelled, not stamped on unconditionally. A `to` of `http://…` is the
 // operator asking for a plaintext connector, so the flag stays false and
 // injectableTransport's port-80 arm keeps credentialing it exactly as before.
@@ -132,7 +132,7 @@ func TestDispatch_CleartextRedirect_LeavesRequireTLSUnset(t *testing.T) {
 }
 
 // TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost is the PRODUCER-side
-// guard the B10-F9 deferral rests on (R-02).
+// guard the redirect-MITM deferral rests on.
 //
 // The proxy keys mitmHosts/mitmPorts on the BARE host, so two entries for one
 // host collapse to the last authored port and the other port silently tunnels
@@ -171,7 +171,7 @@ func TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost(t *testing.T) {
 		if prev, dup := seen[bare]; dup {
 			t.Fatalf("ProxyConfig.MITMHosts carries %q and %q — two entries for one bare host. "+
 				"The proxy keys mitmHosts/mitmPorts on the bare host, so the LAST one wins and the "+
-				"other port tunnels opaque, never offered the operator's token. B10-F9's re-keying "+
+				"other port tunnels opaque, never offered the operator's token. The re-keying "+
 				"is no longer safe to defer.", prev, entry)
 		}
 		seen[bare] = entry

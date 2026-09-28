@@ -18,7 +18,8 @@ import (
 // loopback, where HSTS would poison every localhost port. Each directive:
 //   - style-src 'unsafe-inline': xterm's runtime theme <style>, Radix style
 //     attributes, fallbackStatusPage. font-src data:: inline woff2. connect-src
-//     and media-src: see cspConnectSrc (per request), cspMediaSrc (at boot).
+//     and media-src: see cspConnectSrc (per request), cspUIBindSrc and
+//     cspMediaSrc (at boot).
 //   - script-src 'wasm-unsafe-eval': the recording replay player compiles WASM;
 //     it permits WASM ONLY (no JS eval), and without it replay never plays.
 //     run-ui-e2e asserts on console errors so a tightening cannot regress it.
@@ -29,9 +30,10 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self' 'unsafe-inline'; font-src 'self' data:"
 	mediaSrc := cspMediaSrc(s.cfg.DemoVideoBaseURL)
+	uiBind := s.cspUIBindSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", fmt.Sprintf(csp, cspConnectSrc(r.Host), mediaSrc))
+		h.Set("Content-Security-Policy", fmt.Sprintf(csp, cspConnectSrc(r.Host)+uiBind, mediaSrc))
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")

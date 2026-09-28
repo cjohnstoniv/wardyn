@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestBrokeredCredentialsAreMaskRegistered (F100, F123) pins Requirement 8's
+// TestBrokeredCredentialsAreMaskRegistered pins Requirement 8's
 // proxy-side masking net over BOTH broker lanes at once.
 //
 // procRegistry is what Proxy.httpError and the decision-log sink (maskDecisionBytes)

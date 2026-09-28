@@ -3,27 +3,14 @@
 
 package oidc
 
-// membermode.go — the ONE writer of Session.MemberMode: "view as member", the
-// toggle that lets an admin see what a member sees without a second identity
-// (v0.7.4, field-report P2).
+// membermode.go is the ONE writer of Session.MemberMode: "view as member",
+// letting an admin see what a member sees without a second identity.
 //
-// It lives in its own file for the reason context.go and session_codec.go do —
-// oidc.go is at the file-size gate — and because the whole security argument of
-// the feature is one function long and should be readable in one screen:
-//
-//   - The stamped Role is copied VERBATIM. Nothing here derives a role, so
-//     there is no path by which this toggle widens anybody; the effective role
-//     is clamped downward at contextWithPrincipal and nowhere else.
-//   - IssuedAt is copied VERBATIM, and that is load-bearing rather than tidy: it
-//     is the value SessionRevocations.IsSessionRevoked compares against a
-//     revoke cutoff, so a session an admin has cut off must not be able to
-//     toggle its way to a fresh issue time and back to life.
-//   - Expiry is copied VERBATIM: a toggle is not a renewal.
-//   - Sub/Email/Name/Groups/GroupsTruncated are copied VERBATIM: the human on
-//     the other side of this cookie has not changed, and every audit row,
-//     ownership check and capability grant still resolves against them. That is
-//     the design's whole claim — a member-mode admin is still, provably,
-//     themselves.
+// Security invariants, all copied VERBATIM rather than derived: Role (clamped
+// downward only at contextWithPrincipal); IssuedAt (a revoked session can't
+// toggle back to life via SessionRevocations.IsSessionRevoked); Expiry (a
+// toggle is not a renewal); Sub/Email/Name/Groups/GroupsTruncated (a
+// member-mode admin is still, provably, themselves).
 
 import (
 	"context"
@@ -31,58 +18,23 @@ import (
 )
 
 // SetUserView flips this request's session into or out of the user view
-// ("view as member" until 0.8), writes the re-encoded cookie to w, and returns
-// the session's STAMPED role — what the view pauses.
+// ("view as member" until 0.8), writes the re-encoded cookie to w, and
+// returns the session's STAMPED role — what the view pauses.
 //
-// typeID is the user type the view looks through (Session.UserViewType); the
-// caller has already checked that it exists. It is stored only while the view
-// is on, and any switch clears the deleted-type notice (UserViewDropped).
+// typeID is Session.UserViewType, pre-validated by the caller; any switch
+// clears UserViewDropped. The stamped role is returned because
+// RoleFromContext is already clamped to member while the mode is on.
 //
-// The stamped role is returned rather than left for the caller to re-derive
-// because the caller CANNOT: RoleFromContext is already clamped to member while
-// the mode is on, so a caller reading it back would record "member" as the role
-// being paused, and a security_admin would be recorded as an admin. This
-// function has the cookie open anyway; it is one return value, not a second
-// parse of the session.
+// Decodes the CURRENT cookie, not a Session (context values would drop
+// IssuedAt); a bad cookie surfaces decodeSession's own error as a 4xx.
 //
-// It decodes the caller's CURRENT cookie rather than taking a Session: the
-// cookie is the only authority on what this human's session says, and building
-// one from context values would silently drop every field the context does not
-// publish (IssuedAt above all). A missing/invalid/expired cookie returns
-// decodeSession's own error — ErrNoSession or ErrInvalidSession — which the
-// caller answers as a 4xx; this function never mints a session, only re-signs
-// the one presented.
+// ONE exception: a STAMPED member turning the mode ON gets no cookie at all —
+// downstream readers key on the flag, not the tier (a banner this human
+// can't back, a refused token mint, capped SSH keys). OFF always re-signs
+// and never CLEARS the session, so toggling off leaves the human signed in.
 //
-// Setting the mode it is already in is a no-op in effect and still re-writes
-// the cookie, which costs one Set-Cookie header and keeps the handler free of a
-// branch whose only job would be to answer 200 twice.
-//
-// ONE exception, and it is not cosmetic (W6-4): a caller whose STAMPED role is
-// already member, asking to turn the mode ON, gets no cookie at all. There is
-// nothing to pause — but the flag does not know that, and everything that reads
-// it keys on the flag rather than on the tier: /me would answer
-// user_view:true, the console would paint a banner naming an admin role this
-// human does not hold, the API-token mint (which reads MemberModeFromContext,
-// not the stamped role) would refuse this member their own token with "Exit
-// the user view…", and their SSH keys would be stored capped — breaking the member
-// Getting Started's own "Connect your tools" card until they found the banner's
-// Exit. The route is classMember so that the EXIT is always reachable, which
-// makes this state reachable too. Turning it OFF still re-signs, always: that
-// direction has to work from inside the mode.
-//
-// Note the deliberate asymmetry with clearCookie's callers: this never CLEARS
-// the session. Toggling off has to leave the human signed in — it is the exit
-// from the mode, and an exit that signed you out would be a trap.
-//
-// noCredential (0.7.5) selects the SECOND posture, "view as a new member who has
-// not signed in" — see Session.MemberModeNoCredential. It is stored as
-// `on && noCredential` rather than verbatim, which is what makes turning the
-// mode OFF clear it by construction: there is no path that leaves the preview
-// bit set on a session whose mode bit is not, so nothing downstream has to
-// defend against that pair. It rides BELOW the real-member early return above
-// for the same reason the mode bit does — a real member has no credential of
-// their own to hide from themselves, and the doors that key on the preview
-// would refuse them their own sign-in.
+// noCredential (0.7.5) is "view as a member who hasn't signed in", stored as
+// `on && noCredential` so OFF clears it by construction.
 func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on bool, typeID string, noCredential bool) (stampedRole string, err error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {
@@ -106,16 +58,13 @@ func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on b
 	return sess.Role, nil
 }
 
-// DropUserView turns the user view off because the type it looked through no
-// longer exists: the cookie is re-signed with the view bits cleared and the
-// type recorded in UserViewDropped, so GET /me can say why until the next
-// switch. It returns the request context re-published from the re-signed
-// session, carrying the admin's real tier.
+// DropUserView turns the user view off when its type no longer exists: the
+// cookie re-signs with view bits cleared and the type recorded in
+// UserViewDropped (so GET /me can say why), returning the context
+// republished from that session with the admin's real tier.
 //
-// Only GET /me may serve its own request from that context. Every other
-// request that meets a deleted type is refused, not re-evaluated: its tier
-// was read once, and switching it to admin halfway would hand a request
-// admitted as a user the operator exemption.
+// Only GET /me may serve its own request from that context — every other
+// request meeting a deleted type is refused, not re-evaluated.
 func (a *Authenticator) DropUserView(w http.ResponseWriter, r *http.Request) (context.Context, error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {

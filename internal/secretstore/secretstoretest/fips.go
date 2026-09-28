@@ -13,10 +13,9 @@ import (
 
 const fipsChildEnv = "WARDYN_TEST_FIPS_CHILD"
 
-// UnderFIPSOnly runs the calling test again in a child process started with
-// GODEBUG=fips140=only, which Go reads only at process start. It returns true
-// in that child, where the test does its work, and false in the parent once the
-// child has passed.
+// UnderFIPSOnly re-runs the calling test in a child process started with
+// GODEBUG=fips140=only (Go reads it only at process start). It returns true in
+// the child, where the test runs, and false in the parent once the child passes.
 //
 //	if !secretstoretest.UnderFIPSOnly(t) {
 //		return

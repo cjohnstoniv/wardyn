@@ -268,7 +268,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		t.Errorf("pod create order = %v, want [%s, %s]", podNames, proxyPodName(spec.RunID), agentPodName(spec.RunID))
 	}
 
-	// B9-F7: enableServiceLinks defaults to TRUE, which makes the kubelet inject
+	// enableServiceLinks defaults to TRUE, which makes the kubelet inject
 	// a pair of docker-link-era env vars (<SVC>_PORT, <SVC>_SERVICE_HOST, ...)
 	// for every Service in the namespace into every container. The agent is
 	// untrusted code and the namespace is the operator's — that is a free
@@ -1329,14 +1329,13 @@ func TestCreateSandbox_NoDiskMiBLeavesEphemeralStorageAbsent(t *testing.T) {
 // a knob the sidecar reads from its own environment is unreachable on this
 // substrate unless CreateSandbox copies it in.
 //
-// That is worse than "off": the operator sets
-// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
+// That is worse than "off": the operator sets the pat scope of
+// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
 // it, docs say it confines PAT pushes, and on Kubernetes the proxy never saw it.
 // The list is runner.ProxySidecarEnvKnobs, shared with the docker driver, so a
 // knob added later cannot land on one substrate only.
 func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
-	t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", "on")
-	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "false")
+	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "app:false,pat:on")
 	t.Setenv("WARDYN_LLM_SCAN", "off")
 	// The re-auth hold's budget (0.7.6): how long the proxy parks a sandbox's
 	// AWS SSO credential exchange while its owner signs in again. Unreachable on
@@ -1361,10 +1360,9 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 		got[e.Name] = e.Value
 	}
 	for name, want := range map[string]string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": "on",
-		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS":     "false",
-		"WARDYN_LLM_SCAN":                         "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":        "45s",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
+		"WARDYN_LLM_SCAN":                      "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1386,7 +1384,6 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 // inheriting a knob nobody set.
 func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	for _, k := range []string{
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
 		"WARDYN_LLM_SCAN",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
@@ -1408,8 +1405,12 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get proxy pod: %v", err)
 	}
-	if n := len(proxyPod.Spec.Containers[0].Env); n != 3 {
-		t.Errorf("proxy pod carries %d env vars, want the 3 it always has: %+v",
+	// Two, not three: WARDYN_RUN_ID and WARDYN_CONTROL_PLANE_URL. The config
+	// itself is no longer an env var at all (T-28, issue #688) — it reaches
+	// the container as a file via the init-container staging step, mounted
+	// read-only off the shared emptyDir tested in netpol_invariant_probe_test.go.
+	if n := len(proxyPod.Spec.Containers[0].Env); n != 2 {
+		t.Errorf("proxy pod carries %d env vars, want the 2 it always has: %+v",
 			n, proxyPod.Spec.Containers[0].Env)
 	}
 }

@@ -12,18 +12,16 @@
 // only when something writes that row through the store — state transitions,
 // sandbox_ref updates, or an explicit store.TouchRun keepalive. Two callers
 // touch it today: the interactive-attach handler (a human is watching) and the
-// proxy's decision ingest (the agent made an egress call), so a run doing
-// either is measured on real activity. The ingest touch is coalesced to one
-// UPDATE per TouchDebounce window, so thresholdFor adds TouchDebounce as
-// slack — a run stops once idle past policy + TouchDebounce, never earlier.
+// proxy's decision ingest (the agent made an egress call). The ingest touch is
+// coalesced to one UPDATE per TouchDebounce window, so thresholdFor adds
+// TouchDebounce as slack — a run stops once idle past policy + TouchDebounce,
+// never earlier.
 //
 // What still does NOT reset the clock is activity that never leaves the sandbox
 // — CPU, file writes, a long local build. Such a run is stopped once updated_at
 // ages past its policy threshold even while busy. The remaining upgrade is
 // runner-reported liveness; until then, operators who need an unbounded session
-// should use the never-reap escape hatch (policy AutoStopAfterSec <= 0). This
-// residual risk is documented here and should be mirrored in threatmodel/ if
-// appropriate.
+// should use the never-reap escape hatch (policy AutoStopAfterSec <= 0).
 //
 // # AutoStopAfterSec semantics (policy auto_stop_after_sec)
 //
@@ -52,9 +50,9 @@ const (
 	defaultInterval = time.Minute
 
 	// defaultStopTimeout bounds a single StopRun call so one hung StopSandbox
-	// cannot stall the whole reap loop (finding #3). Each idle run gets its own
-	// deadline derived from the tick's context; on timeout the stop is logged
-	// and skipped, and the run is retried on the next tick.
+	// cannot stall the whole reap loop. Each idle run gets its own deadline
+	// derived from the tick's context; on timeout the stop is logged and
+	// skipped, and the run is retried on the next tick.
 	defaultStopTimeout = 2 * time.Minute
 )
 
@@ -93,12 +91,12 @@ type Store interface {
 	// (0 when no policy is attached or the policy field is unset).
 	//
 	// It ALSO returns the store's own clock, read once for the whole scan, and
-	// the reaper measures idleness against that rather than against its own.
+	// the reaper measures idleness against that rather than its own:
 	// RunSummary.UpdatedAt is a Postgres-stamped column, so a wardynd clock
-	// running ahead of the database added its skew directly to every measured
+	// running ahead of the database adds its skew directly to every measured
 	// age — and TouchDebounce's 30 seconds is the entire margin, so a few
 	// minutes of skew stops an actively-attached run and revokes its
-	// credentials, while skew the other way never reaps at all (B8-F2).
+	// credentials, while skew the other way never reaps at all.
 	//
 	// A ZERO time means "this store has no clock of its own" — every in-memory
 	// double — and the reaper falls back to its own, which is what those doubles
@@ -109,19 +107,20 @@ type Store interface {
 // StopOutcome is what StopRun reports back to the Reaper beyond the raw error.
 type StopOutcome struct {
 	// Applied reports whether the stop actually transitioned the run from RUNNING
-	// to STOPPED. It is false when a concurrent kill/complete had already moved the
-	// run terminal, OR when the idleness guard no-op'd because the run's updated_at
-	// advanced past the reaper's snapshot (an active `wardyn attach` touched it
-	// after the scan — finding N3). Either way the reaper must NOT emit a spurious
-	// run.autostop (finding #1).
+	// to STOPPED. False when a concurrent kill/complete had already moved the
+	// run terminal, OR when the idleness guard no-op'd because the run's
+	// updated_at advanced past the reaper's snapshot (an active `wardyn attach`
+	// touched it after the scan). Either way the reaper must NOT emit a
+	// spurious run.autostop.
 	Applied bool
 	// Errors, when non-empty, carries the teardown/revocation failures that
-	// occurred AFTER the stop transition won (Applied=true) but which left the run
-	// not fully contained: "identity_error" / "broker_error" (the run token or
-	// minted broker creds may still be live — finding N1), and "teardown_error"
-	// (the sandbox may still be routable). The reaper emits these as a distinct
-	// run.revoke/failure audit event so the live-credential/live-sandbox window is
-	// visible, mirroring handleKillRun/revokeRunCascade. Nil on a clean stop.
+	// occurred AFTER the stop transition won (Applied=true) but which left the
+	// run not fully contained: "identity_error" / "broker_error" (the run
+	// token or minted broker creds may still be live), and "teardown_error"
+	// (the sandbox may still be routable). The reaper emits these as a
+	// distinct run.revoke/failure audit event so the live-credential/
+	// live-sandbox window is visible, mirroring handleKillRun/revokeRunCascade.
+	// Nil on a clean stop.
 	Errors map[string]string
 }
 
@@ -136,7 +135,7 @@ type Stopper interface {
 	//
 	// notAfter is the run's updated_at from the reaper's tick snapshot: the stop
 	// transition must be conditional on updated_at not having advanced past it, so
-	// a run an active attach touched after the snapshot is NOT stopped (finding N3).
+	// a run an active attach touched after the snapshot is NOT stopped.
 	//
 	// The returned StopOutcome reports whether the transition applied and any
 	// post-transition teardown/revocation failures. A non-nil error means the stop
@@ -156,14 +155,12 @@ type Config struct {
 	// Interval is how often the reaper scans. Default: 1 minute.
 	Interval time.Duration
 	// Now overrides the wall clock. Nil means use real time.
-	// (overridable in tests, mirrors embedded.Provider's now func idiom)
 	Now func() time.Time
 	// TickLock, when non-nil, makes each tick single-flight across control
 	// planes: it must TRY to take a cluster-wide lock and return a release func,
 	// or (nil, false) when someone else holds it — in which case the tick is
-	// skipped, not queued. wardynd wires a Postgres try-advisory-lock
-	// (db.TryAdvisoryLock, key db.ReaperAdvisoryLockKey); it stays a func here so
-	// lifecycle keeps no database dependency, like Store/Stopper/Recorder.
+	// skipped, not queued. wardynd wires a Postgres try-advisory-lock; it stays
+	// a func here so lifecycle keeps no database dependency.
 	//
 	// Nil = ungated, the single-process default (and what tests drive Tick with).
 	TickLock func(ctx context.Context) (release func(), ok bool)
@@ -231,12 +228,11 @@ func (r *Reaper) Run(ctx context.Context) {
 // The whole tick runs under an Interval+defaultStopTimeout deadline: the
 // advisory-lock connection is held for the tick's duration, so a single
 // wedged StopRun must not pin the lock (and with it, reaping cluster-wide)
-// past that bound. defaultStopTimeout is added on top of Interval, not
-// folded into it — a child context.WithTimeout can only SHORTEN its parent's
-// deadline, so budgeting the tick at bare Interval silently capped every
-// per-stop deadline below at whatever was left of Interval, never the full
-// defaultStopTimeout the constant promises (a stop past ~1 minute failed on
-// every tick and was retried forever, never actually stopping the run).
+// past that bound. defaultStopTimeout is added on top of Interval, not folded
+// into it — a child context.WithTimeout can only SHORTEN its parent's
+// deadline, so budgeting at bare Interval would silently cap every per-stop
+// deadline at whatever was left of Interval, never the full defaultStopTimeout
+// the constant promises.
 func (r *Reaper) Tick(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, r.interval+defaultStopTimeout)
 	defer cancel()
@@ -273,12 +269,11 @@ func (r *Reaper) reap(ctx context.Context) {
 	}
 
 	for _, run := range runs {
-		// Auto-stop disabled / never-reap opt-out (finding #2): a policy
-		// AutoStopAfterSec <= 0 means the run is exempt from idle auto-stop
-		// entirely — the reaper must never stop it regardless of how long it has
-		// been idle. 0 is DISABLED (the default for a run with no auto-stop
-		// configured); a negative value is the explicit interactive escape hatch
-		// for unbounded attach sessions. Either way: skip.
+		// Auto-stop disabled / never-reap opt-out: a policy AutoStopAfterSec <= 0
+		// means the run is exempt from idle auto-stop entirely — the reaper
+		// must never stop it regardless of how long it has been idle. 0 is
+		// DISABLED (the default); a negative value is the explicit interactive
+		// escape hatch for unbounded attach sessions. Either way: skip.
 		if run.PolicyAutoStopAfterSec <= 0 {
 			continue
 		}
@@ -289,13 +284,13 @@ func (r *Reaper) reap(ctx context.Context) {
 		}
 
 		// Run is idle past its threshold: stop it. Bound each stop with its own
-		// deadline (finding #3) so a single hung StopSandbox cannot stall the
-		// whole reap loop; the run is simply retried on the next tick.
+		// deadline so a single hung StopSandbox cannot stall the whole reap
+		// loop; the run is simply retried on the next tick.
 		runID := run.ID
 		stopCtx, cancel := context.WithTimeout(ctx, defaultStopTimeout)
 		// Pass the snapshot's updated_at so the stop transition is conditional on
 		// the run not having been touched (e.g. by an active attach keepalive)
-		// since the scan — finding N3.
+		// since the scan.
 		out, err := r.stopper.StopRun(stopCtx, runID, run.UpdatedAt)
 		cancel()
 		if err != nil {
@@ -311,9 +306,9 @@ func (r *Reaper) reap(ctx context.Context) {
 		if !out.Applied {
 			// A concurrent kill/complete already moved the run terminal, the run
 			// was touched after the snapshot (active attach), or an open request is
-			// still inside its wait (store.openHoldSQL), so the idle-guarded
-			// transition was a no-op. In every case do NOT emit a spurious
-			// run.autostop (findings #1 / N3) — the run was not autostopped.
+			// still inside its wait, so the idle-guarded transition was a no-op. In
+			// every case do NOT emit a spurious run.autostop — the run was not
+			// autostopped.
 			r.logger.DebugContext(ctx, "lifecycle: stop was a no-op (already terminal, touched after snapshot, or an open request is still inside its wait)",
 				"run_id", runID,
 			)
@@ -326,7 +321,7 @@ func (r *Reaper) reap(ctx context.Context) {
 		// STOPPED yet not fully contained (live token/broker creds or a live
 		// sandbox). Emit a DISTINCT run.revoke/failure event so that window is
 		// visible in the audit log — the run.autostop above alone would dishonestly
-		// read as a fully-successful stop (finding N1). Mirrors handleKillRun.
+		// read as a fully-successful stop. Mirrors handleKillRun.
 		if len(out.Errors) > 0 {
 			r.emitRevokeFailure(ctx, runID, out.Errors)
 		}
@@ -382,7 +377,7 @@ func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, thr
 // fully contain it. This mirrors handleKillRun/revokeRunCascade's distinct
 // failure event so a silently-failed idle-stop revoke — which leaves the run
 // token valid until its <=1h TTL, or the sandbox routable — is visible in the
-// system of record instead of hiding behind run.autostop/success (finding N1).
+// system of record instead of hiding behind run.autostop/success.
 func (r *Reaper) emitRevokeFailure(ctx context.Context, runID uuid.UUID, errs map[string]string) {
 	data, _ := json.Marshal(errs)
 	ev := types.AuditEvent{

@@ -301,6 +301,7 @@ var _ runner.Session = (*fakeShellSession)(nil)
 // sshTestHarness starts a real SSH gateway (ServeSSHGateway) on a loopback
 // port backed by st/fr, and returns everything a test needs to dial it.
 type sshTestHarness struct {
+	srv     *Server
 	addr    string
 	hostPub ssh.PublicKey
 	audit   *sshTestRecorder
@@ -338,7 +339,7 @@ func (r *sshTestRecorder) snapshot() []types.AuditEvent {
 	return append([]types.AuditEvent(nil), r.events...)
 }
 
-func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTestHarness {
+func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configure ...func(*Config)) *sshTestHarness {
 	t.Helper()
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -361,7 +362,7 @@ func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTes
 	_ = probe.Close()
 
 	audit := &sshTestRecorder{}
-	srv := New(Config{
+	cfg := Config{
 		Store:         st,
 		Identity:      mustIDP(t),
 		Approvals:     newFakeApprovals(),
@@ -375,7 +376,11 @@ func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTes
 		SSHListenAddr:    addr,
 		SSHAdvertiseAddr: addr,
 		SSHHostKey:       hostPriv,
-	})
+	}
+	for _, fn := range configure {
+		fn(&cfg)
+	}
+	srv := New(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -386,7 +391,7 @@ func newSSHTestHarness(t *testing.T, st *sshMemStore, fr *sshFakeRunner) *sshTes
 	}()
 	waitForListener(t, addr)
 
-	return &sshTestHarness{addr: addr, hostPub: signer.PublicKey(), audit: audit}
+	return &sshTestHarness{srv: srv, addr: addr, hostPub: signer.PublicKey(), audit: audit}
 }
 
 // waitForListener polls addr until something accepts a TCP connection —

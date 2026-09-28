@@ -18,36 +18,32 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// WebhookTimeout bounds every delivery attempt (including the final flush
-// Fanout.Close awaits on graceful shutdown), so callers sizing a shutdown
-// grace period around it don't have to hard-code a second copy of this
-// number (internal/api TestShutdownGraceCoversTheBudget).
+// WebhookTimeout bounds every delivery attempt, including the final flush
+// Fanout.Close awaits on graceful shutdown; wardynd's shutdown grace is sized
+// on this constant (internal/api TestShutdownGraceCoversTheBudget).
 const WebhookTimeout = 15 * time.Second
 
 // WebhookConfig holds the configuration for a WebhookSink.
 type WebhookConfig struct {
 	// URL is the HTTP endpoint that receives JSON-lines batches (required).
 	URL string `json:"url"`
-	// BearerToken is included as "Authorization: Bearer <token>" when non-empty.
-	// Setting it requires an https:// URL (see NewWebhookSink).
+	// BearerToken is sent as "Authorization: Bearer <token>"; requires https://.
 	BearerToken string `json:"bearer_token,omitempty"`
 	// BatchSize is the maximum number of events per HTTP POST (default 100).
 	BatchSize int `json:"batch_size,omitempty"`
 	// FlushInterval is how long to wait before flushing a partial batch
-	// (default 5s). Parsed as a duration string, e.g. "5s".
+	// (default 5s), parsed as a duration string.
 	FlushInterval string `json:"flush_interval,omitempty"`
-	// BufferSize is the capacity of the in-process event queue (default 4096).
-	// Events that would overflow the buffer are dropped and counted.
+	// BufferSize is the capacity of the in-process event queue (default 4096);
+	// events that would overflow it are dropped and counted.
 	BufferSize int `json:"buffer_size,omitempty"`
 	// MaxRetries is the number of delivery attempts per batch (default 3).
 	MaxRetries int `json:"max_retries,omitempty"`
 	// RetryBaseDelay is the initial backoff delay (default 200ms).
 	RetryBaseDelay string `json:"retry_base_delay,omitempty"`
 	// Timeout bounds the HTTP client's per-request wait, including a Close()
-	// drain against a wedged collector (default and maximum WebhookTimeout).
-	// Parsed as a duration string; must be positive, since a zero http.Client
-	// timeout means none, and at most WebhookTimeout, which wardynd's shutdown
-	// grace is sized on.
+	// drain (default and maximum WebhookTimeout). Must be positive and at
+	// most WebhookTimeout, which wardynd's shutdown grace is sized on.
 	Timeout string `json:"timeout,omitempty"`
 }
 
@@ -76,12 +72,11 @@ func (c *WebhookConfig) withDefaults() WebhookConfig {
 
 // WebhookSink buffers audit events and delivers them in JSON-lines batches via
 // HTTP POST. It never blocks the Emit caller beyond a non-blocking channel
-// send; overflow increments the drop counter which is logged periodically.
+// send; overflow increments the drop counter.
 //
 // Start the background flusher with Run(ctx); cancel the context to drain and
-// stop cleanly. Alternatively call Close() to signal the drain and block until
-// the final batch has been flushed (used on graceful shutdown so the last batch
-// is awaited rather than abandoned).
+// stop, or call Close() to signal the drain and block until the final batch
+// has been flushed.
 type WebhookSink struct {
 	cfg       WebhookConfig
 	interval  time.Duration
@@ -89,9 +84,9 @@ type WebhookSink struct {
 	queue     chan types.AuditEvent
 	drops     atomic.Int64
 	client    *http.Client
-	// stop is closed by Close() to signal Run to drain and exit independently of
-	// the Run ctx. done is closed by Run when it returns, so Close can await the
-	// final flush. closeOnce guards against a double Close.
+	// stop is closed by Close() to signal Run to drain and exit independently
+	// of the Run ctx; done is closed by Run when it returns so Close can await
+	// the final flush.
 	stop      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
@@ -105,11 +100,9 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("sinks.webhook: URL is required")
 	}
-	// The bearer is a long-lived, replayable SIEM ingest credential, and every
-	// POST resends it — so a plaintext URL leaks it continuously. The gate is on
-	// the CREDENTIAL, not the scheme: a tokenless http:// collector still boots,
-	// matching the sibling syslog sink, which ships the same event stream over
-	// plaintext udp/tcp.
+	// The bearer is a long-lived, replayable SIEM credential resent on every
+	// POST, so the gate is on the credential, not the scheme: a tokenless
+	// http:// collector still boots (matches the syslog sink over plaintext).
 	if cfg.BearerToken != "" {
 		u, err := url.Parse(cfg.URL)
 		if err != nil {
@@ -209,14 +202,9 @@ func (w *WebhookSink) Run(ctx context.Context) {
 }
 
 // drainAndFlush pulls every event still buffered in the queue (non-blocking)
-// into batch and flushes once, so the final partial batch is delivered before
-// Run exits. flush captures and resets batch, so it is shared by pointer.
-//
-// The final flush runs under a fresh bounded context rather than the Run ctx:
-// on the common signal-driven shutdown the Run ctx is already cancelled, which
-// would make the last POST fail immediately and abandon the batch. A short
-// independent deadline lets the last batch actually deliver while still bounding
-// how long Close can block.
+// into batch and flushes once so the final partial batch is delivered before
+// Run exits. It runs under a fresh bounded context rather than the (already
+// cancelled) Run ctx, so the last POST can still deliver.
 func (w *WebhookSink) drainAndFlush(batch *[]types.AuditEvent, flush func(context.Context)) {
 	for {
 		select {
@@ -231,11 +219,10 @@ func (w *WebhookSink) drainAndFlush(batch *[]types.AuditEvent, flush func(contex
 	}
 }
 
-// Close signals the background flusher to drain and stop, then blocks until the
-// final batch has been flushed. It must only be called after Run has been
-// started (the fanout always starts Run for this sink); otherwise the wait on
-// done would block forever. It is safe to call Close multiple times and
-// concurrently with a ctx-driven Run shutdown.
+// Close signals the background flusher to drain and stop, then blocks until
+// the final batch has been flushed. Must only be called after Run has
+// started. Safe to call multiple times and concurrently with a ctx-driven
+// Run shutdown.
 func (w *WebhookSink) Close() error {
 	w.closeOnce.Do(func() { close(w.stop) })
 	<-w.done
@@ -245,17 +232,15 @@ func (w *WebhookSink) Close() error {
 // Drops returns the number of events dropped due to buffer overflow.
 func (w *WebhookSink) Drops() int64 { return w.drops.Load() }
 
-// deliverWithRetry encodes batch as newline-delimited JSON and POSTs it to the
-// configured URL, retrying up to cfg.MaxRetries times with exponential backoff.
-// Delivery failures after all retries count the lost events in the drop counter
-// and are logged; events are not re-queued. The backoff sleep honors both ctx
-// cancellation and Close()'s stop signal so shutdown drains promptly rather than
-// blocking on context.Background().
+// deliverWithRetry encodes batch as newline-delimited JSON and POSTs it,
+// retrying up to cfg.MaxRetries times with exponential backoff. Failures
+// after all retries count the lost events in the drop counter; events are
+// not re-queued. The backoff sleep honors ctx cancellation and Close()'s
+// stop signal so shutdown drains promptly.
 func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditEvent) {
 	body, err := encodeBatch(batch)
 	if err != nil {
-		// Encoding failure means none of these events can be delivered; count
-		// them as dropped so the loss is observable via Drops().
+		// Encoding failure: count these events as dropped.
 		w.drops.Add(int64(len(batch)))
 		slog.Error("sinks.webhook: encode batch failed",
 			slog.Any("err", err),
@@ -275,19 +260,18 @@ func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditE
 				slog.Duration("retry_in", delay))
 			select {
 			case <-ctx.Done():
-				// Shutdown via ctx: abandon the batch. Count the loss.
+				// Shutdown via ctx: abandon the batch.
 				w.drops.Add(int64(len(batch)))
 				return
 			case <-w.stop:
-				// Shutdown via Close(): abandon the batch. Count the loss.
+				// Shutdown via Close(): abandon the batch.
 				w.drops.Add(int64(len(batch)))
 				return
 			case <-time.After(delay):
 			}
 			delay *= 2
 		} else {
-			// Retries exhausted: the batch is lost. Count every event so the
-			// never-drop-silently invariant is observable via Drops().
+			// Retries exhausted: the batch is lost.
 			w.drops.Add(int64(len(batch)))
 			slog.Error("sinks.webhook: delivery failed, retries exhausted",
 				slog.Int("attempts", w.cfg.MaxRetries),
@@ -318,9 +302,8 @@ func (w *WebhookSink) post(ctx context.Context, body []byte) error {
 	return nil
 }
 
-// encodeBatch serialises each event as a JSON object followed by a newline
-// (JSON-lines / NDJSON format), via marshalEvent so the #10 WARDYN_AUDIT_SOURCE
-// stamp applies here exactly as it does for the file/syslog sinks.
+// encodeBatch serialises each event as JSON-lines / NDJSON via marshalEvent,
+// so the WARDYN_AUDIT_SOURCE stamp applies as it does for other sinks.
 func encodeBatch(batch []types.AuditEvent) ([]byte, error) {
 	var buf bytes.Buffer
 	for i := range batch {

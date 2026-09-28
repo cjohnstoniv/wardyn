@@ -211,7 +211,9 @@ func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 			srv.cfg.Runner = nil
 			b, _ := json.Marshal(map[string]any{"agent": "claude-code", "task": "t",
 				"inline_policy": map[string]any{"min_confinement_class": "CC2", "eligible_grants": []types.GrantSpec{envSecretGrant("AWS_ACCESS_KEY_ID", "operator-aws-key")}}})
-			w := doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), string(b))
+			// An SSO admin session is in the Admin view and cannot launch
+			// (refuseAdminViewLaunch); the token lane still can.
+			w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, "sub-admit-admin"), string(b))
 			if w.Code != map[string]int{"/api/v1/runs": http.StatusCreated, "/api/v1/runs/preflight": http.StatusOK}[path] {
 				t.Errorf("%s with no block = %d %s, want it admitted as before", path, w.Code, w.Body.String())
 			}

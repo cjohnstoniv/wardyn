@@ -53,51 +53,32 @@ type DecisionLog struct {
 	RuleSource string     `json:"rule_source"` // "policy" | "approval:<id>" | "builtin:private-ip" | "builtin:resolve-failed" | ...
 	ApprovalID *uuid.UUID `json:"approval_id,omitempty"`
 	// Cause is the masked, topology-redacted sentence naming WHY a builtin
-	// dial-shaped refusal happened and at what STAGE (a TCP dial, the origin's
-	// TLS handshake, the operator's own upstream-proxy CONNECT exchange) —
-	// never just "dial failed", which hides which stage or hop actually
-	// failed. It runs
-	// through the SAME two passes a sandbox-facing error body already does
-	// (maskDecisionBytes, then Proxy.redactTopology) before it ever reaches
-	// this field: auditScope (internal/api/audit.go) hands a run's OWN CREATOR
-	// this whole row, not just the operator (docs/AUDIT-ACTIONS.md), so the
-	// full unredacted text stays on the sidecar's own slog.Warn line and never
-	// rides the wire twice. Empty on every decision that is not a dial-shaped
-	// refusal.
-	//
-	// builtin:upstream-protocol-mismatch is the one exception to "stage plus
-	// underlying error": that round trip COMPLETED, so Cause there is a FIXED
-	// sentence (docs/AUDIT-ACTIONS.md's own row for that source) naming the
-	// protocol answered, never a stage prefix.
+	// dial-shaped refusal happened and at what STAGE (TCP dial, TLS
+	// handshake, upstream-proxy CONNECT). It runs through the same masking
+	// passes a sandbox-facing error body does before reaching this field, and
+	// is empty on every decision that is not a dial-shaped refusal.
+	// builtin:upstream-protocol-mismatch is the one exception: that round
+	// trip COMPLETED, so Cause there is a fixed sentence naming the protocol
+	// answered, never a stage prefix.
 	Cause string `json:"cause,omitempty"`
-	// Via names the CLASS of hop a dial-shaped refusal attempted —
-	// "upstream-proxy" or "direct" — and NEVER an address: an address is
-	// exactly the topology Cause's redaction pass exists to strip, and Via
-	// must not reopen that hole beside it. Empty on every decision that is not
-	// a dial-shaped refusal.
+	// Via names the CLASS of hop a dial-shaped refusal attempted
+	// ("upstream-proxy" or "direct"), never an address — Cause's redaction
+	// pass exists to strip that, and Via must not reopen the hole.
 	Via string `json:"via,omitempty"`
-	// UpstreamFault names the AWS error class when Bedrock's data plane refused
-	// a call the proxy ALLOWED and relayed (AccessDeniedException,
-	// ThrottlingException), or "recovered" on the first clean model call after
-	// such a refusal. Empty everywhere else. It is read off the response status
-	// and x-amzn-ErrorType header only — never a body.
+	// UpstreamFault names the AWS error class when Bedrock's data plane
+	// refused a call the proxy ALLOWED and relayed, or "recovered" on the
+	// first clean call after such a refusal. Read off the response status
+	// and x-amzn-ErrorType header only, never a body.
 	UpstreamFault string `json:"upstream_fault,omitempty"`
-	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
-	// LLM route decision (off-by-default; nil when inspection is disabled). It
-	// makes per-decision coverage honest: a tunneled-opaque LLM CONNECT is
-	// recorded as scanned=false ("bypass") so audit cannot imply coverage it does
-	// not have. The control plane turns it into an llm.scan.* audit event.
+	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for
+	// an LLM route decision. A tunneled-opaque LLM CONNECT is recorded as
+	// scanned=false ("bypass") so audit cannot imply coverage it lacks.
 	Scan *ScanSummary `json:"scan,omitempty"`
 	// Repeat, when non-zero, marks this row as the SUMMARY of a streak of
-	// IDENTICAL refusals the proxy answered from a memo instead of re-deciding
-	// (today only builtin:private-ip — see privateIPMemo in
-	// internal/egress/proxy). It counts the attempts that were refused WITHOUT a
-	// row of their own, so the trail says "this happened N more times" rather
-	// than either flooding with duplicates or under-reporting silently.
-	//
-	// It always arrives as a NEW row, never as an update of the row that opened
-	// the streak: the audit chain is append-only (migration 0047) and a decision
-	// already recorded is not rewritten because it happened again.
+	// IDENTICAL refusals the proxy answered from a memo instead of
+	// re-deciding, counting attempts refused without a row of their own. It
+	// always arrives as a NEW row: the audit chain is append-only and a
+	// recorded decision is never rewritten.
 	Repeat int `json:"repeat,omitempty"`
 }
 
@@ -115,22 +96,13 @@ type ScanSummary struct {
 	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
-	// THE WIRE.
-	//
-	// Findings above carries at most the cap's worth of rows, so a truncated
-	// scan would otherwise be indistinguishable in the audit from one that
-	// happened to find exactly that many — including when an earlier skip
-	// reason (span_oversize, scan_budget) already claims SkipReason, leaving
-	// nothing else to say the result was truncated. FindingsCapped is that flag; FindingsPastCap is the
-	// count of findings examined past the cap (an upper bound on how many were
-	// pushed out, since severity keep-backs are counted too — see
-	// contentscan.Result.FindingsDropped). FindingsTotal is what an auditor
-	// comparing "how much was found" against "how much was reported" needs: the
-	// number of findings the detectors PRODUCED before the cap truncated the
-	// list, copied from contentscan.Result.FindingsSeen, which COUNTS them as
-	// they are produced. It is deliberately not FindingsPastCap + the reported
-	// rows: block mode keeps a past-cap finding back into the report while
-	// still counting it past the cap, so that sum double-counts every keep-back.
+	// THE WIRE, since Findings above carries at most the cap's worth of rows
+	// and a truncated scan would otherwise be indistinguishable from one that
+	// found exactly that many. FindingsPastCap is an upper bound on findings
+	// pushed out past the cap. FindingsTotal is the number the detectors
+	// PRODUCED before truncation (contentscan.Result.FindingsSeen) — not
+	// FindingsPastCap plus the reported rows, since block mode's keep-backs
+	// would double-count.
 	FindingsCapped  bool `json:"findings_capped,omitempty"`
 	FindingsPastCap int  `json:"findings_past_cap,omitempty"`
 	FindingsTotal   int  `json:"findings_total,omitempty"`
@@ -156,33 +128,20 @@ type InjectionRule struct {
 	SecretName string `json:"secret_name"`
 	// Format wraps the secret, e.g. "Bearer %s".
 	Format string `json:"format"`
-	// RequireTLS declares that this rule's credential may ride ONLY a transport
-	// the proxy runs TLS on. It is the operator's
-	// transport intent, which no other field could carry: injectableTransport
-	// (internal/egress/proxy/inject.go) can rule out cleartext to :443 and to a
-	// host the proxy itself only ever speaks TLS to, but a plaintext connector on
-	// :80 is indistinguishable from an https-only vendor the proxy has no table
-	// for — so a `POST http://<that host>/…` was injected. Setting this refuses
-	// such a request outright (403, rule_source policy:require-tls) rather than
-	// silently withholding the credential.
-	//
-	// Default false = today's behaviour, so no shipped policy changes meaning.
+	// RequireTLS declares that this rule's credential may ride ONLY a
+	// transport the proxy runs TLS on: a plaintext connector on :80 is
+	// indistinguishable from an https-only vendor the proxy has no table
+	// for, so setting this refuses such a request outright (403) rather
+	// than silently withholding the credential. Default false = today's
+	// behaviour.
 	RequireTLS bool `json:"require_tls,omitempty"`
-	// PinPath and PinQuery narrow this rule's credential to ONE request shape:
-	// a GET of PinPath whose query carries exactly these key=value pairs. Any
-	// other request to the same host is forwarded WITHOUT the header, and the
-	// origin answers it however it answers an unauthenticated call — nothing
-	// Wardyn holds is exposed either way.
-	//
-	// It exists because an injected credential otherwise rides EVERY request the
-	// sandbox makes to that host. For the captured-AWS-SSO lane that includes
-	// `POST /logout`, which AWS documents as invalidating the owner's server-side
-	// sign-in session, and a GetRoleCredentials for any other account/role the
-	// session holds. Proxy-side injection is the first point at which this
-	// admin-asserted identity can be narrowed to one request shape, rather
-	// than riding every request to the host.
-	//
-	// Both empty = unpinned = today's behaviour, which is every other rule.
+	// PinPath and PinQuery narrow this rule's credential to ONE request
+	// shape: a GET of PinPath whose query carries exactly these key=value
+	// pairs. Any other request to the same host is forwarded WITHOUT the
+	// header. Exists because an injected credential otherwise rides EVERY
+	// request to that host — for captured-AWS-SSO that includes `POST
+	// /logout` and a GetRoleCredentials for any other account/role the
+	// session holds. Both empty = unpinned = every other rule.
 	PinPath  string            `json:"pin_path,omitempty"`
 	PinQuery map[string]string `json:"pin_query,omitempty"`
 }
@@ -194,30 +153,16 @@ func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
 // An UNPINNED rule allows every request, which is what every rule but the
 // captured-AWS-SSO one does today.
 //
-// It takes the raw query, not url.Values, and that is the whole correctness of
-// the query arm (security re-round SHOULD-1). Matching on a parsed
-// url.Values.Get accepted four shapes that carry a SECOND account or role
-// alongside the pinned one, with the credential attached and RawQuery forwarded
-// verbatim:
-//
-//	account_id=<pinned>&account_id=other          Get returns the first value
-//	role_name=<pinned>&role_name=other            likewise
-//	...&x=1;account_id=other                      Go >= 1.17 DROPS a pair containing
-//	                                              ';', so the pin never sees it
-//	account_id=<pinned>&account%5Fid=other        a second spelling of the key
-//
-// Whether the ORIGIN honours the extra value is its own business — the fake
-// takes the first, and the real portal's duplicate-parameter and ';' semantics
-// are undocumented and could not be measured offline. That is exactly why this
-// refuses them: a pin that a second &account_id= can argue with is enforced only
-// for origins that happen to take the first value, and the threat model says
-// this pair is ENFORCED.
-//
-// So the query must be unambiguous by construction: no ';' in the raw query at
-// all, every pinned key present EXACTLY once, each equal to the pin, and no key
+// It takes the raw query, not url.Values: matching on a parsed
+// url.Values.Get would accept a second, differently-spelled or
+// ';'-separated account/role parameter riding alongside the pinned one,
+// forwarded verbatim with the credential attached, since how an origin
+// resolves a duplicate parameter is undocumented and unmeasurable offline.
+// So the query must be unambiguous by construction: no ';' in the raw query
+// at all, every pinned key present EXACTLY once equal to the pin, and no key
 // whose literal spelling differs from its decoded one. Other keys are left
-// alone — the pin narrows WHICH account and role the session may be spent on,
-// not what else a caller may ask for.
+// alone — the pin narrows WHICH account and role the session may be spent
+// on, not what else a caller may ask for.
 func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if !r.Pinned() {
 		return true
@@ -228,13 +173,9 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if len(r.PinQuery) == 0 {
 		return true
 	}
-	// ';' is refused on the RAW query, before any parse. Defence in depth, and
-	// labelled as such: on this Go, url.ParseQuery already answers
-	// "invalid semicolon separator in query" and the err arm below refuses it —
-	// verified, not assumed. It is spelled out anyway because that behaviour is
-	// exactly what CHANGED in Go 1.17 (before it, ';' was accepted as a
-	// separator, which is this bypass), so the refusal should not be a property
-	// of whichever parser happens to be linked.
+	// ';' is refused on the RAW query, before any parse — defence in depth,
+	// since the refusal should not depend on whichever parser is linked (Go
+	// 1.17 changed ParseQuery to also reject it, previously a bypass).
 	if strings.Contains(rawQuery, ";") {
 		return false
 	}
@@ -242,16 +183,10 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if err != nil {
 		return false
 	}
-	// One spelling per key. A key whose literal bytes differ from its decoded
-	// form (account%5Fid, account+id, ...) is a second way to write a name this
-	// rule pins, and the origin may read it as the first.
-	//
-	// ALSO defence in depth today: ParseQuery DECODES keys, so account%5Fid
-	// lands in vals["account_id"] and the one-value arm below already refuses it
-	// (verified). What this adds is independence from that decoding — a spelling
-	// the parser does NOT fold would otherwise reach the origin unexamined —
-	// and it is why the refusal reads the same for every encoding trick rather
-	// than only for the ones Go happens to normalise.
+	// One spelling per key: a key whose literal bytes differ from its decoded
+	// form (account%5Fid, account+id, ...) is a second way to write a name
+	// this rule pins. This is independent of ParseQuery's own decoding, so
+	// the refusal covers any encoding trick, not only ones Go normalises.
 	for _, pair := range strings.Split(rawQuery, "&") {
 		if pair == "" {
 			continue
@@ -271,24 +206,16 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	return true
 }
 
-// ValidHeaderName reports whether name is a legal HTTP field-name — an RFC 9110
-// token, capped at maxHeaderNameLen.
+// ValidHeaderName reports whether name is a legal HTTP field-name — an RFC
+// 9110 token, capped at maxHeaderNameLen.
 //
-// An InjectionRule's Header is OPERATOR-AUTHORED (an integration's credential
-// header, an api_key grant scope in a stored or inline policy) and is written
-// verbatim onto a forwarded request by the proxy, so it is a trust boundary:
-// a name carrying CR or LF is a header-splitting shape, and one carrying ':'
-// or a space is a malformed field-name the peer may parse as something else.
-// The token charset excludes all of those by construction — this function is
-// the single definition of "a header name Wardyn will put on the wire", run at
-// every write boundary AND at the injection sink so no authoring path can
-// reach the proxy with one.
-//
-// Go's own Transport also rejects an invalid field name at request-write time,
-// which makes this defense-in-depth rather than the only thing standing
-// between an authored header and the wire — but that backstop fails the
-// request at run time, after a run has already started. Rejecting at write
-// time turns the same mistake into a 400 the operator reads immediately.
+// An InjectionRule's Header is OPERATOR-AUTHORED and written verbatim onto a
+// forwarded request, so it is a trust boundary: a name carrying CR/LF is a
+// header-splitting shape, and one carrying ':' or a space is malformed. The
+// token charset excludes all of those by construction, checked at every
+// write boundary and the injection sink. Go's Transport also rejects an
+// invalid field name at request-write time, but only at run time after a run
+// has started; rejecting here turns the mistake into an immediate 400.
 func ValidHeaderName(name string) bool {
 	if name == "" || len(name) > maxHeaderNameLen {
 		return false

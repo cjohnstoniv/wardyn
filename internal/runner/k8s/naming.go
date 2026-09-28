@@ -51,7 +51,8 @@ const (
 	// A0 contract ("Exec (agent launch) = ephemeral container named
 	// \"wardyn-agent\"").
 	execContainerName = "wardyn-agent"
-	// proxyContainerName is the proxy pod's sole container.
+	// proxyContainerName is the proxy pod's main container (beside its
+	// stage-proxy-config init container).
 	proxyContainerName = "wardyn-proxy"
 	// canaryContainerName is the boot-time egress canary's sole container.
 	canaryContainerName = "canary"

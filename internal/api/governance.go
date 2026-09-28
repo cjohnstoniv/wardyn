@@ -817,75 +817,16 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 }
 
 // ceilingWithUnusableGroups is effectiveCeiling's step 4: the caller's group
-// identity cannot be evaluated, so resolve on their user subjects alone and
-// decide whether that answer is trustworthy anyway.
-//
-// The user type is answerable (it is stamped, not a snapshot), so it is matched;
-// but its tier sits BELOW group, so a type-tier winner is untrustworthy for the
-// same reason an all-tier one is — a group row could have outranked it.
-//
-// It is trustworthy in exactly two shapes, and the scoping is the whole point
-// (a blanket 403 here would lock out every pre-0.6 cookie on every deployment,
-// including the ones that have never heard of governance profiles):
-//
-//   - A user-tier row matched. user > group > all, so an explicitly
-//     named principal's ceiling is FULLY determined no matter what their groups
-//     are; refusing would lock out precisely the people an admin took the
-//     trouble to name. The tier comes from the resolver's own ORDER BY rather
-//     than being re-derived here — a user-tier and an all-tier match are
-//     otherwise indistinguishable, including when both name the same profile.
-//   - No group-tier row exists at all. Nothing an unknown group could
-//     have matched, so nothing a nil snapshot could be hiding; refusing would
-//     break "no assignment ⇒ byte-for-byte today" for every pre-upgrade
-//     session on every deployment that never adopted group profiles.
-//
-// HasGroupTierAssignments stays a SEPARATE read, deliberately: the case that
-// most needs it is the one where the resolver matched NOTHING, and a zero-row
-// result carries no columns to have piggybacked the answer on.
+// identity cannot be evaluated, so resolve on their user subjects and type alone
+// and let selectByTier's one stale rule decide whether that answer is
+// trustworthy (target governance.ceiling). The drive preview enters here too.
 func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, userType string, deployment governanceCeiling) (governanceCeiling, error) {
-	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil, userType)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", err)
-	}
-	if err == nil && tier == types.CapabilitySubjectUser {
-		return s.ceilingFromProfile(p, nil, deployment)
-	}
-	hasGroupTier, herr := s.cfg.Store.HasGroupTierAssignments(ctx)
-	if herr != nil {
-		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", herr)
-	}
-	if hasGroupTier {
-		// Audited, at the ONE site that produces this refusal.
-		//
-		// docs/OPERATIONS.md's "Every denial that isn't a 404" makes
-		// authz.denied the record of every member denial that is not a plain
-		// foreign-resource 404, and this 403 is member-reachable from six seams
-		// (GET /policies/default, POST /runs, /runs/preflight, the secrets list,
-		// the profile read, the drives door) — and produced none. An operator
-		// reading the denial stream saw nothing at all for a member who cannot
-		// use the product.
-		//
-		// Here rather than in writeCeilingError, and that placement is the fix
-		// rather than an implementation detail: writeCeilingError is a free
-		// function with no server and no context, and there are three of them
-		// (writeCeilingError, writeCeilingErrorPrefixed, ceilingErrorStatus) —
-		// auditing at the WRITE sites would mean one emit per seam and a seam
-		// that hands the code upward (ceilingErrorStatus) emitting nothing.
-		// This is the only place the refusal is DECIDED, so it is the only place
-		// it can be recorded once.
-		//
-		// Once per request, not once per seam, because effectiveCeiling memoizes
-		// (ceilingMemo): a create that asks three times is one denial, which is
-		// what an operator counting denials means.
-		// Not for a display read (isDisplayRead, user_drives_resolve.go). GET
-		// /me resolves the ceiling to answer user_drive_denied_by_profile, which
-		// would otherwise write this row once per console poll for a member who
-		// never asked for a run — a denial count that grows with page views.
-		// Every enforcement caller reaches here unmarked and still records.
-		if !isDisplayRead(ctx) {
-			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""))
-		}
-		return governanceCeiling{}, errGroupsSnapshotStale
+	p, _, err := selectByTier(ctx, s, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""),
+		func() (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+			return s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil, userType)
+		}, s.cfg.Store.HasGroupTierAssignments)
+	if errors.Is(err, errGroupsSnapshotStale) {
+		return governanceCeiling{}, err
 	}
 	return s.ceilingFromProfile(p, err, deployment)
 }

@@ -311,18 +311,23 @@ type envelope struct {
 // row if one exists, else the operator's ("", name) row — a member with no
 // key of their own resolves the operator's, exactly as every caller did
 // before For existed. For owner="" the IN clause names "" twice, so only the
-// operator row can ever match.
+// operator row can ever match. Under secretstore.OwnRowOnly (an owner_only
+// grant) only the view owner's own row matches: for owner "" the operator's,
+// which is that view's own. A caller reaches For("") for an owner_only grant
+// only for a run the operator itself owns (identity.Claims.OperatorOwned).
 // Returns an error wrapping pgx.ErrNoRows and secretstore.ErrNotFound when
 // absent, and ONLY then: a row that exists but will not open is a distinct
 // error, so loadOrCreateSecret can never mistake a tampered boot key for a
 // missing one and mint over it.
 func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	e := envelope{name: name}
-	err := s.pool.QueryRow(ctx,
-		`SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
-		  WHERE owned_by IN ('', $1) AND name=$2 ORDER BY (owned_by = $1) DESC LIMIT 1`,
-		s.owner, name,
-	).Scan(&e.ownedBy, &e.version, &e.kekID, &e.wrapped, &e.ct)
+	q := `SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
+		  WHERE owned_by IN ('', $1) AND name=$2 ORDER BY (owned_by = $1) DESC LIMIT 1`
+	if secretstore.OwnRowOnly(ctx) {
+		q = `SELECT owned_by, enc_version, kek_id, wrapped_dek, ciphertext FROM secrets
+		  WHERE owned_by = $1 AND name=$2`
+	}
+	err := s.pool.QueryRow(ctx, q, s.owner, name).Scan(&e.ownedBy, &e.version, &e.kekID, &e.wrapped, &e.ct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Satisfy BOTH the seam sentinel (secretstore.ErrNotFound, what the
 		// conformance suite + callers check) and the historical pgx.ErrNoRows
@@ -364,6 +369,11 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	dek, err := k.Unwrap(ctx, e.wrapped, kek.Bind(e.ownedBy, e.name))
 	if errors.Is(err, secretstore.ErrUnavailable) {
 		return nil, fmt.Errorf("pg secretstore: %s could not be unlocked — key service %q did not answer: %w", ref, e.kekID, err)
+	}
+	// The key service's own error (a deleted key, a revoked policy) is its to
+	// name; calling it a forged row would send the operator to the database.
+	if errors.Is(err, kek.ErrService) {
+		return nil, fmt.Errorf("pg secretstore: %s could not be unlocked: %w", ref, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its data key does not unwrap for this row (moved, forged, corrupted, or its key version retired): %w", ref, err)

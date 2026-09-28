@@ -61,8 +61,6 @@ func covers(glob, dir string) bool {
 	return prefix == "." || dir == prefix || strings.HasPrefix(dir, prefix+"/")
 }
 
-// TestPGConcurrencyProofsRunUnderRace is the pin for F137.
-//
 // internal/broker/concurrency_pg_test.go's exactly-once proofs
 // (TestPG_ConcurrentMint_ExactlyOnceWins,
 // TestPG_ConcurrentMint_AutoApprovalGrant_Independent,

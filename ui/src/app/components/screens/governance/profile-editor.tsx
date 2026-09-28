@@ -24,16 +24,21 @@ import { governance as api, isGrantBoundError, type GovernanceLimits, type Gover
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { RunPolicySpec } from "../../../lib/types";
+import type { ConfinementClass, RunPolicySpec } from "../../../lib/types";
+import { CC_ORDER } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Mono } from "../../wardyn/code-block";
+import { CC_META } from "../../wardyn/cc-meta";
+import { FIELD_HELP } from "../../wardyn/policy-field-help";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
+import { Segmented } from "../permissions";
 import { Note, withMono } from "./display";
 import { ProfileRubric } from "./profile-rubric";
 
@@ -146,6 +151,11 @@ export function ProfileEditor({
       <section className="mt-6">
         <h4 className="text-body font-medium text-foreground">{GOV.CEILING_TITLE}</h4>
         <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.CEILING_LEAD}</p>
+        {/* #1200 §3a — the "Allowed barriers" control: the same
+            min_confinement_class floor the JSON spec below already carries,
+            authored as one radio instead of a hand-typed field (T-7 ships
+            against the existing floor; no allow-set, no ceiling field). */}
+        <AllowedBarriersField spec={spec} onChange={setSpec} disabled={disabled} />
         <div className="mt-3">
           <PolicyPanel instance="policies" value={spec} onChange={setSpec} />
         </div>
@@ -303,6 +313,50 @@ export function ProfileEditor({
           {GOV.SAVE}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// #1200 §3a — "Allowed barriers": a labelled radio over the SAME
+// min_confinement_class field the JSON spec below authors, rather than a
+// second, competing floor. Reads the CURRENT floor out of the parsed spec
+// (CC1 — the weakest tier — when the field is absent or unparseable, which
+// reads identically to "no floor"), and on change rewrites just that one key
+// into the spec text PolicyPanel renders, so the two controls can never
+// disagree about what was last saved.
+function AllowedBarriersField({
+  spec,
+  onChange,
+  disabled,
+}: {
+  spec: string;
+  onChange: (next: string) => void;
+  disabled: boolean;
+}) {
+  const parsed = parseSpec(spec);
+  const raw = parsed.ok ? (parsed.spec as { min_confinement_class?: unknown }).min_confinement_class : undefined;
+  const floor: ConfinementClass = typeof raw === "string" && (CC_ORDER as string[]).includes(raw) ? (raw as ConfinementClass) : "CC1";
+
+  const setFloor = (cc: ConfinementClass) => {
+    if (!parsed.ok) return;
+    onChange(JSON.stringify({ ...parsed.spec, min_confinement_class: cc }, null, 2));
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-foreground">{TIER_PICKER.ALLOWED_BARRIERS_LABEL}</span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted-foreground">{FIELD_HELP.min_confinement_class.what}</p>
+      <div className="mt-2">
+        <Segmented
+          value={floor}
+          disabled={disabled || !parsed.ok}
+          onChange={setFloor}
+          options={CC_ORDER.map((cc) => ({ value: cc, label: CC_META[cc].label }))}
+        />
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">{TIER_PICKER.ALLOWED_BARRIERS_SUMMARY(floor)}</p>
     </div>
   );
 }

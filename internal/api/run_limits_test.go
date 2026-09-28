@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -103,6 +105,24 @@ func runLimitsFixture(t *testing.T, cs *capStore) (*Server, *govEscapeStore) {
 func createdRun(t *testing.T, srv *Server, st *govEscapeStore, cookie *http.Cookie) types.AgentRun {
 	t.Helper()
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, `{"agent":"claude-code","task":"t"}`)
+	return decodedCreatedRun(t, st, w)
+}
+
+// createdRunAsAdmin is createdRun for an admin-tier caller, launched through a
+// named wdn_ token instead of a cookie: an SSO session of an admin tier is in
+// the Admin view and cannot launch (refuseAdminViewLaunch), and the token lane
+// still carries the same stamped role.
+func createdRunAsAdmin(t *testing.T, srv *Server, st *govEscapeStore, sub, role string) types.AgentRun {
+	t.Helper()
+	complete := false
+	st.tokenRaw = apiTokenPrefix + "run-limits-" + sub
+	st.token = &types.APIToken{ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: role, GroupsTruncated: &complete}
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", st.tokenRaw, `{"agent":"claude-code","task":"t"}`)
+	return decodedCreatedRun(t, st, w)
+}
+
+func decodedCreatedRun(t *testing.T, st *govEscapeStore, w *httptest.ResponseRecorder) types.AgentRun {
+	t.Helper()
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 	}
@@ -158,14 +178,12 @@ func TestCreateRunCapturesRunLimits(t *testing.T) {
 
 	t.Run("a security admin under a profile is bounded too", func(t *testing.T) {
 		srv, st := runLimitsFixture(t, &capStore{govProfile: profile, govTier: types.CapabilitySubjectUser})
-		wantBounded(t, createdRun(t, srv, st,
-			ssoSession(t, "sub-secadmin", "secadmin@corp.example", oidc.RoleSecurityAdmin)))
+		wantBounded(t, createdRunAsAdmin(t, srv, st, "sub-secadmin", oidc.RoleSecurityAdmin))
 	})
 
 	t.Run("a super admin is exempt", func(t *testing.T) {
 		srv, st := runLimitsFixture(t, assignedStore(profile))
-		wantDeploymentOnly(t, createdRun(t, srv, st,
-			ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)))
+		wantDeploymentOnly(t, createdRunAsAdmin(t, srv, st, "sub-admin", oidc.RoleAdmin))
 	})
 
 	t.Run("an unassigned member keeps today: no end, the deployment's wait", func(t *testing.T) {

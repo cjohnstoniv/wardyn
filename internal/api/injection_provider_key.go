@@ -19,14 +19,14 @@ import (
 
 // DRAFT (M2 canon pending)
 const (
-	providerKeyNotRecorded = "a model provider's key is injected only through the grant Wardyn authors when a run launches on " +
+	providerKeyNotRecorded = "A model provider's key is injected only through the grant Wardyn authors when a run launches on " +
 		"that provider, which records whose key the run uses; this grant carries no such record"
-	providerKeyNotOwn = "a model provider's key is injected only from the run owner's own namespace; this grant names another"
-	providerKeyAbsent = "your own key or token for this run's model provider is not stored — add it again from Getting " +
+	providerKeyNotOwn = "A model provider's key is injected only from the run owner's own namespace; this grant names another"
+	providerKeyAbsent = "Your own key or token for this run's model provider is not stored — add it again from Getting " +
 		"started in the console; no other person's credential stands in for it"
 	providerKeyRefused = "Wardyn's store refused your model provider credential (it is gone, bound to another row, or " +
 		"Wardyn's access to it was revoked). Nothing was substituted; save it again or ask an admin."
-	providerKeyChanged = "this run's model provider was removed, turned off, re-pointed or changed after the run " +
+	providerKeyChanged = "This run's model provider was removed, turned off, re-pointed or changed after the run " +
 		"started, so its key is no longer injected"
 	providerKeyRecordUnreadable = "Wardyn couldn't read this run's model provider just now, so its key is not injected"
 )
@@ -142,6 +142,7 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "source": "provider",
 			"owner": rec.OwnerSubject, "provider": p.ID, "provider_uid": rec.ProviderUID,
 		}, row))))
+	s.stampCredentialUse(ctx, rec.OwnerSubject, name)
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: host, Header: header, Value: formatted, JTI: minted.JTI,
 		ExpiresAt: time.Now().Add(providerKeyRecheck).UnixMilli(),

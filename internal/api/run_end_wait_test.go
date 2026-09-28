@@ -264,8 +264,9 @@ func TestSetRunEnd_Refusals(t *testing.T) {
 // TestPatchRunEnds_ExtendsALostRun is F1's fix (long-holds design rev 4
 // §2.3): a run lost to a reboot or a control-plane outage, even past its own
 // end, is still extendable — that is how it becomes revivable again (§4.1).
-// Only a run whose OWN lease ended (LostEnded) stays refused: its end is what
-// put it in the kept state in the first place.
+// A run whose OWN lease ended (LostEnded) is refused once its files are no
+// longer kept, which with this fixture's grace of 0 is at once
+// (run_ended_revive_test.go covers the grace).
 func TestPatchRunEnds_ExtendsALostRun(t *testing.T) {
 	for _, reason := range []types.LostReason{types.LostOutage, types.LostReboot} {
 		t.Run(string(reason), func(t *testing.T) {
@@ -292,7 +293,7 @@ func TestPatchRunEnds_ExtendsALostRun(t *testing.T) {
 		})
 	}
 
-	t.Run("a run whose own lease ended stays refused", func(t *testing.T) {
+	t.Run("a run whose own lease ended, with no files grace, stays refused", func(t *testing.T) {
 		f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
 		past := f.now.Add(-time.Hour)
 		f.st.mu.Lock()

@@ -137,7 +137,7 @@ func TestPG_CreatePolicy_DuplicateName(t *testing.T) {
 	}
 }
 
-// TestPG_UpdatePolicy_DuplicateName is B1-F5, the UPDATE mirror of the test
+// TestPG_UpdatePolicy_DuplicateName is the UPDATE mirror of the test
 // above: renaming a policy ONTO a taken name raises the same 23505 as an
 // insert, and must map to store.ErrConflict so the API answers 409 instead of
 // a blanket 500 carrying the raw constraint text.

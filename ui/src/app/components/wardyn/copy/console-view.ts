@@ -27,6 +27,24 @@ export const NAV = {
   YOUR_ACCOUNT: "Your account",
 } as const;
 
+// M-5 (#636, packet S-3, approved 2026-09-27): the /account page header's
+// description — every console page header has one, and this says what's here
+// and whose it is, which is the point of the split.
+export const YOUR_ACCOUNT = {
+  LEDE: "The connections and keys your own runs use. No one else's runs can use them.",
+} as const;
+
+// M-5 (#636, packet S-5, approved 2026-09-27): a security admin reaches
+// /admin/settings from a stale link — that tier has no Settings in its nav
+// (app-shell.tsx's navItemsForView), so this only ever renders from a typed
+// or bookmarked URL. Same shape as VIEW_REFUSAL: title "Admin view", a body
+// naming the tier, one CTA back to the caller's own Runs. Nothing behind the
+// page is fetched (AdminSettingsScreen checks this before its first read).
+export const SETTINGS_SUPER_ONLY = {
+  BODY: "Settings is for super admins. You're signed in as a security admin.",
+  CTA: "Back to Runs",
+} as const;
+
 // The no-credential preview (0.7.5), now entered from the Permissions header.
 // Its band is the one kept: sign-in is refused there, which is abnormal.
 export const USER_PREVIEW = {

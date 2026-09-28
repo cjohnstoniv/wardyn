@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -98,8 +97,12 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	scopeToOwner, ok := s.approvalsViewScope(w, r) // #1197: opt-in ?view=user forces this for every caller
+	if !ok {
+		return
+	}
 
-	if !s.isSecurityOperator(r.Context()) { // security tier sees the org-wide queue (http.go's isSecurityOperator)
+	if scopeToOwner { // security tier sees the org-wide queue (http.go's isSecurityOperator), unless view=user forced it
 		if runID == uuid.Nil {
 			pager, capable := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
 			if !capable {
@@ -107,9 +110,9 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			principal := principalFromRequest(r)
-			servePage(w, r, page, func(p store.Page) ([]types.ApprovalRequest, error) {
+			servePage(w, r, page, s.withHoldProjection(func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pager.ListApprovalsPageByRunCreator(r.Context(), principal, state, p)
-			}, nil)
+			}), nil)
 			return
 		}
 		// ?run_id= given: prove ownership up front. Once proven, the fetch-all +
@@ -127,18 +130,18 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		// without the capability falls through to the fetch-all closure below,
 		// which returns the identical rows. Ownership was already proven above.
 		if pager, capable := s.cfg.Approvals.(store.ApprovalsByRunPager); capable {
-			pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+			pageFn = s.withHoldProjection(func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pager.ListApprovalsPageByRun(r.Context(), runID, state, p)
-			}
+			})
 		}
 	default:
 		if pl, ok := s.cfg.Approvals.(approvalPageLister); ok {
-			pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+			pageFn = s.withHoldProjection(func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pl.ListApprovalsPage(r.Context(), state, p)
-			}
+			})
 		}
 	}
-	servePage(w, r, page, pageFn, func() ([]types.ApprovalRequest, error) {
+	servePage(w, r, page, pageFn, s.withHoldProjectionAll(func() ([]types.ApprovalRequest, error) {
 		all, err := s.cfg.Approvals.List(r.Context(), state)
 		if err != nil || runID == uuid.Nil {
 			return all, err
@@ -150,7 +153,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return out, nil
-	})
+	}))
 }
 
 // approvalPageLister is the optional DB-paged read surface an ApprovalService
@@ -645,11 +648,11 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 //
 // Exported for exactly one caller — cmd/wardynd's boot-time local-mode check,
 // which warns when the switch is combined with a mode that cannot enforce it.
-// It is a function rather than a second os.Getenv at the boot site so the env
-// NAME and the truthiness rule keep ONE definition: a boot guard that disagreed
-// with the runtime gate about what "on" means would warn about a deployment that
-// is fine, or stay silent for one that is not.
-func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSecondHuman)) }
+// It is a function rather than a second cliutil.EnvBool at the boot site so
+// the env NAME and the truthiness rule keep ONE definition: a boot guard that
+// disagreed with the runtime gate about what "on" means would warn about a
+// deployment that is fine, or stay silent for one that is not.
+func EgressSecondHumanEnabled() bool { return envEnabled(envEgressSecondHuman) }
 
 // decideErrorClass names WHY a decision failed for the break-glass audit row,
 // in the same three buckets the response switch below answers with — a class,
@@ -754,7 +757,7 @@ func bypassRunID(ap types.ApprovalRequest, haveAP bool) *uuid.UUID {
 // worth keeping, since it is what holds this line correct if an empty principal
 // ever becomes reachable.
 func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) (bool, bool) {
-	if !envEnabled(os.Getenv(envEgressSecondHuman)) {
+	if !envEnabled(envEgressSecondHuman) {
 		return false, true
 	}
 	actorType, principal := actorFromRequest(r)

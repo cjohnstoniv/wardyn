@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -22,7 +23,7 @@ import (
 // Attach tickets: browsers cannot set an Authorization header on a WebSocket
 // handshake, so in admin-token auth mode (no OIDC session cookie) the attach
 // WS was unreachable from the UI. The standard fix: the UI first POSTs
-// /runs/{id}/attach-ticket through the NORMAL authenticated surface, receives
+// /runs/{id}/attach/ticket through the NORMAL authenticated surface, receives
 // a single-use, 30s-TTL random ticket bound to that run and to the minting
 // principal, and presents it as ?ticket= on the WS handshake. The ticket is
 // consumed on first use (a reconnect mints a fresh one), so a leaked ticket is
@@ -45,12 +46,16 @@ const attachTicketTTL = 30 * time.Second
 // this stamped role is the only signal available to re-check owner-or-admin
 // when the ticket is consumed (see attach.go's handleAttachWS).
 func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, now time.Time) (string, error) {
+	var via *types.DelegationVia
+	if v, ok := audit.DelegationFrom(ctx); ok {
+		via = &v
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	tok := hex.EncodeToString(raw)
-	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role}
+	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role, Via: via}
 	if err := st.MintAttachTicket(ctx, tok, t, now, now.Add(attachTicketTTL)); err != nil {
 		return "", err
 	}
@@ -72,7 +77,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 	if !ok || t.RunID != runID {
 		return ticketActor{}, false, nil
 	}
-	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role}, true, nil
+	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -89,10 +94,27 @@ type ticketActor struct {
 	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner-or-admin
 	// re-check.
 	role string
+	// via is the portal and delegated token the ticket was minted through
+	// (#1142), nil otherwise. withTicketActor replays it as the delegated
+	// context, so recordAudit stamps data.via on the ticket lane's rows and
+	// isOperator refuses it there as it did at mint.
+	via *types.DelegationVia
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
+	if a.via != nil {
+		ctx = audit.WithDelegation(ctx, *a.via)
+	}
 	return context.WithValue(ctx, ticketActorCtxKey{}, a)
+}
+
+// withVia adds the ticket's via to an audit datum written outside the
+// request context (the UI gateway audits on BaseCtx), nil-safe.
+func (a ticketActor) withVia(data map[string]any) map[string]any {
+	if a.via != nil {
+		data["via"] = a.via
+	}
+	return data
 }
 
 func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
@@ -102,7 +124,7 @@ func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
 
 // handleAttachTicket mints a single-use WS ticket:
 //
-//	POST /api/v1/runs/{id}/attach-ticket
+//	POST /api/v1/runs/{id}/attach/ticket
 //
 // Mounted INSIDE the humanOrAdminAuth group, owner-or-admin (getRunAuthorized):
 // a run's OWNER may mint a ticket for their own run, same as an admin — a
@@ -192,7 +214,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // omit ?ticket= and get the same live PTY straight from their session cookie
 // (which browsers attach to a same-origin WebSocket handshake automatically).
 // The TICKET lane is owner-or-admin: minting is itself owner-or-admin-gated
-// (POST /runs/{id}/attach-ticket, getRunAuthorized), so holding a ticket at
+// (POST /runs/{id}/attach/ticket, getRunAuthorized), so holding a ticket at
 // all already proves that much — but the handler (handleAttachWS, attach.go)
 // ALSO re-checks the ticket's own stamped role/principal against the run it
 // names, since this lane never runs humanOrAdminAuth/requireOperator at all

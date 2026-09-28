@@ -265,9 +265,11 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// refuses an empty subject) — and secretOwnerFromRequest stamps an
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
-	// namespace, unchanged, for every pre-0.7 deployment.
-	rctx, row := secretstore.SiteAudited(r.Context())
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
+	// namespace, unchanged, for every pre-0.7 deployment. An owner_only grant
+	// never falls back (secretstore.GrantRead).
+	gctx, _ := secretstore.GrantRead(r.Context(), minted.OwnerOnly)
+	rctx, row := secretstore.SiteAudited(gctx)
+	secret, err := s.cfg.Secrets.For(grantReadOwner(claims.Sub, minted.OwnerOnly, claims.OperatorOwned)).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections, and
 		// mid-run it acts on the status: see storeReadRefusal.

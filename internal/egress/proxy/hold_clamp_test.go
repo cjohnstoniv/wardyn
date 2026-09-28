@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestConfigureHoldClampsHostileLimits pins the second half of B11b-F2. The
+// TestConfigureHoldClampsHostileLimits pins the second half of the policy-spec bound. The
 // control plane's validatePolicySpec bounds both knobs at every ingest point,
 // but it only ever runs at AUTHORING time: a policy stored before the bound
 // existed is read straight out of the store, frozen onto the run and handed to

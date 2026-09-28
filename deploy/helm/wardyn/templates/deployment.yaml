@@ -21,7 +21,10 @@ the optional UI-sandbox gateway port + WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/
 _ORIGIN_TEMPLATE (docs/UI-SANDBOXES.md). trustedCA mirrors defaultPolicy's
 shape (a second ConfigMap, mounted read-only, WARDYN_TRUSTED_CA_FILE pointed
 at it unless env.WARDYN_TRUSTED_CA_FILE already is) for a corporate CA bundle
-— see docs/OPERATIONS.md § Network.
+— see docs/OPERATIONS.md § Network. daemonProxySecret.existingSecret mounts
+an OPERATOR-owned Secret (never chart-created or chart-read) read-only and
+points WARDYN_DAEMON_PROXY_SECRET at it, the credentialed-proxy escape hatch
+for WARDYN_DAEMON_PROXY_URL (cmd/wardynd/daemon_proxy.go).
 
 Hardening (defense in depth alongside the per-run sandbox envelope):
   - runs as a non-root user (the wardynd image is distroless:nonroot, uid 65532)
@@ -40,8 +43,15 @@ out; guarded, the 0.5 defaults simply carry forward.
 */ -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $dps := .Values.daemonProxySecret | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
+{{- /* basePath (WARDYN_BASE_PATH): wardynd serves /healthz and /readyz under it,
+so the probes must follow whatever the CONTAINER actually gets — an explicit
+env.WARDYN_BASE_PATH wins (line ~233 below only adds it from basePath when
+env doesn't already set it), basePath otherwise. Same precedence both places,
+so the probes and the daemon can never disagree. */ -}}
+{{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
 {{- /*
 secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
 age key) are projected into ONE read-only volume and wardynd gets
@@ -226,6 +236,10 @@ spec:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
             {{- end }}
+            {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
+            - name: WARDYN_BASE_PATH
+              value: {{ .Values.basePath | quote }}
+            {{- end }}
             {{- if and .Values.auth.ssoOnly (not (hasKey .Values.env "WARDYN_SSO_ONLY")) }}
             # Declare SSO the only way into the console (validateSSOOnlyPosture,
             # cmd/wardynd/boot_posture.go). secret.yaml's render-time refusal
@@ -396,6 +410,17 @@ spec:
             - name: WARDYN_TRUSTED_CA_FILE
               value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
             {{- end }}
+            {{- if and $dps.existingSecret (not (hasKey .Values.env "WARDYN_DAEMON_PROXY_SECRET")) }}
+            # Points wardynd at the operator-managed Secret mounted below — a
+            # Secret this chart never creates, since the value is a
+            # credentialed forward-proxy URL. An .Values.env entry overrides
+            # (e.g. a Vault Agent / CSI path your own extraVolumes mounts
+            # instead). wardynd itself refuses to boot if
+            # WARDYN_DAEMON_PROXY_URL is ALSO set (bootDaemonProxy,
+            # cmd/wardynd/daemon_proxy.go) — the two name one proxy two ways.
+            - name: WARDYN_DAEMON_PROXY_SECRET
+              value: {{ printf "%s/%s" ($dps.mountPath | default "/etc/wardyn/daemon-proxy-secret") ($dps.existingSecretKey | default "proxy-url") | quote }}
+            {{- end }}
             {{- if and .Values.awsSSOProxyInject (not (hasKey .Values.env "WARDYN_AWS_SSO_PROXY_INJECT")) }}
             # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off").
             # An .Values.env entry overrides — scripts/kind-sso-walk.sh pins
@@ -482,7 +507,7 @@ spec:
             {{- end }}
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: {{ printf "%s/healthz" $basePath }}
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -501,7 +526,7 @@ spec:
             # pod never becomes Ready and a rollout to it stalls forever
             # (readinessProbe.path=/healthz pins it back — see values.yaml).
             httpGet:
-              path: {{ (.Values.readinessProbe | default dict).path | default "/readyz" | quote }}
+              path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/readyz") | quote }}
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
@@ -517,7 +542,7 @@ spec:
             # "generous startup budget" this comment promised was never the
             # thing actually bounding a slow migration).
             httpGet:
-              path: /healthz
+              path: {{ printf "%s/healthz" $basePath }}
               port: http
             periodSeconds: 5
             failureThreshold: 90
@@ -554,6 +579,11 @@ spec:
             {{- if $bootFiles }}
             - name: boot-secrets
               mountPath: {{ $filesDir }}
+              readOnly: true
+            {{- end }}
+            {{- if $dps.existingSecret }}
+            - name: daemon-proxy-secret
+              mountPath: {{ $dps.mountPath | default "/etc/wardyn/daemon-proxy-secret" }}
               readOnly: true
             {{- end }}
             {{- with .Values.extraVolumeMounts }}
@@ -619,6 +649,26 @@ spec:
                     - key: {{ $ageItem }}
                       path: age-key
               {{- end }}
+        {{- end }}
+        {{- if $dps.existingSecret }}
+        # An OPERATOR-owned Secret: never chart-created, never chart-read
+        # (this chart neither renders nor otherwise references its content —
+        # only wardynd, at boot, through the mounted file). defaultMode is a
+        # RENDER-time default, not a boot-time guarantee: daemonProxySecretMode
+        # (cmd/wardynd/daemon_proxy.go) refuses group- or world-WRITABLE modes
+        # regardless of what this renders, but a root-owned Secret-volume
+        # file that is wider than defaultMode's own default — e.g. 0644, from
+        # someone editing this field — is still ACCEPTED (the rule's
+        # other-readable refusal only fires on a file wardynd's own non-root
+        # uid owns, which a Secret volume never is). Values.yaml's own comment
+        # on daemonProxySecret has the full rule.
+        - name: daemon-proxy-secret
+          secret:
+            secretName: {{ $dps.existingSecret }}
+            defaultMode: {{ $dps.defaultMode | default 0440 }}
+            items:
+              - key: {{ $dps.existingSecretKey | default "proxy-url" }}
+                path: {{ $dps.existingSecretKey | default "proxy-url" }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

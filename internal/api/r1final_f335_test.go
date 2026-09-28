@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F335: the run-create path never authorized the SELECTED workspace against the
+// the run-create path never authorized the SELECTED workspace against the
 // CALLER. Two doors reached the same room and both are pinned here:
 //
 //  1. req.workspace_id — a second plain member, and a security_admin (a tier
@@ -43,13 +43,20 @@ func TestForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 			root, project := memberProjectRoot(t)
 			srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 			foreign := memberOwnedWorkspace(st, ownerMemberSub, project)
-			caller := ssoSession(t, tc.sub, tc.email, tc.role)
+			// A security admin launches through a token: an SSO session in the
+			// Admin view cannot launch at all (refuseAdminViewLaunch).
+			launch := func(body string) *httptest.ResponseRecorder {
+				if tc.role == oidc.RoleUser {
+					return doSSO(t, srv, http.MethodPost, "/api/v1/runs", ssoSession(t, tc.sub, tc.email, tc.role), body)
+				}
+				return do(t, srv, http.MethodPost, "/api/v1/runs", st.humanToken(tc.sub, tc.role), body)
+			}
 
 			body := func(id string) string {
 				return `{"agent":"claude-code","task":"do the thing","workspace_id":"` + id + `"}`
 			}
-			got := doSSO(t, srv, http.MethodPost, "/api/v1/runs", caller, body(foreign.String()))
-			missing := doSSO(t, srv, http.MethodPost, "/api/v1/runs", caller, body(uuid.New().String()))
+			got := launch(body(foreign.String()))
+			missing := launch(body(uuid.New().String()))
 
 			if got.Code != http.StatusNotFound {
 				t.Fatalf("POST /runs naming another member's workspace: code = %d, want 404; body=%s", got.Code, got.Body.String())

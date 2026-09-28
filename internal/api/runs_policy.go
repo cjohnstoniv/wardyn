@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -145,6 +146,16 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// #1197 L1a: any opt-in landing-page param (view/owner/status/
+	// ended_within/include_killed/workspace/q) branches to the filtered path
+	// below; NONE present keeps this function's pre-#1197 body byte-identical
+	// (runs_list_filter.go's own doc), so every existing caller that sends no
+	// such param — the Recordings pager, the CLI, the SDK, `wardyn run --wait` —
+	// is unaffected.
+	if hasRunsListFilterParams(r.URL.Query()) {
+		s.handleListRunsFiltered(w, r, page)
+		return
+	}
 	if !s.isSecurityOperator(r.Context()) {
 		creatorPager, capable := s.cfg.Store.(store.RunsByCreatorPager)
 		if !capable {
@@ -222,8 +233,28 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		types.AgentRun
-		UIApps []types.UIApp `json:"ui_apps,omitempty"`
-	}{AgentRun: run, UIApps: apps})
+		UIApps       []types.UIApp `json:"ui_apps,omitempty"`
+		UserTypeName string        `json:"user_type_name,omitempty"`
+	}{AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType)})
+}
+
+// runUserTypeName is the display name of the type a run was launched as, for
+// the run page's "Ran as {type}". It rides the run read because GET /user-types
+// is securityOps: a user-tier caller (or an admin in the user view) reading
+// their own run could not resolve the id themselves. Empty for a run with no
+// type, or a type since deleted — the page then shows nothing, never the id.
+func (s *Server) runUserTypeName(r *http.Request, id string) string {
+	if id == "" || s.cfg.Store == nil {
+		return ""
+	}
+	t, err := s.cfg.Store.GetUserType(r.Context(), id)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(r.Context(), "api: could not read the run's user type", "user_type", id, "error", err)
+		}
+		return ""
+	}
+	return t.Name
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
@@ -503,6 +534,34 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 		return op
 	}
 	return actor
+}
+
+// operatorOwnedRequest reports whether the request on ctx is the operator
+// itself rather than a person: local mode's injected principal, or
+// actorFromRequest's system actor that is not a device — the real admin token.
+// It reads what authenticated the request, never a principal string, so an
+// IdP sub spelled like the admin token is still a person. Run creation records
+// it (AgentRun.OperatorOwned, identity.Claims.OperatorOwned).
+func operatorOwnedRequest(ctx context.Context) bool {
+	if localPrincipalFromContext(ctx) != "" {
+		return true
+	}
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false
+	}
+	t, _ := actorFromRequest((&http.Request{}).WithContext(ctx))
+	return t == types.ActorSystem
+}
+
+// grantReadOwner is the namespace a grant's stored secret is read from for a
+// run whose identity subject is subject: that subject's (falling back to the
+// operator's unless the grant is owner_only), except that an owner_only grant
+// on an operator-owned run reads the operator's "" namespace, its own.
+func grantReadOwner(subject string, ownerOnly, operatorOwned bool) string {
+	if ownerOnly && operatorOwned {
+		return ""
+	}
+	return subject
 }
 
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit

@@ -83,10 +83,10 @@ const (
 	adoCapClosedRefusal        = "Wardyn refused this Azure DevOps request: its approval request has closed."
 	adoCapMismatchRefusal      = "Wardyn refused this Azure DevOps request: the approval it named is not this request's."
 	adoCapTooManyRefusal       = "Wardyn refused this Azure DevOps request: this run has asked for more access too many times."
-	adoCapApprovalsUnreadable  = "could not read this run's approvals, so no further access can be decided"
-	adoCapRaiseFailedBody      = "could not raise the approval request for more Azure DevOps access"
-	adoCapUnspendableBody      = "this deployment cannot spend a once-only approval, so none is honoured"
-	adoCapabilityRequestedNote = "a run asked for Azure DevOps access it was not dispatched with, and a person was asked to decide"
+	adoCapApprovalsUnreadable  = "Could not read this run's approvals, so no further access can be decided"
+	adoCapRaiseFailedBody      = "Could not raise the approval request for more Azure DevOps access"
+	adoCapUnspendableBody      = "This deployment cannot spend a once-only approval, so none is honoured"
+	adoCapabilityRequestedNote = "A run asked for Azure DevOps access it was not dispatched with, and a person was asked to decide"
 )
 
 // adoFail is resolveADOInjection's own refusal writer: an audited secret.read

@@ -10,23 +10,17 @@ import (
 	"strings"
 )
 
-// variant is one decoded form of a span plus the decode chain that produced it
-// (e.g. "base64", "url+base64"), recorded so a finding can name how the value
-// was hidden.
+// variant is one decoded form of a span plus the decode chain that produced
+// it, so a finding can name how the value was hidden.
 type variant struct {
 	chain string
 	text  string
 }
 
-// normalizedVariants returns bounded decoded forms of text (Base64 / hex / URL
-// percent-decoding), applied up to maxDepth times in combination. This is the
-// "normalize-before-match" pattern: it lets the exact-match detector catch a
-// known secret that an agent encoded.
-//
-// It is intentionally bounded — capped variant count, capped decoded size, and
-// dedup — so it cannot become a decode-bomb DoS. It does NOT attempt to decode
-// encoded substrings embedded in mixed prose (that overlaps the entropy detector
-// of a later phase); the encoding-evasion residual therefore STANDS.
+// normalizedVariants returns bounded decoded forms of text (Base64/hex/URL
+// percent-decoding, combined up to maxDepth) so exact-match can catch an
+// encoded secret. Capped in count/size against a decode-bomb DoS; it doesn't
+// decode substrings inside mixed prose, a residual risk left to entropy scan.
 func normalizedVariants(text string, maxDepth int) []variant {
 	const (
 		maxVariants = 8
@@ -82,9 +76,8 @@ func normalizedVariants(text string, maxDepth int) []variant {
 	return out
 }
 
-// urlDecode percent-decodes text if it contains a '%' escape and decodes cleanly.
-// Uses PathUnescape (NOT QueryUnescape) so a literal '+' in a secret is preserved
-// rather than turned into a space.
+// urlDecode percent-decodes text if it contains a '%' escape and decodes
+// cleanly. Uses PathUnescape (not QueryUnescape) so a literal '+' is preserved.
 func urlDecode(text string) (string, bool) {
 	if !strings.Contains(text, "%") {
 		return "", false
@@ -96,9 +89,8 @@ func urlDecode(text string) (string, bool) {
 	return d, true
 }
 
-// base64Decode decodes text when the WHOLE span is a plausible base64 token
-// (std/url alphabet, length >= 12). Decoded bytes must be valid UTF-8-ish text
-// for matching; we return the raw decoded string and let the caller bytes.Index.
+// base64Decode decodes text when the whole span is a plausible base64 token
+// (std/url alphabet, len >= 12); caller matches on the raw decoded string.
 func base64Decode(text string) (string, bool) {
 	t := strings.TrimSpace(text)
 	if len(t) < 12 || !allTokenChars(t) {
@@ -115,9 +107,8 @@ func base64Decode(text string) (string, bool) {
 	return "", false
 }
 
-// allTokenChars reports whether every byte of t is in the base64/token alphabet
-// -- isTokenChar, the one home for that alphabet. Byte-wise is rune-wise here:
-// every UTF-8 byte of a non-ASCII rune is >= 0x80 and fails just as the rune did.
+// allTokenChars reports whether every byte of t is in the token alphabet;
+// byte-wise equals rune-wise since non-ASCII UTF-8 bytes are all >= 0x80.
 func allTokenChars(t string) bool {
 	for i := 0; i < len(t); i++ {
 		if !isTokenChar(t[i]) {
@@ -127,8 +118,8 @@ func allTokenChars(t string) bool {
 	return true
 }
 
-// hexDecode decodes text when the WHOLE span is an even-length hex string of at
-// least 16 nibbles.
+// hexDecode decodes text when the whole span is an even-length hex string of
+// at least 16 nibbles.
 func hexDecode(text string) (string, bool) {
 	t := strings.TrimSpace(text)
 	if len(t) < 16 || len(t)%2 != 0 {

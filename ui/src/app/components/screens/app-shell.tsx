@@ -18,6 +18,7 @@ import {
   Fingerprint,
   FolderOpen,
   HardDrive,
+  KeyRound,
   Lock,
   Menu,
   Play,
@@ -27,19 +28,21 @@ import {
   ShieldCheck,
   UserCog,
   Users,
+  UsersRound,
 } from "lucide-react";
 import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarLowerLinks } from "./sidebar-settings-link";
-// GOVERNANCE_NAV_TITLE is ONE string for two places — this nav label and the
-// governance screen's own heading (governance-copy.ts's GOVERNANCE.TITLE reads
-// the same constant) — the way every other nav entry already works. There is
-// no second "Governance profiles" label (governance-prompt.md §7.2). Imported
-// from nav-copy.ts rather than governance-copy.ts itself so the eager sidebar
-// doesn't drag the whole §7.2-§7.9 screen-only canon table into the entry
-// chunk (#498) for one string.
-import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
+// GOVERNANCE_NAV_TITLE and USER_TYPES_NAV_TITLE are each ONE string for two
+// places — this nav label and the screen's own heading (governance-copy.ts's
+// GOVERNANCE.TITLE and user-types-copy.ts's USER_TYPES.TITLE each read the
+// same constant) — the way every other nav entry already works. There is no
+// second "Governance profiles" label (governance-prompt.md §7.2). Imported
+// from nav-copy.ts rather than the screen's own copy module so the eager
+// sidebar doesn't drag a whole screen-only canon table into the entry chunk
+// (#498) for one string.
+import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -50,9 +53,12 @@ import {
   OperatorProvider,
   RoleProvider,
   type Role,
+  type UserTypeMeta,
 } from "../wardyn/operator-context";
-import { health as api, type MeUserDrive } from "../../lib/api/health";
+import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
+import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
+import { appURL } from "../../lib/base-path";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
@@ -125,6 +131,10 @@ export interface ShellMeta {
   // default as the two above: an unresolved or failed /me reads as "" —
   // nothing is claimed about a drive that is also null.
   userDriveUnavailable: string;
+  // 0.8 (UT-7a) — the caller's own user type, the same /me body every other
+  // field here comes from (operator-context.tsx's MeIdentity.userType).
+  // Absent reads as null.
+  userType?: UserTypeMeta | null;
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
   /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
@@ -153,8 +163,41 @@ export interface ShellMeta {
   sso: boolean;
 }
 
-/** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
-function useMeta(): [ShellMeta, () => void] {
+/** Everything the shell holds that /me decides — `me` null is a failed /me.
+ *  One mapping for the mount read and adopt(): a partial copy on adopt kept the
+ *  placeholder principal after a resume, so every later lapse in the tab
+ *  skipped the different-person check (#483, Q457-12). */
+function identityFromMe(me: Me | null) {
+  return {
+    principal: me?.principal || "unknown",
+    email: me?.email ?? "",
+    // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
+    // "none", which falls back to the email, then the principal.
+    name: me?.name ?? "",
+    method: me?.method || "",
+    identityResolved: me !== null,
+    operator: me?.operator ?? true,
+    // ?? true, not `?? me?.operator`: an older daemon that never sends
+    // this field must fail OPEN like every other identity signal here.
+    securityOperator: me?.security_operator ?? true,
+    role: me?.role ?? "admin",
+    // F3-F11: a bad string parses to an Invalid Date, not null — guard
+    // NaN here so useSessionExpiry never has to.
+    sessionExpiresAt: validExpiry(me?.session_expires_at),
+    memberLocalDirRoot: me?.member_local_dir_root ?? null,
+    userDrive: me?.user_drive ?? null,
+    userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
+    userDriveUnavailable: me?.user_drive_unavailable ?? "",
+    userType: me?.user_type ?? null,
+    memberMode: me?.user_view ?? false,
+    memberModeNoCredential: me?.user_view_no_credential ?? false,
+    memberPreviewAvailable: me?.user_preview_available ?? false,
+  } satisfies Partial<ShellMeta>;
+}
+
+/** The shell's identity, the retry that re-fires /me (B1's banner action), and
+ *  adopt() for a /me the reauth dialog already read (#483). */
+function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
   // Bumped by retry(), which is the effect's only other dependency: /me is
   // fetched once per load today, so after a failure identityResolved would stay
   // false forever and the banner below would have nothing to offer.
@@ -176,6 +219,7 @@ function useMeta(): [ShellMeta, () => void] {
     userDrive: null,
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
+    userType: null,
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
@@ -192,29 +236,8 @@ function useMeta(): [ShellMeta, () => void] {
         setMeta({
           trustDomain: h.trust_domain || "unknown",
           identityProvider: h.identity_provider || "unknown",
-          principal: me?.principal || "unknown",
-          email: me?.email ?? "",
-          // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
-          // "none", which falls back to the email, then the principal.
-          name: me?.name ?? "",
-          method: me?.method || "",
+          ...identityFromMe(me),
           resolved: true,
-          identityResolved: me !== null,
-          operator: me?.operator ?? true,
-          // ?? true, not `?? me?.operator`: an older daemon that never sends
-          // this field must fail OPEN like every other identity signal here.
-          securityOperator: me?.security_operator ?? true,
-          role: me?.role ?? "admin",
-          // F3-F11: a bad string parses to an Invalid Date, not null — guard
-          // NaN here so useSessionExpiry never has to.
-          sessionExpiresAt: validExpiry(me?.session_expires_at),
-          memberLocalDirRoot: me?.member_local_dir_root ?? null,
-          userDrive: me?.user_drive ?? null,
-          userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
-          userDriveUnavailable: me?.user_drive_unavailable ?? "",
-          memberMode: me?.user_view ?? false,
-          memberModeNoCredential: me?.user_view_no_credential ?? false,
-          memberPreviewAvailable: me?.user_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
           // "" (unset) reads the same as absent: both mean "no mirror".
@@ -232,7 +255,11 @@ function useMeta(): [ShellMeta, () => void] {
       alive = false;
     };
   }, [attempt]);
-  return [meta, React.useCallback(() => setAttempt((n) => n + 1), [])];
+  // The same person signed back in over the page: take the whole identity
+  // from the /me the dialog read, rather than re-asking — a failed re-ask
+  // would settle as an unknown identity and blank the page it just kept.
+  const adopt = React.useCallback((me: Me) => setMeta((m) => ({ ...m, ...identityFromMe(me), resolved: true })), []);
+  return [meta, React.useCallback(() => setAttempt((n) => n + 1), []), adopt];
 }
 
 // SESSION_WARN_MS — how far ahead of the session's real expiry to start
@@ -307,6 +334,14 @@ const ADMIN_NAV: NavItem[] = [
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
   { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   { to: "/admin/permissions", label: "Permissions", icon: Users },
+  // Credentials (CS-8, design F-1) sits right after Permissions — both name
+  // who may act. securityOps server-side, so both admin tiers see it (a
+  // security admin has no Settings and no Secrets, so this page can't live
+  // in either).
+  { to: "/admin/credentials", label: CREDENTIALS_NAV_TITLE, icon: KeyRound },
+  // User types (0.8, UT-7a) sits beside Permissions — the subject it and
+  // Governance name. securityOps server-side, so both admin tiers see it.
+  { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },
   { to: "/admin/drives", label: "Drives", icon: HardDrive, tier: "security" },
   { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super" },
   { to: "/admin/audit", label: "Audit", icon: ScrollText },
@@ -392,6 +427,12 @@ const ConfinementPostureBanner = React.lazy(() =>
 const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
+
+// #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
+// same entry-budget reason; the shell warms the chunk on mount, because by the
+// time a session ends the daemon may not be answering.
+const loadReauthLayer = () => import("../wardyn/reauth-layer");
+const ReauthLayer = React.lazy(() => loadReauthLayer().then((m) => ({ default: m.ReauthLayer })));
 
 const navLinkClass = (isActive: boolean) =>
   cn(
@@ -546,7 +587,12 @@ export function AppShell({
   unreachable?: boolean;
   lastOkAt?: Date | null;
 }) {
-  const [meta, retryIdentity] = useMeta();
+  const [meta, retryIdentity, adoptIdentity] = useMeta();
+  const reauth = useReauth();
+  React.useEffect(() => {
+    // A warm-up only: if it fails, React.lazy asks again when the layer mounts.
+    loadReauthLayer().catch(() => {});
+  }, []);
   // B1 — SETTLED and still unknown: /me answered nothing, so every tier the
   // shell holds is the fail-open seed. Distinct from "not settled yet", which is
   // an ordinary first paint and says nothing to anybody.
@@ -585,6 +631,7 @@ export function AppShell({
       userDrive={meta.userDrive}
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
       userDriveUnavailable={meta.userDriveUnavailable}
+      userType={meta.userType}
       confinementPosture={confinementPosture}
       demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
@@ -604,6 +651,13 @@ export function AppShell({
             >
               Skip to main content
             </a>
+            {/* #483: first, above everything — while it shows, nothing below
+                it can save. */}
+            {reauth.phase !== "none" && (
+              <React.Suspense fallback={null}>
+                <ReauthLayer onResumed={adoptIdentity} />
+              </React.Suspense>
+            )}
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order
@@ -674,7 +728,7 @@ export function AppShell({
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
                 <a
-                  href="/auth/login"
+                  href={appURL("/auth/login")}
                   className="font-medium underline underline-offset-2"
                 >
                   Sign in again
