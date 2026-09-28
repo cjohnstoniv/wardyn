@@ -66,13 +66,13 @@
 # lookup). WARDYN_ORG_URL here is http://127.0.0.1:${RELAY_PORT}: genuinely
 # loopback FROM WARDYND'S OWN NETWORK NAMESPACE, because the relay it names
 # shares that namespace (see "THE PARTITION MECHANISM" below) rather than
-# sitting on the host and being reached through host.docker.internal — a
-# host-gateway address is NOT loopback and validateHybridPosture correctly
-# refuses it (an earlier version of this walk got that refusal at boot and
-# is why this file now says what it says here). A real cross-network HTTPS
-# proof against a certificate an operator's own CA issued is the live-estate
-# half of this ask and stays OWNER, like every other real-TLS/real-DNS proof
-# in this handoff.
+# sitting on the host — a host-gateway address is NOT loopback and
+# validateHybridPosture correctly refuses it (an earlier version of this
+# walk asserted that shape and a review caught both that it would be refused
+# and that the relay behind it could not start at all — see below). A real
+# cross-network HTTPS proof against a certificate an operator's own CA
+# issued is the live-estate half of this ask and stays OWNER, like every
+# other real-TLS/real-DNS proof in this handoff.
 #
 # THE LAPTOP'S OWN OIDC POSTURE (WARDYN_USER_DESKTOP=true requires a working
 # issuer — validateMemberModePosture refuses boot otherwise) is satisfied with
@@ -84,22 +84,53 @@
 # (devices_auth.go's own header: device routes never publish a human
 # identity) — so Dex only has to answer discovery, never issue a token here.
 #
-# THE PARTITION MECHANISM: a `socat` relay running as a SIDECAR CONTAINER that
-# joins wardynd's own network namespace (`docker run --network
-# container:${PROJECT}-api`, started once wardynd's container exists — see
-# start_relay below), listening on 127.0.0.1 THERE, which is wardynd's own
-# loopback and reachable from nothing else on the host or the laptop's compose
-# network — never bound wide (0.0.0.0 would republish the org's NodePort on
-# every interface, which an earlier version of this walk did and a review
-# caught). The relay reaches the org's loopback-only NodePort on the HOST via
-# its own `--add-host host.docker.internal:host-gateway` (the SAME mechanism
-# scripts/run-host.sh and the proxy sidecar's own ExtraHosts already rely on —
-# NOT the host.docker.internal hop scripts/survival-walk.sh separately found
-# unreliable, which was wardynd itself making the outbound call; here it is
-# the relay container, a different hop). Partition = stop the relay container
-# (ECONNREFUSED from inside wardynd's own namespace, the "organisation
-# unreachable" shape); drain = start a fresh one on the same port. Neither
-# ever touches the kind cluster, the NodePort or the daemon socket.
+# THE PARTITION MECHANISM: a `socat` relay running as a SIDECAR CONTAINER,
+# listening on 127.0.0.1 inside a shared network namespace — reachable from
+# nothing else on the host or the laptop's compose network, and never bound
+# wide (0.0.0.0 would republish the org's NodePort on every interface, which
+# an earlier version of this walk did and a review caught). This is now
+# wardynd's OWN loopback because wardynd shares that namespace too (see "THE
+# ANCHOR" below), not because the relay joined wardynd's container directly —
+# `docker run --network container:X --add-host ...` is refused outright by
+# the daemon ("conflicting options: custom host-to-IP mapping and the network
+# mode", exit 125), which an earlier version of this walk did not catch
+# because it never actually ran the command it claimed would work.
+#
+# THE ROUTE TO THE ORG: not the host at all. host.docker.internal does not
+# resolve on native Linux without an explicit --add-host (which the relay
+# cannot combine with --network container:), and even where it resolves it
+# names the bridge gateway, which cannot reach a NodePort published on the
+# HOST's 127.0.0.1 only. Instead the shared namespace joins the `kind` docker
+# network (`docker network connect kind ${ANCHOR_CONTAINER}` — the same
+# network every kind cluster's own nodes are already on) and the relay
+# forwards to the org's node CONTAINER directly by name and CONTAINER port
+# (`${CONTROL_PLANE_CONTAINER}:${ORG_NODE_CONTAINER_PORT}`, deploy/kind/
+# quickstart.sh's own fixed NodePort) — a plain container-to-container hop
+# on a shared bridge network, nothing to do with the host's loopback
+# publish. start_relay confirms this end to end (a real request through the
+# relay to the org, from a container in the shared namespace) rather than
+# only checking the relay container is Running, so a dead route fails loudly
+# at start instead of surfacing later as a stuck enrolment.
+#
+# THE ANCHOR: see netns-anchor in test/hybrid-walk/compose-override.yaml —
+# wardynd cannot own this namespace itself, because its own `restart:
+# unless-stopped` would hand the relay a dead namespace on every restart,
+# and its FIRST boot enrols synchronously (cmd/wardynd/boot_hybrid.go)
+# before this script could ever detect and restart the relay fast enough.
+# The anchor is a `sleep infinity` container with nothing to crash; the
+# relay and the `kind` network connection are both established against it
+# BEFORE wardynd's own container is created, so wardynd's first enrolment
+# attempt never races the relay's own startup, and none of wardynd's later
+# restarts (docker-kill/restart in sections 3 and 4 below) touch the relay
+# at all — it stays attached to the anchor throughout the whole walk.
+#
+# Partition = stop the relay container (ECONNREFUSED from inside the shared
+# namespace, the "organisation unreachable" shape); drain = start a fresh
+# one on the same port. Neither ever touches the kind cluster, the NodePort
+# or the daemon socket. The relay itself runs capability-dropped, read-only
+# and as an unprivileged uid (start_relay) — a fixed socat command inside a
+# namespace that can otherwise reach everything wardynd can, so this is
+# defence in depth, not a functional requirement.
 #
 # GUARD: needs BOTH a kind cluster (WARDYN_TEST_K8S=1) and Docker
 # (WARDYN_TEST_DOCKER=1) — this walk is the one script in this repo that
@@ -158,6 +189,17 @@ CONTEXT="kind-${CLUSTER}"
 ORG_NAMESPACE="wardyn"
 ORG_RELEASE="wardyn"
 ORG_NODE_HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
+# kind's own node-container naming (every kind cluster's control-plane node is
+# a docker container named "<cluster>-control-plane" on the docker network
+# named "kind") and quickstart.sh's own FIXED NodePort (deploy/kind/
+# quickstart.sh:75 — never overridden by WARDYN_QUICKSTART_HTTP_PORT, which
+# only controls the HOST-side publish deploy/kind/quickstart-kind-config.yaml
+# rewrites onto that Service). This is the relay's route to the org — a
+# container-to-container hop on the `kind` network, not the host loopback
+# publish above (which the script itself, running ON the host, still uses).
+CONTROL_PLANE_CONTAINER="${CLUSTER}-control-plane"
+ORG_NODE_CONTAINER_PORT=30080
+KIND_NETWORK="kind"
 
 step "checking the org cluster is up (this walk never creates or deletes it)"
 kubectl --context "${CONTEXT}" -n "${ORG_NAMESPACE}" get deployment "${ORG_RELEASE}" >/dev/null 2>&1 \
@@ -201,6 +243,7 @@ WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
 PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 RELAY_IMAGE="wardyn/hybrid-relay:${PROJECT}"
 WARDYND_CONTAINER="${PROJECT}-api"
+ANCHOR_CONTAINER="${PROJECT}-netns-anchor"
 RELAY_CONTAINER="${PROJECT}-relay"
 
 EVIDENCE_DIR="${WARDYN_HYBRID_EVIDENCE:-${ROOT}/local/evidence/hybrid-walk}"
@@ -233,22 +276,36 @@ psql1() { docker exec "${PROJECT}-postgres" psql -U wardyn -d wardyn -tAc "$1" 2
 
 DEVICE_ID=""
 
-# start_relay -> a socat sidecar sharing wardynd's OWN network namespace
-# (`--network container:${WARDYND_CONTAINER}`), so it can only be started once
-# that container exists, and 127.0.0.1 inside it is wardynd's own loopback —
-# reachable from nothing else (never 0.0.0.0). The relay reaches the org's
-# NodePort on the host via its own host-gateway route, not wardynd's.
+# start_relay -> a socat sidecar sharing the netns-anchor container's network
+# namespace (`--network container:${ANCHOR_CONTAINER}` — never wardynd's own
+# container: `--network container:X` and `--add-host` are mutually exclusive
+# at the daemon level, "conflicting options: custom host-to-IP mapping and
+# the network mode", and wardynd needs an --add-host-free route to the org
+# anyway — see this file's "THE ROUTE TO THE ORG"). 127.0.0.1 inside that
+# namespace is wardynd's own loopback too, once wardynd joins the same
+# namespace via network_mode: service:netns-anchor (test/hybrid-walk/
+# compose-override.yaml) — reachable from nothing else, never 0.0.0.0.
+# Hardened (R2-3): no capabilities, no privilege escalation, a read-only
+# rootfs and an unprivileged uid — a fixed socat command needs none of them,
+# and the namespace it shares can otherwise reach everything wardynd can.
+# Verifies the FULL route end to end (a real request through the relay to
+# the org, from inside the anchor's own namespace) rather than only that the
+# container is Running, so a route that cannot reach the org fails loudly
+# here instead of surfacing later as a stuck enrolment.
 start_relay() {
   docker run --rm -d --name "${RELAY_CONTAINER}" \
-    --network "container:${WARDYND_CONTAINER}" \
-    --add-host "host.docker.internal:host-gateway" \
+    --network "container:${ANCHOR_CONTAINER}" \
+    --cap-drop ALL --security-opt no-new-privileges --read-only --user 65532:65532 \
     "${RELAY_IMAGE}" \
-    "TCP-LISTEN:${RELAY_PORT},bind=127.0.0.1,fork,reuseaddr" "TCP:host.docker.internal:${ORG_NODE_HTTP_PORT}" \
+    "TCP-LISTEN:${RELAY_PORT},bind=127.0.0.1,fork,reuseaddr" "TCP:${CONTROL_PLANE_CONTAINER}:${ORG_NODE_CONTAINER_PORT}" \
     >"${EVIDENCE_DIR}/relay-start.log" 2>&1 \
     || { cat "${EVIDENCE_DIR}/relay-start.log" >&2; die "starting the relay sidecar (${RELAY_CONTAINER}) failed"; }
   sleep 1
   [[ "$(docker inspect -f '{{.State.Running}}' "${RELAY_CONTAINER}" 2>/dev/null)" == "true" ]] \
     || { docker logs "${RELAY_CONTAINER}" >"${EVIDENCE_DIR}/relay.log" 2>&1 || true; cat "${EVIDENCE_DIR}/relay.log" >&2; die "the relay sidecar (${RELAY_CONTAINER}) on :${RELAY_PORT} did not stay up"; }
+  docker exec "${ANCHOR_CONTAINER}" wget -qO- -T "${CURL_MAX_TIME}" "http://127.0.0.1:${RELAY_PORT}/healthz" \
+    >"${EVIDENCE_DIR}/relay-healthz.log" 2>&1 \
+    || { cat "${EVIDENCE_DIR}/relay-healthz.log" >&2; die "the relay is running but a request through it to ${CONTROL_PLANE_CONTAINER}:${ORG_NODE_CONTAINER_PORT}/healthz failed — is the anchor connected to the ${KIND_NETWORK} network?"; }
 }
 
 stop_relay() {
@@ -295,14 +352,25 @@ export WARDYN_AGE_KEY="$(docker run --rm "${WARDYND_IMAGE}" -gen-age-key 2>"${EV
 [[ "${WARDYN_AGE_KEY}" == AGE-SECRET-KEY-* ]] || { cat "${EVIDENCE_DIR}/gen-age-key.log" >&2; die "-gen-age-key failed"; }
 pass "age key minted"
 
+# The anchor, the kind-network route and the relay are all brought up and
+# PROVEN reachable BEFORE wardynd exists at all (this file's "THE ANCHOR"),
+# so wardynd's very first enrolment attempt never races the relay's own
+# startup.
+step "starting the network-namespace anchor and connecting it to the ${KIND_NETWORK} docker network"
+compose up -d netns-anchor || die "compose up (netns-anchor) failed for ${PROJECT}"
+docker network connect "${KIND_NETWORK}" "${ANCHOR_CONTAINER}" 2>"${EVIDENCE_DIR}/network-connect.log" \
+  || grep -qi 'already exists in network' "${EVIDENCE_DIR}/network-connect.log" \
+  || { cat "${EVIDENCE_DIR}/network-connect.log" >&2; die "connecting ${ANCHOR_CONTAINER} to the ${KIND_NETWORK} network failed"; }
+pass "anchor up (${ANCHOR_CONTAINER}) and on the ${KIND_NETWORK} network"
+
+step "starting the relay sidecar and proving the route to the org (${CONTROL_PLANE_CONTAINER}:${ORG_NODE_CONTAINER_PORT})"
+start_relay
+pass "relay up (${RELAY_CONTAINER}) — a real request through it to the org's /healthz succeeded"
+
 step "bringing up the laptop (postgres, dex, wardynd) with WARDYN_ORG_URL + WARDYN_ORG_ENROLMENT_TOKEN set"
 compose up -d postgres dex || die "compose up (postgres, dex) failed for ${PROJECT}"
 compose up -d wardynd || die "compose up (wardynd) failed for ${PROJECT}"
-pass "laptop wardynd container up (${WARDYND_CONTAINER})"
-
-step "starting the relay sidecar (wardynd's own loopback:${RELAY_PORT} -> the org's NodePort :${ORG_NODE_HTTP_PORT})"
-start_relay
-pass "relay up (${RELAY_CONTAINER}, sharing ${WARDYND_CONTAINER}'s network namespace)"
+pass "laptop wardynd container up (${WARDYND_CONTAINER}, sharing ${ANCHOR_CONTAINER}'s network namespace)"
 
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "the laptop's wardynd did not become healthy"; }
 pass "laptop up and healthy (${BASE})"
@@ -358,8 +426,13 @@ awk -v b="${before_lag}" -v a="${after_lag}" 'BEGIN{exit !(a>b)}' \
 # "unreachable", not a refusal this walk is misreading.
 audit_code="$(org_api GET "/api/v1/audit?action=device.audit.ingest&limit=50")"
 [[ "${audit_code}" == "200" ]] || { cat "${TMPDIR}/org-resp.json" >&2; die "GET /api/v1/audit answered ${audit_code}"; }
+# `jq -r 'length'` on a non-array (an object, or null) still returns a small
+# integer — 0 for {} or null — which would read as "zero rows" exactly like
+# a genuinely empty array. Require the body to actually BE a JSON array first.
+jq -e 'type=="array"' "${TMPDIR}/org-resp.json" >/dev/null 2>&1 \
+  || die "GET /api/v1/audit did not answer a JSON array: $(cat "${TMPDIR}/org-resp.json")"
 ingest_events="$(jq -r 'length' "${TMPDIR}/org-resp.json")"
-[[ "${ingest_events}" =~ ^[0-9]+$ ]] || die "GET /api/v1/audit did not answer a JSON array: $(cat "${TMPDIR}/org-resp.json")"
+[[ "${ingest_events}" =~ ^[0-9]+$ ]] || die "GET /api/v1/audit's length was not a number: ${ingest_events}"
 [[ "${ingest_events}" == "0" ]] \
   && pass "no device.audit.ingest rows on the org while partitioned (unreachable, not refused)" \
   || fail "expected zero device.audit.ingest rows while partitioned; got ${ingest_events}"
@@ -378,16 +451,15 @@ pass "drained — lag back to 0"
 step "accruing more rows, then killing wardynd mid-forward (before the next tick acks them)"
 accrue_local_rows 5
 seq_before_restart="$(psql1 "SELECT last_forwarded_seq FROM org_federation WHERE singleton")"
-# The relay sidecar shares wardynd's network namespace at the moment it was
-# started — killing and recreating wardynd's own container does not carry
-# that sidecar over to the fresh namespace, so it is stopped here and
-# restarted once wardynd is back, exactly like the partition/drain pair above.
-stop_relay
+# The relay stays attached to the netns-anchor container throughout, never to
+# wardynd's own container, so killing and recreating wardynd here does not
+# touch the relay at all — no stop/start choreography needed around this
+# restart (contrast the partition/drain pair above, which stops and starts
+# the relay deliberately, as the test itself).
 docker kill "${PROJECT}-api" >/dev/null || die "docker kill ${PROJECT}-api failed"
 sleep 3
 [[ "$(docker inspect -f '{{.State.Running}}' "${PROJECT}-api" 2>/dev/null)" == "false" ]] || die "${PROJECT}-api is still running after docker kill"
 compose up -d wardynd || die "compose up -d wardynd (restart) failed"
-start_relay
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not come back healthy after restart"; }
 seq_after_restart="$(psql1 "SELECT last_forwarded_seq FROM org_federation WHERE singleton")"
 # psql1 merges stderr (:203), so a psql/docker-exec error string would
@@ -432,11 +504,9 @@ code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:hybrid","inte
   || fail "expected POST /runs to answer 503 after revocation; got ${code}: $(cat "${TMPDIR}/resp.json")"
 
 step "confirming the revoked mark survives a laptop restart (durable, not re-derived from reachability)"
-stop_relay
 docker kill "${PROJECT}-api" >/dev/null || die "docker kill ${PROJECT}-api failed"
 sleep 3
 compose up -d wardynd || die "compose up -d wardynd (restart) failed"
-start_relay
 wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not come back healthy after the post-revocation restart"; }
 code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:hybrid","interactive":true,
   "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","auto_stop_after_sec":-1}}')

@@ -298,16 +298,23 @@ jq -e --arg n "${SECRET_NAME}" 'any(.[]; .name == $n)' "${WORK}/resp.json" >/dev
 
 step "confirming the run carried across the upgrade reached a real outcome (not stuck RUNNING forever with no proxy)"
 carried_state=""
+carried_terminal=""
 for _ in $(seq 1 30); do
   code=$(api GET "/api/v1/runs/${CARRIED_RUN_ID}")
   [[ "${code}" == "200" ]] || { sleep 2; continue; }
   carried_state="$(jq -r '.state' "${WORK}/resp.json")"
-  [[ "${carried_state}" != "RUNNING" ]] && break
+  case "${carried_state}" in
+    COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) carried_terminal=1; break ;;
+  esac
   sleep 2
 done
-[[ -n "${carried_state}" && "${carried_state}" != "RUNNING" ]] \
-  && pass "run ${CARRIED_RUN_ID} reads back as ${carried_state} after the upgrade (never silently vanished, never stuck RUNNING)" \
-  || fail "run ${CARRIED_RUN_ID} did not reach a non-RUNNING state within 60s after the upgrade (last read: ${carried_state:-<unreadable>})"
+# A real outcome means a TERMINAL state, matching types.RunState.IsTerminal —
+# RUNNING, STARTING, PENDING, WAITING_FOR_CONFIRMATION or an unreadable
+# `null` (jq -r '.state' on a body with no state field) are all still "stuck",
+# not "reached an outcome".
+[[ -n "${carried_terminal}" ]] \
+  && pass "run ${CARRIED_RUN_ID} reads back as ${carried_state} after the upgrade (never silently vanished, never stuck)" \
+  || fail "run ${CARRIED_RUN_ID} did not reach a terminal state within 60s after the upgrade (last read: ${carried_state:-<unreadable>})"
 
 step "confirming /healthz.proxy_hop_tls=true and a FRESH run succeeds on tip"
 h="$(curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz")"

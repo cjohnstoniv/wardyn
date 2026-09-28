@@ -3,22 +3,58 @@
 #
 # scripts/hybrid-walk.sh's laptop leg needs WARDYN_ORG_URL to be a genuinely
 # loopback address (cmd/wardynd/boot_posture.go's validateHybridPosture
-# refuses a plaintext org URL whose host is not loopback), while the relay it
-# names has to reach the kind cluster's loopback-only NodePort on the HOST
-# (deploy/kind/quickstart-kind-config.yaml's `listenAddress: "127.0.0.1"`
-# means nothing but a HOST process can reach it).
+# refuses a plaintext org URL whose host is not loopback) while actually
+# reaching the org's kind cluster, whose NodePort is published on the HOST's
+# 127.0.0.1 only (deploy/kind/quickstart-kind-config.yaml). A relay sidecar
+# that shares wardynd's OWN network namespace solves the loopback half (see
+# scripts/hybrid-walk.sh's "THE PARTITION MECHANISM"); reaching the org from
+# inside that namespace needs its own path, since host.docker.internal does
+# not resolve on native Linux and, even where it did, the org's NodePort is
+# not reachable through it (127.0.0.1 is host-local, not bridge-reachable).
 #
-# Both are true at once because the relay is a SIDECAR CONTAINER that joins
-# wardynd's OWN network namespace (`docker run --network container:<wardynd
-# container>`, started by the script itself once wardynd is up — see that
-# file's "THE PARTITION MECHANISM"): binding 127.0.0.1 there is wardynd's own
-# loopback, reachable from nothing else, and the relay reaches the host's
-# NodePort via host-gateway on its OWN `--add-host` flag (the same documented
-# mechanism scripts/run-host.sh's WARDYN_CONTROL_PLANE_URL and the proxy
-# sidecar's own ExtraHosts already rely on, and scripts/test-podman.sh's own
-# probe pins that it resolves — NOT the host.docker.internal hop
-# scripts/survival-walk.sh's header found unreliable, which was a bare
-# outbound curl from wardynd itself, a different hop). Nothing needs
-# declaring here for wardynd any more: it never reaches outside its own
-# network namespace, so this file has no `extra_hosts` entry to add.
-services: {}
+# THE ROUTE: the relay's namespace joins the `kind` docker network (the same
+# network every kind cluster's nodes are already on) and reaches the org by
+# the cluster's own node CONTAINER name and the NodePort's CONTAINER port
+# (`<cluster>-control-plane:30080`, `deploy/kind/quickstart.sh`'s own
+# NODE_HTTP_PORT) — a plain container-to-container hop on a shared bridge
+# network, nothing to do with the host's loopback-only publish at all.
+#
+# THE ANCHOR: wardynd itself cannot own this namespace, because its own
+# `restart: unless-stopped` would hand the relay a dead namespace on every
+# restart, and its FIRST boot enrols synchronously (`cmd/wardynd/
+# boot_hybrid.go`) before this script could ever restart the relay fast
+# enough — a race, not a fix. `netns-anchor` below is a `sleep infinity`
+# container with no application logic to crash, so it is the container that
+# actually owns the shared namespace: the script connects it to `kind` and
+# starts the relay against it BEFORE wardynd exists at all, then wardynd
+# joins that already-verified namespace via `network_mode: service:
+# netns-anchor` — its first enrolment attempt never races the relay's own
+# startup again, and every later wardynd restart leaves the anchor (and the
+# relay) untouched.
+#
+# `network_mode` and `networks`/`ports` are mutually exclusive on one
+# service, so wardynd's own `networks: [wardyn]` and its three loopback
+# `ports:` (the API/UI, SSH gateway and UI-sandbox gateway) are reset here
+# and re-declared on the anchor instead — the anchor is what now actually
+# holds those bindings, wardynd merely shares them.
+services:
+  netns-anchor:
+    # Digest-pinned: the same alpine:3.20 digest test/hybrid-walk/
+    # Dockerfile.relay and test/e2e/fixtures/Dockerfile already pin.
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    container_name: ${WARDYN_NS:-wardyn}-netns-anchor
+    # `sleep infinity` only — no application code, nothing to crash, nothing
+    # for `restart: unless-stopped` to ever need to act on.
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    networks:
+      - wardyn
+    ports:
+      - "127.0.0.1:${WARDYN_UP_PORT:-8080}:8080"
+      - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"
+      - "127.0.0.1:${WARDYN_UI_SANDBOX_PORT:-8081}:8081"
+
+  wardynd:
+    networks: !reset null
+    ports: !reset []
+    network_mode: "service:netns-anchor"
