@@ -271,6 +271,53 @@ func TestAWSSSOAgentRun_EarlyAttachWonTheName(t *testing.T) {
 	}
 }
 
+// TestAWSSSOAgentRun_ReviveClearsStalePrepDone pins the aws-sso harness's
+// revive-safety fix (agent-run-lib.sh's booted_before/revive_markers, called
+// at the very top of --idle before the sign-in session is created — see the
+// "A revive after a reboot" comment right above start_wardyn_session in the
+// image): a REVIVED container's second --idle boot (`docker start` re-running
+// the same writable layer, never a fresh container) must not let its sign-in
+// pane see the FIRST boot's stale prep-done — that would let it sign in before
+// THIS boot's CA and ~/.aws/config are redone. No test in this package boots
+// --idle twice over the same $HOME; the two-boot scenario itself is untested,
+// unlike the claude-code and codex-cli harnesses, which already have a Revive
+// test each.
+func TestAWSSSOAgentRun_ReviveClearsStalePrepDone(t *testing.T) {
+	home, binDir, tmuxLog := fakeTmuxBin(t)
+	if code, out := runIdle(t, home, binDir, tmuxLog); code != 124 {
+		t.Fatalf("first boot exited %d (output: %s), want 124", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".wardyn", "booted")); err != nil {
+		t.Fatalf("first boot never wrote its booted marker (booted_before): %v", err)
+	}
+	// The first boot's OWN prep finished (the ordinary happy path, not a
+	// crash-mid-prep case) — its prep-done is on disk before the revive, so the
+	// assertion below is a real test of clearing it, not a vacuous absent-stays-absent.
+	if _, err := os.Stat(filepath.Join(home, ".wardyn", "prep-done")); err != nil {
+		t.Fatalf("first boot never finished its own prep, so the revive assertion below proves nothing: %v", err)
+	}
+	if err := os.Truncate(tmuxLog, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := runIdle(t, home, binDir, tmuxLog)
+	if code != 124 {
+		t.Fatalf("revive (second --idle over the same $HOME) exited %d (output: %s), want 124", code, out)
+	}
+	log := readLog(t, tmuxLog)
+	if !strings.Contains(log, "prep-done: absent") {
+		t.Errorf("the revive's sign-in session was created with the FIRST boot's stale prep-done still on disk"+
+			" — it would sign in before this boot's CA and ~/.aws/config exist\ntmux log:\n%s", log)
+	}
+	if n := countLines(log, "argv: new-session -d -s wardyn signin-pane.sh"); n != 1 {
+		t.Errorf("tmux got %d `new-session -d -s wardyn signin-pane.sh` calls on the revive, want exactly 1\ntmux log:\n%s\noutput:\n%s",
+			n, log, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".wardyn", "prep-done")); err != nil {
+		t.Errorf("the revive never finished its own prep: %v", err)
+	}
+}
+
 // pathWithoutTmux mirrors every PATH entry into one scratch dir, minus tmux —
 // the only honest way to ask "what does this image do without tmux?" on a host
 // that has it installed.

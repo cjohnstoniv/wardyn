@@ -66,10 +66,11 @@ func TestTryAdvisoryLock_SkipsWhenHeld(t *testing.T) {
 // one property of these constants that can go wrong.
 func TestAdvisoryLockKeysAreDistinct(t *testing.T) {
 	keys := map[string]int64{
-		"migrate":            migrateAdvisoryLockKey,
-		"reaper":             ReaperAdvisoryLockKey,
-		"groundtruthRotator": GroundTruthRotatorLockKey,
-		"secretRekey":        SecretRekeyLockKey,
+		"migrate":              migrateAdvisoryLockKey,
+		"reaper":               ReaperAdvisoryLockKey,
+		"groundtruthRotator":   GroundTruthRotatorLockKey,
+		"secretRekey":          SecretRekeyLockKey,
+		"terminalSandboxSweep": TerminalSandboxSweepLockKey,
 	}
 	seen := map[int64]string{}
 	for name, key := range keys {

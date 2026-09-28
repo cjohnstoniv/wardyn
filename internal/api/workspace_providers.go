@@ -735,7 +735,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 	// true: the console door — a human is choosing this write, in the moment,
 	// with an undo (validateWorkspaceProviders's doc, #380 F2).
 	if err := validateWorkspaceProviders(block, true); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid workspace providers: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
 		return
 	}
 	// SEAM-1: serializes this read-modify-write against the site config's other
@@ -752,7 +752,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedWorkspaceProviders(existing))) {
-		writeError(w, http.StatusPreconditionFailed, providers412Stale)
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonWorkspaceProvidersStale, providers412Stale)
 		return
 	}
 	candidate := existing

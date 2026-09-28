@@ -284,7 +284,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// WRITTEN — and is then refused at every door that would clone it. Authoring is
 	// not cloning, and narrowing the provider rows must not retroactively make a
 	// stored policy unsaveable.
-	if code, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
+	if code, _, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
 		return
 	}
@@ -336,7 +336,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if code, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
+	if code, _, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
 		return
 	}

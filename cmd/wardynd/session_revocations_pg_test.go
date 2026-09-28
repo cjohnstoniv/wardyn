@@ -21,7 +21,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// pgNow reads the database's own clock, so a margin measured in milliseconds
+// (unlike the hour/minute margins elsewhere in this test) never races the
+// host's — see #1274: a bare time.Now() here only passed when the host and
+// Postgres clocks happened to agree.
+func pgNow(t *testing.T, pool *pgxpool.Pool) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := pool.QueryRow(t.Context(), "SELECT now()").Scan(&now); err != nil {
+		t.Fatalf("SELECT now(): %v", err)
+	}
+	return now
+}
 
 func TestPGSessionRevocations_CutoffIsATimestampNotAFlag(t *testing.T) {
 	dsn := os.Getenv("WARDYN_TEST_PG")
@@ -34,7 +49,10 @@ func TestPGSessionRevocations_CutoffIsATimestampNotAFlag(t *testing.T) {
 		t.Fatalf("connectAndMigrate: %v", err)
 	}
 	defer pool.Close()
-	rev := &pgSessionRevocations{pool: pool}
+	// now reads the database's own clock too (like between below), so the age
+	// IsSessionRevoked measures never mixes the host's clock with Postgres's —
+	// see db.AppClockAgeMicros' contract that both its arguments share one clock.
+	rev := &pgSessionRevocations{pool: pool, now: func() time.Time { return pgNow(t, pool) }}
 
 	// A sub unique to this run: the table is keyed on sub and shared with any
 	// other test using this database, so nothing here may collide with — or
@@ -73,9 +91,11 @@ func TestPGSessionRevocations_CutoffIsATimestampNotAFlag(t *testing.T) {
 	// session minted by the re-login above is cut again — the operator's answer
 	// to "they signed straight back in". `between` stands for that re-login: a
 	// real timestamp taken after the first cutoff, not a far-future one, since
-	// only a real one can be overtaken by the second revoke.
+	// only a real one can be overtaken by the second revoke. Read from the
+	// database's own clock (#1274): the margin here is milliseconds, too thin
+	// to survive comparing a host-clock reading against a Postgres-stamped cutoff.
 	time.Sleep(20 * time.Millisecond)
-	between := time.Now().UTC()
+	between := pgNow(t, pool)
 	if revoked, err := rev.IsSessionRevoked(ctx, sub, "", between); err != nil || revoked {
 		t.Fatalf("a session minted just after the revoke = (%v, %v), want (false, nil) — the re-login did not clear the cutoff", revoked, err)
 	}

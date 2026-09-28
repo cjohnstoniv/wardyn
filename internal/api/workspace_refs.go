@@ -69,7 +69,14 @@ func indexWorkspacesBySource(all []types.Workspace) workspaceSourceIndex {
 // single-source Kind/Source mirror, which is empty for a multi-source
 // workspace) — a multi-source workspace's second/third local_dir or repo entry
 // must clear this gate exactly like its first.
-func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec) (int, error) {
+// #656 M1: this used to answer every refusal with reasonWorkspaceSourcesInvalid;
+// each cause below now names its own — except the two not-onboarded arms, which
+// share reasonWorkspaceSourceNotOnboarded with authorizeSpecWorkspaceSources'
+// OWN not-onboarded arms on purpose (H1): the sentence is already byte-identical
+// across all four for the cross-member existence-oracle reason
+// authorizeSpecWorkspaceSources' doc comment explains, and a distinguishable
+// reason would reopen exactly that.
+func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec) (int, string, error) {
 	// A mount at a system target (subscription creds) is exempt from the onboarding
 	// gate ONLY when its SOURCE matches the operator's TRUSTED ceiling (DefaultPolicy)
 	// entry for that target. Keying on the target ALONE would let a user-authored
@@ -99,16 +106,16 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		}
 	}
 	if !hasUserMount && len(spec.WorkspaceRepos) == 0 {
-		return 0, nil
+		return 0, "", nil
 	}
 
 	if s.cfg.Store == nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf(
+		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesStoreUnavailable, fmt.Errorf(
 			"workspace onboarding requires a store, but none is configured")
 	}
 	all, err := s.cfg.Store.ListWorkspaces(ctx)
 	if err != nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf("list workspaces: %w", err)
+		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
 	idx := indexWorkspacesBySource(all)
 
@@ -118,7 +125,7 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		}
 		ws, ok := idx.localDir[wm.Source]
 		if !ok {
-			return http.StatusUnprocessableEntity, fmt.Errorf(
+			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
 		}
 		// MEMBER-OWNED source (0048): re-run the member-safe mount gate on the
@@ -128,16 +135,16 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		// a symlink) AFTER the workspace was created. An operator-owned source
 		// (OwnedBy == "") is untouched.
 		if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
-			return http.StatusUnprocessableEntity, err
+			return http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err
 		}
 	}
 	for _, wr := range spec.WorkspaceRepos {
 		if _, ok := idx.repo[wr.Repo]; !ok {
-			return http.StatusUnprocessableEntity, fmt.Errorf(
+			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"repo %q is not an onboarded repository (onboard it first via the workspaces API)", wr.Repo)
 		}
 	}
-	return 0, nil
+	return 0, "", nil
 }
 
 // userMountAllowed re-checks ONE resolved mount against its owning member's

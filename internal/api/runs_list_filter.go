@@ -82,7 +82,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	switch view {
 	case "", "user", "admin":
 	default:
-		writeError(w, http.StatusBadRequest, "invalid view")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidViewParam, "invalid view")
 		return parsedRunsListParams{}, false
 	}
 	isOperator := s.isSecurityOperator(r.Context())
@@ -94,7 +94,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	switch owner {
 	case "", "me", "all":
 	default:
-		writeError(w, http.StatusBadRequest, "invalid owner")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidOwnerParam, "invalid owner")
 		return parsedRunsListParams{}, false
 	}
 	// #1197: view=user forces owner=me for EVERY caller, admins and security
@@ -124,7 +124,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	seenStatus := map[string]bool{}
 	for _, st := range q["status"] {
 		if !runsListStatuses[st] {
-			writeError(w, http.StatusBadRequest, "invalid status filter")
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidStatusParam, "invalid status filter")
 			return parsedRunsListParams{}, false
 		}
 		if seenStatus[st] {
@@ -135,18 +135,18 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	}
 	if slices.Contains(statuses, "needs") {
 		if !isNeedsStatus(statuses) {
-			writeError(w, http.StatusBadRequest, "status=needs cannot be combined with another status value")
+			writeErrorReason(w, http.StatusBadRequest, reasonStatusNeedsExclusive, "status=needs cannot be combined with another status value")
 			return parsedRunsListParams{}, false
 		}
 		if view == "" {
-			writeError(w, http.StatusBadRequest, "status=needs requires view=user or view=admin")
+			writeErrorReason(w, http.StatusBadRequest, reasonStatusNeedsRequiresView, "status=needs requires view=user or view=admin")
 			return parsedRunsListParams{}, false
 		}
 	}
 
 	endedWithin, ok := endedWithinDurations[q.Get("ended_within")]
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid ended_within")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidEndedWithinParam, "invalid ended_within")
 		return parsedRunsListParams{}, false
 	}
 
@@ -156,13 +156,13 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	case "1":
 		includeKilled = true
 	default:
-		writeError(w, http.StatusBadRequest, "invalid include_killed")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidIncludeKilledParam, "invalid include_killed")
 		return parsedRunsListParams{}, false
 	}
 
 	searchQuery := q.Get("q")
 	if len(searchQuery) > maxRunsListQueryLen {
-		writeError(w, http.StatusBadRequest, "q is too long")
+		writeErrorReason(w, http.StatusBadRequest, reasonRunsSearchQueryTooLong, "q is too long")
 		return parsedRunsListParams{}, false
 	}
 
@@ -198,7 +198,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 	}
 	pager, capable := s.cfg.Store.(store.RunsFilteredPager)
 	if !capable {
-		writeError(w, http.StatusInternalServerError, "run listing is not scoped for this request on this store backend")
+		writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "run listing is not scoped for this request on this store backend")
 		return
 	}
 	adminView := params.view == "admin"

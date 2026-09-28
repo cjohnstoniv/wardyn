@@ -458,6 +458,10 @@ func TestWorkspaceDelete_RefusesWhileARunHoldsTheWorkspace(t *testing.T) {
 	if !strings.Contains(w.Body.String(), runID.String()) {
 		t.Errorf("the 409 does not name the run holding the workspace: %s", w.Body.String())
 	}
+	// #656 M2: pin the LITERAL wire reason, not just the Go constant.
+	if !strings.Contains(w.Body.String(), `"reason":"workspace_delete_active_run"`) {
+		t.Errorf("body = %s, want reason \"workspace_delete_active_run\"", w.Body.String())
+	}
 	if live.deleted {
 		t.Error("the workspace was deleted anyway")
 	}

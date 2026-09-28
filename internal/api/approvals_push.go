@@ -71,25 +71,27 @@ func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, c
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&scope); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid push_content requested_scope: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidPushScope, "invalid push_content requested_scope: "+err.Error())
 		return nil, false
 	}
 	if err := scope.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid push_content requested_scope: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidPushScope, "invalid push_content requested_scope: "+err.Error())
 		return nil, false
 	}
 	if scope.ActsAsKind != "" || scope.ActsAsLabel != "" {
-		writeError(w, http.StatusBadRequest, "invalid push_content requested_scope: acts_as_kind and acts_as_label are set by the control plane")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidPushScope, "invalid push_content requested_scope: acts_as_kind and acts_as_label are set by the control plane")
 		return nil, false
 	}
 	if list != nil {
 		if err := list.VerifyAgainst(scope); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid push_content path_list: "+err.Error())
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidPushPathList, "invalid push_content path_list: "+err.Error())
 			return nil, false
 		}
 	}
 	if s.cfg.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "run store unavailable")
+		// #656 L1: folded into decision_scope_always_unavailable — same cause
+		// (s.cfg.Store == nil), one reason.
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDecisionScopeAlwaysUnavailable, "run store unavailable")
 		return nil, false
 	}
 	if list != nil && !s.admitPushPathList(w, r, claims.RunID) {
@@ -101,7 +103,7 @@ func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, c
 		return nil, false
 	}
 	if !run.Interactive {
-		writeError(w, http.StatusForbidden, pushContentUnattendedBody)
+		writeErrorReason(w, http.StatusForbidden, reasonPushContentUnattended, pushContentUnattendedBody)
 		return nil, false
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(r.Context(), run.ID)
@@ -110,7 +112,7 @@ func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, c
 		return nil, false
 	}
 	if scope.ActsAsKind, scope.ActsAsLabel, err = s.pushActsAs(r.Context(), run, claims.Sub, grants, scope.ActsAs); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid push_content requested_scope: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidPushScope, "invalid push_content requested_scope: "+err.Error())
 		return nil, false
 	}
 	out, err := json.Marshal(scope)
@@ -171,16 +173,18 @@ func (s *Server) pushActsAs(ctx context.Context, run types.AgentRun, subject str
 func (s *Server) admitPushPathList(w http.ResponseWriter, r *http.Request, runID uuid.UUID) bool {
 	lists, ok := s.cfg.Store.(store.PushPathListStore)
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "push path list store unavailable")
+		// #656 L1: folded into push_path_lists_require_postgres — same cause
+		// (the store does not implement store.PushPathListStore), one reason.
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonPushPathListsRequirePostgres, "push path list store unavailable")
 		return false
 	}
 	n, err := lists.CountPushPathLists(r.Context(), runID)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "count push path lists for run", err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonPushPathListCountUnavailable, loggedMsg(r.Context(), "count push path lists for run", err))
 		return false
 	}
 	if n >= maxPushPathListsPerRun {
-		writeError(w, http.StatusTooManyRequests, pushPathListCapBody)
+		writeErrorReason(w, http.StatusTooManyRequests, reasonPushPathListCapReached, pushPathListCapBody)
 		return false
 	}
 	return true
@@ -208,7 +212,7 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 			writeServerError(w, r, "expire a push_content approval past the path-list cap", xerr)
 			return false
 		}
-		writeError(w, http.StatusTooManyRequests, pushPathListCapBody)
+		writeErrorReason(w, http.StatusTooManyRequests, reasonPushPathListCapReached, pushPathListCapBody)
 		return false
 	}
 	if err != nil {
@@ -271,16 +275,19 @@ func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !s.ownsRunOrAdmin(r, run) {
+		// #656: deliberately still a bare writeError — TestPushPathListRouteVisibility pins this
+		// 404 byte-identical to notFoundIf's (above) bare 404 for a genuinely missing approval, so
+		// a foreign approval and a missing one stay indistinguishable (no existence oracle).
 		writeError(w, http.StatusNotFound, "approval not found")
 		return
 	}
 	if ap.Kind != types.ApprovalPushContent {
-		writeError(w, http.StatusBadRequest, "approval is not a held push")
+		writeErrorReason(w, http.StatusBadRequest, reasonPushNotHeld, "approval is not a held push")
 		return
 	}
 	lists, ok := s.cfg.Store.(store.PushPathListStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "push path lists require the Postgres store backend")
+		writeErrorReason(w, http.StatusNotImplemented, reasonPushPathListsRequirePostgres, "push path lists require the Postgres store backend")
 		return
 	}
 	l, err := lists.GetPushPathList(r.Context(), id)
