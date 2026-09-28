@@ -1031,8 +1031,8 @@ test.describe("Focus mode — Escape inside a Deny confirm", () => {
 // of either kind is ALWAYS pinned to the Needs-you lane, never left grouped —
 // there is no more live "stale but still counted in the group" case to prove
 // here; the counted held/reauth chip vocabulary itself stays pinned directly
-// against TitleGroup's own signals in runs/title-group.test.tsx, board-groups
-// .test.ts and run-card.test.tsx. What's reachable live, and pinned below:
+// against TitleGroup's own signals in runs/title-group.test.tsx and
+// board-groups.test.ts. What's reachable live, and pinned below:
 // the STARTING chip (a run.state fact, not an approval one), the
 // "Checking…" pre-resolve window, and a long-PENDING TOOL_CALL/
 // credential_reauth hold that STAYS live (Review, not Open; the Needs-you

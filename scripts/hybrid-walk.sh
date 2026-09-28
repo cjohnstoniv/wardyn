@@ -74,15 +74,33 @@
 # issued is the live-estate half of this ask and stays OWNER, like every
 # other real-TLS/real-DNS proof in this handoff.
 #
-# THE LAPTOP'S OWN OIDC POSTURE (WARDYN_USER_DESKTOP=true requires a working
-# issuer — validateMemberModePosture refuses boot otherwise) is satisfied with
-# the SAME self-contained fixture scripts/compose-sso-roles.sh already proves
-# nightly: `docker compose --profile sso up dex`, Dex reachable by wardynd at
-# WARDYN_OIDC_INTERNAL_ISSUER's default (http://dex:5556) on the laptop's OWN
-# compose network. Nothing in this walk drives an actual human sign-in — the
-# device-credential and revocation paths never touch OIDC at all
-# (devices_auth.go's own header: device routes never publish a human
-# identity) — so Dex only has to answer discovery, never issue a token here.
+# THE LAPTOP'S OWN OIDC POSTURE. WARDYN_USER_DESKTOP=true needs TWO things
+# validated at boot, both in cmd/wardynd/boot_posture.go, and bringing up Dex
+# alone satisfies neither — an earlier version of this walk assumed it did,
+# and wardynd crash-looped on the first of them in the hosted nightly:
+#
+#  1. validateMemberModePosture requires WARDYN_OIDC_ISSUER to be actually
+#     SET (compose's own default is empty, docker-compose.yaml — bringing up
+#     the `dex` container does not set it for you). compose() sets it to
+#     "http://localhost:5556", the literal `issuer:` in deploy/compose/
+#     dex.yaml — the PUBLIC, browser-facing issuer string, which is what this
+#     var means. wardynd itself never dials "localhost" for discovery: the
+#     compose file's own WARDYN_OIDC_INTERNAL_ISSUER default (http://dex:5556)
+#     is what internal/auth/oidc's split-horizon rewrite actually calls (the
+#     SAME self-contained fixture scripts/compose-sso-roles.sh already proves
+#     nightly), so this is a real discovery against a real issuer, not a
+#     fake one.
+#  2. validateOperatorPosture then refuses an OIDC deployment with an empty
+#     operator allowlist ("every signed-in human would be admin-equivalent").
+#     compose() sets WARDYN_OIDC_OPERATOR_EMAILS="admin@wardyn.local" to clear
+#     it — an address that never actually signs in (see below), so its exact
+#     value only has to be non-empty and does not need to correspond to a
+#     Dex user.
+#
+# Nothing in this walk drives an actual human sign-in — the device-credential
+# and revocation paths never touch OIDC at all (devices_auth.go's own header:
+# device routes never publish a human identity) — so Dex only has to answer
+# discovery, never issue a token here.
 #
 # THE PARTITION MECHANISM: a `socat` relay running as a SIDECAR CONTAINER,
 # listening on 127.0.0.1 inside a shared network namespace — reachable from
@@ -256,6 +274,7 @@ compose() {
     WARDYN_DEX_PORT="${DEX_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_SANDBOX_PORT}" \
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_USER_DESKTOP="true" WARDYN_LOCAL_MODE="false" \
+    WARDYN_OIDC_ISSUER="http://localhost:5556" WARDYN_OIDC_OPERATOR_EMAILS="admin@wardyn.local" \
     WARDYN_ORG_URL="http://127.0.0.1:${RELAY_PORT}" \
     WARDYN_ORG_ENROLMENT_TOKEN="${ENROL_TOKEN:-}" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" --profile sso "$@"
