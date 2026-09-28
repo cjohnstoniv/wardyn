@@ -1029,6 +1029,7 @@ jobs:
           name: conformance-docker-test-reports
           path: test/reports/go/conformance-docker/**
       - name: Published 0.7.11 wardynd fails closed over a converted secret store (docker)
+        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_DOCKER: "1"
         run: go test -count=1 -v -run '^TestPG_OldBinaryAgainstV1Store$' ./cmd/wardynd/
