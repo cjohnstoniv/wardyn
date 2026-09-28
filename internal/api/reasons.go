@@ -320,18 +320,28 @@ const (
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
 	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
 
-	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"
-	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"
-	reasonUserDriveReclaimNoDirectoryName = "user_drive_reclaim_no_directory_name"
+	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the deployment's drive-size ceiling (site config) could not be read
+	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard
+	reasonUserDriveReclaimNoDirectoryName = "user_drive_reclaim_no_directory_name" // the allocation resolves to no directory name, so there is no object to reclaim
 
+	// owner_ambiguous / owner_unresolved: resolveSecretOwner's (secrets.go) and
+	// resolveSSHKeyOwner's (sshkeys_admin.go) shared two-cause shape — more
+	// than one known principal matches a name, or none does.
 	reasonOwnerAmbiguous  = "owner_ambiguous"
 	reasonOwnerUnresolved = "owner_unresolved"
 
-	reasonPersonMintNoSignIn                 = "no_sign_in"
-	reasonPersonMintDefaultRoleUnknownGroups = "default_role_unknown_groups"
-	reasonPersonMintElevatedTarget           = "elevated_target"
+	// personMintRefusal's own closed set (people.go, POST /people/{principal}/tokens).
+	reasonPersonMintNoSignIn                 = "no_sign_in"                  // the derived role has no sign-in on this deployment
+	reasonPersonMintDefaultRoleUnknownGroups = "default_role_unknown_groups" // an elevated role rests on the default role, which the person's still-unknown groups might narrow — they must sign in once first
+	reasonPersonMintElevatedTarget           = "elevated_target"             // minting for an admin/security-admin target needs a super admin
 )
 
+// The driveRefusal* closed set (internal/api/user_drives_run.go's
+// refuseDrive/driveBindFailure): one reason per launch-time drive-mount
+// cause, already used for the wardyn_drive_refusals_total metric and its own
+// WARN log line, now also on the wire. Declared here, not beside refuseDrive,
+// so TestReasonDocsMatchReasonsGo (which only reads this file) can see every
+// wire-visible reason in one place (#656 slice 2 review round).
 const (
 	driveRefusalNoAllocation      = "no_allocation"
 	driveRefusalPaused            = "paused"
@@ -339,13 +349,31 @@ const (
 	driveRefusalBackendElsewhere  = "backend_elsewhere"
 	driveRefusalCeilingMoved      = "ceiling_moved"
 	driveRefusalHomeMissing       = "home_missing"
-	driveRefusalHomeUnreadable    = "home_unreadable"
-	driveRefusalShareUnreachable  = "share_unreachable"
-	driveRefusalReadOnly          = "read_only"
-	driveRefusalDrivesDisabled    = "drives_disabled"
+	// driveRefusalHomeUnreadable is the #165 arm: the home directory EXISTS
+	// (driveRefusalHomeMissing's own check already passed) but the sandbox's
+	// own agent uid — not this daemon's root process — cannot read it. A
+	// distinct reason from home_missing because the remedy differs: an admin
+	// fixes permissions, not a directory that is already there.
+	driveRefusalHomeUnreadable   = "home_unreadable"
+	driveRefusalShareUnreachable = "share_unreachable"
+	driveRefusalReadOnly         = "read_only"
+	// driveRefusalDrivesDisabled is the ORG SWITCH, not a door: this install
+	// offers no drives at all, so nobody was denied by a profile. Counted like
+	// the rest, because an operator who turns the switch off wants to see how
+	// many runs are still asking. Shared with userDriveWriteRefusal's OWN
+	// org-switch check (user_drives.go): the identical cause, one route apart.
+	driveRefusalDrivesDisabled = "drives_disabled"
 )
 
+// The user-drive resolver's own closed enum (user_drives_resolve.go) members
+// that reach writeDriveError's wire body. driveUnavailableGroups,
+// driveUnavailableUnknown and driveUnavailableGovernance stay declared beside
+// their own GET /me field instead — they never reach errorBody.Reason, so
+// TestReasonDocsMatchReasonsGo does not need to see them, and docs/sdk.md does
+// not document them (#656 slice 2 review round S3: a documented-but-unsent
+// reason is worse than an undocumented one, and `unavailable` collided with
+// ADOEntraFailure's own reason of the same name).
 const (
-	driveUnavailableUserType    = "user_type_unknown"
-	driveUnavailableUnmountable = "unmountable"
+	driveUnavailableUserType    = "user_type_unknown" // the caller's stamped user type no longer exists. 403 at launch.
+	driveUnavailableUnmountable = "unmountable"       // an allocation EXISTS and cannot be mounted — a home name that cannot name a directory, a share that is not there. 422 at launch, and the one state whose remedy is an admin's, not the member's.
 )

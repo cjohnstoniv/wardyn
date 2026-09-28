@@ -4,12 +4,19 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestSlice2_QueryAndBodyReasons (#656 slice 2) pins the machine-readable
@@ -77,5 +84,63 @@ func TestCreateAPIToken_FromAPIToken_ReasonLiteral(t *testing.T) {
 	}
 	if got := errorReason(w); got != "api_token_from_api_token" {
 		t.Errorf("reason = %q, want the literal \"api_token_from_api_token\"; body=%s", got, w.Body.String())
+	}
+}
+
+// personMintFakeStore is a minimal in-memory store.PersonStore, so
+// TestMintPersonAPIToken_NoSignIn_ReasonLiteral runs with no Postgres.
+type personMintFakeStore struct {
+	store.Store
+	mu     sync.Mutex
+	people map[string]types.Person
+}
+
+func (s *personMintFakeStore) CreatePerson(_ context.Context, p types.Person) (types.Person, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.people[p.Principal]; ok {
+		return existing, false, nil
+	}
+	s.people[p.Principal] = p
+	return p, true, nil
+}
+
+func (s *personMintFakeStore) GetPerson(_ context.Context, principal string) (types.Person, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.people[principal]
+	if !ok {
+		return types.Person{}, store.ErrNotFound
+	}
+	return p, nil
+}
+
+func (s *personMintFakeStore) ListPeople(context.Context) ([]types.Person, error) { return nil, nil }
+func (s *personMintFakeStore) MarkPersonSignedIn(context.Context, string, time.Time) error {
+	return nil
+}
+
+// TestMintPersonAPIToken_NoSignIn_ReasonLiteral (#656 slice 2 review round
+// F3) pins people.go:235 at the HTTP level: the handler, not just the
+// personMintRefusal helper (already pinned by TestPersonMintRefusal_DerivationArms),
+// writes the refusal's reason to the wire. Drives POST
+// /people/{principal}/tokens through the real router with a person whose
+// email matches no role-mapping row and no default role, the "no_sign_in"
+// arm.
+func TestMintPersonAPIToken_NoSignIn_ReasonLiteral(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &personMintFakeStore{people: map[string]types.Person{
+		"pat-sub": {Principal: "pat-sub", Email: "pat@corp.example"},
+	}})
+	cfg.OIDC = newAccessAuth(t, map[string]string{"admin@corp.example": "admin"}, "", nil, nil)
+	srv := New(cfg)
+	admin := accessSession(t, "root", "admin@corp.example", oidc.RoleAdmin, []string{})
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/people/pat-sub/tokens", admin, `{"name":"ci"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("mint for a person with no derivable sign-in: status = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "no_sign_in" {
+		t.Errorf("reason = %q, want the literal \"no_sign_in\"; body=%s", got, w.Body.String())
 	}
 }
