@@ -64,7 +64,7 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
+import { CONSOLE_VIEW, USER_PREVIEW, VIEW_TO_USER } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
 import { LOGIN_SANDBOX_UNREADABLE, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
@@ -1094,6 +1094,16 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
     gating.filter((c) => c.blocking).map((c) => c.id),
     "no warn/fail row on this install may be blocking, or this case proves nothing",
   ).toEqual([]);
+
+  // #639: an admin's New Run lives in the USER view. In the Admin view
+  // /runs/new renders VIEW_TO_USER's switch page instead of the form, so switch
+  // through that page's own button first; the gate question below is the same,
+  // asked where New Run now is.
+  await page.goto("/runs/new");
+  await page.getByRole("button", { name: VIEW_TO_USER.GO }).click();
+  await expect(
+    page.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name: CONSOLE_VIEW.USER }),
+  ).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
 
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
   // /setup/status read. The rail's per-person line renders off that same read,
