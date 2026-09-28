@@ -363,7 +363,7 @@ ceilings; `agent_providers` says which agents this org offers and how each
 reaches its model. `wardyn site-config set` is a **full-document replace**, but
 a key the file does not NAME is **carried forward, not cleared** — the CLI
 strict-decodes and re-marshals, so an omitted (or `null`) block leaves the stored
-one alone, and `apply` prints which post-0.6.6 keys it left as the server already
+one alone, and `set` prints which post-0.6.6 keys it left as the server already
 had them. That carry-forward is what stops the 5-minute converge on a laptop
 whose MDM file predates 0.7.2 from silently deleting the org's provider policy on
 every tick. To CLEAR a block deliberately, write it as `{}` — the only clear form

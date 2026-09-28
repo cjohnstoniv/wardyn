@@ -545,7 +545,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// workspace_providers.git_pat_broker_enabled: the SAME projection GET
 	// /workspace-providers does, and for the same reason (#381) — this door
 	// returns the identical nested block, so a console reading site-config
-	// directly (or an MDM diffing its own `apply` against a `get`) must see
+	// directly (or an MDM diffing its own `set` against a `get`) must see
 	// the same live switch value, not a stale/absent one.
 	//
 	// A COPY, never a mutation through the pointer: cfg.WorkspaceProviders may
