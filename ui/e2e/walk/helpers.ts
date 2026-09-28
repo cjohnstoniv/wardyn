@@ -396,7 +396,14 @@ export async function openLoginPane(page: Page): Promise<void> {
 export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> {
   await openLoginPane(page);
   const progress = page.getByTestId("signin-progress").first();
-  const downloadStep = progress.getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE });
+  // The download row by POSITION (marksFor's rows are always [start, download,
+  // wait?], signin-progress.tsx), not by filtering on STEP_DOWNLOAD_ACTIVE's
+  // label text: that text only matches while the row is ALSO in the active
+  // state, so a text filter plus an attribute check must both land on the same
+  // poll — on the small (16-64 MiB) cold-pull layer #891 now uses, the active
+  // window is short enough that the two can straddle it and the assertion
+  // times out on a real cold pull. Position is stable regardless of state.
+  const downloadStep = progress.getByRole("listitem").nth(1);
   await expect(
     downloadStep,
     "the download step never lit — either the aws-sso image was not a cold pull (see scripts/kind-sso-walk.sh's registry step), or the runner Role lost events:list (#881's fail-closed path)",

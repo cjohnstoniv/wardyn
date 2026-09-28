@@ -230,17 +230,16 @@ async function myLoginRuns(page: Page): Promise<RunRow[]> {
  *     pane and waits for one that is not in it. That wait doubles as the
  *     barrier that stops a `page.goto` firing while POST /setup/harness-login
  *     is still in flight — a navigation would abort it;
- *   - picking the FIRST "harness login" card on the board picks the wrong run:
+ *   - picking the FIRST "harness login" row on the board picks the wrong run:
  *     runs.tsx orders `attention, active, done`, and KILLED ranks as attention,
- *     so the top card is a dead run from the previous file. The card is
- *     selected by the run id on its own id chip (`title={run.id}`,
- *     run-card.tsx) instead of by position. */
+ *     so the top row is a dead run from the previous file. The row is
+ *     selected by the run id in its own title link's href
+ *     (`run-row.tsx`) instead of by position. */
 async function openLoginRunCard(page: Page, runID: string): Promise<void> {
   await page.goto("/runs");
   await page
-    .getByTestId("run-card")
-    .filter({ has: page.locator(`[title="${runID}"]`) })
-    .getByText("harness login")
+    .getByTestId("run-row")
+    .locator(`a[href$="/runs/${runID}"]`)
     .click();
   await expect(page).toHaveURL(new RegExp(`/runs/${runID}$`), { timeout: 60_000 });
 }
