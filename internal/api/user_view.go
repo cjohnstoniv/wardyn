@@ -390,26 +390,33 @@ func meUserViewDropped(ctx context.Context) any {
 }
 
 // meUserViewTypes is /me's user_view_types (#912, H2): the org's user types
-// (id + name only), present ONLY when the caller's STAMPED role — never the
-// clamped one — is admin or security_admin. This is the one piece of data
-// the console's type picker needs WHILE ALREADY INSIDE the view, where the
-// effective role reads user and GET /user-types (securityOps) correctly
-// refuses it; reading it from here instead means a clamped session never has
-// to call that route at all. Advisory UI data only: nothing here decides
-// what the caller may actually do (RoleFromContext, unaffected by this, still
-// does). nil for anyone else, including a real member, who must never see
-// the org's type roster. A store failure degrades to nil, the same "nothing
-// to offer" the picker already treats an empty list as.
+// (id + name only), present for a human who is a security operator OUTSIDE
+// the view (isSecurityOperator, admin or security_admin) OR who is currently
+// INSIDE the user view (oidc.MemberModeFromContext) — the one piece of data
+// the console's type picker needs while already in the view, where the
+// EFFECTIVE role reads user and GET /user-types (securityOps) correctly
+// refuses it. This reads no role the clamp has not already published:
+// isSecurityOperator is the same predicate every other admin surface in this
+// package gates on, and MemberMode is sufficient on its own because it is
+// TRUE only for a security operator by construction — membermode.go's SetUserView
+// is its one writer, and it refuses to set it for a stamped user
+// (membermode.go's own doc, "Nothing in this package re-derives a tier").
+// Advisory UI data only: nothing here decides what the caller may actually
+// do (RoleFromContext, unaffected by this, still does). nil for anyone else,
+// including a real member, who must never see the org's type roster. A store
+// failure degrades to nil, the same "nothing to offer" the picker already
+// treats an empty list as.
 func (s *Server) meUserViewTypes(r *http.Request) []meUserTypeView {
-	if !oidc.StampedRoleIsOperatorTier(r.Context()) {
+	ctx := r.Context()
+	if oidcHumanFromContext(ctx) == "" || !(s.isSecurityOperator(ctx) || oidc.MemberModeFromContext(ctx)) {
 		return nil
 	}
 	if s.cfg.Store == nil {
 		return nil
 	}
-	list, err := s.cfg.Store.ListUserTypes(r.Context())
+	list, err := s.cfg.Store.ListUserTypes(ctx)
 	if err != nil {
-		slog.WarnContext(r.Context(), "api: could not list user types for /me", "error", err)
+		slog.WarnContext(ctx, "api: could not list user types for /me", "error", err)
 		return nil
 	}
 	out := make([]meUserTypeView, len(list))

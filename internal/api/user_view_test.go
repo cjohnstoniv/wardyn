@@ -436,3 +436,94 @@ func TestUserViewDroppedCarriesTheCachedName(t *testing.T) {
 		t.Fatalf("/me user_view_dropped = %+v, want user_type %q and user_type_name %q", me.UserViewDropped, utPM, "Portfolio manager")
 	}
 }
+
+// TestMeUserViewTypes_SecurityAdminInsideTheView (round-2 review P-C): the
+// builder's own TestMeUserViewTypes checked this tier only OUTSIDE the view;
+// a security_admin looking through a chosen type must get the roster too,
+// for the identical reason an admin does.
+func TestMeUserViewTypes_SecurityAdminInsideTheView(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	inView := uvSession(t, "sub-uv-secadmin-inview", oidc.RoleSecurityAdmin, types.UserTypeStandard, utDev)
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/user-types", inView, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("GET /user-types inside the view (security_admin) = %d, want 403", w.Code)
+	}
+	me, _ := uvGetMe(t, srv, inView)
+	if len(me.UserViewTypes) != 1 {
+		t.Fatalf("security_admin inside the view: user_view_types = %+v, want the built-in type", me.UserViewTypes)
+	}
+}
+
+// TestMeUserViewTypes_HandBuiltMemberModeCookieGetsNil (round-2 review): a
+// cookie claiming MemberMode on a stamped USER — a state SetUserView (the
+// mode's one writer) never produces, since it refuses to turn the mode on
+// for a stamped user — must still never hand back the org's roster. Here
+// that state also names a type that was never legitimately chosen, so
+// userViewGate's own existence check drops the view before /me ever answers
+// (the request never reaches meUserViewTypes with MemberMode still true) —
+// proving the SAME defence-in-depth this file already pins for a genuinely
+// deleted type also closes this hand-built one.
+func TestMeUserViewTypes_HandBuiltMemberModeCookieGetsNil(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	handBuilt := uvSession(t, "sub-uv-handbuilt-member", oidc.RoleUser, types.UserTypeStandard, "not-a-real-type")
+	me, w := uvGetMe(t, srv, handBuilt)
+	if me.UserViewTypes != nil {
+		t.Fatalf("hand-built MemberMode member: user_view_types = %+v, want nil", me.UserViewTypes)
+	}
+	if _, sess := reSigned(t, w); sess.MemberMode {
+		t.Errorf("hand-built session = %+v, want the gate to have dropped MemberMode (the named type never existed)", sess)
+	}
+}
+
+// TestMeUserViewTypes_ForgedCookieIs401 (round-2 review): a session cookie
+// whose signature no longer verifies must never reach any handler logic —
+// GET /me answers 401, not a resolved (or even a nil) user_view_types.
+func TestMeUserViewTypes_ForgedCookieIs401(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	good := uvSession(t, "sub-uv-forged", oidc.RoleAdmin, types.UserTypeStandard, "")
+	forged := *good
+	// Flips the base64 payload's first character to a different one from the
+	// SAME alphabet (RawURLEncoding never emits '_' first, so this is always
+	// a change) — corrupts the signed payload while staying a byte the
+	// cookie wire format accepts, unlike an arbitrary XOR'd byte.
+	if forged.Value[0] == '_' {
+		forged.Value = "-" + forged.Value[1:]
+	} else {
+		forged.Value = "_" + forged.Value[1:]
+	}
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/me", &forged, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /me with a forged cookie = %d, want 401", w.Code)
+	}
+}
+
+// TestMeUserViewTypes_TokenLaneMemberGetsNil (round-2 review): the wdn_ token
+// lane publishes identity through the SAME withHumanIdentity the SSO branch
+// uses (apitokens.go), never through oidc.contextWithPrincipal — so
+// oidc.MemberModeFromContext is always false there (the user view is a
+// cookie-only concept; SetUserView needs one to write to). A member's own
+// token must still never see the org's type roster.
+func TestMeUserViewTypes_TokenLaneMemberGetsNil(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	ctx := withHumanIdentity(req.Context(), "sub-uv-token-member", "member@corp.example", oidc.RoleUser, types.UserTypeStandard, nil, false)
+	if got := srv.meUserViewTypes(req.WithContext(ctx)); got != nil {
+		t.Fatalf("token-lane member: user_view_types = %+v, want nil", got)
+	}
+}
+
+// TestMeUserViewTypes_BareAdminTokenGetsNil: the bare admin token (env-var
+// bootstrap credential, no per-human identity) is exempt in isSecurityOperator
+// itself ("no verified OIDC human" arm, http.go), which would otherwise make
+// it look like a security operator here too. The explicit human check is
+// what keeps this lane at nil — it already reaches GET /user-types directly
+// (isOperator's own exemption), so /me owes it nothing extra.
+func TestMeUserViewTypes_BareAdminTokenGetsNil(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	w := do(t, srv, http.MethodGet, "/api/v1/me", adminToken, "")
+	var got uvMe
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("GET /me with the bare admin token = %d %s", w.Code, w.Body.String())
+	}
+	if got.UserViewTypes != nil {
+		t.Fatalf("bare admin token: user_view_types = %+v, want nil", got.UserViewTypes)
+	}
+}

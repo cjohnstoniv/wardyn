@@ -80,7 +80,7 @@ export function ViewSwitch({
   onNavigate,
   currentUserType,
   preselectType,
-  userTypes,
+  userTypes = [],
 }: {
   access: ViewAccess;
   view: ConsoleView;
@@ -92,8 +92,10 @@ export function ViewSwitch({
   /** /me's user_view_preselect_type — the dropdown's first value before the
    *  view is entered (#912). */
   preselectType?: string;
-  /** /me's user_view_types — empty for anyone who never renders a picker. */
-  userTypes: ViewUserType[];
+  /** /me's user_view_types — empty (the default) for anyone who never
+   *  renders a picker, and for a caller (a test's cast `meta`, a pre-0.8
+   *  daemon's absent key) that never supplies the field at all. */
+  userTypes?: ViewUserType[];
 }) {
   const requestLeave = useRequestLeave();
   const navigate = useNavigate();
@@ -201,10 +203,10 @@ export function ViewSwitch({
  *  without leaving the view. */
 export function UserViewEyebrow({
   currentUserType,
-  userTypes,
+  userTypes = [],
 }: {
   currentUserType?: { id: string; name: string } | null;
-  userTypes: ViewUserType[];
+  userTypes?: ViewUserType[];
 }) {
   const [busy, setBusy] = React.useState(false);
   if (userTypes.length <= 1 || !currentUserType) return null;
@@ -247,11 +249,11 @@ export function UserViewEyebrow({
 export function UserViewDroppedNotice({
   access,
   dropped,
-  userTypes,
+  userTypes = [],
 }: {
   access: ViewAccess;
   dropped: { user_type: string; user_type_name?: string } | null;
-  userTypes: ViewUserType[];
+  userTypes?: ViewUserType[];
 }) {
   const [busy, setBusy] = React.useState(false);
   const [failed, setFailed] = React.useState(false);

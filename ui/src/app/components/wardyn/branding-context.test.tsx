@@ -76,6 +76,7 @@ function renderSignIn(provider = true) {
 const meta = {
   trustDomain: "wardyn.local", identityProvider: "embedded", principal: "admin-token", email: "", name: "",
   method: "token", resolved: true, identityResolved: true, operator: true, securityOperator: true, role: "admin",
+  userViewTypes: [],
 } as unknown as ShellMeta;
 
 function renderTopBar(provider = true) {
