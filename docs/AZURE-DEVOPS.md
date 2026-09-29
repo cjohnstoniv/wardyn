@@ -143,6 +143,16 @@ saved access profile — for example `["read", "code_write", "pr"]` for a contri
 ceiling: a run naming a capability outside it is refused at launch and granted nothing. See
 [POLICIES.md](POLICIES.md).
 
+**For a member, only what an admin granted stands.** When a member (or an admin in the user view)
+launches, the policy's list stands only where it is in this row's default profile or in the Azure
+DevOps list of the governance profile that applies to them (the default policy's list when none is
+assigned). That holds whether the list came inline, from a saved policy (assigned to them or not) or
+from a preset. Anything else the list names is not standing access: under `deny_with_review` the run
+asks for it mid-run and a person decides, and under `always_deny` it is refused. A narrower list is
+always honoured, so a member who picks `["read"]` gets exactly `read`. A list that leaves nothing
+they may hold refuses the launch with reason `ado_capabilities_none_permitted`; it never falls back
+to the default profile. An admin's own run keeps its policy's list, bounded by the ceiling alone.
+
 ## What a member sees
 
 Someone whose org path is served by an `entra` row signs in once — a redirect to Azure DevOps'

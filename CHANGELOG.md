@@ -371,6 +371,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   key it; a push that assigns them differently is held and asked about again. The control plane
   refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A stored
   request without `updates` still reads the same in the console and API, and matches no new push.
+- **A member's policy no longer gives them standing Azure DevOps access an admin did not grant.**
+  A member's `azure_devops_capabilities` (inline, a saved policy assigned to them or not, or a
+  preset) now stands only where it is in the provider row's `default_profile` or in their
+  governance profile's Azure DevOps list; the rest is asked for mid-run under `deny_with_review`
+  and refused under `always_deny`. Previously a saved policy could stand `pr` above the default
+  with no approval. A narrower choice is always honoured: `["read"]` under a `[read, code_write]`
+  default is exactly `read` (it used to fall back to the default). A choice that leaves nothing
+  permitted refuses the launch with reason `ado_capabilities_none_permitted`. An admin's own run is
+  unchanged.
 - **Azure DevOps `policy_bypass` means only a pull request completed with `bypassPolicy` (#1372).**
   A push or REST ref move outside the run's own `refs/heads/wardyn/<run-id>/` branch is now governed
   only by `git_push_any_branch`: off, it is refused whatever the run holds and is never held for an

@@ -11,43 +11,26 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// azure_devops_capabilities can widen a run past its row's default_profile, so
-// a proposal keeps only what the ceiling's own list names — and the clamped
-// spec owns its slice.
-func TestClamp_ADOCapabilities(t *testing.T) {
-	r, cw, pr, pa := adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR, adoscope.CapPolicyAdmin
-	ceiling := operatorCeiling(t)
-	ceiling.AzureDevOpsCapabilities = []adoscope.Capability{r, cw, pr}
-
-	proposed := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{r, pa, pr}}
-	got, warns := Clamp(proposed, ceiling, 0)
-	if !slices.Equal(got.AzureDevOpsCapabilities, []adoscope.Capability{r, pr}) {
-		t.Errorf("intersected = %v, want [read pr]", got.AzureDevOpsCapabilities)
-	}
-	if !hasWarn(warns, "policy_admin") {
-		t.Errorf("no warning names the dropped capability: %v", warns)
-	}
-	got.AzureDevOpsCapabilities[0] = pa
-	if proposed.AzureDevOpsCapabilities[0] != r || ceiling.AzureDevOpsCapabilities[0] != r {
-		t.Error("the clamped spec aliases an argument's slice")
-	}
-
-	// The ceiling's list is a bound, never a grant: nothing chosen, or nothing
-	// chosen inside it, leaves the field unset (the row's default_profile).
-	got, warns = Clamp(types.RunPolicySpec{}, ceiling, 0)
-	if got.AzureDevOpsCapabilities != nil || hasWarn(warns, "azure_devops") {
-		t.Errorf("unset proposal = %v (warns %v), want unset and no warning", got.AzureDevOpsCapabilities, warns)
-	}
-	got, warns = Clamp(types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{pa}}, ceiling, 0)
-	if got.AzureDevOpsCapabilities != nil || !hasWarn(warns, "azure_devops_capabilities dropped") {
-		t.Errorf("disjoint proposal = %v (warns %v), want unset with a warning", got.AzureDevOpsCapabilities, warns)
-	}
-	silent := operatorCeiling(t)
-	got, warns = Clamp(proposed, silent, 0)
-	if got.AzureDevOpsCapabilities != nil || !hasWarn(warns, "azure_devops_capabilities dropped") {
-		t.Errorf("silent ceiling: %v (warns %v), want the choice dropped with a warning", got.AzureDevOpsCapabilities, warns)
-	}
-	if _, warns := Clamp(types.RunPolicySpec{}, silent, 0); hasWarn(warns, "azure_devops") {
-		t.Errorf("nothing to clamp, yet warned: %v", warns)
+// azure_devops_capabilities is bounded at dispatch, where the row's
+// default_profile is known, so Clamp keeps a choice exactly as proposed — an
+// explicit list must not arrive at dispatch narrowed to nothing, which reads as
+// "use the default" — and the clamped spec owns its slice.
+func TestClamp_ADOCapabilitiesPassThrough(t *testing.T) {
+	r, pr, pa := adoscope.CapRead, adoscope.CapPR, adoscope.CapPolicyAdmin
+	for name, ceilingCaps := range map[string][]adoscope.Capability{"silent": nil, "disjoint": {pr}, "wider": {r, pr, pa}} {
+		ceiling := operatorCeiling(t)
+		ceiling.AzureDevOpsCapabilities = ceilingCaps
+		proposed := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{r, pa}}
+		got, warns := Clamp(proposed, ceiling, 0)
+		if !slices.Equal(got.AzureDevOpsCapabilities, proposed.AzureDevOpsCapabilities) || hasWarn(warns, "azure_devops") {
+			t.Errorf("%s ceiling: %v (warns %v), want the choice unchanged", name, got.AzureDevOpsCapabilities, warns)
+		}
+		got.AzureDevOpsCapabilities[0] = pr
+		if proposed.AzureDevOpsCapabilities[0] != r {
+			t.Errorf("%s ceiling: the clamped spec aliases the proposal's slice", name)
+		}
+		if got, _ := Clamp(types.RunPolicySpec{}, ceiling, 0); got.AzureDevOpsCapabilities != nil {
+			t.Errorf("%s ceiling: unset proposal = %v, want unset (never inherited)", name, got.AzureDevOpsCapabilities)
+		}
 	}
 }
