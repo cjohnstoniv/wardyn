@@ -109,7 +109,7 @@ func (e entraPeoplePG) callback(t *testing.T) (*httptest.ResponseRecorder, *http
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: "entra-nonce"})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: "v1"})
 	w := httptest.NewRecorder()
-	e.h.srv.Handler().ServeHTTP(w, r)
+	panicFails(t, e.h.srv.Handler()).ServeHTTP(w, r)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == "wardyn_session" && c.Value != "" {
 			return w, c
@@ -406,7 +406,7 @@ func TestPeopleEntra_ExchangeRecordsAttachOnlyWhenAdmitted(t *testing.T) {
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.SetBasicAuth(d.ID.String(), d.Credential)
 		w := httptest.NewRecorder()
-		e.h.srv.Handler().ServeHTTP(w, r)
+		panicFails(t, e.h.srv.Handler()).ServeHTTP(w, r)
 		return w.Code
 	}
 	if code := exchange("eng"); code != http.StatusForbidden || len(e.auditRows("person.attach")) != 0 {
