@@ -143,7 +143,7 @@ func certSubjects(pemBundle string) []string {
 // defaultPolicyMissingGatewayHosts returns publicHost -> gatewayHost for every
 // configured LLM gateway whose host is NOT covered by defaultPolicy's egress
 // (an exact allowed_domains entry, or allow_all_egress) — the operator must
-// add it, or ensureLLMGrant's coupled egress entry drops at the clamp and
+// add it, or an api_key grant's coupled egress entry drops at the clamp and
 // every run under that policy 404s on its first model call. Never refuses
 // boot: the default policy is not always the ceiling every run inherits (a
 // named policy_id may cover it instead), so this is advisory only.

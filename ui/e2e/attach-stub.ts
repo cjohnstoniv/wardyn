@@ -18,9 +18,10 @@
 // scripts/e2e-backend.sh's row_number->state map), but the create body never
 // sets `interactive` — so TerminalPane would otherwise render the autonomous
 // "Output" branch instead of AttachTerminal. stubInteractiveRun splices just
-// that one field onto the REAL response (route.fetch() + patch, runs.spec.ts's
-// own precedent) rather than editing the shared seed script: every other
-// field on the run (repo, created_by, task, the audit/approvals/layout reads
+// that one field onto the REAL response (route.fetch() + patch,
+// runs-header.spec.ts's and runs-detail.spec.ts's own precedent) rather than
+// editing the shared seed script: every other field on the run (repo,
+// created_by, task, the audit/approvals/layout reads
 // other widgets on the page make) still comes from the real backend, so this
 // stays scoped to this one spec file and touches no other spec's fixture.
 import type { BrowserContext, Page, WebSocketRoute } from "@playwright/test";

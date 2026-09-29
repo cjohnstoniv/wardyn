@@ -159,19 +159,18 @@ func shannonEntropy(s string) float64 {
 // maxFieldPathBytes bounds one Finding's FieldPath.
 //
 // TRUST BOUNDARY: the per-request findings cap bounds the NUMBER of
-// findings, not their SIZE, and a FieldPath is built out of AGENT-CONTROLLED
-// JSON keys — the scan budget counts span TEXT (values), so a body of
-// enormous KEYS burns neither limit (measured: a 324KB body of long-key
-// leaves produced a 46 MB findings JSON, 44x the control plane's body limit,
-// silently losing the decision). Bounding the path is what makes the
-// decision log bounded in BYTES, not only in rows. 256 is far beyond any
-// real field path and small enough that a full cap's worth of findings
-// cannot approach the control plane's body limit.
+// findings, not their SIZE, and FieldPath is built from AGENT-CONTROLLED
+// JSON keys — the scan budget only counts span TEXT (values), so huge KEYS
+// burn neither limit (measured: a 324KB body of long-key leaves produced a
+// 46 MB findings JSON, 44x the control plane's body limit, silently losing
+// the decision). Bounding the path keeps the decision log bounded in BYTES,
+// not only rows. 256 is far beyond any real field path yet small enough
+// that a full cap of findings can't approach the control plane's limit.
 const maxFieldPathBytes = 256
 
-// sanitizePath masks any well-known secret FORMAT appearing in a field path
-// so a Finding stays content-free by construction, and TRUNCATES it to
-// maxFieldPathBytes so one finding cannot be arbitrarily large. Masking runs
+// sanitizePath masks any well-known secret FORMAT in a field path so a
+// Finding stays content-free by construction, then TRUNCATES it to
+// maxFieldPathBytes so one finding can't be arbitrarily large. Masking runs
 // BEFORE truncation so a secret-shaped key is masked wherever it sits. The
 // head+tail form keeps both ends an operator navigates by and states the
 // original length. Idempotent.

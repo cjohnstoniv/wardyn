@@ -407,9 +407,11 @@ DEVICE_ID="$(org_api GET "/api/v1/admin/devices" >/dev/null; jq -r --arg n "${DE
 pass "enrolled — device_id=${DEVICE_ID}"
 
 # lag -> the laptop's own wardyn_org_federation_lag reading, or empty on any
-# failure to reach it (the caller decides what that means).
+# failure to reach it (the caller decides what that means). /metrics is
+# operator-gated (routes.go), so the scrape carries the laptop's admin token.
 lag() {
-  curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/metrics" 2>/dev/null | awk '/^wardyn_org_federation_lag /{print $2}'
+  curl -sf --max-time "${CURL_MAX_TIME}" -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/metrics" 2>/dev/null \
+    | awk '/^wardyn_org_federation_lag /{print $2}'
 }
 
 # accrue_local_rows N -> create and immediately kill N throwaway runs on the
@@ -509,7 +511,9 @@ step "waiting for the laptop's next tick to observe the revocation"
 revoked=""
 for _ in $(seq 1 30); do
   h="$(curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz" 2>/dev/null || true)"
-  [[ "$(jq -r '.org_federation.enrolled // empty' <<<"${h}")" == "false" ]] && { revoked=1; break; }
+  # Not `// empty` here: jq's alternative operator treats false as absent, so
+  # `.enrolled // empty` can never print "false".
+  [[ "$(jq -r '.org_federation.enrolled' <<<"${h}" 2>/dev/null)" == "false" ]] && { revoked=1; break; }
   sleep 2
 done
 [[ -n "${revoked}" ]] || { compose logs wardynd | tail -80; die "the laptop never reported org_federation.enrolled=false after revocation"; }

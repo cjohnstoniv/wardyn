@@ -4,24 +4,24 @@
 package proxy
 
 // The credential-injection host binding — the one policy question asked
-// without a port, by the one caller that has no port to offer (buildInjector,
-// inject.go). It lives beside the matcher rather than inside it: evalHost
-// decides what the sandbox may REACH, this decides where a secret the
-// sandbox never holds may be ATTACHED.
+// without a port, by the one caller that has no port to offer (buildInjector).
+// It lives beside the matcher rather than inside it: evalHost decides what
+// the sandbox may REACH, this decides where a secret the sandbox never holds
+// may be ATTACHED.
 
 // AllowedExactHost reports whether host is allowed via an EXACT allowlist
-// entry (not a wildcard, not approval). Credential injection requires this
-// stricter match so an injection rule can never widen egress nor leak a
-// secret to a wildcard-matched host.
+// entry (not a wildcard, not approval). SECURITY: credential injection
+// requires this stricter match so an injection rule can never widen egress
+// nor leak a secret to a wildcard-matched host.
 //
-// Port-less by contract: its one caller (buildInjector) holds a rule host and
-// no port, while the allowlist entry may be authored PORT-QUALIFIED
-// ("m.corp:443"). Reading only the port-less map would make the two
-// contradict and fail NewServer closed at boot on any estate with a
-// corporate artifact mirror, so this also consults allowedExactAnyPort: did
-// the operator author a port for this host that they did not also deny? At
-// least one surviving port means the credential has somewhere sanctioned to
-// go; none means every authored port was taken back in writing.
+// Port-less by contract: its caller holds a rule host and no port, while the
+// allowlist entry may be authored PORT-QUALIFIED ("m.corp:443"). Reading only
+// the port-less map would make the two contradict and fail NewServer closed
+// at boot on any estate with a corporate artifact mirror, so this also
+// consults allowedExactAnyPort: did the operator author a port for this host
+// that they did not also deny? At least one surviving port means the
+// credential has somewhere sanctioned to go; none means every authored port
+// was taken back in writing.
 func (p *Policy) AllowedExactHost(host string) bool {
 	if p == nil {
 		return false
@@ -37,10 +37,8 @@ func (p *Policy) AllowedExactHost(host string) bool {
 		if _, denied := p.deniedExactPort[hostPortKey(host, port)]; denied {
 			continue
 		}
-		// Also matches WILDCARD port-qualified denies (CompilePolicy routes
-		// "*.corp:8443" to deniedWildPort alone, invisible to the checks
-		// above), so a blanket wildcard deny can still cancel an authored
-		// port for this host.
+		// Also matches WILDCARD port-qualified denies (invisible to the checks
+		// above), so a blanket wildcard deny can still cancel an authored port.
 		if matchWildPort(host, port, p.deniedWildPort) {
 			continue
 		}
@@ -67,8 +65,7 @@ func (p *Policy) exactHostDenied(host string) bool {
 // port-qualified-only entry answers yes there. That's right for the BINDING,
 // but wrong for injectableTransport's port-80 arm, which needs an UNAUTHORED
 // port to read as consent: an operator who wrote "vendor.example:8443" DID
-// state a port, so silence about port 80 must not read as permission. That
-// arm asks this; every other port asks AuthoredPortFor.
+// state a port, so silence about port 80 must not read as permission.
 func (p *Policy) AllowedBareExactHost(host string) bool {
 	if p == nil {
 		return false

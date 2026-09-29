@@ -127,13 +127,13 @@ func (s *Server) handleCreateUserType(w http.ResponseWriter, r *http.Request) {
 	}
 	t, msg := userTypeFromRequest(req)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonUserTypeRequestInvalid, msg)
 		return
 	}
 	t.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.CreateUserType(r.Context(), t)
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict,
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeConflict,
 			fmt.Sprintf("A user type with the id %q or the name %q already exists.", t.ID, t.Name))
 		return
 	}
@@ -155,18 +155,18 @@ func (s *Server) handleUpdateUserType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ID != "" && strings.TrimSpace(req.ID) != id {
-		writeError(w, http.StatusBadRequest, "A user type's id can't be changed.")
+		writeErrorReason(w, http.StatusBadRequest, reasonUserTypeIDImmutable, "A user type's id can't be changed.")
 		return
 	}
 	req.ID = id
 	t, msg := userTypeFromRequest(req)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonUserTypeRequestInvalid, msg)
 		return
 	}
 	current, err := s.cfg.Store.GetUserType(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "User type not found.")
+		writeErrorReason(w, http.StatusNotFound, reasonUserTypeNotFound, "User type not found.")
 		return
 	}
 	if err != nil {
@@ -174,17 +174,17 @@ func (s *Server) handleUpdateUserType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if current.BuiltIn && t.Priority != 0 {
-		writeError(w, http.StatusBadRequest,
+		writeErrorReason(w, http.StatusBadRequest, reasonUserTypeBuiltInNoPriority,
 			fmt.Sprintf("%s never wins a tie against another type, so it has no priority.", current.Name))
 		return
 	}
 	saved, err := s.cfg.Store.UpdateUserType(r.Context(), t)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "User type not found.")
+		writeErrorReason(w, http.StatusNotFound, reasonUserTypeNotFound, "User type not found.")
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, fmt.Sprintf("Another user type is already named %q.", t.Name))
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeConflict, fmt.Sprintf("Another user type is already named %q.", t.Name))
 		return
 	}
 	if err != nil {
@@ -213,7 +213,7 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	t, err := s.cfg.Store.GetUserType(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "User type not found.")
+		writeErrorReason(w, http.StatusNotFound, reasonUserTypeNotFound, "User type not found.")
 		return
 	}
 	if err != nil {
@@ -221,7 +221,7 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.BuiltIn {
-		writeError(w, http.StatusConflict, fmt.Sprintf("%s can't be removed at all.", t.Name))
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeBuiltInImmutable, fmt.Sprintf("%s can't be removed at all.", t.Name))
 		return
 	}
 	var use userTypeInUse
@@ -240,16 +240,16 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if msg := use.refusal(); msg != "" {
-		writeError(w, http.StatusConflict, msg)
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeInUse, msg)
 		return
 	}
 	err = s.cfg.Store.DeleteUserType(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "User type not found.")
+		writeErrorReason(w, http.StatusNotFound, reasonUserTypeNotFound, "User type not found.")
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, "It can't be removed yet: something started naming it just now. Reload and try again.")
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeDeleteConflict, "It can't be removed yet: something started naming it just now. Reload and try again.")
 		return
 	}
 	if err != nil {

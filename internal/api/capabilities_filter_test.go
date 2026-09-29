@@ -128,11 +128,6 @@ func getJSON(t *testing.T, srv *Server, path string, cookie *http.Cookie) (strin
 	return w.Body.String(), m
 }
 
-var (
-	carrierIntegKept    = types.Integration{ID: "team-wiki", Name: "Team wiki", Kind: "artifactory"}
-	carrierIntegRefused = types.Integration{ID: "corp-vault", Name: "Corp vault", Kind: "artifactory"}
-)
-
 // TestListCarriersRefusedReadsAsAbsent is the no-oracle property for every
 // per-person list: a resource the caller may not use is indistinguishable from
 // one the deployment does not have. Each carrier is read in a world where the
@@ -143,25 +138,6 @@ func TestListCarriersRefusedReadsAsAbsent(t *testing.T) {
 	deny := func(kind, value string) []types.CapabilityGrant {
 		return []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", kind, value, types.CapabilityDeny)}
 	}
-
-	t.Run("integrations: GET /setup/status and GET /integrations", func(t *testing.T) {
-		present := types.SiteConfig{Integrations: []types.Integration{carrierIntegKept, carrierIntegRefused}}
-		absent := types.SiteConfig{Integrations: []types.Integration{carrierIntegKept}}
-		for _, path := range []string{"/api/v1/setup/status", "/api/v1/integrations"} {
-			refused, _ := getJSON(t, carrierServer(t, present, deny(capIntegration, carrierIntegRefused.ID), nil), path, memberCookie(t))
-			missing, _ := getJSON(t, carrierServer(t, absent, nil, nil), path, memberCookie(t))
-			if refused != missing {
-				t.Errorf("GET %s: a refused integration is distinguishable from an absent one\nrefused: %s\nabsent:  %s", path, refused, missing)
-			}
-			if strings.Contains(refused, carrierIntegRefused.ID) || strings.Contains(refused, carrierIntegRefused.Name) {
-				t.Errorf("GET %s names the refused integration: %s", path, refused)
-			}
-			allowed, _ := getJSON(t, carrierServer(t, present, nil, nil), path, memberCookie(t))
-			if !strings.Contains(allowed, carrierIntegRefused.ID) {
-				t.Errorf("GET %s hides an integration nothing refuses: %s", path, allowed)
-			}
-		}
-	})
 
 	t.Run("harnesses: GET /setup/status", func(t *testing.T) {
 		harnessIDs := func(srv *Server) []string {
@@ -213,12 +189,10 @@ func TestListCarriersRefusedReadsAsAbsent(t *testing.T) {
 
 	t.Run("an admin is exempt: the refused rows stay", func(t *testing.T) {
 		site := adoTestSiteConfig(false)
-		site.Integrations = []types.Integration{carrierIntegKept, carrierIntegRefused}
-		grants := slices.Concat(deny(capIntegration, carrierIntegRefused.ID), deny(capAgent, "codex-cli"),
-			deny(capWorkspaceProvider, scmTestRowID))
+		grants := slices.Concat(deny(capAgent, "codex-cli"), deny(capWorkspaceProvider, scmTestRowID))
 		admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 		body, _ := getJSON(t, carrierServer(t, site, grants, nil), "/api/v1/setup/status", admin)
-		for _, want := range []string{carrierIntegRefused.ID, `"id":"codex-cli"`, `"scm_access"`} {
+		for _, want := range []string{`"id":"codex-cli"`, `"scm_access"`} {
 			if !strings.Contains(body, want) {
 				t.Errorf("GET /setup/status as an admin dropped %s: %s", want, body)
 			}
@@ -229,11 +203,9 @@ func TestListCarriersRefusedReadsAsAbsent(t *testing.T) {
 // TestListCarriersFailClosed: when the grant tables cannot be read, a member's
 // lists come back empty — never unfiltered — and the page still answers 200.
 func TestListCarriersFailClosed(t *testing.T) {
-	site := adoTestSiteConfig(false)
-	site.Integrations = []types.Integration{carrierIntegKept}
-	srv := carrierServer(t, site, nil, errors.New("pg down"))
+	srv := carrierServer(t, adoTestSiteConfig(false), nil, errors.New("pg down"))
 	_, st := getJSON(t, srv, "/api/v1/setup/status", memberCookie(t))
-	for _, key := range []string{"harnesses", "integrations", "scm_access"} {
+	for _, key := range []string{"harnesses", "scm_access"} {
 		if raw, ok := st[key]; ok {
 			t.Errorf("GET /setup/status on an unreadable grant table carries %s = %s, want it omitted", key, raw)
 		}
@@ -250,6 +222,7 @@ var capKindsGolden = map[int]string{
 	1: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing",
 	2: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing,model_provider:narrowing",
 	3: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing,model_provider:narrowing,feature:narrowing,policy:narrowing",
+	4: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,workspace_provider:narrowing,model_provider:narrowing,feature:narrowing,policy:narrowing",
 }
 
 // TestCapKindsVersionPinsTheTable fails on a kind-table change that does not

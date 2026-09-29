@@ -267,7 +267,7 @@ func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ap, err := s.cfg.Approvals.Get(r.Context(), id)
-	if notFoundIf(w, err, "approval") {
+	if notFoundIf(w, err, "approval", reasonApprovalNotFound) {
 		return
 	}
 	if err != nil {
@@ -275,10 +275,12 @@ func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !s.ownsRunOrAdmin(r, run) {
-		// #656: deliberately still a bare writeError — TestPushPathListRouteVisibility pins this
-		// 404 byte-identical to notFoundIf's (above) bare 404 for a genuinely missing approval, so
-		// a foreign approval and a missing one stay indistinguishable (no existence oracle).
-		writeError(w, http.StatusNotFound, "approval not found")
+		// #656 slice 3: the SAME reasonApprovalNotFound notFoundIf's own 404
+		// above carries — TestPushPathListRouteVisibility pins this 404
+		// byte-identical to notFoundIf's for a genuinely missing approval, so
+		// a foreign approval and a missing one stay indistinguishable (no
+		// existence oracle), reason included.
+		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return
 	}
 	if ap.Kind != types.ApprovalPushContent {

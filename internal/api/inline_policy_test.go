@@ -231,8 +231,9 @@ func TestFilterMemberGrants(t *testing.T) {
 		t.Fatalf("exfil pairing: kept=%d warns=%d, want (0 kept, 1 warn)", len(kept), len(warns))
 	}
 	// The run's OWN model-access grant (real provider key) is likewise dropped
-	// under a wildcard ceiling - that is fine, ensureLLMGrant re-adds it after
-	// resolveRunPolicy returns (see TestCreateRun_MemberInlineGrantExfilDropped).
+	// under a wildcard ceiling - that is fine, the run's model provider supplies
+	// its own after resolveRunPolicy returns (see
+	// TestCreateRun_MemberInlineGrantExfilDropped).
 	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{apiKey("api.anthropic.com", "anthropic-api-key")}); len(kept) != 0 {
 		t.Fatalf("real-key LLM grant under wildcard ceiling: kept=%d, want 0 (dropped, re-folded downstream)", len(kept))
 	}
@@ -916,26 +917,17 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 	}
 }
 
-// TestIntegrations_MemberKeySynthesisesRow_NoWarning: a member's own
-// anthropic-api-key secret, with NO operator row of that name at all,
-// synthesises the legacy anthropic_api_key integration row and provisions
-// model access with no "no model access" warning — proven at the unit level
-// AND through the real POST /api/v1/runs handler (handleCreateRun), which
-// must consult presentSecretNamesFor like preflight does, not the
-// operator-only presentSecretNames. The negative control (same request,
-// member owns nothing) proves the warning still fires — member presence
-// widens what counts, it does not silence the check.
-func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
+// TestMemberOwnKeyGrant_NoWarning: a member's own anthropic-api-key secret,
+// named by an api_key grant the member hand-authored on their inline policy,
+// provisions model access with no "no model access" warning — proven at the
+// unit level AND through the real POST /api/v1/runs handler (handleCreateRun),
+// which must consult presentSecretNamesFor like preflight does, not the
+// operator-only presentSecretNames. The negative control (same request, member
+// owns nothing) proves the warning still fires — member presence widens what
+// counts, it does not silence the check.
+func TestMemberOwnKeyGrant_NoWarning(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}
-
-	integ, ok := h.srv.resolveIntegrationRef(context.Background(), "bob", "anthropic_api_key")
-	if !ok {
-		t.Fatal("member's own anthropic-api-key must synthesise the legacy anthropic_api_key row")
-	}
-	if !types.AIProviderKind(integ.Kind) {
-		t.Fatalf("synthesised row kind = %q, not an AI-provider kind", integ.Kind)
-	}
 
 	present := h.srv.presentSecretNamesFor(context.Background(), "bob")
 	if !present["anthropic-api-key"] {
@@ -996,79 +988,5 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 	// (filterUserGrants: ownership unproven) and the warning must still fire.
 	if warns := createRun(&memSecrets{}); !slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
 		t.Fatalf("member owning nothing must still get the no-model-access warning, got: %v", warns)
-	}
-}
-
-// TestIntegrations_MemberList_OwnKeyListed: GET /integrations lists the
-// member's own synthesised anthropic_api_key row (the list and the run's
-// resolve read the SAME owner-scoped presence map); a member owning nothing
-// sees no such row — the negative control.
-func TestIntegrations_MemberList_OwnKeyListed(t *testing.T) {
-	h := newHarness(t)
-	list := func(secrets *memSecrets) string {
-		t.Helper()
-		st := &runWarnStore{capStore: &capStore{}}
-		cfg := baseTestConfig(h, st)
-		cfg.OIDC = &oidc.Authenticator{}
-		cfg.Secrets = secrets
-		srv := New(cfg)
-		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("list = %d, want 200: %s", w.Code, w.Body.String())
-		}
-		return w.Body.String()
-	}
-	if body := list(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}); !strings.Contains(body, `"anthropic_api_key"`) {
-		t.Fatalf("member's own key must list as the synthesised anthropic_api_key row, got: %s", body)
-	}
-	if body := list(&memSecrets{}); strings.Contains(body, `"anthropic_api_key"`) {
-		t.Fatalf("a member owning nothing must not see an anthropic_api_key row, got: %s", body)
-	}
-}
-
-// TestIntegrations_MemberSelectsOwnKey_NoWarning: the "Model access" lane a
-// member is told to use (USERS.md "Your model key") — POST /runs with
-// integration_id "anthropic_api_key" and NO hand-authored grant — folds the
-// member's own key when the operator holds no row of that name, so the run
-// has model access and no warning fires. Negative control: the same request
-// from a member who owns nothing warns.
-func TestIntegrations_MemberSelectsOwnKey_NoWarning(t *testing.T) {
-	h := newHarness(t)
-	const body = `{"agent":"claude-code","task":"t","integration_id":"anthropic_api_key"}`
-	const noModelAccessSubstr = "no model credential resolves"
-	createRun := func(secrets *memSecrets) *httptest.ResponseRecorder {
-		t.Helper()
-		st := &runWarnStore{capStore: &capStore{}}
-		cfg := baseTestConfig(h, st)
-		cfg.OIDC = &oidc.Authenticator{}
-		cfg.Secrets = secrets
-		// No grant in the ceiling at all: the integration fold is what authors
-		// the api_key grant, post-clamp, from the selected row.
-		cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
-		srv := New(cfg)
-		return doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), body)
-	}
-	w := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}})
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
-	}
-	var got createRunResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
-	}
-	if slices.ContainsFunc(got.Warnings, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
-		t.Fatalf("selecting the synthesised anthropic_api_key row must fold the member's own key with no warning, got: %v", got.Warnings)
-	}
-	// Negative control: a member owning nothing (and no operator row) has no
-	// anthropic_api_key row to select at all — the eager integration_id check
-	// refuses the request outright, the same 400 a typo gets.
-	w = createRun(&memSecrets{})
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "does not name an AI provider integration") {
-		t.Fatalf("a member owning nothing must be refused by the eager integration_id check; got %d: %s", w.Code, w.Body.String())
-	}
-	if got := errorReason(w); got != reasonIntegrationNotAIProvider {
-		t.Errorf("reason = %q, want %q; body=%s", got, reasonIntegrationNotAIProvider, w.Body.String())
 	}
 }

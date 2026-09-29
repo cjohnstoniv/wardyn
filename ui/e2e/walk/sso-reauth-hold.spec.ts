@@ -18,18 +18,19 @@
  * the walk's injection "rides the cleartext lane" and that the production path
  * is "proven by the docker-gated test, whose fake serves TLS". Both are false.
  * The SDK CONNECTs, so the walk exercises the MITM lane — terminate, strip,
- * inject, re-originate — and `test/awsssofake` serves PLAIN HTTP
- * (`httptest.NewServer`); the docker-gated tests point the agent straight at it
- * with no proxy at all, deliberately, because what they measure is the SDK's
- * patience. Nothing in them touches mitm.go.
+ * inject, re-originate. The docker-gated tests point the agent straight at an
+ * in-process plain-HTTP fake with no proxy at all, deliberately, because what
+ * they measure is the SDK's patience. Nothing in them touches mitm.go.
  *
- * Nothing here is simulated: the SDK speaks plain HTTP inside its CONNECT tunnel,
- * the proxy terminates it (peeking the first byte — no TLS handshake for this
- * client), strips the placeholder, injects the session and re-originates in the
- * entry's scheme, and the hold's own sentence reaches the SDK. That path is
- * pinned by internal/egress/proxy's TestMITMConnect_PlaintextClientInsideTheTunnelIsServed,
+ * Nothing here is simulated. Since #703 the walk's fake serves HTTPS under a
+ * throwaway CA the walk installs as the chart's trustedCA, so the SDK speaks TLS
+ * inside its CONNECT tunnel, the proxy terminates it with the run's own CA,
+ * strips the placeholder, injects the session and re-originates over TLS to
+ * the fake, and the hold's own sentence reaches the SDK. The plaintext-client
+ * shape the walk ran before stays pinned by internal/egress/proxy's
+ * TestMITMConnect_PlaintextClientInsideTheTunnelIsServed,
  * TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks and
- * TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames — and by this walk, end to end.
+ * TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames.
  *
  * What IS real here, and is proven nowhere else: a real member, a real k8s
  * sandbox, a real agent process, a real session retired at the portal mid-run,
@@ -114,13 +115,18 @@ async function setReauthAfter(n: number): Promise<void> {
         `set -e
          kubectl --context ${KUBE_CONTEXT} -n ${KUBE_RELEASE_NAMESPACE} port-forward svc/${KUBE_FAKE} ${CONTROL_PORT}:8090 >/dev/null 2>&1 &
          PF=$!; trap "kill $PF 2>/dev/null" EXIT
-         for _ in $(seq 1 30); do curl -sf http://127.0.0.1:${CONTROL_PORT}/_seen >/dev/null 2>&1 && break; sleep 1; done
-         curl -sf -X POST "http://127.0.0.1:${CONTROL_PORT}/_control/reauth?after=${n}" >/dev/null`,
+         for _ in $(seq 1 30); do curl -sf ${FAKE_CURL_TLS} ${FAKE_SCHEME}//127.0.0.1:${CONTROL_PORT}/_seen >/dev/null 2>&1 && break; sleep 1; done
+         curl -sf ${FAKE_CURL_TLS} -X POST "${FAKE_SCHEME}//127.0.0.1:${CONTROL_PORT}/_control/reauth?after=${n}" >/dev/null`,
       ],
       { encoding: "utf8", stdio: "pipe" },
     );
   }
 }
+
+/** The fake's scheme is the walk's (HTTPS under its throwaway CA since #703),
+ *  read off SEEN_URL so this forward speaks what the fake serves. */
+const FAKE_SCHEME = new URL(SEEN_URL).protocol;
+const FAKE_CURL_TLS = process.env.WARDYN_WALK_FAKE_CA ? `--cacert ${process.env.WARDYN_WALK_FAKE_CA}` : "";
 
 /** A port for this file's own short-lived forwards — never the walk's 8390. */
 const CONTROL_PORT = process.env.WARDYN_WALK_FAKE_CONTROL_PORT || "8399";
@@ -265,7 +271,11 @@ async function openAdminLoginPane(page: Page): Promise<void> {
   }).toPass({ timeout: 90_000 });
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  // Wait for the dialog to show its Start button or its steps before choosing:
+  // isVisible() does not wait, and a dialog still mounting reads as "no Start
+  // button" and leaves the sign-in unstarted (helpers.ts's openLoginPane).
   const start = page.getByRole("button", { name: "Start login" });
+  await expect(start.or(page.getByTestId("signin-progress").first()).first()).toBeVisible({ timeout: 60_000 });
   if (await start.isVisible().catch(() => false)) await start.click();
 }
 

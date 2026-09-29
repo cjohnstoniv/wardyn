@@ -12,21 +12,19 @@ import (
 )
 
 // Request is ONE candidate Azure DevOps request, as much of it as a classifier
-// can be given without buffering the whole body. It is a struct rather than a
+// can be given without buffering the whole body. A struct rather than a
 // parameter list because Org and RefProtected are properties of the row and
-// the run, not of the request, and neither can be guessed from the bytes.
+// run, not of the request, and neither can be guessed from the bytes.
 type Request struct {
 	// Method is the HTTP method as it arrived on the request line. An
 	// override header may RAISE it — see Classify.
 	Method string
 	// Host is the request's host WITHOUT a port.
 	Host string
-	// Path is the request's path, still percent-encoded and WITHOUT the query
-	// string.
+	// Path is the request's path, still percent-encoded and WITHOUT the query string.
 	Path string
-	// Header is the request's headers. May be nil. Keys are compared
-	// case-insensitively, so wire-spelling vs. canonicalised map keys read
-	// the same way.
+	// Header may be nil. Keys are compared case-insensitively, so
+	// wire-spelling vs. canonicalised map keys read the same way.
 	Header http.Header
 	// BodyPeek is the first MaxBodyPeek bytes of the body, or nil. A route
 	// that needs the body and cannot see all of it is REFUSED, never
@@ -36,14 +34,13 @@ type Request struct {
 	// request is refused.
 	Org string
 	// RefProtected answers whether one ref is covered by a branch policy,
-	// given the ref name exactly as the request body spelled it (the full
-	// name, e.g. "refs/heads/main"). Optional — when nil, a ref move
-	// classifies as CapCodeWrite and the caller gets the ref names in
-	// Verdict.Refs to re-decide against its own cache.
+	// given the full ref name as the request body spelled it. Optional — when
+	// nil, a ref move classifies as CapCodeWrite and the caller gets the ref
+	// names in Verdict.Refs to re-decide against its own cache.
 	RefProtected func(ref string) bool
 	// BodyWithheld marks a request whose body the caller has not read. A
-	// route whose classification reads the body fails with ErrNeedsBody
-	// instead, and the caller peeks and asks again.
+	// route classified by the body fails with ErrNeedsBody instead, and the
+	// caller peeks and asks again.
 	BodyWithheld bool
 }
 
@@ -70,13 +67,12 @@ var writeMethods = []string{http.MethodPost, http.MethodPut, http.MethodPatch, h
 // only where no capability could be honest: a non-Azure-DevOps host, a
 // mismatched organisation, an obscured path, an undocumented method
 // override, a git-over-HTTP endpoint, or a body the peek cannot see whole.
-// Everything else classifies, and an unrecognized write classifies as
-// CapUnclassifiedWrite, which is not grantable.
+// Everything else classifies, and an unrecognized write classifies as the
+// non-grantable CapUnclassifiedWrite.
 //
 // GIT-OVER-HTTP IS OUT OF SCOPE and refused by name: the ref names a push
 // carries live in a pack protocol this catalogue does not parse, so no
-// answer here could tell a clone from a push onto a protected branch. The
-// transport is gated on its own.
+// answer here could tell a clone from a push onto a protected branch.
 func Classify(req Request) (Verdict, error) {
 	method, err := effectiveMethod(req.Method, req.Header)
 	if err != nil {
@@ -109,12 +105,11 @@ func Classify(req Request) (Verdict, error) {
 }
 
 // locationDiscovery classifies an OPTIONS request: the SDKs' API
-// location-discovery call. It returns route templates, not data, and needs
-// no scope. Admitted on exactly the discovery shapes (API root, or one
-// area's location at org/project level); otherwise an unclassified read. Any
-// area name is accepted, including ones readAreas does not list, because
-// OPTIONS cannot carry a write — a body and every override header are
-// refused before routing.
+// location-discovery call. Returns route templates, not data, and needs no
+// scope. Admitted only on discovery shapes (API root, or one area's location
+// at org/project level); otherwise an unclassified read. Any area name is
+// accepted, including ones readAreas doesn't list, because OPTIONS can't
+// carry a write — a body and every override header are refused before routing.
 func locationDiscovery(r route) Verdict {
 	if (r.apis == 0 || r.apis == 1) && r.at(2) == "" {
 		return Verdict{Capability: CapRead}
@@ -147,10 +142,9 @@ func optionsCarriesNoBody(req Request) error {
 
 // readAreas is EVERY area this catalogue answers CapRead for, with the scope
 // a token must carry to perform that read. An empty scope is an area the
-// service does not scope-gate at all. A key "area/resource" is a resource
-// whose read scope differs from its area's. It is a CLOSED table: a read
-// outside it is CapUnclassifiedRead (not grantable) rather than 403ing at
-// the forge.
+// service doesn't scope-gate at all. A key "area/resource" is a resource
+// whose read scope differs from its area's. CLOSED table: a read outside it
+// is CapUnclassifiedRead (not grantable) rather than 403ing at the forge.
 var readAreas = map[string]string{
 	"git": "vso.code", "policy": "vso.code", "search": "vso.code",
 	"wit": "vso.work", "work": "vso.work",
@@ -188,13 +182,13 @@ func readScope(r route) (string, bool) {
 	return s, ok
 }
 
-// effectiveMethod is the method the SERVER will act on, which is not always
-// the one on the request line: Azure DevOps honours X-HTTP-Method-Override,
-// so a POST carrying `X-HTTP-Method-Override: PATCH` is a PATCH.
+// effectiveMethod is the method the SERVER will act on, not always the one on
+// the request line: Azure DevOps honours X-HTTP-Method-Override, so a POST
+// carrying `X-HTTP-Method-Override: PATCH` is a PATCH.
 //
-// AN OVERRIDE MAY ONLY RAISE: on a POST it must name a write, and anything
-// else is refused rather than ignored — otherwise a POSTed push could
-// classify as a READ on the word of a header the caller controls.
+// AN OVERRIDE MAY ONLY RAISE: on a POST it must name a write, refused rather
+// than ignored otherwise — a POSTed push must not classify as a READ on the
+// word of a header the caller controls.
 func effectiveMethod(method string, h http.Header) (string, error) {
 	base := strings.ToUpper(strings.TrimSpace(method))
 	if !knownMethod(base) {
@@ -211,12 +205,12 @@ func effectiveMethod(method string, h http.Header) (string, error) {
 	switch {
 	case base == http.MethodOptions:
 		// OPTIONS is a read precisely because nothing can ride on it, so any
-		// override is refused outright rather than weighed.
+		// override is refused outright.
 		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override on an OPTIONS request — discovery takes no override")
 	case !knownMethod(over):
 		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q is not an HTTP method", ov[0])
 	case base != http.MethodPost:
-		// Off a POST the header is undocumented. An override naming the
+		// Off a POST the header is undocumented: an override naming the
 		// method already on the line, or a read, is IGNORED; one that would
 		// turn this into a DIFFERENT write is refused.
 		if over == base || slices.Contains(readMethods, over) {
@@ -229,9 +223,8 @@ func effectiveMethod(method string, h http.Header) (string, error) {
 	return over, nil
 }
 
-// headerValues is h's values for name, matched CASE-INSENSITIVELY against the
-// map's own keys — http.Header.Values canonicalises the key it is given but
-// not keys already in the map, which would hide a non-canonical spelling.
+// headerValues is h's values for name, matched CASE-INSENSITIVELY — Header.Values
+// canonicalises the key given but not keys already in the map, hiding a non-canonical spelling.
 func headerValues(h http.Header, name string) []string {
 	var out []string
 	for k, v := range h {
@@ -243,8 +236,7 @@ func headerValues(h http.Header, name string) []string {
 }
 
 // knownMethod reports whether m is a method this catalogue has an opinion
-// about. TRACE and CONNECT are deliberately absent: neither is an Azure DevOps
-// API call, so neither has a capability.
+// about. TRACE and CONNECT are deliberately absent: neither is an Azure DevOps API call.
 func knownMethod(m string) bool {
 	return slices.Contains(readMethods, m) || slices.Contains(writeMethods, m)
 }
@@ -264,10 +256,9 @@ type route struct {
 }
 
 // at is the segment n positions after _apis — at(1) is the area, at(2) the
-// resource, at(3) the resource's id, and so on — or "". EVERY route rule
-// indexes through this rather than searching the segments: a repository is
-// named by whoever created it, so searching would let a repository called
-// "items" make its deletion read as a code write.
+// resource, and so on — or "". EVERY route rule indexes through this rather
+// than searching segments: a repository named "items" by its creator must
+// not make its deletion read as a code write.
 func (r route) at(n int) string {
 	if r.apis < 0 {
 		return ""
@@ -279,11 +270,10 @@ func (r route) at(n int) string {
 }
 
 // parseRoute decodes path, pins it to org, and splits it at _apis. Decoding
-// refuses rather than resolves three things: percent-encoding that hides the
-// structure, a segment that decodes to contain a separator, and a "." or
-// ".." segment (Azure DevOps resolves these server-side, so refusing is
-// simpler and safer than RFC 3986 resolution). "Segment" splits on "\\" as
-// well as "/" — see isPathSeparator — since the service routes both.
+// refuses rather than resolves three things: percent-encoding that hides
+// structure, a segment decoding to contain a separator, and a "." or ".."
+// segment (Azure DevOps resolves these server-side; refusing is simpler and
+// safer than RFC 3986 resolution). "Segment" also splits on "\\" (isPathSeparator).
 func parseRoute(host, rawPath, org string) (route, error) {
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if !azureDevOpsHost(h) {
@@ -309,7 +299,7 @@ func parseRoute(host, rawPath, org string) (route, error) {
 // azureDevOpsHost reports whether h is one of the hosts that accept Entra
 // tokens: dev.azure.com and its service subdomains, or a legacy
 // <org>.visualstudio.com. An Azure DevOps Server host is absent on purpose —
-// it does not accept Entra tokens at all.
+// it doesn't accept Entra tokens at all.
 func azureDevOpsHost(h string) bool {
 	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") ||
 		strings.HasSuffix(h, ".visualstudio.com")
@@ -323,8 +313,7 @@ func isPathSeparator(c rune) bool { return c == '/' || c == '\\' }
 
 // decodeSegments splits rawPath into decoded, lowercased, non-empty segments,
 // refusing the shapes parseRoute documents. Each segment is decoded by
-// UnescapeName (names.go), the one rule every door that reads an Azure
-// DevOps name shares.
+// UnescapeName (names.go), shared by every door that reads an Azure DevOps name.
 func decodeSegments(rawPath string) ([]string, error) {
 	var out []string
 	for _, raw := range strings.FieldsFunc(rawPath, isPathSeparator) {
@@ -369,9 +358,9 @@ func splitAtAPIs(host string, segs []string) route {
 }
 
 // deniedAreas is the area -> refusal table, refused for EVERY method,
-// including reads. The token family is deliberately WIDE: a lane that can
-// obtain a second credential (session-token, delegated-auth, web-platform-auth,
-// not just the documented PAT door) is a lane that can leave the lane.
+// including reads. SECURITY: the token family is deliberately WIDE — a lane
+// that can obtain a second credential (session-token, delegated-auth,
+// web-platform-auth, not just the documented PAT door) is a lane that can leave the lane.
 var deniedAreas = map[string]Capability{
 	"tokens":              CapDeniedTokens,
 	"token":               CapDeniedTokens,
@@ -388,10 +377,10 @@ var deniedAreas = map[string]Capability{
 }
 
 // readWrite reports whether r is one of the POSTs that only READ. Azure
-// DevOps uses POST for queries whose input is too big for a query string, so
+// DevOps uses POST for queries whose input is too big for a query string;
 // treating method as intent would charge a work-item query the same
-// capability as an edit. The list is closed, short and POSITIONAL: every
-// entry is a documented query endpoint matched where the route puts it.
+// capability as an edit. Closed, short, and POSITIONAL: every entry is a
+// documented query endpoint matched where the route puts it.
 func readWrite(r route) bool {
 	switch r.area {
 	case "wit":
@@ -407,9 +396,9 @@ func readWrite(r route) bool {
 	return false
 }
 
-// classifyWrite names the capability a write needs, by area. The DEFAULT is
-// CapUnclassifiedWrite: a new Azure DevOps area is refused until someone
-// adds it here, rather than inheriting whatever the nearest area was granted.
+// classifyWrite names the capability a write needs, by area. DEFAULT is
+// CapUnclassifiedWrite: a new area is refused until someone adds it here,
+// rather than inheriting whatever the nearest area was granted.
 func classifyWrite(method string, r route, req Request) (Verdict, error) {
 	if packagePublish(r) {
 		return Verdict{Capability: CapPackagingWrite}, nil
@@ -477,11 +466,10 @@ var gitCodeWriteResources = []string{
 // read out of the body; held to policy_bypass like every other REST ref move.
 var gitRefMoveResources = []string{"annotatedtags", "forksyncrequests"}
 
-// gitWrite is the git area, which carries four different capabilities behind
-// one scope: the repository object (CapRepoAdmin), its policies
-// (CapPolicyAdmin), its pull requests (CapPR) and its refs (CapCodeWrite or
-// CapPolicyBypass, decided by the body). The split is POSITIONAL, since one
-// of the segments is a repository name the caller chose.
+// gitWrite is the git area, carrying four capabilities behind one scope: the
+// repository object (CapRepoAdmin), its policies (CapPolicyAdmin), its pull
+// requests (CapPR), and its refs (CapCodeWrite or CapPolicyBypass, decided by
+// the body). POSITIONAL split, since one segment is a caller-chosen repository name.
 func gitWrite(method string, r route, req Request) (Verdict, error) {
 	switch r.res {
 	case "repositories":

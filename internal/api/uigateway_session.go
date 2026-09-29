@@ -61,15 +61,14 @@ const (
 	uiSessionUnverifiableMsg = "could not verify this UI session; try again"
 )
 
-// The ui.authorize/denied `reason` values a refused re-check writes. Not DRAFT
-// strings: they are audit DATA, read by a SIEM rule, never rendered to a human
-// — so they are stable identifiers rather than copy.
-const (
-	uiDeniedReasonNotAuthorized         = "not_authorized"
-	uiDeniedReasonRevoked               = "revoked"
-	uiDeniedReasonRevocationUnavailable = "revocation_unavailable"
-	uiDeniedReasonRunUnreadable         = "run_unreadable"
-)
+// The ui.authorize/denied `reason` values a refused re-check writes are
+// declared in reasons_routes.go (uiDeniedReasonNotAuthorized/Revoked/
+// RevocationUnavailable — #656 review round: the docs guard only reads the
+// two reasons files), not here — they are audit DATA, read by a SIEM rule,
+// never rendered to a human, so they are stable identifiers rather than
+// copy. The fourth member of this same closed set, "run row unreadable",
+// reuses reasonRunUnreadable (reasons.go) directly below: the identical
+// cause slice 1's credential-injection lanes already named.
 
 // uiReassertInterval is how often a relay session riding an ALREADY-OPEN
 // connection is re-checked. uiDial re-checks per new connection, but net/http
@@ -297,7 +296,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.authorize", sess.App, "denied",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
 	}
-	return &uiDialError{status: status, msg: msg}
+	return &uiDialError{status: status, reason: reason, msg: msg}
 }
 
 // uiReassertRelay is the REQUEST-path half of the re-check, and it exists
@@ -323,7 +322,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 		// Fail CLOSED, for the same reason the revocation arm does: "the check
 		// could not run" must never resolve to "carry on". Retryable, so 503.
 		slog.ErrorContext(ctx, "wardynd: ui gateway re-assert could not load the run", "run_id", sess.Run, "err", err)
-		return s.uiDenyReassert(sess, uiDeniedReasonRunUnreadable,
+		return s.uiDenyReassert(sess, reasonRunUnreadable,
 			http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {

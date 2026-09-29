@@ -89,7 +89,7 @@ func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host 
 	// carries proxy-side bearer injection too, and this guard consulted the
 	// anthropic/openai-only predicate, so a workspace-bricking deny·always on it
 	// was accepted.
-	if s.isModelProviderRejectHost(ctx, ws, host) {
+	if s.isModelProviderRejectHost(ctx, host) {
 		return "deny always on " + host + " would permanently break model access for this workspace: " +
 			"proxy-side credential injection refuses a denied host" + caveat
 	}

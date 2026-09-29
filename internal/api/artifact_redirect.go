@@ -256,11 +256,9 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// row would swap an artifact token onto model traffic. isModelProviderRejectHost,
 		// NOT isModelProviderHost: the Bedrock hosts (and WARDYN_BEDROCK_BASE_URL)
 		// carry proxy-side bearer injection too (resolveBedrockAuth), so they are the
-		// SAME collision. A ZERO types.Workspace is deliberate: this plan is composed
-		// before resolveLLMTransport, and a run can reference several workspaces
-		// (run.WorkspaceIDs), so only the daemon-wide BedrockRegion pair is decidable
-		// here; bedrockLaneHosts' per-workspace half is not exercised at this site.
-		if s.isModelProviderRejectHost(ctx, types.Workspace{}, host) {
+		// SAME collision, as is every model provider row's own host
+		// (modelServingHosts).
+		if s.modelServingHosts(sc)(host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,

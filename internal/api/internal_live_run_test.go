@@ -109,6 +109,27 @@ func TestInternalAuth_TerminalRunIsRefusedAtEveryDoor(t *testing.T) {
 	}
 }
 
+// TestInternalAuth_RenewRunNotFoundReasonIsPinned covers renew's own GetRun
+// call, exempt from refuseTerminalRun's earlier gate, on a run token
+// store.GetRun cannot find at all. Asserts the LITERAL wire value, not the Go
+// const, so a rename of reasonRunNotFound without updating docs/sdk.md fails
+// here too.
+func TestInternalAuth_RenewRunNotFoundReasonIsPinned(t *testing.T) {
+	h := newHarness(t)
+	knownRunID, missingRunID := uuid.New(), uuid.New()
+	cfg := baseTestConfig(h, terminalRunStore{runID: knownRunID, state: types.RunRunning})
+	srv := New(cfg)
+	tok := h.mintRunToken(t, missingRunID)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/token/renew", tok, "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %s)", w.Code, w.Body.String())
+	}
+	if got := errorReason(w); got != "run_not_found" {
+		t.Errorf("reason = %q, want the literal %q", got, "run_not_found")
+	}
+}
+
 // TestInternalAuth_TailUploadsLandInsideTheGrace is the asserted exemption.
 // wardyn-rec, wardyn-scan and wardyn-aws-sso all PUT their artifact as the run
 // finishes, racing the completion watcher that flips the state — so a gate with

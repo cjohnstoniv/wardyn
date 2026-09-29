@@ -152,7 +152,7 @@ func (s *Server) lockLoginSupersede(ctx context.Context, actor string, runID uui
 // A person who cannot reach their own sign-in because a store read failed is
 // worse off than one whose stale sandbox outlives the retry, and the capture PUT
 // has its own belt: handleUploadSSOToken refuses a KILLED run
-// (refuseReasonRunKilled), because /internal/sso-token/ stays usable by a
+// (reasonCaptureRunKilled), because /internal/sso-token/ stays usable by a
 // terminal run for five minutes and RevokeRun is best-effort. Failures are
 // logged and audited (the run.kill row carries the failing step) rather than
 // propagated.

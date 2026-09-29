@@ -18,28 +18,21 @@ import (
 // straight through untouched, only losing the per-key tolerance.
 const maxTolerableJWKSBytes = 1 << 20
 
-// tolerantJWKSTransport makes ONE JWKS entry that this JOSE stack cannot parse
-// a skipped key instead of a total SSO outage: go-oidc hands the whole document
-// to jose.JSONWebKeySet.UnmarshalJSON, which is all-or-nothing, so one bad entry
-// (e.g. a malformed Ed25519 key, since go-jose v4.1.5 correctly rejects those
-// instead of silently zero-padding them) locks every user out over a key Wardyn
-// never needed.
-//
-// The fix sanitises only the DOCUMENT: it unmarshals each entry with the same
-// jose.JSONWebKey.UnmarshalJSON go-oidc would use and drops the ones that call
-// rejects. Key selection, algorithm checks and verification stay untouched in
-// go-oidc/go-jose, so this can only make surviving keys still work, never admit
-// a signature that would otherwise be refused. Surviving entries are re-emitted
-// VERBATIM (json.RawMessage) so nothing is lost to a re-marshal round trip.
+// tolerantJWKSTransport turns one unparseable JWKS entry into a skipped key
+// instead of a total SSO outage: go-oidc's UnmarshalJSON is all-or-nothing, so
+// one bad key (e.g. a malformed Ed25519 entry, which go-jose v4.1.5 now
+// correctly rejects) would lock out every user over a key Wardyn never needed.
+// This sanitises only the document, using the same per-entry decode go-oidc
+// would use, so verification itself is untouched: it can only keep a key
+// working, never admit a signature that would otherwise be refused. Surviving
+// entries are re-emitted VERBATIM (json.RawMessage) to avoid remarshal loss.
 type tolerantJWKSTransport struct {
 	base http.RoundTripper
 }
 
-// RoundTrip fetches through base and, when the answer is a readable JWK Set,
-// returns it with the unparseable entries removed. Every early return hands
-// back the response UNCHANGED, so any shape this function is unsure about
-// (non-200, oversized body, no "keys" member, non-JSON body) behaves exactly
-// as it did before this layer existed.
+// RoundTrip fetches through base and, when readable, returns the JWK Set with
+// unparseable entries removed. Any shape it's unsure about (non-200, oversized
+// body, no "keys" member, non-JSON) is returned UNCHANGED.
 func (t *tolerantJWKSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil || resp == nil || resp.StatusCode != http.StatusOK || resp.Body == nil {
@@ -78,12 +71,11 @@ type droppedJWK struct {
 }
 
 // filterJWKS returns body with every unparseable "keys" entry removed, plus
-// what was dropped. It returns body UNCHANGED (nothing dropped) whenever it
-// cannot confidently rewrite the document, or when NOTHING survived — serving
-// `{"keys":[]}` there would trade go-jose's precise error for go-oidc's generic
-// one while login stays equally broken, so the operator keeps the error that
-// names the key to fix. This only ever converts a total outage into a partial
-// key set, never a quieter total outage.
+// what was dropped. It returns body UNCHANGED when it cannot confidently
+// rewrite the document, or when NOTHING survived — serving `{"keys":[]}` there
+// would trade go-jose's precise error for a generic one while login stays
+// equally broken. This only ever turns a total outage into a partial key set,
+// never a quieter total outage.
 func filterJWKS(body []byte) (out []byte, dropped []droppedJWK) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(body, &doc); err != nil {
@@ -131,13 +123,11 @@ func filterJWKS(body []byte) (out []byte, dropped []droppedJWK) {
 }
 
 // newTolerantJWKSClient returns the HTTP client the ID-token key set fetches
-// through: base's behaviour (including the split-horizon rewrite transport,
-// when configured) with the per-key JWKS tolerance layered on top. It is a
-// COPY of base, not a fresh client, so a caller-supplied timeout, cookie jar
-// or redirect policy is preserved — only the transport changes. base may be
-// nil (production default), matching http.DefaultClient's behaviour. The
-// client is handed only to gooidc.NewRemoteKeySet, which requests nothing but
-// the JWKS URL, scoping this filter away from the discovery/token/userinfo docs.
+// through: base's behaviour layered with the per-key JWKS tolerance. It is a
+// COPY of base (nil defaults like http.DefaultClient), not a fresh client, so
+// a caller's timeout, cookie jar or redirect policy survives — only the
+// transport changes. Handed only to gooidc.NewRemoteKeySet, so this filter
+// never touches the discovery/token/userinfo docs.
 func newTolerantJWKSClient(base *http.Client) *http.Client {
 	c := &http.Client{}
 	if base != nil {

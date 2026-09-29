@@ -4,12 +4,9 @@
 package proxy
 
 // The sidecar PROCESS: wiring a Proxy from a validated Config, serving it, and
-// shutting it down cleanly.
-//
-// Split from proxy.go when that file crossed the 1000-line gate. A real seam
-// rather than a size dodge: everything here is lifecycle — construction,
-// listen, shutdown — while proxy.go is the request path itself. The two change
-// for different reasons and are read at different times.
+// shutting it down cleanly. A real seam from proxy.go, not a size dodge:
+// everything here is lifecycle — construction, listen, shutdown — while
+// proxy.go is the request path itself.
 
 import (
 	"context"
@@ -36,10 +33,10 @@ type Server struct {
 	http  *http.Server
 	sink  *decisionSink
 	// renewStop stops the run-token renewer started by NewServer; renewStopped
-	// closes once it has exited. Both are set ONCE in NewServer (never from
-	// ListenAndServe) because production runs ListenAndServe in one goroutine and
-	// calls Shutdown from another — writing them at serve time would race the read
-	// in Shutdown. Nil when no renewer was started.
+	// closes once it has exited. Both set ONCE in NewServer (never from
+	// ListenAndServe): production runs ListenAndServe in one goroutine and
+	// calls Shutdown from another, so writing at serve time would race the
+	// read in Shutdown. Nil when no renewer was started.
 	renewStop    context.CancelFunc
 	renewStopped chan struct{}
 }
@@ -49,21 +46,20 @@ type Server struct {
 func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
-	// several callers (including one per evaluator construction), and this is a
-	// once-per-boot report about the policy this sidecar was actually dispatched.
+	// several callers, and this is a once-per-boot report about the policy
+	// this sidecar was actually dispatched.
 	warnDeadDomainEntries(ctx, cfg.Policy)
 
 	// Captured ONCE here (never per-request): the internal-host lift's
-	// own-subnet/control-plane exclusion (Proxy.onOwnSubnetOrControlPlane) needs
-	// both before any request is served. net.InterfaceAddrs() at this point
-	// already sees the control-plane network — NetworkConnect precedes
-	// ContainerStart on the docker driver, so the sidecar's container is joined
-	// to wardyn-internal before this process starts.
+	// own-subnet/control-plane exclusion needs both before any request is
+	// served. net.InterfaceAddrs() already sees the control-plane network at
+	// this point, since NetworkConnect precedes ContainerStart on the docker
+	// driver.
 	//
-	// A lookup failure for either is non-fatal but NOT free: the exclusion is a
-	// CLAMP on the lift, so an empty clamp would widen the lift instead of
-	// narrowing it. The failure is carried into the Proxy as ExclusionUnknown,
-	// which makes the clamp refuse every lift/trust instead, and it is logged.
+	// A lookup failure for either is non-fatal but NOT free: the exclusion is
+	// a CLAMP on the lift, so an empty clamp would widen it instead of
+	// narrowing it. The failure is carried into the Proxy as
+	// ExclusionUnknown, which makes the clamp refuse every lift/trust instead.
 	localSubnets, subnetsOK := localInterfaceSubnets()
 	cpIPs, cpOK := resolveControlPlaneIPs(cfg.ControlPlaneURL)
 	exclusionUnknown := !subnetsOK || !cpOK
@@ -73,19 +69,18 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 			slog.Bool("control_plane_resolved", cpOK))
 	}
 
-	// ONE live token for the whole sidecar: the config's run token is the seed,
-	// and the renewer (started by ListenAndServe) rotates it in place before its
-	// short TTL lapses. Every control-plane caller below shares this source, so a
-	// renew reaches all of them at once — the sink, the injector's subscription
-	// re-resolves, the approval client, and the brokered local routes.
+	// ONE live token for the whole sidecar: the config's run token is the
+	// seed, and the renewer (started by ListenAndServe) rotates it in place
+	// before its short TTL lapses. Every control-plane caller below shares
+	// this source, so a renew reaches all of them at once.
 	ts := newTokenSource(cfg.RunToken)
 
-	// Two TLS trust sets, never merged and never shared. The corporate CA pool
-	// (system roots plus WARDYN_TRUSTED_CA_FILE) is for EGRESS only: a
-	// TLS-inspecting middlebox sits between this sidecar and the internet, not
-	// between it and wardynd. Control-plane calls trust wardynd's internal CA
-	// and nothing else (internal/hoptls) — an empty pin fails every handshake
-	// rather than falling back to the system roots.
+	// SECURITY: two TLS trust sets, never merged and never shared. The
+	// corporate CA pool (system roots plus WARDYN_TRUSTED_CA_FILE) is for
+	// EGRESS only: a TLS-inspecting middlebox sits between this sidecar and
+	// the internet, not between it and wardynd. Control-plane calls trust
+	// wardynd's internal CA and nothing else — an empty pin fails every
+	// handshake rather than falling back to the system roots.
 	var tlsCfg *tls.Config
 	if cfg.TrustedCAPEM != "" {
 		pool, perr := x509.SystemCertPool()
@@ -101,21 +96,18 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	if err != nil {
 		return nil, err
 	}
-	// The four control-plane clients below — the decision sink, the injector, the
-	// approval client and the token renewer — all ride THIS client. A caller-supplied
-	// client with no Transport rides http.DefaultTransport, so it would see neither
-	// the internal CA pin above nor, more importantly, the Proxy: nil the proxy's OWN
-	// transports set ("keeps the run token off the corp-proxy wire"): it would ride
-	// ProxyFromEnvironment instead. With HTTP(S)_PROXY visible to the sidecar
-	// (dockerd-level proxy injection, a host-run or custom proxy image) the run
-	// token, approvals, decisions and MINTED CREDENTIAL VALUES would transit the
-	// corporate proxy and skip resolveTrustedURL's pin.
+	// SECURITY: the four control-plane clients below (sink, injector, approval
+	// client, token renewer) all ride THIS client. A caller-supplied client
+	// with no Transport rides http.DefaultTransport, which would ride
+	// ProxyFromEnvironment instead of nil-ing Proxy out. With HTTP(S)_PROXY
+	// visible to the sidecar, the run token, approvals, decisions and MINTED
+	// CREDENTIAL VALUES would transit the corporate proxy and skip
+	// resolveTrustedURL's pin.
 	//
-	// So the transport is owned UNCONDITIONALLY and Proxy is cleared explicitly:
-	// Transport.Clone() PRESERVES the proxy function. Everything else about
-	// DefaultTransport (timeouts, HTTP/2, keep-alives) is kept.
-	// A nil client is built here, never left to a callee's fallback: the only
-	// transport a control-plane call may ride is the pinned one below.
+	// So the transport is owned UNCONDITIONALLY and Proxy is cleared
+	// explicitly: Transport.Clone() PRESERVES the proxy function, so this
+	// can't skip the clearing. A nil client is built here, never left to a
+	// callee's fallback.
 	if client == nil {
 		client = &http.Client{Timeout: controlPlaneCallTimeout}
 	}
@@ -124,8 +116,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		tr.Proxy = nil
 		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
 		// and enabling it prepends "h2" to the config's own NextProtos on
-		// first use (net/http's http2configureTransports) — the v0.7.9 defect
-		// (#359), where a shared config made the egress transport offer h2.
+		// first use — a shared config made the egress transport offer h2 (#359).
 		tr.TLSClientConfig = cpTLS.Clone()
 		c := *client
 		c.Transport = tr
@@ -140,13 +131,13 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		return nil, fmt.Errorf("build injector: %w", err)
 	}
 
-	// Build the OPTIONAL outbound content-inspection engine. Off unless the
-	// policy carries an llm_inspection block. Register the operator-declared
+	// Build the OPTIONAL outbound content-inspection engine, off unless the
+	// policy carries an llm_inspection block. Register operator-declared
 	// workspace secret values in the proxy-global mask registry FIRST so they
 	// (a) form the scan corpus and (b) are masked from decision-log output
 	// defense-in-depth — then snapshot (buildInjector already registered any
-	// injected credentials above). A global kill-switch (WARDYN_LLM_SCAN=off) is
-	// applied upstream in cmd/wardyn-proxy by clearing cfg.Policy.LLMInspection.
+	// injected credentials above). A global kill-switch
+	// (WARDYN_LLM_SCAN=off) is applied upstream by clearing cfg.Policy.LLMInspection.
 	var scanner *contentscan.Engine
 	if spec := cfg.Policy.LLMInspection; spec != nil {
 		for _, v := range spec.WorkspaceSecretValues {
@@ -166,12 +157,12 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		}
 	}
 
-	// TLS-MITM CA: build whenever the per-run PEMs are provided. MITM now serves
+	// TLS-MITM CA: build whenever the per-run PEMs are provided. MITM serves
 	// TWO purposes — content inspection (scanner) AND subscription credential
-	// injection (which must terminate TLS to swap the Authorization header for the
-	// live host token). Dispatch only delivers the PEMs when one of those is
-	// wanted, so their presence is the authoritative signal. With a nil scanner
-	// the terminated tunnel is forward+inject only (inspectLLM no-ops).
+	// injection (which must terminate TLS to swap the Authorization header
+	// for the live host token). Dispatch only delivers the PEMs when one of
+	// those is wanted, so their presence is the authoritative signal. With a
+	// nil scanner the terminated tunnel is forward+inject only.
 	var ca *certAuthority
 	if cfg.MITMCACertPEM != "" && cfg.MITMCAKeyPEM != "" {
 		ca, err = newCertAuthority([]byte(cfg.MITMCACertPEM), []byte(cfg.MITMCAKeyPEM))
@@ -196,14 +187,11 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))
-		// Say LOUDLY and EXHAUSTIVELY what is NOT chained. A bypass is a routing
-		// exception to the "every forward dial goes through the corp proxy"
-		// ceiling the line above states, so the deployment's log must name the
-		// entries themselves — a count would leave an operator inferring the
-		// shape of an exception list. Also state what it does NOT do, because
-		// "bypass" reads like "exempt" and it is not: a bypassed dial still runs
-		// the private-IP guard and still needs its policy allow. Logged only
-		// with an upstream configured; the list is inert without one.
+		// Say LOUDLY and EXHAUSTIVELY what is NOT chained: the deployment's
+		// log must name the bypass entries themselves, not just a count. Also
+		// state what it does NOT do, because "bypass" reads like "exempt" and
+		// isn't: a bypassed dial still runs the private-IP guard and needs
+		// its policy allow.
 		if noProxy := compileNoProxy(cfg.UpstreamProxyNoProxy); len(noProxy) > 0 {
 			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy BYPASSED for declared destinations — dialed directly "+
 				"(still SSRF-guarded: a private address needs a site-config internal_hosts declaration; still policy-gated)",
@@ -216,16 +204,12 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
 		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
-	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE, forwarded from wardynd as
-	// trusted_ca_pem): additive to the system roots for THIS sidecar's egress
-	// TLS — the forward transport (MITM-terminated forwards + the brokered
-	// LLM/git/PAT routes). Each transport that may EDIT it — anything with
-	// HTTP/2 enabled — takes its own copy first (offerHTTP2,
-	// upstream_protocol.go). Nil (unset) leaves it nil, byte-identical to today (system roots,
-	// ServerName from URL). applyDefaultsAndValidate already fail-fast-checked
-	// this same PEM at config-load time without retaining a pool; this is the
-	// live proxy's own parse, matching parseUpstreamProxy's "validate at load,
-	// build for real here" split.
+	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system
+	// roots for THIS sidecar's egress TLS. Each transport that may EDIT it
+	// (anything with HTTP/2 enabled) takes its own copy first. Nil (unset)
+	// leaves it nil (system roots, ServerName from URL).
+	// applyDefaultsAndValidate already fail-fast-checked this PEM at
+	// config-load time; this is the live proxy's own parse.
 
 	p := newProxy(Options{
 		RunID:                cfg.RunID,
@@ -262,12 +246,12 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	srv := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: p,
-		// The agent-facing listener is the untrusted side of the boundary. With
-		// ReadTimeout 0 there is NO header deadline unless this is set, so a
-		// partial-header connection would pin a goroutine forever in a 256 MiB
-		// sidecar. Independent of ReadTimeout, and cleared by the CONNECT hijack —
-		// tunnels and streaming bodies are unaffected. Matches the inner MITM
-		// server (mitm.go).
+		// SECURITY: the agent-facing listener is the untrusted side of the
+		// boundary. With ReadTimeout 0 there is NO header deadline unless this
+		// is set, so a partial-header connection would pin a goroutine
+		// forever in a 256 MiB sidecar. Independent of ReadTimeout, and
+		// cleared by the CONNECT hijack — tunnels and streaming bodies are
+		// unaffected. Matches the inner MITM server.
 		ReadHeaderTimeout: 30 * time.Second,
 		ReadTimeout:       0, // streaming/tunnels: no whole-request deadline
 		WriteTimeout:      0,
@@ -284,13 +268,11 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 // startRunTokenRenewer starts the run-token renewer, which keeps this
 // sidecar's short-TTL token fresh for the life of the run. Without it every
-// control-plane call (mints, approvals, decision logs, subscription
-// re-resolves) starts 401ing once the startup token's 1h TTL lapses, with no
-// recovery. It starts here — like the decision sink's own goroutine — so it
-// is running before the first request and is torn down by Shutdown; the
-// caller's ctx (NewServer's) is a STARTUP context, so the renewer gets its
-// own lifetime instead. Alongside it, the activity reporter streams the
-// pause's presence clock (activity.go) for as long as the renewer runs.
+// control-plane call starts 401ing once the startup token's 1h TTL lapses,
+// with no recovery. Starts here so it's running before the first request and
+// torn down by Shutdown; NewServer's ctx is a STARTUP context, so the
+// renewer gets its own lifetime instead. Alongside it, the activity reporter
+// streams the pause's presence clock for as long as the renewer runs.
 func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client) {
 	if cfg.ControlPlaneURL == "" {
 		return
@@ -322,12 +304,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	httpErr := s.http.Shutdown(ctx)
 	// End any open credential re-auth hold: its poll loop is detached from the
-	// request that opened it (so a hung-up SDK cannot end a hold its owner is
+	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it
 	// talking to the control plane about a run that has ended.
 	s.proxy.stopReauthHolds()
-	// Run end closes every open private-ip streak (B6), BEFORE the sink drains,
-	// so a repeat count that never hit the eviction path is still recorded.
+	// Run end closes every open private-ip streak BEFORE the sink drains, so
+	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
 	sinkErr := s.sink.close(ctx)
 	if httpErr != nil {
@@ -342,9 +324,8 @@ func (s *Server) Addr() string { return s.http.Addr }
 // localInterfaceSubnets returns this process's own interface subnets and
 // whether the lookup SUCCEEDED. The second return is the point: a nil slice
 // from a failed net.InterfaceAddrs() is indistinguishable from a host with no
-// addresses, and the caller must be able to tell, because an empty exclusion
-// set widens the internal-host lift rather than narrowing it. Used ONLY
-// by the lift's own-subnet exclusion (Proxy.onOwnSubnetOrControlPlane).
+// addresses, and an empty exclusion set widens the internal-host lift rather
+// than narrowing it. Used only by the lift's own-subnet exclusion.
 func localInterfaceSubnets() ([]*net.IPNet, bool) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -360,15 +341,13 @@ func localInterfaceSubnets() ([]*net.IPNet, bool) {
 }
 
 // resolveControlPlaneIPs resolves rawURL's host to EVERY address it names,
-// using the production resolver and mirroring resolveTrustedURL's own resolve
-// step — but it runs before any Proxy exists (NewServer, ahead of newProxy), so
-// it cannot go through a *Proxy method. The bool reports whether the resolve
-// succeeded, which the caller needs because a nil result must fail the
-// exclusion CLOSED rather than silently widen the lift.
+// mirroring resolveTrustedURL's own resolve step — but runs before any Proxy
+// exists, so it can't go through a *Proxy method. The bool reports whether
+// the resolve succeeded, since a nil result must fail the exclusion CLOSED
+// rather than silently widen the lift.
 //
-// Every answer, not ips[0]: vetTrustedHost already checks every answer of a
-// gateway host, and a wardynd behind two A records had exactly one of them
-// excluded — the other was liftable by a declared internal host.
+// Every answer, not ips[0]: a wardynd behind two A records had exactly one
+// of them excluded — the other was liftable by a declared internal host.
 func resolveControlPlaneIPs(rawURL string) ([]net.IP, bool) {
 	host, _, err := hostPortFromURL(rawURL)
 	if err != nil || host == "" {

@@ -25,6 +25,7 @@ import type { AgentProvider } from "../../../lib/api/agent-providers";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
 import { ModelProvidersList } from "./model-providers-list";
+import { expandCard, startsWith } from "../../../lib/test-dom";
 
 const CLAUDE: SetupHarnessTool = { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true };
 const CODEX: SetupHarnessTool = { id: "codex-cli", display: "Codex CLI", has_gateway: true, has_login: false, enabled: true };
@@ -69,9 +70,10 @@ describe("ModelProvidersList", () => {
   it("A1: no providers is the empty state, under the title, lede and Add button", async () => {
     given([]);
     renderList();
+    await expandCard(M.TITLE);
     expect(await screen.findByText(M.EMPTY_TITLE)).toBeInTheDocument();
     expect(screen.getByText(M.EMPTY_BODY)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: M.TITLE })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: startsWith(M.TITLE) })).toBeInTheDocument();
     expect(screen.getByText(MODEL_LEDE)).toBeInTheDocument();
     // No A9 notice over an empty list, even with agents turned on.
     expect(screen.queryByText(M.HARNESS_UNSERVED("Codex CLI"))).toBeNull();
@@ -80,6 +82,7 @@ describe("ModelProvidersList", () => {
   it("Add model provider opens the editor (#537) at its kind step", async () => {
     given([]);
     renderList();
+    await expandCard(M.TITLE);
     await userEvent.click(await screen.findByRole("button", { name: M.ADD_CTA }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: M.ADD_CTA })).toBeInTheDocument();
@@ -89,6 +92,7 @@ describe("ModelProvidersList", () => {
   it("threads subscriptionAvailable to the editor's kind step (#538)", async () => {
     given([]);
     renderList(undefined, false);
+    await expandCard(M.TITLE);
     await userEvent.click(await screen.findByRole("button", { name: M.ADD_CTA }));
     expect(within(screen.getByRole("dialog")).getByText(PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING)).toBeInTheDocument();
   });
@@ -99,6 +103,7 @@ describe("ModelProvidersList", () => {
   ])("%s opens the editor on that provider (#538)", async (_, provider, name, kindChip) => {
     given([provider]);
     renderList();
+    await expandCard(M.TITLE);
     const r = await screen.findByTestId(`model-provider-${provider.id}`);
     await userEvent.click(within(r).getByText(name));
     const dialog = screen.getByRole("dialog");
@@ -111,6 +116,7 @@ describe("ModelProvidersList", () => {
   it("a row opens the editor on that provider", async () => {
     given([gateway]);
     renderList();
+    await expandCard(M.TITLE);
     await userEvent.click(await screen.findByRole("button", { name: /^Corp gateway/ }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "Corp gateway" })).toBeInTheDocument();
@@ -120,6 +126,7 @@ describe("ModelProvidersList", () => {
   it("A2: one provider shows name, kind, what each person provides, Used by and its count, with no default chip", async () => {
     given([bedrock], { "bedrock-prod": 12 }, [def("claude-code", "bedrock-prod")]);
     renderList([CLAUDE]);
+    await expandCard(M.TITLE);
     const r = await screen.findByTestId("model-provider-bedrock-prod");
     expect(within(r).getByText("Bedrock (prod)")).toBeInTheDocument();
     expect(within(r).getByText("Amazon Bedrock")).toBeInTheDocument();
@@ -132,6 +139,7 @@ describe("ModelProvidersList", () => {
   it("the count comes from connected[id]: 1 person, and 0 (or absent) is 'No one has connected yet'", async () => {
     given([bedrock, key, sub], { "bedrock-prod": 1, "anthropic-key": 0 });
     renderList();
+    await expandCard(M.TITLE);
     await screen.findByTestId("model-provider-bedrock-prod");
     expect(row("bedrock-prod").getByText("Connected by 1 person")).toBeInTheDocument();
     expect(row("anthropic-key").getByText("No one has connected yet")).toBeInTheDocument();
@@ -141,6 +149,7 @@ describe("ModelProvidersList", () => {
   it("A3: several for Claude Code — the default chip on one, each kind's line, a name equal to its kind shown once", async () => {
     given([gateway, key, sub], { "corp-gateway": 9, "anthropic-key": 1 }, [def("claude-code", "corp-gateway")]);
     renderList();
+    await expandCard(M.TITLE);
     await screen.findByTestId("model-provider-corp-gateway");
     expect(row("corp-gateway").getByText("Your own endpoint")).toBeInTheDocument();
     expect(row("corp-gateway").getByText(M.PROVIDES.TOKEN)).toBeInTheDocument();
@@ -156,6 +165,7 @@ describe("ModelProvidersList", () => {
   it("A4 variant: the default for both agents is one chip", async () => {
     given([gateway, key, openai], {}, [def("claude-code", "corp-gateway"), def("codex-cli", "corp-gateway")]);
     renderList();
+    await expandCard(M.TITLE);
     await screen.findByTestId("model-provider-corp-gateway");
     expect(row("corp-gateway").getByText("Default for Claude Code and Codex CLI")).toBeInTheDocument();
   });
@@ -163,6 +173,7 @@ describe("ModelProvidersList", () => {
   it("A7: an off provider says runs can't choose it, and shows Off instead of its count", async () => {
     given([{ ...key, disabled: true }, bedrock], { "anthropic-key": 4 });
     renderList();
+    await expandCard(M.TITLE);
     await screen.findByTestId("model-provider-anthropic-key");
     expect(row("anthropic-key").getByText(M.OFF_LINE)).toBeInTheDocument();
     expect(row("anthropic-key").getByText(M.CHIP_OFF)).toBeInTheDocument();
@@ -173,6 +184,7 @@ describe("ModelProvidersList", () => {
   it("A7: off while still a default keeps its chips and says those runs are refused", async () => {
     given([{ ...gateway, disabled: true }, key], {}, [def("claude-code", "corp-gateway")]);
     renderList();
+    await expandCard(M.TITLE);
     await screen.findByTestId("model-provider-corp-gateway");
     expect(row("corp-gateway").getByText("Default for Claude Code")).toBeInTheDocument();
     expect(row("corp-gateway").getByText(M.CHIP_OFF)).toBeInTheDocument();
@@ -183,6 +195,7 @@ describe("ModelProvidersList", () => {
   it("A8: a provider no agent uses says so", async () => {
     given([bedrock, { ...openai, harnesses: [] }], { "bedrock-prod": 3 });
     renderList();
+    await expandCard(M.TITLE);
     await screen.findByTestId("model-provider-openai-key");
     expect(row("openai-key").getByText(M.UNUSED)).toBeInTheDocument();
     expect(row("openai-key").getByText("No one has connected yet")).toBeInTheDocument();
@@ -191,6 +204,7 @@ describe("ModelProvidersList", () => {
   it("A9: an agent turned on with no provider gets a notice; 'none' and an unknown enabled state don't", async () => {
     given([bedrock], { "bedrock-prod": 12 });
     renderList([CLAUDE, CODEX, NONE, { ...CODEX, id: "old", display: "Old", enabled: undefined }]);
+    await expandCard(M.TITLE);
     expect(await screen.findByText(M.HARNESS_UNSERVED("Codex CLI"))).toBeInTheDocument();
     expect(screen.queryByText(M.HARNESS_UNSERVED("Your own tools"))).toBeNull();
     expect(screen.queryByText(M.HARNESS_UNSERVED("Old"))).toBeNull();
@@ -201,6 +215,7 @@ describe("ModelProvidersList", () => {
     getModelProvidersMock.mockReturnValue(new Promise(() => {}));
     getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: null });
     const { container, unmount } = renderList();
+    await expandCard(M.TITLE);
     expect(container.querySelector(".animate-pulse")).not.toBeNull();
     expect(screen.queryByText(M.EMPTY_TITLE)).toBeNull();
     expect(screen.queryByText(M.FETCH_FAILED_TITLE)).toBeNull();
@@ -208,6 +223,7 @@ describe("ModelProvidersList", () => {
 
     getModelProvidersMock.mockRejectedValueOnce(new Error("boom"));
     renderList();
+    await expandCard(M.TITLE);
     expect(await screen.findByText(M.FETCH_FAILED_TITLE)).toBeInTheDocument();
     expect(screen.getByText(M.FETCH_FAILED_BODY)).toBeInTheDocument();
     given([]);

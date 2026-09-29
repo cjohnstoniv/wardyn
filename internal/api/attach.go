@@ -157,11 +157,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
 	// require a credential, so this is local-mode-only.
 	if s.cfg.LocalMode && !s.cfg.LocalTrustForwarder && !isLoopbackRemoteAddr(r.RemoteAddr) {
-		writeError(w, http.StatusForbidden, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
 		return
 	}
 	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
-		writeError(w, http.StatusForbidden, "local mode: request Host is not loopback (DNS-rebinding guard)")
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "local mode: request Host is not loopback (DNS-rebinding guard)")
 		return
 	}
 
@@ -193,7 +193,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		// (csrf.go), and that argument started applying to this socket the
 		// moment the decision moved out of the library and into our code.
 		s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
-		writeError(w, http.StatusForbidden, csrfRefusedBody)
+		writeErrorReason(w, http.StatusForbidden, csrfAuditReason, csrfRefusedBody)
 		return
 	}
 
@@ -204,7 +204,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	// A runner must be wired to attach to anything (headless API mode cannot).
 	if s.cfg.Runner == nil {
-		writeError(w, http.StatusServiceUnavailable, "no runner configured; attach unavailable")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachNoRunner, "no runner configured; attach unavailable")
 		return
 	}
 
@@ -225,7 +225,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	if ta, tok := ticketActorFromContext(ctx); tok {
 		if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
 			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
-			writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
+			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
 			return
 		}
 	}
@@ -234,16 +234,16 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// can be attached. Rejecting here (plain HTTP) keeps a bad attach a clean
 	// error rather than a WebSocket that opens and immediately dies.
 	if run.State != types.RunRunning {
-		writeError(w, http.StatusConflict, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
+		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
 	// A kept run is RUNNING with its agent stopped: nothing to attach to.
 	if runIsKept(run) {
-		writeError(w, http.StatusConflict, "run has ended; cannot attach")
+		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
 		return
 	}
 	if run.SandboxRef == "" {
-		writeError(w, http.StatusConflict, "run has no sandbox; cannot attach")
+		writeErrorReason(w, http.StatusConflict, reasonAttachNoSandbox, "run has no sandbox; cannot attach")
 		return
 	}
 
@@ -259,7 +259,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// A paused run is thawed before the exec: the daemon refuses one into a
 	// paused container (run_pause.go).
 	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
-		writeError(w, http.StatusBadGateway, "run is paused and could not be resumed; try again")
+		writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
 		return
 	}
 

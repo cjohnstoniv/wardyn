@@ -88,7 +88,16 @@ type Decision struct {
 	Target string     `json:"target,omitempty"`
 	RunID  *uuid.UUID `json:"run_id,omitempty"`
 	// Sentence is the refusal body. Empty means the reason's own sentence.
-	Sentence    string            `json:"sentence,omitempty"`
+	Sentence string `json:"sentence,omitempty"`
+	// WireReason overrides the reason an HTTP response carries, when set
+	// (#656 slice 3's refuse fix). d.Reason itself is never overridden — the
+	// audit row's own "reason" field (authz.Datum) always uses the TRUE
+	// cause — this only changes what the CALLER sees. Its one use today is a
+	// Hidden-effect decision (EffectHidden: "byte-identical to a missing
+	// row"): the caller must see the SAME reason a truly-missing resource's
+	// 404 carries, never the internal "not_owner"/"attach_ticket_foreign_run"
+	// that would tell a prober the resource exists. See Decision.AsIf.
+	WireReason  Reason            `json:"wire_reason,omitempty"`
 	Detail      map[string]string `json:"detail,omitempty"`
 	Obligations []Obligation      `json:"obligations,omitempty"`
 	Trace       []Step            `json:"trace,omitempty"`
@@ -118,6 +127,15 @@ func Drop(reason Reason, target string, dropped []string) Decision {
 // OnRun is d about run id.
 func (d Decision) OnRun(id uuid.UUID) Decision {
 	d.RunID = &id
+	return d
+}
+
+// AsIf makes d's HTTP response carry reason instead of d.Reason, for a
+// Hidden-effect decision whose wire body must match a specific entity's
+// genuinely-missing twin byte for byte (#656 slice 3) — d.Reason (and so the
+// audit row) is untouched; only WireReason changes.
+func (d Decision) AsIf(reason Reason) Decision {
+	d.WireReason = reason
 	return d
 }
 
@@ -154,14 +172,10 @@ type Origin struct {
 
 var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
 
-// Datum is the data of d's audit row, refused to p over method (empty when
-// no request carried it). A detail never stands in for a reserved key, so it
-// can never forge the reason or a marker.
-//
-// user_view is a marker, present only when true (renamed in 0.8 from
-// member_mode; no dual-emit needed since this key lives inside authz.denied's
-// own Data map, not a separate audit row). device_channel is a sibling of
-// the ingest marker device_origin, never that key.
+// Datum is the data of d's audit row, refused to p over method (empty when no request
+// carried it). A detail never stands in for a reserved key, so it can never forge the
+// reason or a marker. user_view is a marker present only when true (renamed in 0.8 from
+// member_mode); device_channel is a sibling of the ingest marker device_origin, never that key.
 func Datum(d Decision, p Principal, method string) map[string]any {
 	m := make(map[string]any, len(d.Detail)+len(reservedDatumKeys))
 	for k, v := range d.Detail {

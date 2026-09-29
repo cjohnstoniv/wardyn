@@ -398,9 +398,7 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 func TestUserDriveWriteAuditIsTheWholeRow(t *testing.T) {
 	realRoot := t.TempDir()
 	inside := filepath.Join(realRoot, "homes")
-	if err := os.MkdirAll(inside, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, inside, 0o755)
 	for _, writable := range []bool{true, false} {
 		t.Run(fmt.Sprintf("writable=%v", writable), func(t *testing.T) {
 			st := newDriveCRUDStore()
@@ -457,9 +455,7 @@ func TestUserDriveWriteAuditIsTheWholeRow(t *testing.T) {
 func TestUserDriveWriteRefusals(t *testing.T) {
 	realRoot := t.TempDir()
 	inside := filepath.Join(realRoot, "homes")
-	if err := os.MkdirAll(inside, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, inside, 0o755)
 	outside := t.TempDir()
 
 	for _, tc := range []struct {
@@ -573,9 +569,7 @@ func TestUserDriveWriteRefusals(t *testing.T) {
 func TestHostPathDriveInsideRootsIsAccepted(t *testing.T) {
 	root := t.TempDir()
 	inside := filepath.Join(root, "homes")
-	if err := os.MkdirAll(inside, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, inside, 0o755)
 	srv, _ := driveAdminServer(newDriveCRUDStore(), []string{root})
 	body := `{"name":"share","backend":"host_path","home_template":"email_local","host_root":"` + inside + `"}`
 	if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil); w.Code != http.StatusCreated {
@@ -601,13 +595,9 @@ func TestNestedHostRootDrivesAreRefused(t *testing.T) {
 	root := t.TempDir()
 	shares := filepath.Join(root, "shares")
 	nested := filepath.Join(shares, "alice", "team")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, nested, 0o755)
 	sibling := filepath.Join(root, "other-shares")
-	if err := os.MkdirAll(sibling, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, sibling, 0o755)
 	body := func(name, hostRoot string) string {
 		return `{"name":"` + name + `","backend":"host_path","home_template":"sub","host_root":"` + hostRoot + `"}`
 	}
@@ -1294,9 +1284,7 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 	base := t.TempDir()
 	homes, other := filepath.Join(base, "homes"), filepath.Join(base, "other")
 	for _, dir := range []string{homes, other} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
+		mustMkdirAll(t, dir, 0o755)
 	}
 
 	// The stored row every case starts from: a share, allocated to two subjects.
@@ -1735,9 +1723,7 @@ func TestDriveHostRootNestingSeesThroughASymlink(t *testing.T) {
 	base := t.TempDir()
 	shares := filepath.Join(base, "shares")
 	team := filepath.Join(shares, "alice", "team")
-	if err := os.MkdirAll(team, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, team, 0o755)
 	link := filepath.Join(base, "teamshare")
 	if err := os.Symlink(team, link); err != nil {
 		t.Skipf("symlinks unavailable on this host: %v", err)
@@ -1769,9 +1755,7 @@ func TestDriveHostRootNestingSeesThroughASymlink(t *testing.T) {
 	// THE CONTROL, in both directions. A sibling that resolves nowhere near the
 	// other tree is still authorable, so the gate refuses nesting and not links.
 	sibling := filepath.Join(base, "other")
-	if err := os.MkdirAll(sibling, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, sibling, 0o755)
 	siblingLink := filepath.Join(base, "otherlink")
 	if err := os.Symlink(sibling, siblingLink); err != nil {
 		t.Skipf("symlinks unavailable on this host: %v", err)

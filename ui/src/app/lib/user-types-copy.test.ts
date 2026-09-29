@@ -59,7 +59,7 @@ function checkParity(label: string, sectionHeading: RegExp, ns: Record<string, u
   });
 }
 
-checkParity("user-types canon — What this type gets (packet A + packet UT-G)", /^## Frozen strings$/, EXPLAIN, 27);
+checkParity("user-types canon — What this type gets (packet A + packet UT-G)", /^## Frozen strings$/, EXPLAIN, 26);
 checkParity(
   "user-types canon — the rest of the screen (packet UT-G, G-8)",
   /^## Frozen strings — the rest of the screen$/,

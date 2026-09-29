@@ -310,7 +310,7 @@ func (s *Server) handleExplainCapabilities(w http.ResponseWriter, r *http.Reques
 	subjectType := types.CapabilitySubjectType(q.Get("subject_type"))
 	subject, subj, err := explainPrincipal(subjectType, q.Get("subject"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorReason(w, http.StatusBadRequest, reasonExplainPrincipalInvalid, err.Error())
 		return
 	}
 	if !s.userTypeSubjectExists(w, r, subjectType, subject) {
@@ -322,7 +322,7 @@ func (s *Server) handleExplainCapabilities(w http.ResponseWriter, r *http.Reques
 		kinds = nil
 		for _, k := range strings.Split(raw, ",") {
 			if !validCapabilityKind(k) {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown capability kind %q", k))
+				writeErrorReason(w, http.StatusBadRequest, reasonCapabilityKindUnknown, fmt.Sprintf("unknown capability kind %q", k))
 				return
 			}
 			if !slices.Contains(kinds, k) {

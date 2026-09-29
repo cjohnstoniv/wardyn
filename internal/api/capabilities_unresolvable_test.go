@@ -65,7 +65,7 @@ func capUnresolvableMatrixRows() []types.CapabilityGrant {
 		g(types.CapabilitySubjectUser, "alice", capSecret, "staging-db", types.CapabilityDeny), // subject_type
 		g(types.CapabilitySubjectAll, "", capSecret, "shared-db", types.CapabilityDeny),        // subject_type
 		g(types.CapabilitySubjectGroup, "walled", capWorkspace, "ws-1", types.CapabilityDeny),  // kind, for a secret query
-		g(types.CapabilitySubjectGroup, "walled", capIntegration, "github", types.CapabilityDeny),
+		g(types.CapabilitySubjectGroup, "walled", capWorkspaceProvider, "github", types.CapabilityDeny),
 	}
 }
 
@@ -85,7 +85,7 @@ func TestCapUnresolvableGroupDenyMatchesFullScan(t *testing.T) {
 		"pypi.org", "files.pypi.org", capWildcard,
 		"ghcr.io/x:1", "claude-code", "codex", "ws-1", "ws-2", "github", "gitlab",
 	}
-	kinds := []string{capSecret, capEgressHost, capImage, capWorkspace, capAgent, capIntegration}
+	kinds := []string{capSecret, capEgressHost, capImage, capWorkspace, capAgent, capWorkspaceProvider}
 
 	var agreed, fired int
 	for _, kind := range kinds {

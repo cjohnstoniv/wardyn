@@ -7,7 +7,7 @@
 // part of the unsplit settings-screen.test.tsx until M-5 split the page in
 // two (issue #636's own "Check": "the settings specs split per view").
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 const getSetupStatusMock = vi.fn();
@@ -39,6 +39,7 @@ import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-f
 import { WithDoor } from "../../../../test/door-harness";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { expandCard, startsWith } from "../../../lib/test-dom";
 
 function renderScreen(operator = false) {
   return render(
@@ -64,8 +65,8 @@ describe("YourAccountScreen", () => {
 
   it("draws Model provider then Your SSH keys, with no Azure DevOps card when none is configured", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: "Model provider" });
-    expect(screen.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeInTheDocument();
+    const heading = await screen.findByRole("heading", { name: startsWith("Model provider") });
+    expect(screen.getByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
     const html = document.body.innerHTML;
     expect(html.indexOf(">Model provider<")).toBeLessThan(html.indexOf(">Your SSH keys<"));
     expect(heading).toBeInTheDocument();
@@ -77,7 +78,7 @@ describe("YourAccountScreen", () => {
       baseStatus({ scm_access: { state: "live", source: "org", org: "https://dev.azure.com/example-org" } }),
     );
     renderScreen();
-    expect(await screen.findByRole("heading", { name: "Azure DevOps" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: startsWith("Azure DevOps") })).toBeInTheDocument();
   });
 
   // M-5 (#636): this page has NONE of Admin Settings' cards — Host, the
@@ -85,7 +86,7 @@ describe("YourAccountScreen", () => {
   // all stayed there. Nothing here belongs to the deployment.
   it("has no admin cards — Host, Model providers, Providers, User drives, Admin SSH keys", async () => {
     renderScreen();
-    await screen.findByRole("heading", { name: "Model provider" });
+    await screen.findByRole("heading", { name: startsWith("Model provider") });
     expect(screen.queryByRole("heading", { name: "Host" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Model providers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Workspace providers" })).not.toBeInTheDocument();
@@ -99,7 +100,7 @@ describe("YourAccountScreen", () => {
   // GET /site-config) left this page entirely.
   it("fires no site-config read regardless of the caller's tier", async () => {
     renderScreen(/* operator */ true);
-    await screen.findByRole("heading", { name: "Model provider" });
+    await screen.findByRole("heading", { name: startsWith("Model provider") });
     // No Host card means no button that would even offer the read; the
     // absence itself is the proof, alongside the module mock list above
     // carrying no health.getSiteConfig entry at all.
@@ -113,6 +114,8 @@ describe("YourAccountScreen", () => {
 describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
   it("carries the rewritten description", async () => {
     renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    await expandCard("Your SSH keys");
     expect(
       await screen.findByText(
         "Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's.",
@@ -125,12 +128,28 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
       { fingerprint: "SHA256:aaa", name: "laptop", public_key: "", role: "user", capped: true, created_at: new Date().toISOString() },
     ]);
     renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    await expandCard("Your SSH keys");
     const chip = await screen.findByText("User access");
     expect(screen.queryByText("Member access")).not.toBeInTheDocument();
     expect(chip.closest("[title]")).toHaveAttribute(
       "title",
       "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
     );
+  });
+
+  // review R2-L1: the packet has no error row for this card, and the
+  // expanded body's own ErrorState already renders "Something went wrong" —
+  // showing it as the collapsed summary too would put the same string on
+  // screen twice at once.
+  it("a failed key list carries no collapsed summary, and the expanded body's own error heading is not repeated", async () => {
+    listKeysMock.mockRejectedValue(new Error("HTTP 500"));
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    const card = within(heading.closest("section")!);
+    await expandCard("Your SSH keys");
+    expect(await card.findByText("Something went wrong")).toBeInTheDocument();
+    expect(card.getAllByText("Something went wrong")).toHaveLength(1);
   });
 });
 
@@ -155,7 +174,7 @@ describe("YourAccountScreen — Your model connections", () => {
   it("does not show it in the Admin view", async () => {
     getSetupStatusMock.mockResolvedValue(status);
     renderAt("/admin/account");
-    expect(await screen.findByRole("heading", { name: "Model provider" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: startsWith("Model provider") })).toBeInTheDocument();
     expect(screen.queryByTestId("model-connections-card")).toBeNull();
   });
 });

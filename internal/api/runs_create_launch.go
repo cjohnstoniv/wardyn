@@ -45,7 +45,6 @@ type createRunLaunch struct {
 	wsRefs        []types.Workspace
 	driveMount    *types.DriveMount
 	ephemeralDirs []string
-	bedrockRef    *types.WorkspaceBedrockRef
 	runToken      string
 	created       types.AgentRun
 }
@@ -110,7 +109,6 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			InteractiveStart:   l.req.InteractiveStart,
 			SeedAutoTools:      l.req.SeedAutoTools,
 			ToolApprovals:      l.req.ToolApprovals,
-			BedrockRef:         l.bedrockRef,
 			EphemeralDirs:      l.ephemeralDirs,
 			Toolchains:         runToolchainNeeds(l.wsRefs),
 			// The member's own persistent storage, already resolved and narrowed

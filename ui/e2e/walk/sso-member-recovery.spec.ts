@@ -28,8 +28,8 @@
  *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L
  *
  * B runs FIRST because it reads the member's SIGNED-IN card while the member is
- * still `live` from the previous file — case A's console save is what flips the
- * pin and takes that state away. F runs LAST because it signs the ADMIN in to
+ * still `live` from the previous file — case A's pin flip is what takes that
+ * state away. F runs LAST because it signs the ADMIN in to
  * AWS, which breaks sso-member.spec.ts:"the capture belongs to the member
  * alone"'s admin-stays-`not_configured` invariant for anything after it.
  *
@@ -64,7 +64,7 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
+import { CONSOLE_VIEW, USER_PREVIEW, VIEW_TO_USER } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
 import { LOGIN_SANDBOX_UNREADABLE, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
@@ -87,7 +87,7 @@ import {
   RECORDING_DISABLED_TITLE,
   YOUR_MODEL_KEY,
 } from "../../src/app/components/wardyn/copy";
-import { AGENTS, AGENTS_EXTRA, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
   LOGIN_DONE,
@@ -104,7 +104,6 @@ import {
   me,
   modelAccess,
   openLoginPane,
-  otherPin,
   ownAWSRow,
   runIDFromURL,
   seen,
@@ -326,11 +325,33 @@ test.afterEach(() => {
   }
 });
 
+// Case H's interactive run never ends by itself, and the walk's single 4-vCPU
+// node holds one agent run at a time: left running, it takes the CPU the NEXT
+// case's sign-in sandbox needs, whose proxy pod then never schedules and never
+// gets an IP. Ended here, pass or fail, and waited out until its pods are gone.
+let runToEnd = "";
+test.afterEach(async ({ page }) => {
+  if (!runToEnd) return;
+  const id = runToEnd;
+  runToEnd = "";
+  await page.evaluate(async (rid: string) => {
+    const r = await fetch(`/api/v1/runs/${rid}/kill`, { method: "POST", credentials: "include" });
+    // 409: the run already ended on its own, which is what this wants.
+    if (!r.ok && r.status !== 409) throw new Error(`POST /runs/${rid}/kill: ${r.status}`);
+  }, id);
+  if (process.env.WARDYN_TEST_K8S !== "1") return;
+  await expect
+    .poll(() => kubectlOrEmpty("-n", KUBE_NAMESPACE, "get", "pods", "-o", "name").split("\n").filter((n) => n.includes(id)), {
+      timeout: 180_000,
+    })
+    .toEqual([]);
+});
+
 // ── B — the member's own card, while they are still signed in ───────────────
 
 test("B (ui-member-model-key): a per_user member's card names their OWN AWS sign-in", async ({ page }) => {
   // FIRST, and that is not cosmetic: the member is `live` only until case A's
-  // console save moves the pin. The before-sign-in half of this card is proven
+  // pin flip moves it. The before-sign-in half of this card is proven
   // by sso-member.spec.ts's second case plus the lane's own vitest matrix — the
   // ONE thing only a live walk can show is the SIGNED-IN branch under a real
   // per_user roster row, with a real captured session behind it.
@@ -360,28 +381,26 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   page,
   request,
 }) => {
-  // The ONE UI-driven roster save on the walk (every other one is the API PUT,
-  // for speed). It is the console half of the owner's E2E goal: the admin never
-  // touches an API, and what a member then sees is the consequence.
+  // The UI-driven roster save on the walk: the admin narrows the roster in the
+  // console, and what a member then sees is the consequence.
   //
-  // IT IS ALSO THE makeMemberActionable() FLIP. The pair saved here is the
+  // IT IS ALSO THE makeMemberActionable() FLIP. The pair written here is the
   // fixture's OTHER valid one (helpers.ts explains why the other VALID one),
   // so the member's stored capture stops matching the pin, they grade
   // `expired_signin`, and the "Sign in to AWS" CTA comes back — which is what
   // (iii) below and case C both need.
-  const pin = await otherPin(request);
+  //
+  // The per_user row, its start URL and its pin go through the API: the Agents
+  // tab no longer carries them (they live on a Bedrock provider), and this walk
+  // runs on the no-provider-block roster lane until the conversion moves it
+  // onto one. The console Save below round-trips them untouched.
+  const pin = await makeMemberActionable(request);
 
   await dexSignIn(page, ADMIN_EMAIL);
   await gotoAgentsTab(page);
 
   const row = page.getByTestId("agent-row-claude-code");
   await expect(row).toBeVisible();
-  await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-  await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-  // The three ORG SETTINGS the row carries, typed into the console.
-  await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill(SSO_START_URL);
-  await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID).fill(pin.account);
-  await row.getByLabel(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME).fill(pin.role);
 
   // …and the field report's deployment shape: ONE enabled row.
   for (const display of ["Codex CLI", "Your own tools"]) {
@@ -396,11 +415,12 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
 
-  // The save ROUND-TRIPS: the server holds what the console showed.
+  // The save ROUND-TRIPS: the server still holds the row the console loaded.
   const saved = (await getRoster(request)).find((a) => a.id === "claude-code");
-  expect(saved, "the console save did not reach GET /agent-providers").toMatchObject({
+  expect(saved, "the console save did not keep the per_user row it loaded").toMatchObject({
     mechanism: "bedrock_sso",
     credential_source: "per_user",
+    sso_start_url: SSO_START_URL,
     sso_account_id: pin.account,
     sso_role_name: pin.role,
   });
@@ -831,6 +851,7 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   // the trust dialog is blind to exactly the thing this case measures, and
   // would have read empty on the BROKEN image too.
   const runID = runIDFromURL(page);
+  runToEnd = runID;
   expect(
     await approvalsFor(page, runID),
     "the CLI's first REPL start parked an approval nobody asked for",
@@ -1072,6 +1093,16 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
     "no warn/fail row on this install may be blocking, or this case proves nothing",
   ).toEqual([]);
 
+  // #639: an admin's New Run lives in the USER view. In the Admin view
+  // /runs/new renders VIEW_TO_USER's switch page instead of the form, so switch
+  // through that page's own button first; the gate question below is the same,
+  // asked where New Run now is.
+  await page.goto("/runs/new");
+  await page.getByRole("button", { name: VIEW_TO_USER.GO }).click();
+  await expect(
+    page.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name: CONSOLE_VIEW.USER }),
+  ).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
   // /setup/status read. The rail's per-person line renders off that same read,
   // so once it is on screen the answer that used to bounce us has landed — and
@@ -1140,6 +1171,12 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
   await page.getByRole("button", { name: "Start login" }).click();
   await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
+  // The refused sign-in's dialog is modal and stays open on its error, which
+  // hides the page behind it (and the banner's Exit button) from the
+  // accessibility tree. Close it the way a person would before exiting.
+  const signInDialog = page.getByRole("dialog");
+  await signInDialog.getByRole("button", { name: "Close" }).click();
+  await expect(signInDialog).toBeHidden({ timeout: 30_000 });
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.

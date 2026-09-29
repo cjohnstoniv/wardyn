@@ -152,6 +152,7 @@ type recordAbortStore struct {
 	stateUpdated  bool
 	clearedActive bool
 	grantErr      error
+	site          types.SiteConfig
 }
 
 func (s *recordAbortStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, runID uuid.UUID, _ *uuid.UUID) (types.Workspace, bool, error) {
@@ -178,13 +179,20 @@ func (s *recordAbortStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUI
 	return true, nil
 }
 
-// GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
-// access unconditionally (foldRunIntegration
-// always runs, not just when the workspace carries its own LLMCred binding),
-// which reaches defaultAgentRunsIntegration's GetSiteConfig read on every
-// call — the embedded nil store.Store would otherwise panic here.
+// GetSiteConfig serves `site`: launchRecordRun reads the site config on every
+// call (recordProviderChoice) — the embedded nil store.Store would otherwise
+// panic here.
 func (s *recordAbortStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{}, nil
+	return s.site, nil
+}
+
+// grantingRequirement is a workspace requirement whose fold mints a grant a
+// record launch must persist: a required integration that delivers a header
+// credential on a host that serves no model. The two grant-failure tests use
+// it to reach CreateGrant.
+func grantingRequirement() (map[string]types.WorkspaceRequirement, types.SiteConfig) {
+	return map[string]types.WorkspaceRequirement{"integration:corp-artifactory": {Level: "required", Provenance: "operator_set"}},
+		types.SiteConfig{Integrations: []types.Integration{feedIntegration()}}
 }
 
 // TestLaunchRecordRun_CreateGrantFailureFinalizesRun: when
@@ -199,12 +207,13 @@ func TestLaunchRecordRun_CreateGrantFailureFinalizesRun(t *testing.T) {
 		ws:       types.Workspace{ID: wsID, Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
 		grantErr: errors.New("grant store down"),
 	}
+	fake.ws.Requirements, fake.site = grantingRequirement()
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	// A present provider secret + a ceiling that does NOT bless a subscription mount
-	// forces the api-key branch, whose CreateGrant then fails.
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
+	// A required integration whose token the store holds makes the requirement
+	// fold mint a grant, whose CreateGrant then fails.
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"artifactory-token": []byte("tok")}}
 	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
 	srv := New(cfg)
 

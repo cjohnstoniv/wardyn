@@ -7,11 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -64,71 +60,30 @@ func (s *Server) recordProviderChoice(ctx context.Context, actor string, ws type
 
 // recordSessionModelAccess is a record session's model access. Under a
 // provider block it is the chosen provider's, which dispatch authors, and
-// nothing is folded here. Otherwise it is the legacy fold: the workspace's own
-// binding, then the operator default, then the ceiling's subscription mount or
-// a brokered api-key grant — minted here so dispatch hands it to the proxy.
+// nothing is folded here. Otherwise it is the operator ceiling's subscription
+// mount, when the ceiling blesses one; no model credential is minted here.
 // hadInjections says whether the requirement fold already minted any, which
-// the api-key label counts too. Returns the session's llm_mode label.
-func (s *Server) recordSessionModelAccess(ctx context.Context, runID uuid.UUID, now time.Time, policy *types.RunPolicySpec,
-	ws types.Workspace, mp runProviderChoice, hadInjections bool,
-) (string, *types.WorkspaceBedrockRef, []runner.InjectionGrant, error) {
+// the api-key label counts. Returns the session's llm_mode label.
+func (s *Server) recordSessionModelAccess(policy *types.RunPolicySpec, mp runProviderChoice, hadInjections bool) string {
 	if mp.governs {
 		switch {
 		case !mp.chosen:
-			return "none", nil, nil, nil
+			return "none"
 		case mp.provider.Kind == types.ModelProviderAnthropicSubscription:
-			return "subscription", nil, nil, nil
+			return "subscription"
 		case mp.provider.Kind.IsBedrock():
-			return "bedrock", nil, nil, nil
+			return "bedrock"
 		}
-		return "api-key", nil, nil, nil
+		return "api-key"
 	}
-	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
-	// fold above already minted and audited the requirement grants — reusing
-	// the full policy.EligibleGrants slice there would remint and re-inject
-	// every one of them a second time.
-	llmGrantsBefore := len(policy.EligibleGrants)
-
-	// Unconditional, same as launch/preflight for a real run:
-	// foldRunIntegration already resolves the workspace's OWN binding first and only
-	// falls through to the operator's site-wide DefaultFor:agent_runs integration when
-	// the workspace names nothing — it returns kind=="" when neither resolves, so the
-	// ceiling/convention fallback below stays the last resort exactly as before. Gating
-	// this call on the workspace carrying its own binding skipped tier 3 (the operator's
-	// site-wide default) for every unbound workspace's record/replay session, silently
-	// diverging from "Model access resolves" (docs/OPERATIONS.md).
-	_, integKind, bedrockRef := s.foldRunIntegration(ctx, "", policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
-	subMounted := specHasMountTarget(policy, claudeCredTarget)
-	if integKind == "" && !subMounted {
-		// No workspace/operator integration bound: fall back to the operator
-		// ceiling's convention subscription mount, else a brokered api-key grant
-		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHostPort()); m {
-			subMounted = true
-		} else {
-			s.ensureLLMGrant(policy, "claude-code", s.presentSecretNames(ctx), false)
-		}
+	if specHasMountTarget(policy, claudeCredTarget) {
+		return "subscription"
 	}
-	llmMode := "none"
-	switch {
-	case subMounted, integKind == "anthropic_subscription":
-		llmMode = "subscription" // managed subscription is injected proxy-side by dispatch
-	case integKind == "bedrock" || bedrockRef != nil:
-		llmMode = "bedrock" // dispatch's resolveBedrockAuth wires it from bedrockRef below
+	if m, _ := applyLLMCredMount(policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHostPort()); m {
+		return "subscription" // managed subscription is injected proxy-side by dispatch
 	}
-	if subMounted {
-		return llmMode, bedrockRef, nil, nil
+	if hadInjections {
+		return "api-key"
 	}
-	// Build the injection from whatever api_key grant the FALLBACK just added
-	// (llmGrantsBefore: the fold's own grants above are already minted) —
-	// mirrors handleCreateRun's api_key branch (a subscription/bedrock fold
-	// adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
-	minted, err := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[llmGrantsBefore:])
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("create llm grant: %w", err)
-	}
-	if (hadInjections || len(minted) > 0) && llmMode == "none" {
-		llmMode = "api-key"
-	}
-	return llmMode, bedrockRef, minted, nil
+	return "none"
 }

@@ -15,13 +15,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// integrations_write.go is the write + run resolution half of integrations.go,
+// integrations_write.go is the write + resolution half of integrations.go,
 // split out (scripts/check-file-size.sh) once the file grew past the 1000-line
 // gate: validateIntegrationWrite backs the write endpoints
-// (setup_integrations.go); resolveIntegrationRef/defaultAgentRunsIntegration
-// back the run-time resolution ladder (llmcred.go). Everything here builds ON
-// TOP of effectiveIntegrations/capabilitiesFor (integrations.go) without
-// changing either.
+// (setup_integrations.go); resolveIntegrationRef resolves a ref against the
+// effective set. Everything here builds ON TOP of
+// effectiveIntegrations/capabilitiesFor (integrations.go) without changing
+// either.
 
 // genericIntegrationKind reports whether kind is a GENERIC open slug — one
 // whose behavior does NOT come from code: the row's own secrets, egress and
@@ -161,23 +161,24 @@ func countProxyHeaderSecrets(in types.Integration) int {
 }
 
 // knownIntegrationConfigKeys is each CLOSED kind's accepted non-secret config
-// key set — an unknown key on a closed kind 400s BY NAME (a typo'd "regoin"
-// silently stored would read back as an unset region at dispatch), while a
+// key set — an unknown key on a closed kind 400s BY NAME (a typo'd
+// "instalation_id" silently stored would read back as unset), while a
 // GENERIC kind's config takes any string keys (the row is its own contract).
 // github_app's "host" carries the legacy derivation's github.com marker
-// (legacyIntegrations) so a derived row stays adoptable.
+// (legacyIntegrations, integrations.go) so a derived row stays adoptable.
 var knownIntegrationConfigKeys = map[string]map[string]bool{
-	types.IntegrationKindBedrock:               {"region": true, "model": true, "auth_lane": true},
-	types.IntegrationKindGitHubApp:             {"app_id": true, "installation_id": true, "host": true},
-	types.IntegrationKindAnthropicSubscription: {"lane": true},
-	types.IntegrationKindAnthropicAPIKey:       {},
-	types.IntegrationKindOpenAIAPIKey:          {},
-	types.IntegrationKindGitHost:               {},
+	types.IntegrationKindGitHubApp: {"app_id": true, "installation_id": true, "host": true},
+	types.IntegrationKindGitHost:   {},
 }
 
-// validIntegrationDefaultFor is DefaultFor's closed value set (see
-// types.Integration's doc comment: "agent_runs" and/or "wardyn_features").
-var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_features": true}
+// integration400ModelHost refuses an integration whose credential would be
+// presented on a host that serves a model (modelServingHosts).
+const integration400ModelHost = "egress: %q serves a model — a model credential comes only from a model provider, so an integration's credential can't be presented there"
+
+// integration400AIKind refuses an AI-kind write: model access is a model
+// provider now, and effectiveIntegrations leaves a stored AI row out of every
+// resolver, so a row written here would grant nothing.
+const integration400AIKind = "kind: %q is model access, which is set up under Settings → Model providers — an integration no longer carries it"
 
 // validateIntegrationWrite enforces an operator-authored Integration's
 // structural + security invariants before it is persisted (PUT
@@ -192,17 +193,9 @@ var validIntegrationDefaultFor = map[string]bool{"agent_runs": true, "wardyn_fea
 // the contract; a closed kind may leave it nil, meaning the kind's own bespoke
 // transport); config keys closed per kind (knownIntegrationConfigKeys — an
 // unknown key on a closed kind 400s BY NAME; a generic kind takes any string
-// keys); DefaultFor closed to {agent_runs, wardyn_features} on AI kinds only;
-// and the one per-kind Config check this codebase already has an established
-// rule for: a bedrock integration may not
-// half-override region/model — the identical hazard
-// `git show ecc1903~1:internal/api/llmcred.go`'s
-// TestValidateWorkspaceLLMCred_Rejections pinned for the pre-Integration
-// shape (a region-scoped inference profile 403s at invoke with only one set).
-// Config VALUES on a closed kind's known keys are left permissive beyond the
-// bedrock pair: capabilitiesFor documents an unrecognized value as a graceful
-// fallback, not an error, and this validator should not be stricter than the
-// reader.
+// keys). Config VALUES on a closed kind's known keys are left permissive:
+// capabilitiesFor documents an unrecognized value as a graceful fallback, not
+// an error, and this validator should not be stricter than the reader.
 func validateIntegrationWrite(in types.Integration) error {
 	if !integrationRefRE.MatchString(in.ID) {
 		return fmt.Errorf("id: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars, "+
@@ -220,6 +213,9 @@ func validateIntegrationWrite(in types.Integration) error {
 	// integrations_run.go). It simply can no longer be edited through this
 	// endpoint. This is a deliberate capability removal, recorded under BREAKING
 	// in the changelog — not a validation tightening that fell out of a refactor.
+	if types.AIProviderKind(in.Kind) {
+		return fmt.Errorf(integration400AIKind, in.Kind)
+	}
 	if !types.ClosedIntegrationKinds[in.Kind] {
 		return fmt.Errorf("kind: %q is not a supported integration kind (want one of: %s)",
 			in.Kind, strings.Join(types.ClosedIntegrationKindList(), ", "))
@@ -259,22 +255,6 @@ func validateIntegrationWrite(in types.Integration) error {
 	if len(in.Docs) > 2048 {
 		return fmt.Errorf("docs: too long (%d bytes, max 2048)", len(in.Docs))
 	}
-	if len(in.DefaultFor) > 0 && !types.AIProviderKind(in.Kind) {
-		// Both marks are defined only for the AI kinds
-		// (types.Integration.DefaultFor's doc), and their readers
-		// (applyDefaultForRadio's clear, defaultAgentRunsIntegration) already
-		// filter on it — so a non-AI row taking a mark here just STEALS it from
-		// the real AI row (applyDefaultForRadio
-		// clears it from every OTHER row regardless of kind) while never being
-		// able to SERVE it itself: silent, site-wide loss of model access
-		// through a write that validated clean.
-		return fmt.Errorf("default_for: only an AI provider integration may set this (kind is %q)", in.Kind)
-	}
-	for _, d := range in.DefaultFor {
-		if !validIntegrationDefaultFor[d] {
-			return fmt.Errorf("default_for: unknown %q (want agent_runs and/or wardyn_features)", d)
-		}
-	}
 	if known, closed := knownIntegrationConfigKeys[in.Kind]; closed {
 		for _, k := range slices.Sorted(maps.Keys(in.Config)) {
 			if !known[k] {
@@ -282,57 +262,7 @@ func validateIntegrationWrite(in types.Integration) error {
 			}
 		}
 	}
-	if in.Kind == types.IntegrationKindBedrock {
-		region, _ := in.Config["region"].(string)
-		model, _ := in.Config["model"].(string)
-		if (region == "") != (model == "") {
-			return fmt.Errorf("config: bedrock region and model must be set together (a region-scoped inference profile 403s at invoke with only one)")
-		}
-		// resolveBedrockAuth (runs_bedrock.go) reads FOUR
-		// FIXED global secret names in a fixed precedence — bearer > captured
-		// SSO > ~/.aws mount > static keys — never this row's own
-		// secret_name/auth_lane (Bedrock creds are deliberately operator-
-		// global, per that file's own doc comment: "The workspace never
-		// carries credentials — those stay operator-global"). A row that
-		// names anything else here is decorative: the operator renames the
-		// credential field in Add/Edit Integration, the write succeeds, and
-		// the stored secret is silently orphaned — never read by anything.
-		// Reject at write time instead of accepting a field nothing honors.
-		for i, sec := range in.Secrets {
-			if !bedrockGlobalSecretNames[sec.SecretName] {
-				return fmt.Errorf("secrets[%d].secret_name: %q is not a recognized Bedrock credential secret — "+
-					"Bedrock credentials are operator-global, not per-integration; use one of %s "+
-					"(set via the Bedrock setup flow, not this row)", i, sec.SecretName, bedrockGlobalSecretNamesList)
-			}
-		}
-	}
 	return nil
-}
-
-// applyDefaultForRadio enforces DefaultFor's RADIO semantics across rows: each
-// value in newDefaultFor is a single-select mark, so setting it on the row
-// named id CLEARS that same value from every OTHER row's DefaultFor in the
-// same write — never a 409, per the approved spec. Mutates rows in place
-// (mirroring applyDisabled's own in-place style above); a row with nothing to
-// clear is left untouched (including its slice identity, so an unrelated
-// write never appears to "touch" every other row).
-func applyDefaultForRadio(rows []types.Integration, id string, newDefaultFor []string) {
-	if len(newDefaultFor) == 0 {
-		return
-	}
-	marks := make(map[string]bool, len(newDefaultFor))
-	for _, m := range newDefaultFor {
-		marks[m] = true
-	}
-	for i := range rows {
-		if rows[i].ID == id || len(rows[i].DefaultFor) == 0 {
-			continue
-		}
-		cleared := slices.DeleteFunc(slices.Clone(rows[i].DefaultFor), func(m string) bool { return marks[m] })
-		if len(cleared) != len(rows[i].DefaultFor) {
-			rows[i].DefaultFor = cleared
-		}
-	}
 }
 
 // resolveIntegrationRefFrom is resolveIntegrationRef's pure half: resolves
@@ -357,53 +287,19 @@ func resolveIntegrationRefFrom(rows []integrationRow, ref string) (types.Integra
 
 // resolveIntegrationRef resolves ref against the EFFECTIVE integration set
 // (stored ∪ legacy-derived — effectiveIntegrations above) into the concrete
-// types.Integration it names. Effective, not stored-only, so a run/workspace
-// binding "just works" against a well-known legacy id (e.g.
-// "anthropic_api_key") with no adoption step required first — the entire
+// types.Integration it names. Effective, not stored-only, so a workspace
+// requirement "just works" against a well-known legacy id (e.g.
+// "git_host:github.com") with no adoption step required first — the entire
 // point of deriving legacy rows in the first place. ok=false when ref is
 // empty or names nothing at all. The single-ref convenience form — a caller
 // resolving MULTIPLE refs in one request should compute effectiveIntegrations
 // once and call resolveIntegrationRefFrom directly.
 // owner (secretOwnerFromRequest — "" for an operator) widens the presence map
-// this resolves against to include the caller's OWN stored secrets, so a
-// member's own anthropic-api-key synthesises the legacy anthropic_api_key row
-// exactly as the operator's does. "" is byte-identical to the pre-6c behavior.
+// this resolves against to include the caller's OWN stored secrets. "" is the
+// operator namespace.
 func (s *Server) resolveIntegrationRef(ctx context.Context, owner, ref string) (types.Integration, bool) {
 	if ref == "" {
 		return types.Integration{}, false
 	}
-	present := s.presentSecretNamesFor(ctx, owner)
-	// Operator scope: this asks whether the DEPLOYMENT has a bedrock row to
-	// resolve a ref against, not whose session would carry a run — that answer is
-	// resolveBedrockAuth's, and it is scoped there.
-	return resolveIntegrationRefFrom(s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, types.SiteConfig{}, awsSSOScope{})), ref)
-}
-
-// defaultAgentRunsIntegration returns the STORED AI-provider integration
-// marked DefaultFor: agent_runs, optionally narrowed to onlyType (""=any
-// type). Only a STORED row can carry DefaultFor at all (a legacy-derived row
-// is never persisted, so it never has one — see types.Integration's doc
-// comment), which is exactly what keeps this tier a no-op with zero stored
-// integrations regardless of onlyType. ok=false when none is marked.
-func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType string) (types.Integration, bool) {
-	var sc types.SiteConfig
-	if s.cfg.Store != nil {
-		if got, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			sc = got
-		}
-	}
-	for _, in := range sc.Integrations {
-		// A Disabled row must never be handed back as
-		// "the site-wide default" — applyIntegrationRequirement's probe path
-		// already refuses one; this fold-time tier is the actual agent-run
-		// model-credential path and had no equivalent guard.
-		if !types.AIProviderKind(in.Kind) || in.Disabled || !slices.Contains(in.DefaultFor, "agent_runs") {
-			continue
-		}
-		if onlyType != "" && in.Kind != onlyType {
-			continue
-		}
-		return in, true
-	}
-	return types.Integration{}, false
+	return resolveIntegrationRefFrom(s.effectiveIntegrations(ctx, s.presentSecretNamesFor(ctx, owner)), ref)
 }

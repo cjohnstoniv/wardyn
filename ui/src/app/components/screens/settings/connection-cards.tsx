@@ -43,6 +43,7 @@ import { Input } from "../../ui/input";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useOperator } from "../../wardyn/operator-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
@@ -80,13 +81,15 @@ export const S = {
   BEDROCK_CONFIG_NOTE:
     "Region and model come from the daemon's own config (WARDYN_BEDROCK_REGION / WARDYN_BEDROCK_MODEL) — set them where wardynd starts, not here.",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
-  // A per_user Bedrock row is declared on the
-  // Agents tab, and its sign-in is per person (the connected check below
-  // reads the CALLER's own model_access, not a deployment-wide fact) — this
-  // note says so rather than leaving the card silent about where the lane
-  // actually lives.
+  // A per_user Bedrock row's sign-in is per person
+  // (the connected check below reads the CALLER's own model_access, not a
+  // deployment-wide fact), and this note says so. The Agents tab no longer
+  // declares such a lane (#539): a new per-person lane is a model provider,
+  // so the note points there — "under Model providers" is AGENTS.NO_PROVIDER's
+  // own wording — and stays true on an install still running an older
+  // per_user roster row.
   BEDROCK_PER_USER_NOTE:
-    "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
+    "This lane is per person: each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's. A new per-person lane is set up under Model providers.",
   // U-02: not_applicable is the shared
   // admin-token principal's own answer (no session of its own, ever) —
   // reading the deployment-wide `!!bedrockRow` fact instead paints a green
@@ -111,7 +114,7 @@ export const S = {
   // one on the card. Unconditional on role (mirrors BEDROCK_PER_USER_NOTE),
   // since the fact is true of whoever owns the row, operator included.
   BEDROCK_BEARER_OWN_NOTE:
-    "This lane is per person: it is declared on the Agents tab, and each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's.",
+    "This lane is per person: each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's. A new per-person lane is set up under Model providers.",
   // PR #352 review, finding 4: the disabled field's
   // own reason, for the row shape where it stays operator-only (a shared row,
   // or no row at all — deriveIntegrations' default). Without this the only
@@ -127,13 +130,29 @@ function Card({
   title,
   lede,
   footer,
+  // #1200 compact cards — Settings' and Your account's ModelProviderCard only.
+  // Getting started's Secrets step mounts the SAME card and must stay fully
+  // open, so the collapse is an opt-in, never this shell's own new default.
+  compact = false,
+  summary,
   children,
 }: {
   title: string;
   lede: string;
   footer?: string;
+  compact?: boolean;
+  summary?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  if (compact) {
+    return (
+      <CollapsibleCard title={title} summary={summary} testId="model-provider-card">
+        <p className="text-body leading-snug text-muted-foreground">{lede}</p>
+        <div className="mt-3 space-y-2">{children}</div>
+        {footer && <p className="mt-3 text-meta leading-snug text-muted-foreground">{footer}</p>}
+      </CollapsibleCard>
+    );
+  }
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <h3 className="text-sm font-medium text-foreground">{title}</h3>
@@ -396,10 +415,15 @@ export function ModelProviderCard({
   status,
   siteConfig,
   onChanged,
+  // #1200 compact cards — Settings' and Your account's opt-in; Getting
+  // started's Secrets step (integrations-step.tsx) omits it and stays fully
+  // open (Card's own comment).
+  compact = false,
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
   onChanged: () => void;
+  compact?: boolean;
 }) {
   const operator = useOperator();
   const present = status.secrets.present;
@@ -448,13 +472,12 @@ export function ModelProviderCard({
   // only decides whether to offer a lane that would fail.
   const sharedSubBlocked = status.auth.shared_subscription_allowed === false;
 
-  // The claude-code roster row is per_user Bedrock SSO
-  // — declared on the Agents tab, where each person signs in for themselves.
-  // Read independently here on purpose: this card reads the server's settled
-  // answer (status.harnesses), while the Agents tab reads the same `harness`
-  // prop for the DRAFT being edited — but both share ONE predicate,
-  // isPerUserSsoRow (workspace-providers-copy.ts), so the three-part
-  // test (enabled/mechanism/credential_source) can't drift into two answers.
+  // The claude-code roster row is per_user Bedrock SSO, where each person
+  // signs in for themselves.
+  // This card reads the server's settled answer (status.harnesses) through
+  // the ONE predicate every such reader shares, isPerUserSsoRow
+  // (lib/model-access.ts), so the three-part test
+  // (enabled/mechanism/credential_source) can't drift into two answers.
   // See that function's comment for why `enabled !== false` is
   // load-bearing, not decorative.
   const perUserSso = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserSsoRow(h));
@@ -472,13 +495,29 @@ export function ModelProviderCard({
   // complete" (internal/api/modelaccess.go). One predicate behind both the
   // sentence and the missing door, so they can never drift apart.
   const mechanismPrincipal = perUserSso && !!status.model_access && modelAccessState === "not_applicable";
+  // The bedrock Lane's own `connected` predicate (below), extracted so #1200's
+  // one-line summary can share it rather than compute a second, driftable copy.
+  const bedrockConnected =
+    perUserSso && status.model_access
+      ? modelAccessState !== "not_applicable" && perUserLive
+      : !!bedrockRow?.bedrockLane || !!status.bedrock?.ready;
+  // #1200 compact cards — one line: which lane is connected, reusing the
+  // exact same lane titles the radiogroup below renders, never a new name
+  // for the same thing.
+  const modelSummary = subRow
+    ? "Connected — Claude subscription"
+    : keyRow
+      ? "Connected — API key"
+      : bedrockConnected
+        ? "Connected — AWS Bedrock"
+        : "Not connected";
 
   const LANES: ModelLane[] = ["subscription", "api_key", "bedrock"];
   const { containerProps, itemProps } = useRovingRadio(LANES.length, LANES.indexOf(lane), (i) => setLane(LANES[i]));
 
   return (
     <>
-      <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
+      <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER} compact={compact} summary={modelSummary}>
         {/* PR #352 review, finding 3: suppressed while a member sits on the
             ONE lane/row combination this card actually hands them an
             editable field (a per_user bearer row's AWS Bedrock lane) — the
@@ -540,11 +579,7 @@ export function ModelProviderCard({
             // server's own "region + model + one credential lane" fold and is
             // the member-safe form of the same fact; it is false on the
             // region-or-model-only deployment the check above guards against.
-            connected={
-              perUserSso && status.model_access
-                ? modelAccessState !== "not_applicable" && perUserLive
-                : !!bedrockRow?.bedrockLane || !!status.bedrock?.ready
-            }
+            connected={bedrockConnected}
             connectedDetail={
               bedrockConfigured ? `${status.bedrock?.region} · ${status.bedrock?.model}` : undefined
             }

@@ -10,32 +10,25 @@ package workspacescan
 // manifest body can never inject an egress host.
 //
 // Fidelity notes (deliberate Wave-1 scope limits):
-//   - Tier 0 (.devcontainer.json/.devcontainer/devcontainer.json): PRESENCE
-//     only. We don't parse the JSONC body (image/build/features) — that's a
-//     later wave (image generation, gen.go); Wave 1 just needs HasDevcontainer.
-//   - Tier 1 (Dockerfile/Containerfile/compose): presence only. Compose is
-//     intentionally matched without caring whether a `version:` key exists —
-//     Compose v2 parses version-less files fine, so we never look for one.
-//   - Tier 2 declarative (buildpacks/devbox/devenv/gitpod/okteto/skaffold):
-//     presence + a tool hint, no language claim (no TOML/YAML parser here).
-//     The Nix/DSL family (flake.nix/shell.nix/devenv.nix/Tiltfile/Earthfile)
-//     is NOT statically parseable, so those rows set unresolved=true, which
-//     forces NeedsReview regardless of what else was found.
-//   - Tier 3 toolchain pins: single-language pin files (.nvmrc,
-//     .python-version, .ruby-version, ...) need no content parsing — the
-//     FILENAME alone implies the language. Multi-language pin files
-//     (.tool-versions, mise.toml/.mise.toml) are presence-only (tool hint,
-//     no language claim): mise.toml is TOML and .tool-versions would need a
-//     small parser — add content parsing (a bounded per-line
-//     split, ignoring the path:/ref:/system version-field variants) if a
-//     bare-pin-file-only repo turning up empty Languages becomes a real
-//     complaint.
+//   - Tier 0: PRESENCE only — the JSONC body (image/build/features) isn't
+//     parsed; that's a later wave (image generation, gen.go).
+//   - Tier 1: presence only. Compose is matched without checking `version:`
+//     — Compose v2 parses version-less files fine.
+//   - Tier 2 declarative: presence + tool hint, no language claim (no
+//     TOML/YAML parser here). The Nix/DSL family isn't statically
+//     parseable, so those rows set unresolved=true, forcing NeedsReview
+//     regardless of what else was found.
+//   - Tier 3 toolchain pins: single-language pin files need no content
+//     parsing — the FILENAME implies the language. Multi-language pin files
+//     (.tool-versions, mise.toml) are presence-only: parsing them would need
+//     a small parser, added later if empty Languages on a pin-only repo
+//     becomes a real complaint.
 //   - Tier 4 manifests carry the load-bearing language/package-manager/egress
-//     claims. Credential/custom-registry files are also egress-affecting
-//     (per the plan) but never a language/package-manager claim by
-//     themselves, and their secret values are never read.
-//   - Tier 5 CI (.github/workflows/*.yml, .gitlab-ci.yml) is corroborating
-//     only: presence + a tool hint, no language/package-manager/egress claim.
+//     claims. Credential/custom-registry files are egress-affecting but
+//     never a language/package-manager claim, and their secret values are
+//     never read.
+//   - Tier 5 CI is corroborating only: presence + tool hint, no
+//     language/package-manager/egress claim.
 
 // Tier 4 egress hosts, named once so the table below stays typo-proof.
 var (
@@ -43,8 +36,7 @@ var (
 	egressPyPI  = []string{"pypi.org", "files.pythonhosted.org"}
 	egressGo    = []string{"proxy.golang.org", "sum.golang.org"}
 	egressCargo = []string{"crates.io", "static.crates.io", "index.crates.io"}
-	// repo1.maven.org is Central's canonical host; many builds hit it directly
-	// (survey: 6/10 JVM repos resolve against both).
+	// repo1.maven.org is Central's canonical host; many builds hit it directly.
 	egressMaven    = []string{"repo.maven.apache.org", "repo1.maven.org"}
 	egressGradle   = []string{"repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org"}
 	egressGem      = []string{"rubygems.org"}
@@ -150,10 +142,10 @@ var markerTable = []marker{
 	{id: "Cargo.lock", languages: []string{"Rust"}, packageManagers: []string{"cargo"}, egress: egressCargo},
 	{id: idCargoConfig, egress: egressCargo},
 
-	// maven / gradle (Java). The wrapper-properties rows are matched by path
-	// suffix (lookupMarker): a wrapper self-downloads its build tool on first
-	// run, so its distribution host is a first-build egress need even though
-	// no host tool is required.
+	// maven / gradle (Java). Wrapper-properties rows match by path suffix
+	// (lookupMarker): a wrapper self-downloads its build tool on first run,
+	// so its distribution host is a first-build egress need even with no
+	// host tool required.
 	{id: idGradleWrapper, egress: []string{"services.gradle.org"}, tools: []string{"gradle-wrapper"}},
 	{id: idMavenWrapper, egress: egressMaven, tools: []string{"maven-wrapper"}},
 	{id: "pom.xml", languages: []string{"Java"}, packageManagers: []string{"maven"}, egress: egressMaven},
@@ -185,16 +177,14 @@ var markerTable = []marker{
 	{id: "pubspec.yaml", languages: []string{"Dart"}, packageManagers: []string{"pub"}, egress: egressPub},
 	{id: "pubspec.lock", languages: []string{"Dart"}, packageManagers: []string{"pub"}, egress: egressPub},
 
-	// pip/poetry/pdm/pipenv/uv (Python) — all share the same registry, so
-	// each file independently contributes its own package manager (set
-	// union, no precedence): a repo with both requirements.txt and uv.lock
-	// yields PackageManagers=[pip,uv], neither suppressing the other.
+	// pip/poetry/pdm/pipenv/uv (Python) share one registry; each file
+	// independently contributes its own package manager (set union, no
+	// precedence) — requirements.txt + uv.lock yields [pip,uv].
 	{id: "requirements.txt", languages: []string{"Python"}, packageManagers: []string{"pip"}, egress: egressPyPI},
 	{id: "Pipfile", languages: []string{"Python"}, packageManagers: []string{"pipenv"}, egress: egressPyPI},
 	{id: "Pipfile.lock", languages: []string{"Python"}, packageManagers: []string{"pipenv"}, egress: egressPyPI},
-	// pyproject.toml alone is ambiguous among poetry/pdm/uv/setuptools (would
-	// need a TOML parser to read [tool.*] sections) — claim the language +
-	// egress, but no specific package manager unless a lockfile says which.
+	// pyproject.toml alone is ambiguous among poetry/pdm/uv/setuptools —
+	// claim language + egress, but no package manager unless a lockfile says.
 	{id: "pyproject.toml", languages: []string{"Python"}, egress: egressPyPI},
 	{id: "poetry.lock", languages: []string{"Python"}, packageManagers: []string{"poetry"}, egress: egressPyPI},
 	{id: "pdm.lock", languages: []string{"Python"}, packageManagers: []string{"pdm"}, egress: egressPyPI},
@@ -203,11 +193,10 @@ var markerTable = []marker{
 	{id: ".pypirc", egress: egressPyPI},
 
 	// --- Docs generators: tool hint only (no language/egress claim). The tool
-	// feeds a fixed docs-build SetupCommand template (deriveSetupCommands) so a
-	// docs workspace gets a recordable/verifiable build task. Docusaurus needs no
-	// template of its own — its package.json build script rides the JS branch.
-	// Hugo detection is hugo.toml only (the modern default); legacy config.toml
-	// sites are missed rather than false-positived (config.toml is too generic).
+	// feeds a fixed docs-build SetupCommand template (deriveSetupCommands).
+	// Docusaurus rides the JS branch instead of its own template. Hugo
+	// detection is hugo.toml only; legacy config.toml sites are missed
+	// rather than false-positived (too generic).
 	{id: "mkdocs.yml", tools: []string{"mkdocs"}},
 	{id: "mkdocs.yaml", tools: []string{"mkdocs"}},
 	{id: idSphinxConf, tools: []string{"sphinx"}},
@@ -231,16 +220,14 @@ var markersByID = func() map[string]marker {
 }()
 
 // unmappedBuildFiles are filenames that are clearly a build/dependency
-// descriptor but fall outside the fixed egress table above (either no single
-// safe registry mapping, or an ecosystem outside Wave-1 scope). Seeing one
-// means "an unrecognized build system was seen": bounded evidence is
-// captured (UnrecognizedSamples, for the later AI fallback) and the profile
-// is marked low-confidence + NeedsReview.
+// descriptor but fall outside the egress table above (no safe registry
+// mapping, or outside Wave-1 scope). Seeing one captures bounded evidence
+// (UnrecognizedSamples, for a later fallback) and marks the profile
+// low-confidence + NeedsReview.
 //
-// Makefile is deliberately EXCLUDED: it's an extremely common convenience
-// wrapper unrelated to the primary language/package manager, and flagging
-// every Makefile as "unrecognized build system" would make NeedsReview noise
-// rather than signal.
+// Makefile is deliberately EXCLUDED: a common convenience wrapper unrelated
+// to the primary language/package manager — flagging it would make
+// NeedsReview noise, not signal.
 var unmappedBuildFiles = map[string]struct{}{
 	"environment.yml":  {},
 	"environment.yaml": {}, // conda

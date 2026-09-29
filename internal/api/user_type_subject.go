@@ -128,7 +128,7 @@ func (s *Server) userTypeSubjectExists(w http.ResponseWriter, r *http.Request, s
 	}
 	_, err := s.cfg.Store.GetUserType(r.Context(), subject)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusBadRequest, accessUnknownUserType(subject))
+		writeErrorReason(w, http.StatusBadRequest, reasonAccessUnknownUserType, accessUnknownUserType(subject))
 		return false
 	}
 	if err != nil {

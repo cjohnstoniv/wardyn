@@ -86,7 +86,7 @@ async function createRunningInteractiveRun(
   const run = (await resp.json()) as { id: string };
   // The `none` runner (this backend) never actually reaches RUNNING on its
   // own — force it, same as every other fixture that needs an active state
-  // (see e.g. runs.spec.ts's F1-F3 repro).
+  // (see e.g. runs-cockpit.spec.ts's F1-F3 repro).
   sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${run.id}'`);
   return run.id;
 }

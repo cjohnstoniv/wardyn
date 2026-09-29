@@ -27,15 +27,16 @@ type policyRequest = client.PolicyRequest
 // closed, mirroring LoadPolicySpec discipline), requires a non-empty name, and
 // runs validatePolicySpec over the spec before any store write — policies are
 // admin-gated config and a bad spec must never be persisted. Any problem is
-// returned as a human-readable message the handler surfaces with HTTP 400.
-func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader) (policyRequest, string) {
+// returned as a human-readable message, with its wire reason, that the handler
+// surfaces with HTTP 400.
+func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader) (policyRequest, string, string) {
 	var req policyRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
-		return policyRequest{}, msg
+		return policyRequest{}, reasonPolicyRequestInvalid, msg
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		return policyRequest{}, "name is required"
+		return policyRequest{}, reasonPolicyRequestInvalid, "name is required"
 	}
 	repos := make([]string, len(req.Spec.WorkspaceRepos))
 	for i, wr := range req.Spec.WorkspaceRepos {
@@ -45,9 +46,9 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 	hosts, _ := ado.forAddresses(repos...)
 	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos, hosts)
 	if err := validatePolicySpec(req.Spec); err != nil {
-		return policyRequest{}, "invalid policy spec: " + err.Error()
+		return policyRequest{}, specRefusalReason(err, reasonPolicyRequestInvalid), "invalid policy spec: " + err.Error()
 	}
-	return req, ""
+	return req, "", ""
 }
 
 // handleListPolicies returns policies in reverse creation order, paginated by
@@ -103,7 +104,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := s.cfg.Store.GetPolicy(r.Context(), id)
-	if notFoundIf(w, err, "policy") {
+	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
 		return
 	}
 	if err != nil {
@@ -271,9 +272,9 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
 // with the created policy, or 400 on an invalid body/spec.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	req, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
+	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return
 	}
 	// Authoring fail-fast: a policy's user-workspace mounts/repos must be onboarded
@@ -284,8 +285,8 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// WRITTEN — and is then refused at every door that would clone it. Authoring is
 	// not cloning, and narrowing the provider rows must not retroactively make a
 	// stored policy unsaveable.
-	if code, _, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
-		writeError(w, code, "workspace: "+err.Error())
+	if code, reason, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
+		writeErrorReason(w, code, reason, "workspace: "+err.Error())
 		return
 	}
 	// Secret references are checked for shape only. Whether a named secret
@@ -293,7 +294,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// in that owner's namespace; checking the author's here demanded an
 	// operator row, the fallback a per-person credential must not have (#1123).
 	if _, err := s.secretRefsOf(req.Spec); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "secret: "+err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPolicySecretRefsInvalid, "secret: "+err.Error())
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -310,7 +311,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		// run_policies.name is UNIQUE — a duplicate name is a
 		// caller-fixable 409, not a raw Postgres 500 (contrast CreateApproval's
 		// existing 23505 sentinel for approvals).
-		writeError(w, http.StatusConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
+		writeErrorReason(w, http.StatusConflict, reasonPolicyNameConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
 		return
 	}
 	if err != nil {
@@ -331,21 +332,21 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
+	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return
 	}
-	if code, _, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
-		writeError(w, code, "workspace: "+err.Error())
+	if code, reason, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
+		writeErrorReason(w, code, reason, "workspace: "+err.Error())
 		return
 	}
 	if _, err := s.secretRefsOf(req.Spec); err != nil { // shape only, as in create
-		writeError(w, http.StatusUnprocessableEntity, "secret: "+err.Error())
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPolicySecretRefsInvalid, "secret: "+err.Error())
 		return
 	}
 	updated, err := s.cfg.Store.UpdatePolicy(r.Context(), id, req.Name, req.Spec)
-	if notFoundIf(w, err, "policy") {
+	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
@@ -354,7 +355,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		// one does: a caller-fixable 409, never the blanket 500 below carrying the
 		// raw Postgres constraint string. Sited after notFoundIf so an unknown id
 		// is still a 404.
-		writeError(w, http.StatusConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
+		writeErrorReason(w, http.StatusConflict, reasonPolicyNameConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
 		return
 	}
 	if err != nil {
@@ -375,7 +376,7 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.cfg.Store.DeletePolicy(r.Context(), id)
-	if notFoundIf(w, err, "policy") {
+	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
 		return
 	}
 	if err != nil {

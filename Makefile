@@ -558,6 +558,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	GOLANGCI_LINT_CACHE=$(CURDIR)/.golangci-cache go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."
 	./scripts/check-file-size.sh
+	@echo "Running doc-form gate (scripts/doc-form.sh)..."
+	./scripts/doc-form.sh
 	@echo "Running fixture-date gate (scripts/check-fixture-dates.sh)..."
 	./scripts/check-fixture-dates.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."

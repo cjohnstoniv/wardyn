@@ -234,9 +234,9 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 }
 
 // SweepOrphanedSandboxes tears down the sandbox objects of every run whose row
-// no longer owns them — this substrate's half of api.SandboxOrphanSweeper
-// (D13). Without it the control-plane's boot-and-cadence sweep was a SILENT
-// NO-OP on k8s: only the docker driver satisfied the capability.
+// no longer owns them — this substrate's half of api.SandboxOrphanSweeper.
+// Without it the control-plane's boot-and-cadence sweep was a SILENT NO-OP on
+// k8s: only the docker driver satisfied the capability.
 //
 // Reachable routinely, not just after a crash: disk_mib is the agent
 // container's ephemeral-storage LIMIT, so the kubelet EVICTS it (an ordinary

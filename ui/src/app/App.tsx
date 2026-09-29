@@ -17,6 +17,7 @@ import { WardynMark } from "./components/wardyn/logo";
 import { getToken, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
+import { deriveReadiness } from "./lib/readiness";
 // From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
 // from there drags the whole funnel (→ integrations → harness-login → xterm) into
 // the entry chunk and defeats the /setup route's code-splitting.
@@ -608,6 +609,12 @@ export default function App() {
               attentionCount={attentionCount}
               unreachable={unreachable}
               lastOkAt={lastOkAt}
+              // #214 — the shell's own read of the deployment-wide no-barrier
+              // fact (deriveReadiness's barrierReady — see AppShell's own doc
+              // for exactly what this is and is not the same as). Absent
+              // (undefined -> false) while setupStatus hasn't landed yet,
+              // never a guess painted off no data.
+              noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token

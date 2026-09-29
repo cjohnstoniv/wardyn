@@ -183,7 +183,6 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `workspace` | Workspaces | narrows | Which workspaces a member may launch a run against. |
 | `image` | Base images | **widens** | Which base images a member may name on a run of their own. |
 | `agent` | Agents | narrows | Which agents a member may launch a run with. *(0.7 ADDITION, not from this round — see below.)* |
-| `integration` | Model providers | narrows | Which model provider a member may name on a run of their own. *(0.7 ADDITION.)* |
 | `feature` | SSH keys and API tokens | narrows | Whether a member may add an SSH key or mint an API token. *(0.8 DRAFT, #614.)* |
 | `policy` | Stored policies | narrows | Which stored policies a member may select for a run of their own. *(0.8 DRAFT, #613.)* |
 
@@ -194,7 +193,6 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `workspace` | Workspace | One workspace. Use * for every workspace. |
 | `image` | Image ref | The exact image ref, registry and tag included. Use * for every image. |
 | `agent` | Agent | The exact agent id, spelled as --agent takes it. Use * for every agent. |
-| `integration` | Integration | The exact integration id. Use * for every integration. |
 | `feature` | Feature | ssh_key or api_token. Use * for both. |
 | `policy` | Policy | The policy's id. Use * for every policy. |
 
@@ -208,7 +206,6 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `workspace` | Members can launch a run against any workspace. |
 | `image` | Members can't name their own base image at all. Runs use what the workspace carries. |
 | `agent` | Members can launch a run with any agent this deployment carries. |
-| `integration` | Members can name any model provider integration on a run they launch. |
 | `feature` | Members can add SSH keys and mint API tokens. |
 | `policy` | Members can select any stored policy for a run they launch. |
 
@@ -221,7 +218,6 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `workspace` | A member can only launch against workspaces granted to them. The rest stay listed — a run against one is refused at launch, with the reason. |
 | `image` | A member can name an image granted to them. Every other ref is still refused. |
 | `agent` | A member can only launch agents granted to them. A run naming another one is refused at launch, with the reason. |
-| `integration` | A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them. |
 | `feature` | A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked. |
 | `policy` | A member can only select policies granted to them. A run naming another one is refused at launch, with the reason. A run with no policy is never refused for it. |
 
@@ -232,10 +228,9 @@ re-frozen*, so `ui/src/app/lib/permissions-copy.ts` stays the single home for
 `KIND` rows and this table stays the single canon of them. Both NARROW, for the
 reason `capGranted` documents — a widening kind refuses on `!enforced`, which
 would refuse every member run on every deployment that has not enforced it.
-`integration`'s `enforced` string carries the doctrine in-line on purpose: the
-kind bounds the `integration_id` a member typed and nothing else, so a
-workspace's own pin and the operator's site default keep applying no matter what
-the member holds.
+0.8 retired `integration` with the AI integrations it bounded: a run's
+`integration_id` is refused outright, and a model provider is bounded by
+`model_provider` instead.
 
 ### 7.2 Admin surface — `PERM`
 

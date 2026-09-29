@@ -208,6 +208,26 @@ describe("SetupLayout", () => {
     expect(screen.getByRole("button", { name: /finish setup/i })).toBeInTheDocument();
   });
 
+  // #214 — Setup cannot finish on a host with no barrier: `finishGate` is the
+  // one gate this footer carries with no `next` step left to render it
+  // beside (mirrors nextGate's own head/reason shape above).
+  describe("finishGate — the footer's Finish-setup gate", () => {
+    it("Finish setup is enabled and nothing extra renders when finishGate is absent", () => {
+      renderLayout({ current: "review" });
+      expect(screen.getByRole("button", { name: /finish setup/i })).toBeEnabled();
+    });
+
+    it("Finish setup is disabled and the gate's head/reason render beside it", () => {
+      renderLayout({
+        current: "review",
+        finishGate: { head: "Setup can't finish without a barrier.", reason: "Wardyn confines every run." },
+      });
+      expect(screen.getByRole("button", { name: /finish setup/i })).toBeDisabled();
+      expect(screen.getByText("Setup can't finish without a barrier.")).toBeInTheDocument();
+      expect(screen.getByText("Wardyn confines every run.")).toBeInTheDocument();
+    });
+  });
+
   // The fast-path banner ("You're ready — launch your first run now" + Keep
   // setting up) was REMOVED: it duplicated the Launch step's own affordance and
   // shouted over the step the operator was actually working on. Launching early

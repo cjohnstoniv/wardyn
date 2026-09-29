@@ -173,4 +173,11 @@ export const FIELD_HELP = {
     doc: "push_rules--pushrulesspec",
     snippet: { deny_paths: [".github/workflows/**"] },
   },
+  azure_devops_capabilities: {
+    what: "This run's Azure DevOps capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
+    values:
+      "A list of grantable capabilities: read, code_write, pr, policy_admin, policy_bypass, repo_admin, … — anything else is refused on write. Only within the provider's capability_ceiling: a run naming anything outside it is refused at launch. Opening a pull request needs pr, not code_write. Omitted keeps the provider's default.",
+    doc: "top-level",
+    snippet: ["read", "code_write", "pr"],
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

@@ -21,7 +21,7 @@ every row with it byte for byte.
 | REAUTH_BAR.CTA | Sign in | Bar button (reopens the dialog); the dialog's token submit |
 | SESSION_ENDED_REASON | You were signed out. Sign in again to continue. | The full sign-in screen's own notice (`lib/api/core.ts`), amber not red (Q457-10) |
 
-Reused, not restated: "Copy my changes" and its toast (`PROVIDERS_DRAFT.CONFLICT_COPY`,
+Reused, not restated: "Copy my changes" and its toast (`PROVIDERS_EXTRA.CONFLICT_COPY`,
 `CONFLICT_COPIED_TOAST`), "Not now" (`MODEL_ACCESS_BANNER.NOT_NOW`), "Sign in with SSO"
 (`sign-in.tsx` `SSO_SIGN_IN`).
 

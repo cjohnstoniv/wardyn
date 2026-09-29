@@ -15,7 +15,7 @@
 // their own.
 //
 // workspace-providers-copy.test.ts PARSES §7.2-§7.5 + §7.7 back out of the
-// prompt doc and compares all 98 keys below against them (§7.6 is STAGING —
+// prompt doc and compares all 94 keys below against them (§7.6 is STAGING —
 // field-report strings owned by other lanes — and is excluded, the way this
 // doc's own header says: `/^### 7\.[2-57]\b/`), so a swapped hyphen, a dropped
 // ellipsis or a new doc row fails a gate instead of shipping.
@@ -228,24 +228,12 @@ export const PROVIDER_MEMBER = {
 export const AGENTS = {
   AGENTS_TITLE: "Agents",
   AGENTS_LEAD:
-    "Which coding agents this Wardyn offers, how each one reaches its model, and whether that credential is one for everyone or one per person.",
+    "Which coding agents this Wardyn offers, and the model provider each one uses by default. Every credential is each person's own.",
   AGENT_ROW_DISABLED_HINT: "Off: runs naming this agent are refused, and it shows as unavailable in New run.",
-  FIELD_MECHANISM: "Model access",
-  MECHANISM_HINT: "One lane per agent. A run whose lane is not working is refused — Wardyn never substitutes another provider.",
   MECHANISM_NONE: "None — the image brings its own",
-  MECHANISM_NONE_HINT: "Wardyn wires no model credential. The only choice for an agent outside the catalog.",
   MECHANISM_BEDROCK_BEARER: "Bearer key",
   MECHANISM_BEDROCK_SSO: "SSO sign-in",
-  MECHANISM_BEDROCK_ENV: "Daemon environment",
-  MECHANISM_BEDROCK_AWS_DIR: "Host ~/.aws",
-  FIELD_SOURCE: "Credential",
-  SOURCE_SHARED: "Shared",
-  SOURCE_SHARED_HINT: "One credential, captured by an admin, backs every run.",
-  SOURCE_PER_USER: "Per person",
-  SOURCE_PER_USER_HINT: "Each person signs in to AWS themselves. Their runs use their own session; an expiry affects one person.",
-  PER_USER_UNAVAILABLE: "Not available: only an AWS SSO sign-in is captured per person in this release.",
   FIELD_SSO_START_URL: "AWS access portal start URL",
-  SSO_START_URL_HINT: "Everyone signs in against this portal. A sign-in never chooses another.",
   // Replaces the login pane's start-URL FIELD when the sign-in runs under a
   // per_user row: the server signs in against the row's stored sso_start_url and
   // IGNORES a typed one, so the field was a control with no effect.
@@ -284,6 +272,13 @@ export const AGENTS = {
   // The off row's neutral chip. Its own key rather than AGENT_ROW_DISABLED_HINT
   // sliced at its colon — a reworded hint must not silently reword a chip.
   AGENT_ROW_DISABLED_CHIP: "Off",
+  // The row's default model provider (packet MP-C, G1–G3). DEFAULT_OPTION
+  // shows the name once when it equals the kind label (packet MP-A, QA-5).
+  FIELD_DEFAULT_PROVIDER: "Default model provider",
+  NO_PROVIDER: (harness: string) => `No model provider is set up for ${harness} — add one under Model providers.`,
+  ONLY_PROVIDER: (name: string, harness: string) => `${name} — the only provider ${harness} can use.`,
+  DEFAULT_OPTION: (name: string, kind: string) => (name === kind ? name : `${name} · ${kind}`),
+  DEFAULT_HINT: "What a new run uses unless the person chooses another.",
 } as const;
 
 // SetupModelAccess.state -> the AGENTS chip label. SIX keys, not the seven
@@ -361,8 +356,7 @@ export function modelAccessActionLine(
 // reads as unknown, never false, so an older daemon that omits the field is
 // unaffected. ONE predicate, not two independently-typed copies (the U-03
 // recurrence this fixes): connection-cards.tsx's perUserSso reads the
-// server's settled row, agents-tab.tsx's perUserSaved reads the same
-// `harness` prop — same three-part test, same answer.
+// server's settled row through it.
 
 // AGENTS_EXTRA — shipped copy, frozen by #206, not part of the byte-parity
 // §7.7 table above — workspace-providers-copy.test.ts's byte-check parses
@@ -371,25 +365,9 @@ export function modelAccessActionLine(
 // started as a draft in docs/design/workspace-providers-prompt.md, the same
 // doc §7.2-§7.5/§7.7 above were transcribed from.
 export const AGENTS_EXTRA = {
-  // The per_user sign-in banner (Appendix A finding 4): moves the
-  // claude-code model-access block to the TOP of an expanded per_user row so
-  // the legacy Settings door stops being the one an admin reaches for.
-  PER_USER_SIGN_IN_TITLE: "This lane is per person — including yours",
-  PER_USER_SIGN_IN_BODY:
-    "Saving declares the lane; it signs nobody in, you included. Sign in to AWS below. Every member does the same from their own Getting Started.",
-  // The roster pin (Appendix A finding 1, ask 1) — mirrors FIELD_SSO_START_URL /
-  // SSO_START_URL_HINT's shape, one Field each.
+  // The roster pin labels, reused by the provider editor's Bedrock SSO fields.
   FIELD_SSO_ACCOUNT_ID: "Pinned AWS account id",
-  SSO_ACCOUNT_ID_HINT:
-    "The 12-digit account a sign-in for this row must resolve to. Set together with the role below, or leave both blank — the sign-in proposes, the roster disposes.",
   FIELD_SSO_ROLE_NAME: "Pinned IAM role name",
-  SSO_ROLE_NAME_HINT:
-    "The IAM role a sign-in for this row must resolve to. Set together with the account above, or leave both blank.",
-  // F4-F9 (Appendix A V8): a per_user bedrock_sso row with no start URL is a
-  // guaranteed 400 (agent_providers.go's validateAgentCredentialSource) — the
-  // Git tab withholds Save for its own invalid rows; this is the same rule
-  // said where the field is authored.
-  SSO_START_URL_REQUIRED: "Required for a per-person lane — Save is disabled until this names a real https:// start URL.",
 } as const;
 
 // PROVIDERS_EXTRA — shipped copy, frozen by #206, not part of the

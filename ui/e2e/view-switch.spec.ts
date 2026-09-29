@@ -5,8 +5,8 @@
 
 import type { BrowserContext, Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
-import { CONSOLE_VIEW, USER_PREVIEW, VIEW_DROPPED } from "../src/app/components/wardyn/copy/console-view";
-import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
+import { CONSOLE_VIEW, USER_PREVIEW, VIEW_DROPPED, VIEW_TO_ADMIN } from "../src/app/components/wardyn/copy/console-view";
+import { NO_BARRIER, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 
 // M-2 — the Console view switch and the per-view chrome
@@ -315,11 +315,14 @@ test.describe("who sees the switch", () => {
   });
 
   test("the admin token on an SSO install: no switch, and the eyebrow still names the view", async ({ page }) => {
+    // Cache-and-serve (see ssoAdminSession): one real fetch, every match served from it.
+    let healthz: Record<string, unknown> | null = null;
     await page.route("**/healthz", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.sso = true;
-      await route.fulfill({ response, json });
+      if (!healthz) {
+        healthz = (await (await route.fetch()).json()) as Record<string, unknown>;
+        healthz.sso = true;
+      }
+      await route.fulfill({ json: healthz });
     });
     await gotoConsole(page, "admin");
     await expect(page.getByRole("group", { name: CONSOLE_VIEW.GROUP })).toHaveCount(0);
@@ -350,14 +353,17 @@ test.describe("the slimmed avatar menu and the preview", () => {
 
   test("Preview as a new user sits on the Permissions header; its band is the way out", async ({ page, context }) => {
     const session = await ssoAdminSession(context, { user_preview_available: true });
+    // Cache-and-serve the real fetch (see ssoAdminSession); each match still
+    // re-derives its answer from the mutable session onto a copy of the base.
+    let meBase: Record<string, unknown> | null = null;
     await context.route("**/api/v1/me", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
+      if (!meBase) meBase = (await (await route.fetch()).json()) as Record<string, unknown>;
+      const json: Record<string, unknown> = { ...meBase };
       Object.assign(json, { method: "sso", user_view: session.userView, user_preview_available: !session.userView });
       if (session.userView) {
         Object.assign(json, { role: "user", operator: false, security_operator: false, user_view_no_credential: true });
       }
-      await route.fulfill({ response, json });
+      await route.fulfill({ json });
     });
     await gotoConsole(page, "admin");
     await sidebarLink(page, "Permissions").click();
@@ -377,5 +383,60 @@ test.describe("the slimmed avatar menu and the preview", () => {
     await gotoConsole(page);
     await expect(segment(page, CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByText(/Viewing as/)).toHaveCount(0);
+  });
+});
+
+// #1328 review round 2, R2-1 — a session-user (an SSO admin who switched to
+// the User view) is clamped exactly like a plain member (role "user",
+// operator false), so #214's no-barrier CTA cannot gate on meta.operator
+// alone for them; it gates on access === "session-user" instead, routes to
+// the SAME /admin/setup?step=environment an operator uses, and leaves
+// entering admin authority to ViewGate's own "to-admin" click (never a
+// silent redirect). The click's own target already carries the full
+// pathname+search (console-view.tsx's ViewInterstitial), so `?step=
+// environment` needs no extra plumbing to survive the switch.
+test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment", () => {
+  test("a session-user's CTA still reaches the Environment step, through the switch prompt", async ({
+    page,
+    context,
+  }) => {
+    const session = await ssoAdminSession(context);
+    session.userView = true;
+    // The Admin Setup funnel shows the welcome hero first until this is set
+    // (confinement-posture.spec.ts's own precedent for reaching this step
+    // directly).
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-onboarding-seen", "1");
+      } catch {
+        /* private mode — ignore */
+      }
+    });
+    // A settled, empty probe — the deployment genuinely has no barrier, so
+    // the CTA this test clicks actually renders (context-level: it must
+    // survive the full reload switchView triggers).
+    // Cache-and-serve (see ssoAdminSession): the console re-reads this on every
+    // poll, so a real round trip per match would race the response disposal.
+    let setupStatus: Record<string, unknown> | null = null;
+    await context.route("**/api/v1/setup/status*", async (route) => {
+      if (!setupStatus) {
+        const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+        body.runner = { ...(body.runner as object), driver: "docker", confinement_classes: [] };
+        setupStatus = body;
+      }
+      await route.fulfill({ json: setupStatus });
+    });
+    await gotoConsole(page);
+
+    // Scoped with .first(): the banner and the top bar both carry this CTA.
+    await page.getByRole("link", { name: NO_BARRIER.CTA }).first().click();
+    // The client-side navigation already lands the URL bar here — ViewGate
+    // renders the interstitial INSTEAD of the Outlet, not a redirect away.
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
+    await expect(page.getByRole("heading", { name: VIEW_TO_ADMIN.TITLE })).toBeVisible();
+
+    await page.getByRole("button", { name: VIEW_TO_ADMIN.GO }).click();
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
   });
 });

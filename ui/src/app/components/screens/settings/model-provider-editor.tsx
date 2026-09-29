@@ -358,10 +358,10 @@ function ProviderFields({
   const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
   // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
-  // (never a kind-step option of its own). agents-tab.tsx's FIELD_SOURCE toggle
-  // is the same segmented-radio-group idiom (role="radiogroup" Buttons over
-  // useRovingRadio, not a native radiogroup — CONSOLE-RULES' precedent for a
-  // two-option choice with the mock's segmented look).
+  // (never a kind-step option of its own). A segmented radio group
+  // (role="radiogroup" Buttons over useRovingRadio, not a native radiogroup —
+  // CONSOLE-RULES' precedent for a two-option choice with the mock's segmented
+  // look).
   const signInGroup = useRovingRadio(2, sso ? 0 : 1, (i) => set({ kind: i === 0 ? "bedrock_sso" : "bedrock_bearer" }));
 
   return (

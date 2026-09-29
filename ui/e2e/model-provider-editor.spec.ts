@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, navToRoute } from "./fixtures";
 
 // The provider editor (#537, model-provider-editor.tsx), opened from
 // Settings → Model providers (#536). Two things only an e2e
@@ -16,6 +16,7 @@ import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 test.describe.configure({ mode: "serial" });
 
 async function addEndpoint(page: import("@playwright/test").Page, baseURL: string) {
+  await expandCard(page, "Model providers");
   await page.getByRole("button", { name: "Add model provider" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "Your own endpoint" }).click();
@@ -118,6 +119,7 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model providers");
 
     await page.getByRole("button", { name: "Add model provider" }).click();
     let dialog = page.getByRole("dialog");
@@ -207,6 +209,7 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model providers");
 
     await page.getByRole("button", { name: "Add model provider" }).click();
     let dialog = page.getByRole("dialog");

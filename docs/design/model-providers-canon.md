@@ -106,8 +106,8 @@ line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API k
 and E4 — the two rows `docs/design/model-providers-mock/canon.html` Table 1 left as "#538 builds it".
 The agent reasons reused, `INTEGRATIONS.X_BEDROCK_CODEX` and `INTEGRATIONS.X_SUB_CODEX`, are
 `lib/integrations.ts`'s own; the AWS sign-in labels reused, `AGENTS.FIELD_SSO_START_URL`,
-`AGENTS.MECHANISM_BEDROCK_SSO`, `AGENTS.MECHANISM_BEDROCK_BEARER`, `AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID`
-and `AGENTS_DRAFT.FIELD_SSO_ROLE_NAME`, are `lib/workspace-providers-copy.ts`'s own.
+`AGENTS.MECHANISM_BEDROCK_SSO`, `AGENTS.MECHANISM_BEDROCK_BEARER`, `AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID`
+and `AGENTS_EXTRA.FIELD_SSO_ROLE_NAME`, are `lib/workspace-providers-copy.ts`'s own.
 
 `PROVIDER_EDITOR.REGION` — the packet's frozen table calls the four Bedrock labels (including
 "Region") "Reused" as a group, but no shipped `Region` Field constant existed to pin against, only
@@ -124,3 +124,14 @@ as every other row below.
 | `PROVIDER_EDITOR.SSO_SETUP_HINT` | E3, under Pinned IAM role name | These make each person's sign-in one click. |
 | `PROVIDER_EDITOR.MODEL_HINT_BEDROCK` | E3, under a ticked agent | An inference profile id. |
 | `PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING` | kind step (disabled reason) and E4 | Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image. |
+
+## Owner decisions (packet MP-C) — the Agents tab default (#539)
+
+Packet MP-C ("Choosing at Launch", owner-approved 2026-09-28, recommended on every question). Its
+Agents-tab strings are frozen in the `AGENTS` table of `workspace-providers-prompt.md` §7.7, beside the
+rest of that tab's copy, and parsed back by `workspace-providers-copy.test.ts`.
+
+| Id | Decision |
+|---|---|
+| QC-1 | With one provider for an agent, no select: the static G2 line. |
+| QC-5 | The Agents-tab default is a select, not radio rows. |

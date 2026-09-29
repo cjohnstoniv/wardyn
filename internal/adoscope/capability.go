@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package adoscope is the Azure DevOps CAPABILITY CATALOGUE: it names the
-// access an Azure DevOps request needs, classifies one request to exactly one
-// name, and maps a set of those names to the Entra scopes a token must carry —
-// because Azure DevOps asks for vso.code_write both to push a commit and to
-// complete a pull request while BYPASSING branch policy, so a token minted
-// from the requested scope is strictly wider than the work it was minted for.
+// access a request needs, classifies one request to exactly one name, and
+// maps those names to Entra scopes — because Azure DevOps asks for
+// vso.code_write both to push a commit and to complete a pull request while
+// BYPASSING branch policy, so a token minted from the requested scope is
+// strictly wider than the work it was minted for.
 //
 // The package is PURE, standard-library only (importing internal/types would
-// cycle; importing internal/api or internal/egress would let a call site's own
-// idea of "read" drift from the one classifier's).
+// cycle; internal/api or internal/egress would let a call site's own idea of
+// "read" drift from the classifier's).
 //
-// FAIL-CLOSED IS THE CONTRACT: Classify errors on a request it cannot reason
-// about and returns CapUnclassifiedWrite for a write it does not recognize;
-// neither is grantable, so a caller refuses both.
+// FAIL-CLOSED IS THE CONTRACT: Classify errors on a request it can't reason
+// about, and returns CapUnclassifiedWrite for an unrecognized write; neither
+// is grantable, so a caller refuses both.
 package adoscope
 
 import (
@@ -31,9 +31,8 @@ type Capability string
 // profile may name, and the only ones ScopesFor turns into scopes.
 const (
 	// CapRead is a read of any area in readAreas: the floor every profile
-	// starts from, and a ceiling must include it. It is WIDER than "read the
-	// code" — the minimum credential can also read service-connection
-	// configuration, groups/users, and directory identities.
+	// starts from. WIDER than "read the code" — it can also read
+	// service-connection config, groups/users and directory identities.
 	CapRead Capability = "read"
 	// CapCodeWrite is a commit, a push or a ref move that no branch policy
 	// protects.
@@ -43,10 +42,9 @@ const (
 	CapPR Capability = "pr"
 	// CapPolicyAdmin is editing the branch policies themselves.
 	CapPolicyAdmin Capability = "policy_admin"
-	// CapPolicyBypass is landing a change THROUGH a policy rather than past
-	// it: a PR completed with bypassPolicy, or a ref moved on a protected
-	// branch. Azure DevOps asks only for write scope for both, hence the
-	// separate capability from CapCodeWrite.
+	// CapPolicyBypass is landing a change THROUGH a policy: a PR completed
+	// with bypassPolicy, or a ref moved on a protected branch. Azure DevOps
+	// asks only write scope for both, hence the split from CapCodeWrite.
 	CapPolicyBypass Capability = "policy_bypass"
 	// CapRepoAdmin is creating, renaming or deleting a repository.
 	CapRepoAdmin Capability = "repo_admin"
@@ -71,24 +69,22 @@ const (
 	CapProjectAdmin Capability = "project_admin"
 )
 
-// The REFUSED capabilities. They are Capability values rather than errors so a
-// refusal can name the area it refused — an operator reading "denied_tokens"
-// learns something "refused" does not tell them — but none of them is
-// grantable, so a caller refuses every one.
+// The REFUSED capabilities: Capability values, not errors, so a refusal can
+// name the area it refused — an operator reading "denied_tokens" learns more
+// than "refused" would — but none is grantable, so a caller refuses every one.
 const (
-	// CapDeniedTokens is the personal-access-token and token-administration
-	// area. A token lane that can mint or revoke tokens is a lane that can
-	// leave the lane.
+	// CapDeniedTokens is the PAT and token-administration area: a lane that
+	// can mint or revoke tokens is a lane that can leave the lane.
 	CapDeniedTokens Capability = "denied_tokens"
-	// CapDeniedServiceHooks is the service-hook area: forwarding the org's
-	// events to a caller-chosen address is exfiltration with a webhook's paperwork.
+	// CapDeniedServiceHooks is the service-hook area: forwarding org events
+	// to a caller-chosen address is exfiltration with a webhook's paperwork.
 	CapDeniedServiceHooks Capability = "denied_service_hooks"
 	// CapDeniedExtensions is extension management: installing an extension
 	// runs someone else's code inside the organisation.
 	CapDeniedExtensions Capability = "denied_extension_management"
-	// CapDeniedInternal is the undocumented contribution API the web UI drives
-	// itself with (_apis/Contribution/…). It is a single door onto every other
-	// area, so no capability over it could mean anything.
+	// CapDeniedInternal is the undocumented contribution API the web UI
+	// drives itself with (_apis/Contribution/…) — a single door onto every
+	// other area, so no capability over it could mean anything.
 	CapDeniedInternal Capability = "denied_internal"
 	// CapUnclassifiedWrite is a write this catalogue does not recognize. It is
 	// the fail-closed answer, not a capability anyone can hold.
@@ -114,9 +110,9 @@ var deniedCapabilities = map[Capability]bool{
 	CapDeniedExtensions: true, CapDeniedInternal: true,
 }
 
-// Grantable reports whether c may be written on a provider row and turned into
-// a scope. Everything else — the denied areas and the unclassified write — is
-// refused, which is why a caller tests THIS rather than enumerating refusals.
+// Grantable reports whether c may be written on a provider row and turned
+// into a scope. Everything else is refused — test THIS, not enumerate
+// refusals.
 func (c Capability) Grantable() bool { return grantableCapabilities[c] }
 
 // Denied reports whether c names an area no capability can be held over.
@@ -172,20 +168,18 @@ var labels = map[Capability]string{
 }
 
 // Label is c's plain-language rendering, or "" for a value outside the set —
-// an empty string rather than a guess, so a caller cannot render an
-// unrecognized capability as though it were understood.
+// never a guess, so an unrecognized capability can't render as understood.
 func Label(c Capability) string { return labels[c] }
 
-// ProfileRead is the DEFAULT profile: reads and nothing else. A provider row
-// whose default_profile is empty gets this one, which is what makes the
-// read-only default a fact of the catalogue rather than a field someone
-// remembered to fill in.
+// ProfileRead is the DEFAULT profile: reads and nothing else — a provider
+// row with empty default_profile gets this, making read-only the
+// catalogue's fact rather than a field someone remembered to fill in.
 func ProfileRead() []Capability { return []Capability{CapRead} }
 
 // ProfileContribute is the "do the work" profile: read, push, pull requests,
-// work items and wiki. CapBuildExecute is deliberately ABSENT: queueing a
-// pipeline runs under a different, usually wider identity, so it stays an
-// opt-in on the row rather than part of "contribute".
+// work items and wiki. CapBuildExecute is deliberately ABSENT: a pipeline
+// runs under a different, usually wider identity, so it stays opt-in rather
+// than part of "contribute".
 func ProfileContribute() []Capability {
 	return []Capability{CapRead, CapCodeWrite, CapPR, CapWorkWrite, CapWikiWrite}
 }

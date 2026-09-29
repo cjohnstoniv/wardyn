@@ -76,6 +76,7 @@ import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ADMIN_SSH_KEYS } from "./admin-ssh-keys-card";
 import { SETTINGS_SUPER_ONLY, VIEW_REFUSAL } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { expandCard, startsWith } from "../../../lib/test-dom";
 
 function renderScreen(operator = true, operatorResolved = true) {
   return render(
@@ -127,7 +128,7 @@ describe("AdminSettingsScreen", () => {
   // all, so there is nothing left for that rule to protect there either.
   it("draws Admin SSH keys LAST, after User drives", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: ADMIN_SSH_KEYS.TITLE });
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
     const card = heading.closest("section")!;
     expect(card.parentElement?.lastElementChild).toBe(card);
     const drivesCard = await screen.findByTestId("user-drives-card");
@@ -140,6 +141,8 @@ describe("AdminSettingsScreen", () => {
 
   it("draws the Model providers list above the Model provider card", async () => {
     renderScreen();
+    await screen.findByTestId("model-providers-list");
+    await expandCard(MODEL_PROVIDERS.TITLE);
     expect(await screen.findByText(MODEL_PROVIDERS.EMPTY_TITLE)).toBeInTheDocument();
     const html = document.body.innerHTML;
     expect(html.indexOf(`>${MODEL_PROVIDERS.TITLE}<`)).toBeLessThan(html.indexOf(">Model provider<"));
@@ -163,7 +166,7 @@ describe("AdminSettingsScreen — S-5, a security admin is refused (nothing fetc
   // Negative control: a real super admin gets the page, not the refusal.
   it("a super admin gets the real page", async () => {
     renderScreen(true, true);
-    expect(await screen.findByRole("heading", { name: "Host", level: 3 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: startsWith("Host"), level: 3 })).toBeInTheDocument();
     expect(screen.queryByText(SETTINGS_SUPER_ONLY.BODY)).not.toBeInTheDocument();
     expect(getSetupStatusMock).toHaveBeenCalled();
   });
@@ -173,7 +176,7 @@ describe("AdminSettingsScreen — S-5, a security admin is refused (nothing fetc
   // an unresolved /me must never lock an admin out of their own console.
   it("an unresolved /me (fail-open default) is not refused", async () => {
     renderScreen(true, /* operatorResolved */ false);
-    expect(await screen.findByRole("heading", { name: "Host", level: 3 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: startsWith("Host"), level: 3 })).toBeInTheDocument();
     expect(screen.queryByText(SETTINGS_SUPER_ONLY.BODY)).not.toBeInTheDocument();
   });
 });
@@ -189,9 +192,10 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
       { fingerprint: "SHA256:aaa", name: "laptop", public_key: "", role: "user", created_at: new Date().toISOString() },
     ]);
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: ADMIN_SSH_KEYS.TITLE });
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
     const card = within(heading.closest("section")!);
-    expect(card.getByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).toBeInTheDocument();
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
+    expect(await card.findByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).toBeInTheDocument();
     expect(card.queryByText("laptop")).not.toBeInTheDocument();
   });
 
@@ -200,8 +204,9 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
       { fingerprint: "SHA256:bbb", name: "break-glass laptop", public_key: "", role: "admin", created_at: new Date().toISOString() },
     ]);
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: ADMIN_SSH_KEYS.TITLE });
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
     const card = within(heading.closest("section")!);
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
     expect(await card.findByText("break-glass laptop")).toBeInTheDocument();
     expect(card.getByText("Admin override")).toBeInTheDocument();
     expect(card.queryByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).not.toBeInTheDocument();
@@ -209,11 +214,26 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
 
   it("Add key opens the shared dialog and reloads the list on success", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: ADMIN_SSH_KEYS.TITLE });
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
     const card = within(heading.closest("section")!);
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
     await userEvent.click(card.getByRole("button", { name: /add key/i }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Add key" })).toBeInTheDocument();
+  });
+
+  // review R2-L1: the packet has no error row for this card, and the
+  // expanded body's own ErrorState already renders "Something went wrong" —
+  // showing it as the collapsed summary too would put the same string on
+  // screen twice at once.
+  it("a failed key list carries no collapsed summary, and the expanded body's own error heading is not repeated", async () => {
+    listKeysMock.mockRejectedValue(new Error("HTTP 500"));
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
+    const card = within(heading.closest("section")!);
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
+    expect(await card.findByText("Something went wrong")).toBeInTheDocument();
+    expect(card.getAllByText("Something went wrong")).toHaveLength(1);
   });
 });
 
@@ -222,8 +242,9 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
 describe("AdminSettingsScreen — the Host card's barrier picker offers only what's installed", () => {
   it("lists only the installed tiers, read-only — Vault is dropped entirely, not disabled", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
+    await expandCard("Host");
     expect(hostCard.queryByRole("radiogroup")).toBeNull();
     expect(hostCard.getAllByRole("status").map((el) => el.textContent)).toEqual([
       expect.stringContaining("Fence"),
@@ -237,8 +258,9 @@ describe("AdminSettingsScreen — the Host card's barrier picker offers only wha
       baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }),
     );
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
+    await expandCard("Host");
     expect(hostCard.getAllByRole("status")).toHaveLength(1);
     expect(hostCard.getByText("Fence")).toBeInTheDocument();
     expect(hostCard.queryByText("Wall")).toBeNull();
@@ -257,8 +279,9 @@ describe("AdminSettingsScreen — the Host card keeps the canon no-runner card a
       baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
     );
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
+    await expandCard("Host");
     expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
     expect(hostCard.getByText(/-runner docker/)).toBeInTheDocument();
     // Never the compact-picker's own generic fallback beside the real card.
@@ -270,8 +293,9 @@ describe("AdminSettingsScreen — the Host card keeps the canon no-runner card a
       baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
     );
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
+    await expandCard("Host");
     expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
     expect(
       hostCard.getByText(/start the Docker daemon.*so Wardyn can build a barrier/),
@@ -284,8 +308,9 @@ describe("AdminSettingsScreen — the Host card keeps the canon no-runner card a
       baseStatus({ runner: { driver: "k8s", confinement_classes: [] } }),
     );
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
+    await expandCard("Host");
     expect(hostCard.getByText("Kubernetes")).toBeInTheDocument();
     expect(hostCard.getByText("Egress containment")).toBeInTheDocument();
     // Zero classes on a k8s driver is still "no runner" by the shared rule.
@@ -303,6 +328,8 @@ describe("AdminSettingsScreen — the proxy posture", () => {
       upstream_proxy_url: "http://proxy.internal.corp.example:3128",
     });
     renderScreen(true);
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
     expect(
       await screen.findByText(/corporate proxy & egress/i),
     ).toBeInTheDocument();
@@ -327,8 +354,9 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
 
     // The screen still renders — a site-config failure is not a page failure.
     expect(
-      await screen.findByRole("heading", { name: "Host", level: 3 }),
+      await screen.findByRole("heading", { name: startsWith("Host"), level: 3 }),
     ).toBeInTheDocument();
+    await expandCard("Host");
     // The way in is still offered…
     expect(screen.getByText(/corporate proxy & egress/i)).toBeInTheDocument();
     // …but nothing on the card states a posture nothing read.
@@ -344,6 +372,8 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
   it("an answered empty config still says 'Not configured' — that one is a fact", async () => {
     getSiteConfigMock.mockResolvedValue({});
     renderScreen(true);
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
     expect(
       await screen.findByText(/not configured — sandboxes go direct/i),
     ).toBeInTheDocument();
@@ -359,8 +389,9 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
       .mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.example:3128" });
     renderScreen(true);
     expect(
-      await screen.findByRole("heading", { name: "Host", level: 3 }),
+      await screen.findByRole("heading", { name: startsWith("Host"), level: 3 }),
     ).toBeInTheDocument();
+    await expandCard("Host");
     expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /re-check this host/i }));
@@ -377,7 +408,8 @@ describe("AdminSettingsScreen — an operator's Image builder row", () => {
   it("keeps the row and the honest Off sentence when the builder really is off", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ checks: [] }));
     renderScreen();
-    await screen.findByRole("heading", { name: "Host", level: 3 });
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
     expect(screen.getByText("Image builder")).toBeInTheDocument();
     expect(screen.getByText(/devcontainer builds and --image wraps are unavailable/)).toBeInTheDocument();
   });

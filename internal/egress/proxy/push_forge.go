@@ -6,46 +6,46 @@ package proxy
 // What a push leaves unchanged, read from the forge.
 //
 // A pack leaves out every object the forge already stores, so the inspector
-// cannot tell a directory a push left alone from one it moved onto a denied
-// path (push_rules.go). Object ids are content addresses, which is what closes
-// that gap: an entry the pack does not carry is UNCHANGED exactly when the same
-// path, in a commit the push builds on, has the same mode and object id — for a
-// directory, that fixes everything beneath it. So for each such entry a deny
-// pattern reaches, the broker reads that commit's trees from GitHub — trees
-// only, one directory level per request, never blobs — and drops the entry when
-// they agree. Anything else keeps the strict reading: the entry refuses the
-// push, and the refusal says why it could not be dropped.
+// can't tell a directory a push left alone from one it moved onto a denied
+// path (push_rules.go). Object ids are content addresses, which closes that
+// gap: an entry the pack doesn't carry is UNCHANGED exactly when the same
+// path, in a commit the push builds on, has the same mode and object id —
+// for a directory, that fixes everything beneath it. So for each such entry
+// a deny pattern reaches, the broker reads that commit's trees from GitHub
+// — trees only, one directory level per request, never blobs — and drops
+// the entry when they agree. Anything else keeps the strict reading.
 //
-// WHICH COMMIT. A commit may name any object id as its parent, and on GitHub
-// "the forge holds it" is not "this repository's history": objects pushed to
-// any fork of a repository are readable, and pushable-upon, through the
+// WHICH COMMIT. A commit may name any object id as its parent, and on
+// GitHub "the forge holds it" is not "this repository's history": objects
+// pushed to any fork are readable, and pushable-upon, through the
 // repository itself. Comparing against whatever parent the pack names would
 // let a fork's commit vouch for its own content at a denied path. So a base
-// counts only when the forge reports it inside the CURRENT history of a branch
-// this push updates or of the default branch (contains) — the forge resolves
-// those names, so nothing the pack asserts is taken on trust. A merge passes
-// an entry that matches ANY counted parent: demanding all would refuse
-// merging the default branch in after it changed a denied path, and closes
-// nothing a single-parent commit on the same base could not already do.
+// counts only when the forge reports it inside the CURRENT history of a
+// branch this push updates or of the default branch (contains) — the forge
+// resolves those names, so nothing the pack asserts is taken on trust. A
+// merge passes an entry matching ANY counted parent: demanding all would
+// refuse merging the default branch in after it changed a denied path, and
+// closes nothing a single-parent commit on the same base couldn't already.
 //
-// WHAT THE PACK RE-SENDS. git leaves out of a pack only what is reachable from
-// the tips the forge advertises that the client also has. A clone taken before
-// its branch moved on has none of them, so it re-sends its history — its
-// shallow boundary commit, or everything — and that history's first commit is
-// read whole: every file the repository already has arrives as though the push
-// added it. So before any carried entry refuses a push, the commits the pack
-// carries are put to the same question a base is (vouch), and the ones the
-// forge already holds in the default branch's or an updated branch's history
-// are taken out of the answer (gitpack.Result.Settle). A push built on one is
-// then judged against it exactly as against a parent it did not re-send.
+// WHAT THE PACK RE-SENDS. git leaves out of a pack only what is reachable
+// from the tips the forge advertises that the client also has. A clone
+// taken before its branch moved on has none of them, so it re-sends its
+// history — its shallow boundary commit, or everything — and that history's
+// first commit is read whole: every file the repository already has arrives
+// as though the push added it. So before any carried entry refuses a push,
+// the commits the pack carries face the same question a base does (vouch),
+// and the ones the forge already holds in the default or an updated
+// branch's history are taken out of the answer (gitpack.Result.Settle). A
+// push built on one is then judged exactly as against a parent it didn't
+// re-send.
 //
 // THE PRICE. The broker dials api.github.com with the run's own credential
-// for the lane — normally already minted by the push's discovery request, so
-// the read is a cache hit — and only for a push the pack alone would refuse.
-// At most maxForgeReads requests, all inside forgeReadWait, all while the push
-// holds the sidecar's inspection slot. Any
-// failure — a forge other than GitHub, a status other than 200, a truncated
-// listing, the read budget or the wait running out — keeps the strict reading.
+// for the lane — normally already minted by the push's discovery request,
+// so the read is a cache hit — and only for a push the pack alone would
+// refuse. At most maxForgeReads requests, all inside forgeReadWait, all
+// while the push holds the sidecar's inspection slot. Any failure — a forge
+// other than GitHub, a status other than 200, a truncated listing, the read
+// budget or wait running out — keeps the strict reading.
 
 import (
 	"context"

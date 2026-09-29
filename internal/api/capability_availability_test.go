@@ -47,7 +47,6 @@ func TestAvailability_RestrictedAtEveryLaunchField(t *testing.T) {
 	}{
 		{capWorkspace, ws.String(), "capability_workspace", createRunRequest{Agent: "claude-code", WorkspaceID: &ws}},
 		{capAgent, "codex", "capability_agent", createRunRequest{Agent: "codex"}},
-		{capIntegration, "corp-openai", "capability_integration", createRunRequest{Agent: "claude-code", IntegrationID: "corp-openai"}},
 		{capImage, img, "byoi_user", createRunRequest{Image: img}},
 	}
 	for _, f := range fields {

@@ -3,14 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Agents tab (§5c.4/§9.1): rows from SetupStatus.harnesses, `per_user`
-// disabled off `bedrock_sso`, and the signed-in admin's own model-access chip
-// (claude-code only — modelAccessAgent, internal/api).
+// The Agents tab (§5c.4/§9.1, design §5.3): rows from SetupStatus.harnesses,
+// each row's default model provider (packet MP-C's G1–G4), and the signed-in
+// admin's own model-access chip (claude-code only — modelAccessAgent,
+// internal/api).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
-import { AGENTS, AGENTS_EXTRA, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
+import type { ModelProvider } from "../../../lib/api/model-providers";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
+import { RAIL_PROVIDER } from "../../wardyn/copy/new-run-rail";
+import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab } from "./agents-tab";
@@ -37,6 +41,24 @@ vi.mock("../../../lib/api/agent-providers", async () => {
     },
   };
 });
+
+// GET /model-providers — what each row's default can name.
+const getModelProvidersMock = vi.fn();
+vi.mock("../../../lib/api/model-providers", () => ({
+  modelProviders: { getModelProviders: (...a: unknown[]) => getModelProvidersMock(...a) },
+}));
+const withProviders = (providers: ModelProvider[]) =>
+  getModelProvidersMock.mockResolvedValue({ providers: { providers }, connected: {}, etag: '"mp"' });
+
+const BEDROCK: ModelProvider = { id: "bedrock-prod", name: "Bedrock (prod)", kind: "bedrock_sso", harnesses: [{ harness: "claude-code" }] };
+const GATEWAY: ModelProvider = {
+  id: "corp-gateway",
+  name: "Corp gateway",
+  kind: "custom_endpoint",
+  harnesses: [{ harness: "claude-code" }, { harness: "codex-cli" }],
+};
+// Its name equals its kind label, so its option reads the name once.
+const ANTHROPIC_KEY: ModelProvider = { id: "anthropic", kind: "anthropic_api_key", harnesses: [{ harness: "claude-code" }] };
 
 function harness(overrides: Partial<SetupHarnessTool> = {}): SetupHarnessTool {
   return {
@@ -75,6 +97,8 @@ const statusRefreshMock = vi.fn();
 
 beforeEach(() => {
   getAgentProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: '"e0"' });
+  getModelProvidersMock.mockReset();
+  withProviders([]);
   putAgentProvidersMock.mockReset();
   retryRosterMock.mockReset();
   statusRefreshMock.mockReset();
@@ -86,72 +110,6 @@ describe("AgentsTab", () => {
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-codex-cli")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-none")).toBeInTheDocument();
-  });
-
-  it("Per person is disabled off bedrock_sso, with its reason", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_subscription" }] },
-      etag: '"e1"',
-    });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
-    expect(perUser).toBeDisabled();
-    expect(within(row).getByText(AGENTS.PER_USER_UNAVAILABLE)).toBeInTheDocument();
-  });
-
-  // The credential source is a real radiogroup (role=radiogroup + role=radio),
-  // matching the sibling mechanism control — not two styled buttons with
-  // selection conveyed by `variant` alone.
-  it("the credential source is a radiogroup whose chosen option reads as checked", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
-      etag: '"e3"',
-    });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    const group = within(row).getByRole("radiogroup", { name: AGENTS.FIELD_SOURCE });
-    expect(within(group).getByRole("radio", { name: AGENTS.SOURCE_PER_USER, checked: true })).toBeInTheDocument();
-    expect(within(group).getByRole("radio", { name: AGENTS.SOURCE_SHARED, checked: false })).toBeInTheDocument();
-  });
-
-  it("Per person is enabled once bedrock_sso is the selected mechanism", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
-      etag: '"e2"',
-    });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
-  });
-
-  // The start-URL input is reachable by its Field label (htmlFor/id).
-  it("the SSO start-URL input is reachable by its label on a per_user row", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: {
-        agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" }],
-      },
-      etag: '"e-a11y"',
-    });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const input = await screen.findByLabelText(AGENTS.FIELD_SSO_START_URL);
-    expect(input.tagName).toBe("INPUT");
-    expect(input).toHaveValue("https://acme.awsapps.com/start");
-  });
-
-  it("switching the mechanism away from bedrock_sso clears an existing per_user source", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
-      etag: '"e2b"',
-    });
-    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"e2c"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    await userEvent.click(within(row).getByRole("radio", { name: /Claude subscription/ }));
-    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
-    const [body] = putAgentProvidersMock.mock.calls[0];
-    const saved = body.agents.find((a: { id: string }) => a.id === "claude-code");
-    expect(saved.credential_source).toBeUndefined();
   });
 
   it("the signed-in admin's own model-access chip renders on the claude-code row only", async () => {
@@ -236,14 +194,11 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
     expect(within(codex).getByRole("switch")).toHaveAttribute("aria-checked", "false");
     expect(within(screen.getByTestId("agent-row-claude-code")).getByRole("switch")).toHaveAttribute("aria-checked", "true");
 
-    // An edit to a DIFFERENT row, then Save.
-    const claude = screen.getByTestId("agent-row-claude-code");
-    await userEvent.click(within(claude).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
 
     const [body] = putAgentProvidersMock.mock.calls[0];
     expect(body.agents.map((a: { id: string }) => a.id)).toEqual(["claude-code"]);
-    expect(body.agents[0].mechanism).toBe("bedrock_bearer");
+    expect(body.agents[0].mechanism).toBe("bedrock_sso");
   });
 
   it("a stored disabled row stays disabled through a Save, never dropped and never re-enabled", async () => {
@@ -267,11 +222,12 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
   });
 
   it("legacy open mode (every harness enabled) still pre-fills all-on, in catalog order", async () => {
+    withProviders([BEDROCK, GATEWAY]);
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n5"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
+    await screen.findByTestId("agent-row-claude-code");
     // An edit to the FIRST row must not move it to the end of the body.
-    await userEvent.click(within(row).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }));
+    await pickDefault("Claude Code", "Corp gateway · Your own endpoint");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
 
     const [body] = putAgentProvidersMock.mock.calls[0];
@@ -342,93 +298,66 @@ describe("AgentsTab — an unknown roster is never a saveable empty one", () => 
   });
 });
 
-// `per_user` is valid for AWS SSO only. A stored row pairing it with any
-// other mechanism must be normalised on load: rendering "Per person" both
-// active and disabled at once, hiding the start-URL field, and re-PUTting
-// both fields verbatim on the next unrelated Save would leave a value the
-// admin can neither see nor clear.
-describe("AgentsTab — a stored per_user on a mechanism that can't carry it is normalised on LOAD", () => {
-  const STORED = {
-    id: "claude-code",
-    mechanism: "anthropic_api_key",
-    credential_source: "per_user",
-    sso_start_url: "https://acme.awsapps.com/start",
-  };
-
-  it("renders Shared, with no start-URL field and no active-and-disabled Per person", async () => {
-    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED] }, etag: '"p1"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    const shared = within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED });
-    const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
-    // "Active" is the secondary variant the tab paints the chosen source with.
-    expect(shared.className.split(/\s+/)).toContain("bg-secondary");
-    expect(perUser.className.split(/\s+/)).not.toContain("bg-secondary");
-    expect(perUser).toBeDisabled();
-    expect(within(row).queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
-    // Nor is the hidden value readable anywhere on the surface.
-    expect(screen.queryByDisplayValue("https://acme.awsapps.com/start")).toBeNull();
-  });
-
-  it("...and the next Save PUTs the normalised row, not the pair it loaded", async () => {
-    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED] }, etag: '"p2"' });
+// `per_user` is valid for AWS SSO only, and the tab no longer shows the
+// credential source, start URL or pin. A stored row pairing them with a
+// mechanism that can't carry them is normalised on LOAD, or the next unrelated
+// Save would re-PUT a pair the server refuses and the admin could not clear.
+describe("AgentsTab — hidden per_user fields the server would refuse are normalised on LOAD", () => {
+  it("per_user on a non-bedrock_sso row: the next Save PUTs the normalised row", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [{ id: "claude-code", mechanism: "anthropic_api_key", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" }],
+      },
+      etag: '"p2"',
+    });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"p3"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
+    // Nothing of the hidden value is readable on the surface.
+    expect(screen.queryByDisplayValue("https://acme.awsapps.com/start")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
 
     const [body] = putAgentProvidersMock.mock.calls[0];
     const claude = body.agents.find((a: { id: string }) => a.id === "claude-code");
     expect(claude.mechanism).toBe("anthropic_api_key");
-    expect(claude.credential_source ?? "shared").toBe("shared");
+    expect(claude.credential_source).toBeUndefined();
     expect(claude.sso_start_url).toBeUndefined();
   });
 
-  it("a bedrock_sso row keeps both fields — that pair IS valid", async () => {
+  it("a stored bedrock_sso+SHARED row carrying a stale pin is normalised too", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: {
-        agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" }],
+        agents: [
+          { id: "claude-code", mechanism: "bedrock_sso", sso_start_url: "https://acme.awsapps.com/start", sso_account_id: "111111111111", sso_role_name: "BedrockRunner" },
+        ],
       },
-      etag: '"p4"',
+      etag: '"p5"',
     });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"p6"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).getByLabelText(AGENTS.FIELD_SSO_START_URL)).toHaveValue("https://acme.awsapps.com/start");
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const claude = body.agents.find((a: { id: string }) => a.id === "claude-code");
+    expect(claude).toEqual({ id: "claude-code", mechanism: "bedrock_sso" });
   });
 
-  // A bedrock_sso row with credential_source SHARED (or unset) is the same
-  // "the admin can neither see nor clear it" trap as the mechanism case
-  // above — the pin fields aren't shown (per_user gate), so a stale
-  // sso_account_id/sso_role_name/sso_start_url from another client can
-  // survive load-normalise and ride the next unrelated Save straight into
-  // agent400SSOPinUnused. One clause (credential_source !== "per_user")
-  // clears all four fields together, regardless of mechanism.
-  it("a stored bedrock_sso+SHARED row carrying a stale pin is normalised on LOAD too", async () => {
-    const STORED_SHARED_WITH_PIN = {
+  it("a valid per_user bedrock_sso row round-trips every hidden field unchanged", async () => {
+    const STORED = {
       id: "claude-code",
       mechanism: "bedrock_sso",
+      credential_source: "per_user",
       sso_start_url: "https://acme.awsapps.com/start",
       sso_account_id: "111111111111",
       sso_role_name: "BedrockRunner",
     };
-    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED_SHARED_WITH_PIN] }, etag: '"p5"' });
-    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"p6"' });
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED] }, etag: '"p7"' });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"p8"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    // Hidden on load: the row renders Shared, so none of the three fields
-    // (per_user-gated) show, and the stale values are not readable anywhere.
-    expect(within(row).queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
-    expect(within(row).queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toBeNull();
-    expect(within(row).queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toBeNull();
-    expect(screen.queryByDisplayValue("111111111111")).toBeNull();
-
+    await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     const [body] = putAgentProvidersMock.mock.calls[0];
-    const claude = body.agents.find((a: { id: string }) => a.id === "claude-code");
-    expect(claude.credential_source ?? "shared").toBe("shared");
-    expect(claude.sso_start_url).toBeUndefined();
-    expect(claude.sso_account_id).toBeUndefined();
-    expect(claude.sso_role_name).toBeUndefined();
+    expect(body.agents.find((a: { id: string }) => a.id === "claude-code")).toEqual(STORED);
   });
 });
 
@@ -510,6 +439,183 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
     await screen.findByTestId("login-start-url-prompt");
     expect(document.getElementById("harness-login-start-url")).toBeInTheDocument();
     expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
+  });
+});
+
+// Packet MP-C (design §5.3): each row's default model provider. G1 none set
+// up, G2 one (a static line — QC-1), G3 several (a select — QC-5), G4 an agent
+// that takes no provider.
+async function pickDefault(display: string, option: string) {
+  await userEvent.click(screen.getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — ${display}` }));
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
+describe("AgentsTab — the default model provider (G1–G4)", () => {
+  it("G1: no provider serves the agent", async () => {
+    withProviders([BEDROCK]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const codex = await screen.findByTestId("agent-row-codex-cli");
+    expect(within(codex).getByText(AGENTS.FIELD_DEFAULT_PROVIDER)).toBeInTheDocument();
+    expect(within(codex).getByText("No model provider is set up for Codex CLI — add one under Model providers.")).toBeInTheDocument();
+    expect(within(codex).queryByRole("combobox")).toBeNull();
+  });
+
+  it("G2: one provider is a static line, no select, and nothing is written for it", async () => {
+    withProviders([BEDROCK]);
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"g2"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).getByText("Bedrock (prod) — the only provider Claude Code can use.")).toBeInTheDocument();
+    expect(within(claude).queryByRole("combobox")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.find((a: { id: string }) => a.id === "claude-code").default_provider).toBeUndefined();
+  });
+
+  // A turned-off provider can't serve a run (chooseModelProvider skips it), so
+  // the tab doesn't offer or count one. Packet MP-C draws no off case; this
+  // follows the server.
+  it("G1 in text-info: every provider serving the agent is turned off", async () => {
+    withProviders([{ ...ANTHROPIC_KEY, disabled: true }]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    const line = within(claude).getByText(AGENTS.NO_PROVIDER("Claude Code"));
+    expect(line.className.split(/\s+/)).toContain("text-info");
+    expect(within(claude).queryByText(/the only provider/)).toBeNull();
+  });
+
+  it("G2 counts only turned-on providers, and names one by its kind label when unnamed", async () => {
+    withProviders([ANTHROPIC_KEY, { ...GATEWAY, disabled: true }]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).getByText("Anthropic API key — the only provider Claude Code can use.")).toBeInTheDocument();
+    expect(within(claude).queryByRole("combobox")).toBeNull();
+  });
+
+  // Review round 2: a stored default that is turned off is never hidden. The
+  // server refuses every run of the agent until another default is chosen, so
+  // the row keeps the select even with a single provider left on.
+  it("a stored default that is off, with one other provider on, keeps the select on the placeholder", async () => {
+    withProviders([{ ...GATEWAY, disabled: true }, ANTHROPIC_KEY]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"offone"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"offone2"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).queryByText(/the only provider/)).toBeNull();
+    const select = within(claude).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` });
+    expect(select).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
+    await pickDefault("Claude Code", "Anthropic API key");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.find((a: { id: string }) => a.id === "claude-code").default_provider).toBe("anthropic");
+  });
+
+  it("a stored default with every provider off reads the list's OFF_STILL_DEFAULT line, never G1", async () => {
+    withProviders([{ ...GATEWAY, disabled: true }, { ...ANTHROPIC_KEY, disabled: true }]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"offall"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).getByText(MODEL_PROVIDERS.OFF_STILL_DEFAULT("Claude Code"))).toBeInTheDocument();
+    expect(within(claude).queryByText(AGENTS.NO_PROVIDER("Claude Code"))).toBeNull();
+  });
+
+  it("G3 offers only turned-on providers, and a stored default that is off shows the placeholder", async () => {
+    withProviders([{ ...GATEWAY, disabled: true }, ANTHROPIC_KEY, BEDROCK]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"g3off"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    const select = within(claude).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` });
+    expect(select).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
+    await userEvent.click(select);
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["Anthropic API key", "Bedrock (prod) · Amazon Bedrock"]);
+  });
+
+  it("G3: several providers are a select showing the stored default, with the hint", async () => {
+    withProviders([GATEWAY, ANTHROPIC_KEY, BEDROCK]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "anthropic_api_key", default_provider: "corp-gateway" }] },
+      etag: '"g3"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    const select = within(claude).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` });
+    expect(select).toHaveTextContent("Corp gateway · Your own endpoint");
+    expect(within(claude).getByText(AGENTS.DEFAULT_HINT)).toBeInTheDocument();
+    await userEvent.click(select);
+    // Every provider serving the agent, the name once where it equals the kind label.
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["Corp gateway · Your own endpoint", "Anthropic API key", "Bedrock (prod) · Amazon Bedrock"]);
+  });
+
+  it("G3: with no default stored, the select shows the placeholder", async () => {
+    withProviders([GATEWAY, BEDROCK]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).getByRole("combobox")).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
+  });
+
+  it("G3: picking a default writes default_provider on that row, and only that row", async () => {
+    withProviders([GATEWAY, BEDROCK]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }, { id: "codex-cli", mechanism: "openai_api_key" }] },
+      etag: '"g3s"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"g3t"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    await pickDefault("Claude Code", "Bedrock (prod) · Amazon Bedrock");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.find((a: { id: string }) => a.id === "claude-code")).toEqual({
+      id: "claude-code",
+      mechanism: "bedrock_sso",
+      default_provider: "bedrock-prod",
+    });
+    expect(body.agents.find((a: { id: string }) => a.id === "codex-cli").default_provider).toBeUndefined();
+  });
+
+  it("G3: a member (not an operator) sees the select disabled", async () => {
+    withProviders([GATEWAY, BEDROCK]);
+    render(<AgentsTab harnesses={HARNESSES} operator={false} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const claude = await screen.findByTestId("agent-row-claude-code");
+    expect(within(claude).getByRole("combobox")).toBeDisabled();
+  });
+
+  it("G4: an agent that takes no provider reads None — the image brings its own", async () => {
+    withProviders([GATEWAY]);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const none = await screen.findByTestId("agent-row-none");
+    expect(within(none).getByText(AGENTS.FIELD_DEFAULT_PROVIDER)).toBeInTheDocument();
+    expect(within(none).getByText(AGENTS.MECHANISM_NONE)).toBeInTheDocument();
+  });
+
+  it("the mechanism radio, credential toggle and start URL are gone from every row", async () => {
+    withProviders([GATEWAY, BEDROCK]);
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" }] },
+      etag: '"gone"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    expect(screen.queryByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO })).toBeNull();
+    expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
+  });
+
+  it("a failed GET /model-providers renders the fetch-failed state, with no Save", async () => {
+    getModelProvidersMock.mockRejectedValue(new HttpError(500, "boom"));
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    expect(await screen.findByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeNull();
   });
 });
 

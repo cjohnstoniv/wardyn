@@ -723,7 +723,7 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.cfg.Store.DeleteUserDrive(r.Context(), id)
-	if notFoundIf(w, err, "user drive") {
+	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
@@ -846,7 +846,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// the FK: an unknown drive_id is now named here.
 	if strings.TrimSpace(g.HomeOverride) != "" {
 		d, derr := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID)
-		if notFoundIf(w, derr, "user drive") {
+		if notFoundIf(w, derr, "user drive", reasonUserDriveNotFound) {
 			return
 		}
 		if derr != nil {
@@ -863,7 +863,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
-	if notFoundIf(w, err, "user drive") {
+	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
 		return
 	}
 	// ErrConflict here is the ONE uniqueness rule the natural key does not
@@ -922,7 +922,7 @@ func (s *Server) handleDeleteUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// load every allocation in the deployment to describe one, and could
 	// describe a row a concurrent write had since changed.
 	deleted, err := s.cfg.Store.DeleteUserDriveGrant(r.Context(), id)
-	if notFoundIf(w, err, "user drive allocation") {
+	if notFoundIf(w, err, "user drive allocation", reasonUserDriveAllocationNotFound) {
 		return
 	}
 	if err != nil {

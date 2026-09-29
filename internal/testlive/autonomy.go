@@ -12,24 +12,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// AutonomyL0RefusalOK reports a descriptive error unless body is the shape
-// internal/api/runs_autonomy.go's autonomyLadder writes when a governance
-// profile caps a member's posture at AutonomyL0 and the request is an
-// unattended (non-interactive) run: "unattended runs are not allowed by your
-// governance profile %q at this run's posture: it permits autonomy level %s
-// (bound by %s), which requires a human at the pane. Launch with
-// `--interactive`, or narrow the run's egress, secrets or confinement."
+// AutonomyL0RefusalOK reports a descriptive error unless body is the refusal
+// autonomyLadder writes when a governance profile caps a member at AutonomyL0
+// and the request is an unattended run.
 //
-// It is PURE — no HTTP, no client — so #705's live test and a hermetic fixture
-// both prove the SAME check: a 403 alone is not proof of L0 enforcement (a
-// governance profile could refuse for an unrelated reason, or resolve to a
-// DIFFERENT rung, and the test would still see "403" and call it proven).
+// It is PURE — no HTTP, no client — so a live test and a hermetic fixture
+// prove the SAME check: a 403 alone isn't proof of L0 enforcement, since a
+// profile could refuse for an unrelated reason or resolve to a different rung
+// and still return 403.
 //
-// It grades body text only, never a machine "reason" field: refuse() calls
-// writeError, which is writeErrorReason(w, status, "", msg) — the reason is
-// always "" on this refusal (internal/api/http.go's errorBody.Reason is
-// omitempty, and refuse() never sets one here). A check against
-// APIError.Reason would fail red against a server enforcing L0 correctly.
+// It grades body text only, never the machine "reason" field, which the
+// server always leaves empty on this refusal — checking APIError.Reason
+// would fail red against a server enforcing L0 correctly.
 func AutonomyL0RefusalOK(body string) error {
 	if !strings.Contains(body, "unattended runs are not allowed") {
 		return fmt.Errorf("refusal does not name the unattended-run gate (runs.interactive): %q", body)
@@ -52,21 +46,17 @@ type agentPolicyWriteData struct {
 // interactive run's own audit trail) carries a run.agent_policy.write row for
 // wantLevel with delivered=true — proof the managed-settings file that closes
 // claude-code's own bypass route actually reached the sandbox, on whichever
-// runner substrate this deployment uses (internal/runner/k8s/driver.go
-// advertises Capabilities.ManagedFiles unconditionally; the Docker driver
-// does too).
+// runner substrate this deployment uses.
 //
-// It does NOT also check for an absent run.exec row: on an interactive run,
-// startAgentOrIdle records run.interactive and returns before any Exec call
-// exists to write one, at EVERY autonomy level — an absent run.exec row here
-// would be true of any interactive run and would prove nothing about L0
-// specifically. The real "no run.exec at L0" proof is
-// AutonomyL0RefusalOK's refusal, which happens before any run exists at all.
+// It does NOT also check for an absent run.exec row: an interactive run
+// records run.interactive and returns before any Exec call exists, at EVERY
+// autonomy level, so an absent row here proves nothing L0-specific. The real
+// "no run.exec at L0" proof is AutonomyL0RefusalOK's refusal, which happens
+// before any run exists at all.
 //
-// On an exec-less (krun) runner substrate, run.agent_policy.write is written
-// from onAgentStarted, which interactive dispatch never calls — an
-// interactive run on that substrate never gets the row at all, and this
-// check reports "never even attempted" rather than a real delivery failure.
+// On an exec-less (krun) runner substrate, interactive dispatch never writes
+// this row at all, so this check reports "never even attempted" rather than
+// a real delivery failure there.
 func AgentPolicyDeliveredOK(events []types.AuditEvent, wantLevel string) error {
 	var found *agentPolicyWriteData
 	for _, e := range events {

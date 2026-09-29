@@ -64,10 +64,8 @@ func TestRecordProviderChoice_ChecksEveryKindLive(t *testing.T) {
 			if err != nil || !choice.chosen || !choice.governs || choice.provider.ID != tc.p.ID {
 				t.Fatalf("choice = %+v, %v, want %s chosen", choice, err, tc.p.ID)
 			}
-			label, _, minted, err := srv.recordSessionModelAccess(context.Background(), uuid.New(), time.Now(), &types.RunPolicySpec{},
-				types.Workspace{}, choice, false)
-			if err != nil || label != tc.llmLabel || len(minted) != 0 {
-				t.Errorf("model access = %q, %d minted, %v; want %q and nothing minted here", label, len(minted), err, tc.llmLabel)
+			if label := srv.recordSessionModelAccess(&types.RunPolicySpec{}, choice, false); label != tc.llmLabel {
+				t.Errorf("model access = %q, want %q", label, tc.llmLabel)
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
+  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -62,6 +63,7 @@ async function gotoProviders(page: Page): Promise<void> {
   await navToRoute(page, "/admin/settings");
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
+  await expandCard(page, "Workspace providers");
   await card.getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/providers$/);
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
@@ -122,6 +124,7 @@ test.describe("providers — legacy open mode, with no rows at all", () => {
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
+    await expandCard(page, "Workspace providers");
     await expect(card.getByText(PROVIDERS.CARD_LEAD)).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_EMPTY)).toBeVisible();
   });
@@ -383,6 +386,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
+    await expandCard(page, "Workspace providers");
     await expect(card.getByText(PROVIDERS.CARD_PROVIDERS(enabledCount))).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_EMPTY)).toHaveCount(0);
   });
@@ -511,6 +515,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await splicePerUserBedrock(page, "live");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await expect(page.locator("#lane-bedrock")).toContainText("Connected");
   });
 
@@ -518,6 +523,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await splicePerUserBedrock(page, "expired_signin");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
@@ -535,6 +541,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await splicePerUserBedrock(page, "not_applicable");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
@@ -554,6 +561,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await splicePerUserBedrock(page, "not_applicable");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByRole("button", { name: "Sign in with SSO" })).toHaveCount(0);
   });
@@ -564,6 +572,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await splicePerUserBedrock(page, "live");
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -576,6 +585,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     // U2-01 (blind round 2, lens-U2): this daemon is the finding's own
     // reproduction — scripts/e2e-backend.sh sets WARDYN_BEDROCK_REGION and
     // WARDYN_BEDROCK_MODEL and NO credential of any kind (no bearer key, no
@@ -613,6 +623,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await page.getByRole("button", { name: /start login/i }).click();
@@ -653,6 +664,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await page.getByRole("button", { name: /start login/i }).click();
@@ -679,6 +691,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await spliceBedrockRow(page, "shared", null);
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
@@ -777,6 +790,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
     await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
     await navToRoute(page, "/account");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeEditable();
   });
@@ -785,6 +799,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
     await mockMemberBedrockRowRedacted(page, "shared", "bedrock_bearer", false);
     await gotoConsole(page);
     await navToRoute(page, "/account");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
   });
@@ -797,6 +812,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
     await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
     await navToRoute(page, "/account");
+    await expandCard(page, "Model provider");
     await page.locator("#lane-bedrock").click();
 
     const field = page.getByLabel("Bedrock bearer key");

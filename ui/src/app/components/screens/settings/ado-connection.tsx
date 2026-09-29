@@ -12,9 +12,9 @@
 //
 // Absent entirely when no Azure DevOps row is configured (status.scm_access
 // is absent or state "") — the same absent-row doctrine every other card
-// here follows. The card shell (a bordered <section>, title + lede) matches
-// connection-cards.tsx's own un-exported Card, rather than importing a
-// shadcn Card this codebase does not have.
+// here follows. The card shell is CollapsibleCard (#1200 compact cards) —
+// this was connection-cards.tsx's own un-exported Card's shape before that,
+// rather than importing a shadcn Card this codebase does not have.
 //
 // id="azure-devops" + the hash-focus effect (#458): the capability card's
 // consent CTA and the mid-run sign-in door (ado-capability-card.tsx) both
@@ -22,6 +22,10 @@
 // — a five-card page with no anchor otherwise strands the reader at the top.
 // tabIndex=-1 makes the section programmatically focusable without joining
 // the page's Tab order; the browser's own focus-triggered scroll is the only scroll this does.
+// #1200 compact cards: a card collapsed by default would otherwise hide the
+// very connection state a deep link exists to show, so the same effect that
+// focuses the section also force-opens it — the one card whose open state is
+// CONTROLLED rather than left to CollapsibleCard's own uncontrolled default.
 //
 // PR #501 review F2: the effect used to depend on `access` (status.scm_access)
 // itself, which is a NEW object after every Settings reload — Re-check, a
@@ -49,6 +53,7 @@ import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import type { SetupStatus } from "../../../lib/types";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 
 export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus; onChanged: () => void }) {
   const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
@@ -56,8 +61,14 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
   const hasRow = !!access && access.state !== "";
   const location = useLocation();
   const sectionRef = React.useRef<HTMLElement | null>(null);
+  // #1200 compact cards: controlled, not CollapsibleCard's own uncontrolled
+  // default — a card collapsed by default must not also hide itself from the
+  // deep link that exists to show exactly this state. Manual toggling still
+  // works afterward (onOpenChange below).
+  const [open, setOpen] = React.useState(false);
   React.useEffect(() => {
     if (location.hash === "#azure-devops" && hasRow) {
+      setOpen(true);
       // `focusVisible: true` (F3): forces the ring even when the browser's
       // own heuristic would otherwise suppress it for a focus that followed
       // a mouse click (the consent door's own click, on the previous page).
@@ -78,21 +89,31 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
   };
   if (!access || access.state === "") return null;
   const chip = scmAccessChip(access.state, access.source, access.cause);
+  // #1200 compact cards — reuses the exact same first line the body already
+  // rendered (never a new sentence): the plain not_applicable line, or the
+  // chip's own label toned the same way.
+  const summary =
+    access.state === "not_applicable" ? (
+      ADO.NOT_APPLICABLE_BODY
+    ) : chip ? (
+      <span className={chip.tone === "success" ? "text-success" : "text-warning"}>{chip.label}</span>
+    ) : undefined;
 
   return (
-    <section
+    <CollapsibleCard
+      title={PROVIDERS.KIND_AZURE_DEVOPS}
+      summary={summary}
       id="azure-devops"
       ref={sectionRef}
       tabIndex={-1}
-      className="rounded-xl border border-border bg-card p-4 outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
+      open={open}
+      onOpenChange={setOpen}
+      className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
     >
-      <h3 className="text-sm font-medium text-foreground">{PROVIDERS.KIND_AZURE_DEVOPS}</h3>
-      <div className="mt-3 space-y-2 text-body">
-        {/* Q458-1: an admin-token/local-mode caller has no per-person Azure
-            DevOps connection at all — one line, no chip, no button, unlike
-            every other state below. */}
-        {access.state === "not_applicable" && <p className="text-muted-foreground">{ADO.NOT_APPLICABLE_BODY}</p>}
-        {chip && <p className={chip.tone === "success" ? "text-success" : "text-warning"}>{chip.label}</p>}
+      <div className="space-y-2 text-body">
+        {/* Q458-1's one canon line, and the chip label below it, are now the
+            header's `summary` (#1200 compact cards) — stated once, not
+            repeated verbatim here once expanded. */}
         {/* review finding F3: `live` branches on `source` — a SHARED row's
             `live` (no source) makes no per-person claim (§7.5's
             ACCESS_SHARED_NOTE) and must never render "Your Wardyn sign-in" /
@@ -138,6 +159,6 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
         )}
         {access.state === "shared_expired" && <p className="text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>}
       </div>
-    </section>
+    </CollapsibleCard>
   );
 }

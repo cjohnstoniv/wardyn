@@ -111,7 +111,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 			// names anything — an authorization failure, not a member guessing at
 			// a path a 404 would have to keep silent about.
 			s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "", "")
-			writeError(w, http.StatusForbidden, "run not found")
+			writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run not found")
 			return false
 		}
 		// The error goes to the LOG, never to the caller. This runs on every
@@ -123,7 +123,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		// which is exactly what handleInternalTokenRenew's own 503 says.
 		slog.ErrorContext(r.Context(), "api: read run for the /internal liveness gate",
 			slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
-		writeError(w, http.StatusServiceUnavailable, "read run failed; retry")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
 		return false
 	}
 	now := s.cfg.Now().UTC()
@@ -134,7 +134,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 			return true
 		}
 		s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "run_state", string(run.State))
-		writeError(w, http.StatusForbidden, "run is terminal")
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return false
 	}
 	if !runIsKept(run) {
@@ -152,7 +152,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 		return true
 	}
 	s.auditInternalDenied(r, claims, authz.ReasonRunKept, "lost_reason", string(run.LostReason))
-	writeError(w, http.StatusForbidden, "run is lost")
+	writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 	return false
 }
 

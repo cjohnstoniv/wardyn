@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, navToRoute } from "./fixtures";
 
 // E2E coverage for Your SSH keys (src/app/components/screens/ssh-keys.tsx) —
 // X2-F2: this screen had ZERO e2e; its own component test
@@ -32,6 +32,7 @@ test.describe("SSH keys — add, reload, delete", () => {
     await gotoConsole(page);
     await navToRoute(page, "/account");
     await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
+    await expandCard(page, "Your SSH keys");
 
     await page.getByRole("button", { name: "Add key" }).first().click();
     const addDialog = page.getByRole("dialog");
@@ -51,6 +52,7 @@ test.describe("SSH keys — add, reload, delete", () => {
     // held in the dialog's onAdded() client-side reload of the same load().
     await page.reload();
     await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
+    await expandCard(page, "Your SSH keys");
     await expect(page.getByRole("row").filter({ hasText: KEY_NAME })).toBeVisible();
 
     // Delete — the icon button in the row, then the confirm dialog. The

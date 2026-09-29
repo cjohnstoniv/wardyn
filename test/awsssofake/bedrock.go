@@ -70,6 +70,21 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
+	// A SigV4 signature names the session its role credentials came from; a
+	// call carrying a session's bearer instead (a proxy terminating the stub's
+	// host sets one) names that session too. A call naming none is counted by
+	// the shape of what it did carry, so a walk that finds no attribution can
+	// see why.
+	auth := r.Header.Get("Authorization")
+	ss := s.sessionForSigV4Locked(auth)
+	if ss == nil {
+		ss = s.sessionForBearerLocked(r.Header.Get(bearerHeader))
+	}
+	if ss != nil {
+		ss.bedrockCallers[peerIP(r)]++
+	} else {
+		s.bedrockUnattributed[authShape(auth, r.Header.Get(bearerHeader) != "")]++
+	}
 	s.bedrockCalls++
 	s.bedrockModel = model
 	// …and the CUMULATIVE set, because bedrockModel is last-write-wins and a
@@ -154,4 +169,38 @@ func (s *Server) writeBedrockFault(w http.ResponseWriter, fault string) bool {
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
 	return true
+}
+
+// sessionForSigV4Locked is the session whose role credentials signed a SigV4
+// Authorization header ("... Credential=<access key id>/<scope>, ..."), or nil.
+func (s *Server) sessionForSigV4Locked(auth string) *session {
+	_, cred, ok := strings.Cut(auth, "Credential=")
+	if !ok {
+		return nil
+	}
+	akid, _, _ := strings.Cut(cred, "/")
+	for _, ss := range s.sessions {
+		if sessionAccessKeyID(ss.n) == akid {
+			return ss
+		}
+	}
+	return nil
+}
+
+// authShape names what an unattributed bedrock call carried, without its secret
+// part: the SigV4 access key id (a fixture, and the thing that failed to match),
+// "bearer" for an unknown session token, the scheme of any other Authorization,
+// or "none".
+func authShape(auth string, hasBearer bool) string {
+	if _, cred, ok := strings.Cut(auth, "Credential="); ok {
+		akid, _, _ := strings.Cut(cred, "/")
+		return "sigv4:" + akid
+	}
+	if hasBearer {
+		return "bearer"
+	}
+	if scheme, _, _ := strings.Cut(auth, " "); scheme != "" {
+		return "auth:" + scheme
+	}
+	return "none"
 }

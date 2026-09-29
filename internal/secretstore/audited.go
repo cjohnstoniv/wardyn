@@ -166,12 +166,11 @@ func OwnRowOnly(ctx context.Context) bool {
 	return g.ownOnly
 }
 
-// Audited wraps s so that every Get records one secret.read on rec, carrying
-// the owner, the store, the row's ref and the context's purpose — unless the
-// context is SiteAudited. A Get that finds no row records nothing: no value
-// was read. A Get with neither mark is refused before the store is read, and
-// recorded as a failure with purpose unmarked, so a read never goes on record
-// without saying why. Values are never recorded.
+// Audited wraps s so every Get records one secret.read on rec (owner, store,
+// row ref, purpose) unless the context is SiteAudited. A Get finding no row
+// records nothing. A Get with neither mark is refused before the store is
+// read and recorded as a failure with purpose unmarked, so a read never goes
+// unrecorded without saying why. Values are never recorded.
 func Audited(s Store, rec audit.Recorder) Store {
 	return &audited{inner: s, rec: rec}
 }
@@ -289,11 +288,10 @@ func (a *audited) Get(ctx context.Context, name string) ([]byte, error) {
 }
 
 // RecordRead records the secret.read for one read of row: by Audited for a
-// Get, and by a caller that opens rows without Get (the boot conversion of
-// legacy rows). owner is the namespace the read was made for; err, when set,
-// makes the outcome a failure. Only names and refs are recorded, never values
-// or error text. A failed audit write is logged (wardynd's recorder chain also
-// spools it); the read is not refused for it.
+// Get, and by a caller opening rows without Get (the boot conversion of
+// legacy rows). owner is the namespace read for; err, when set, makes the
+// outcome a failure. Only names and refs are recorded, never values or error
+// text. A failed audit write is logged, not refused for.
 func RecordRead(ctx context.Context, rec audit.Recorder, p Purpose, owner string, row Row, err error) {
 	outcome := "success"
 	if err != nil {

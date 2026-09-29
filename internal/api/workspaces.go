@@ -32,17 +32,22 @@ import (
 // llm_cred, which strict decoding then made unsettable from the SDK).
 type workspaceRequest = client.WorkspaceRequest
 
-// validateWorkspaceLLMCred checks an operator-supplied cred binding: a NAME
-// only — whether the named Integration actually exists/resolves is
-// resolveWorkspaceIntegration's job (llmcred.go), and whether the named
-// provider admits a run is enforceRunModelProvider's. nil, or empty refs
-// (clears the binding), is always valid.
+// llmCred400IntegrationRef refuses a workspace pin to an integration.
+const llmCred400IntegrationRef = "llm_cred.integration_ref no longer chooses a model credential: pin a model provider (llm_cred.provider_ref) instead"
+
+// validateWorkspaceLLMCred checks an operator-supplied cred binding: a
+// provider NAME only — whether the named provider admits a run is
+// enforceRunModelProvider's. nil, or empty refs (clears the binding), is
+// always valid.
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 	if c == nil {
 		return ""
 	}
-	if c.IntegrationRef != "" && !repoFieldSafe(c.IntegrationRef) {
-		return fmt.Sprintf(repoField400Charset, "llm_cred.integration_ref")
+	// An integration no longer chooses a model credential, so a pin to one is
+	// refused rather than stored inert. One stored before 0.8 stays for the
+	// conversion to model providers to read.
+	if c.IntegrationRef != "" {
+		return llmCred400IntegrationRef
 	}
 	if c.ProviderRef != "" && !modelProviderIDPattern.MatchString(c.ProviderRef) {
 		return fmt.Sprintf("llm_cred.provider_ref: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters", c.ProviderRef)
@@ -492,10 +497,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	owner := s.secretOwnerFromRequest(r)
 	// llm_cred is an OPERATOR field on a member-reachable door. The
 	// dedicated PUT /workspaces/{id}/llm-cred is operatorOnly (routes.go) — create
-	// was the one unguarded way in, and the binding it writes folds through
-	// resolveRunIntegration's TIER 2, which deliberately carries NO resident_host
-	// guard precisely because "a workspace pin is operator consent" (llmcred.go).
-	// A member-authored pin makes that sentence false.
+	// was the one unguarded way in, and a workspace pin is operator consent —
+	// a member-authored pin makes that false. (An AI-integration pin no longer
+	// credentials a run; the conversion to model providers reads it.)
 	//
 	// Refused, never silently dropped: "a field accepted and thrown away is worse
 	// than one refused" (interactiveToolApprovalsError) — a member who sees a 201
@@ -710,7 +714,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.builds.drop(id)
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
 	if err != nil {
@@ -784,22 +788,22 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	// with the observed-egress panel that produces what gets promoted here.
 	deadHosts := s.deadApprovedEgressHosts()
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
-		func(req body) ([]string, string) {
+		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
-				return nil, "too many domains (max 64)"
+				return nil, reasonWorkspaceApprovedEgressInvalid, "too many domains (max 64)"
 			}
 			set := map[string]struct{}{}
 			for _, d := range req.Domains {
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !hostrules.ValidApprovedHost(d) {
-					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+					return nil, reasonWorkspaceApprovedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
 				if _, dead := deadHosts[d]; dead {
-					return nil, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
+					return nil, reasonWorkspaceApprovedEgressDeadHost, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
 				}
 				set[d] = struct{}{}
 			}
-			return sortedKeys(set), ""
+			return sortedKeys(set), "", ""
 		},
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
@@ -837,19 +841,19 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 		Domains []string `json:"domains"`
 	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.deny",
-		func(req body) ([]string, string) {
+		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
-				return nil, "too many domains (max 64)"
+				return nil, reasonWorkspaceDeniedEgressInvalid, "too many domains (max 64)"
 			}
 			set := map[string]struct{}{}
 			for _, d := range req.Domains {
 				d = strings.ToLower(strings.TrimSpace(d))
 				if !hostrules.ValidApprovedHost(d) {
-					return nil, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
+					return nil, reasonWorkspaceDeniedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
 				set[d] = struct{}{}
 			}
-			return sortedKeys(set), ""
+			return sortedKeys(set), "", ""
 		},
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
@@ -866,14 +870,14 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 // clears it. Names/refs only — the secret itself lives in the store.
 func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Request) {
 	scopedWorkspaceWrite(s, w, r, "workspace.llm_cred.set",
-		func(req types.WorkspaceLLMCred) (*types.WorkspaceLLMCred, string) {
+		func(req types.WorkspaceLLMCred) (*types.WorkspaceLLMCred, string, string) {
 			if msg := validateWorkspaceLLMCred(&req); msg != "" {
-				return nil, msg
+				return nil, reasonWorkspaceLLMCredInvalid, msg
 			}
 			if !llmCredBinds(&req) {
-				return nil, "" // nil clears the binding
+				return nil, "", "" // nil clears the binding
 			}
-			return &req, ""
+			return &req, "", ""
 		},
 		func(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error) {
 			return s.cfg.Store.SetWorkspaceLLMCred(ctx, id, cred)
@@ -921,7 +925,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	staleImage := ws.ImageRef
 	err := s.cfg.Store.DeleteWorkspace(r.Context(), id)
-	if notFoundIf(w, err, "workspace") {
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
 	if err != nil {

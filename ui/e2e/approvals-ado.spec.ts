@@ -5,7 +5,7 @@
 
 // The Azure DevOps capability card (plan slice S10) on the standalone
 // /approvals list. The seeded e2e backend has no real Azure DevOps
-// organisation to escalate against, so — same technique runs.spec.ts's
+// organisation to escalate against, so — same technique runs-detail.spec.ts's
 // "a failing side fetch is not an outage" describes and model-access-
 // banner.spec.ts's mockModelAccess uses for a field the seeded backend
 // doesn't produce — this spec intercepts **/api/v1/approvals* wholesale with

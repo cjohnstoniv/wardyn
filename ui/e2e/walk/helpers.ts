@@ -30,7 +30,7 @@ export const PIN_ACCOUNT = process.env.WARDYN_WALK_PIN_ACCOUNT || "222222222222"
 export const PIN_ROLE = process.env.WARDYN_WALK_PIN_ROLE || "WardynDev";
 export const SSO_START_URL = process.env.WARDYN_WALK_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
 /** The harness's read-only route to the fake's /_seen — see seen() below. */
-export const SEEN_URL = process.env.WARDYN_WALK_SEEN_URL || "http://127.0.0.1:8390/_seen";
+export const SEEN_URL = process.env.WARDYN_WALK_SEEN_URL || "https://127.0.0.1:8390/_seen";
 
 export const ADMIN_EMAIL = "admin@wardyn.local";
 export const MEMBER_EMAIL = "member@wardyn.local";
@@ -187,6 +187,9 @@ export async function seen(): Promise<{
   bedrock_calls: number;
   bedrock_model: string;
   bedrock_models: string[];
+  /** One per sign-in: which peers (a run's proxy pod) called GetRoleCredentials
+   *  with it, and which made bedrock calls with its key or its bearer. */
+  sessions: Array<{ session: number; role_cred_callers: Record<string, number>; bedrock_callers: Record<string, number> }>;
 }> {
   const res = await fetch(SEEN_URL);
   if (!res.ok) throw new Error(`GET ${SEEN_URL}: ${res.status}`);
@@ -364,11 +367,18 @@ export async function openLoginPane(page: Page): Promise<void> {
   const onPage = (p: Page) => opened.push(p);
   page.context().on("page", onPage);
   try {
+    // The dialog renders either its Start button or, already started, its
+    // steps; wait for one before choosing. isVisible() alone does not wait, and
+    // a dialog still mounting read as "no Start button" and left the sign-in
+    // unstarted (recovery E in nightly 36402346113, sso-concurrency A in
+    // 36418109595).
     const start = page.getByRole("button", { name: "Start login" });
+    const progress = page.getByTestId("signin-progress").first();
+    await expect(start.or(progress).first()).toBeVisible({ timeout: 60_000 });
     if (await start.isVisible().catch(() => false)) {
       await start.click();
     }
-    await expect(page.getByTestId("signin-progress").first()).toContainText(SIGNIN_PROGRESS.STEP_START);
+    await expect(progress).toContainText(SIGNIN_PROGRESS.STEP_START);
     expect(opened.map((p) => p.url()), "Start login opened a tab").toEqual([]);
   } finally {
     page.context().off("page", onPage);
@@ -402,9 +412,9 @@ export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> 
   // wait?], signin-progress.tsx), not by filtering on STEP_DOWNLOAD_ACTIVE's
   // label text: that text only matches while the row is ALSO in the active
   // state, so a text filter plus an attribute check must both land on the same
-  // poll — on the small (16-64 MiB) cold-pull layer #891 now uses, the active
-  // window is short enough that the two can straddle it and the assertion
-  // times out on a real cold pull. Position is stable regardless of state.
+  // poll — the rate-limited cold pull (scripts/lib/kind-sso-walk-cold-pull.sh)
+  // keeps the row active for seconds, not minutes, so the two could straddle
+  // it and time out on a real cold pull. Position is stable regardless of state.
   const downloadStep = progress.getByRole("listitem").nth(1);
   await expect(
     downloadStep,

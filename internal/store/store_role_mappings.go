@@ -36,7 +36,7 @@ const roleMappingCols = `id, value, role, COALESCE(user_type, ''), migrated_from
 // ErrNotFound, so the caller can tell a type deleted between its check and
 // this write from a store fault.
 //
-// A-9: the conflict path updates role and user_type only, deliberately NOT created_by —
+// The conflict path updates role and user_type only, deliberately NOT created_by —
 // creation provenance (who ADDED this mapping) stays with the original
 // creator across a later role flip by a different admin, the same way
 // created_at is untouched on conflict (no SET at all, so Postgres leaves it).

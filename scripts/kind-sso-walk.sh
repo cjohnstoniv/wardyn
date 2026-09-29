@@ -23,12 +23,10 @@
 #     WARDYN_ALLOW_TEST_ENDPOINTS) moves the login sandbox env, the ssoInject
 #     sandbox env, the SSO egress entries and the CreateToken URL together;
 #  3. a Bedrock lane to spend the minted credential on: WARDYN_BEDROCK_BASE_URL
-#     points the data plane at the same fake's bedrock-runtime stub — plain
-#     http://, which ValidateBedrockBaseURL accepts ONLY under the same
-#     WARDYN_ALLOW_TEST_ENDPOINTS acknowledgement as (2), because the stub serves
-#     no TLS and this is the SigV4 lane (no per-run TLS-MITM terminates for it) —
-#     and WARDYN_BEDROCK_MODEL is an ARN naming the PINNED account, so the
-#     account-pin check has both halves;
+#     points the data plane at the same fake's bedrock-runtime stub, and
+#     WARDYN_BEDROCK_MODEL is an ARN naming the PINNED account, so the
+#     account-pin check has both halves. The fake serves HTTPS under a walk CA
+#     installed as the chart's trustedCA (#703, scripts/lib/kind-sso-fake-tls.sh);
 #  4. site-config `internal_hosts` seeded with the fake's SERVICE host AND the
 #     Service CIDR, BEFORE the first sign-in.
 #
@@ -46,17 +44,18 @@
 # apiserver rather than guessing it.
 #
 # The walk itself is a Playwright project — ui/e2e/walk/sso-member.spec.ts,
-# ui/e2e/walk/sso-member-recovery.spec.ts (0.7.5) and
+# ui/e2e/walk/sso-member-recovery.spec.ts (0.7.5),
+# ui/e2e/walk/sso-concurrency.spec.ts (#697) and
 # ui/e2e/walk/sso-reauth-hold.spec.ts (0.7.6) — driven through
 # scripts/run-ui-e2e.sh in its LIVE mode: same runner, same per-spec reporting
 # and the same zero-executed check, pointed at this cluster instead of the
-# hermetic backend it otherwise boots. The THREE files run, one run-ui-e2e.sh
+# hermetic backend it otherwise boots. The FOUR files run, one run-ui-e2e.sh
 # call per file (#804 — so a failed spec's own ui/test-results survives to be
 # copied out before the next spec's Playwright process wipes it), in THAT
 # order: the recovery file inherits a member who is already `live` and a
-# roster pin that already contradicts nothing, and the hold file goes last
-# because its case K spends ten minutes of wall clock and every case in it makes
-# its own capture.
+# roster pin that already contradicts nothing, the concurrency file makes its
+# own captures for both members, and the hold file goes last because its case K
+# spends ten minutes of wall clock and every case in it makes its own capture.
 #
 # Then the ROLE WALK (step 6): ui/e2e/walk/sso-roles.spec.ts signs in every
 # identity deploy/kind/sso/dex.yaml ships — admin, allowlist-only operator,
@@ -142,14 +141,16 @@ PROXY_INJECT="${WARDYN_KIND_SSO_PROXY_INJECT:-on}"
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
 BASE_URL="http://localhost:${HTTP_PORT}"
 
-# The fake, addressed as the sandbox will address it (see the fourth
-# precondition above). ONE Service backs sso-oidc, the sso portal and the
-# bedrock-runtime stub — their paths never collide (test/awsssofake's package
-# doc), so one host and one internal_hosts entry cover all three.
+# The fake, addressed as the sandbox will (fourth precondition). sso-oidc and the
+# portal share a Service; the bedrock stub has its own (same pod, :8091), so a
+# model call takes real Bedrock's SigV4 passthrough, not the portal's terminated
+# tunnel. Each host gets an internal_hosts entry.
 FAKE_SVC="wardyn-awsssofake"
 FAKE_HOST="${FAKE_SVC}.${NAMESPACE}.svc.cluster.local"
 FAKE_PORT=8090
-FAKE_URL="http://${FAKE_HOST}:${FAKE_PORT}"
+FAKE_URL="https://${FAKE_HOST}:${FAKE_PORT}"
+FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
+FAKE_BEDROCK_URL="https://${FAKE_BEDROCK_HOST}:8091"
 # …and the host-side port-forward this script opens to READ the fake's /_seen.
 #
 # THIS IS AN OBSERVATION CHANNEL, NOT A ROUTE THE WALK USES. Everything under
@@ -165,7 +166,7 @@ FAKE_URL="http://${FAKE_HOST}:${FAKE_PORT}"
 # which is the ONE observation in this walk that is not Wardyn asserting about
 # itself.
 SEEN_PORT="${WARDYN_KIND_SSO_SEEN_PORT:-8390}"
-SEEN_URL="http://127.0.0.1:${SEEN_PORT}/_seen"
+SEEN_URL="https://127.0.0.1:${SEEN_PORT}/_seen"
 
 # The PINNED pair. It is index 1 of the fake's entitlement fixture
 # (deploy/kind/sso/awsssofake.yaml) on purpose: index 0 is always the wrong
@@ -189,8 +190,8 @@ mkdir -p "${EVIDENCE_DIR}"
 step "checking the cluster and the SSO overlay"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" >/dev/null 2>&1 \
   || die "no wardyn release on ${CONTEXT} — run: WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${FAKE_SVC}" >/dev/null 2>&1 \
-  || die "the fake AWS endpoints are not installed — run: make kind-sso"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${FAKE_SVC}" "${FAKE_SVC}-bedrock" >/dev/null 2>&1 \
+  || die "the fake AWS endpoints (or the bedrock stub's own Service) are not installed — run: make kind-sso"
 health="$(curl -s "${BASE_URL}/healthz" || true)"
 [[ "${health}" == *'"runner":"k8s"'* ]] \
   || die "${BASE_URL}/healthz did not answer with runner=k8s (another daemon on that port?). Body: ${health}"
@@ -297,10 +298,11 @@ fi
 # other failure here must not be silently ignored.
 connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)" \
   || { [[ "${connect_err}" == *"already exists in network"* ]] || die "docker network connect ${REGISTRY_NAME} ${KIND_NETWORK} failed: ${connect_err}"; }
-# Node -> registry, by the registry's CONTAINER name on the shared kind network
-# (never localhost: the node is a different network namespace). Idempotent:
-# the file's content is identical every walk.
-#
+# Node -> registry through a rate-limited nginx, by CONTAINER name on the kind
+# network (never localhost: the node is another network namespace). Why the
+# limit: scripts/lib/kind-sso-walk-cold-pull.sh. Idempotent per walk.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/kind-sso-walk-cold-pull.sh"
+serve_cold_pull_throttle
 # Requires containerd >= 2.2 on the node: that's the version certs.d's
 # `/etc/containerd/certs.d:/etc/docker/certs.d` default config_path shipped in
 # (containerd's cri/images plugin.go); kind's own v0.33.0 node image ships
@@ -309,7 +311,7 @@ connect_err="$(docker network connect "${KIND_NETWORK}" "${REGISTRY_NAME}" 2>&1)
 # loopback instead, which fails closed (ImagePullBackOff), not silently.
 docker exec "${KIND_NODE}" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}" \
   || die "could not create containerd certs.d on ${KIND_NODE}"
-printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
+printf '[host."http://%s:5000"]\n' "${COLD_PULL_THROTTLE_NAME}" \
   | docker exec -i "${KIND_NODE}" cp /dev/stdin "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" \
   || die "could not write ${KIND_NODE}'s registry mirror config"
 
@@ -330,12 +332,8 @@ printf '[host."http://%s:5000"]\n' "${REGISTRY_NAME}" \
 # produces new bytes rather than replaying Docker's own build cache.
 AWS_SSO_COLD_TAG="cold-$(date +%s)"
 AWS_SSO_NODE_IMAGE="localhost:${REGISTRY_PORT}/agent-aws-sso:${AWS_SSO_COLD_TAG}"
-# 64-128 MiB: the sign-in pane only learns about the pull via its own 2s
-# poll (harness-login-pane.tsx's RUN_POLL_MS), so the download has to
-# outlast at least one of those ticks with real margin — a 16-64 MiB pad
-# measured at ~2-2.4s wall clock (mostly fixed per-pull overhead, not
-# bandwidth) left too much of that window uncovered. Doubling the floor
-# buys margin without turning every walk into a large image build/push.
+# 64-128 MiB of fresh bytes. The SIZE does not set the pull's duration (a local
+# registry serves any of it in under a second); the rate limit above does.
 COLD_PULL_MIB=$(( 64 + RANDOM % 65 ))
 printf 'FROM %s\nRUN head -c %dm /dev/urandom > /tmp/.wardyn-coldpull-pad # %s\n' \
     "${AWS_SSO_IMAGE}" "${COLD_PULL_MIB}" "${AWS_SSO_COLD_TAG}" \
@@ -465,6 +463,11 @@ dex_iss="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get configmap wardyn
 [[ "${dex_iss}" == "http://localhost:${DEX_PORT}" ]] \
   || die "this cluster's Dex issuer is '${dex_iss}', not http://localhost:${DEX_PORT} — the browser would sign in elsewhere"
 
+# ── 2c. THE FAKE ON TLS (#703) — scripts/lib/kind-sso-fake-tls.sh says why ──
+step "minting the fake's throwaway CA and serving cert (${FAKE_HOST})"
+# shellcheck source=scripts/lib/kind-sso-fake-tls.sh
+. "${ROOT}/scripts/lib/kind-sso-fake-tls.sh" && fake_tls_up
+
 step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values; WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT})"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   -n "${NAMESPACE}" --reuse-values -f deploy/kind/sso/values.yaml \
@@ -475,9 +478,10 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   --set "env.WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" \
   --set "env.WARDYN_BEDROCK_REGION=${SSO_REGION}" \
   --set "env.WARDYN_BEDROCK_AWS_SSO_REGION=${SSO_REGION}" \
-  --set "env.WARDYN_BEDROCK_BASE_URL=${FAKE_URL}" \
+  --set "env.WARDYN_BEDROCK_BASE_URL=${FAKE_BEDROCK_URL}" \
   --set "env.WARDYN_BEDROCK_MODEL=${BEDROCK_MODEL}" \
   --set "env.WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT}" \
+  --set-file "trustedCA=${FAKE_CA}" \
   --set-json "env.WARDYN_AGENT_IMAGES=$(jq -Rn --arg v "${AGENT_IMAGES}" '$v')" \
   >"${EVIDENCE_DIR}/helm-upgrade.log" 2>&1 \
   || { tail -30 "${EVIDENCE_DIR}/helm-upgrade.log" >&2; die "helm upgrade failed (see ${EVIDENCE_DIR}/helm-upgrade.log)"; }
@@ -554,21 +558,14 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${FA
   || die "the fake AWS endpoints did not come back after the reset"
 
 if ! kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s; then
-  # TWO knobs can refuse this boot, not one, and the old message named only the
-  # second: WARDYN_BEDROCK_BASE_URL is plain http:// here (the stub serves no
-  # TLS), which wardynd refuses unless WARDYN_ALLOW_TEST_ENDPOINTS=true —
-  # the same acknowledgement WARDYN_AWS_SSO_ENDPOINT_OVERRIDE needs. Both
-  # refusals are one line on stderr of a pod that has already exited, so read
-  # the PREVIOUS container's log and print it rather than guessing.
+  # A refusal is one stderr line of an exited pod: print the PREVIOUS container's log.
   echo "" >&2
   echo "FAIL: wardynd did not become ready after the upgrade. Its own refusal, verbatim:" >&2
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" --previous --tail=50 2>/dev/null \
     | grep -i "refusing to start" | tail -3 >&2 \
     || kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" --tail=50 >&2 || true
   echo "" >&2
-  echo "Both of these are refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true is ALSO set:" >&2
-  echo "  WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" >&2
-  echo "  WARDYN_BEDROCK_BASE_URL=${FAKE_URL}          (plain http:// — the stub serves no TLS)" >&2
+  echo "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE needs WARDYN_ALLOW_TEST_ENDPOINTS=true, and trustedCA (${FAKE_CA}) must be PEM." >&2
   die "wardynd did not become ready after the upgrade"
 fi
 
@@ -642,8 +639,8 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 [[ -n "${current}" ]] || die "GET /site-config never answered with the admin token this run set (last body: ${body:-<empty>})"
-merged="$(echo "${current}" | jq --arg h "${FAKE_HOST}" --arg c "${SERVICE_CIDR}" '
-  .internal_hosts = ((.internal_hosts // []) | map(select(.host_suffix != $h)) + [{host_suffix:$h, cidrs:[$c]}])')"
+merged="$(echo "${current}" | jq --arg h "${FAKE_HOST}" --arg b "${FAKE_BEDROCK_HOST}" --arg c "${SERVICE_CIDR}" '
+  .internal_hosts = ((.internal_hosts // []) | map(select(.host_suffix != $h and .host_suffix != $b)) + [{host_suffix:$h, cidrs:[$c]}, {host_suffix:$b, cidrs:[$c]}])')"
 code="$(curl -s -o "${EVIDENCE_DIR}/site-config-put.json" -w '%{http_code}' \
   -X PUT -H "Authorization: Bearer ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
   -d "${merged}" "${BASE_URL}/api/v1/site-config")"
@@ -740,15 +737,16 @@ seen_pf_pid=""
 pod_watch_pid=""
 # ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
-# a leftover one causes on the NEXT walk). ALSO the registry (step 1c): removed
-# here rather than left running, so a fresh, empty one is created next walk
-# instead of one more cold-<epoch> tag piling up in it forever.
+# a leftover one causes on the NEXT walk). ALSO the registry, its rate-limited
+# front and the derived cold image (step 1c): removed here, so a fresh, empty
+# registry is created next walk and no cold-<epoch> image piles up on the host.
 cleanup_walk() {
   [[ -n "${SSO_ONLY_APPLIED:-}" ]] && set_render sso
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
-  docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1
+  docker rm -f "${REGISTRY_NAME}" "${COLD_PULL_THROTTLE_NAME:-}" >/dev/null 2>&1
+  [[ -n "${AWS_SSO_NODE_IMAGE:-}" ]] && docker rmi "${AWS_SSO_NODE_IMAGE}" >/dev/null 2>&1
   return 0
 }
 trap cleanup_walk EXIT
@@ -757,7 +755,7 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" 
 seen_pf_pid=$!
 seen_ok=""
 for _ in $(seq 1 30); do
-  curl -sf "${SEEN_URL}" >/dev/null 2>&1 && { seen_ok=1; break; }
+  curl -sf --cacert "${FAKE_CA}" "${SEEN_URL}" >/dev/null 2>&1 && { seen_ok=1; break; }
   sleep 1
 done
 [[ -n "${seen_ok}" ]] || die "the fake's /_seen never answered on ${SEEN_URL} (port-forward failed; is ${SEEN_PORT} taken?)"
@@ -770,12 +768,15 @@ kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -w \
   >"${EVIDENCE_DIR}/run-pod-volumes.txt" 2>/dev/null &
 pod_watch_pid=$!
 
-step "running the walk (ui/e2e/walk/sso-member + sso-member-recovery + sso-reauth-hold)"
+step "running the walk (ui/e2e/walk/sso-member + sso-member-recovery + sso-concurrency + sso-reauth-hold)"
 export WARDYN_WALK_SEEN_URL="${SEEN_URL}"
 export WARDYN_E2E_WALK_BASE_URL="${BASE_URL}"
 export WARDYN_TEST_K8S=1
 export WARDYN_WALK_ADMIN_TOKEN="${ADMIN_TOKEN}"
 export WARDYN_WALK_FAKE_URL="${FAKE_URL}"
+# The fake is HTTPS under the walk CA (#703): Node trusts it via NODE_EXTRA_CA_CERTS, curl via --cacert.
+export WARDYN_WALK_FAKE_CA="${FAKE_CA}"
+export NODE_EXTRA_CA_CERTS="${FAKE_CA}"
 export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
 export WARDYN_WALK_PIN_ROLE="${PIN_ROLE}"
 export WARDYN_WALK_SSO_START_URL="${SSO_START_URL}"
@@ -802,9 +803,10 @@ if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   export WARDYN_WALK_SANDBOX_UP_MS="${WARDYN_WALK_SANDBOX_UP_MS:-720000}"
   export WARDYN_WALK_LOGIN_DONE_MS="${WARDYN_WALK_LOGIN_DONE_MS:-720000}"
 fi
-# THREE specs, run in this order against this one cluster: sso-member-recovery
+# FOUR specs, run in this order against this one cluster: sso-member-recovery
 # inherits the state sso-member leaves (a `live` member under the contradicting
 # pin, and the Dex principals). Order is the argument order — never sort these.
+# sso-concurrency.spec.ts (#697) flips the pin itself; it needs only the Dex principals.
 # sso-reauth-hold.spec.ts is LAST: its case K spends about ten minutes of wall
 # clock waiting for the injector's own re-resolve window, and every case in it
 # makes its own capture, so nothing after it should depend on which session the
@@ -813,10 +815,10 @@ fi
 # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 drops it entirely — for a nightly job,
 # where that ten minutes is wall clock nobody is watching and every other spec
 # already runs unattended. An interactive or release walk leaves this unset and
-# keeps all three.
-specs=(sso-member sso-member-recovery sso-reauth-hold)
+# keeps all four.
+specs=(sso-member sso-member-recovery sso-concurrency sso-reauth-hold)
 if [[ "${WARDYN_KIND_SSO_SKIP_REAUTH_HOLD:-}" == "1" ]]; then
-  specs=(sso-member sso-member-recovery)
+  specs=(sso-member sso-member-recovery sso-concurrency)
 fi
 # ONE run-ui-e2e.sh CALL PER SPEC (#804), not the three-argument call this used
 # to be. run-ui-e2e.sh's own per-spec loop shells out to a SEPARATE `playwright
@@ -923,17 +925,17 @@ step "reading the fake's /_seen"
 # `curl | grep -q` under `pipefail`. Write the evidence file from the capture
 # rather than through `tee`, so a grep -q that matches on the first byte can
 # no longer SIGPIPE curl mid-write.
-_seen_body="$(curl -sf "${SEEN_URL}")"
+_seen_body="$(curl -sf --cacert "${FAKE_CA}" "${SEEN_URL}")"
 printf '%s' "${_seen_body}" >"${EVIDENCE_DIR}/seen.json"
 if ! grep -q . <<<"${_seen_body}"; then
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" \
     "${SEEN_RETRY_PORT:-8398}:${FAKE_PORT}" >/dev/null 2>&1 &
   seen_retry_pf=$!
   for _ in $(seq 1 30); do
-    curl -sf "http://127.0.0.1:${SEEN_RETRY_PORT:-8398}/_seen" >/dev/null 2>&1 && break
+    curl -sf --cacert "${FAKE_CA}" "https://127.0.0.1:${SEEN_RETRY_PORT:-8398}/_seen" >/dev/null 2>&1 && break
     sleep 1
   done
-  curl -s "http://127.0.0.1:${SEEN_RETRY_PORT:-8398}/_seen" | tee "${EVIDENCE_DIR}/seen.json" \
+  curl -s --cacert "${FAKE_CA}" "https://127.0.0.1:${SEEN_RETRY_PORT:-8398}/_seen" | tee "${EVIDENCE_DIR}/seen.json" \
     || echo '(could not read /_seen)'
   kill "${seen_retry_pf}" 2>/dev/null
 fi

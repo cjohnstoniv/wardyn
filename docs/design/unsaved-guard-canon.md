@@ -4,7 +4,7 @@ Owner-approved mock for issue #460. Strings below are canon, byte-for-byte. `UNS
 `NAV.*` are re-exported from `ui/src/app/lib/unsaved-copy.ts`, itself sourced from
 `UNSAVED_GUARD` in `ui/src/app/components/wardyn/copy/shell.ts` — nothing here duplicates them.
 `CONFLICT.*` and `PROVIDERS.DISCARD_AND_RELOAD` stay in their existing home,
-`ui/src/app/lib/workspace-providers-copy.ts`'s `PROVIDERS`/`PROVIDERS_DRAFT`, and are consumed
+`ui/src/app/lib/workspace-providers-copy.ts`'s `PROVIDERS`/`PROVIDERS_EXTRA`, and are consumed
 directly from there (`saved-elsewhere-banner.tsx`) rather than re-exported a second time: that
 file is a ~400-line, route-split copy table, and `unsaved-copy.ts` stays on the console's EAGER
 entry path (`use-unsaved-guard.tsx` -> `app-shell.tsx`), so it imports only the lightweight
@@ -79,7 +79,7 @@ One shared hook (`ui/src/app/lib/use-unsaved-guard.tsx`) and one shared registry
 
 `saved-elsewhere-banner.tsx`, shared by every screen that PUTs a whole draft with an `If-Match` etag.
 Title/body from `PROVIDERS.SAVED_ELSEWHERE_TITLE`/`SAVED_ELSEWHERE_BODY` (= `CONFLICT.TITLE`/`BODY`
-above); two buttons, in order — "Copy my changes" (outline, `PROVIDERS_DRAFT.CONFLICT_COPY`) puts the
-whole document on the clipboard and toasts `PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST`, then "Discard
-mine and reload" (ghost, `PROVIDERS_DRAFT.DISCARD_AND_RELOAD`). No "save over theirs" control exists
+above); two buttons, in order — "Copy my changes" (outline, `PROVIDERS_EXTRA.CONFLICT_COPY`) puts the
+whole document on the clipboard and toasts `PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST`, then "Discard
+mine and reload" (ghost, `PROVIDERS_EXTRA.DISCARD_AND_RELOAD`). No "save over theirs" control exists
 — a security document is never last-writer-wins from this banner.

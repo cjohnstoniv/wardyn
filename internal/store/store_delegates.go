@@ -1,9 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Registered portals and the delegated tokens they are handed (migration
-// 0094, #1142). Like store_apitokens.go and store_devices.go, every method
-// takes the RAW credential and hashes it with hashToken before it reaches SQL.
+// Registered portals and the delegated tokens they are handed. Like
+// store_apitokens.go and store_devices.go, every method hashes the RAW
+// credential with hashToken before it reaches SQL.
 package store
 
 import (
@@ -21,15 +21,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DelegateStore is the OPTIONAL store capability behind delegated run
-// management, type-asserted the way DeviceStore is: a store without it has no
-// portals, so the exchange and the delegated lane fail closed rather than
-// silently no-op.
+// DelegateStore is optional, type-asserted like DeviceStore: without it the
+// exchange and delegated lane fail closed instead of silently no-op.
 //
-// Every read that authenticates (GetDelegateByRaw, GetDelegatedTokenByRaw)
-// filters revoked and expired rows in its WHERE, so revoked, expired, unknown
-// and mismatched credentials all answer ErrNotFound and the boundary is not an
-// oracle.
+// Authenticating reads filter revoked/expired rows in their WHERE, so
+// revoked, expired, unknown, and mismatched credentials all answer
+// ErrNotFound — the boundary gives no oracle signal.
 type DelegateStore interface {
 	CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error)
 	GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, error)
@@ -39,7 +36,6 @@ type DelegateStore interface {
 	GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error)
 }
 
-// Compile-time assertion: PG satisfies DelegateStore.
 var _ DelegateStore = PG{}
 
 const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at`
@@ -57,9 +53,9 @@ func scanDelegate(row pgx.Row) (types.Delegate, error) {
 	return d, nil
 }
 
-// CreateDelegate registers one portal. raw is the PLAINTEXT portal credential;
-// only its hash is stored. ErrConflict on a credential_sha256 collision (a
-// reused credential, in a 256-bit random space).
+// CreateDelegate registers one portal. raw is the PLAINTEXT credential; only
+// its hash is stored. Returns ErrConflict on a credential_sha256 collision
+// (a reused credential in a 256-bit space).
 func (s PG) CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error) {
 	const q = `
 		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by)
@@ -79,17 +75,17 @@ func (s PG) GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, e
 	return scanDelegate(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
 
-// ListDelegates returns every registered portal, newest first, revoked ones
-// included — an admin needs to see that a retired portal is retired.
+// ListDelegates returns every portal, newest first, including revoked —
+// admins need to see that a retired portal is retired.
 func (s PG) ListDelegates(ctx context.Context) ([]types.Delegate, error) {
 	const q = `SELECT ` + delegateCols + ` FROM delegates ORDER BY created_at DESC, id`
 	return collect(ctx, s.Pool, "list", "delegates", q, nil, scanDelegate)
 }
 
-// RevokeDelegate marks id revoked. Unknown or already revoked is ErrNotFound,
-// so a second revoke writes no second audit row. The portal's outstanding
-// delegated tokens need no write of their own: GetDelegatedTokenByRaw joins
-// on this column.
+// RevokeDelegate marks id revoked. Unknown or already-revoked is ErrNotFound,
+// so a second revoke writes no second audit row. Outstanding delegated
+// tokens need no write of their own: GetDelegatedTokenByRaw joins on this
+// column.
 func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error) {
 	const q = `
 		UPDATE delegates SET revoked_at = $2
@@ -119,14 +115,14 @@ func scanDelegatedToken(row pgx.Row) (types.DelegatedToken, error) {
 	return t, nil
 }
 
-// MintDelegatedToken stores one delegated token (raw is the plaintext; only
-// its hash is stored), stamps the portal's last use, and sweeps tokens that
-// expired before now. created_at is written on the database's clock, back-dated
-// by t.CreatedAt's age, for the reason CreateAPIToken gives: it is compared to
-// a person's session cutoff, which Postgres stamps.
+// MintDelegatedToken stores one token (raw is plaintext; only its hash
+// persists), stamps the portal's last use, and sweeps expired tokens.
+// created_at is written on the DB clock, back-dated by t.CreatedAt's age
+// like CreateAPIToken, since it's compared against a session cutoff that
+// Postgres stamps.
 //
-// ponytail: the sweep rides the mint, as MintAttachTicket's does — the table
-// holds only ten-minute tokens. A sweeper if mint volume ever makes that false.
+// ponytail: the sweep rides the mint, like MintAttachTicket — rows live only
+// ten minutes. Add a real sweeper if mint volume ever breaks that.
 func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw string, now time.Time) (types.DelegatedToken, error) {
 	groups, err := marshalGroups(t.Groups)
 	if err != nil {
@@ -143,10 +139,9 @@ func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw 
 		t.UserType, groups, t.GroupsTruncated, age, t.ExpiresAt, now))
 }
 
-// GetDelegatedTokenByRaw is the delegated lane's auth-time lookup: the token
-// must be unexpired at now AND its portal must still be registered — the join
-// is what makes revoking a portal end every token it minted on their very next
-// request.
+// GetDelegatedTokenByRaw is the delegated lane's auth lookup: the token must
+// be unexpired at now AND its portal still registered — the join is what
+// makes revoking a portal kill all its tokens on their next request.
 func (s PG) GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error) {
 	const q = `
 		SELECT ` + delegatedTokenCols + `

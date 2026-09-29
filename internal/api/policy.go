@@ -6,12 +6,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	neturl "net/url"
 	"os"
 	"regexp"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -121,7 +123,36 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validatePushRules(spec.PushRules); err != nil {
 		return err
 	}
+	return validateADOCapabilities(spec.AzureDevOpsCapabilities)
+}
+
+// errADOCapabilityUnknown marks validatePolicySpec's refusal of an
+// azure_devops_capabilities entry the catalogue cannot grant, so a policy
+// write answers it with its own reason (specRefusalReason) rather than the
+// door's generic bucket.
+var errADOCapabilityUnknown = errors.New("not a grantable Azure DevOps capability")
+
+// validateADOCapabilities holds azure_devops_capabilities to the catalogue's
+// grantable set — the same closed set a provider row's ceiling and profile are
+// held to. Whether an entry sits inside a row's ceiling is dispatch's question,
+// because the row is only known once the run's repositories are.
+func validateADOCapabilities(caps []adoscope.Capability) error {
+	for i, c := range caps {
+		if !c.Grantable() {
+			return fmt.Errorf("azure_devops_capabilities[%d]: %q is %w — want one of: %s",
+				i, string(c), errADOCapabilityUnknown, adoscope.GrantableCapabilityList())
+		}
+	}
 	return nil
+}
+
+// specRefusalReason is the wire reason for a validatePolicySpec failure: the
+// unknown-capability arm carries its own, every other arm the door's bucket.
+func specRefusalReason(err error, bucket string) string {
+	if errors.Is(err, errADOCapabilityUnknown) {
+		return reasonADOCapabilityUnknown
+	}
+	return bucket
 }
 
 // maxHoldsPerSpec and maxFirstUseHoldSeconds bound the two wait_for_review

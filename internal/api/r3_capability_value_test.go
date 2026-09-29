@@ -111,15 +111,15 @@ func TestCapabilityWorkspaceValueIsCanonicalized(t *testing.T) {
 		}
 	})
 
-	// Secret and integration are the sibling kinds. secretNameRE forbids
+	// Secret and workspace provider are the sibling kinds. secretNameRE forbids
 	// uppercase in every stored secret name and integrationRefRE does the same
-	// for an integration id, so storing "Acme-Prod-DB" verbatim for capSecret
+	// for a git provider row id, so storing "Acme-Prod-DB" verbatim for capSecret
 	// would give a value that can never match the row it names — the workspace
 	// arm's inert deny, on another kind. Folding can only ever make the grant
 	// match the row its author meant.
-	t.Run("secret and integration fold onto the grammar their rows use", func(t *testing.T) {
-		for kind, want := range map[string]string{capSecret: "acme-prod-db", capIntegration: "corp-artifactory"} {
-			in := map[string]string{capSecret: "Acme-Prod-DB", capIntegration: "Corp-Artifactory"}[kind]
+	t.Run("secret and workspace provider fold onto the grammar their rows use", func(t *testing.T) {
+		for kind, want := range map[string]string{capSecret: "acme-prod-db", capWorkspaceProvider: "corp-gitlab"} {
+			in := map[string]string{capSecret: "Acme-Prod-DB", capWorkspaceProvider: "Corp-GitLab"}[kind]
 			g := types.CapabilityGrant{
 				SubjectType: types.CapabilitySubjectUser, Subject: "sub-alice",
 				Capability: kind, Value: "  " + in + "  ", Effect: types.CapabilityDeny,
@@ -137,12 +137,12 @@ func TestCapabilityWorkspaceValueIsCanonicalized(t *testing.T) {
 		}
 	})
 
-	t.Run("a secret or integration value that no row could ever carry is refused", func(t *testing.T) {
+	t.Run("a secret or workspace provider value that no row could ever carry is refused", func(t *testing.T) {
 		for _, tc := range []struct{ kind, value string }{
-			{capSecret, "acme prod db"},          // spaces are outside secretNameRE
-			{capSecret, "-leading-hyphen"},       // must start alphanumeric
-			{capSecret, "\u212Aim-secret"},       // KELVIN SIGN: non-ASCII, refused BEFORE the fold
-			{capIntegration, "corp/artifactory"}, // outside integrationRefRE
+			{capSecret, "acme prod db"},           // spaces are outside secretNameRE
+			{capSecret, "-leading-hyphen"},        // must start alphanumeric
+			{capSecret, "\u212Aim-secret"},        // KELVIN SIGN: non-ASCII, refused BEFORE the fold
+			{capWorkspaceProvider, "corp/gitlab"}, // outside integrationRefRE
 		} {
 			g := types.CapabilityGrant{
 				SubjectType: types.CapabilitySubjectUser, Subject: "sub-alice",

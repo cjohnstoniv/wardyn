@@ -17,6 +17,7 @@ import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { Field, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
+import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useThemeName } from "../../wardyn/theme-provider";
 import { BrandingContext } from "../../wardyn/branding-context";
 import { branding as brandingApi, type BrandingSave } from "../../../lib/api/branding";
@@ -178,11 +179,17 @@ export function BrandingCard() {
   const fill = inDark ? (draft.darkOn ? draft.darkPrimary : derived?.primary) : draft.primary;
   const ink = inDark ? (draft.darkOn ? draft.darkText : derived?.text) : draft.text;
   const swatch = fill && ink && isHexColour(fill) && isHexColour(ink) ? { background: fill, color: ink } : undefined;
+  // #1200 compact cards — one line, collapsed or expanded.
+  const brandingSummary = brand ? `Custom — ${brand.org_name}` : "Default branding";
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4" aria-labelledby="branding-title">
-      <h3 id="branding-title" className="text-sm font-medium text-foreground">{BRANDING.TITLE}</h3>
-      <p className="mt-0.5 text-body leading-snug text-muted-foreground">{BRANDING.LEDE}</p>
+    <CollapsibleCard
+      title={BRANDING.TITLE}
+      summary={brandingSummary}
+      headingId="branding-title"
+      aria-labelledby="branding-title"
+    >
+      <p className="text-body leading-snug text-muted-foreground">{BRANDING.LEDE}</p>
       <div className="mt-4 grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
           <Field label={BRANDING.ORG_NAME_LABEL} htmlFor="brand-org">
@@ -270,6 +277,6 @@ export function BrandingCard() {
           </div>
         </div>
       </div>
-    </section>
+    </CollapsibleCard>
   );
 }
