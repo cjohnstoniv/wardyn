@@ -143,9 +143,10 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	if ask.repo != "" {
 		q.Set("repo", ask.repo)
 	}
-	if v.Capability == adoscope.CapPolicyBypass {
-		// A protected-ref move; a ref in the run's own namespace is code_write, not this class.
-		q.Set("ref_class", "protected")
+	if len(v.Refs) > 0 && p.adoOutsideRunBranch(v.Refs) {
+		// A ref move outside the run's own branch (only reachable under git_push_any_branch). A
+		// pull request completed with bypassPolicy moves no ref and carries no class.
+		q.Set("ref_class", "outside_run_namespace")
 	}
 	out, err := resolveInjectionQuery(ctx, inj.base, inj.token.Get(), grantID, q, inj.client)
 	if err == nil {
@@ -158,12 +159,6 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	}
 	var pending errReauthPending
 	if !errors.As(err, &pending) {
-		// A ref move outside the run's branch namespace nobody may be asked
-		// about keeps the caller's sentence (adoRunBranchRefusal): the control
-		// plane's names the capability, not why the push needed it.
-		if adoRunBranchMove(v) && adoRunBranchReasons[adoControlPlaneBody(err).Reason] {
-			return false, fallback
-		}
 		return false, adoControlPlaneRefusal(err, fallback)
 	}
 	hq := maps.Clone(q)
@@ -197,31 +192,17 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 // adoControlPlaneRefusal is the control plane's own refusal sentence (a 403
 // for above-ceiling, always_deny, or a refused deny_with_review ask), or fallback.
 func adoControlPlaneRefusal(err error, fallback string) string {
-	if body := adoControlPlaneBody(err); body.Error != "" {
-		return body.Error
-	}
-	return fallback
-}
-
-// adoRunBranchReasons are the control plane's machine classes (internal/api
-// reasons.go) for a capability ask no person will be asked about: the run's
-// first-use mode is always_deny, or the capability is above the ceiling.
-var adoRunBranchReasons = map[string]bool{"capability_always_deny": true, "capability_above_ceiling": true}
-
-// adoControlPlaneError is the control plane's error body (internal/api errorBody).
-type adoControlPlaneError struct {
-	Error  string `json:"error"`
-	Reason string `json:"reason"`
-}
-
-// adoControlPlaneBody is a control-plane 403's error body; zero otherwise.
-func adoControlPlaneBody(err error) adoControlPlaneError {
 	var se injectionStatusError
-	var body adoControlPlaneError
-	if !errors.As(err, &se) || se.status != http.StatusForbidden || json.Unmarshal([]byte(se.body), &body) != nil {
-		return adoControlPlaneError{}
+	if !errors.As(err, &se) || se.status != http.StatusForbidden {
+		return fallback
 	}
-	return body
+	var body struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(se.body), &body) != nil || body.Error == "" {
+		return fallback
+	}
+	return body.Error
 }
 
 // grantIDFor is the grant host's injection resolves against.

@@ -158,8 +158,8 @@ run this suite: nothing here reads them.
 LL2b uses LL2's member, organisation, project and repository. It pushes one
 branch, `wardyn/<run-id>/ll2b`, and deletes it again, so the member needs
 Contribute on the repository. The branch sits in the run's own namespace on
-purpose: a push to any other ref counts as a protected-ref move and asks for
-`policy_bypass`, not `code_write`. The deployment needs:
+purpose: a push to any other ref is outside the run's own branch and is
+refused outright unless the run's policy sets `git_push_any_branch`. The deployment needs:
 
 - an `entra` provider row for the organisation with `default_profile`
   `["read"]` and a `capability_ceiling` that holds `code_write` but not

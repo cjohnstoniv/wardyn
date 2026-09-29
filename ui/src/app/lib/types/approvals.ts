@@ -166,7 +166,8 @@ export interface AdoCapabilityScope {
   grant_id: string;
   capability: string;
   repo: string;
-  ref_class?: "protected" | "";
+  // "protected" is the legacy spelling an older row stored for the same case.
+  ref_class?: "outside_run_namespace" | "protected" | "";
   tool: string;
   cmd: string;
 }

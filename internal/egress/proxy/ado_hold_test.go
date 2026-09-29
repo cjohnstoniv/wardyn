@@ -411,34 +411,56 @@ func TestADOHold_AFirstAskAnsweredWithoutTheCapabilityIsRefused(t *testing.T) {
 	}
 }
 
-// A push to main that nobody may be asked about (always_deny, above the
-// ceiling) is refused in terms of where the run may push, not the control
-// plane's policy_bypass sentence; a real bypass (a PR completed with
-// bypassPolicy) keeps that sentence, and a raised review keeps its own.
-func TestADOHold_RunBranchRefusalReplacesTheControlPlaneSentence(t *testing.T) {
-	bypass := fmt.Sprintf("Wardyn refused this Azure DevOps request: it needs %q, and this run's policy refuses more access without asking.",
-		adoscope.Label(adoscope.CapPolicyBypass))
+// A push outside the run's own branch is never an ask: with the switch off it
+// is refused before the control plane hears of it, whatever the first-use
+// mode would have done.
+func TestADOHold_OutsideRunBranchIsNeverAsked(t *testing.T) {
+	cp := newCapControlPlane(t)
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
 	push := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
-	for _, reason := range []string{"capability_always_deny", "capability_above_ceiling"} {
+	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", push, nil),
+		"this run may push only to its own branch")
+	if asks, _ := cp.snapshot(); len(asks) != 0 {
+		t.Errorf("a push outside the run's own branch asked the control plane: %v", asks)
+	}
+}
+
+// ref_class names a ref move outside the run's own branch — reachable only as
+// a code_write ask under git_push_any_branch — and nothing else: a push inside
+// the namespace carries none, and a pull request completed with bypassPolicy
+// (the only policy_bypass ask) moves no ref and carries none.
+func TestADOHold_RefClassIsOutsideRunNamespaceOnlyForARefMoveOutsideIt(t *testing.T) {
+	ask := func(t *testing.T, anyBranch bool, method, path string, body func(runID uuid.UUID) string) url.Values {
+		t.Helper()
 		cp := newCapControlPlane(t)
-		cp.refuse, cp.refuseReason = bypass, reason
+		cp.refuse, cp.refuseReason = "refused", "capability_always_deny"
 		h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
-		rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", push, nil)
-		h.mustRefuse(t, rec, "this run may push only to its own branch")
-		if strings.Contains(rec.Body.String(), adoscope.Label(adoscope.CapPolicyBypass)) {
-			t.Errorf("%s: the push refusal names a branch policy: %s", reason, rec.Body.String())
+		h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: anyBranch})
+		h.mustRefuse(t, h.do(t, method, path, body(h.p.runID), nil), "refused")
+		asks, _ := cp.snapshot()
+		if len(asks) != 1 {
+			t.Fatalf("asks = %v, want one", asks)
+		}
+		return asks[0]
+	}
+	const pushes = "/acme/proj/_apis/git/repositories/app/pushes"
+	onto := func(ref func(uuid.UUID) string) func(uuid.UUID) string {
+		return func(runID uuid.UUID) string {
+			return `{"refUpdates":[{"name":"` + ref(runID) + `","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
 		}
 	}
-
-	cp := newCapControlPlane(t)
-	cp.refuse, cp.refuseReason = bypass, "capability_always_deny"
-	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
-	h.mustRefuse(t, h.do(t, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1?api-version=7.1",
-		`{"status":"completed","completionOptions":{"bypassPolicy":true}}`, nil), "refuses more access without asking")
-
-	review := "Wardyn refused this Azure DevOps request and asked a person to approve \"x\" (approval 1). Retry once it is approved."
-	cp = newCapControlPlane(t)
-	cp.refuse, cp.refuseReason = review, "capability_review"
-	h = newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
-	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", push, nil), "(approval 1). Retry once it is approved.")
+	main := func(uuid.UUID) string { return "refs/heads/main" }
+	own := func(runID uuid.UUID) string { return BranchNSPrefix(runID) + "work" }
+	if q := ask(t, true, http.MethodPost, pushes, onto(main)); q.Get("capability") != string(adoscope.CapCodeWrite) || q.Get("ref_class") != "outside_run_namespace" {
+		t.Errorf("any-branch push to main asked %v, want code_write outside_run_namespace", q)
+	}
+	for _, anyBranch := range []bool{false, true} {
+		if q := ask(t, anyBranch, http.MethodPost, pushes, onto(own)); q.Get("capability") != string(adoscope.CapCodeWrite) || q.Has("ref_class") {
+			t.Errorf("any-branch=%v push to the run's own branch asked %v, want code_write with no ref_class", anyBranch, q)
+		}
+	}
+	prBypass := func(uuid.UUID) string { return `{"status":"completed","completionOptions":{"bypassPolicy":true}}` }
+	if q := ask(t, true, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1", prBypass); q.Get("capability") != string(adoscope.CapPolicyBypass) || q.Has("ref_class") {
+		t.Errorf("PR bypass asked %v, want policy_bypass with no ref_class", q)
+	}
 }

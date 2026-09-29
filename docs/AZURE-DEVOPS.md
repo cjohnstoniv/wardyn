@@ -168,10 +168,10 @@ above grants some subset of these, and a run can never be handed one the ceiling
 | Capability | What it allows |
 |---|---|
 | `read` | Clone, browse history, view work items, boards, builds, packages, and wiki pages |
-| `code_write` | Push commits and create or move a branch no policy protects — a git push only to refs under `refs/heads/wardyn/<run-id>/`, or to any branch when the run's policy sets `git_push_any_branch: true` (see [How pushes work](#how-pushes-work)). Opening a pull request is `pr`, not this |
+| `code_write` | Push commits, and create or move a ref: push under `refs/heads/wardyn/<run-id>/` (or any branch when the policy sets `git_push_any_branch`) — see [How pushes work](#how-pushes-work). Opening a pull request is `pr`, not this |
 | `pr` | Open, update, comment on, vote on and complete a pull request, without bypassing a policy |
 | `policy_admin` | Create or change branch policies — required reviewers, build validation, merge strategy |
-| `policy_bypass` | Complete a pull request with a policy bypass, or move a protected ref directly, skipping a policy rather than satisfying it. Without `git_push_any_branch`, every ref outside the run's own namespace counts as protected |
+| `policy_bypass` | Complete a pull request with `bypassPolicy` — without its required reviewers or checks. Nothing else needs it |
 | `repo_admin` | Create, rename, or delete a repository; change its default branch |
 | `security_admin` | Read or change Azure DevOps permission assignments |
 | `serviceendpoint_admin` | Read, create, or change service connections |
@@ -195,22 +195,29 @@ one thing nobody, including an admin approving in the moment, can grant past.
 ### How pushes work
 
 A push is checked the same way whichever door it takes: a `git push` through Wardyn's git broker,
-or a REST call that moves a ref (`pushes`, or `refs` with the refs in the body).
+or a REST call that creates or moves a ref — `pushes`; `refs` (Update Refs names its refs in the
+body, Update Ref its one ref in `?filter=`); `annotatedtags` (the tag its `name` creates); and
+`cherrypicks`/`reverts` (the branch their `generatedRefName` creates). A ref move whose ref Wardyn
+cannot read is refused as one that *"names no ref Wardyn can check"*; a fork sync, which may name no
+ref at all, is not available through this lane.
 
 - **By default a run pushes only to its own branch namespace**, `refs/heads/wardyn/<run-id>/…`,
-  which needs `code_write`. Wardyn has no copy of the organisation's branch policies, so every other
-  ref counts as protected and needs `policy_bypass`. A push refused for that reason says so: *"this
-  run may push only to its own branch (wardyn/<run-id>/…). Pushing to other branches needs a policy
-  with git_push_any_branch: true."*
+  which needs `code_write`. Every other ref — any other branch, and any tag — is outside this run's
+  own branch and is refused, whatever capabilities the run holds; no approval lifts it. This is
+  Wardyn's own rule for the run, as on the GitHub App lane, not a reading of the organisation's
+  branch policies, which Wardyn never consults. The refusal says so: *"this run may push only to
+  its own branch (wardyn/<run-id>/…). Pushing to other branches needs a policy with
+  git_push_any_branch: true."*
 - **With `git_push_any_branch: true` on the run's policy, a push to any branch needs `code_write`
   only.** Wardyn forwards it with the person's own credential, and Azure DevOps' branch policies
   and permissions decide: a protected `main` still rejects someone who lacks the permission to
   push to it. Each such git push is recorded as `brokered:git:branch-ns-off`, as on the GitHub
   lanes; a REST ref move keeps the ordinary `brokered:ado` row (see
   [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
-- **The switch never touches a real bypass.** Completing a pull request with
-  `completionOptions.bypassPolicy: true` still needs `policy_bypass`, and so do Update Ref (`PATCH`
-  on `refs`, whose ref sits in a query Wardyn does not read), annotated tags and fork syncs.
+- **`policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy: true`**,
+  the one request whose body asks Azure DevOps to skip its own policies. The switch does not touch
+  it. A held push outside this run's own branch (switch on, `code_write` not yet granted) is shown
+  to the approver as *"Outside this run's own branch"*.
 
 ## Request flow
 
@@ -251,20 +258,23 @@ sequenceDiagram
 
 ## Two layers of enforcement
 
-Two independent things stand between a sandbox and an unwanted write, and it takes both:
+Two different things bound what a run can do, and only one of them is narrowed to the run:
 
-1. **The token's own scope, enforced by Azure DevOps.** The access token injected on the wire only
-   carries the `vso.*` scopes the row's ceiling maps to — Azure DevOps itself refuses anything the
-   token's scope doesn't cover.
-2. **The request check, enforced by Wardyn's proxy**, in front of that token. This layer exists
-   because token scope alone cannot express "contribute, but not administer": `vso.code_write` — the
-   scope an ordinary contributor needs to push — is also what Azure DevOps requires to edit branch
-   policies and to complete a pull request with a policy bypass. A token scoped for "push code" is,
-   at Azure DevOps' own layer, also scoped for "override the policy that was supposed to stop a bad
-   merge." Wardyn's proxy classifies every request by what it actually does, not by what scope
-   authorized it, and holds or refuses the ones that don't match what was granted or already
-   approved — which is how `policy_bypass` and `policy_admin` end up as their own capabilities even
-   though Azure DevOps has no scope that separates them from `code_write`.
+1. **The person's consent and permissions, enforced by Azure DevOps and Entra.** The access token
+   injected on the wire carries every `vso.*` scope the person has consented to for Azure DevOps,
+   whatever subset the row's ceiling maps to. Entra does not narrow it to the run, so it can be
+   broader than the ceiling or the run's capabilities. What Azure DevOps enforces on that token is
+   the person's own access: a repository they can't read, or a branch policy they can't bypass, is
+   refused by Azure DevOps whatever Wardyn allowed.
+2. **The request check, enforced by Wardyn's proxy**, in front of that token. This is what holds a
+   run to the row's ceiling and to the capabilities the run was granted: it pins the organisation
+   (the token carries no organisation claim), classifies every request by what it actually does, applies
+   the run's own-branch rule to every ref it moves, and holds or refuses anything that doesn't
+   match what was granted or already approved. It is also the only layer that can express
+   "contribute, but not administer": `vso.code_write` — the scope an ordinary contributor needs to
+   push — is also what Azure DevOps requires to edit branch policies and to complete a pull request
+   with a policy bypass, which is how `policy_bypass` and `policy_admin` end up as their own
+   capabilities even though Azure DevOps has no scope that separates them from `code_write`.
 
 **The residual, stated plainly.** Wardyn's classifier recognizes the Azure DevOps REST routes it has
 been taught. A request against a route it does not recognize is refused rather than guessed at — it

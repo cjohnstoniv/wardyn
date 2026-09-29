@@ -235,9 +235,7 @@ the sentence that whatever is allowed happens under that person's name at Azure 
 you're approving:" (this one request) and "Blast radius:" (what the capability covers for as long as
 it is held) — the shipped two-line shape.
 
-**The protected-ref variant is a different capability, not a warning on the same one.** Any ref move
-onto a policy-protected ref classifies as `policy_bypass`, on both doors (the git broker's pkt-line
-commands and the REST `refs`/`pushes` bodies). The card names the policy that will not stop it.
+**A ref outside the run's own branch is a rule of the run, not a capability.** Any ref move outside `refs/heads/wardyn/<run-id>/…`, on either door (the git broker's pkt-line commands and the REST `refs`/`pushes`/`annotatedtags`/`cherrypicks`/`reverts` requests), is refused unless the run's policy sets `git_push_any_branch`; with it on, the move is `code_write` and Azure DevOps' own policies decide. `policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy`. The card names no branch policy: Wardyn never reads one (owner ruling 2026-09-29).
 
 **Four states have no decision to make, and draw no buttons.** Above the ceiling; always refused;
 refused by the run's governance policy; and a write Wardyn cannot classify. Drawing a disabled
@@ -284,7 +282,7 @@ not run because the sign-in had ended.
   separately) — which changes two chips and two remedies and **is not a seventh state**; plus
   shared-and-live (which reuses the existing "Provided by your admin" chip and deliberately makes no
   per-person claim).
-- **Card, decidable** — push; push past a branch policy; change a branch policy; complete a pull
+- **Card, decidable** — push; complete a pull request past its policies; change a branch policy; complete a pull
   request. Live, and in the list.
 - **Card, not decidable** — above the ceiling; always refused; refused by governance; unclassifiable;
   not yours to decide; timed out; cancelled with the run.
@@ -537,13 +535,13 @@ renders in the defaults column nowhere, and outside the row nowhere.
 | `CAP_READ` | Read |
 | `CAP_READ_HINT` | Clone, fetch, and read work items, pipelines and policies. |
 | `CAP_CODE_WRITE` | Push |
-| `CAP_CODE_WRITE_HINT` | Push commits, and create or move a branch no policy protects. |
+| `CAP_CODE_WRITE_HINT` | Push commits, and create or move a branch inside this run's own branch — any branch only when its policy allows it. |
 | `CAP_PR` | Pull requests |
 | `CAP_PR_HINT` | Open, update, comment on and complete a pull request. |
 | `CAP_POLICY_ADMIN` | Branch policies |
 | `CAP_POLICY_ADMIN_HINT` | Create, change or delete a branch policy. |
-| `CAP_POLICY_BYPASS` | Push past a branch policy |
-| `CAP_POLICY_BYPASS_HINT` | Move a policy-protected branch, or complete a pull request with its policies bypassed. |
+| `CAP_POLICY_BYPASS` | Bypass branch policies |
+| `CAP_POLICY_BYPASS_HINT` | Complete a pull request without its required reviewers or checks. |
 | `CAP_BUILD_EXECUTE` | Run pipelines |
 | `CAP_BUILD_EXECUTE_HINT` | Queue a build or a release. |
 | `CAP_REPO_ADMIN` | Repository settings |
@@ -607,10 +605,6 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `DISCONNECT_CONFIRM_BODY` | Runs you start after this can't reach Azure DevOps. Runs already going keep the connection they started with. Signing in to Wardyn again reconnects you — to stop that, withdraw the permission from your Microsoft account's My Apps page. |
 | `ACCESS_SHARED_NOTE` | Rendered when the row uses a shared token and that token works. It is deliberately not a per-person claim: the run does not act as this person. |
 
-A ref's policy summary on the card ("Protected: 2 reviewers required, build must pass") is rendered
-from what Azure DevOps reports about that ref. It is not frozen here, because it is the forge's
-description of the forge's own configuration and Wardyn does not author it.
-
 `ACCESS_LIVE_ORG` renders with **no action line and no button** — that is the point of the whole
 surface. `ACCESS_NOT_CONNECTED` never renders alone: it always carries one of the four `CAUSE_*`
 lines. The member-facing verb is **connect** throughout, because "sign in" names something they have
@@ -633,13 +627,6 @@ already done (§5 #10).
 | `REQ_FIELD_REQUEST` | Request |
 | `REQ_FIELD_ACTS_AS` | Acts as |
 | `REQ_ACTS_AS_HINT(person)` | Whatever you allow happens as {person} on Azure DevOps, and Azure DevOps records it that way. |
-| `REQ_UNPROTECTED_REF` | No branch policy protects this branch. |
-| `REQ_PROTECTED_REF_TITLE(ref)` | `{ref}` is protected by a branch policy |
-| `REQ_PROTECTED_REF_BODY(person)` | Allowing this moves it anyway. The policy that requires a reviewed pull request will not stop it, because {person}'s Azure DevOps account is allowed to bypass it. |
-| `REQ_WHAT_CODE_WRITE(repo, person)` | the run pushes this branch to {repo}, as {person}. |
-| `REQ_BLAST_CODE_WRITE(repo)` | commits, and creating or moving branches no policy protects, anywhere in {repo}. Not a protected branch, not completing a pull request, not changing a policy — each of those asks separately. |
-| `REQ_WHAT_POLICY_BYPASS(ref, person)` | the run moves {ref} past the policy protecting it, as {person}. |
-| `REQ_BLAST_POLICY_BYPASS(repo)` | moving any policy-protected branch in {repo}, and completing a pull request with its policies bypassed. |
 | `REQ_WHAT_POLICY_ADMIN(ref, person)` | the run lowers the reviewer count on {ref}, as {person}. |
 | `REQ_BLAST_POLICY_ADMIN(repo)` | creating, changing and deleting branch policies anywhere in {repo} — including the ones that would hold back its own pushes. |
 | `REQ_WHAT_PR(pr, person)` | the run completes pull request {pr}, as {person}. |
@@ -934,7 +921,7 @@ drawn in the mock; their nouns below are the lead's own extension, in the same r
 | `CAP_THING_CODE_WRITE` | push |
 | `CAP_THING_PR` | action |
 | `CAP_THING_POLICY_ADMIN` | change |
-| `CAP_THING_POLICY_BYPASS` | push |
+| `CAP_THING_POLICY_BYPASS` | completion |
 | `CAP_THING_REPO_ADMIN` | change |
 | `CAP_THING_BUILD_EXECUTE` | run |
 | `CAP_THING_WORK_WRITE` | edit |
@@ -942,16 +929,20 @@ drawn in the mock; their nouns below are the lead's own extension, in the same r
 
 ### 10.2 `ADO` — the ref-class field and the consent card's heading
 
-`REQ_FIELD_REF_CLASS`/`REQ_REF_CLASS_PROTECTED` name the fact the canonical scope actually carries
-(`ref_class: "protected"`) without inventing a ref name the wire scope does not have (`adoCapabilityScope`
-carries no ref). `REQ_CONSENT_HEADING` titles the Entra-consent card (`credential_reauth` /
+`REQ_FIELD_REF_CLASS`/`REQ_REF_CLASS_OUTSIDE_RUN` name the fact the canonical scope actually carries
+(`ref_class: "outside_run_namespace"`, or the legacy `"protected"` an older row stored for the same case)
+without inventing a ref name the wire scope does not have (`adoCapabilityScope` carries no ref).
+`REQ_CHANGE_PR_BYPASS` states what a `policy_bypass` ask does: completing a pull request with
+`bypassPolicy`, the only request that capability covers (owner ruling, 2026-09-29; supersedes the mock's
+"Push past a branch policy" and "protected" wording). `REQ_CONSENT_HEADING` titles the Entra-consent card (`credential_reauth` /
 `entra_consent`) when it stands alone rather than paired with the escalation it blocked — see
 ado-capability-card.tsx's own doc comment for why it is not paired.
 
 | Key | String |
 |---|---|
 | `REQ_FIELD_REF_CLASS` | Ref class |
-| `REQ_REF_CLASS_PROTECTED` | Protected by a branch policy |
+| `REQ_REF_CLASS_OUTSIDE_RUN` | Outside this run's own branch |
+| `REQ_CHANGE_PR_BYPASS` | Complete this pull request past its policies |
 | `REQ_CONSENT_HEADING` | Azure DevOps needs more access |
 
 ### 10.3 `ADO` — the hold's honest expiry (owner-delegated to the lead, 2026-09-22)

@@ -428,8 +428,8 @@ since 0.7.2: `git_push_any_branch` opts out the GitHub-App lane
 row's own brokered-cleartext parsing (see `WARDYN_GIT_PAT_BROKER`,
 [ENV.md](ENV.md)) makes reachable the same way. Since 0.8.0 it also opts out
 the per-person Azure DevOps (Entra) lane, where a ref outside the run's
-namespace then needs `code_write` instead of `policy_bypass`
-(`internal/egress/proxy/ado_gate.go`'s `adoRunRefProtected`) and Azure
+namespace then needs `code_write` instead of being refused outright
+(`internal/egress/proxy/ado_gate.go`'s `adoRunBranchRule`) and Azure
 DevOps' own branch policies decide — see
 [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
 
@@ -1005,8 +1005,8 @@ match always wins: a path both lists match is refused and nothing is asked.
   the `git_pat` lane (GitHub, GitLab, Azure DevOps over a PAT), whatever either
   lane's branch switch says, and the Azure DevOps **Entra** lane (`/wardyn/git/`
   for a host the run's per-person Azure DevOps grant covers), where the rules
-  run before the capability check — nobody is asked for `code_write` or
-  `policy_bypass` on a push the rules refuse. There the card's `acts_as_kind`
+  run before the capability check — nobody is asked for `code_write` on a
+  push the rules refuse. There the card's `acts_as_kind`
   is `ado_entra` and its label is the person whose sign-in the push uses. The
   lane's REST door holds the same way — see **Every door, not only git's**.
 

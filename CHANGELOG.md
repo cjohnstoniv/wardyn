@@ -363,14 +363,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   key it; a push that assigns them differently is held and asked about again. The control plane
   refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A stored
   request without `updates` still reads the same in the console and API, and matches no new push.
+- **Azure DevOps `policy_bypass` means only a pull request completed with `bypassPolicy` (#1372).**
+  A push or REST ref move outside the run's own `refs/heads/wardyn/<run-id>/` branch is now governed
+  only by `git_push_any_branch`: off, it is refused whatever the run holds and is never held for an
+  approval (as on the GitHub App lane); on, it needs `code_write`. Update Ref reads its ref from
+  `?filter=`, annotated tags from their `name`, and REST cherry-picks and reverts from
+  `generatedRefName`, each held to the same rule; a ref move whose ref cannot be read is refused as
+  one that "names no ref Wardyn can check", and a fork sync is unclassified. The approval's
+  `ref_class` is `outside_run_namespace` (a stored `protected` row still reads, shown the same way),
+  and the capability copy no longer calls any branch "protected" or says a policy was consulted:
+  "Bypass branch policies" is "Complete a pull request without its required reviewers or checks."
 - **The Azure DevOps (Entra) lane honours `git_push_any_branch` (#1370).** With it on, a push or
   REST ref move to a branch outside the run's `refs/heads/wardyn/<run-id>/` namespace needs
   `code_write`, not `policy_bypass`, on both doors (the git broker and the REST gate), and Azure
   DevOps' own branch policies decide; each such git push is recorded as
   `brokered:git:branch-ns-off`, as on the GitHub lanes. Without it nothing changes, but the refusal
   now says the run may push only to its own branch and names the switch, instead of claiming a
-  branch policy was bypassed. A pull request completed with `bypassPolicy`, Update Ref, annotated
-  tags and fork syncs still need `policy_bypass`.
+  branch policy was bypassed.
+- **The provider editor no longer overwrites or removes a hidden row of the same kind.** The Git tab now
+  shows every row of a kind, each with its own switch, Entra section and Remove button, and edits or
+  removes only the row it was made on by id. The Remove confirmation names that row's id and host.
+
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
