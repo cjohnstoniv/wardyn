@@ -122,6 +122,13 @@ type PushContentScope struct {
 	PathsTotal int `json:"paths_total"`
 	// Commits are the object ids the push sets its refs to, sorted.
 	Commits []string `json:"commits"`
+	// Updates pairs each ref the push updates with the object id it sets it
+	// to — all zeros for a delete — sorted by ref. Branch and Commits name the
+	// same refs and ids for the card; Updates is what binds one to the other,
+	// so the same commits sent to the same refs in a different assignment are
+	// a different scope. A row raised before it existed has none and matches
+	// no new raise.
+	Updates []PushRefUpdate `json:"updates"`
 	// PathsDigest is the lower-case hex SHA-256 over every review-matched path,
 	// sorted, each followed by a NUL byte (a git path cannot contain one).
 	PathsDigest string `json:"paths_digest"`
@@ -133,6 +140,12 @@ type PushContentScope struct {
 	// constants; ActsAsLabel is the principal the console names.
 	ActsAsKind  string `json:"acts_as_kind,omitempty"`
 	ActsAsLabel string `json:"acts_as_label,omitempty"`
+}
+
+// PushRefUpdate is one ref a held push sets and the object id it sets it to.
+type PushRefUpdate struct {
+	Ref string `json:"ref"`
+	New string `json:"new"`
 }
 
 // The PushContentScope.ActsAsKind values: which lane's credential a held push
@@ -173,8 +186,35 @@ func (s PushContentScope) Validate() error {
 			return fmt.Errorf("commit %q is not an object id", c)
 		}
 	}
+	if err := s.validateUpdates(); err != nil {
+		return err
+	}
 	if len(s.PathsDigest) != 64 || !lowerHex(s.PathsDigest) {
 		return errors.New("paths_digest is not a SHA-256")
+	}
+	return nil
+}
+
+// validateUpdates checks Updates names exactly Branch's refs, each once and
+// in order, set to exactly Commits' object ids besides deletes.
+func (s PushContentScope) validateUpdates() error {
+	refs := make([]string, len(s.Updates))
+	var commits []string
+	for i, u := range s.Updates {
+		if (len(u.New) != 40 && len(u.New) != 64) || !lowerHex(u.New) {
+			return fmt.Errorf("update of %q sets %q, which is not an object id", u.Ref, u.New)
+		}
+		refs[i] = u.Ref
+		if strings.Trim(u.New, "0") != "" {
+			commits = append(commits, u.New)
+		}
+	}
+	slices.Sort(commits)
+	if len(refs) == 0 || !sortedUnique(refs) || strings.Join(refs, ", ") != s.Branch {
+		return errors.New("updates must name each of branch's refs once, sorted")
+	}
+	if !slices.Equal(slices.Compact(commits), s.Commits) {
+		return errors.New("updates must set branch's refs to exactly commits, besides deletes")
 	}
 	return nil
 }

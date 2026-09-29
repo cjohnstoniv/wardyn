@@ -362,6 +362,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   has. A terminal proxy state (`ImagePullBackOff`, `ErrImagePull`, `CrashLoopBackOff`,
   `CreateContainerConfigError`, a failed init or an exited proxy) fails the run at once, naming the
   container and the reason, and the run's objects are rolled back.
+- **A held push's approval binds each ref to its commit.** A `push_content` approval named the
+  push's refs and its commits as two separately sorted lists, so a later push setting the same
+  refs to the same commits in a different assignment (commits swapped between refs, or a ref
+  deleted instead of set) was forwarded on the earlier approval. The approval's
+  `requested_scope` now carries `updates`, each ref paired with the object id it is set to (all
+  zeros for a delete), and both the proxy's remembered decisions and the control plane's dedup
+  key it; a push that assigns them differently is held and asked about again. The control plane
+  refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A stored
+  request without `updates` still reads the same in the console and API, and matches no new push.
 - **Azure DevOps `policy_bypass` means only a pull request completed with `bypassPolicy` (#1372).**
   A push or REST ref move outside the run's own `refs/heads/wardyn/<run-id>/` branch is now governed
   only by `git_push_any_branch`: off, it is refused whatever the run holds and is never held for an

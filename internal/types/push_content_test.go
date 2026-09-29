@@ -17,6 +17,7 @@ func TestPushContentScopeValidate(t *testing.T) {
 			Paths:       []string{".github/workflows/ci.yml"},
 			PathsTotal:  1,
 			Commits:     []string{strings.Repeat("a", 40)},
+			Updates:     []PushRefUpdate{{Ref: "refs/heads/wardyn/run/x", New: strings.Repeat("a", 40)}},
 			PathsDigest: strings.Repeat("0", 64),
 		}
 	}
@@ -31,6 +32,12 @@ func TestPushContentScopeValidate(t *testing.T) {
 	many.Paths = many.Paths[1:]
 	if err := many.Validate(); err != nil {
 		t.Errorf("ten of twenty-five is refused: %v", err)
+	}
+	withDelete := good()
+	withDelete.Branch += ", refs/heads/wardyn/run/y"
+	withDelete.Updates = append(withDelete.Updates, PushRefUpdate{Ref: "refs/heads/wardyn/run/y", New: strings.Repeat("0", 40)})
+	if err := withDelete.Validate(); err != nil {
+		t.Errorf("an update beside a delete is refused: %v", err)
 	}
 
 	for name, mut := range map[string]func(*PushContentScope){
@@ -49,6 +56,16 @@ func TestPushContentScopeValidate(t *testing.T) {
 		"upper-case hex":   func(s *PushContentScope) { s.Commits = []string{strings.Repeat("A", 40)} },
 		"digest not hex":   func(s *PushContentScope) { s.PathsDigest = strings.Repeat("g", 64) },
 		"digest too short": func(s *PushContentScope) { s.PathsDigest = "00" },
+		"no updates":       func(s *PushContentScope) { s.Updates = nil },
+		"update of another ref": func(s *PushContentScope) {
+			s.Updates[0].Ref = "refs/heads/wardyn/run/z"
+		},
+		"update to another commit": func(s *PushContentScope) { s.Updates[0].New = strings.Repeat("b", 40) },
+		"update not an object id":  func(s *PushContentScope) { s.Updates[0].New = "abc" },
+		"only a delete":            func(s *PushContentScope) { s.Updates[0].New = strings.Repeat("0", 40) },
+		"a ref updated twice": func(s *PushContentScope) {
+			s.Updates = append(s.Updates, s.Updates[0])
+		},
 	} {
 		s := good()
 		mut(&s)
