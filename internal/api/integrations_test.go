@@ -274,7 +274,7 @@ func findRow(rows []integrationRow, id string) (integrationRow, bool) {
 // provider, so no AI-kind row is derived into the effective set from the
 // operator's own model credentials (an anthropic-api-key or openai-api-key
 // secret, a live host subscription, a managed token, Bedrock boot config).
-// Every resolver reads this set. A STORED AI row cannot exist: migration 0099
+// Every resolver reads this set. A STORED AI row cannot exist: migration 0100
 // converted and deleted every one.
 func TestEffectiveIntegrations_NoAIRows(t *testing.T) {
 	retired := map[string]bool{"anthropic_api_key": true, "anthropic_subscription": true, "bedrock": true, "openai_api_key": true}

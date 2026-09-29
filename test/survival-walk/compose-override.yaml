@@ -26,14 +26,21 @@
 # directly, merged into the base service's own map.
 #
 # WARDYN_SURVIVAL_FAKE_URL points at the fake (test/awsssofake/cmd) by
-# CONTAINER NAME on wardynd's own control-plane network
-# (survival-walk.sh starts it there, alongside wardynd) — not
-# host.docker.internal. An earlier version of this file used
-# host.docker.internal (with an ExtraHosts entry here to match) for BOTH this
-# and the sandbox-facing capture flow; both were abandoned for real,
-# live-observed reasons documented in survival-walk.sh's own header (an SSRF-
-# guard refusal for the sandbox path, then a Docker Desktop/WSL2
-# host-gateway reachability failure for wardynd's own refresh calls).
+# CONTAINER NAME on a THIRD network, ${WARDYN_SURVIVAL_FAKE_NETWORK}, that
+# survival-walk.sh creates before wardynd boots and that only wardynd and the
+# fake join — never ${WARDYN_NS}-internal (#1352). wardynd's boot guard
+# (refuseBedrockAddrsOnSubnets, cmd/wardynd/bedrock_subnet_guard.go) refuses a
+# WARDYN_BEDROCK_BASE_URL resolving onto the control-plane network's subnet,
+# and the per-run proxy never joins this network, so the fake's address is on
+# neither the proxy's nor the control plane's subnet and the guard passes for
+# real. Docker allocates this network's subnet, so it cannot overlap any
+# network already on the daemon, including the control-plane one. An earlier
+# version of this file used host.docker.internal (with an ExtraHosts entry here
+# to match) for BOTH this and the sandbox-facing capture flow; both were
+# abandoned for real, live-observed reasons documented in survival-walk.sh's
+# own header (an SSRF-guard refusal for the sandbox path, then a Docker
+# Desktop/WSL2 host-gateway reachability failure for wardynd's own refresh
+# calls).
 services:
   wardynd:
     environment:
@@ -41,3 +48,11 @@ services:
       WARDYN_AWS_SSO_ENDPOINT_OVERRIDE: "${WARDYN_SURVIVAL_FAKE_URL}"
       WARDYN_BEDROCK_BASE_URL: "${WARDYN_SURVIVAL_FAKE_URL}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-30s}"
+    networks:
+      - wardyn
+      - survival-fake
+
+networks:
+  survival-fake:
+    name: ${WARDYN_SURVIVAL_FAKE_NETWORK}
+    external: true

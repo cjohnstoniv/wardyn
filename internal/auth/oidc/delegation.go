@@ -40,7 +40,8 @@ func (a *Authenticator) ClientID() string { return a.cfg.ClientID }
 // matches nothing — else every Wardyn ID token would double as a subject token for it.
 //
 // The returned Session carries the token's iat as IssuedAt (compared against the session cutoff)
-// and exp as Expiry. denied is non-empty on any refusal, with a zero Session.
+// and exp as Expiry. denied is non-empty on any refusal, with a zero Session. The caller records
+// an attach to a person set up by object id with RecordAttach once it has admitted the exchange.
 func (a *Authenticator) VerifySubjectToken(r *http.Request, raw, portalClientID string, reserved func(string) bool) (Session, string) {
 	if a.subjectVerifier == nil {
 		return Session{}, SubjectTokenInvalid

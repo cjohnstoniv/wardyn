@@ -244,7 +244,7 @@ a provider — a key, a Claude sign-in or an AWS sign-in — from Getting starte
 Wardyn never substitutes: a run whose provider cannot credential it is refused
 at create, naming the provider and what to fix, and a run with no provider at
 all launches with only a warning. Upgrading converts the old setup once
-(migration `0099_model_provider_conversion`; see the CHANGELOG).
+(migration `0100_model_provider_conversion`; see the CHANGELOG).
 
 The operator-held lanes below (a key in the operator's secret store, the
 managed subscription, Bedrock boot configuration) no longer credential any

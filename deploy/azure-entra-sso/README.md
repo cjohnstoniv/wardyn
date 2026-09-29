@@ -323,6 +323,35 @@ observation) as you go.
    functions without it — `email` is best-effort here (Context above), never
    load-bearing for anything this runbook proves.
 
+## Pre-creating a person by object id
+
+On an Entra ID issuer, a person who has never signed in is set up by their
+tenant id and object id, not their `sub` (Entra's `sub` is per app
+registration and unknown until that first sign-in). See
+[docs/OPERATIONS.md](../../docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in)
+for the keying rule. Both ids are GUIDs; read them from any of these:
+
+| Where | Tenant id | Object id |
+|---|---|---|
+| Microsoft Entra admin center | **Entra ID → Overview → Tenant ID** | **Entra ID → Users → All users →** the user **→ Overview → Object ID** |
+| Microsoft Graph | `GET https://graph.microsoft.com/v1.0/organization?$select=id` → `id` | `GET https://graph.microsoft.com/v1.0/users/{userPrincipalName}?$select=id` → `id` |
+| Azure CLI | `az account show --query tenantId -o tsv` | `az ad user show --id <upn> --query id -o tsv` |
+| This runbook | `TENANT_ID` in `.env.local` | `WARDYN_ADMIN_OID` / `WARDYN_MEMBER_OID` in `.env.local` (`03-people.sh`) |
+
+The object id is the user's `id` in Graph, the value the id_token's `oid`
+claim carries. Do not use the app's service principal or the app registration's
+object id. Then, signed in as an admin or `security_admin`, call
+`POST /api/v1/people` with
+
+```json
+{"tenant_id":"<tenant id>","object_id":"<object id>","email":"<their email>"}
+```
+
+which answers `201` with `"principal":"entra:<tenant id>:<object id>"`.
+Mint their token with `POST /api/v1/people/entra:<tenant id>:<object id>/tokens`.
+Their first sign-in becomes that principal and writes a `person.attach` audit
+row naming the pairwise `sub` it arrived with.
+
 ## Playwright — what's automated vs. what this runbook is for
 
 The live Entra login flow is **not part of `make ci`** — it drives

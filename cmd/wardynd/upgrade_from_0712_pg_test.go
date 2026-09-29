@@ -12,7 +12,7 @@ package main
 // frozen, so a later edit to a shared migration on this branch cannot make the
 // fixture drift toward what it is meant to check.
 //
-// MP-4a (#548) is 0099_model_provider_conversion: the PENDING credential_reauth
+// MP-4a (#548) is 0100_model_provider_conversion: the PENDING credential_reauth
 // row below names no provider, so the conversion cancels it. MP-4b (#549) adds
 // its own boot conversion here when it lands.
 

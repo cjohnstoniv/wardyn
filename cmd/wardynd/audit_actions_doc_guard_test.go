@@ -593,7 +593,7 @@ var auditActionGrammarAllow = map[string]bool{
 	// purpose. Removed in 0.9.
 	"auth.member_mode": true,
 	// The 0.8 upgrade's two one-time rows (#548), written by migration
-	// 0099_model_provider_conversion under the names the issue and its design
+	// 0100_model_provider_conversion under the names the issue and its design
 	// record fixed before this grammar saw them. Past tense on purpose: each
 	// records a conversion that already happened, once, at upgrade.
 	"workspace.llm_cred.migrated":  true,

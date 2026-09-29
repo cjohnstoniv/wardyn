@@ -143,7 +143,7 @@ func TestEveryMigrationIsWellFormedDDL(t *testing.T) {
 			switch first[0] {
 			case "CREATE", "ALTER", "DROP", "INSERT", "UPDATE", "COMMENT", "GRANT", "REVOKE", "SET",
 				// DO: an anonymous plpgsql block, for a data conversion that
-				// reads the document it rewrites (0099_model_provider_conversion).
+				// reads the document it rewrites (0100_model_provider_conversion).
 				"DO":
 				// ok
 			default:

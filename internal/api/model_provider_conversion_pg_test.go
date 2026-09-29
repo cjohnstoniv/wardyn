@@ -14,13 +14,13 @@ import (
 )
 
 // TestPG_ModelProviderConversion_OutputPassesTheWriteDoors: whatever migration
-// 0099_model_provider_conversion writes, an admin must be able to save back
+// 0100_model_provider_conversion writes, an admin must be able to save back
 // unchanged — so its document decodes STRICTLY into types.SiteConfig (no
 // retired roster field survives) and passes the same validation
 // PUT /model-providers and PUT /agent-providers apply. A conversion the doors
 // refuse would wedge the admin's next edit on the upgrade's own output.
 func TestPG_ModelProviderConversion_OutputPassesTheWriteDoors(t *testing.T) {
-	migration, err := os.ReadFile("../db/migrations/0099_model_provider_conversion.sql")
+	migration, err := os.ReadFile("../db/migrations/0100_model_provider_conversion.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

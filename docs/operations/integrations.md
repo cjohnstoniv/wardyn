@@ -31,7 +31,7 @@ env var, so a write naming one is refused.
   access is set up under Settings → Model providers — and `default_for` is
   no longer a field at all.
 - The upgrade converted every stored AI row into a model provider and
-  deleted it (migration `0099_model_provider_conversion`; see the
+  deleted it (migration `0100_model_provider_conversion`; see the
   CHANGELOG).
 - No AI row is derived from the operator's own model credentials any
   more either.
@@ -166,7 +166,7 @@ owner's own key, token or sign-in, or by nothing.
   integration. The 0.8.2 upgrade converts a 0.7.x or 0.8.0 integration pin, an
   integration's `DefaultFor: agent_runs` mark and the agent roster's model
   credential fields into model providers and drops the AI integration
-  rows (`0099_model_provider_conversion`, see
+  rows (`0100_model_provider_conversion`, see
   [CHANGELOG](../../CHANGELOG.md)).
 - Record, verify and build sessions no longer mint an `api_key` grant
   from an operator secret either (`recordSessionModelAccess`,

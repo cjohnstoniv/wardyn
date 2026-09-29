@@ -45,9 +45,9 @@
 #  2. wardynd pointed at the fake for its OWN direct calls (never
 #     proxy/sandbox-gated): WARDYN_ALLOW_TEST_ENDPOINTS=true,
 #     WARDYN_AWS_SSO_ENDPOINT_OVERRIDE / WARDYN_BEDROCK_BASE_URL both aimed at
-#     the fake by CONTAINER NAME on the project's own control-plane network
-#     (test/survival-walk/compose-override.yaml) — never host.docker.internal (see
-#     below). internal/api/awssso_refresh.go's createAWSSSOToken is wardynd's
+#     the fake by CONTAINER NAME on a third network only wardynd and the fake
+#     join (test/survival-walk/compose-override.yaml) — never the control-plane
+#     network, never host.docker.internal (see below). internal/api/awssso_refresh.go's createAWSSSOToken is wardynd's
 #     OWN outbound HTTP call, so this alone is enough for it.
 #  3. the org's agent standard declared bedrock_sso/shared (PUT
 #     /site-config), so a claude-code run actually dispatches on the AWS-SSO
@@ -82,9 +82,9 @@
 # side (syntheticAWSHome), just at the control-plane's own capture boundary
 # instead of the sandbox filesystem.
 #
-# THE FAKE RUNS AS A CONTAINER ON THE PROJECT'S OWN CONTROL-PLANE NETWORK
-# (the same one wardynd's container joins), not as a host process reached via
-# host.docker.internal. A second real finding, on this same walk: wardynd's
+# THE FAKE RUNS AS A CONTAINER ON A THIRD NETWORK (${FAKE_NETWORK}, created
+# here, joined by wardynd and the fake only), not as a host process reached
+# via host.docker.internal. A second real finding, on this same walk: wardynd's
 # OWN refresh call (createAWSSSOToken, direct, no proxy) reaching a host
 # process through host.docker.internal's NAT/port-forward was observed live
 # to hang indefinitely ("Client.Timeout exceeded while awaiting headers")
@@ -95,8 +95,16 @@
 # container did not), not anything this repo's code controls. Since
 # wardynd's refresh call is the ONLY thing that ever needed to reach the
 # fake over the network (the capture upload above never does), giving the
-# fake a normal container identity on wardynd's own network removes the
+# fake a normal container identity on a network wardynd joins removes the
 # unreliable hop entirely.
+#
+# NOT the control-plane network (#1352): wardynd's boot guard
+# (refuseBedrockAddrsOnSubnets, cmd/wardynd/bedrock_subnet_guard.go) refuses a
+# WARDYN_BEDROCK_BASE_URL that resolves onto ${PROJECT}-internal's subnet, so
+# a fake there stopped wardynd from ever booting. The third network is one
+# the per-run proxy never joins and whose subnet Docker allocates clear of
+# every existing network, so the guard evaluates the fake's real address and
+# passes, with no exemption in the guard.
 #
 # GUARD: like every other dedicated-stack e2e script, self-skips unless
 # WARDYN_TEST_DOCKER=1. Tears down its own project (compose down --volumes,
@@ -164,7 +172,8 @@ SSO_REGION="us-east-1"
 BEDROCK_MODEL="arn:aws:bedrock:${SSO_REGION}:${PIN_ACCOUNT}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 SSO_START_URL="https://wardyn-survival.awsapps.com/start"
 FAKE_CONTAINER="${PROJECT}-awsssofake"
-FAKE_URL="http://${FAKE_CONTAINER}:8090" # container DNS on the project's own control-plane network — see this file's header
+FAKE_NETWORK="${PROJECT}-awsfake" # the third network — see this file's header
+FAKE_URL="http://${FAKE_CONTAINER}:8090" # container DNS on ${FAKE_NETWORK}
 PG_CONTAINER="${PROJECT}-postgres"
 SECRET_NAME="wardyn-harness-aws-oauth" # internal/api/harnesscred.go's harnessCredSecretName(awsSSOProvider), shared scope
 
@@ -185,7 +194,7 @@ compose() {
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg cc "${AGENT_IMAGE}" --arg aws "${AWSSSO_AGENT_IMAGE}" \
       '{"claude-code":$cc,"aws-sso":$aws}')" \
-    WARDYN_SURVIVAL_FAKE_URL="${FAKE_URL}" \
+    WARDYN_SURVIVAL_FAKE_URL="${FAKE_URL}" WARDYN_SURVIVAL_FAKE_NETWORK="${FAKE_NETWORK}" \
     WARDYN_BEDROCK_REGION="${SSO_REGION}" \
     WARDYN_BEDROCK_AWS_SSO_REGION="${SSO_REGION}" \
     WARDYN_BEDROCK_MODEL="${BEDROCK_MODEL}" \
@@ -232,13 +241,12 @@ teardown() {
     [[ -n "${rid}" ]] || continue
     curl -sS --max-time "${CURL_MAX_TIME}" -X POST "${BASE}/api/v1/runs/${rid}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   done
-  # The fake is attached to ${PROJECT}-internal, so it must be removed BEFORE
-  # `compose down` — otherwise compose cannot remove that network ("Resource
-  # is still in use") and `|| true` on the down call hides the leak (found
-  # live: the network survived every prior version of this teardown).
+  # The fake first, then compose down (which detaches wardynd), then the fake
+  # network, which is external to compose and only removable once empty.
   docker rm -f "${FAKE_CONTAINER}" >/dev/null 2>&1 || true
   echo "tearing down ${PROJECT} (compose down --volumes; this project only)"
   compose down --volumes >/dev/null 2>&1 || true
+  docker network rm "${FAKE_NETWORK}" >/dev/null 2>&1 || true
   rm -rf "${TMPDIR}"
 }
 trap teardown EXIT
@@ -247,6 +255,7 @@ trap teardown EXIT
 # a differently-named project. Same ordering as teardown (fake removed first).
 docker rm -f "${FAKE_CONTAINER}" >/dev/null 2>&1 || true
 compose down --volumes >/dev/null 2>&1 || true
+docker network rm "${FAKE_NETWORK}" >/dev/null 2>&1 || true
 
 # ── build + bring up the dedicated stack ────────────────────────────────────
 step "building wardynd/proxy/agent images (project-unique tags)"
@@ -275,13 +284,14 @@ export WARDYN_AGE_KEY="$(docker run --rm "${WARDYND_IMAGE}" -gen-age-key 2>"${EV
 [[ "${WARDYN_AGE_KEY}" == AGE-SECRET-KEY-* ]] || { cat "${EVIDENCE_DIR}/gen-age-key.log" >&2; die "-gen-age-key did not print an AGE-SECRET-KEY-...; needs ${WARDYND_IMAGE} built first"; }
 pass "age key minted"
 
-step "bringing up postgres (creates ${PROJECT}-internal, the network wardynd and the fake both join)"
+step "bringing up postgres (creates ${PROJECT}-internal, the control-plane network)"
 compose up -d postgres || die "compose up (postgres) failed for ${PROJECT}"
 
-# The fake (test/awsssofake/cmd), as a CONTAINER on wardynd's own
-# control-plane network — never a host process reached via
-# host.docker.internal (see this file's header for the live reachability
-# finding that ruled that out). CGO_ENABLED=0 for a static binary portable
+# The fake (test/awsssofake/cmd), as a CONTAINER on ${FAKE_NETWORK} — never a
+# host process reached via host.docker.internal, never the control-plane
+# network (see this file's header for both). Started BEFORE wardynd so the
+# boot guard resolves its name and checks a real address, rather than
+# WARNing the check UNVERIFIED. CGO_ENABLED=0 for a static binary portable
 # into the small, already-pulled base image below.
 #
 # STARTS WITH REAUTH DISABLED (AWSSSOFAKE_REAUTH_AFTER=0): every refresh
@@ -301,7 +311,8 @@ compose up -d postgres || die "compose up (postgres) failed for ${PROJECT}"
 # GetRoleCredentials here) — left short anyway since it costs nothing.
 step "building and starting the fake AWS SSO + Bedrock endpoint (container ${FAKE_CONTAINER})"
 CGO_ENABLED=0 go build -o "${TMPDIR}/awsssofake" ./test/awsssofake/cmd || die "build awsssofake failed"
-docker run -d --name "${FAKE_CONTAINER}" --network "${PROJECT}-internal" \
+docker network create "${FAKE_NETWORK}" >/dev/null || die "docker network create ${FAKE_NETWORK} failed"
+docker run -d --name "${FAKE_CONTAINER}" --network "${FAKE_NETWORK}" \
   -p 127.0.0.1:${FAKE_PORT}:8090 \
   -v "${TMPDIR}/awsssofake:/awsssofake:ro" \
   -e "AWSSSOFAKE_ADDR=0.0.0.0:8090" \
@@ -317,7 +328,7 @@ for _ in $(seq 1 30); do
 done
 curl -sf --max-time "${CURL_MAX_TIME}" "http://127.0.0.1:${FAKE_PORT}/_seen" >/dev/null 2>&1 \
   || { docker logs "${FAKE_CONTAINER}" >&2; die "the fake never answered on 127.0.0.1:${FAKE_PORT}"; }
-pass "fake AWS SSO/Bedrock endpoint up (${FAKE_CONTAINER}, on ${PROJECT}-internal)"
+pass "fake AWS SSO/Bedrock endpoint up (${FAKE_CONTAINER}, on ${FAKE_NETWORK})"
 
 step "bringing up wardynd (api :${API_PORT})"
 compose up -d wardynd || die "compose up (wardynd) failed for ${PROJECT}"
@@ -328,6 +339,18 @@ for _ in $(seq 1 60); do
 done
 [[ -n "${healthy}" ]] || { compose logs wardynd | tail -80; die "wardynd did not become healthy"; }
 pass "stack up and healthy (${BASE})"
+# Healthy alone does not prove the Bedrock subnet guard checked the fake: it
+# also boots when it could not resolve the host or read the control-plane
+# subnet, WARNing the check UNVERIFIED.
+compose logs wardynd >"${EVIDENCE_DIR}/wardynd-boot.log" 2>&1 || die "could not read wardynd's boot log"
+# A positive marker too: an empty or failed capture must not read as a pass.
+# The plain-HTTP Bedrock WARN is logged right after the guard returns nil.
+grep -qF "WARDYN_BEDROCK_BASE_URL is plain http://" "${EVIDENCE_DIR}/wardynd-boot.log" \
+  || die "wardynd's boot log does not show the Bedrock guard completing (no plain-HTTP Bedrock WARN)"
+if grep -qE "could not resolve WARDYN_BEDROCK_BASE_URL|could not determine the docker control-plane network's subnet" "${EVIDENCE_DIR}/wardynd-boot.log"; then
+  die "wardynd booted without checking the fake's address against the control-plane subnet (UNVERIFIED WARN in its log)"
+fi
+pass "Bedrock subnet guard checked ${FAKE_URL} against ${PROJECT}-internal and passed"
 
 # ── the preconditions ────────────────────────────────────────────────────────
 step "declaring the org agent standard: claude-code on bedrock_sso, shared credential"

@@ -16,7 +16,7 @@ import (
 )
 
 // PersonStore holds the identities an admin created or confirmed before their
-// first sign-in (migration 0090, #1157). Optional, like DeviceStore: the API
+// first sign-in (migration 0090, #1157; the Entra object-id key, 0099, #1195). Optional, like DeviceStore: the API
 // answers 501 on a store without it.
 type PersonStore interface {
 	// CreatePerson inserts p, or returns the row already stored under
@@ -35,11 +35,11 @@ type PersonStore interface {
 
 var _ PersonStore = PG{}
 
-const personCols = `principal, email, created_by, created_at, first_signed_in_at`
+const personCols = `principal, email, issuer, tenant_id, object_id, created_by, created_at, first_signed_in_at`
 
 func scanPerson(row pgx.Row) (types.Person, error) {
 	var p types.Person
-	err := row.Scan(&p.Principal, &p.Email, &p.CreatedBy, &p.CreatedAt, &p.FirstSignedInAt)
+	err := row.Scan(&p.Principal, &p.Email, &p.Issuer, &p.TenantID, &p.ObjectID, &p.CreatedBy, &p.CreatedAt, &p.FirstSignedInAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Person{}, ErrNotFound
 	}
@@ -51,9 +51,9 @@ func scanPerson(row pgx.Row) (types.Person, error) {
 
 func (s PG) CreatePerson(ctx context.Context, p types.Person) (types.Person, bool, error) {
 	out, err := scanPerson(s.Pool.QueryRow(ctx, `
-		INSERT INTO people (principal, email, created_by) VALUES ($1, $2, $3)
+		INSERT INTO people (principal, email, issuer, tenant_id, object_id, created_by) VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (principal) DO NOTHING
-		RETURNING `+personCols, p.Principal, p.Email, p.CreatedBy))
+		RETURNING `+personCols, p.Principal, p.Email, p.Issuer, p.TenantID, p.ObjectID, p.CreatedBy))
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "23505":

@@ -18,7 +18,7 @@ import (
 // conversionFloor is the model-provider conversion (multi-provider design
 // §2.11): every test here seeds a pre-conversion document below it and runs the
 // real Migrate() over it, the path an upgrading install takes.
-const conversionFloor = "0099"
+const conversionFloor = "0100"
 
 // convertedDoc is the part of the converted site config these tests read.
 type convertedDoc struct {

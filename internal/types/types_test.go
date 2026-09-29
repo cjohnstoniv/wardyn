@@ -403,7 +403,7 @@ func TestFirstUseModeDecode(t *testing.T) {
 // TestWorkspaceLLMCredRoundTrip: the model-provider pin survives marshal ->
 // unmarshal unchanged (a decoder that dropped it would read every pinned
 // workspace back as unpinned). The pre-provider shapes are gone from storage:
-// migration 0099 rewrote every stored llm_cred.
+// migration 0100 rewrote every stored llm_cred.
 func TestWorkspaceLLMCredRoundTrip(t *testing.T) {
 	in := WorkspaceLLMCred{ProviderRef: "corp-gateway"}
 	b, err := json.Marshal(in)

@@ -327,7 +327,7 @@ func validateHeaderScheme(id, where, header, format string) error {
 // validateProviderBedrock: a Bedrock kind needs a region (it names the hosts a
 // run reaches); bedrock_sso alone needs the start URL and may carry the pin.
 // A provider that is turned off may leave the region and start URL unset —
-// migration 0099 creates one from a Bedrock lane whose region and model came
+// migration 0100 creates one from a Bedrock lane whose region and model came
 // only from the boot environment — and has to be completed before it is turned
 // on; whatever it does set is still held to its grammar. The base URL takes
 // ValidateBedrockBaseURL's rule — the seven gateway rules, plain http:// only

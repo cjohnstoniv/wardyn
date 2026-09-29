@@ -230,7 +230,7 @@ type Workspace struct {
 const (
 	// The four AI kinds (anthropic_api_key, anthropic_subscription, bedrock,
 	// openai_api_key) are GONE as of 0.8: model access is a model provider, and
-	// migration 0099 converted and deleted every stored row of them.
+	// migration 0100 converted and deleted every stored row of them.
 	IntegrationKindGitHubApp = "github_app"
 	IntegrationKindGitHost   = "git_host"
 )
