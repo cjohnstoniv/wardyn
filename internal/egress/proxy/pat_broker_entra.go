@@ -76,7 +76,13 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
-		// Content rules run BEFORE the capability check: nobody is asked to approve policy_bypass for a
+		// The run's branch rule first (adoRunBranchRule, the REST gate's too): a ref outside the run's own
+		// branch is refused outright, never held for a capability.
+		if msg := p.adoRunBranchRule(push.refs); msg != "" {
+			p.refuseADOGit(w, r, host, nil, push, msg)
+			return
+		}
+		// Content rules run BEFORE the capability check: nobody is asked to approve code_write for a
 		// push the rules refuse. A probe moving no ref carries nothing to inspect and stays a read.
 		if len(push.refs) > 0 {
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
@@ -90,10 +96,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		}
 		// A command section moving no ref is git's auth probe ahead of a large pack (remote-curl's
 		// probe_rpc): it writes nothing, so it's a read and never raises or spends an approval for the push.
-		switch {
-		case slices.ContainsFunc(push.refs, p.adoRunRefProtected):
-			need = adoscope.CapPolicyBypass
-		case len(push.refs) > 0:
+		if len(push.refs) > 0 {
 			need = adoscope.CapCodeWrite
 		}
 	}
@@ -102,6 +105,13 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			"Wardyn refused this git request: it needs %q (%s), and this run was not granted it.",
 			adoscope.Label(need), need)) {
 		return
+	}
+	// A push forwarded under git_push_any_branch is marked as the App lane
+	// marks one (ruleSourceGitNSOff), so the audit shows its refs went
+	// unconfined.
+	allowSrc := ruleSourceADOGit
+	if push != nil && p.policy.GitPushAnyBranch() {
+		allowSrc = ruleSourceGitNSOff
 	}
 
 	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)
@@ -129,7 +139,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	// (push_advert.go). Without it a shallow clone's push is thin and every
 	// one of them is refused as uninspectable.
 	noThin := p.noThinAdvert(r, verb)
-	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, ruleSourceADOGit, ruleSourceADOGitDenied,
+	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, allowSrc, ruleSourceADOGitDenied,
 		func(out *http.Request) {
 			if noThin {
 				out.Header.Set("Accept-Encoding", "identity")
@@ -169,11 +179,11 @@ func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string
 	return false
 }
 
-// adoGitVerdict is the verdict a git request is held to. Refs ride only a policy_bypass verdict: the
-// control plane reads refs as a protected-ref move, which a push inside the run's own namespace is not.
+// adoGitVerdict is the verdict a git request is held to: a push carries its refs, as a REST ref move
+// does, so a held ask can say whether they lie outside the run's own branch.
 func adoGitVerdict(need adoscope.Capability, push *adoGitPush) adoscope.Verdict {
 	v := adoscope.Verdict{Capability: need}
-	if need == adoscope.CapPolicyBypass {
+	if push != nil {
 		v.Refs = push.refs
 	}
 	return v

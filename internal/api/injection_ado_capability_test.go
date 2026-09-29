@@ -677,3 +677,30 @@ func TestADOCapability_AnotherRunsApprovalIsRefused(t *testing.T) {
 		t.Fatal("another run's approval was spent")
 	}
 }
+
+// ref_class carries ONE value, outside_run_namespace, and the card's command
+// says so in the run's terms; the legacy "protected" spelling is no longer
+// written, and a row stored with it still reads back.
+func TestADOCapability_RefClassIsOutsideRunNamespace(t *testing.T) {
+	sn := adoEntraScopeSnapshot{ProviderRowID: "row", Organisation: "acme"}
+	grantID := uuid.New()
+	sc := adoScopeFor(sn, grantID, adoscope.CapCodeWrite, url.Values{"repo": {"app"}, "ref_class": {"outside_run_namespace"}})
+	if sc.RefClass != "outside_run_namespace" || !strings.HasSuffix(sc.Cmd, ", outside this run's own branch") {
+		t.Errorf("scope = %+v, want ref_class outside_run_namespace and the command saying so", sc)
+	}
+	for _, legacy := range []string{"protected", "bogus"} {
+		if sc := adoScopeFor(sn, grantID, adoscope.CapCodeWrite, url.Values{"ref_class": {legacy}}); sc.RefClass != "" {
+			t.Errorf("ref_class %q was written as %q", legacy, sc.RefClass)
+		}
+	}
+	if sc := adoScopeFor(sn, grantID, adoscope.CapPolicyBypass, url.Values{}); strings.Contains(strings.ToLower(sc.Cmd), "protected") || sc.RefClass != "" {
+		t.Errorf("PR bypass scope = %+v, want no ref class and no protected-branch wording", sc)
+	}
+
+	stored := []byte(`{"lane":"azure_devops","provider_id":"row","org":"acme","grant_id":"` + grantID.String() +
+		`","capability":"policy_bypass","repo":"app","ref_class":"protected","tool":"Azure DevOps","cmd":"x"}`)
+	got, ok := adoEscalationScope(types.ApprovalRequest{Kind: types.ApprovalToolCall, GrantID: &grantID, RequestedScope: stored})
+	if !ok || got.RefClass != "protected" {
+		t.Errorf("a stored legacy row reads back as %+v, %v", got, ok)
+	}
+}

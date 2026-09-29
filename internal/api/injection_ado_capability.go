@@ -63,7 +63,10 @@ const (
 	adoApprovalLane           = "azure_devops"
 	adoConsentMechanism       = "entra_consent"
 	adoCapabilityPendingState = "capability_pending"
-	adoRefClassProtected      = "protected"
+	// adoRefClassOutsideRun marks an ask whose request moves a ref outside
+	// the run's own branch namespace. A row stored before 0.8.0 carries
+	// "protected" for the same case; it is still read, never written.
+	adoRefClassOutsideRun = "outside_run_namespace"
 	// adoMaxAuditPath bounds the sandbox-chosen path on the audit row.
 	adoMaxAuditPath = 512
 )
@@ -238,8 +241,8 @@ func adoScopeFor(sn adoEntraScopeSnapshot, grantID uuid.UUID, c adoscope.Capabil
 		Lane: adoApprovalLane, ProviderID: sn.ProviderRowID, Org: sn.Organisation, GrantID: grantID,
 		Capability: string(c), Repo: adoCanonicalRepo(q.Get("repo")), Tool: "Azure DevOps",
 	}
-	if q.Get("ref_class") == adoRefClassProtected {
-		sc.RefClass = adoRefClassProtected
+	if q.Get("ref_class") == adoRefClassOutsideRun {
+		sc.RefClass = adoRefClassOutsideRun
 	}
 	sc.Cmd = adoCapabilityCmd(sc, c)
 	return sc
@@ -368,8 +371,8 @@ func adoCapabilityCmd(sc adoCapabilityScope, c adoscope.Capability) string {
 		where += " / " + sc.Repo
 	}
 	cmd := fmt.Sprintf("%s (%s) in %s", adoscope.Label(c), c, where)
-	if sc.RefClass == adoRefClassProtected {
-		cmd += ", on a protected branch"
+	if sc.RefClass == adoRefClassOutsideRun {
+		cmd += ", outside this run's own branch"
 	}
 	return cmd
 }

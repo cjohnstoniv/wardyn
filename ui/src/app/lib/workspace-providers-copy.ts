@@ -456,7 +456,7 @@ export const ADO_CAP_COPY: Record<string, { name: string; consequence: string }>
   read: { name: "Read", consequence: "See code, work items, pipelines, wikis, feeds and settings — never change anything." },
   code_write: {
     name: "Push to the run's own branch",
-    consequence: "Push commits and move branches that no policy protects — never main or another protected branch.",
+    consequence: "Push commits and move branches — nothing outside this run's own branch unless its policy allows any branch.",
   },
   pr: { name: "Open pull requests", consequence: "Open, review and complete pull requests without bypassing a branch policy." },
   work_write: { name: "Work items", consequence: "Create and update work items." },
@@ -473,7 +473,7 @@ export const ADO_CAP_COPY: Record<string, { name: string; consequence: string }>
   },
   policy_bypass: {
     name: "Bypass branch policies",
-    consequence: "Land a change straight through a protected branch's policy, skipping the review it requires.",
+    consequence: "Complete a pull request without its required reviewers or checks.",
   },
   repo_admin: { name: "Manage repositories", consequence: "Create, rename or delete a repository — other people's work included." },
   security_admin: {

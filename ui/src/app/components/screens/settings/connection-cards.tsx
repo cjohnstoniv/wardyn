@@ -288,6 +288,8 @@ export function SecretLane({
    *  Save must not compete with it. */
   saveVariant?: "default" | "secondary";
 }) {
+  // Two lanes can share a secret name (two rows on one host), never a DOM id.
+  const uid = React.useId();
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   // Only ever true after an explicit Replace: a stored secret is write-only, so
@@ -349,9 +351,9 @@ export function SecretLane({
   return (
     <div className="space-y-3">
       {extra}
-      <Field label={label} htmlFor={`v-${secretName}`} hint={hint}>
+      <Field label={label} htmlFor={`${uid}v-${secretName}`} hint={hint}>
         <Input
-          id={`v-${secretName}`}
+          id={`${uid}v-${secretName}`}
           type="password"
           autoComplete="off"
           value={value}
