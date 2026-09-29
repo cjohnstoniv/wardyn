@@ -235,7 +235,7 @@ the sentence that whatever is allowed happens under that person's name at Azure 
 you're approving:" (this one request) and "Blast radius:" (what the capability covers for as long as
 it is held) — the shipped two-line shape.
 
-**A ref outside the run's own branch is a rule of the run, not a capability.** Any ref move outside `refs/heads/wardyn/<run-id>/…`, on either door (the git broker's pkt-line commands and the REST `refs`/`pushes`/`annotatedtags`/`cherrypicks`/`reverts` requests), is refused unless the run's policy sets `git_push_any_branch`; with it on, the move is `code_write` and Azure DevOps' own policies decide. `policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy`. The card names no branch policy: Wardyn never reads one (owner ruling 2026-09-29).
+**A ref outside the run's own branch is a rule of the run, not a capability.** Any ref move outside `refs/heads/wardyn/<run-id>/…`, on either door (the git broker's pkt-line commands and the REST `refs`/`pushes`/`annotatedtags`/`cherrypicks`/`reverts` requests), is refused unless the run's policy sets `git_push_any_branch`; with it on, the move is `code_write` and Azure DevOps' own policies decide. `policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy`. The card names no branch policy: Wardyn never reads one (owner ruling 2026-09-28).
 
 **Four states have no decision to make, and draw no buttons.** Above the ceiling; always refused;
 refused by the run's governance policy; and a write Wardyn cannot classify. Drawing a disabled
@@ -933,7 +933,7 @@ drawn in the mock; their nouns below are the lead's own extension, in the same r
 (`ref_class: "outside_run_namespace"`, or the legacy `"protected"` an older row stored for the same case)
 without inventing a ref name the wire scope does not have (`adoCapabilityScope` carries no ref).
 `REQ_CHANGE_PR_BYPASS` states what a `policy_bypass` ask does: completing a pull request with
-`bypassPolicy`, the only request that capability covers (owner ruling, 2026-09-29; supersedes the mock's
+`bypassPolicy`, the only request that capability covers (owner ruling, 2026-09-28; supersedes the mock's
 "Push past a branch policy" and "protected" wording). `REQ_CONSENT_HEADING` titles the Entra-consent card (`credential_reauth` /
 `entra_consent`) when it stands alone rather than paired with the escalation it blocked — see
 ado-capability-card.tsx's own doc comment for why it is not paired.

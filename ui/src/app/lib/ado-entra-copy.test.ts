@@ -33,7 +33,7 @@ import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-pa
 // CONNECT_POPUP_OPEN (#628's approved sign-in progress packet) one more (219),
 // and §10's 23 rows (S10 round 2/3's 19 capability-card additions, plus §10.7's
 // 2 rows for issue #458 — the not-applicable Settings card and the owner
-// fallback) bring the live count to 242. The 2026-09-29 policy_bypass split
+// fallback) bring the live count to 242. The 2026-09-28 policy_bypass split
 // deleted §7's seven unrendered protected-ref keys (212) and replaced §10.2's
 // protected ref class with two keys (24): 236.
 //

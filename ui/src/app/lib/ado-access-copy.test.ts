@@ -34,7 +34,7 @@ describe("ADO_CAP_COPY names — the same names Go's launch refusal uses", () =>
   });
 });
 
-// Owner ruling 2026-09-29: policy_bypass is ONLY a pull request completed with
+// Owner ruling 2026-09-28: policy_bypass is ONLY a pull request completed with
 // bypassPolicy, and the run's own-branch rule is Wardyn's, never a branch
 // policy Wardyn read. The copy must not say otherwise, in the console or in the
 // Go labels a refusal quotes.

@@ -240,7 +240,7 @@ func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
 
 // One rule per ref across both doors: a REST push to the run's own branch
 // namespace needs code_write, exactly as a git push through the broker does
-// (adoRunRefProtected).
+// (adoRunBranchRule).
 func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
 	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
 	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `work","oldObjectId":"` + zeroOID + `"}],"commits":[]}`

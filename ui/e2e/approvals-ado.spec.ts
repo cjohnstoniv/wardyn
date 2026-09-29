@@ -102,7 +102,7 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
     expect(approveBody).toMatchObject({ decision_scope: "once" });
   });
 
-  // Owner ruling 2026-09-29: a ref class names a ref outside this run's own
+  // Owner ruling 2026-09-28: a ref class names a ref outside this run's own
   // branch, never a branch policy; a policy_bypass ask is a pull request
   // completed past its policies, with no ref class.
   test("names a ref outside the run's own branch, and a pull request completed past its policies", async ({ page }) => {

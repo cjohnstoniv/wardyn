@@ -394,13 +394,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   REST ref move to a branch outside the run's `refs/heads/wardyn/<run-id>/` namespace needs
   `code_write`, not `policy_bypass`, on both doors (the git broker and the REST gate), and Azure
   DevOps' own branch policies decide; each such git push is recorded as
-  `brokered:git:branch-ns-off`, as on the GitHub lanes. Without it nothing changes, but the refusal
-  now says the run may push only to its own branch and names the switch, instead of claiming a
-  branch policy was bypassed.
+  `brokered:git:branch-ns-off`, as on the GitHub lanes. Without it such a move is refused whatever
+  the run holds (see the `policy_bypass` entry above), and the refusal says the run may push only to
+  its own branch and names the switch, instead of claiming a branch policy was bypassed.
 - **The provider editor no longer overwrites or removes a hidden row of the same kind.** The Git tab now
   shows every row of a kind, each with its own switch, Entra section and Remove button, and edits or
   removes only the row it was made on by id. The Remove confirmation names that row's id and host.
-
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
