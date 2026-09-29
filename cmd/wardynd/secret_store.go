@@ -193,7 +193,8 @@ const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_
 // under any more (refuseIdleAgeKey). An alternate
 // backend keeps its own format and is left alone. Each row the conversion
 // opened was a read of its value, recorded as a secret.read with purpose boot
-// (outcome failure for the rows an aborted conversion opened before it failed).
+// (outcome failure for every row an aborted conversion opened, including the
+// failing row when it decrypted before its seal or update failed).
 func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool, rec audit.Recorder) error {
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {

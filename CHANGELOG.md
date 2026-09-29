@@ -19,9 +19,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   been re-pointed at alone; a concurrent save waits for it. A failed removal still leaves an
   orphan the error names.
 - **An aborted boot conversion of legacy secrets now records the rows it read (#1071).** When a
-  legacy (v0) secret that will not decrypt stops boot, each row it opened is recorded as a
-  `secret.read` with purpose `boot` and outcome `failure`, where it was recorded nowhere; the abort
-  itself is still in the boot log, naming the row.
+  legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
+  row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
+  was recorded nowhere; the abort itself is still in the boot log, naming the row.
 
 ## [0.8.0] — 2026-09-29
 
