@@ -21,11 +21,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// canaryWaitTimeout is generous: a canary pod's image may need a cold pull on a node's first run.
-const (
-	k8sPollInterval   = 200 * time.Millisecond
+const k8sPollInterval = 200 * time.Millisecond
+
+// Vars, not consts, only so tests can shorten them.
+var (
+	// canaryWaitTimeout is generous: an image may need a cold pull on a node's first run.
 	canaryWaitTimeout = 3 * time.Minute
-	// podIPWaitTimeout is shorter than canaryWaitTimeout: by then the proxy image is usually already pulled.
+	// podIPWaitTimeout bounds scheduling only: the CNI assigns a pod's IP before any image pull.
 	podIPWaitTimeout = 90 * time.Second
 )
 

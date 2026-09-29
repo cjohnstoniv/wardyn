@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -520,11 +521,17 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 // Reports why via onWaiting (nil-safe, once per change). It's the FIRST wait
 // CreateSandbox blocks on, so on a cluster with nowhere to schedule it's the
 // one a person sits through.
+//
+// Two bounds: the IP (scheduling) within podIPWaitTimeout, then Ready within
+// canaryWaitTimeout overall, the agent image's pull bound — a node the boot
+// canary never ran on pulls the proxy image cold, possibly queued behind
+// another run's agent pull.
 func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(string)) (string, error) {
 	var ip string
 	var lastPod *corev1.Pod
 	var lastReason string
-	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, podIPWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+	ipDeadline := time.Now().Add(podIPWaitTimeout)
+	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
@@ -539,8 +546,14 @@ func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(s
 		if err := proxyStartFailure(pod); err != nil {
 			return false, err
 		}
+		if pod.Status.PodIP == "" {
+			if time.Now().After(ipDeadline) {
+				return false, fmt.Errorf("proxy pod got no IP within %s: %w", podIPWaitTimeout, context.DeadlineExceeded)
+			}
+			return false, nil
+		}
 		for _, cs := range pod.Status.ContainerStatuses {
-			if cs.Name == proxyContainerName && cs.Ready && pod.Status.PodIP != "" {
+			if cs.Name == proxyContainerName && cs.Ready {
 				ip = pod.Status.PodIP
 				return true, nil
 			}

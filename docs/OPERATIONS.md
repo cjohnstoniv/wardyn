@@ -4089,13 +4089,15 @@ daemon, or a run that started before this upgrade, simply carries no reason.
 The pane will wait; the **runner** will not wait forever, and those are the bounds an operator has to
 size:
 
-- `podIPWaitTimeout` = **90 seconds** (`internal/runner/k8s/canary.go`) bounds the PROXY pod's
-  start: scheduling, the proxy image's pull, its config-staging init container, and its container
-  becoming Ready. The agent pod is not created before then. The boot-time egress canary runs the proxy
-  image, so at least one node already holds it and in practice this is mostly a scheduling bound: an
-  unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an operator
-  most often sees just before this error. A terminal proxy state (`ImagePullBackOff`,
-  `CrashLoopBackOff`, a failed init, …) fails the run at once instead of waiting it out.
+- `podIPWaitTimeout` = **90 seconds** (`internal/runner/k8s/canary.go`) is a SCHEDULING bound, not a
+  pull bound. It bounds the wait for the PROXY pod's CNI-assigned IP, and the CNI assigns that at
+  PodSandbox creation, *before* any application image is pulled. A cold pull can therefore never trip
+  it; an unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an
+  operator most often sees just before this error.
+- The proxy image's pull, its config-staging init container and its container becoming Ready are then
+  bounded by `canaryWaitTimeout` below, counted from the proxy pod's creation. The agent pod is not
+  created before the proxy is Ready. A terminal proxy state (`ImagePullBackOff`, `CrashLoopBackOff`, a
+  failed init, …) fails the run at once instead of waiting it out.
 - `canaryWaitTimeout` = **3 minutes** (same file) is the agent image's PULL bound. It bounds the wait
   for the agent pod's main container to reach Running, which is where a genuine first pull of an
   arbitrary agent image is spent. A first pull of the `aws-sso` image was measured at **131 seconds**
