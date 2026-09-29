@@ -53,9 +53,13 @@ import (
 // ssoCacheFile.isSSOToken for how the two are told apart.
 const ssoCacheSubdir = ".aws/sso/cache"
 
-// resolveTimeout bounds the best-effort account/role lookup so a slow or
-// hanging SSO portal call can never hang the upload.
-const resolveTimeout = 15 * time.Second
+// resolveTimeout bounds EACH SSO portal request (ssoPortalGET applies it per
+// call), so a slow or hanging portal can never hang the upload. It is per
+// request, never per pick: the chooser waits on a person for an unbounded time
+// between two portal calls, and one shared deadline started before that wait
+// had expired by the time the role lookup ran. A variable so a test can shrink
+// it.
+var resolveTimeout = 15 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -86,12 +90,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Best-effort account/role resolution. The control plane REQUIRES both:
+	// Account/role resolution. The control plane REQUIRES both:
 	// awsSSOBlob.valid (internal/api/harnesscred.go) rejects a half-resolved
 	// capture and internal/api/ssotoken.go answers 400 (pinned by
 	// TestUploadSSOToken_HalfResolvedCaptureRejected), so a failure here means
-	// the upload is refused and the operator re-runs the login — it is never a
-	// fatal error in THIS process (see run()'s non-fatal upload branch).
+	// nothing is uploaded and the person is told why — it is never a fatal
+	// error in THIS process (see run()'s non-fatal upload branch).
 	// This used to shell out to `aws sso list-accounts`/`list-account-roles
 	// --access-token <token>`, which put the live SSO access token on a CHILD
 	// PROCESS's own argv for the call's duration — readable by any /proc
@@ -102,17 +106,20 @@ func run() error {
 	// no exec, no argv, ever.
 	accountID, roleName, refusal, ok := pickAccountRole(blob.AccessToken, blob.Region, pinFromEnv())
 	if refusal != "" {
-		// A REFUSAL IS NOT A FAILURE TO RESOLVE. ok=false with no refusal is the
-		// old best-effort miss (the upload goes out blank and the control plane
-		// 400s it); a refusal means this sign-in cannot reach the identity this
+		// A refusal means this sign-in cannot reach the identity this
 		// deployment asked for, so nothing is uploaded at all — storing it would
 		// bake the wrong account into every later run's ~/.aws/config.
 		printFailure(refusal)
 		return nil
 	}
-	if ok {
-		blob.AccountID, blob.RoleName = accountID, roleName
+	if !ok {
+		// The lookup itself failed (portal unreachable, nothing listed). A blank
+		// account/role would only be refused by the control plane in its own
+		// field-name jargon, so upload nothing and say what the person can do.
+		printFailure(lookupFailedRefusal)
+		return nil
 	}
+	blob.AccountID, blob.RoleName = accountID, roleName
 	body, err := json.Marshal(blob)
 	if err != nil {
 		printFailure("the captured session could not be encoded for upload: " + err.Error())
@@ -254,9 +261,10 @@ func serverSentence(err error) string {
 const (
 	pinAccountNotEntitledRefusal = "this deployment pins AWS sign-ins for this agent to account %s, which this sign-in does not reach — ask an admin to change the pin, or ask your cloud team for access to that account"
 	pinRoleNotInAccountRefusal   = "this deployment pins AWS sign-ins for this agent to role %s in account %s, which this sign-in cannot assume there — ask an admin to change the pin, or ask your cloud team to grant you that role"
-	chooserNoTerminalRefusal     = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the agent row; this session reaches %s"
+	chooserNoTerminalRefusal     = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the model provider; this session reaches %s"
 	portalUnreachableRefusal     = "the AWS access portal could not be reached — try the sign-in again"
-	chooserGaveUpRefusal         = "nothing was chosen after three tries — ask an admin to pin the account and role on the agent row so this sign-in has nothing to guess"
+	chooserGaveUpRefusal         = "nothing was chosen after three tries — ask an admin to pin the account and role on the model provider so this sign-in has nothing to guess"
+	lookupFailedRefusal          = "the AWS access portal did not return your accounts and roles, so nothing was saved — sign in again, or ask an admin to pin the account and role on the model provider"
 )
 
 // The chooser's prompt block, verbatim from the plan.
@@ -498,15 +506,16 @@ type portalAccount struct {
 //
 // (accountID, roleName, "", true) picked; ("", "", refusal, false) refused —
 // the caller uploads NOTHING and prints the refusal after the fail marker;
-// ("", "", "", false) is the old best-effort miss (portal unreachable, empty
-// list), where the caller uploads a blank pair and the control plane answers
-// 400 as it always has.
+// ("", "", "", false) is a lookup that failed (portal unreachable, empty
+// list), where the caller likewise uploads nothing and prints
+// lookupFailedRefusal.
 func pickAccountRole(accessToken, region string, pin ssoPin) (accountID, roleName, refusal string, ok bool) {
 	if accessToken == "" || region == "" {
 		return "", "", "", false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
-	defer cancel()
+	// No deadline here: each portal request carries its own (ssoPortalGET), so
+	// the wait for the person at the chooser cannot eat a later request's time.
+	ctx := context.Background()
 	client := portalClient()
 	base := ssoPortalBase(region)
 
@@ -700,33 +709,77 @@ func accountList(accounts []portalAccount) string {
 // what a failure means, which differs between the pin arm (the portal refusing
 // a pinned account is the answer, not an outage) and the rest.
 func listAccounts(ctx context.Context, client *http.Client, base, accessToken string) ([]portalAccount, bool) {
-	var out struct {
-		AccountList []portalAccount `json:"accountList"`
-	}
-	if _, ok := ssoPortalGET(ctx, client, base+"/assignment/accounts", accessToken, &out); !ok {
+	var out []portalAccount
+	_, ok := portalPaged(ctx, client, base+"/assignment/accounts", accessToken, func(p *portalPage) {
+		out = append(out, p.AccountList...)
+	})
+	if !ok {
 		return nil, false
 	}
-	return out.AccountList, true
+	return out, true
 }
 
 // listAccountRoles returns the roles of ONE account, plus the portal's status
 // so a caller can tell "not entitled" (4xx) from "could not ask" (0 / 5xx).
 func listAccountRoles(ctx context.Context, client *http.Client, base, accessToken, accountID string) ([]string, int, bool) {
-	var out struct {
-		RoleList []struct {
-			RoleName string `json:"roleName"`
-		} `json:"roleList"`
-	}
+	var names []string
 	rolesURL := base + "/assignment/roles?account_id=" + url.QueryEscape(accountID)
-	status, ok := ssoPortalGET(ctx, client, rolesURL, accessToken, &out)
+	status, ok := portalPaged(ctx, client, rolesURL, accessToken, func(p *portalPage) {
+		for _, r := range p.RoleList {
+			names = append(names, r.RoleName)
+		}
+	})
 	if !ok {
 		return nil, status, false
 	}
-	names := make([]string, 0, len(out.RoleList))
-	for _, r := range out.RoleList {
-		names = append(names, r.RoleName)
-	}
 	return names, status, true
+}
+
+// portalPage is one page of either portal listing: both carry the token for the
+// next page in nextToken, and each fills only its own list.
+type portalPage struct {
+	NextToken   string          `json:"nextToken"`
+	AccountList []portalAccount `json:"accountList"`
+	RoleList    []struct {
+		RoleName string `json:"roleName"`
+	} `json:"roleList"`
+}
+
+// maxPortalPages bounds how many pages one listing may follow, so a portal that
+// keeps returning a next token can never loop this helper forever. At the
+// portal's default page size this is far more accounts than any one person is
+// entitled to.
+const maxPortalPages = 100
+
+// portalPaged follows nextToken (sent back as the next_token query parameter)
+// until the portal stops returning one, handing every page to collect. A failed
+// page fails the whole listing: a partial list would let a pin be refused as
+// "not in that account" for a role that sits on a page never read. Reaching
+// maxPortalPages is the one exception: it returns what was read and prints a
+// warning that the list may be incomplete.
+func portalPaged(ctx context.Context, client *http.Client, rawURL, accessToken string, collect func(*portalPage)) (status int, ok bool) {
+	next := ""
+	for pages := 0; pages < maxPortalPages; pages++ {
+		pageURL := rawURL
+		if next != "" {
+			sep := "?"
+			if strings.Contains(rawURL, "?") {
+				sep = "&"
+			}
+			pageURL += sep + "next_token=" + url.QueryEscape(next)
+		}
+		var page portalPage
+		if status, ok = ssoPortalGET(ctx, client, pageURL, accessToken, &page); !ok {
+			return status, false
+		}
+		collect(&page)
+		if page.NextToken == "" {
+			return status, true
+		}
+		next = page.NextToken
+	}
+	fmt.Fprintf(stdout, "wardyn: the AWS access portal kept returning more results; stopped after %d pages, so the list may be incomplete.\n", maxPortalPages)
+	return status, true
 }
 
 // ssoPortalGET performs a GET against the SSO portal API with the SSO access
@@ -754,6 +807,9 @@ func listAccountRoles(ctx context.Context, client *http.Client, base, accessToke
 const maxPortalResponseBytes = 512 << 10 // 512 KiB
 
 func ssoPortalGET(ctx context.Context, client *http.Client, rawURL, accessToken string, dst any) (status int, ok bool) {
+	// This request's OWN deadline (see resolveTimeout), covering the body read.
+	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return 0, false

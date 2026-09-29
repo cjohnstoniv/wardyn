@@ -41,14 +41,19 @@ func TestConformanceDocker(t *testing.T) {
 		t.Skip("WARDYN_TEST_DOCKER=1 not set; skipping docker conformance")
 	}
 
+	// Before docker.New: the UserDrives case's ceiling is this driver's own
+	// WARDYN_USER_DRIVE_HOST_ROOTS, so its directories must exist first.
+	driveRoots, drives := dockerDriveFixture(t)
+
 	sub, err := docker.New(docker.Config{
 		// busybox doubles as the proxy image so no real wardyn-proxy binary is
 		// required for the conformance gate. busybox's default `sh` would exit
 		// immediately (leaving the sidecar with no per-run network IP, failing
 		// CreateSandbox), so keep it alive — the sidecar only needs to exist on
 		// the network for the runner-contract assertions, not to relay traffic.
-		ProxyImage: "busybox:latest",
-		ProxyCmd:   []string{"sleep", "infinity"},
+		ProxyImage:         "busybox:latest",
+		ProxyCmd:           []string{"sleep", "infinity"},
+		UserDriveHostRoots: driveRoots,
 	})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
@@ -78,6 +83,7 @@ func TestConformanceDocker(t *testing.T) {
 		// root-owned file without any capability; the managed-files case runs
 		// as the uid every agent image uses instead.
 		AgentUserImage: agentUserImage(t, "busybox:latest"),
+		UserDrives:     drives,
 	})
 }
 
