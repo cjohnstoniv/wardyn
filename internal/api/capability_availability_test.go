@@ -179,37 +179,6 @@ func TestAvailability_RestrictedProviderAtEveryDoor(t *testing.T) {
 	}
 }
 
-// TestAvailability_RestrictedAgentRefusesHarnessLogin: the per-person model
-// sign-in is gated on capAgent for the roster row's agent.
-func TestAvailability_RestrictedAgentRefusesHarnessLogin(t *testing.T) {
-	row := perUserAWSRow()
-	for _, tc := range []struct {
-		name     string
-		listType string
-		wantOK   bool
-	}{
-		{"restricted to another type: refused", utDev, false},
-		{"restricted to this caller's type: allowed", utPM, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cs := &capStore{
-				grants:     []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, tc.listType, capAgent, row.ID, types.CapabilityAllow)},
-				restricted: restrictedOne(capAgent, row.ID),
-				userTypes:  utKnown,
-			}
-			srv := New(baseTestConfig(newHarness(t), &integStore{govEscapeStore: newGovEscapeStore(cs), site: agentRoster(row)}))
-			w := httptest.NewRecorder()
-			_, _, ok := srv.authorizeHarnessLogin(w, typeRequest(oidc.RoleUser, utPM), awsSSOProvider)
-			if ok != tc.wantOK {
-				t.Fatalf("ok = %v, want %v (status %d: %s)", ok, tc.wantOK, w.Code, w.Body.String())
-			}
-			if !tc.wantOK && w.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403", w.Code)
-			}
-		})
-	}
-}
-
 // TestAvailability_RestrictedReadFailureNeverAllows: capRead.enforced folds a
 // failed capability_restrictions read into r.err, and decide discards
 // whatever its steps computed once r.err is set — so a store outage on a

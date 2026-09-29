@@ -143,7 +143,7 @@ func TestRunModelProviderDoors(t *testing.T) {
 	bearerCorp.Kind = types.ModelProviderBedrockBearer
 	keyAndBearer := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), bearerCorp)}
 	withIntegration := twoKeys
-	withIntegration.Integrations = []types.Integration{{ID: "corp-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+	withIntegration.Integrations = []types.Integration{{ID: "corp-anthropic", Kind: types.IntegrationKindGitHost,
 		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}}}}
 	pinned := &types.Workspace{
 		ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
@@ -359,9 +359,7 @@ func (siteErrStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 // run.create audit event's model_provider snapshot ({id, kind} — the kind is
 // NOT on the row; see the field's doc on types.AgentRun).
 func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
-	// The single candidate: no AgentProviders row at all, so the legacy
-	// declared-mechanism gate (enforceCreateLLMMechanism, unrelated to #527)
-	// sees no row for this agent and stays out of the way — exactly what
+	// The single candidate: no AgentProviders row at all — exactly what
 	// TestChooseModelProvider's "the single candidate" case exercises.
 	provider := keyProvider("corp", "claude-code")
 	provider.UID = "uid-corp"

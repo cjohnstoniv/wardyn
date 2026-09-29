@@ -400,42 +400,12 @@ func TestFirstUseModeDecode(t *testing.T) {
 	}
 }
 
-// TestWorkspaceLLMCredDecode is the load-bearing backward-compat check for the
-// mode/api_key_secret/bedrock -> IntegrationRef migration: every workspace
-// persisted before that change stored one of the pre-Integration shapes in its
-// llm_cred JSONB column. Those rows MUST still decode -- to an EMPTY
-// IntegrationRef ("no binding") rather than an error -- or GetWorkspace/
-// ListWorkspaces breaks for every workspace that had ANY llm_cred set. The
-// current {"integration_ref":...} shape is covered too.
-func TestWorkspaceLLMCredDecode(t *testing.T) {
-	cases := []struct {
-		name string
-		json string
-		want string // want.IntegrationRef
-	}{
-		{"legacy_api_key", `{"mode":"api_key","api_key_secret":"acme-anthropic-key"}`, ""},
-		{"legacy_managed", `{"mode":"managed"}`, ""},
-		{"legacy_bedrock", `{"mode":"bedrock","bedrock":{"region":"us-east-1","model":"claude"}}`, ""},
-		{"legacy_none", `{"mode":""}`, ""},
-		{"empty_object", `{}`, ""},
-		{"current_shape", `{"integration_ref":"acme-anthropic"}`, "acme-anthropic"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var cred WorkspaceLLMCred
-			if err := json.Unmarshal([]byte(c.json), &cred); err != nil {
-				t.Fatalf("decode %s: %v", c.json, err)
-			}
-			if cred.IntegrationRef != c.want {
-				t.Errorf("decode %s: IntegrationRef = %q, want %q", c.json, cred.IntegrationRef, c.want)
-			}
-		})
-	}
-
-	// Round-trip: the current shape survives marshal -> unmarshal unchanged,
-	// the model-provider pin included (a decoder that dropped it would read
-	// every pinned workspace back as unpinned).
-	in := WorkspaceLLMCred{IntegrationRef: "acme-anthropic", ProviderRef: "corp-gateway"}
+// TestWorkspaceLLMCredRoundTrip: the model-provider pin survives marshal ->
+// unmarshal unchanged (a decoder that dropped it would read every pinned
+// workspace back as unpinned). The pre-provider shapes are gone from storage:
+// migration 0100 rewrote every stored llm_cred.
+func TestWorkspaceLLMCredRoundTrip(t *testing.T) {
+	in := WorkspaceLLMCred{ProviderRef: "corp-gateway"}
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

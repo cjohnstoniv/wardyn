@@ -4,14 +4,13 @@
  */
 
 // Finding 7b (0.7.5 field report, Codex #8/#9): the markerless half of the
-// sign-in confirmation — extractSignedIn (the CLI's own hint), the strict
-// corroboration `serverConfirmsCapture` gained, and watchForCapture, the
+// sign-in confirmation — extractSignedIn (the CLI's own hint), the provider
+// corroboration (serverConfirmsProviderCapture), and watchForCapture, the
 // background watch that is the only NEW way this lane lets the pane reach
 // onDone without a marker.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   extractSignedIn,
-  serverConfirmsCapture,
   serverConfirmsProviderCapture,
   watchForCapture,
   CAPTURE_POST_RUN_GRACE_MS,
@@ -57,45 +56,6 @@ describe("extractSignedIn", () => {
   });
 });
 
-describe("serverConfirmsCapture — strict (Codex #9)", () => {
-  // The most important case in the lane: a free-running watch must never
-  // fall through to the presence fallbacks — a pre-existing live
-  // model_access would otherwise confirm a sign-in that never happened.
-  it("refuses a live model_access with no matching source_run_id", () => {
-    expect(
-      serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws", "run-123", { strict: true }),
-    ).toBe(false);
-  });
-
-  it("refuses a captured harness row with no runId to compare at all", () => {
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: true }] }),
-        "aws",
-        null,
-        { strict: true },
-      ),
-    ).toBe(false);
-  });
-
-  it("still confirms a harness row stamped with THIS run", () => {
-    expect(
-      serverConfirmsCapture(
-        status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
-        "aws",
-        "run-123",
-        { strict: true },
-      ),
-    ).toBe(true);
-  });
-
-  // Regression: every existing (non-strict) caller — confirmCaptureWithServer,
-  // every S-13 pin in the sibling test file — is unchanged by the new option.
-  it("non-strict (the default) keeps the presence fallbacks", () => {
-    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws", "run-123")).toBe(true);
-  });
-});
-
 // #993: the provider row's own source_run_id — the server's stamp from the
 // capturing run's token — proves THIS sign-in without the best-effort audit row.
 describe("serverConfirmsProviderCapture — source_run_id (#993)", () => {
@@ -125,6 +85,9 @@ describe("serverConfirmsProviderCapture — source_run_id (#993)", () => {
   });
 });
 
+// This run's capture, as the provider's own row carries it (#993).
+const captured = () => status({ provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }] });
+
 describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -139,10 +102,10 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   it("confirms and stops the moment the audit hint fires and /setup/status agrees", async () => {
     listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
-      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+      captured(),
     );
     const controller = new AbortController();
-    const result = await watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const result = await watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     expect(result).toBe(true);
     // The hint made the FIRST tick authoritative — no 30s fallback needed.
     expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
@@ -153,9 +116,9 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     getSetupStatusMock
       .mockResolvedValueOnce(status({})) // the immediate first fallback check, at watch start? no hint yet
       .mockResolvedValueOnce(status({}))
-      .mockResolvedValue(status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }));
+      .mockResolvedValue(captured());
     const controller = new AbortController();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     await vi.advanceTimersByTimeAsync(2 * 60_000);
     await expect(promise).resolves.toBe(true);
   });
@@ -164,10 +127,10 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     getSetupStatusMock
       .mockResolvedValueOnce({ unreachable: true, ready: true } as unknown as SetupStatus)
       .mockResolvedValueOnce({ unreachable: true, ready: true } as unknown as SetupStatus)
-      .mockResolvedValue(status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }));
+      .mockResolvedValue(captured());
     listAuditMock.mockResolvedValue([{ id: "a1" }]); // hint every tick — fast cadence
     const controller = new AbortController();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(promise).resolves.toBe(true);
   });
@@ -176,9 +139,9 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     listAuditMock.mockResolvedValue([{ id: "a1" }]);
     getSetupStatusMock
       .mockRejectedValueOnce(new Error("401"))
-      .mockResolvedValue(status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }));
+      .mockResolvedValue(captured());
     const controller = new AbortController();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     await vi.advanceTimersByTimeAsync(10_000);
     await expect(promise).resolves.toBe(true);
   });
@@ -188,7 +151,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     listAuditMock.mockResolvedValue([]); // never hinted
     getSetupStatusMock.mockResolvedValue(status({})); // never confirms
     const controller = new AbortController();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     await vi.advanceTimersByTimeAsync(CAPTURE_POST_RUN_GRACE_MS + 60_000);
     await expect(promise).resolves.toBe(false);
   });
@@ -198,7 +161,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     listAuditMock.mockResolvedValue([{ id: "a1" }]); // hinted every tick — busy, but never confirming
     getSetupStatusMock.mockResolvedValue(status({})); // never confirms
     const controller = new AbortController();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     await vi.advanceTimersByTimeAsync(CAPTURE_WATCH_MAX_MS + 5 * 60_000);
     await expect(promise).resolves.toBe(false);
   });
@@ -208,7 +171,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     listAuditMock.mockRejectedValue(new Error("control plane unreachable"));
     getSetupStatusMock.mockRejectedValue(new Error("control plane unreachable"));
     const controller = new AbortController();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     await vi.advanceTimersByTimeAsync(CAPTURE_WATCH_MAX_MS + 5 * 60_000);
     await expect(promise).resolves.toBe(false);
   });
@@ -216,7 +179,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   it("an already-aborted signal ends the watch at once, with no reads", async () => {
     const controller = new AbortController();
     controller.abort();
-    const result = await watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal });
+    const result = await watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal });
     expect(result).toBe(false);
     expect(getSetupStatusMock).not.toHaveBeenCalled();
   });
@@ -234,11 +197,11 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
       return auditCalls >= 2 ? [{ id: "a1" }] : []; // no hint on tick 1, hinted from tick 2
     });
     getSetupStatusMock.mockResolvedValue(
-      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+      captured(),
     );
     const controller = new AbortController();
     const wake = new EventTarget();
-    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal, wake });
+    const promise = watchForCapture({ modelProvider: "bedrock-prod", runId: "run-123", signal: controller.signal, wake });
 
     // Let the FIRST tick's reads settle (no hint yet, so it schedules a 2s
     // sleep) without advancing time, then wake it.

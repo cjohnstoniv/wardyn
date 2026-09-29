@@ -12,22 +12,13 @@ import {
   useClaimModelAccessDoor,
   useModelAccessDoor,
 } from "./model-access-context";
-import { OperatorProvider } from "./operator-context";
-import { baseStatus } from "../../lib/test-fixtures";
-import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "../../lib/types";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import type { SetupStatus } from "../../lib/types";
 
-const PER_USER_ROW: SetupHarnessTool = {
-  id: "claude-code",
-  display: "claude-code",
-  has_gateway: false,
-  has_login: true,
-  enabled: true,
-  mechanism: "bedrock_sso",
-  credential_source: "per_user",
-};
-
-function statusWith(access: SetupModelAccess): SetupStatus {
-  return baseStatus({ model_access: access, harnesses: [PER_USER_ROW] });
+// A deployment whose claude-code default is a Bedrock sign-in provider: the
+// one door a login request opens (resolveDoor).
+function statusWith(state: string): SetupStatus {
+  return providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state }]);
 }
 
 /** One consumer, rendering everything the hook answers plus the two controls. */
@@ -35,9 +26,6 @@ function Probe({ label = "probe" }: { label?: string }) {
   const door = useModelAccessDoor();
   return (
     <div>
-      <span data-testid={`${label}-state`}>{door.state}</span>
-      <span data-testid={`${label}-attention`}>{String(door.needsAttention)}</span>
-      <span data-testid={`${label}-actionable`}>{String(door.actionable)}</span>
       <span data-testid={`${label}-claimed`}>{String(door.claimed)}</span>
       <span data-testid={`${label}-open`}>{String(door.open)}</span>
       <button type="button" onClick={() => door.openDoor()}>{`${label} open`}</button>
@@ -58,45 +46,20 @@ describe("useModelAccessDoor with no provider above it", () => {
   // The fail-open default, and the reason it must never be hardened into a
   // throw: every suite that mounts a screen directly, and every screen rendered
   // outside the shell, has to keep rendering exactly what it renders today.
-  it("answers a door with nothing to say", () => {
+  it("answers a closed, unclaimed door that opens nothing", async () => {
     render(<Probe />);
-    expect(screen.getByTestId("probe-state")).toHaveTextContent("");
-    expect(screen.getByTestId("probe-attention")).toHaveTextContent("false");
-    expect(screen.getByTestId("probe-actionable")).toHaveTextContent("false");
+    expect(screen.getByTestId("probe-open")).toHaveTextContent("false");
+    expect(screen.getByTestId("probe-claimed")).toHaveTextContent("false");
+    await userEvent.click(screen.getByRole("button", { name: "probe open" }));
+    expect(screen.getByTestId("probe-open")).toHaveTextContent("false");
   });
 });
 
-describe("ModelAccessProvider grades the shell's status for the CONSUMER's viewer", () => {
-  // OperatorProvider lives inside AppShell, BELOW the provider App.tsx mounts —
-  // so the grading has to happen where it is consumed, or every caller reads
-  // the fail-open operator default.
-  it("a member's shared_expired is not actionable; an operator's is", () => {
-    const status = statusWith({ state: "shared_expired", action: "ask them to reconnect it" });
-    const { unmount } = render(
-      <ModelAccessProvider status={status} onRefresh={vi.fn()}>
-        <OperatorProvider operator={false} securityOperator={false}>
-          <Probe />
-        </OperatorProvider>
-      </ModelAccessProvider>,
-    );
-    expect(screen.getByTestId("probe-attention")).toHaveTextContent("true");
-    expect(screen.getByTestId("probe-actionable")).toHaveTextContent("false");
-    unmount();
-
-    render(
-      <ModelAccessProvider status={status} onRefresh={vi.fn()}>
-        <OperatorProvider operator securityOperator>
-          <Probe />
-        </OperatorProvider>
-      </ModelAccessProvider>,
-    );
-    expect(screen.getByTestId("probe-actionable")).toHaveTextContent("true");
-  });
-
+describe("ModelAccessProvider", () => {
   it("refresh reaches the shell's own reader", async () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined);
     render(
-      <ModelAccessProvider status={statusWith({ state: "not_configured" })} onRefresh={onRefresh}>
+      <ModelAccessProvider status={statusWith("not_configured")} onRefresh={onRefresh}>
         <Probe />
       </ModelAccessProvider>,
     );
@@ -126,7 +89,7 @@ describe("openDoor({ onSignedIn }) — a completed sign-in reaches the surface t
   it("signedIn() closes the door and calls the callback exactly once", async () => {
     const relaunch = vi.fn();
     render(
-      <ModelAccessProvider status={statusWith({ state: "expired_signin" })} onRefresh={vi.fn()}>
+      <ModelAccessProvider status={statusWith("expired_signin")} onRefresh={vi.fn()}>
         <Relauncher onSignedIn={relaunch} />
       </ModelAccessProvider>,
     );
@@ -143,7 +106,7 @@ describe("openDoor({ onSignedIn }) — a completed sign-in reaches the surface t
   it("a cancellation drops the callback — a sign-in completed later from another opener never launches the run the person walked away from", async () => {
     const relaunch = vi.fn();
     render(
-      <ModelAccessProvider status={statusWith({ state: "expired_signin" })} onRefresh={vi.fn()}>
+      <ModelAccessProvider status={statusWith("expired_signin")} onRefresh={vi.fn()}>
         <Relauncher onSignedIn={relaunch} />
         <Probe label="strip" />
       </ModelAccessProvider>,
@@ -162,7 +125,7 @@ describe("openDoor({ onSignedIn }) — a completed sign-in reaches the surface t
 describe("ONE dialog instance — the open state is shared, never per caller", () => {
   it("a second caller's openDoor opens the same door, and either can close it", async () => {
     render(
-      <ModelAccessProvider status={statusWith({ state: "not_configured" })} onRefresh={vi.fn()}>
+      <ModelAccessProvider status={statusWith("not_configured")} onRefresh={vi.fn()}>
         <Probe label="strip" />
         <Probe label="rail" />
       </ModelAccessProvider>,
@@ -182,7 +145,7 @@ describe("claim() — one PRIMARY recovery action per state per screen", () => {
   it("a mounted page surface owns the door and releases it on navigation away", () => {
     function Screen({ onRail }: { onRail: boolean }) {
       return (
-        <ModelAccessProvider status={statusWith({ state: "not_configured" })} onRefresh={vi.fn()}>
+        <ModelAccessProvider status={statusWith("not_configured")} onRefresh={vi.fn()}>
           <Probe />
           {onRail && <Claimer />}
         </ModelAccessProvider>
@@ -201,7 +164,7 @@ describe("claim() — one PRIMARY recovery action per state per screen", () => {
 
   it("a surface that renders no sign-in control does not claim", () => {
     render(
-      <ModelAccessProvider status={statusWith({ state: "shared_expired" })} onRefresh={vi.fn()}>
+      <ModelAccessProvider status={statusWith("shared_expired")} onRefresh={vi.fn()}>
         <Probe />
         <Claimer active={false} />
       </ModelAccessProvider>,
@@ -216,7 +179,7 @@ describe("claim() — one PRIMARY recovery action per state per screen", () => {
   it("two overlapping claims release independently", () => {
     function Two({ first, second }: { first: boolean; second: boolean }) {
       return (
-        <ModelAccessProvider status={statusWith({ state: "not_configured" })} onRefresh={vi.fn()}>
+        <ModelAccessProvider status={statusWith("not_configured")} onRefresh={vi.fn()}>
           <Probe />
           {first && <Claimer />}
           {second && <Claimer />}
@@ -239,7 +202,7 @@ describe("claim() — one PRIMARY recovery action per state per screen", () => {
     }
     function Poll({ state }: { state: string }) {
       return (
-        <ModelAccessProvider status={statusWith({ state })} onRefresh={vi.fn()}>
+        <ModelAccessProvider status={statusWith(state)} onRefresh={vi.fn()}>
           <Recorder />
         </ModelAccessProvider>
       );

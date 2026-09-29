@@ -37,6 +37,37 @@ func (p *WorkspaceProviders) Empty() bool {
 	return p.Storage == nil || (p.Storage.Ephemeral == nil && p.Storage.UserDrive == nil)
 }
 
+// CredentialSource says WHOSE credential a git provider's lanes use.
+type CredentialSource string
+
+const (
+	// CredentialSourceShared: one credential, captured by an admin, backs
+	// every run. The zero value, so an unset field keeps legacy behaviour.
+	CredentialSourceShared CredentialSource = "shared"
+	// CredentialSourcePerUser: one credential per principal, captured or
+	// stored under their own namespace.
+	CredentialSourcePerUser CredentialSource = "per_user"
+)
+
+// ClosedCredentialSources is the closed source set — the only values a write may name.
+var ClosedCredentialSources = map[CredentialSource]bool{
+	CredentialSourceShared: true, CredentialSourcePerUser: true,
+}
+
+// ClosedCredentialSourceList is ClosedCredentialSources in a stable order, for a
+// rejected write's "want one of: …".
+func ClosedCredentialSourceList() []string {
+	ss := slices.Sorted(maps.Keys(ClosedCredentialSources))
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = string(s)
+	}
+	return out
+}
+
+// Valid reports whether s is one of the two sources.
+func (s CredentialSource) Valid() bool { return ClosedCredentialSources[s] }
+
 // GitProviderKind is the closed set of git forges Wardyn has bespoke behaviour
 // for; a self-hosted forge is a github (GHES) or azure_devops (ADO Server) row, not a third kind.
 type GitProviderKind string

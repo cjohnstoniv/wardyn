@@ -189,6 +189,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.stripRevivedModelInjections(ctx, run, cfg); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -327,6 +330,55 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
 	return cfg, nil
+}
+
+// stripRevivedModelInjections is dispatch's strip (dropLegacyModelInjections)
+// over a stored proxy config (#548). A revive or admin restart replays the
+// config the run was dispatched with, so a run dispatched before 0.8.2 can
+// still carry a model credential no provider authored: a policy's api_key
+// grant reading the operator's key, or a managed or subscription sentinel.
+// Every injection the strip would drop goes, audited as run.injection.drop,
+// unless its grant's snapshot names the UID of the run's own provider as it
+// stands now — the grants the provider arms author. A run left with no model
+// credential revives without one, as dispatch leaves a run no provider serves:
+// never a fallback to the operator's. A site config or grant list that cannot
+// be read refuses the revive.
+func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.AgentRun, cfg *proxy.Config) *reviveError {
+	if len(cfg.Injection) == 0 {
+		return nil
+	}
+	unreadable := func(what string, err error) *reviveError {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			"re-check the run's model credentials: read "+what+": "+err.Error())
+	}
+	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return unreadable("site config", err)
+	}
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		return unreadable("the run's grants", err)
+	}
+	authored := map[uuid.UUID]bool{}
+	if p, ok := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID); ok && run.ModelProviderID != "" && p.UID != "" {
+		for _, g := range grants {
+			var sc struct {
+				Snapshot providerGrantSnapshot `json:"snapshot"`
+			}
+			if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.ProviderUID == p.UID {
+				authored[g.ID] = true
+			}
+		}
+	}
+	model := s.modelCredentialInjection(nil, s.modelServingHosts(siteCfg))
+	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
+		if authored[in.GrantID] || !model(in.InjectionRule) {
+			return false
+		}
+		s.auditDroppedInjection(ctx, run, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule}, "model_credential_not_provider_authored")
+		return true
+	})
+	return nil
 }
 
 // reviveEligible: a RUNNING run with a sandbox, inside its lease, that is live,

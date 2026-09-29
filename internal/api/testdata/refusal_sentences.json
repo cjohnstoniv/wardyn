@@ -55,11 +55,6 @@
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
   },
   {
-    "reason": "capKinds[capAgent].reason",
-    "target": "\"setup.harness_login\"",
-    "sentence": "fmt.Sprintf(harnessLoginAgentRefusal, row.ID)"
-  },
-  {
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.ssh_keys\"",
     "sentence": "sshKeyFeatureRefusal"
@@ -188,16 +183,6 @@
     "reason": "groups_snapshot_stale",
     "target": "\"runs.drive\"",
     "sentence": "(audit only)"
-  },
-  {
-    "reason": "harness_login_mechanism_principal",
-    "target": "\"setup.harness_login\"",
-    "sentence": "harnessLoginMechanismPrincipalRefusal"
-  },
-  {
-    "reason": "harness_login_not_per_user",
-    "target": "\"setup.harness_login\"",
-    "sentence": "harnessLoginNotPerUserRefusal"
   },
   {
     "reason": "model_provider_unavailable",

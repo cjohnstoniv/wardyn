@@ -11,7 +11,7 @@ import (
 
 // integration_fold_test.go is the migration proof for the base-component
 // reshape (track B, B1): a SiteConfig document carrying EVERY pre-fold row
-// shape — the five AI types, github_app, git_host, one of each generic
+// shape — azure_openai, github_app, git_host, one of each generic
 // category, artifact_mirror and host_proxy — decodes into the new shape
 // (read-time fold), the two topology categories come out ABSENT, old stored
 // wire data stays readable, and a write emits the new shape only.
@@ -22,18 +22,6 @@ import (
 const legacySiteConfigFixture = `{
   "scm_hosts": ["github.example.com"],
   "integrations": [
-    {"id": "anthropic_api_key", "name": "Anthropic API key",
-     "category": "ai_provider", "type": "anthropic_api_key",
-     "credentials": {"api_key": "anthropic-api-key"}},
-    {"id": "acme-sub", "name": "Claude subscription",
-     "category": "ai_provider", "type": "anthropic_subscription",
-     "config": {"lane": "resident_host"}},
-    {"id": "acme-bedrock", "name": "AWS Bedrock",
-     "category": "ai_provider", "type": "bedrock",
-     "config": {"lane": "auto", "region": "eu-central-1", "model": "eu.anthropic.claude-x"}},
-    {"id": "openai_api_key", "name": "OpenAI API key",
-     "category": "ai_provider", "type": "openai_api_key",
-     "credentials": {"api_key": "openai-api-key"}},
     {"id": "acme-azure", "name": "Azure OpenAI",
      "category": "ai_provider", "type": "azure_openai",
      "credentials": {"api_key": "azure-key"}},
@@ -119,8 +107,8 @@ func fixtureRow(t *testing.T, sc SiteConfig, id string) Integration {
 // under Corporate network.
 func TestIntegrationFold_TopologyRowsAbsent(t *testing.T) {
 	sc := foldFixture(t)
-	if want, got := 15, len(sc.Integrations); got != want {
-		t.Errorf("rows after fold = %d, want %d (17 legacy rows minus the 2 topology rows)", got, want)
+	if want, got := 11, len(sc.Integrations); got != want {
+		t.Errorf("rows after fold = %d, want %d (13 legacy rows minus the 2 topology rows)", got, want)
 	}
 	for _, in := range sc.Integrations {
 		if in.ID == "artifact_mirror:artifactory.corp" || in.ID == "host_proxy" {
@@ -133,71 +121,18 @@ func TestIntegrationFold_TopologyRowsAbsent(t *testing.T) {
 	}
 }
 
-// TestIntegrationFold_AIKinds: each AI row's kind = the old type, and an
-// api_key credential folds to a secrets row carrying the provider's
-// proxy-header convention (the delivery that actually happens at injection).
-func TestIntegrationFold_AIKinds(t *testing.T) {
-	sc := foldFixture(t)
-
-	anthropic := fixtureRow(t, sc, "anthropic_api_key")
-	if anthropic.Kind != IntegrationKindAnthropicAPIKey {
-		t.Errorf("anthropic kind = %q", anthropic.Kind)
-	}
-	if len(anthropic.Secrets) != 1 || anthropic.Secrets[0].Role != "api_key" || anthropic.Secrets[0].SecretName != "anthropic-api-key" {
-		t.Fatalf("anthropic secrets = %+v", anthropic.Secrets)
-	}
-	if d := anthropic.Secrets[0].Delivery; d == nil || d.Mode != DeliveryProxyHeader || d.Header != "x-api-key" || d.Format != "%s" {
-		t.Errorf("anthropic api_key delivery = %+v, want the x-api-key convention", anthropic.Secrets[0].Delivery)
-	}
-
-	openai := fixtureRow(t, sc, "openai_api_key")
-	if d := openai.Secrets[0].Delivery; d == nil || d.Header != "Authorization" || d.Format != "Bearer %s" {
-		t.Errorf("openai api_key delivery = %+v, want the Authorization/Bearer convention", openai.Secrets[0].Delivery)
-	}
-
-	// azure_openai stopped being a kind Wardyn honors in 0.5 (its one capability
-	// powered the deleted AI Run Composer). The read-time fold is deliberately a
-	// passthrough, so a row stored under the old release still DESERIALIZES with
-	// its kind and credential intact — nobody's config is silently rewritten.
-	// It just no longer derives a model provider, and validateIntegrationWrite
-	// refuses it like any other unknown kind on the next write.
-	azure := fixtureRow(t, sc, "acme-azure")
+// TestIntegrationFold_UnknownKindPassesThrough: a kind Wardyn stopped honoring
+// (azure_openai in 0.5) still DESERIALIZES with its kind and credential
+// intact — the read-time fold is a passthrough, so nobody's config is silently
+// rewritten — and validateIntegrationWrite refuses it like any other unknown
+// kind on the next write.
+func TestIntegrationFold_UnknownKindPassesThrough(t *testing.T) {
+	azure := fixtureRow(t, foldFixture(t), "acme-azure")
 	if azure.Kind != "azure_openai" || azure.RoleSecret("api_key") != "azure-key" {
 		t.Errorf("azure row = %+v", azure)
 	}
 	if ClosedIntegrationKinds[azure.Kind] {
 		t.Errorf("azure_openai is still a closed kind — it was removed in 0.5")
-	}
-
-	sub := fixtureRow(t, sc, "acme-sub")
-	if sub.Kind != IntegrationKindAnthropicSubscription {
-		t.Errorf("subscription kind = %q", sub.Kind)
-	}
-	if lane, _ := sub.Config["lane"].(string); lane != "resident_host" {
-		t.Errorf("subscription config = %+v, want lane=resident_host preserved", sub.Config)
-	}
-	if len(sub.Secrets) != 0 {
-		t.Errorf("subscription secrets = %+v, want none (blob/peek lanes, not store secrets)", sub.Secrets)
-	}
-}
-
-// TestIntegrationFold_BedrockLaneRenamedAuthLane: the old bedrock "lane"
-// config key folds to its contract name "auth_lane"; region/model carry over
-// verbatim — so a folded row re-validates (and re-saves) under the closed
-// per-kind config-key rule instead of 400ing on its own history.
-func TestIntegrationFold_BedrockLaneRenamedAuthLane(t *testing.T) {
-	bedrock := fixtureRow(t, foldFixture(t), "acme-bedrock")
-	if bedrock.Kind != IntegrationKindBedrock {
-		t.Errorf("kind = %q", bedrock.Kind)
-	}
-	if lane, _ := bedrock.Config["auth_lane"].(string); lane != "auto" {
-		t.Errorf("config = %+v, want auth_lane=auto (renamed from the legacy lane key)", bedrock.Config)
-	}
-	if _, still := bedrock.Config["lane"]; still {
-		t.Errorf("config = %+v, legacy lane key must not survive the fold", bedrock.Config)
-	}
-	if bedrock.Config["region"] != "eu-central-1" || bedrock.Config["model"] != "eu.anthropic.claude-x" {
-		t.Errorf("config = %+v, want region/model preserved", bedrock.Config)
 	}
 }
 
@@ -384,40 +319,5 @@ func TestIntegrationFold_SecretsOrderDeterministic(t *testing.T) {
 		if in.Secrets[0].Role != "app_id" || in.Secrets[1].Role != "app_key" {
 			t.Fatalf("secrets order = [%s %s], want sorted [app_id app_key]", in.Secrets[0].Role, in.Secrets[1].Role)
 		}
-	}
-}
-
-// TestIntegrationFold_BedrockLaneFoldDoesNotMutateCaller pins the reason the
-// lane rename copies the config map at all: foldLegacyIntegration is a READ-time
-// migration, and a stored row may be folded more than once, so renaming "lane"
-// to "auth_lane" in place would edit the caller's own map and make the second
-// fold see a row with no lane to rename.
-//
-// Nothing pinned this before — deleting the copy outright left every test in
-// this package green — so the swap to maps.Clone brings the assertion with it.
-// It calls foldLegacyIntegration directly: the fixture above decodes fresh maps
-// from JSON per fold, which is exactly the case where aliasing cannot show up.
-func TestIntegrationFold_BedrockLaneFoldDoesNotMutateCaller(t *testing.T) {
-	cfg := map[string]any{"lane": "auto", "region": "eu-central-1"}
-	row := legacyIntegrationJSON{
-		ID: "acme-bedrock", Name: "AWS Bedrock",
-		Category: "ai_provider", Type: IntegrationKindBedrock, Config: cfg,
-	}
-
-	got := foldLegacyIntegration(row)
-	if lane, _ := got.Config["auth_lane"].(string); lane != "auto" {
-		t.Fatalf("folded config = %+v, want auth_lane=auto", got.Config)
-	}
-
-	if _, ok := cfg["lane"]; !ok {
-		t.Error("the caller's map lost its legacy lane key: the fold mutated it")
-	}
-	if _, ok := cfg["auth_lane"]; ok {
-		t.Error("the caller's map gained auth_lane: the fold mutated it")
-	}
-	// Folding the SAME row again must produce the same answer — the property
-	// the copy exists to make true.
-	if again := foldLegacyIntegration(row); again.Config["auth_lane"] != "auto" {
-		t.Errorf("second fold of the same row = %+v, want auth_lane=auto", again.Config)
 	}
 }

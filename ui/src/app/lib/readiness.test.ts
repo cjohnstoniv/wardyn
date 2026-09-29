@@ -24,143 +24,24 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
-// llmReady/llmLabel read the same integration rows /integrations itself derives
-// (lib/api/integrations.ts) instead of a bespoke heuristic over raw SetupStatus
-// fields. The old "fake composer backend must not read as LLM access" guard is
-// gone with the composer itself — there are no backends to mis-count now — but
-// the invariant it protected still matters: a status with no real credential
-// anywhere must report no LLM path.
-describe("hasLlmPath — via the integrations adapter", () => {
-  it("does NOT count a bare status as LLM access (default make setup config)", () => {
+// llmReady is the server's own llm_ready (an enabled model provider serves a
+// harness) and llmLabel names that provider. Since 0.8 (#548) a run's model
+// credential comes only from its model provider, so an operator key, a host
+// CLI login or Bedrock boot config is no LLM path at all.
+describe("hasLlmPath — the server's llm_ready", () => {
+  it("a bare status is no LLM access", () => {
     expect(hasLlmPath(status())).toBe(false);
   });
 
-  it("counts a logged-in CLI (auth_mode: subscription — deriveAiRows' own signal for a resident login)", () => {
-    expect(
-      hasLlmPath(
-        status({
-          providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  // UI-LIB-3: auth_mode is only set once Wardyn peeks a real subscription
-  // token (setup.go's subOK) — but the server's own llm_provider check calls
-  // ANY logged-in CLI real access, so this must agree and read true even when
-  // auth_mode can't yet confirm a subscription.
-  it("counts a resident CLI login even when auth_mode can't confirm a subscription", () => {
-    expect(hasLlmPath(status({ providers: [{ tool: "claude", installed: true, logged_in: true }] }))).toBe(true);
-    expect(
-      hasLlmPath(
-        status({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "api_key" }] }),
-      ),
-    ).toBe(true);
-  });
-
-  it("counts an anthropic key secret", () => {
-    expect(hasLlmPath(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }))).toBe(true);
-  });
-
-  it("counts an openai key secret — Codex CLI is an agent tool too", () => {
-    expect(hasLlmPath(status({ secrets: { present: ["openai-api-key"], github_app: false } }))).toBe(true);
-  });
-
-  it("counts a Wardyn-managed subscription captured via container login", () => {
-    expect(hasLlmPath(status({ harness: [{ provider: "anthropic", captured: true }] }))).toBe(true);
-  });
-
-  it("counts a fully-resolved Bedrock lane (region + model + a credential source)", () => {
-    expect(
-      hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: true } })),
-    ).toBe(true);
-  });
-
-  it("does NOT count Bedrock with no region/model set at all", () => {
-    expect(hasLlmPath(status({ bedrock: { creds_present: true } }))).toBe(false);
-  });
-
-  // Semantic shift from the old five-way heuristic: readiness now agrees with
-  // whatever /integrations itself would show for this row (posture reads
-  // "Configured" once region+model are both set — deriveAiRows doesn't
-  // separately require a credential SOURCE for that specific posture), rather
-  // than re-deriving a stricter, independent check. Single source of truth,
-  // not a split-brain with the real Integrations page.
-  it("counts Bedrock once region+model are set, even with no credential source detected yet", () => {
-    expect(
-      hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false } })),
-    ).toBe(true);
-  });
-
-  // #1155 review F1: an ADMIN's status is never redacted (checks_redacted is
-  // unset here, same as every fixture above), so the fallback must not
-  // engage even though the server's own llm_ready is (buggy-)true for this
-  // secret name — llmProvenance's substring match fires on "openai" inside
-  // "azure-openai-key" too. Exercised with llm_ready explicitly true so this
-  // stays the real regression guard the review asked for, not an accident of
-  // the fixture never setting the field.
-  it("a stored Azure key is never an LLM path for an admin, even when the server's llm_ready misfires on it", () => {
-    expect(hasLlmPath(status({ secrets: { present: ["azure-openai-key"], github_app: false }, llm_ready: true }))).toBe(
-      false,
-    );
-  });
-
-  // Same admin-view guard, a second secret-name shape llmProvenance's bare
-  // "api" substring misfires on (a GitHub token, nothing to do with an LLM).
-  it("a stored github-api-token is never an LLM path for an admin, even when the server's llm_ready misfires on it", () => {
-    expect(
-      hasLlmPath(status({ secrets: { present: ["github-api-token"], github_app: false }, llm_ready: true })),
-    ).toBe(false);
-  });
-
-  // #850: a member's redacted SetupStatus carries empty providers/secrets no
-  // matter what the admin actually configured, so the rows above can never
-  // see an API key or a host CLI login for them. The server's own llm_ready
-  // verdict is computed from the unredacted facts and survives redaction —
-  // this must be honored as a fallback ONLY for that redacted view (#1155
-  // review F1), never overridden by the empty rows.
-  it("honors the server's llm_ready for a member's redacted view (checks_redacted, providers/secrets both empty)", () => {
+  it("an enabled provider (llm_ready) is LLM access, redacted view or not", () => {
+    expect(hasLlmPath(status({ llm_ready: true }))).toBe(true);
     expect(hasLlmPath(status({ checks_redacted: true, llm_ready: true }))).toBe(true);
   });
 
-  it("does NOT honor llm_ready for an admin's (non-redacted) view — agentRows already answered for them", () => {
-    expect(hasLlmPath(status({ llm_ready: true }))).toBe(false);
-  });
-
-  it("llm_ready:false with nothing else configured still reads no LLM path", () => {
-    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: false }))).toBe(false);
-  });
-
-  // #1155 review F2: a per_user model-access row that is NOT signed in must
-  // never be papered over by the deployment-wide llm_ready, mirroring
-  // member-getting-started.tsx's own `llmReady && !isPerUserModelAccess`.
-  it("a member's redacted view with a per-user row that is not signed in stays false, even with llm_ready true", () => {
-    expect(
-      hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state: "not_configured" } })),
-    ).toBe(false);
-    expect(
-      hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state: "expired_signin" } })),
-    ).toBe(false);
-    // A shared-row member whose credential is dead reads shared_expired, and a
-    // state this client does not know yet must fail closed too.
-    for (const state of ["shared_expired", "revoked"]) {
-      expect(
-        hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state } as never })),
-      ).toBe(false);
-    }
-  });
-
-  // The positive counterpart: a per-user row that IS signed in is real
-  // access, honored through model_access directly — true even if llm_ready
-  // itself were false (a lapsed OPERATOR secret elsewhere must not hide the
-  // caller's own live credential).
-  it("a member's redacted view with a per-user row that is signed in reads true via model_access, llm_ready aside", () => {
-    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: false, model_access: { state: "live" } }))).toBe(
-      true,
-    );
-    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: false, model_access: { state: "expiring" } }))).toBe(
-      true,
-    );
+  it("an operator key, a host CLI login or Bedrock boot config is no LLM path", () => {
+    expect(hasLlmPath(status({ secrets: { present: ["anthropic-api-key", "openai-api-key"], github_app: false } }))).toBe(false);
+    expect(hasLlmPath(status({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }))).toBe(false);
+    expect(hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: true } }))).toBe(false);
   });
 });
 
@@ -172,84 +53,38 @@ describe("deriveReadiness — must not overclaim a connected model", () => {
     expect(r.composerReady).toBe(false);
   });
 
-  it("an Anthropic API key is the default agent-tool + Wardyn-features holder — llmLabel names the row", () => {
-    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
-    expect(r.llmReady).toBe(true);
-    expect(r.llmLabel).toBe("Anthropic (API key)");
-    expect(r.composerReady).toBe(true);
-  });
-
-  it("a managed (container-login) Claude subscription powers both agent runs and Wardyn features", () => {
-    const r = deriveReadiness(status({ harness: [{ provider: "anthropic", captured: true }] }));
-    expect(r.llmReady).toBe(true);
-    expect(r.llmLabel).toBe("Claude subscription (managed)");
-    expect(r.composerReady).toBe(true);
-  });
-
-  it("a host-CLI Claude subscription powers agent runs but NOT Wardyn features (opt-in, off by default)", () => {
+  it("llm_ready names the first enabled provider serving a harness", () => {
     const r = deriveReadiness(
-      status({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
+      status({
+        llm_ready: true,
+        model_providers: [
+          { id: "off", kind: "anthropic_api_key", disabled: true, harnesses: ["claude-code"], host: "api.anthropic.com" },
+          { id: "corp", name: "Corp gateway", kind: "custom_endpoint", harnesses: ["claude-code"], host: "gw.corp.example" },
+        ],
+      }),
     );
     expect(r.llmReady).toBe(true);
-    expect(r.llmLabel).toBe("Claude subscription (host CLI)");
-    expect(r.composerReady).toBe(false);
+    expect(r.llmLabel).toBe("Corp gateway");
   });
 
-  it("a resident CLI login with an unconfirmed auth_mode still powers agent runs, honestly labeled apart from a confirmed subscription", () => {
-    const r = deriveReadiness(status({ providers: [{ tool: "claude", installed: true, logged_in: true }] }));
-    expect(r.llmReady).toBe(true);
-    expect(r.llmLabel).toBe("Claude Code CLI (resident login)");
-    expect(r.composerReady).toBe(false);
-  });
-
-  // Azure was the one integration that satisfied composerReady without ever
-  // satisfying llmReady — it powered Wardyn's own features and no agent tool.
-  // Those features (the AI Run Composer) are deleted, so the kind is gone and
-  // its stored secret is inert: readiness must not resurrect it as anything.
-  // #1155 review F1, exercised with llm_ready explicitly true (the server's
-  // real, if imprecise, verdict for this secret name) — the existing
-  // invariant from before #850 touched this file must still hold for an
-  // admin's (non-redacted) view: llmProvenance's misfire must not leak
-  // through the fallback that #850 added.
-  it("a stored Azure key is inert — neither an agent path nor a Wardyn-features path (admin view, llm_ready true)", () => {
-    const r = deriveReadiness(status({ secrets: { present: ["azure-openai-key"], github_app: false }, llm_ready: true }));
-    expect(r.llmReady).toBe(false);
-    expect(r.llmLabel).toBe("");
-    expect(r.composerReady).toBe(false);
-  });
-
-  // #850: same fallback as hasLlmPath, for the demo-gating consumer
-  // (setup/steps.ts's walkableDemos/stepOrder) — a member with real model
-  // access the redacted rows cannot show must still read llmReady true, with
-  // no label to offer (nothing here names WHICH row, by construction). Only
-  // for the redacted view (#1155 review F1) — checks_redacted is what makes
-  // this a member's status, not an admin's.
-  it("a member's redacted view (no rows) still reads llmReady via the server's llm_ready", () => {
+  it("a redacted view that lists no provider still reads llmReady, with no label to offer", () => {
     const r = deriveReadiness(status({ checks_redacted: true, llm_ready: true }));
     expect(r.llmReady).toBe(true);
     expect(r.llmLabel).toBe("");
   });
 
-  it("an admin's (non-redacted) view with no rows never borrows llm_ready — agentRows already answered for them", () => {
-    const r = deriveReadiness(status({ llm_ready: true }));
+  it("an operator Anthropic key still powers Wardyn features, but is no agent path", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
     expect(r.llmReady).toBe(false);
+    expect(r.composerReady).toBe(true);
   });
 
-  // #1155 review F2: the demo-gating consumer must gate a per-user row that
-  // is not signed in exactly like hasLlmPath does — a member must not see
-  // `agent-in-the-box` (or any other needsModel demo) unlocked by a
-  // deployment-wide bit while their OWN AWS sign-in is what the demo would
-  // actually run on.
-  it("a member's redacted view with a per-user row not signed in keeps llmReady false, even with llm_ready true", () => {
-    const r = deriveReadiness(
-      status({ checks_redacted: true, llm_ready: true, model_access: { state: "not_configured" } }),
-    );
+  // Azure powered Wardyn's own features and no agent tool; those features (the
+  // AI Run Composer) are deleted, so its stored secret is inert.
+  it("a stored Azure key is inert — neither an agent path nor a Wardyn-features path", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["azure-openai-key"], github_app: false } }));
     expect(r.llmReady).toBe(false);
-  });
-
-  it("a member's redacted view with a per-user row signed in reads llmReady true via model_access", () => {
-    const r = deriveReadiness(status({ checks_redacted: true, llm_ready: false, model_access: { state: "live" } }));
-    expect(r.llmReady).toBe(true);
+    expect(r.composerReady).toBe(false);
   });
 });
 

@@ -32,9 +32,6 @@ import (
 // llm_cred, which strict decoding then made unsettable from the SDK).
 type workspaceRequest = client.WorkspaceRequest
 
-// llmCred400IntegrationRef refuses a workspace pin to an integration.
-const llmCred400IntegrationRef = "llm_cred.integration_ref no longer chooses a model credential: pin a model provider (llm_cred.provider_ref) instead"
-
 // validateWorkspaceLLMCred checks an operator-supplied cred binding: a
 // provider NAME only — whether the named provider admits a run is
 // enforceRunModelProvider's. nil, or empty refs (clears the binding), is
@@ -42,12 +39,6 @@ const llmCred400IntegrationRef = "llm_cred.integration_ref no longer chooses a m
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 	if c == nil {
 		return ""
-	}
-	// An integration no longer chooses a model credential, so a pin to one is
-	// refused rather than stored inert. One stored before 0.8 stays for the
-	// conversion to model providers to read.
-	if c.IntegrationRef != "" {
-		return llmCred400IntegrationRef
 	}
 	if c.ProviderRef != "" && !modelProviderIDPattern.MatchString(c.ProviderRef) {
 		return fmt.Sprintf("llm_cred.provider_ref: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters", c.ProviderRef)
@@ -58,7 +49,7 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 // llmCredBinds reports whether c binds anything — the shape a write stores
 // rather than clears.
 func llmCredBinds(c *types.WorkspaceLLMCred) bool {
-	return c != nil && (c.IntegrationRef != "" || c.ProviderRef != "")
+	return c != nil && c.ProviderRef != ""
 }
 
 // defaultEphemeralTarget is the composition floor's in-sandbox scratch path
@@ -887,7 +878,7 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			if cred != nil {
 				c = *cred
 			}
-			return map[string]any{"integration_ref": c.IntegrationRef, "provider_ref": c.ProviderRef}
+			return map[string]any{"provider_ref": c.ProviderRef}
 		})
 }
 

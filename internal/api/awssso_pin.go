@@ -11,7 +11,7 @@
 //
 // Three things live here, and they are one idea seen from three sides:
 //
-//	awsSSOPin / awsSSOPinEnv  the admin's roster pin, carried to the login
+//	awsSSOPin / awsSSOPinEnv  the admin's provider pin, carried to the login
 //	                          sandbox as launch env (never as sandbox input)
 //	bindCaptureToPin          the upload's refusal predicate: the blob must
 //	                          agree with the LAUNCH-TIME stamp and with the
@@ -20,7 +20,7 @@
 //	                          row in the trail rather than a 400 nobody sees
 //
 // Why refuse and not rewrite. The stored blob is baked VERBATIM into every
-// later Bedrock run's ~/.aws/config (awsSSOConfigFileContents, runs_bedrock.go).
+// later Bedrock run's ~/.aws/config (awsSSOConfigFileContents).
 // Rewriting a disagreeing capture would record a session the person never saw
 // and would only move the IAM 403 from capture time back to run time — the
 // finding's own complaint, ten retries deep inside somebody else's terminal.
@@ -37,8 +37,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// awsSSOPin is the admin-owned account/role pin from the roster row, as the
-// launch carries it. Both halves or neither — see validateAgentCredentialSource.
+// awsSSOPin is the admin-owned account/role pin from a bedrock_sso provider, as
+// the launch carries it. Both halves or neither — see validateProviderPin.
 type awsSSOPin struct {
 	AccountID string
 	RoleName  string
@@ -72,10 +72,10 @@ func awsSSOPinEnv(pin awsSSOPin) map[string]string {
 //
 // It exists as its own function for one reason — loginConfigEnv returns a NIL
 // map for a non-AWS flow or a half-known config, and maps.Copy into a nil map
-// PANICS. Through the HTTP door that is unreachable (handleHarnessLogin 400s an
-// empty start URL or region, and validateAgentSSOPin forbids a pin off a
-// bedrock_sso row), but the safety was two validators away from the panic,
-// which is not where a panic should live. Here it is one line and one test.
+// PANICS. Through the HTTP door that is unreachable (validateProviderBedrock
+// requires a start URL and region on a bedrock_sso provider, and forbids a pin
+// elsewhere), but the safety was two validators away from the panic, which is
+// not where a panic should live. Here it is one line and one test.
 //
 // An UNPINNED row adds nothing, so its launch is byte-identical to what it was.
 // endpointOverride is the TEST hatch (awssso_endpoint.go): `aws sso login`
@@ -120,9 +120,9 @@ const (
 	// the person reading it on a terminal is the one who has to pick again.
 	ssoTokenAccountPinRefusal = "This sign-in captured account %s / role %s, but this deployment pins AWS sign-ins for this agent to account %s / role %s — sign in again and choose that account and role, or ask an admin to change the pin"
 	// ssoTokenModelAccountRefusal: "Wardyn holds both halves — say so at
-	// capture". Refused rather than warned: a wrong-account blob pre-empts
-	// every other Bedrock lane the moment it is stored, because
-	// resolveBedrockAuth selects a stored SSO credential first.
+	// capture". Refused rather than warned: a wrong-account blob is what every
+	// later run on its provider signs with the moment it is stored
+	// (bedrockSSOAuth).
 	ssoTokenModelAccountRefusal = "This session is for account %s; the configured Bedrock model lives in account %s — a run using this session would be refused by IAM, so it was not stored"
 	// ssoTokenAccountShapeRefusal / ssoTokenRoleShapeRefusal: the capture named
 	// an account or role that is not shaped like one. It names the SHAPE rather
@@ -133,24 +133,6 @@ const (
 	ssoTokenAccountShapeRefusal = "This sign-in did not resolve to a 12-digit AWS account id, so nothing was stored — sign in again and choose an account from the list"
 	// DRAFT (M2 canon pending)
 	ssoTokenRoleShapeRefusal = "This sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
-	// dispatchRosterUnreadableRefusal answers a DISPATCH whose roster read failed
-	// (enforceReadableRosterForCredential, runs_dispatch_llm_mechanism.go): the
-	// roster is what says whose model credential this run may use, and serving
-	// one from a namespace the daemon could not resolve is the outage that cannot
-	// be taken back. Surfaces as the run's failure reason, not an HTTP body.
-	dispatchRosterUnreadableRefusal = "The agent roster could not be read, so Wardyn cannot tell whose model credential this run may use — nothing was started; try again in a moment"
-	// harnessLoginRosterUnavailable answers a LAUNCH whose roster read failed
-	// (authorizeHarnessLogin, harnesscred.go): the pin and the admin's access
-	// portal both come off that row, so there is nothing to bind a capture to.
-	// It lives in THIS file, with the rest of the pin's vocabulary, because
-	// harnesscred.go sits against the 1000-line file-size gate — the same reason
-	// csrf.go was split out of http.go.
-	harnessLoginRosterUnavailable = "The agent roster could not be read, so this sign-in cannot be bound to the account and access portal it was meant for — try again in a moment"
-	// harnessDisconnectRosterUnavailable answers a DISCONNECT whose roster read
-	// failed (handleHarnessDisconnect, harnesscred.go): the roster is what says
-	// whether captures live per-person or deployment-wide, so without it there is
-	// no way to tell which stored session this would remove.
-	harnessDisconnectRosterUnavailable = "The agent roster could not be read, so Wardyn cannot tell whose stored sign-in this would remove — try again in a moment"
 	// credentialConfinementAdvisorySentence (0.8 #150): the confinement-visibility
 	// WARNING for a run whose model credential is a stored AWS SSO session
 	// delivered to the sandbox at dispatch, under a confinement class weaker than
@@ -164,9 +146,9 @@ const (
 )
 
 // awsAccountID matches an AWS account id. ONE var for the package: the ARN
-// parser below and the roster's own pin validation (agent_providers.go) ask the
-// same question about the same kind of value, and two copies of `^\d{12}$` is
-// two places for it to drift.
+// parser below and the provider's own pin validation (validateProviderPin) ask
+// the same question about the same kind of value, and two copies of `^\d{12}$`
+// is two places for it to drift.
 var awsAccountID = regexp.MustCompile(`^\d{12}$`)
 
 // bedrockModelAccount returns the AWS account id a Bedrock model ARN names, or
@@ -210,124 +192,20 @@ func BedrockModelARNNamesNoAccount(model string) bool {
 		bedrockModelAccount(model) == ""
 }
 
-// BedrockSSOPinUnenforced reports the configuration on which NOTHING
-// server-side constrains which AWS account and role a sign-in may store: an
-// enabled `per_user` `bedrock_sso` row with no `sso_account_id` pin, AND a
-// configured Bedrock model that names no account (a bare cross-region profile
-// id, or nothing at all).
-//
-// It is not a defect — the pin is optional on purpose, and a single-account
-// tenant never had this problem — it is the RESIDUAL of the account/role
-// pinning defect above, and the point is that it was inaudible. bindCaptureToPin skips both of its checks on
-// this shape, so the in-sandbox chooser is the only remaining defence and it is
-// code the sandbox controls; the one boot warning that existed
-// (BedrockModelARNNamesNoAccount) fires exclusively when the model LOOKS like
-// an ARN — the typo case, never the bare-id case this file calls "most often"
-// true. Exported for cmd/wardynd's boot warning; bedrockProviderCheck reads it
-// for the console's own row. Warn, never refuse: refusing would take capture
-// away from every unpinned deployment on upgrade.
-func BedrockSSOPinUnenforced(sc types.SiteConfig, model string) bool {
-	row, ok := perUserLoginRow(sc, awsSSOProvider)
-	return ok && row.SSOAccountID == "" && bedrockModelAccount(model) == ""
-}
-
-// bedrockPinDisagreement names the roster's account PIN and the account the
-// configured Bedrock model lives in — but only when both are known AND they
-// DIFFER, which is the one case worth a console row. ("", "") otherwise,
-// including a roster that could not be read (a zero SiteConfig has no row).
-//
-// That disagreement is legal by design: the pin is the admin's deliberate answer,
-// so the save door takes it and warns. A journal line is not where an admin
-// looks, and finding out at run time as an IAM 403 is the original complaint —
-// so the posture rides the bedrock_provider row beside its sibling
-// BedrockSSOPinUnenforced (R-04).
-func bedrockPinDisagreement(sc types.SiteConfig, model string) (pinAccount, modelAccount string) {
-	row, ok := perUserLoginRow(sc, awsSSOProvider)
-	if !ok || row.SSOAccountID == "" {
-		return "", ""
-	}
-	if ma := bedrockModelAccount(model); ma != "" && ma != row.SSOAccountID {
-		return row.SSOAccountID, ma
-	}
-	return "", ""
-}
-
-// awsSSOPinContradiction answers the question the pin was never asked after
-// capture time: does the identity a STORED session names still agree with the
-// one this deployment's roster row allows?
-//
-// It is ONE comparison with two doors — dispatch/create read it through
-// bedrockBlobPinMismatch below, and the caller's own /setup/status grading
-// (setupModelAccess, modelaccess.go) reads it directly off the blob — because a
-// second spelling of it would eventually refuse a run the console called fine.
-//
-// Four things make it answer "NO CONTRADICTION", and each is load-bearing:
-//
-//   - no ENABLED per_user bedrock_sso row (perUserLoginRow): a `shared` estate
-//     has no per-person identity to contradict, and the save door refuses pin
-//     fields on such a row anyway.
-//   - an UNPINNED row. The pin is optional on purpose and most estates carry
-//     none; firing here would take Bedrock away from every one of them on
-//     upgrade — the regression BedrockSSOPinUnenforced's doc warns about, in
-//     its dispatch form. Both halves or neither, the discipline awsSSOPin.set()
-//     already states: a half-pinned row (unreachable through
-//     validateAgentSSOPin, reachable through hand-edited JSONB) constrains
-//     nothing, so it refuses nothing.
-//   - a stored pair Wardyn does not know. account_id/role_name are `omitempty`
-//     on the wire (awsSSOBlob, harnesscred.go) and a blob written by an older
-//     binary may carry neither; refusing on absence would be that same upgrade
-//     regression, for a comparison there is no data for. Both halves or
-//     neither on this side too, not merely the account: a half-known stored
-//     pair (reachable the same way a half-pinned row is — a hand-edited store
-//     row) would otherwise return mismatch=true with a pair no caller can name,
-//     and every caller here composes a sentence that names both halves.
-//   - agreement.
-//
-// Returns (stored, pinned, true) ONLY on a genuine contradiction, so a caller
-// can name BOTH pairs — which is the whole point: the person reading the
-// refusal is the one who has to sign in again.
-func awsSSOPinContradiction(sc types.SiteConfig, stored awsSSOPin) (awsSSOPin, awsSSOPin, bool) {
-	if !stored.set() {
-		return awsSSOPin{}, awsSSOPin{}, false
-	}
-	row, ok := perUserLoginRow(sc, awsSSOProvider)
-	if !ok {
-		return awsSSOPin{}, awsSSOPin{}, false
-	}
-	pinned := awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}
-	if !pinned.set() || stored == pinned {
-		return awsSSOPin{}, awsSSOPin{}, false
-	}
-	return stored, pinned, true
-}
-
-// bedrockBlobPinMismatch is that comparison asked of a RESOLVED Bedrock auth:
-// the captured-SSO lane, and only it, carries a stored identity
-// (bedrockAuth.ssoAccountID). Every other lane — the operator's bearer key, the
-// host ~/.aws mount, the resident SigV4 keys, and every non-Bedrock transport —
-// has no account/role of its own, so there is nothing for a roster pin to
-// disagree with and this answers false for all of them.
-func bedrockBlobPinMismatch(sc types.SiteConfig, b bedrockAuth) (stored, pinned awsSSOPin, mismatch bool) {
-	if !b.ssoInject {
-		return awsSSOPin{}, awsSSOPin{}, false
-	}
-	return awsSSOPinContradiction(sc, awsSSOPin{AccountID: b.ssoAccountID, RoleName: b.ssoRoleName})
-}
-
 // bindCaptureToPin is the upload's identity binding: does this blob name the
 // account and role this capture was AUTHORIZED to produce?
 //
 // Two independent checks, both fail-closed, both against trusted server state:
 //
 //  1. The launch-time pin, read back off this run's own harness.login.start
-//     row — never off the live roster. A roster edit mid-login must not
-//     re-point a capture already in flight, for the same reason the credential
-//     scope is stamped rather than re-resolved (see loginRunScope). An empty
-//     stamp pin means "launched unpinned", which is accepted: the run was
-//     authorized without one.
-//  2. The configured model's account, when the operator gave a full ARN and the
-//     run was launched UNPINNED. Wardyn holds both halves of this comparison
-//     already — the blob's account_id and the account in WARDYN_BEDROCK_MODEL.
+//     row — never off the live provider. An edit mid-login must not re-point a
+//     capture already in flight, for the same reason the credential scope is
+//     stamped rather than re-resolved (see loginRunScope). An empty stamp pin
+//     means "launched unpinned", which is accepted: the run was authorized
+//     without one.
+//  2. The provider's model account, when its model is a full ARN and the run
+//     was launched UNPINNED. Wardyn holds both halves of this comparison
+//     already — the blob's account_id and the account in the stamped model.
 //     A PIN outranks it: it is the admin's deliberate answer to the same
 //     question, and a resource-shared application inference profile
 //     legitimately lives in another account, so a deployment with one had no

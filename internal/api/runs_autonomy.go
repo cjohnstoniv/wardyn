@@ -46,7 +46,7 @@ import (
 // it, as it discards the derived field.
 //
 // modelCred is the door's ONE resolution of the run's model credential
-// (enforceCreateLLMMechanism, which both doors now call first); the Bedrock
+// (runProviderChoice.modelCredential, off the door's one provider choice); the Bedrock
 // credential it names is graded here and frozen for dispatch (bedrockCredGrade).
 func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, enforced types.ConfinementClass,

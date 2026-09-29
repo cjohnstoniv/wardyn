@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// HarnessLoginPane — "Connect via container login" for a Claude subscription in
-// deployments with no host ~/.claude (compose/team). It launches an interactive
+// HarnessLoginPane — a person's sign-in to a model provider (a Claude
+// subscription or an AWS sign-in) through a container login. It launches an interactive
 // login sandbox IMMEDIATELY (opening the pane IS the intent — no extra button),
 // embeds the AttachTerminal, AUTO-TYPES `claude setup-token`, offers the
 // printed OAuth URL behind an "Open Claude sign-in" button (#628: the tab opens
@@ -15,21 +15,17 @@
 // pasting the callback code back into the terminal. A manual paste field remains
 // as a fallback if auto-capture misses. Renders inline (never routes away).
 //
-// The AWS flow adds one step BEFORE the sandbox launches: it asks for the
-// organization's access portal (start) URL, because `aws sso login` reads
-// sso_start_url + sso_region from ~/.aws/config and Wardyn stores no start URL
-// (the region is daemon boot config). The server seeds both into the sandbox as
-// a credential-free ~/.aws/config, which is what makes the auto-typed
-// `aws sso login --sso-session wardyn …` run unattended.
+// For AWS the provider record carries the access portal (start) URL, region
+// and pin; the server seeds them into the sandbox as a credential-free
+// ~/.aws/config, which is what makes `aws sso login --sso-session wardyn …`
+// run unattended.
 import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, CornerDownLeft } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
-import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { modelProviderSignIn } from "../../../lib/api/model-provider-signin";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { isTerminalRunState, type AgentRun } from "../../../lib/types";
 import { usePoll } from "../../../lib/use-poll";
-import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -54,17 +50,16 @@ import {
 // RE-EXPORTED, not re-declared: the corroboration rule and its refusal
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
-export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
+export { CAPTURE_NOT_CORROBORATED, serverConfirmsProviderCapture } from "./capture-confirm";
 // Finding 7a / #628: the provider tab opens only from the door's Open button.
 import { openSignInTab } from "./auth-tab-handle";
 import { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER, SIGNIN_PROGRESS } from "./login-pane-copy";
 export { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
 import { SignInDoorState, SignInSteps, isImagePullFailure } from "./signin-progress";
-// review-1 S4: the per-provider flow table is pure data + one presentational
-// component (ExpectList) — EXTRACTED to login-flows.tsx to keep this file
-// under the size cap. Re-exported so agents-tab.tsx and this pane's own
-// pinned tests keep their import path.
-import { ExpectList, loginFlow } from "./login-flows";
+// review-1 S4: the per-provider flow table is pure data — EXTRACTED to
+// login-flows.tsx to keep this file under the size cap. Re-exported so this
+// pane's own pinned tests keep their import path.
+import { loginFlow } from "./login-flows";
 export { loginFlow, LOGIN_FLOWS } from "./login-flows";
 export type { CaptureMode, LoginFlow } from "./login-flows";
 // review-1 S4: the raw-PTY extractors are pure functions — no React, no pane
@@ -79,12 +74,9 @@ import {
 } from "./login-pty-extract";
 export { SANDBOX_REFUSAL_LEAD_IN, extractAuthUrl, extractFailSentence, extractSetupToken } from "./login-pty-extract";
 
-// "intro" is the consent gate: nothing launches until the operator has read
-// what is about to happen and clicked Start — skipping it would fire the pane
-// on mount instead: a dialog, then suddenly a terminal, then suddenly a
-// browser auth prompt, with nothing saying what was coming or what would be
-// asked of you.
-type Phase = "intro" | "prompt" | "launching" | "starting" | "attached" | "saving" | "done" | "error";
+// A provider door starts at once: the door around the pane (packet E) says
+// what is about to happen, so there is no consent step of the pane's own.
+type Phase = "launching" | "starting" | "attached" | "saving" | "done" | "error";
 
 // How often the pane asks whether the login sandbox is up yet. Same cadence
 // demo-runner's own launch→starting→live machine uses, and for the same reason:
@@ -134,15 +126,6 @@ export const LOGIN_NOT_COMPLETED =
 // SELFRUN_MARKER itself is declared in ./login-pane-copy for the same reason.
 const SELFRUN_GRACE_MS = 12_000;
 
-// isLikelyStartUrl mirrors the server's validateSSOStartURL (harnesscred.go) so
-// the operator sees the problem before a round trip. Deliberately loose — the
-// server is the authority, and the egress policy, not this check, decides what
-// the sandbox may dial. Exported for tests.
-export function isLikelyStartUrl(s: string): boolean {
-  const v = s.trim();
-  return /^https:\/\/[^\s/]+/.test(v);
-}
-
 // Force the login terminal wide so `claude setup-token` never hard-wraps the
 // OAuth URL (~250 chars) or the token across lines — a narrow PTY wrap mid-URL
 // dropped response_type=code and produced "Invalid OAuth Request" on the opened
@@ -166,29 +149,16 @@ export interface HarnessLoginPaneHandle {
 export function HarnessLoginPane({
   provider = "anthropic",
   modelProvider,
-  startURLManaged = false,
   onDone,
   onCancel,
   paneRef,
 }: {
   provider?: string;
   // The model provider id this sign-in is for (#544): launch and paste go to
-  // /model-providers/{id}/sign-in instead of /setup/harness-*, the provider
-  // record supplies the access portal, and the door around the pane carries
-  // packet E's framing — so the pane starts at once (packet E draws no consent
-  // step) and drops its own title and blurb.
-  modelProvider?: string;
-  // The ORG's access portal is already stored and the server will use it: this
-  // sign-in runs under a per_user agent row (the member's Getting Started CTA,
-  // and the admin's own sign-in on a per_user row of the Agents tab). The
-  // start-URL PROMPT is then skipped for a one-line note — harnessLogin's
-  // startUrl argument is ignored server-side under such a row, so asking was a
-  // field whose value could not take effect, and every member had to hunt down a
-  // URL their admin had already entered.
-  //
-  // Default false: the ordinary Settings flow (no row, or `shared`) has nothing
-  // stored to sign in against, so it still asks.
-  startURLManaged?: boolean;
+  // /model-providers/{id}/sign-in, the provider record supplies the access
+  // portal, and the door around the pane carries packet E's framing — so the
+  // pane starts at once and draws no title or blurb of its own.
+  modelProvider: string;
   // Called after the token is captured (parent refreshes setup status + closes).
   onDone: () => void;
   // Called when the operator backs out before capturing.
@@ -200,7 +170,6 @@ export function HarnessLoginPane({
   paneRef?: React.Ref<HarnessLoginPaneHandle>;
 }) {
   const flow = loginFlow(provider);
-  const askStartUrl = !!flow.needsStartUrl && !startURLManaged && !modelProvider;
   // review-1 B1: every mount site passes an INLINE `onDone` — a fresh function
   // identity on every parent re-render. `completeCapture` must not list
   // `onDone` in its own deps: that puts a fresh `completeCapture` in the watch
@@ -212,8 +181,7 @@ export function HarnessLoginPane({
   React.useEffect(() => {
     onDoneRef.current = onDone;
   }, [onDone]);
-  const [phase, setPhase] = React.useState<Phase>(modelProvider ? "launching" : askStartUrl ? "prompt" : "intro");
-  const [startUrl, setStartUrl] = React.useState("");
+  const [phase, setPhase] = React.useState<Phase>("launching");
   const [runId, setRunId] = React.useState<string | null>(null);
   const [token, setToken] = React.useState("");
   const [error, setError] = React.useState("");
@@ -328,9 +296,7 @@ export function HarnessLoginPane({
     setImageFailed(false);
     setTabOpened(false);
     try {
-      const id = modelProvider
-        ? (await modelProviderSignIn.startSignIn(modelProvider)).runId
-        : await harnessAuthApi.harnessLogin(provider, startUrl.trim());
+      const id = (await modelProviderSignIn.startSignIn(modelProvider)).runId;
       // The id comes first, the terminal later. Holding the id from t≈0 is what
       // makes Cancel able to kill a sandbox that is still coming up — P5 fixed
       // the POST not answering until dispatch was done, which let a timed-out
@@ -353,17 +319,17 @@ export function HarnessLoginPane({
       setRefused(e instanceof HttpError && e.status === 409);
       setPhase("error");
     }
-  }, [provider, modelProvider, startUrl, runId]);
+  }, [modelProvider, runId]);
 
-  // A provider door starts at once (packet E draws no consent step). A ref,
-  // not the phase: StrictMode re-runs this effect on the same instance, and a
-  // second launch is a second sign-in sandbox.
+  // The pane starts at once (packet E draws no consent step). A ref, not the
+  // phase: StrictMode re-runs this effect on the same instance, and a second
+  // launch is a second sign-in sandbox.
   const autoStarted = React.useRef(false);
   React.useEffect(() => {
-    if (!modelProvider || autoStarted.current) return;
+    if (autoStarted.current) return;
     autoStarted.current = true;
     void launch();
-  }, [modelProvider, launch]);
+  }, [launch]);
 
   // startingSentenceOf is the substrate's sentence for this read, or "". The lead-in
 // below promises the reader words after it, so BOTH arms that use it check for
@@ -527,8 +493,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       setPhase("saving");
       setError("");
       try {
-        if (modelProvider) await modelProviderSignIn.captureSignIn(modelProvider, runId ?? "", t);
-        else await harnessAuthApi.harnessCredentialPaste(provider, t);
+        await modelProviderSignIn.captureSignIn(modelProvider, runId ?? "", t);
         if (runId) await runsApi.killRun(runId).catch(() => {});
         setPhase("done");
         onDone();
@@ -538,7 +503,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         savedRef.current = false; // allow another attempt (auto or manual)
       }
     },
-    [provider, modelProvider, token, runId, onDone],
+    [modelProvider, token, runId, onDone],
   );
 
   // confirmCapture is the PHASE half of the corroboration; the rule and the
@@ -566,13 +531,13 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       void runsApi.killRun(runId).catch(() => {});
     }
     setPhase("saving");
-    const { confirmed, unreachable } = await confirmCaptureWithServer(provider, runId, modelProvider);
+    const { confirmed, unreachable } = await confirmCaptureWithServer(runId, modelProvider);
     if (confirmed) {
       completeCapture();
       return;
     }
     verifyFailSentenceRef.current = unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED;
-  }, [provider, modelProvider, runId, completeCapture]);
+  }, [modelProvider, runId, completeCapture]);
 
   // Watch the login terminal: read the sign-in URL off it (the door's Open
   // button uses it, #628), then capture and save the printed token.
@@ -677,7 +642,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     const controller = new AbortController();
     watchAbortRef.current = controller;
     const wake = watchWakeRef.current;
-    void watchForCapture({ provider, runId, signal: controller.signal, wake, modelProvider }).then((confirmed) => {
+    void watchForCapture({ runId, signal: controller.signal, wake, modelProvider }).then((confirmed) => {
       if (controller.signal.aborted) return;
       if (confirmed) {
         completeCaptureRef.current();
@@ -706,20 +671,6 @@ function startingSentenceOf(run: AgentRun | undefined): string {
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">
-      {!modelProvider && (
-        <div className="flex items-center gap-2">
-          <KeyRound className="size-4 shrink-0 text-primary" />
-          <span className="text-sm font-medium text-foreground">{flow.title}</span>
-        </div>
-      )}
-      {/* The blurb narrates the RUNNING flow ("Wardyn opened a sandbox…") — on
-          the intro nothing has launched yet, so the expectations list speaks
-          instead and the blurb would be a lie. A provider door says it in
-          packet E's one cleanup line instead. */}
-      {phase !== "intro" && !modelProvider && (
-        <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb(startURLManaged)}</p>
-      )}
-
       {/* State 7: the list stops at the step that failed, above its reason. */}
       {phase === "error" && imageFailed && <SignInSteps step="download-failed" provider={flow.providerName} />}
 
@@ -731,59 +682,6 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           {/* The server's detail is a wire value, so it reads as one. */}
           <p className={imageFailed ? "break-all font-mono" : undefined}>{error}</p>
-        </div>
-      )}
-
-      {phase === "intro" && (
-        <div className="space-y-3" data-testid="login-intro">
-          <ExpectList items={flow.expects} />
-          {/* The portal the sign-in will use is the row's, not one to type. */}
-          {flow.needsStartUrl && startURLManaged && (
-            <p className="text-xs leading-relaxed text-muted-foreground">{AGENTS.SSO_START_URL_MANAGED}</p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => void launch()}>
-              <KeyRound className="size-3.5" /> Start login
-            </Button>
-            <Button size="sm" variant="outline" onClick={onCancel}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {phase === "prompt" && (
-        <div className="space-y-2" data-testid="login-start-url-prompt">
-          <ExpectList items={flow.expects} />
-          <label className="block text-xs font-medium text-foreground" htmlFor="harness-login-start-url">
-            Your AWS access portal URL
-          </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              id="harness-login-start-url"
-              value={startUrl}
-              onChange={(e) => setStartUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && isLikelyStartUrl(startUrl)) void launch();
-              }}
-              placeholder="https://my-org.awsapps.com/start"
-              className="h-9 min-w-[18rem] flex-1 font-mono"
-              aria-label="AWS access portal start URL"
-            />
-            <Button size="sm" onClick={() => void launch()} disabled={!isLikelyStartUrl(startUrl)}>
-              <KeyRound className="size-3.5" /> Start login
-            </Button>
-            <Button size="sm" variant="outline" onClick={onCancel}>
-              Cancel
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Find it in the AWS access portal (IAM Identity Center) — it looks like{" "}
-            <code className="rounded bg-background/70 px-1 py-0.5 font-mono">https://my-org.awsapps.com/start</code>.
-            Wardyn does not store it; the SSO region comes from the daemon&apos;s{" "}
-            <code className="rounded bg-background/70 px-1 py-0.5 font-mono">-bedrock-aws-sso-region</code> /{" "}
-            <code className="rounded bg-background/70 px-1 py-0.5 font-mono">-bedrock-region</code> setting.
-          </p>
         </div>
       )}
 

@@ -98,12 +98,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// predicate that hides the plain entry.
 		//
 		// The tiers are the left operand, deliberately. They are context reads;
-		// userPreviewApplies is a GetSiteConfig. In this order the roster is read
+		// userPreviewApplies is a GetSiteConfig. In this order the config is read
 		// only for the tier the key exists for — the other way round it put a store
 		// read on EVERY caller of the console's most-polled route, users included,
 		// to compute an answer that is false for them by construction.
 		"user_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
-			s.userPreviewApplies(r.Context(), r),
+			s.userPreviewApplies(r.Context()),
 	}
 	body["user_type"] = s.meUserType(r)
 	// The type whose deletion turned the user view off, until the next

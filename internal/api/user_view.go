@@ -128,13 +128,12 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 		typeName = s.userTypeName(ctx, typeID)
 	}
 	// The posture is granted by the server, never taken from the body. The
-	// no-credential preview only does anything where the model-access agent's
-	// roster row is per_user (userPreviewApplies, membermode_preview.go);
-	// asking for it anywhere else would enter a view whose banner asserts a
-	// state the same deployment immediately contradicts. On `shared` this
-	// silently downgrades to the plain view — the honest answer, and no new
-	// string.
-	preview := on && req.NoCredential && s.userPreviewApplies(ctx, r)
+	// no-credential preview only does anything where a model provider is on
+	// (userPreviewApplies, membermode_preview.go); asking for it anywhere else
+	// would enter a view whose banner asserts a state the same deployment
+	// immediately contradicts. Elsewhere this silently downgrades to the plain
+	// view — the honest answer, and no new string.
+	preview := on && req.NoCredential && s.userPreviewApplies(ctx)
 	realRole, err := s.cfg.OIDC.SetUserView(w, r, on, typeID, typeName, preview)
 	if err != nil {
 		// decodeSession's own errors: the cookie went missing or stopped

@@ -203,6 +203,8 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_WALK_ADMIN_TOKEN": true, "WARDYN_WALK_FAKE_URL": true, "WARDYN_WALK_FAKE_CA": true,
 	"WARDYN_WALK_PIN_ACCOUNT": true, "WARDYN_WALK_PIN_ROLE": true,
 	"WARDYN_WALK_SSO_START_URL": true, "WARDYN_WALK_SSO_REGION": true,
+	// #548: the walk's bedrock_sso model provider's model ARN and address.
+	"WARDYN_WALK_BEDROCK_MODEL": true, "WARDYN_WALK_BEDROCK_BASE_URL": true,
 	// 0.7.5: the cluster coordinates the recovery spec's cold-start case taints
 	// the node and reads a pod phase with. Passed rather than guessed, so a
 	// renamed cluster reds that case instead of making its 90 s hold vacuous.

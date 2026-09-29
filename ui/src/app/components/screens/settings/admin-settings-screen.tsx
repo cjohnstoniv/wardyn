@@ -341,12 +341,7 @@ export function AdminSettingsScreen() {
           {/* The shared credential lanes, as built — until MP-18 replaces this
               card (design §4.3). S-4 (#636): Your account mounts the SAME
               component for a person's own connection; this is the org one. */}
-          <ModelProviderCard
-            status={status}
-            siteConfig={siteConfig}
-            onChanged={load}
-            compact
-          />
+          <ModelProviderCard compact />
           {/* The Providers card replaces Git host: the git credential
               lanes moved into a provider row on /providers, and this card is
               the same shared component the funnel's `providers` step body

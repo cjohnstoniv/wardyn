@@ -16,7 +16,7 @@ vi.mock("../settings/harness-login-pane", () => ({
   HarnessLoginPane: (p: { modelProvider?: string }) => <div data-testid="fake-pane" data-model-provider={p.modelProvider ?? ""} />,
 }));
 
-import type { AgentRun, AuditEvent } from "../../../lib/types";
+import type { AgentRun, AuditEvent, SetupStatus } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
@@ -45,7 +45,7 @@ function failedRun(hint: string, createdBy = "bob@acme.example"): AgentRun {
 
 /** The dispatch refusal's run.create/failure row (#532's refuseProviderDispatch). */
 function trail(provider: string, kind: string, credential = true): AuditEvent[] {
-  const data: Record<string, unknown> = { error: "…", provider, kind, mechanism: kind };
+  const data: Record<string, unknown> = { error: "…", provider, kind };
   if (credential) data.reason = "model_credential";
   return [{ id: "e1", time: aheadByHours(-1), actor_type: "system", actor: "wardynd", action: "run.create", outcome: "failure", data }];
 }
@@ -57,6 +57,8 @@ function renderBlock(opts: {
   createdBy?: string;
   path?: string;
   resolved?: boolean;
+  status?: SetupStatus;
+  onRefresh?: () => void;
 }) {
   const path = opts.path ?? "/runs/run_1";
   window.history.pushState({}, "", path);
@@ -66,13 +68,17 @@ function renderBlock(opts: {
       principal={opts.principal ?? "bob@acme.example"}
       operatorResolved={opts.resolved ?? true}
       operator={path.startsWith("/admin")}
-      status={providerStatus([
-        { provider: bedrockDev, defaultFor: ["claude-code"] },
-        { provider: bedrock },
-        { provider: claude },
-        { provider: gateway },
-        { provider: anthropicKey },
-      ])}
+      onRefresh={opts.onRefresh}
+      status={
+        opts.status ??
+        providerStatus([
+          { provider: bedrockDev, defaultFor: ["claude-code"] },
+          { provider: bedrock },
+          { provider: claude },
+          { provider: gateway },
+          { provider: anthropicKey },
+        ])
+      }
     >
       <RunFailureBlock run={failedRun(opts.hint, opts.createdBy)} audit={opts.audit} onGoAudit={() => {}} />
     </WithDoor>,
@@ -81,18 +87,19 @@ function renderBlock(opts: {
 
 afterEach(() => window.history.pushState({}, "", "/"));
 
-describe("runEndingFromAudit — a provider row is read by `provider`, not `mechanism`", () => {
-  it("names the provider and drops the legacy key", () => {
+describe("runEndingFromAudit — a credential row is read by `provider`", () => {
+  it("names the provider", () => {
     const ending = runEndingFromAudit("FAILED", trail("bedrock-prod", "bedrock_sso"));
     expect(ending).toMatchObject({ kind: "credential", provider: "bedrock-prod" });
-    expect(ending?.mechanism).toBeUndefined();
   });
 
-  it("a legacy row keeps its mechanism", () => {
+  it("a row from before 0.8 names no provider, whatever else it carries", () => {
     const legacy: AuditEvent[] = [
       { ...trail("", "")[0], data: { error: "…", reason: "model_credential", mechanism: "bedrock_sso" } },
     ];
-    expect(runEndingFromAudit("FAILED", legacy)).toMatchObject({ kind: "credential", mechanism: "bedrock_sso" });
+    const ending = runEndingFromAudit("FAILED", legacy);
+    expect(ending).toMatchObject({ kind: "credential" });
+    expect(ending?.provider).toBeUndefined();
   });
 });
 
@@ -200,5 +207,31 @@ describe("while /me is still resolving", () => {
     expect(screen.getByText(hint)).toBeInTheDocument();
     expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("bob@acme.example"))).toBeNull();
     expect(screen.queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeNull();
+  });
+});
+
+
+describe("the block and the shell strip — one sign-in button per screen", () => {
+  const hint = refusal(bedrock.name, "you are not signed in to AWS for it", CONNECT);
+  // One provider, so the strip states one line and offers its own button.
+  const oneProvider = () => providerStatus([{ provider: bedrock, defaultFor: ["claude-code"] }]);
+  const stripButton = () => screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS });
+
+  it("refreshes the door once on mount — the context can be five minutes stale", () => {
+    const onRefresh = vi.fn();
+    renderBlock({ hint, audit: trail(bedrock.id, "bedrock_sso"), onRefresh });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims the door, so the shell strip drops its button while the block has one", () => {
+    renderBlock({ hint, audit: trail(bedrock.id, "bedrock_sso"), status: oneProvider() });
+    expect(screen.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeInTheDocument();
+    expect(stripButton()).toBeNull();
+  });
+
+  it("does not claim the door for a NON-credential ending", () => {
+    renderBlock({ hint: "", audit: trail(bedrock.id, "bedrock_sso", false), status: oneProvider() });
+    expect(screen.queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeNull();
+    expect(stripButton()).toBeInTheDocument();
   });
 });

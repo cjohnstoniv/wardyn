@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -21,14 +20,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // getErrStore is a secretstore.Store whose Get returns a fixed error (or value),
-// so readManagedBlob's error-classification branch can be exercised without a
+// so readHarnessBlob's error-classification branch can be exercised without a
 // real backend.
 type getErrStore struct {
 	getErr error
@@ -49,55 +46,13 @@ func (getErrStore) DeleteEverywhere(context.Context, []string) (int, error) { re
 
 func (getErrStore) Holders(context.Context, []string) (map[string][]string, error) { return nil, nil }
 
-// TestReadManagedBlob_DistinguishesStoreErrors pins only ErrNotFound is
-// "not connected" (found=false, err=nil). Any OTHER store error (decrypt failure
-// after key rotation, backend down) MUST propagate rather than masquerade as
-// "no credential connected". Reverting to a blanket `if err != nil { return
-// false, nil }` makes the decrypt-failure case return a nil error and fails here.
-func TestReadManagedBlob_DistinguishesStoreErrors(t *testing.T) {
-	goodBlob, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-real-token"})
-	tests := []struct {
-		name    string
-		store   secretstore.Store
-		wantOK  bool
-		wantErr bool
-	}{
-		{"absent is not-connected", getErrStore{getErr: secretstore.ErrNotFound}, false, false},
-		{"wrapped absent is not-connected", getErrStore{getErr: fmt.Errorf("pg: %w", secretstore.ErrNotFound)}, false, false},
-		{"decrypt failure propagates", getErrStore{getErr: errors.New("age: no identity matched key")}, false, true},
-		{"backend down propagates", getErrStore{getErr: errors.New("dial tcp: connection refused")}, false, true},
-		{"connected", getErrStore{val: goodBlob}, true, false},
-		{"nil store is not-connected", nil, false, false},
-	}
-	h := newHarness(t)
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := h.srv.cfg
-			cfg.Secrets = tc.store
-			s := New(cfg)
-			_, ok, err := s.readManagedBlob(context.Background(), "anthropic")
-			if ok != tc.wantOK {
-				t.Fatalf("ok = %v, want %v (err %v)", ok, tc.wantOK, err)
-			}
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// TestReadHarnessBlob_InputClasses pins the ONE read discipline both harness
-// lanes share (readHarnessBlob): absent, unparseable, and structurally-unusable
-// blobs must NEVER read as connected, and only a non-ErrNotFound store failure
-// may propagate. The identical class list runs through BOTH readers, so the two
-// lanes cannot silently drift apart again — the drift risk that made a single
-// shared reader worth having. A `usable` predicate weakened to a bare non-empty
-// check, or a parse error swallowed into found=false, fails here.
+// TestReadHarnessBlob_InputClasses pins the read discipline of readHarnessBlob
+// through its one reader (readAWSSSOBlob): absent, unparseable, and
+// structurally-unusable blobs must NEVER read as connected, and only a
+// non-ErrNotFound store failure may propagate. A `usable` predicate weakened to
+// a bare non-empty check, or a parse error swallowed into found=false, fails
+// here.
 func TestReadHarnessBlob_InputClasses(t *testing.T) {
-	goodManaged, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-real-token"})
-	// Whitespace-only: parses, but is not a token. readManagedBlob's shape check
-	// TrimSpaces before deciding.
-	blankManaged, _ := json.Marshal(managedCredBlob{Token: "   "})
 	goodSSO, _ := json.Marshal(awsSSOBlob{
 		AccessToken: "sso-tok", StartURL: "https://d-1.awsapps.com/start", Region: "us-east-1",
 		AccountID: "111122223333", RoleName: "Dev", ExpiresAt: time.Now().Add(time.Hour),
@@ -116,15 +71,6 @@ func TestReadHarnessBlob_InputClasses(t *testing.T) {
 		good     []byte
 		unusable []byte
 	}{
-		{
-			name: "managed",
-			read: func(s *Server, ctx context.Context) (bool, error) {
-				_, ok, err := s.readManagedBlob(ctx, "anthropic")
-				return ok, err
-			},
-			good:     goodManaged,
-			unusable: blankManaged,
-		},
 		{
 			name: "aws-sso",
 			read: func(s *Server, ctx context.Context) (bool, error) {
@@ -194,12 +140,11 @@ func TestManagedCredProvider(t *testing.T) {
 		t.Fatalf("managed token must have zero expiry, got %v", tok.ExpiresAt)
 	}
 
-	// Empty token blob == not connected. The write goes behind the provider's
-	// back, so drop its 60-second cache as a capture or disconnect does.
+	// Empty token blob == not connected (a fresh provider: the first one's
+	// 60-second cache still holds the token read above).
 	empty, _ := json.Marshal(managedCredBlob{Token: ""})
 	_ = store.Put(context.Background(), harnessCredSecretName("anthropic"), empty)
-	p.(*managedCredProvider).evict()
-	if _, err := p.Current(context.Background()); err == nil {
+	if _, err := NewManagedCredProvider(store, "anthropic").Current(context.Background()); err == nil {
 		t.Fatal("empty token must fail closed")
 	}
 }
@@ -252,91 +197,6 @@ func TestHarnessSecretIsReserved(t *testing.T) {
 	}
 }
 
-func TestManagedOptOut_APIKeyInjectionWins(t *testing.T) {
-	// The managed-subscription dispatch gate must stay a FALLBACK: when the run
-	// already carries an anthropic api-key injection (the operator chose api-key),
-	// managed must NOT fire and silently override it.
-	s := &Server{}
-	anthropic := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "api.anthropic.com"}}}
-	if !s.hasAnthropicAPIKeyInjection("claude-code", anthropic) {
-		t.Fatal("should detect an api.anthropic.com injection")
-	}
-	// Trailing dot / case should still match (mirrors the sink host check).
-	dotted := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "API.Anthropic.com."}}}
-	if !s.hasAnthropicAPIKeyInjection("claude-code", dotted) {
-		t.Fatal("host match must normalize case + trailing dot")
-	}
-	// A non-anthropic injection (e.g. OpenAI) must NOT block managed.
-	other := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "api.openai.com"}}}
-	if s.hasAnthropicAPIKeyInjection("claude-code", other) {
-		t.Fatal("a non-anthropic injection must not count")
-	}
-	if s.hasAnthropicAPIKeyInjection("claude-code", nil) {
-		t.Fatal("no injections must not count")
-	}
-
-	// Gateway-aware: with WARDYN_ANTHROPIC_BASE_URL configured, the grant
-	// targets the GATEWAY host, not api.anthropic.com — the unset-gateway
-	// check above must not spuriously match it, and the gateway host must.
-	gw := &Server{cfg: Config{LLMGateways: map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}}}
-	if gw.hasAnthropicAPIKeyInjection("claude-code", anthropic) {
-		t.Fatal("a public-host injection must not count once a gateway is configured")
-	}
-	gwInjection := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "llm-gateway.corp.internal"}}}
-	if !gw.hasAnthropicAPIKeyInjection("claude-code", gwInjection) {
-		t.Fatal("a gateway-host injection must count once a gateway is configured")
-	}
-}
-
-// TestHarnessCredentialPaste_RegistersGlobalMask pins that a pasted setup-token
-// is handed to the mask registry PROCESS-GLOBALLY. Nothing else ever registers
-// it: the login run mints no credential, so its per-run snapshot is empty by
-// construction, and this handler is the only point in wardynd that ever sees the
-// value. Without the AddGlobal the token would pass verbatim through every
-// stream masker in the process.
-func TestHarnessCredentialPaste_RegistersGlobalMask(t *testing.T) {
-	const token = "sk-ant-oat01-live-long-lived-harness-token-value"
-
-	reg := secretmask.NewRegistry()
-	h := newHarness(t)
-	cfg := h.srv.cfg
-	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	cfg.MaskRegistry = reg
-	h.srv = New(cfg)
-
-	w := do(t, h.srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-		`{"token":"`+token+`"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("paste: code = %d, want 200 (body %s)", w.Code, w.Body.String())
-	}
-
-	// The value must now be masked out of ANY run's stream, including runs that
-	// did not exist when it was captured.
-	masked := secretmask.NewMasker(reg.Snapshot(uuid.New())).Mask([]byte("printed " + token + " here"))
-	if bytes.Contains(masked, []byte(token)) {
-		t.Fatalf("pasted setup-token is not globally mask-registered: %q", masked)
-	}
-	if !bytes.Contains(masked, []byte("<secret-hidden>")) {
-		t.Fatalf("expected the placeholder in %q", masked)
-	}
-}
-
-// TestHarnessCredentialPaste_NilMaskRegistry proves the paste path stays nil-safe
-// (masking is optional wiring; it must not become a required dependency).
-func TestHarnessCredentialPaste_NilMaskRegistry(t *testing.T) {
-	h := newHarness(t)
-	cfg := h.srv.cfg
-	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	cfg.MaskRegistry = nil
-	h.srv = New(cfg)
-
-	w := do(t, h.srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-		`{"token":"sk-ant-oat01-token-with-no-registry-wired"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("paste with nil MaskRegistry: code = %d, want 200", w.Code)
-	}
-}
-
 // HTTP-router-level tests (through the real mux + humanOrAdminAuth)
 
 // harnessCredSrv builds a Server with the harness login/credential routes MOUNTED
@@ -361,199 +221,20 @@ func auditHas(events []types.AuditEvent, action string) bool {
 	return false
 }
 
-// failSecrets wraps memSecrets to force Put/Delete failures so the paste/disconnect
-// handlers' store-error → 500 mapping is exercisable through the router.
-type failSecrets struct {
-	*memSecrets
-	putErr, delErr error
-}
-
-func (s failSecrets) Put(ctx context.Context, n string, v []byte) error {
-	if s.putErr != nil {
-		return s.putErr
-	}
-	return s.memSecrets.Put(ctx, n, v)
-}
-func (s failSecrets) Delete(ctx context.Context, n string) error {
-	if s.delErr != nil {
-		return s.delErr
-	}
-	return s.memSecrets.Delete(ctx, n)
-}
-
-// TestHarnessRoutes_AuthRequired: every harness setup route sits in the
-// humanOrAdminAuth group — an unauthenticated or wrong-token request must 401
-// before any handler logic runs (capability disclosure / shared-credential
-// mutation must never be anonymous).
-func TestHarnessRoutes_AuthRequired(t *testing.T) {
+// TestHarnessRoutes_RetiredDoorsAreGone: the operator-wide container-login
+// launch, the token paste and the disconnect are gone — every person signs in
+// through their model provider's own door. Nothing answers on the old paths,
+// for an admin or anyone else.
+func TestHarnessRoutes_RetiredDoorsAreGone(t *testing.T) {
 	_, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}})
-	routes := []struct {
-		method, path string
-	}{
+	for _, rt := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/setup/harness-login"},
 		{http.MethodPut, "/api/v1/setup/harness-credential/anthropic"},
 		{http.MethodDelete, "/api/v1/setup/harness-credential/anthropic"},
-	}
-	for _, rt := range routes {
-		if w := do(t, srv, rt.method, rt.path, "", `{}`); w.Code != http.StatusUnauthorized {
-			t.Errorf("%s %s no token: code = %d, want 401", rt.method, rt.path, w.Code)
-		}
-		if w := do(t, srv, rt.method, rt.path, "wrong-token", `{}`); w.Code != http.StatusUnauthorized {
-			t.Errorf("%s %s wrong token: code = %d, want 401", rt.method, rt.path, w.Code)
-		}
-	}
-}
-
-// TestHarnessRoutes_MethodDiscipline: the registered paths reject unregistered
-// verbs with 405 (chi's method-not-allowed), never silently accepting them.
-func TestHarnessRoutes_MethodDiscipline(t *testing.T) {
-	_, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}})
-	cases := []struct {
-		method, path string
-	}{
-		{http.MethodGet, "/api/v1/setup/harness-login"},                 // only POST
-		{http.MethodPut, "/api/v1/setup/harness-login"},                 // only POST
-		{http.MethodGet, "/api/v1/setup/harness-credential/anthropic"},  // only PUT/DELETE
-		{http.MethodPost, "/api/v1/setup/harness-credential/anthropic"}, // only PUT/DELETE
-	}
-	for _, c := range cases {
-		if w := do(t, srv, c.method, c.path, adminToken, `{}`); w.Code != http.StatusMethodNotAllowed {
-			t.Errorf("%s %s: code = %d, want 405", c.method, c.path, w.Code)
-		}
-	}
-}
-
-// TestHandleHarnessLogin_ErrorMapping covers the router-reachable error paths of
-// the login launcher short of a full sandbox dispatch (which needs a runner +
-// run store; the launch machinery itself is covered by the dispatch/interactive
-// tests). Bad body → 400, unsupported provider → 400, launch failure → 500.
-func TestHandleHarnessLogin_ErrorMapping(t *testing.T) {
-	_, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}})
-	const path = "/api/v1/setup/harness-login"
-
-	// Malformed JSON body → 400.
-	if w := do(t, srv, http.MethodPost, path, adminToken, `{`); w.Code != http.StatusBadRequest {
-		t.Errorf("bad body: code = %d, want 400; body=%s", w.Code, w.Body.String())
-	}
-	// A provider with no container-login convention → 400.
-	if w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"openai"}`); w.Code != http.StatusBadRequest {
-		t.Errorf("unknown provider: code = %d, want 400; body=%s", w.Code, w.Body.String())
-	}
-	// Valid provider (default anthropic) but no runner configured → the launch
-	// fails and maps to 500 (harness has no Runner).
-	if w := do(t, srv, http.MethodPost, path, adminToken, `{}`); w.Code != http.StatusInternalServerError {
-		t.Errorf("no-runner launch: code = %d, want 500; body=%s", w.Code, w.Body.String())
-	}
-}
-
-// TestHandleHarnessCredentialPaste_HappyPath: a well-formed setup-token is stored
-// under the RESERVED name, the response reports captured:true, and a
-// harness.credential.capture audit event is written.
-func TestHandleHarnessCredentialPaste_HappyPath(t *testing.T) {
-	const token = "sk-ant-oat01-happy-path-stored-token"
-	sec := &memSecrets{m: map[string][]byte{}}
-	h, srv := harnessCredSrv(t, sec)
-
-	w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-		`{"token":"`+token+`"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("paste: code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode resp: %v", err)
-	}
-	if resp["captured"] != true || resp["provider"] != "anthropic" {
-		t.Errorf("resp = %v, want captured:true provider:anthropic", resp)
-	}
-	raw, ok := sec.m[harnessCredSecretName("anthropic")]
-	if !ok {
-		t.Fatal("token blob was not stored under the reserved harness name")
-	}
-	var blob managedCredBlob
-	if err := json.Unmarshal(raw, &blob); err != nil {
-		t.Fatalf("stored blob is not a managedCredBlob: %v", err)
-	}
-	if blob.Token != token {
-		t.Errorf("stored token = %q, want %q", blob.Token, token)
-	}
-	if !auditHas(h.audit.events, "harness.credential.capture") {
-		t.Error("no harness.credential.capture audit event")
-	}
-}
-
-// TestHandleHarnessCredentialPaste_Errors covers the handler's 4xx/5xx mapping:
-// unknown provider, malformed body, wrong token prefix, and a store Put failure.
-func TestHandleHarnessCredentialPaste_Errors(t *testing.T) {
-	// Unknown provider → 400 (checked before the body is read).
-	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
-		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/openai", adminToken,
-			`{"token":"sk-ant-oat01-x"}`); w.Code != http.StatusBadRequest {
-			t.Errorf("unknown provider: code = %d, want 400; body=%s", w.Code, w.Body.String())
-		}
-	}
-	// Malformed JSON → 400.
-	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
-		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken, `{`); w.Code != http.StatusBadRequest {
-			t.Errorf("bad body: code = %d, want 400; body=%s", w.Code, w.Body.String())
-		}
-	}
-	// A token that fails the format guard (wrong prefix) → 400, and nothing stored.
-	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
-		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-			`{"token":"not-a-setup-token"}`); w.Code != http.StatusBadRequest {
-			t.Errorf("bad prefix: code = %d, want 400; body=%s", w.Code, w.Body.String())
-		}
-	}
-	// A store Put failure maps to 500 (not swallowed as success).
-	fail := failSecrets{memSecrets: &memSecrets{m: map[string][]byte{}}, putErr: errors.New("age: no identity matched key")}
-	if _, srv := harnessCredSrv(t, fail); true {
-		if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-			`{"token":"sk-ant-oat01-store-will-fail"}`); w.Code != http.StatusInternalServerError {
-			t.Errorf("store Put failure: code = %d, want 500; body=%s", w.Code, w.Body.String())
-		}
-	}
-}
-
-// TestHandleHarnessDisconnect_HappyPath: DELETE removes the stored blob, reports
-// captured:false, and writes a harness.credential.disconnect audit event.
-func TestHandleHarnessDisconnect_HappyPath(t *testing.T) {
-	sec := &memSecrets{m: map[string][]byte{
-		harnessCredSecretName("anthropic"): []byte(`{"token":"sk-ant-oat01-existing"}`),
-	}}
-	h, srv := harnessCredSrv(t, sec)
-
-	w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/anthropic", adminToken, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("disconnect: code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode resp: %v", err)
-	}
-	if resp["captured"] != false || resp["provider"] != "anthropic" {
-		t.Errorf("resp = %v, want captured:false provider:anthropic", resp)
-	}
-	if _, ok := sec.m[harnessCredSecretName("anthropic")]; ok {
-		t.Error("stored blob was not deleted")
-	}
-	if !auditHas(h.audit.events, "harness.credential.disconnect") {
-		t.Error("no harness.credential.disconnect audit event")
-	}
-}
-
-// TestHandleHarnessDisconnect_Errors: unknown provider → 400, store Delete
-// failure → 500.
-func TestHandleHarnessDisconnect_Errors(t *testing.T) {
-	if _, srv := harnessCredSrv(t, &memSecrets{m: map[string][]byte{}}); true {
-		if w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/openai", adminToken, ""); w.Code != http.StatusBadRequest {
-			t.Errorf("unknown provider: code = %d, want 400; body=%s", w.Code, w.Body.String())
-		}
-	}
-	fail := failSecrets{memSecrets: &memSecrets{m: map[string][]byte{}}, delErr: errors.New("pg: connection refused")}
-	if _, srv := harnessCredSrv(t, fail); true {
-		if w := do(t, srv, http.MethodDelete, "/api/v1/setup/harness-credential/anthropic", adminToken, ""); w.Code != http.StatusInternalServerError {
-			t.Errorf("store Delete failure: code = %d, want 500; body=%s", w.Code, w.Body.String())
+		{http.MethodDelete, "/api/v1/setup/harness-credential/aws"},
+	} {
+		if w := do(t, srv, rt.method, rt.path, adminToken, `{"provider":"aws","token":"sk-ant-oat01-x"}`); w.Code != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404 — the retired door must not answer; body=%s", rt.method, rt.path, w.Code, w.Body.String())
 		}
 	}
 }
@@ -742,82 +423,30 @@ func TestLoginConfigEnv(t *testing.T) {
 	}
 }
 
-// TestHandleHarnessLogin_AWSNeedsStartURLAndRegion: `aws sso login` cannot run
-// without an sso_start_url + sso_region, so refuse before launching a sandbox
-// whose auto-typed command is guaranteed to fail.
-//
-// The region is boot config. The start URL arrives with the request ONLY in
-// legacy mode, which is what this test drives: since 0.7.2 a `per_user` agent
-// row carries the org's `sso_start_url` and the launch uses THAT, ignoring the
-// request's — see TestHandleHarnessLogin_PerUserUsesTheRowsStartURL. With no
-// such row there is nowhere else to keep it, and the operator is the only
-// caller, so the request stays the source.
-func TestHandleHarnessLogin_AWSNeedsStartURLAndRegion(t *testing.T) {
-	const path = "/api/v1/setup/harness-login"
-	newSrv := func(region string) *Server {
-		h := newHarness(t)
-		cfg := h.srv.cfg
-		cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-		cfg.BedrockRegion = region
-		return New(cfg)
-	}
-
-	srv := newSrv("us-east-1")
-	// No start URL at all → 400 naming what's missing.
-	w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"aws"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "access portal") {
-		t.Errorf("missing start url: code = %d, body = %s; want 400 naming the access portal URL", w.Code, w.Body.String())
-	}
-	// Malformed start URL → 400.
-	if w := do(t, srv, http.MethodPost, path, adminToken,
-		`{"provider":"aws","sso_start_url":"my-org.awsapps.com/start"}`); w.Code != http.StatusBadRequest {
-		t.Errorf("malformed start url: code = %d, want 400; body=%s", w.Code, w.Body.String())
-	}
-	// Valid start URL, but no configured SSO region → 400 naming the flag.
-	w = do(t, newSrv(""), http.MethodPost, path, adminToken,
-		`{"provider":"aws","sso_start_url":"https://my-org.awsapps.com/start"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "bedrock-aws-sso-region") {
-		t.Errorf("no region: code = %d, body = %s; want 400 naming the region flag", w.Code, w.Body.String())
-	}
-	// Both present → validation passes and the launch itself fails (no runner) → 500.
-	if w := do(t, srv, http.MethodPost, path, adminToken,
-		`{"provider":"aws","sso_start_url":"https://my-org.awsapps.com/start"}`); w.Code != http.StatusInternalServerError {
-		t.Errorf("valid aws login: code = %d, want 500 (no runner configured); body=%s", w.Code, w.Body.String())
-	}
-	// The anthropic flow needs no start URL — unchanged.
-	if w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"anthropic"}`); w.Code != http.StatusInternalServerError {
-		t.Errorf("anthropic login: code = %d, want 500 (no runner configured); body=%s", w.Code, w.Body.String())
-	}
-}
-
-// TestLaunchHarnessLoginRun_SeedsPinEnv: the admin's account/role pin reaches
-// the login sandbox as launch ENV, and is stamped on the run's own
-// harness.login.start row.
+// TestLaunchHarnessLoginRun_SeedsPinEnv: a sign-in to a pinned bedrock_sso
+// provider seeds the pin into the login sandbox's env AND stamps it on the
+// run's harness.login.start row.
 //
 // Both halves matter and they are different claims. The ENV is what lets the
 // in-sandbox helper verify the pin against the portal instead of taking
 // AccountList[0]; the STAMP is what lets the upload refuse a blob that
-// disagrees, and it is read back from the audit row rather than the live roster
-// so a roster edit mid-login cannot re-point a capture already in flight.
+// disagrees, and it is read back from the audit row rather than the live
+// provider so an edit mid-login cannot re-point a capture already in flight.
 func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
-	runner := &fakeRunner{}
-	srv, audit := perUserLoginSrvWithRunner(t, runner, types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-		SSOAccountID: "111111111111", SSORoleName: "BedrockRunner",
-	})
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	site := credentialSite(ssoProvider())
+	p := site.ModelProviders.Providers[0]
+	srv, _, audit, _ := signInFixture(t, nil, site)
+	runner := srv.cfg.Runner.(*fakeRunner)
+	if code, body := signIn(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), p.ID); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", code, body)
 	}
 
-	// The POST answers before dispatch now (P5), so the spec this reads is
-	// composed by the launch goroutine a beat later. Same assertion, one sync
-	// point: waitForSandbox returns when CreateSandbox has actually been called.
+	// The POST answers before dispatch (P5), so the spec this reads is composed
+	// by the launch goroutine a beat later: waitForSandbox returns when
+	// CreateSandbox has actually been called.
 	runner.waitForSandbox(t)
 	env := runner.lastSandboxEnv()
-	if env[awsSSOPinAccountEnvVar] != "111111111111" || env[awsSSOPinRoleEnvVar] != "BedrockRunner" {
+	if env[awsSSOPinAccountEnvVar] != p.Bedrock.SSOAccountID || env[awsSSOPinRoleEnvVar] != p.Bedrock.SSORoleName {
 		t.Errorf("sandbox env = %v, want the pin in %s/%s — without it the helper is back to AccountList[0]",
 			env, awsSSOPinAccountEnvVar, awsSSOPinRoleEnvVar)
 	}
@@ -828,31 +457,30 @@ func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
 	}
 
 	stamp := loginStartedStamp(t, audit)
-	if stamp.SSOAccountID != "111111111111" || stamp.SSORoleName != "BedrockRunner" {
-		t.Errorf("harness.login.start stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live roster", stamp)
+	if stamp.SSOAccountID != p.Bedrock.SSOAccountID || stamp.SSORoleName != p.Bedrock.SSORoleName {
+		t.Errorf("harness.login.start stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live provider", stamp)
 	}
 }
 
-// TestLoginConfigEnv_NoPinNoEnv: an UNPINNED row seeds neither variable, so a
-// deployment that never pins launches byte-for-byte the sandbox it always did.
+// TestLoginConfigEnv_NoPinNoEnv: an UNPINNED provider seeds neither variable,
+// so a deployment that never pins launches byte-for-byte the sandbox it always
+// did.
 func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
-	runner := &fakeRunner{}
-	srv, audit := perUserLoginSrvWithRunner(t, runner, types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-	})
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	unpinned := ssoProvider()
+	unpinned.Bedrock.SSOAccountID, unpinned.Bedrock.SSORoleName = "", ""
+	site := credentialSite(unpinned)
+	srv, _, audit, _ := signInFixture(t, nil, site)
+	runner := srv.cfg.Runner.(*fakeRunner)
+	if code, body := signIn(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), unpinned.ID); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", code, body)
 	}
 	runner.waitForSandbox(t) // see TestLaunchHarnessLoginRun_SeedsPinEnv
 	env := runner.lastSandboxEnv()
 	if _, ok := env[awsSSOPinAccountEnvVar]; ok {
-		t.Errorf("an unpinned row seeded %s: %v", awsSSOPinAccountEnvVar, env)
+		t.Errorf("an unpinned provider seeded %s: %v", awsSSOPinAccountEnvVar, env)
 	}
 	if _, ok := env[awsSSOPinRoleEnvVar]; ok {
-		t.Errorf("an unpinned row seeded %s: %v", awsSSOPinRoleEnvVar, env)
+		t.Errorf("an unpinned provider seeded %s: %v", awsSSOPinRoleEnvVar, env)
 	}
 	if stamp := loginStartedStamp(t, audit); stamp.SSOAccountID != "" || stamp.SSORoleName != "" {
 		t.Errorf("an unpinned launch stamped %+v, want no pin — the upload reads an empty stamp pin as 'launched unpinned'", stamp)
@@ -878,9 +506,9 @@ func loginStartedStamp(t *testing.T, audit *memAudit) loginRunStamp {
 // the map loginConfigEnv returned, and that map is NIL for a non-AWS flow or a
 // half-known config — `maps.Copy` into a nil map panics.
 //
-// Unreachable through the HTTP door today only because handleHarnessLogin 400s
-// an empty start URL / region first and validateAgentSSOPin forbids a pin off a
-// bedrock_sso row: the safety was two validators away from the panic. This
+// Unreachable through the HTTP door today only because handleProviderSignIn
+// refuses a provider with no start URL / region first and validateProviderBedrock
+// forbids a pin off a bedrock_sso provider: the safety was two validators away from the panic. This
 // calls the merge directly, past both, which is how a future caller reaches it.
 func TestLoginEnv_PinWithNoConfigEnvDoesNotPanic(t *testing.T) {
 	aws, _ := agentHarnessLogin(awsSSOAgent)
@@ -957,37 +585,6 @@ func TestDeleteSpentAWSSSOBlob_ProviderScopeDeletesOnlyItsOwnRow(t *testing.T) {
 	}
 }
 
-// TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow is the reverse: a
-// roster-scoped refusal (no provider) must delete only the roster row and
-// leave the same person's provider-scoped row alone.
-func TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow(t *testing.T) {
-	ctx := context.Background()
-	s := &Server{cfg: Config{Secrets: &memSecrets{}, Now: func() time.Time { return awsSSOTestFixedNow }}}
-	const owner = "alice@example.com"
-	rosterScope := awsSSOScope{perUser: true, owner: owner}
-	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
-
-	if err := s.storeAWSSSOBlob(ctx, rosterScope, awsSSOScopeDeleteBlob("roster-access-token-1234567890")); err != nil {
-		t.Fatalf("seed roster row: %v", err)
-	}
-	if err := s.storeAWSSSOBlob(ctx, providerScope, awsSSOScopeDeleteBlob("provider-access-token-123456789")); err != nil {
-		t.Fatalf("seed provider row: %v", err)
-	}
-
-	s.deleteSpentAWSSSOBlob(ctx, rosterScope)
-
-	if _, found, err := s.readAWSSSOBlob(ctx, rosterScope); err != nil || found {
-		t.Errorf("roster row after its own refresh was refused: found=%v err=%v, want gone", found, err)
-	}
-	provider, found, err := s.readAWSSSOBlob(ctx, providerScope)
-	if err != nil || !found {
-		t.Fatalf("provider row after a ROSTER-scoped refusal: found=%v err=%v, want intact", found, err)
-	}
-	if provider.AccessToken != "provider-access-token-123456789" {
-		t.Errorf("provider row AccessToken = %q, want the original — a roster-scoped delete touched it", provider.AccessToken)
-	}
-}
-
 // #1100: the sign-in sandbox gets its own small default, an operator-configured
 // override, and stays clamped to the acting principal's governance ceiling.
 
@@ -1040,19 +637,15 @@ func TestHarnessLoginResources_CeilingNeverRaises(t *testing.T) {
 	}
 }
 
-// TestLaunchHarnessLoginRun_DefaultResources: end to end through the real
-// /setup/harness-login POST — the composed SandboxSpec carries the small
-// default rather than runner.DefaultCPUMillis/DefaultMemoryMiB.
+// TestLaunchHarnessLoginRun_DefaultResources: end to end through a provider's
+// sign-in door — the composed SandboxSpec carries the small default rather than
+// runner.DefaultCPUMillis/DefaultMemoryMiB.
 func TestLaunchHarnessLoginRun_DefaultResources(t *testing.T) {
-	runner := &fakeRunner{}
-	srv, _ := perUserLoginSrvWithRunner(t, runner, types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-	})
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	site := credentialSite(ssoProvider())
+	srv, _, _, _ := signInFixture(t, nil, site)
+	runner := srv.cfg.Runner.(*fakeRunner)
+	if code, body := signIn(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), "bedrock-prod"); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", code, body)
 	}
 	runner.waitForSandbox(t)
 	res := runner.lastSpec.Resources
@@ -1066,32 +659,16 @@ func TestLaunchHarnessLoginRun_DefaultResources(t *testing.T) {
 // override (here simulated the way boot wires it: a non-zero Config field)
 // reaches the composed SandboxSpec.
 func TestLaunchHarnessLoginRun_ConfiguredResources(t *testing.T) {
-	h := newHarness(t)
-	audit := &memAudit{}
-	rnr := &fakeRunner{}
-	st := &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-	})}
-	cfg := baseTestConfig(h, st)
-	cfg.Audit = audit
-	cfg.OIDC = &oidc.Authenticator{}
-	cfg.Runner = rnr
-	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion = "us-east-1"
-	cfg.DefaultPolicy = govDeployment()
-	cfg.HarnessLoginCPUMillis = 750
-	cfg.HarnessLoginMemoryMiB = 1024
-	srv := New(cfg)
-
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	site := credentialSite(ssoProvider())
+	srv, _, _, _ := signInFixture(t, nil, site)
+	srv.cfg.HarnessLoginCPUMillis = 750
+	srv.cfg.HarnessLoginMemoryMiB = 1024
+	runner := srv.cfg.Runner.(*fakeRunner)
+	if code, body := signIn(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), "bedrock-prod"); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", code, body)
 	}
-	rnr.waitForSandbox(t)
-	res := rnr.lastSpec.Resources
+	runner.waitForSandbox(t)
+	res := runner.lastSpec.Resources
 	if res.CPUMillis != 750 || res.MemoryMiB != 1024 {
 		t.Errorf("sign-in SandboxSpec.Resources = %+v, want {CPUMillis:750 MemoryMiB:1024} (the configured override)", res)
 	}

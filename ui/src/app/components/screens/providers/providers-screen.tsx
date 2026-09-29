@@ -312,7 +312,6 @@ export function ProvidersScreen() {
                  read as an empty one and save `{agents: []}`, disabling every
                  agent. Absent is unknown (setup.ts's own rule). */
               harnesses={setupStatus?.harnesses}
-              modelAccess={setupStatus?.model_access}
               operator={operator}
               /* The roster comes from this screen's /setup/status read, so
                  the tab's roster-unknown Retry has to re-fire that — its own

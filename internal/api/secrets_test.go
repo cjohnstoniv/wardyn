@@ -791,16 +791,3 @@ func TestInternalWrite_RowFailureIsAudited(t *testing.T) {
 		}
 	}
 }
-
-// The operator's pasted harness credential is audited by who pasted it.
-func TestHarnessCredentialPaste_RowFailureIsAudited(t *testing.T) {
-	h, srv := harnessCredSrv(t, rowFailingSecrets{&memSecrets{m: map[string][]byte{}}})
-	if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-		`{"token":"sk-ant-oat01-row-will-fail"}`); w.Code != http.StatusInternalServerError {
-		t.Fatalf("paste = %d, want 500: %s", w.Code, w.Body.String())
-	}
-	ev := lastAuditEvent(t, h.audit.events, "secret.write")
-	if ev.Outcome != "failure" || ev.Target != harnessCredSecretName("anthropic") || string(ev.Data) != `{"reason":"row"}` {
-		t.Fatalf("secret.write = (%s, %s, %s); want a failure on the harness credential with reason row", ev.Outcome, ev.Target, ev.Data)
-	}
-}

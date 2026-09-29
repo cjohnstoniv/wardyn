@@ -275,19 +275,6 @@ func (s *Server) anthropicGatewayHost() string {
 	return gatewayHost(base)
 }
 
-// anthropicGatewayHostPort is anthropicGatewayHost with its port attached
-// (default 443, matching the proxy's own LLMUpstreams parsing) — the
-// "host:port" form a per-run MITM host entry needs, mirroring how
-// authorBedrockBearerInjection joins its own runtime host and port. "" when no
-// gateway is configured.
-func (s *Server) anthropicGatewayHostPort() string {
-	base, ok := s.anthropicGatewayBase()
-	if !ok {
-		return ""
-	}
-	return gatewayHostPort(base)
-}
-
 // gatewayHostPort is gatewayHost with its port attached (default 443), or ""
 // when base has no host.
 func gatewayHostPort(base string) string {
@@ -300,16 +287,4 @@ func gatewayHostPort(base string) string {
 		port = p
 	}
 	return net.JoinHostPort(u.Hostname(), port)
-}
-
-// anthropicBaseURL is the base URL subscription and Wardyn-managed runs dial:
-// the operator-configured gateway when one is set, else the vendor default —
-// unset is byte-identical to today ("https://" + subscriptionInjectionHost).
-// The harness-login (`claude setup-token`) lane never calls this: that flow
-// mints the OAuth token itself and must stay on the public host.
-func (s *Server) anthropicBaseURL() string {
-	if base, ok := s.anthropicGatewayBase(); ok {
-		return base
-	}
-	return "https://" + subscriptionInjectionHost
 }

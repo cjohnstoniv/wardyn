@@ -37,8 +37,8 @@ func TestJSONParamHelpers_NullSemantics(t *testing.T) {
 		if got := workspaceLLMCredParam(nil); got != nil {
 			t.Errorf("nil llm cred: got %#v, want SQL NULL", got)
 		}
-		got, ok := workspaceLLMCredParam(&types.WorkspaceLLMCred{IntegrationRef: "anthropic"}).([]byte)
-		if !ok || string(got) != `{"integration_ref":"anthropic"}` {
+		got, ok := workspaceLLMCredParam(&types.WorkspaceLLMCred{ProviderRef: "corp-key"}).([]byte)
+		if !ok || string(got) != `{"provider_ref":"corp-key"}` {
 			t.Errorf("set llm cred: got %#v", got)
 		}
 		if got := workspaceBaseImageParam(nil); got != nil {

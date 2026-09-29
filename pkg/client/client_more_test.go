@@ -553,7 +553,7 @@ func TestPutSiteConfig_StripsIntegrations(t *testing.T) {
 	captured := types.SiteConfig{
 		ScmHosts: []string{"github.example.com"},
 		Integrations: []types.Integration{
-			{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey},
+			{ID: "acme-github", Kind: types.IntegrationKindGitHubApp},
 		},
 	}
 	if _, _, _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {

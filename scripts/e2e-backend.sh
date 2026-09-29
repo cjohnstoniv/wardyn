@@ -222,14 +222,11 @@ cmd_up() {
   # and the drives screen has nothing to exercise. Registration only — this
   # daemon still dispatches nothing.
   #
-  # WARDYN_BEDROCK_MODEL/_REGION (console-agents, 0.7.3): a FULL ARN, not a bare
-  # cross-region profile id, so bedrockModelAccount() (awssso_pin.go) has an
-  # account to compare an agent roster pin against — agents.spec.ts's "pin
-  # whose account differs from the model ARN" 400 needs this daemon to actually
-  # HAVE a model account on file, or validateAgentSSOPin's account check always
-  # skips. The fake account (222222222222) never needs to be real: no bearer
-  # key/SSO session/host dir is configured either, so every OTHER Bedrock
-  # credential path here is still "not configured", unchanged.
+  # WARDYN_BEDROCK_MODEL/_REGION (console-agents, 0.7.3): the operator's boot
+  # Bedrock knobs, a FULL ARN naming a fake account (222222222222). Since #548
+  # no run is credentialed from them — a run's model credential comes only
+  # from its model provider — so they feed only the status surfaces that still
+  # report them.
   if [[ -n "${BASE_PATH}" ]]; then
     export WARDYN_BASE_PATH="${BASE_PATH}"
   fi

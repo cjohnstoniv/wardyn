@@ -127,7 +127,7 @@ var awsSSORegionPattern = regexp.MustCompile(`^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+
 var errAWSSSOCredentialSpent = errors.New("aws sso refresh credential is spent")
 
 // DRAFT (M2 canon pending)
-// The three sentences below are the user-facing copy this lane introduces. They
+// The sentences below are the user-facing copy this lane introduces. They
 // are held in ONE block so the canon swap is a single-file diff, and every test
 // asserts through the constants rather than the literals.
 const (
@@ -135,11 +135,11 @@ const (
 	// sign in again; nothing Wardyn can do renews this credential, and Wardyn
 	// does not quietly bill a different model provider instead.
 	//
-	// %s is the REMEDY clause (llmMechanismRemedy): under a per_user row the
-	// person who must sign in again is the member, and Settings → Model provider
-	// is the page whose AWS button is admin-only.
+	// The remedy names the person's own two doors: Getting started, and the
+	// sign-in banner the console shows on every page.
 	awsSSORefreshSpentSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
-		"and that session can no longer be renewed — %s " +
+		"and that session can no longer be renewed — sign in to AWS again from Getting started in the console, " +
+		"or from the sign-in banner the console shows on every page. " +
 		"Wardyn does not substitute a different model provider."
 
 	// awsSSORefreshUnavailableSentence: the renewal could not be completed
@@ -152,30 +152,6 @@ const (
 	awsSSORefreshUnavailableSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
 		"and renewing that session did not complete — AWS did not answer the token request. " +
 		"Your sign-in is still good; launch again in a moment. Wardyn does not substitute a different model provider."
-
-	// credSourceSSODesc names the captured-SSO lane in setup copy. It replaces
-	// "re-login when it expires", which stopped being true the moment dispatch
-	// started renewing the credential itself.
-	credSourceSSODesc = "your captured AWS SSO session (container login; Wardyn renews it at launch while its refresh token lives)"
-)
-
-// awsSSORefreshSpentRefusal composes the sentence above for the scope whose
-// credential is spent. A captured session always existed here, so the remedy is
-// its audience's "again" arm.
-func awsSSORefreshSpentRefusal(perUser bool) string {
-	return fmt.Sprintf(awsSSORefreshSpentSentence, llmMechanismRemedy(perUser, true))
-}
-
-// harnessCredentialAWSRenewingDetail / Fix are the admin setup row for a
-// captured SSO session whose ACCESS token has lapsed but whose refresh token has
-// not: there is nothing for the operator to do, so the row stopped being a warn.
-// %s is the expiry timestamp.
-//
-// DRAFT (M2 canon pending)
-const (
-	harnessCredentialAWSRenewingDetail = "A captured AWS SSO session is connected. Its access token lapsed at %s, " +
-		"and Wardyn renews it automatically at launch while its refresh token lives — no re-login needed."
-	harnessCredentialAWSRenewingFix = "Nothing to do. Re-run the containerized AWS SSO login only if a run reports that the session can no longer be renewed."
 )
 
 // awsSSOTokenResponse is the subset of the SSO-OIDC CreateToken response this
@@ -442,7 +418,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		return blob, ""
 	}
 	if s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken)) {
-		return blob, awsSSORefreshSpentRefusal(scope.perUser)
+		return blob, awsSSORefreshSpentSentence
 	}
 
 	// Single-flight, and non-blocking while the token in hand would still carry a
@@ -476,7 +452,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	cur, found, rerr := s.readAWSSSOBlob(ctx, scope)
 	if rerr == nil {
 		if !found {
-			return blob, awsSSORefreshSpentRefusal(scope.perUser)
+			return blob, awsSSORefreshSpentSentence
 		}
 		blob = cur
 	}
@@ -486,7 +462,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	}
 	fingerprint := awsSSOTokenFingerprint(blob.RefreshToken)
 	if s.awsSSOTokenSpent(fingerprint) {
-		return blob, awsSSORefreshSpentRefusal(scope.perUser)
+		return blob, awsSSORefreshSpentSentence
 	}
 
 	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
@@ -508,7 +484,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		})
 		if spent {
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
-			return blob, awsSSORefreshSpentRefusal(scope.perUser)
+			return blob, awsSSORefreshSpentSentence
 		}
 		// A TRANSIENT failure is not a reason to stop using a token we still hold.
 		// needsRefresh fires a whole skew window (10 min) AHEAD of expiry, so most
@@ -580,7 +556,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 }
 
 // auditAWSSSORefresh emits the harness.credential.refresh row. Run-less: the
-// credential is per-principal, not per-run, and resolveBedrockAuth is reached
+// credential is per-principal, not per-run, and providerBedrockRefusal is reached
 // from create and preflight as well as dispatch.
 //
 // owner + credential_source are what make the row answerable under per_user:

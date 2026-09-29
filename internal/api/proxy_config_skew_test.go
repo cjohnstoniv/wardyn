@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -151,33 +151,45 @@ func TestDispatchConfigLoadsOnPreviousProxy(t *testing.T) {
 		{
 			name: "anthropic_api_key",
 			setup: func(t *testing.T, srv *Server) {
-				srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
+				p := types.ModelProvider{ID: "anthropic", UID: "uid-skew-anthropic", Kind: types.ModelProviderAnthropicAPIKey,
+					Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+				srv.cfg.Secrets = skewOwnerSecret(t, providerSecretName(p.UID, providerKeyPart), []byte("sk-ant-test"))
+				seedSiteConfig(t, srv, types.SiteConfig{ModelProviders: providerBlock(p)})
 			},
-			body: apiKeyRun("claude-code", "api.anthropic.com", "x-api-key", "anthropic-api-key"),
+			body: claude,
 			took: injectsHost("api.anthropic.com"),
 		},
 		{
 			name: "openai_api_key",
 			setup: func(t *testing.T, srv *Server) {
-				srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"openai-api-key": []byte("sk-openai-test")}}
+				p := types.ModelProvider{ID: "openai", UID: "uid-skew-openai", Kind: types.ModelProviderOpenAIAPIKey,
+					Harnesses: []types.ProviderHarness{{Harness: "codex-cli"}}}
+				srv.cfg.Secrets = skewOwnerSecret(t, providerSecretName(p.UID, providerKeyPart), []byte("sk-openai-test"))
+				seedSiteConfig(t, srv, types.SiteConfig{ModelProviders: providerBlock(p)})
 			},
-			body: apiKeyRun("codex-cli", "api.openai.com", "Authorization", "openai-api-key"),
+			body: `{"agent":"codex-cli","repo":"acme/widgets","task":"do the thing"}`,
 			took: injectsHost("api.openai.com"),
 		},
 		{
 			name: "anthropic_subscription",
 			setup: func(t *testing.T, srv *Server) {
-				srv.cfg.SubscriptionPostureOK = true
-				srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}
+				p := types.ModelProvider{ID: "sub", UID: "uid-skew-sub", Kind: types.ModelProviderAnthropicSubscription,
+					Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+				srv.cfg.Secrets = skewOwnerSecret(t, providerSecretName(p.UID, providerOAuthPart), subBlob("sub-tok"))
+				srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+				seedSiteConfig(t, srv, types.SiteConfig{ModelProviders: providerBlock(p)})
 			},
 			body: claude,
-			took: func(pc runner.ProxyConfig) bool { return pc.MITMLLM },
+			took: injectsHost("api.anthropic.com"),
 		},
 		{
 			name: "bedrock_bearer",
 			setup: func(t *testing.T, srv *Server) {
-				c := bedrockBearerCfg()
-				srv.cfg.BedrockRegion, srv.cfg.BedrockModel, srv.cfg.Secrets, srv.cfg.MaskRegistry = c.BedrockRegion, c.BedrockModel, c.Secrets, c.MaskRegistry
+				p := types.ModelProvider{ID: "br-key", UID: "uid-skew-br", Kind: types.ModelProviderBedrockBearer,
+					Bedrock:   &types.BedrockSettings{Region: "us-east-1"},
+					Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}}}
+				srv.cfg.Secrets = skewOwnerSecret(t, providerSecretName(p.UID, providerKeyPart), []byte("ABSK-skew"))
+				seedSiteConfig(t, srv, types.SiteConfig{ModelProviders: providerBlock(p)})
 			},
 			body: claude,
 			took: func(pc runner.ProxyConfig) bool { return len(pc.Injection) == 1 && len(pc.MITMHosts) == 1 },
@@ -185,26 +197,32 @@ func TestDispatchConfigLoadsOnPreviousProxy(t *testing.T) {
 		{
 			name: "bedrock_sso",
 			setup: func(t *testing.T, srv *Server) {
-				s := ssoInjectServer(t, true)
-				srv.cfg.BedrockRegion, srv.cfg.BedrockModel, srv.cfg.Secrets = s.cfg.BedrockRegion, s.cfg.BedrockModel, s.cfg.Secrets
-				srv.cfg.AWSSSOProxyInject, srv.cfg.Now, srv.cfg.MaskRegistry = true, s.cfg.Now, s.cfg.MaskRegistry
+				p := reauthProvider() // the provider liveSSOBlob was captured for
+				raw, err := json.Marshal(liveSSOBlob())
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv.cfg.Secrets = skewOwnerSecret(t, providerSecretName(p.UID, providerSSOPart), raw)
+				srv.cfg.AWSSSOProxyInject, srv.cfg.MaskRegistry = true, secretmask.NewRegistry()
+				seedSiteConfig(t, srv, types.SiteConfig{ModelProviders: providerBlock(p)})
 			},
 			body: claude,
 			took: func(pc runner.ProxyConfig) bool { return len(pc.Injection) == 1 && len(pc.MITMHosts) == 1 },
 		},
 		{
 			// Every routing knob the previous release already honoured, on a
-			// Bedrock static-key run with a token-bearing artifact redirect.
-			name: "bedrock static keys behind every site routing setting",
+			// key-provider run with a token-bearing artifact redirect.
+			name: "key provider behind every site routing setting",
 			setup: func(t *testing.T, srv *Server) {
-				c := bedrockStaticCfg()
-				srv.cfg.BedrockRegion, srv.cfg.BedrockModel, srv.cfg.MaskRegistry = c.BedrockRegion, c.BedrockModel, c.MaskRegistry
-				c.Secrets.(*memSecrets).m["corp-proxy-url"] = []byte("http://proxy.corp:3128")
-				c.Secrets.(*memSecrets).m["npm-artifactory-token"] = []byte("s3cr3t-npm-token")
-				srv.cfg.Secrets = c.Secrets
+				p := types.ModelProvider{ID: "anthropic", UID: "uid-skew-key", Kind: types.ModelProviderAnthropicAPIKey,
+					Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+				sec := skewOwnerSecret(t, providerSecretName(p.UID, providerKeyPart), []byte("sk-ant-skew"))
+				sec.m["corp-proxy-url"] = []byte("http://proxy.corp:3128")
+				sec.m["npm-artifactory-token"] = []byte("s3cr3t-npm-token")
+				srv.cfg.Secrets = sec
 				srv.cfg.TrustedCAPEM = "corp-ca"
-				srv.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gw.corp.example/anthropic"}
 				seedSiteConfig(t, srv, types.SiteConfig{
+					ModelProviders:         providerBlock(p),
 					UpstreamProxySecretRef: "corp-proxy-url",
 					UpstreamProxyNoProxy:   []string{"10.0.0.0/8", ".corp.example"},
 					InternalHosts:          []types.InternalHost{{HostSuffix: "artifactory.corp", CIDRs: []string{"10.1.0.0/16"}}},
@@ -217,7 +235,7 @@ func TestDispatchConfigLoadsOnPreviousProxy(t *testing.T) {
 				`{"allowed_domains":["api.anthropic.com","registry.npmjs.org"],"min_confinement_class":"CC2"}}`,
 			took: func(pc runner.ProxyConfig) bool {
 				return pc.UpstreamProxyURL != "" && len(pc.UpstreamProxyNoProxy) == 2 && len(pc.InternalHosts) == 1 &&
-					pc.TrustedCAPEM != "" && len(pc.LLMUpstreams) == 1 && injectsHost("artifactory.corp")(pc)
+					pc.TrustedCAPEM != "" && injectsHost("api.anthropic.com")(pc) && injectsHost("artifactory.corp")(pc)
 			},
 		},
 	} {
@@ -250,18 +268,21 @@ func TestDispatchConfigLoadsOnPreviousProxy(t *testing.T) {
 	}
 }
 
-// apiKeyRun is a run whose policy carries the provider's auto-mint api_key
-// grant, the way a workspace or composed policy brings one.
-func apiKeyRun(agent, host, header, secret string) string {
-	return `{"agent":"` + agent + `","repo":"acme/widgets","task":"do the thing","inline_policy":{"min_confinement_class":"CC2",` +
-		`"allowed_domains":["` + host + `"],"eligible_grants":[{"kind":"api_key","scope":` +
-		`{"host":"` + host + `","header":"` + header + `","secret_name":"` + secret + `"}}]}}`
-}
-
 func injectsHost(host string) func(runner.ProxyConfig) bool {
 	return func(pc runner.ProxyConfig) bool {
 		return slices.ContainsFunc(pc.Injection, func(g runner.InjectionGrant) bool { return g.Rule.Host == host })
 	}
+}
+
+// skewOwnerSecret is a secret store holding one value in the admin token's
+// own namespace — the run owner of every POST /runs here.
+func skewOwnerSecret(t *testing.T, name string, value []byte) *memSecrets {
+	t.Helper()
+	sec := &memSecrets{m: map[string][]byte{}}
+	if err := sec.For(adminTokenPrincipal).Put(context.Background(), name, value); err != nil {
+		t.Fatal(err)
+	}
+	return sec
 }
 
 // seedSiteConfig stores sc and restores the empty singleton afterwards, so it

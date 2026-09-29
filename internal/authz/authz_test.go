@@ -54,7 +54,7 @@ func TestDenyTakesItsEffectFromTheRegistry(t *testing.T) {
 	}{
 		{ReasonAdminSurface, EffectDeny, 403},
 		{ReasonNotOwner, EffectHidden, 404},
-		{ReasonHarnessLoginMechanismPrincipal, EffectUnprocessable, 422},
+		{ReasonModelProviderUnavailable, EffectUnprocessable, 422},
 		{Reason("never_registered"), EffectDeny, 403},
 	} {
 		d := Deny(tc.reason, "t", "")

@@ -84,6 +84,9 @@ func headingSlug(text string) string {
 // claim; markdown has no Go tokens, so literals and fileLiterals are both nil.
 func citedSymbolBodies(rel string, src []byte) (bodies map[string]string, literals map[string][]string, fileLiterals []string, err error) {
 	bodies = map[string]string{}
+	if strings.HasSuffix(rel, ".sql") {
+		return bodies, nil, nil, nil // a migration has no symbols; cited by bare path only
+	}
 	if strings.HasSuffix(rel, ".md") {
 		lines := strings.Split(string(src), "\n")
 		for i, line := range lines {

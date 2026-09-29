@@ -26,14 +26,13 @@ env var, so a write naming one is refused.
 `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key`
 — left the closed set.
 
-- A write naming one is refused, pointing at Settings → Model providers
-  (`validateIntegrationWrite`, `internal/api/integrations_write.go`), and
-  `default_for` is no longer a writable field.
-- A stored AI row stays in `SiteConfig` for the conversion to model
-  providers to read. It is left out of the effective set every resolver
-  reads instead (`effectiveIntegrations`, `internal/api/integrations.go`),
-  so it grants nothing: not to a run, not through a workspace
-  requirement, not as a redirect token.
+- A write naming one is refused as an unsupported kind
+  (`validateIntegrationWrite`, `internal/api/integrations_write.go`) — model
+  access is set up under Settings → Model providers — and `default_for` is
+  no longer a field at all.
+- The upgrade converted every stored AI row into a model provider and
+  deleted it (migration `0100_model_provider_conversion`; see the
+  CHANGELOG).
 - No AI row is derived from the operator's own model credentials any
   more either.
 
@@ -133,25 +132,23 @@ bare exact hostname, because proxy-side injection resolves through
 | A port-qualified host with `proxy_header` | Makes the injector refuse to build a rule, a hard proxy startup failure — rejected at write time |
 | Either shape on an integration with no credential header | Allowed — a data store on `db.corp.internal:5432`, egress only, is exactly the shape this is for |
 
-## Model access resolves — it does not default to none
+## Model access comes from a model provider
 
-**With a model-provider block set (0.8), none of this section applies.** A
-model run is credentialed by the provider it chose
+Since 0.8.2 a model run is credentialed by the model provider it chose
 (`enforceRunModelProvider`, `internal/api/run_model_provider.go`) from its
 owner's own key, token or sign-in, or by nothing.
 
-- No integration folds, no managed or host-mounted subscription and no
-  operator key serves it.
-- Dispatch drops every other model credential its policy carries
-  (`resolveProviderLane`, `internal/api/runs_dispatch_provider.go`).
+- No integration folds, no managed or host-mounted subscription, no
+  operator key and no boot-time Bedrock configuration serves it.
+- Dispatch drops every model credential its policy carries that the
+  provider did not author (`dropLegacyModelInjections`,
+  `resolveProviderLane`, `internal/api/runs_dispatch_provider.go`).
 - Nor may an `env_secret` grant set a variable a model credential rides
   in, or a provider arm sets (`modelEnvNames`,
   `internal/api/provider_env.go`, table below). Such a grant is refused
   with a 422 at create and Review, naming the grant and the variable, and
   dispatch refuses the run again if one arrives another way.
-- Every other `env_secret` grant is placed as before, and with no block
-  nothing changes. What follows is the path of a deployment with no
-  block.
+- Every other `env_secret` grant is placed as before.
 
 | Group | Refused variables |
 | --- | --- |
@@ -161,38 +158,19 @@ owner's own key, token or sign-in, or by nothing.
 | Anthropic-on-AWS | `ANTHROPIC_AWS_API_KEY`, `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_PROFILE` |
 | Every arm | Its own base-URL, model, region and config variables |
 
-**No integration chooses a run's model credential (0.8).** A run naming
-one (`integration_id`) is refused with a `422` at create and Review
+**No integration chooses a run's model credential.** A run naming one
+(`integration_id`) is refused with a `422` at create and Review
 (`decodeAndValidateCreateRun`, `internal/api/runs_create_validate.go`).
 
-- A workspace's `LLMCred.IntegrationRef` pin and an integration's
-  `DefaultFor: agent_runs` mark are inert: the conversion to model
-  providers reads them, nothing else does.
+- A workspace pins a model provider (`LLMCred.ProviderRef`), never an
+  integration. The 0.8.2 upgrade converts a 0.7.x or 0.8.0 integration pin, an
+  integration's `DefaultFor: agent_runs` mark and the agent roster's model
+  credential fields into model providers and drops the AI integration
+  rows (`0100_model_provider_conversion`, see
+  [CHANGELOG](../../CHANGELOG.md)).
 - Record, verify and build sessions no longer mint an `api_key` grant
   from an operator secret either (`recordSessionModelAccess`,
-  `internal/api/record_model_provider.go`). What an operator's stored
-  model key used to reach through those paths, a person's own credential
-  on a model provider reaches now.
-
-**That is not the same as no access.** Dispatch's own transport
-resolution (`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`)
-still credentials the run from whatever GLOBAL provider config exists,
-independent of any integration or workspace binding:
-
-- A Wardyn-managed subscription connected via `wardyn subscription
-  connect` (`managedInjectReady`, `internal/api/harnesscred.go` — checks
-  that the run's agent is `claude-code` and a captured token exists,
-  never that any integration names it) injects proxy-side.
-- A global Bedrock config (`WARDYN_BEDROCK_REGION`+`WARDYN_BEDROCK_MODEL`,
-  [ENV.md](../ENV.md)) still credentials Bedrock calls
-  (`resolveBedrockAuth`, `internal/api/runs_bedrock.go`).
-- An `api_key` grant the run's own policy carries is injected as before.
-
-- The `agent == "claude-code"` gate means the managed-subscription
-  fallback isn't universal: a `codex-cli` run with a connected managed
-  subscription and no integration gets no model access via this lane.
-- Full transport precedence (subscription → Bedrock → api-key) once a run
-  reaches dispatch: [TRY-IT.md](../TRY-IT.md) → "Model auth: three ways".
+  `internal/api/record_model_provider.go`).
 
 ## What the New Run rail states
 
@@ -200,40 +178,23 @@ The right-hand "What this run can do" panel is read, not asserted. Two of
 its rows consult the server, and both are silent rather than wrong when
 the server hasn't answered.
 
-**Credentials** names where THIS run's model credential will land.
-Pressing **Preflight** is what produces that answer for real: it dry-runs
-the exact body Launch would send and returns one of:
+**Credentials** names the model provider THIS run would use and where its
+credential lands, with no click:
 
 | Answer | Meaning |
 | --- | --- |
-| `proxy` | Injected by the proxy at launch, never written into the sandbox — a static API key, a stored Bedrock bearer or the subscription token, injected as it stands; nothing is minted |
-| `sandbox` | A live credential inside the run for its lifetime — a Bedrock SSO exchange mints role credentials there |
-| `image` | A `none` roster row — Wardyn wires nothing and can't say where the image's own credential lives |
-| `unknown` | Nothing resolved — reads the same "Resolved at launch." as no verdict at all |
+| `proxy` | A key or token, injected by the proxy at launch and never written into the sandbox |
+| `sandbox` | A Bedrock AWS sign-in, which signs inside the run for its lifetime, chipped **Per-person AWS sign-in** — ownership, not sign-in status |
 
-The `sandbox` arm chips whose credential it is ONLY for a Bedrock lane:
-**Per-person AWS sign-in** under a `per_user` roster row, **Admin's
-credential** under `shared`. That's ownership, not sign-in status — the
-rail is painted from the roster row alone and never reads whether that
-person has actually signed in. The Claude subscription's own `sandbox`
-case (the `~/.claude` mount with proxy-side injection off) carries no
-such chip; nothing AWS is involved.
-
-With no click the rail states a residency only under a per-person Bedrock
-SSO roster row (`credential_source: per_user`, `mechanism: bedrock_sso`),
-which is resident whether or not that person has signed in. It's the one
-shape the roster settles on its own, and the one whose Preflight answer
-is a `422` for exactly the member who needs it. Every other deployment
-WITH A PROVIDER CONNECTED reads "Resolved at launch." and an invitation
-to press Preflight, until Preflight has run.
-
-That's deliberate: a roster can't tell which lane a run resolves — the
-run's policy and the deployment's global model configuration both move
-it. An answer given before the run is described could be confidently
-wrong in either direction, which is the defect this replaced. With no
-model provider connected the rail shows the no-provider warning instead,
-and the Preflight hint doesn't render. A run that makes no model call (a
-shell command) shows no Credentials row at all.
+- Where several providers serve the agent and none is the default, the
+  rail asks which.
+- Where no provider serves the agent it reads "Resolved at launch." and an
+  invitation to press **Preflight**, which dry-runs the exact body Launch
+  would send.
+- With no model provider connected at all the rail shows the no-provider
+  warning instead.
+- A run that makes no model call (a shell command) shows no Credentials
+  row at all.
 
 **Recording** reads `/healthz`. A stock Helm install leaves
 `persistence.enabled=false`, which renders `WARDYN_RECORDING_STORE=off` —

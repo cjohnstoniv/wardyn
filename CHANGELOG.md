@@ -28,6 +28,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Forgejo runner that registers, takes one job and exits, inside a confined run. Every command in it
   was run against a compose install.
 
+### Changed
+
+- **A run's model credential comes only from its model provider; the 0.8.2 upgrade converts 0.7.x
+  and 0.8.0 model configuration and there is no alias window (#548).** Migration `0100_model_provider_conversion`
+  runs once, in one transaction: the AI integration rows (`anthropic_api_key`,
+  `anthropic_subscription`, `openai_api_key`, `bedrock`) become model providers of the same id and
+  are then **dropped from site config**; each agent roster row's model lane joins a provider of that
+  kind (a `bedrock_sso` row's start URL, account and role become the provider's sign-in setup), and
+  the row keeps only `id`, `disabled` and `default_provider`; a workspace's
+  `llm_cred.integration_ref` becomes `provider_ref` (audited `workspace.llm_cred.migrated`); and
+  every pending AWS sign-in hold that names no provider is cancelled (`approval.cancel`, reason
+  `model_provider_conversion`). Whatever is not converted — a subscription on the operator's host
+  `~/.claude`, the `bedrock_env`/`bedrock_aws_dir` lanes, a Bedrock provider with no region, model or
+  start URL (those came from the boot environment, which a migration cannot read) — is audited
+  `model_provider.not_converted` naming it and why, and a provider created that way starts turned
+  off. No stored credential moves: each person signs in or adds their key again on their provider.
+  **Upgrade note:** take a `pg_dump` first (migrations are forward-only), then review Settings →
+  Model providers — turn on any provider the conversion left off once its region, model or start
+  URL is filled in. Removed with no alias: `POST /setup/harness-login` (a sign-in is
+  `POST /model-providers/{id}/sign-in`) and `PUT`/`DELETE /setup/harness-credential/{provider}`;
+  the roster's `mechanism`, `credential_source` and `sso_*` fields (a roster write still carrying
+  one is a `400`); `GET /setup/status`'s `model_access` and `harness` objects and the
+  `mechanism`/`credential_source`/`credential_residency` fields on its `harnesses` rows; a
+  preflight's `model_credential.mechanism`/`credential_source`/`staged_placeholder` (it now names
+  `provider`, `kind` and a `proxy`/`sandbox` residency); a run refusal's `mechanism` datum; the
+  workspace Bedrock reference; and the `harness_login_mechanism_principal` and
+  `harness_login_not_per_user` authz reasons. `llm_ready` now reads true only when an enabled model
+  provider serves a harness. Dispatch drops every model credential a policy carries that its
+  provider did not author, with or without a provider block (`run.injection.drop`, reason
+  `model_credential_not_provider_authored`), and an `env_secret` grant setting a model variable is
+  refused either way. A revive or admin "Restart with current limits" applies the same strip to the
+  run's stored proxy config, so a run dispatched before the upgrade comes back without the
+  operator's model key. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
+  and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
+  row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
+  CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
+
 ### Fixed
 
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer

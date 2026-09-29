@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -219,51 +218,23 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No cross-mechanism fallback, at the door: when the org declared how this
-	// agent reaches its model and the lane that would carry this run is not that
-	// one, refuse HERE — before a run row, an identity or a grant exists — rather
-	// than let the person watch a sandbox boot and die. With no declaration the
-	// model-access finding stays the 201 advisory it has always been (below).
-	// Writes its own 422; see enforceCreateLLMMechanism.
-	// runIdentitySubject(principalFromRequest), NEVER secretOwnerFromRequest: the
-	// subject is the secret NAMESPACE a run resolves against, and the adjacent
-	// owner helper answers "" for every operator — which would refuse an ADMIN
-	// their own per_user capture here while dispatch, reading run.CreatedBy,
-	// resolved it fine.
-	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	// refresh=true: the real launch redeems an expired-but-renewable session
-	// here, so a spent one is refused before any run exists.
-	//
-	// out is non-nil (unlike before #150): the SAME resolved lanes preflight
-	// already grades from (modelCred.Mechanism) is what
-	// credentialConfinementAdvisory below reads to know whether THIS run's
-	// model credential is the captured-AWS-SSO lane — resolving it a second
-	// way here would risk the two surfaces disagreeing about whether a run
-	// carries the advisory.
+	// The model-provider choice: the run's provider decides its lane, and one
+	// whose credential its owner does not hold is refused here rather than at
+	// dispatch. mpChoice is this run's ONLY source for ModelProviderID below and
+	// for the run.create audit snapshot (#527) — mpChoice.chosen is false, with
+	// a zero mpChoice.provider, when no provider serves this agent, so
+	// ModelProviderID freezes "" there.
 	//
 	// Ahead of the autonomy gate because that gate grades THIS resolution: the
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
-	// The model-provider choice first: with a provider block, it is the run's
-	// provider that decides its lane, and one whose credential its owner does
-	// not hold is refused here rather than at dispatch. mpChoice is
-	// this run's ONLY source for ModelProviderID below and for the run.create
-	// audit snapshot (#527) — mpChoice.chosen is false, with a zero
-	// mpChoice.provider, on every "today's path" return (no block, or a block
-	// serving no provider for this agent), so ModelProviderID freezes "" there,
-	// same as a legacy row.
 	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
 	if !ok {
 		return
 	}
-	// Under a provider block the chosen provider's arm, or nothing, credentials
-	// the run, so the roster's declared-mechanism gate, which grades the legacy
-	// lanes, does not apply; a Bedrock provider's run is graded with its
-	// owner's Bedrock credential (modelCredential).
+	// The chosen provider's arm, or nothing, credentials the run; a Bedrock
+	// provider's run is graded with its owner's Bedrock credential.
 	modelCred := mpChoice.modelCredential()
-	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, nil, ssoSubject, &modelCred, true) {
-		return
-	}
 
 	// Posture-gated autonomy, resolved ONCE and enforced at both doors
 	// (handlePreflightRun calls the SAME gate). Sited after the enforced class
@@ -410,18 +381,18 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
 	// credentialConfinementAdvisory (#150): a run whose model credential just
-	// graded as the captured-AWS-SSO lane (modelCred.Mechanism, above) but
+	// graded as the captured-AWS-SSO lane (modelCred.Kind, above) but
 	// whose enforced confinement is weaker than CC3 gets that said on every
 	// surface a person or an incident review reads — the 201, and (below) the
 	// audit row's closed-vocabulary credential_confinement field. WARN, never
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
-	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
+	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Kind)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
-	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, nil, ssoSubject, mpChoice)...)
+	warnings = append(warnings, noModelAccessWarning(req, mpChoice)...)
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
@@ -576,29 +547,20 @@ func (s *Server) repoSourceWarnings(ctx context.Context, runID uuid.UUID, spec t
 }
 
 // noModelAccessWarning is the model-resolution fail-fast, as a sentence on the
-// 201: a non-interactive harness run whose agent needs a model but has NO
-// resolvable credential boots and 404s on its FIRST model call — classically a
-// codex-cli run whose only model access is a claude-code-only managed
-// subscription.
+// 201: a non-interactive harness run whose agent needs a model but that no
+// model provider serves boots and 404s on its FIRST model call.
 //
 // WARN, never hard-reject (edge cases); the CLI already prints warnings, so the
-// operator sees it before the run wastes a sandbox. Computed on the resolved
-// spec through the SAME helper preflight's checklist uses, so the two agree.
-// Extracted from handleCreateRun for the function-size gate.
-func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest, spec types.RunPolicySpec,
-	present map[string]bool, bedrockRef *types.WorkspaceBedrockRef, ssoSubject string, mp runProviderChoice,
-) []string {
+// operator sees it before the run wastes a sandbox. Computed through the SAME
+// helper preflight's checklist uses (runLLMAccess), so the two agree.
+func noModelAccessWarning(req createRunRequest, mp runProviderChoice) []string {
 	if !runNeedsModelWarning(req) {
 		return nil
 	}
-	la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject, mp)
-	switch {
-	case la != nil && la.Provisioned:
-		return nil
-	case mp.governs && la != nil:
+	if la := runLLMAccess(req, mp); la != nil && !la.Provisioned {
 		return []string{la.Note}
 	}
-	return []string{s.noModelAccessWarningFor(req.Agent)}
+	return nil
 }
 
 // createRunAuditData assembles the run.create event's payload.
@@ -723,59 +685,16 @@ type createRunResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// resolveRunLLMAccess computes the deterministic model-access verdict for a run's
-// RESOLVED spec — the SAME computation preflight's checklist uses, shared so the
-// create-path warning and the preflight row can never disagree. It mirrors dispatch's
-// precedence (managed subscription > api-key, with an operator-Bedrock fallback) and
-// returns nil only for a non-LLM agent (nothing to resolve).
-//
-// It runs on a CLONE: reconcileLLMAccess drops orphaned grants IN PLACE, but the
-// caller's spec is still persisted/dispatched here, so it must never be mutated. The
-// grants slice is cloned because a struct copy shares the backing array and
-// slices.DeleteFunc zeroes the vacated tail in place.
-// subject is the CALLER's run-identity subject — whose captured AWS SSO session
-// this run would resolve under a per_user roster row. "" is the operator
-// namespace, i.e. every deployment that never declared per_user.
-//
-// mp is the run's model-provider choice: under a provider block the verdict is
-// the provider's alone, since no legacy lane serves the run.
-func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef, subject string, mp runProviderChoice) *composeLLMAccess {
-	if mp.governs {
-		return providerLLMAccess(req.Agent, mp)
+// runLLMAccess is the deterministic model-access verdict for a run request —
+// the SAME computation preflight's checklist uses, shared so the create-path
+// warning and the preflight row can never disagree: the chosen provider's
+// verdict, or "no provider serves it". nil for an agent Wardyn wires no model
+// credential for (nothing to resolve).
+func runLLMAccess(req createRunRequest, mp runProviderChoice) *composeLLMAccess {
+	if _, needsModel := agentLLMProvider(req.Agent); !needsModel {
+		return nil
 	}
-	llmSpec := spec
-	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
-	// Which lanes this run has available — resolved by the same helper the
-	// create-time mechanism refusal uses (resolveRunLLMLanes), so the advisory
-	// below and that refusal can never disagree about what would credential this
-	// run.
-	// The create-path advisory, not a credential door: this scope feeds
-	// resolveRunLLMAccess's reply Note and the preflight checklist row — what a
-	// run WOULD dispatch on. ok is ignored on purpose: an unreadable roster
-	// degrades the ADVICE to the legacy operator answer exactly as it always
-	// has, and nothing is written, served or deleted on it. The doors that
-	// decide where a credential is written, deleted or SERVED take ok
-	// (harnesscred.go, ssotoken.go, enforceReadableRosterForCredential).
-	ssoScope, _ := s.awsSSOScopeForAgent(ctx, req.Agent, subject)
-	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, ssoScope, false)
-	var llmAccess *composeLLMAccess
-	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), lanes.managed); note != "" {
-		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
-	}
-	// Operator-configured Bedrock credentials the run automatically: dispatch's
-	// resolveBedrockAuth OVERRIDES the per-run api-key selection at launch. Thread the
-	// picked workspace/container's bedrockRef so a per-run region/model
-	// override is honored here too — a workspace can only narrow region/model, never
-	// supply credentials — matching what launch enforces.
-	if llmAccess == nil || !llmAccess.Provisioned {
-		if ba := lanes.bedrock; ba.ready {
-			llmAccess = &composeLLMAccess{
-				Provisioned: true,
-				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",
-			}
-		}
-	}
-	return llmAccess
+	return providerLLMAccess(req.Agent, mp)
 }
 
 // runNeedsModelWarning gates the create-time model-access check: a NON-interactive
@@ -789,28 +708,4 @@ func runNeedsModelWarning(req createRunRequest) bool {
 	}
 	_, needsModel := agentLLMProvider(req.Agent)
 	return needsModel
-}
-
-// noModelAccessWarning is the create-time advisory for a run whose agent needs a
-// model but has no resolvable credential: it will boot and 404 on its first model
-// call. managedClaudePresent on a non-claude agent is the canonical trap — a
-// managed Claude subscription credentials claude-code only — so the copy names it and
-// steers to --agent claude-code.
-func noModelAccessWarning(agent string, p llmProvider, managedClaudePresent bool) string {
-	msg := fmt.Sprintf(
-		"no model credential resolves for agent %q — this run will boot and fail on its first model call (it needs %s "+
-			"access: set up a model provider for it under Settings → Model providers, and connect your own credential).",
-		agent, p.host)
-	if managedClaudePresent && agent != "claude-code" {
-		msg += " A Wardyn-managed Claude subscription is connected, but it credentials claude-code only — " +
-			"use --agent claude-code, or connect a credential for this agent."
-	}
-	return msg
-}
-
-// noModelAccessWarningFor renders the no-model-access warning for `agent`
-// against its (gateway-aware) provider and the managed-inject readiness.
-func (s *Server) noModelAccessWarningFor(agent string) string {
-	p, _ := s.llmProviderFor(agent)
-	return noModelAccessWarning(agent, p, s.managedInjectReady("claude-code"))
 }

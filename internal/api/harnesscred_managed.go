@@ -34,9 +34,7 @@ const managedTokenCacheTTL = 60 * time.Second
 // the sink, surfaced as a run failure + an aging warning in setup status).
 //
 // It is the one value cache wardynd keeps for a stored credential, and it
-// caches only a successful read: a failure is never served twice. A capture or
-// a disconnect evicts it (Server.evictManagedToken), so a replaced or deleted
-// token is not served for the rest of the minute on this replica.
+// caches only a successful read: a failure is never served twice.
 type managedCredProvider struct {
 	provider string
 	// store is the boot provider's operator-wide managed credential (the raw,
@@ -114,12 +112,6 @@ func (p *managedCredProvider) fetch(ctx context.Context) (subscription.Token, er
 	return subscription.Token{Value: blob.Token}, nil
 }
 
-func (p *managedCredProvider) evict() {
-	p.mu.Lock()
-	p.cached = subscription.Token{}
-	p.mu.Unlock()
-}
-
 // Current returns the managed token (no refresh — see type doc).
 func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
 	return p.read(secretstore.WithPurpose(ctx, secretstore.PurposeManagedToken))
@@ -127,25 +119,9 @@ func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, 
 
 // Peek reads the store like Current (no refresh side effect to avoid), but
 // neither uses nor fills the cache: its callers only ask whether a token is
-// there (managedInjectReady), so its read is recorded as a status read, and
+// there, so its read is recorded as a status read, and
 // the cache only ever holds a token read for injection.
 func (p *managedCredProvider) Peek() (subscription.Token, error) {
 	return p.fetch(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus))
 }
 
-// evictManagedToken drops the managed provider's cached token, so the next
-// resolve reads the store again.
-func (s *Server) evictManagedToken() {
-	if p, ok := s.cfg.ManagedToken.(*managedCredProvider); ok {
-		p.evict()
-	}
-}
-
-// forgetCredential lets go of what wardynd holds in memory for the credential
-// (owner, name) once it is deleted: its process-wide mask copies, which are
-// retired and then swept (secretmask.Registry.EvictGlobal), and the managed
-// token cache.
-func (s *Server) forgetCredential(owner, name string) {
-	s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
-	s.evictManagedToken()
-}

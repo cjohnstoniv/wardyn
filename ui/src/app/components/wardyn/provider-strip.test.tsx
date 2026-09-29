@@ -130,16 +130,7 @@ describe("B8, and where the strip is silent", () => {
     expect(screen.queryByText(BANNER.B1("Claude Code", "Bedrock (prod)"))).toBeNull();
   });
 
-  it("with a provider block the legacy AWS sentence never renders beside it", () => {
-    strip(
-      providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state: "live" }], {
-        model_access: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
-      }),
-    );
-    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
-  });
-
-  it("with no provider block, providerAttention is empty and today's strip speaks", () => {
+  it("with no provider block, providerAttention is empty", () => {
     expect(providerAttention(baseStatus())).toEqual([]);
   });
 });

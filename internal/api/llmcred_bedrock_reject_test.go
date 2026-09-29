@@ -15,7 +15,7 @@ import (
 // run's model provider" question had TWO implementations, and denyAlwaysReject —
 // the guard whose whole job is to refuse a deny·always that permanently breaks a
 // workspace's model access — consulted the anthropic/openai-only one. The Bedrock
-// lane is not hypothetical: resolveBedrockAuth's PREFERRED bearer mode TLS-MITMs
+// lane is not hypothetical: a Bedrock provider's bearer lane TLS-MITMs
 // bedrock-runtime and injects the Authorization header proxy-side, which is
 // exactly the "proxy-side credential injection refuses a denied host" failure the
 // guard's own message names.

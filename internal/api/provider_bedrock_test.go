@@ -107,9 +107,9 @@ func TestProviderBedrockDispatch(t *testing.T) {
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.anthropic.com", Header: "Authorization",
 				SecretName: types.ManagedOAuthSecret, Format: "Bearer %s"}},
 		})
-		if !ok || !plan.llm.injectBedrockBearer || plan.llm.bedrock.awsMount || plan.mitmLLM {
-			t.Fatalf("dispatch ok=%v bearer=%v mount=%v mitmLLM=%v (failed: %q)",
-				ok, plan.llm.injectBedrockBearer, plan.llm.bedrock.awsMount, plan.mitmLLM, st.failed)
+		if !ok || !plan.llm.injectBedrockBearer || plan.mitmLLM {
+			t.Fatalf("dispatch ok=%v bearer=%v mitmLLM=%v (failed: %q)",
+				ok, plan.llm.injectBedrockBearer, plan.mitmLLM, st.failed)
 		}
 		if len(st.grants) != 1 || len(plan.injections) != 1 {
 			t.Fatalf("grants=%d injections=%+v, want exactly the one dispatch authored", len(st.grants), plan.injections)
@@ -184,8 +184,8 @@ func TestProviderBedrockDispatch(t *testing.T) {
 		h, st, _ := brHarness(t, p)
 		env := map[string]string{}
 		plan, ok := dispatchSub(h, st, &types.RunPolicySpec{}, env, nil)
-		if !ok || !plan.llm.injectBedrockSSO || plan.llm.bedrock.awsMount {
-			t.Fatalf("dispatch ok=%v sso=%v mount=%v (failed: %q)", ok, plan.llm.injectBedrockSSO, plan.llm.bedrock.awsMount, st.failed)
+		if !ok || !plan.llm.injectBedrockSSO {
+			t.Fatalf("dispatch ok=%v sso=%v (failed: %q)", ok, plan.llm.injectBedrockSSO, st.failed)
 		}
 		if len(st.grants) != 1 || plan.injections[0].Rule.SecretName != types.AWSSSOAccessTokenSecret {
 			t.Fatalf("grants=%d injections=%+v, want the one session grant", len(st.grants), plan.injections)
@@ -397,11 +397,10 @@ func TestProviderBedrockKeySink(t *testing.T) {
 		})
 	}
 
-	t.Run("the roster's bedrock-api-key never resolves on a provider run", func(t *testing.T) {
+	t.Run("a grant naming bedrock-api-key never resolves on a provider run", func(t *testing.T) {
 		h, st, _ := brAuthored(t, brBearerProvider())
 		raw, _ := json.Marshal(map[string]any{
 			"host": host, "header": "Authorization", "format": "Bearer %s", "secret_name": bedrockAPIKeySecret,
-			"snapshot": bedrockBearerSnapshotOf(awsSSOScope{}),
 		})
 		st.grants[0].Spec.Scope = raw
 		code, body := resolveBR(t, h, st, host)
@@ -607,7 +606,7 @@ func TestProviderBedrockSandboxSpecCarriesNoHostAWSCredential(t *testing.T) {
 // Only bedrock_sso is resident; the key, endpoint, subscription and bearer
 // arms leave the sandbox a placeholder the proxy replaces.
 func TestProviderChoiceModelCredential(t *testing.T) {
-	if got := (runProviderChoice{governs: true}).modelCredential(); got != (modelCredentialFacts{}) {
+	if got := (runProviderChoice{}).modelCredential(); got != (modelCredentialFacts{}) {
 		t.Errorf("no provider chosen: facts = %+v, want zero", got)
 	}
 	openai := keyProvider("openai", "codex-cli")
@@ -623,17 +622,16 @@ func TestProviderChoiceModelCredential(t *testing.T) {
 		{brBearerProvider(), residencyProxy},
 		{brSSOProvider(), residencySandbox},
 	} {
-		got := runProviderChoice{provider: tc.p, chosen: true, governs: true}.modelCredential()
-		if got.Mechanism != string(tc.p.Kind) || got.Residency != tc.want ||
-			got.CredentialSource != string(types.CredentialSourcePerUser) || got.StagedPlaceholder {
-			t.Errorf("%s: facts = %+v, want mechanism %s, residency %s, per_user", tc.p.Kind, got, tc.p.Kind, tc.want)
+		got := runProviderChoice{provider: tc.p, chosen: true}.modelCredential()
+		if got.Provider != tc.p.ID || got.Kind != string(tc.p.Kind) || got.Residency != tc.want {
+			t.Errorf("%s: facts = %+v, want provider %s, kind %s, residency %s", tc.p.Kind, got, tc.p.ID, tc.p.Kind, tc.want)
 		}
 	}
 }
 
 // TestProviderRunCredentialFactsOnReview (#983 item 2): Review publishes a
 // chosen provider's model_credential, and both doors warn the same way about
-// an AWS sign-in delivered below CC3 — the advisory reads the same Mechanism.
+// an AWS sign-in delivered below CC3 — the advisory reads the same Kind.
 func TestProviderRunCredentialFactsOnReview(t *testing.T) {
 	const admin = "sub-admit-admin"
 	for _, tc := range []struct {
@@ -675,8 +673,7 @@ func TestProviderRunCredentialFactsOnReview(t *testing.T) {
 					}
 					continue
 				}
-				want := modelCredentialFacts{Mechanism: string(tc.p.Kind), Residency: tc.want,
-					CredentialSource: string(types.CredentialSourcePerUser)}
+				want := modelCredentialFacts{Provider: tc.p.ID, Kind: string(tc.p.Kind), Residency: tc.want}
 				if got.ModelCredential == nil || *got.ModelCredential != want {
 					t.Errorf("preflight model_credential = %+v, want %+v", got.ModelCredential, want)
 				}

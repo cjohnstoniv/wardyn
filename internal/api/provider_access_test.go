@@ -20,10 +20,9 @@ import (
 )
 
 // provider_access_test.go: MP-12's per-provider grading (SetupProviderAccess),
-// generalising SetupModelAccess's single hardcoded AWS-SSO lane to every kind
-// a person may be granted. The grading tests read through providerAccessFor/
-// setupProviderAccess — the functions GET /setup/status calls — never the lower
-// helpers (awsSSOCredentialState, ownSecret) directly;
+// for every kind a person may be granted. The grading tests read through
+// providerAccessFor/setupProviderAccess — the functions GET /setup/status
+// calls — never the lower helpers (awsSSOCredentialState, ownSecret) directly;
 // TestSetupStatusProviderAccess reads it off the endpoint itself.
 
 const paOwner = "alice@example.com"
@@ -93,8 +92,8 @@ func TestProviderAccess_KeyKinds_OwnNamespaceOnly(t *testing.T) {
 }
 
 // TestProviderAccess_AnthropicSubscription walks not_configured -> live ->
-// expiring (harnessTokenAging, the SAME conservative age heuristic
-// SetupHarness.Aging already uses) for a per-person Claude sign-in.
+// expiring (harnessTokenAging, a conservative age heuristic) for a
+// per-person Claude sign-in.
 func TestProviderAccess_AnthropicSubscription(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	now := time.Now().UTC()
@@ -127,8 +126,7 @@ func TestProviderAccess_AnthropicSubscription(t *testing.T) {
 // TestProviderAccess_BedrockSSO reuses awsSSOCredentialState's own vocabulary
 // (not_configured / live / expired_signin) over a provider-scoped read, then
 // the provider's own account/role pin turning a live, renewable session for
-// the WRONG identity into expired_signin — the same substitution
-// setupModelAccess's roster-pin arm makes, moved onto the provider record.
+// the WRONG identity into expired_signin.
 func TestProviderAccess_BedrockSSO(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	now := awsSSOTestFixedNow
@@ -326,26 +324,22 @@ func TestProviderAccessCheck_NotDefaultNotConfiguredIsInfo(t *testing.T) {
 	}
 }
 
-// TestLLMProviderCheck_ProviderArm: with no legacy signal, a provider block
-// granting this caller providers is not "no model/harness provider
-// configured" — the LLM access row answers from provider_access instead.
+// TestLLMProviderCheck_ProviderArm: a provider block granting this caller
+// providers is not "no model provider serves you" — the LLM access row answers
+// from provider_access.
 func TestLLMProviderCheck_ProviderArm(t *testing.T) {
 	row := func(id, state string) SetupProviderAccess { return SetupProviderAccess{Provider: id, State: state} }
-	missing := llmProviderCheck("", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotConfigured), row("b", modelAccessExpiredSignin)})
+	missing := llmProviderCheck([]SetupProviderAccess{row("a", modelAccessNotConfigured), row("b", modelAccessExpiredSignin)})
 	if missing.Status != "warn" || missing.Detail != providerAccessLLMMissingDetail || missing.Fix != providerAccessLLMMissingFix {
 		t.Errorf("no usable provider: got %+v, want the warn arm", missing)
 	}
-	live := llmProviderCheck("", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotConfigured), row("b", modelAccessLive), row("c", modelAccessExpiring)})
+	live := llmProviderCheck([]SetupProviderAccess{row("a", modelAccessNotConfigured), row("b", modelAccessLive), row("c", modelAccessExpiring)})
 	if live.Status != "ok" || live.Detail != "Model providers you can run on now: b, c." || live.Fix != "" {
 		t.Errorf("b live, c expiring: got %+v, want ok naming b and c", live)
 	}
-	mech := llmProviderCheck("", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotApplicable)})
+	mech := llmProviderCheck([]SetupProviderAccess{row("a", modelAccessNotApplicable)})
 	if mech.Status != "info" || mech.Detail != providerAccessMechanismDetail {
 		t.Errorf("mechanism principal: got %+v, want info", mech)
-	}
-	// The legacy winning signal still outranks the provider arm (until MP-4).
-	if got := llmProviderCheck("legacy lane", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotConfigured)}); got.Status != "ok" || got.Detail != "legacy lane" {
-		t.Errorf("legacy signal: got %+v, want it unchanged", got)
 	}
 	for _, chk := range []SetupCheck{missing, live, mech} {
 		assertSetupCheckBlocking(t, chk)
@@ -359,7 +353,7 @@ func TestLLMProviderCheck_ProviderArm(t *testing.T) {
 func TestSetupStatusProviderAccess(t *testing.T) {
 	p := paKeyProvider("anthropic", types.ModelProviderAnthropicAPIKey)
 	site := types.SiteConfig{ModelProviders: providerBlock(p),
-		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey})}
+		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code"})}
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
 	sec := srv.cfg.Secrets.(*memSecrets)
 	status := func(t *testing.T, sub string) SetupStatus {

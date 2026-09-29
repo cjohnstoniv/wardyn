@@ -289,10 +289,10 @@ export async function mockMemberRole(page: Page): Promise<void> {
 // which is how W6-3's security-admin twin survived a green suite.
 //
 // A MIRROR of redactSetupStatusForUser's structural drops, not a re-derivation
-// of its value projections: `integrations`, `harness` and `model_access` are
-// reduced server-side by rules whose inputs (own-AWS-row scoping, the graded
-// blob's tier) this side cannot see, and inventing them here would prove a
-// render against a body no server produces. The drops below are the ones the
+// of its value projections: `integrations` and `provider_access` are reduced
+// server-side by rules whose inputs (the caller's own stored credentials) this
+// side cannot see, and inventing them here would prove a render against a body
+// no server produces. The drops below are the ones the
 // console branches on, and each is exactly what that function writes.
 export async function mockMemberSetupStatus(page: Page): Promise<void> {
   // CACHE-AND-SERVE, not route.fetch()+refulfill per match — the same reason

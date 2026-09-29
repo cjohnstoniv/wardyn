@@ -60,7 +60,7 @@ func TestHarnessLogin_ALockWaitThatExpiresRefusesBeforeAnythingIsStarted(t *test
 	before := len(f.store.runs)
 	f.store.mu.Unlock()
 
-	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/setup/harness-login", sess, `{"provider":"aws"}`)
+	w := doSSO(t, f.srv, http.MethodPost, awsSSOSignInPath, sess, "")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code = %d, want 503 — an unserialized sign-in must not proceed; body=%s", w.Code, w.Body.String())
 	}
@@ -145,7 +145,7 @@ func TestUploadSSOToken_ALockWaitThatExpiresStoresNothing(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code = %d, want 503 — an unserialized capture must not store; body=%s", w.Code, w.Body.String())
 	}
-	if _, stored := sec.m[harnessCredSecretName(awsSSOProvider)]; stored {
+	if _, stored := uploadedBlob(sec, uploadOwner); stored {
 		t.Error("the capture was stored without the per-person lock")
 	}
 	var refused *types.AuditEvent

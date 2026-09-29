@@ -232,8 +232,8 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
     expect(RESIDENCY_META.control_plane.label).not.toBe(RESIDENCY_META.varies.label);
   });
 
-  it("BEDROCK_LANE_META covers all four lanes and points each at a residency kind", () => {
-    for (const lane of ["bearer", "sso", "aws_dir", "static"] as const) {
+  it("BEDROCK_LANE_META covers all three lanes and points each at a residency kind", () => {
+    for (const lane of ["bearer", "aws_dir", "static"] as const) {
       expect(RESIDENCY_META[BEDROCK_LANE_META[lane].residency]).toBeDefined();
     }
     // Raw access keys are env vars, not a mounted file — the one lane that

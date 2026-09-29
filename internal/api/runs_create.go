@@ -290,12 +290,10 @@ const credentialConfinementBelowFloor = "below_floor"
 // able to launch — adding a refusal here would break every single-class
 // deployment.
 //
-// ssoDelivered is the caller's own answer to "did this run's model credential
-// resolve to the captured-AWS-SSO lane" (selectedMechanism ==
-// types.AgentMechanismBedrockSSO, i.e. resolveBedrockAuth's ssoInject arm) —
-// resolved once by the caller from the SAME lane resolution the
-// model-credential grade already ran (modelCredentialFacts.Mechanism), never
-// re-derived here. Pure, with the same purity contract as enforcedConfinement,
+// ssoDelivered is the caller's own answer to "is this run's model credential
+// the captured-AWS-SSO lane" (the chosen provider's kind is bedrock_sso) —
+// taken once by the caller from the SAME choice the model-credential grade
+// already made (modelCredentialFacts.Kind), never re-derived here. Pure, with the same purity contract as enforcedConfinement,
 // so it is called from both the launch path and the preflight path off the
 // same resolved body — the two can never disagree about whether a run carries
 // the advisory.
@@ -315,10 +313,10 @@ func credentialConfinementAdvisory(spec types.RunPolicySpec, enforced types.Conf
 // around credentialConfinementAdvisory (runs.go's handleCreateRun and
 // preflight.go's handlePreflightRun): append the sentence to warnings when it
 // fires, and report whether it did, since the create path's audit row needs
-// that same answer for credential_confinement. mechanism is the resolved
-// modelCredentialFacts.Mechanism both callers already have in hand.
-func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicySpec, enforced types.ConfinementClass, mechanism string) ([]string, bool) {
-	advisory := credentialConfinementAdvisory(spec, enforced, mechanism == string(types.AgentMechanismBedrockSSO))
+// that same answer for credential_confinement. kind is the chosen provider's
+// modelCredentialFacts.Kind both callers already have in hand.
+func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicySpec, enforced types.ConfinementClass, kind string) ([]string, bool) {
+	advisory := credentialConfinementAdvisory(spec, enforced, kind == string(types.ModelProviderBedrockSSO))
 	if advisory == "" {
 		return warnings, false
 	}

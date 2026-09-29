@@ -93,7 +93,7 @@ func TestProviderEnvSecret_DispatchEveryArm(t *testing.T) {
 					msg := fmt.Sprintf(mpRunModelEnvSecret, "operator-model-key", name)
 					want := map[string]any{"error": msg, "provider": "", "variable": name, "grant": "operator-model-key"}
 					if sc.chosen {
-						want["provider"], want["kind"], want["mechanism"] = k.p.ID, string(k.p.Kind), string(k.p.Kind)
+						want["provider"], want["kind"] = k.p.ID, string(k.p.Kind)
 					}
 					if st.failed != msg {
 						t.Errorf("failure hint = %q, want %q", st.failed, msg)
@@ -116,9 +116,10 @@ func TestProviderEnvSecret_DispatchEveryArm(t *testing.T) {
 	}
 }
 
-// TestProviderEnvSecret_NoBlockUnchanged: with no provider block the legacy
-// path places the same grant exactly as before.
-func TestProviderEnvSecret_NoBlockUnchanged(t *testing.T) {
+// TestProviderEnvSecret_NoBlockRefusedToo: with no provider block there is no
+// legacy path left to place the grant (#548) — a model run's credential comes
+// only from its model provider, so the same grant is refused the same way.
+func TestProviderEnvSecret_NoBlockRefusedToo(t *testing.T) {
 	st := &subStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: subOwner}}
 	h, sec := newSecretsHarness(t)
 	h.srv.cfg.Store = st
@@ -126,11 +127,15 @@ func TestProviderEnvSecret_NoBlockUnchanged(t *testing.T) {
 	policy := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{envSecretGrant("AWS_ACCESS_KEY_ID", "operator-aws-key")}}
 	env := map[string]string{}
 	if _, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{}, &policy, env, nil, joinProxyURL,
-		artifactRedirectPlan{}, false, types.SiteConfig{}, true, false, bedrockCredUngraded()); !ok {
-		t.Fatalf("legacy dispatch refused: %q", st.failed)
+		artifactRedirectPlan{}, false, types.SiteConfig{}, true, false, bedrockCredUngraded()); ok {
+		t.Fatal("dispatch placed a model-credential env_secret with no provider block")
 	}
-	if placed := h.srv.resolveEnvSecretGrants(context.Background(), st.run, policy, env); !slices.Equal(placed, []string{"AWS_ACCESS_KEY_ID"}) {
-		t.Errorf("placed %v, want AWS_ACCESS_KEY_ID as today", placed)
+	msg := fmt.Sprintf(mpRunModelEnvSecret, "operator-aws-key", "AWS_ACCESS_KEY_ID")
+	if st.failed != msg {
+		t.Errorf("failure hint = %q, want %q", st.failed, msg)
+	}
+	if _, set := env["AWS_ACCESS_KEY_ID"]; set {
+		t.Error("AWS_ACCESS_KEY_ID reached the sandbox env")
 	}
 }
 
@@ -154,8 +159,8 @@ func assertOneRunCreateFailure(t *testing.T, h *harness, want map[string]any) {
 // provider and kind when a provider was chosen, the sentence naming the grant
 // and the variable, and the generic model_provider_unavailable reason (#656
 // slice 3), never llmRefusalAuditReason since no sign-in repairs THIS cause —
-// and admit an ordinary env_secret; with no block, the same grant is admitted
-// as before.
+// and admit an ordinary env_secret; with no block, the same grant is refused
+// too.
 func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 	happy, noProvider := joinScenarios()[0], joinScenarios()[6]
 	inline := func(k joinKind, sc joinScenario, grants ...types.GrantSpec) string {
@@ -217,8 +222,10 @@ func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 			// An SSO admin session is in the Admin view and cannot launch
 			// (refuseAdminViewLaunch); the token lane still can.
 			w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, "sub-admit-admin"), string(b))
-			if w.Code != map[string]int{"/api/v1/runs": http.StatusCreated, "/api/v1/runs/preflight": http.StatusOK}[path] {
-				t.Errorf("%s with no block = %d %s, want it admitted as before", path, w.Code, w.Body.String())
+			var got errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &got)
+			if want := (errorBody{Error: fmt.Sprintf(mpRunModelEnvSecret, "operator-aws-key", "AWS_ACCESS_KEY_ID"), Reason: string(authz.ReasonModelProviderUnavailable)}); w.Code != http.StatusUnprocessableEntity || got != want {
+				t.Errorf("%s with no block = %d %s, want 422 %+v", path, w.Code, w.Body.String(), want)
 			}
 		}
 	})

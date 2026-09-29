@@ -58,7 +58,7 @@ func TestPG_LoginSupersedeSlowStoreRefusesTheNextSignIn(t *testing.T) {
 	pool := throwawayPGPool(t)
 	st := &slowSupersedeStore{
 		PG:      store.NewPG(pool),
-		site:    agentRoster(perUserAWSRow()),
+		site:    awsSSOTestSite(),
 		parked:  make(chan struct{}),
 		release: make(chan struct{}),
 	}
@@ -103,7 +103,7 @@ func TestPG_LoginSupersedeSlowStoreRefusesTheNextSignIn(t *testing.T) {
 	// The second takes the lock and parks inside its supersede pass.
 	second := make(chan int, 1)
 	go func() {
-		second <- doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", sess, `{"provider":"aws"}`).Code
+		second <- doSSO(t, srv, http.MethodPost, awsSSOSignInPath, sess, "").Code
 	}()
 	select {
 	case <-st.parked:
@@ -117,7 +117,7 @@ func TestPG_LoginSupersedeSlowStoreRefusesTheNextSignIn(t *testing.T) {
 
 	// The third meets the held lock: refused after the wait, not queued behind it.
 	started := time.Now()
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", sess, `{"provider":"aws"}`)
+	w := doSSO(t, srv, http.MethodPost, awsSSOSignInPath, sess, "")
 	took := time.Since(started)
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), signInBusyRefusal) {
 		t.Fatalf("third sign-in = %d %s, want 503 carrying %q", w.Code, w.Body.String(), signInBusyRefusal)

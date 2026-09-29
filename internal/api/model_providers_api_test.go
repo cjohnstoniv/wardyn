@@ -487,8 +487,8 @@ func TestSetupStatusModelProviders(t *testing.T) {
 	site := types.SiteConfig{
 		ModelProviders: providerBlock(endpointProvider(), sso, keyProvider("anthropic", "claude-code"), keyProvider("unused")),
 		AgentProviders: agentBlock(
-			types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, DefaultProvider: "corp-gateway"},
-			types.AgentProvider{ID: "codex-cli", Mechanism: types.AgentMechanismOpenAIAPIKey},
+			types.AgentProvider{ID: "claude-code", DefaultProvider: "corp-gateway"},
+			types.AgentProvider{ID: "codex-cli"},
 		),
 	}
 	// Every member is denied Codex CLI.
@@ -551,7 +551,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 	// case, which stays absent.
 	t.Run("an agent the roster turns off is not offered, but the key is present as []", func(t *testing.T) {
 		off := site
-		off.AgentProviders = agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, Disabled: true})
+		off.AgentProviders = agentBlock(types.AgentProvider{ID: "claude-code", Disabled: true})
 		off.ModelProviders = providerBlock(keyProvider("anthropic", "claude-code"))
 		w := do(t, modelProvidersStatusSrv(t, off, &capStore{}), http.MethodGet, "/api/v1/setup/status", adminToken, "")
 		if !strings.Contains(w.Body.String(), `"model_providers":[]`) {
@@ -623,7 +623,7 @@ func TestSetupStatusModelProvidersAbsentVsEmpty(t *testing.T) {
 	t.Run("a block exists, granting this caller nothing: empty array", func(t *testing.T) {
 		site := types.SiteConfig{
 			ModelProviders: providerBlock(keyProvider("anthropic", "claude-code")),
-			AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey, Disabled: true}),
+			AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Disabled: true}),
 		}
 		srv := modelProvidersStatusSrv(t, site, &capStore{})
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
@@ -646,8 +646,8 @@ func TestSetupStatusModelProvidersAbsentVsEmpty(t *testing.T) {
 // agent chooses a provider (run_model_provider.go).
 func TestRunCreateUnderAnUnservingProviderBlock(t *testing.T) {
 	providers := providerBlock(keyProvider("codex", "codex-cli"))
-	row := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}
-	codex := types.AgentProvider{ID: "codex-cli", Mechanism: types.AgentMechanismOpenAIAPIKey, DefaultProvider: "codex"}
+	row := types.AgentProvider{ID: "claude-code"}
+	codex := types.AgentProvider{ID: "codex-cli", DefaultProvider: "codex"}
 	for _, tc := range []struct {
 		name string
 		site types.SiteConfig

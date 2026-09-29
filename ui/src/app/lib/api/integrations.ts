@@ -26,7 +26,6 @@
 import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
 import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType } from "../integrations";
 import { deriveProviders, LANE_META, patLaneMeta, slugHost, type Lane } from "../scm-provider";
-import { relativeTime, clockTime } from "../format";
 import type { SetupStatus, SiteConfig } from "../types";
 import { setup as setupApi } from "./setup";
 import { health } from "./health";
@@ -68,9 +67,6 @@ export interface IntegrationRow {
   posture: Posture;
   /** Secret name(s) this row is backed by — rotate/delete act on these. */
   secretNames: string[];
-  /** Set when the credential is a harness login (rotate/delete use harnessAuth,
-   *  not the generic secret store) rather than a plain secret. */
-  harnessProvider?: string;
   aiType?: AiType;
   /** anthropic_subscription only: which of the two lanes this row is. */
   hostCli?: boolean;
@@ -160,22 +156,15 @@ export function aiResidency(type: AiType, hostCli: boolean | undefined, lane: Be
   return "proxy_injected"; // anthropic_api_key / openai_api_key
 }
 
-// Which of the currently-derived AI rows already "holds" the default for a
-// capability slot (its own matrix's `def` flag for that capability) — used by
-// the Add dialog to preview a "replaces <name>" note instead of guessing.
-export function defaultHolder(rows: IntegrationRow[], capability: RegExp): IntegrationRow | undefined {
-  return rows.find((r) => r.chips.some((c) => !c.muted && capability.test(c.label) && c.label.includes("· default")));
-}
-
-// resolveBedrockAuth's precedence (internal/api/runs_bedrock.go): bearer >
-// AWS SSO session > host ~/.aws mount > static access keys. Undefined when
-// only region/model are set — no credential lane is actually active yet.
+// The boot-configured Bedrock lane that is present: bearer > host ~/.aws mount
+// > static access keys. Undefined when only region/model are set — no
+// credential lane is present yet. Since 0.8 none of them credentials a run (a
+// run's Bedrock credential is its model provider's); an AWS sign-in is a
+// provider's, never a row here.
 function activeBedrockLane(status: SetupStatus): BedrockLane | undefined {
   const b = status.bedrock;
   if (!b) return undefined;
-  const sso = status.harness?.find((h) => h.provider === "aws" && h.captured && !h.expired);
   if (b.bearer_present) return "bearer";
-  if (sso) return "sso";
   if (b.aws_mount) return "aws_dir";
   if (b.creds_present) return "static";
   return undefined;
@@ -247,29 +236,6 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
     });
   }
 
-  const managed = status.harness?.find((h) => h.provider === "anthropic" && h.captured);
-  if (managed) {
-    rows.push({
-      id: "ai:anthropic_subscription:managed",
-      serverId: aiServerId("anthropic_subscription", false),
-      category: "ai_provider",
-      name: aiRowName("anthropic_subscription", false),
-      typeLabel: subscriptionTypeLabel(false),
-      chips: capabilityChips("anthropic_subscription", false),
-      residency: aiResidency("anthropic_subscription", false, undefined),
-      posture: managed.aging
-        ? { kind: "reconnect_soon" }
-        : managed.captured_at
-          ? { kind: "captured", ageLabel: relativeTime(managed.captured_at) }
-          : { kind: "configured" },
-      secretNames: [],
-      harnessProvider: "anthropic",
-      aiType: "anthropic_subscription",
-      hostCli: false,
-      checkIds: ["harness_credential", "claude_subscription_staging"],
-    });
-  }
-
   const bedrock = status.bedrock;
   // RIDER B7-F6: a member's SetupStatus carries bedrock as {ready} ONLY (the
   // region/model/lane booleans are the operator's host posture, redacted
@@ -278,15 +244,8 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   const bedrockConfigured = !!(bedrock && (bedrock.ready || bedrock.region || bedrock.model || bedrock.creds_present || bedrock.aws_mount || bedrock.bearer_present));
   if (bedrockConfigured) {
     const lane = activeBedrockLane(status);
-    const sso = status.harness?.find((h) => h.provider === "aws" && h.captured);
     let posture: Posture = { kind: "configured" };
     if (!bedrock!.ready && (!bedrock!.region || !bedrock!.model)) posture = { kind: "region_model_unset" };
-    else if (lane === "sso" && sso) {
-      posture =
-        sso.expired || !sso.expires_at
-          ? { kind: "reconnect_soon" }
-          : { kind: "session_expires", when: clockTime(sso.expires_at) };
-    }
     rows.push({
       id: "ai:bedrock",
       serverId: aiServerId("bedrock"),
@@ -297,7 +256,6 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       residency: aiResidency("bedrock", undefined, lane),
       posture,
       secretNames: bedrockSecretNames(lane, present),
-      harnessProvider: lane === "sso" ? "aws" : undefined,
       aiType: "bedrock",
       bedrockLane: lane,
       checkIds: ["bedrock_provider"],

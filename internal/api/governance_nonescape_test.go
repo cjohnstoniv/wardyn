@@ -850,15 +850,18 @@ func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
 		_, spec, _, _ := runWalledDispatch(t, walledDispatch{
 			deny: walled,
 			policy: types.RunPolicySpec{
-				AllowedDomains:      []string{"api.anthropic.com", "api.corp.example"},
+				AllowedDomains:      []string{"artifacts.example.net", "api.corp.example"},
 				MinConfinementClass: types.CC2,
 			},
+			// The unwalled one is NOT a model host: a model credential comes only
+			// from the run's model provider, so dispatch strips any other author's
+			// injection there (dropLegacyModelInjections) whatever the profile.
 			injections: []runner.InjectionGrant{
 				{GrantID: uuid.New(), Rule: egress.InjectionRule{
 					Host: "api.corp.example", Header: "Authorization", SecretName: govCorpSecret, Format: "Bearer %s",
 				}},
 				{GrantID: uuid.New(), Rule: egress.InjectionRule{
-					Host: "api.anthropic.com", Header: "Authorization", SecretName: govCorpSecret, Format: "Bearer %s",
+					Host: "artifacts.example.net", Header: "Authorization", SecretName: govCorpSecret, Format: "Bearer %s",
 				}},
 			},
 		})
@@ -866,8 +869,8 @@ func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
 		if slices.Contains(hosts, "api.corp.example") {
 			t.Errorf("injection hosts = %v — an operator secret is presented on a host this principal's profile denies", hosts)
 		}
-		if !slices.Contains(hosts, "api.anthropic.com") {
-			t.Errorf("injection hosts = %v — an UNWALLED injection was dropped; the run loses its model credential", hosts)
+		if !slices.Contains(hosts, "artifacts.example.net") {
+			t.Errorf("injection hosts = %v — an UNWALLED injection was dropped", hosts)
 		}
 	})
 }

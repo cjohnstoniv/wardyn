@@ -34,17 +34,19 @@ vi.mock("../../attach-terminal", () => ({
   }),
 }));
 const harnessLoginMock = vi.fn();
-vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: {
-    harnessLogin: (...a: unknown[]) => harnessLoginMock(...a),
-    harnessCredentialPaste: vi.fn(),
+// The pane launches and stores through the provider door (#548: the only
+// door), adapted to the mocks below: a launch resolves the run id, a
+// capture passes the token.
+vi.mock("../../../lib/api/model-provider-signin", () => ({
+  modelProviderSignIn: {
+    startSignIn: (...a: unknown[]) => Promise.resolve(harnessLoginMock(...a)).then((runId: unknown) => ({ runId, state: "PENDING" })),
+    captureSignIn: vi.fn(),
   },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn() } }));
 
 import { HarnessLoginPane, type HarnessLoginPaneHandle } from "./harness-login-pane";
-import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
 import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import { makeRun } from "../../../../test/factories";
@@ -66,8 +68,7 @@ describe("a REFUSED launch offers no retry (U-11)", () => {
 
   it("a 409 shows the refusal and NO Try again", async () => {
     harnessLoginMock.mockRejectedValue(new HttpError(409, "sign-in is refused in the member preview"));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("sign-in is refused in the member preview");
     expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
@@ -79,8 +80,7 @@ describe("a REFUSED launch offers no retry (U-11)", () => {
   // move — a 500, a dropped socket, a bad start URL.
   it("a 500 keeps Try again", async () => {
     harnessLoginMock.mockRejectedValue(new HttpError(500, "control plane unreachable"));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("control plane unreachable");
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
@@ -91,52 +91,10 @@ describe("a REFUSED launch offers no retry (U-11)", () => {
     harnessLoginMock.mockRejectedValueOnce(new HttpError(500, "control plane unreachable"));
     harnessLoginMock.mockResolvedValue("run-123");
     vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
     await screen.findByRole("alert");
     await userEvent.click(screen.getByRole("button", { name: /try again/i }));
     expect(await screen.findByTestId("login-sandbox-starting")).toBeInTheDocument();
-  });
-});
-
-// U-8 (W6 blind lens) — the aws blurb asked the reader to give Wardyn their
-// organization's access portal URL, under a managed row where there is no field,
-// the server ignores a supplied one, and the intro one line above has just said
-// there is nothing to enter.
-describe("the aws blurb under a managed access portal (U-8)", () => {
-  async function blurbAfterStart(startURLManaged: boolean) {
-    harnessLoginMock.mockReset().mockResolvedValue("run-123");
-    vi.mocked(runsApiMocked.getRun)
-      .mockReset()
-      .mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
-    const { container } = render(
-      <HarnessLoginPane
-        provider="aws"
-        startURLManaged={startURLManaged}
-        onDone={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-    if (!startURLManaged) {
-      await userEvent.type(screen.getByLabelText("AWS access portal start URL"), "https://acme.awsapps.com/start");
-    }
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-    await screen.findByTestId("login-sandbox-starting");
-    return container.textContent ?? "";
-  }
-
-  it("a managed row says the portal is already set, never asks for it", async () => {
-    const text = await blurbAfterStart(true);
-    expect(text).toContain(AWS_BLURB_MANAGED_OPENING);
-    expect(text).not.toContain("Give Wardyn your organization");
-    // The rest of the blurb is unchanged — same sandbox, same config, same command.
-    expect(text).toContain("holding just that URL and the configured SSO region");
-  });
-
-  it("the ordinary Settings flow still asks for it", async () => {
-    const text = await blurbAfterStart(false);
-    expect(text).toContain("Give Wardyn your organization");
-    expect(text).not.toContain(AWS_BLURB_MANAGED_OPENING);
   });
 });
 
@@ -162,8 +120,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
       status_detail: detail,
       status_reason: "ImagePullBackOff",
     }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent(detail);
@@ -196,8 +153,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
         state: "FAILED",
         failure_hint: "docker: pull ghcr.io/example/agent-aws-sso:0.8.0: manifest unknown",
       }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     const starting = await screen.findByTestId("login-sandbox-starting");
     expect(starting).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE);
@@ -219,8 +175,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
       status_detail: "agent: CrashLoopBackOff: back-off restarting failed container",
       status_reason: "CrashLoopBackOff",
     }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
@@ -239,8 +194,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
       status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
       status_reason: "ImagePullBackOff",
     }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent("agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied");
@@ -260,8 +214,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
       await screen.findByTestId("login-sandbox-starting");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(RUN_POLL_SLOW_START_MS + 5_000);
@@ -282,8 +235,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "STARTING" }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
       await screen.findByTestId("login-sandbox-starting");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(RUN_POLL_SLOW_START_MS + 5_000);
@@ -317,8 +269,7 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
       failure_hint:
         "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
     }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent("agent: ImagePullBackOff: rpc error: pull access denied");
@@ -334,8 +285,7 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
       failure_hint:
         "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
     }));
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
 
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent("pull access denied");
@@ -366,8 +316,7 @@ describe("a dismissal from outside the pane still ends the login run", () => {
     harnessLoginMock.mockResolvedValue("run-abc");
     const onCancel = vi.fn();
     const ref = React.createRef<HarnessLoginPaneHandle>();
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={onCancel} paneRef={ref} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={onCancel} paneRef={ref} />);
     await screen.findByTestId("login-sandbox-starting");
 
     await act(async () => ref.current?.cancel());
@@ -379,8 +328,7 @@ describe("a dismissal from outside the pane still ends the login run", () => {
     let answer: (id: string) => void = () => {};
     harnessLoginMock.mockReturnValue(new Promise<string>((resolve) => (answer = resolve)));
     const ref = React.createRef<HarnessLoginPaneHandle>();
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} paneRef={ref} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} paneRef={ref} />);
 
     // Dismissed while the POST is still in flight: nothing has an id yet.
     await act(async () => ref.current?.cancel());
@@ -413,8 +361,7 @@ describe("the provider tab opens only from the Open button (#628)", () => {
   });
 
   async function attachAws() {
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
     await screen.findByTestId("fake-terminal");
   }
 
@@ -459,8 +406,7 @@ describe("the provider tab opens only from the Open button (#628)", () => {
 
   it("the Claude door has the same ready state, with no device code and no printed link", async () => {
     const oauth = "https://claude.ai/oauth/authorize?code=true&client_id=abc&response_type=code&state=xyz";
-    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="claude-sub" provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
     await screen.findByTestId("fake-terminal");
     expect(screen.getByTestId("signin-progress")).toHaveTextContent(SIGNIN_PROGRESS.STEP_WAIT("Claude"));
     await act(async () => lastAttachOutput?.(`${oauth}\n`));

@@ -21,7 +21,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 import { GettingStarted, OnboardingScreen, onboardingSeen, markOnboardingSeen } from "./onboarding-screen";
-import { baseStatus } from "../../../lib/test-fixtures";
+import { MODEL_PROVIDERS, baseStatus } from "../../../lib/test-fixtures";
 import { RoleProvider } from "../../wardyn/operator-context";
 
 // This suite's own pins: ready, CC1-only runner, a logged-in Claude CLI, and a
@@ -67,12 +67,15 @@ describe("OnboardingScreen (welcome hero)", () => {
   });
 
   it("surfaces live readiness from the status prop (barrier tier + connected model)", () => {
-    render(<OnboardingScreen onGetStarted={() => {}} status={status()} />);
+    render(
+      <OnboardingScreen
+        onGetStarted={() => {}}
+        status={status({ llm_ready: true, model_providers: [MODEL_PROVIDERS.bedrock] })}
+      />,
+    );
     expect(screen.getByText(/Barrier: Fence ready/)).toBeInTheDocument();
-    // llmLabel now names the resolved default integration row itself (see
-    // intro.tsx's deriveReadiness) rather than an ad hoc "Claude connected"
-    // string — this fixture's host-CLI subscription row is named accordingly.
-    expect(screen.getByText(/Model: Claude subscription \(host CLI\)/)).toBeInTheDocument();
+    // llmLabel names the model provider llm_ready counted (deriveReadiness).
+    expect(screen.getByText(/Model: Bedrock \(prod\)/)).toBeInTheDocument();
   });
 
   it("the not-ready barrier chip still carries its subject — never a bare 'Needs setup'", () => {

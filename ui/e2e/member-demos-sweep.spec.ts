@@ -60,22 +60,18 @@ const UNWALKABLE = [
 // or UNWALKABLE id's absence actually has to prove is missing.
 const TITLE = Object.fromEntries(DEMOS.map((d) => [d.id, d.title])) as Record<DemoId, string>;
 
-// Review F2: the seeded backend sets a Bedrock region+model
-// (scripts/e2e-backend.sh), which can make the server's own llm_ready read
-// true — and a redacted member falls back to exactly that bit
-// (readiness.ts's serverModelPathFallback) once model_access has nothing
-// per-principal to say. That made `agent-in-the-box`'s bucket a fact about
-// the HOST, not about the member ceiling this spec exists to sweep. Forcing
-// both fields here (on top of the real, already-redacted response — nothing
-// else about the member's real session or authorization changes) is what
-// makes the UNWALKABLE bucket a fact about the catalog again.
+// Review F2: the harness demo reads the server's own llm_ready
+// (readiness.ts's hasLlmPath), a fact about the HOST, not about the member
+// ceiling this spec exists to sweep. Forcing it false here (on top of the
+// real, already-redacted response — nothing else about the member's real
+// session or authorization changes) is what makes the UNWALKABLE bucket a
+// fact about the catalog.
 async function forceNoModelAccess(page: Page): Promise<void> {
   let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
     if (!cached) {
       const body = (await (await route.fetch()).json()) as Record<string, unknown>;
       body.llm_ready = false;
-      body.model_access = { state: "not_configured" };
       cached = body;
     }
     await route.fulfill({ json: cached });

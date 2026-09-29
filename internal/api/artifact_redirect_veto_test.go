@@ -79,8 +79,8 @@ func TestPlanArtifactRedirect_ToPublicProviderRefused(t *testing.T) {
 // Bedrock lane's data/control host (or a WARDYN_BEDROCK_BASE_URL endpoint) was
 // still allowed to author an artifact-token injection — and buildInjector's
 // byHost map is last-write-wins, so that row could swap the artifact token onto
-// the run's Bedrock traffic, which resolveBedrockAuth's preferred bearer mode
-// injects proxy-side.
+// the run's Bedrock traffic, which a Bedrock provider's bearer lane
+// (authorBedrockBearerInjection) injects proxy-side.
 //
 // RED on the base tree: the two bedrock rows plan an injection. The
 // Bedrock-disabled row is here so a fix that simply refused every amazonaws.com

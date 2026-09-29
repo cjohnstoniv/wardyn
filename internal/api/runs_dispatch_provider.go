@@ -1,13 +1,11 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch for a run whose deployment configured model providers (multi-provider
-// design §2.5, §2.8): the one gate, the one strip, and the per-kind arms. Once
-// the provider block is non-nil, a model run is credentialed by the provider it
-// chose, from its owner's own credential, or by nothing — never by the legacy
-// lane chain, which serves the operator's credentials. The key and endpoint
-// kinds' arm lives here; the subscription arm in provider_subscription.go and
-// the Bedrock arms in provider_bedrock.go.
+// Dispatch of a run's model credential (multi-provider design §2.5, §2.8): the
+// one gate, the one strip, and the per-kind arms. A model run is credentialed
+// by the provider it chose, from its owner's own credential, or by nothing. The
+// key and endpoint kinds' arm lives here; the subscription arm in
+// provider_subscription.go and the Bedrock arms in provider_bedrock.go.
 package api
 
 import (
@@ -22,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -87,8 +86,7 @@ func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, ag
 		d, err := s.providerSubscriptionRefusal(secretstore.WithPurpose(ctx, purpose), p, owner)
 		return awsSSOBlob{}, d, err
 	case p.Kind.IsBedrock():
-		// The same purpose the legacy lanes read and renew under at dispatch
-		// (resolveLLMTransport's resolveBedrockAuth).
+		// A status read, unless this pass may renew.
 		purpose := secretstore.PurposeStatus
 		if refresh {
 			purpose = secretstore.PurposeSSORefresh
@@ -186,25 +184,6 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 	return connectDenial(p.ID, mpRunNoKey), nil
 }
 
-// providerGovernsDispatch reports whether this dispatch takes the provider path
-// rather than the legacy lane chain: the run chose a provider, or this is a
-// model run of an agent Wardyn credentials and the block is set — or could not
-// be read. Nothing on the row records that a run was created under a block
-// that serves no provider for it, so an unreadable block governs and the
-// provider path refuses the run, as the create door does, rather than hand it
-// to a chain that serves the operator's credentials.
-func providerGovernsDispatch(run types.AgentRun, p dispatchParams, siteCfg types.SiteConfig, siteCfgOK bool) bool {
-	if run.ModelProviderID != "" {
-		return true
-	}
-	if run.Task == harnessLoginTask {
-		return false
-	}
-	_, needsModel := agentLLMProvider(run.Agent)
-	return needsModel && isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) &&
-		(!siteCfgOK || siteCfg.ModelProviders != nil)
-}
-
 // providerDispatch is what the provider path hands the rest of dispatch.
 type providerDispatch struct {
 	upstreams map[string]string // ProxyConfig.LLMUpstreams: {vendor host → BaseURL+Path}, nil for the vendor itself
@@ -244,23 +223,31 @@ func (l providerLane) hosts(s *Server) []string {
 	return []string{l.key.host}
 }
 
-// resolveProviderLane is the provider path of the LLM phase, for every kind.
-// In order: a block that could not be read refuses the run; the operator's
-// ~/.claude mounts go; a run that chose a provider has it re-read and its
-// owner's credential checked live, refused naming it on any miss; then the
+// resolveProviderLane is the LLM phase of every dispatch, for every kind. In
+// order: a model run whose site config could not be read is refused; the
+// operator's ~/.claude mounts go; a run that chose a provider has it re-read and
+// its owner's credential checked live, refused naming it on any miss; then the
 // STRIP — every injection that would credential the run's model
-// (dropLegacyModelInjections) — and only after it the kind's arm: its env,
-// and the key arm's one grant. The subscription and Bedrock arms author their
-// grants later in resolveLLMInjections, also after the strip, so nothing an
-// arm authors is ever stripped. A run no provider serves, or one that makes no
-// model call, is stripped and credentialed by nothing.
+// (dropLegacyModelInjections) — and only after it the kind's arm: its env, and
+// the key arm's one grant. The subscription and Bedrock arms author their
+// grants later in resolveLLMInjections, also after the strip, so nothing an arm
+// authors is ever stripped. A run no provider serves, or one that makes no
+// model call, is stripped and credentialed by nothing; a login box also gets
+// the public vendor host its sign-in dials.
 //
 // ok=false means the run was refused and is already marked FAILED.
 func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p dispatchParams, policy *types.RunPolicySpec,
 	sandboxEnv map[string]string, injections []runner.InjectionGrant, proxyURL string,
 	siteCfg types.SiteConfig, siteCfgOK bool,
 ) (llmTransport, []runner.InjectionGrant, providerDispatch, bool) {
-	if !siteCfgOK {
+	modelRun := isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) && run.Task != harnessLoginTask
+	_, needsModel := agentLLMProvider(run.Agent)
+	// Nothing records that a run was created under a block serving no provider
+	// for it, so a model run of an agent Wardyn credentials cannot tell "no
+	// provider" from "a provider I could not read" — it is refused, as the
+	// create door refuses the same read. A run that makes no model call is
+	// stripped with what could be read.
+	if !siteCfgOK && (run.ModelProviderID != "" || (modelRun && needsModel)) {
 		s.refuseProviderDispatch(ctx, run, "", providerDenial{msg: mpRunUnreadable}, nil)
 		return llmTransport{}, injections, providerDispatch{}, false
 	}
@@ -268,18 +255,17 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 	// dispatch another way (a record session, a stored policy edited since):
 	// resolveEnvSecretGrants must never place a model credential beside the
 	// provider's, so the run is refused before anything is authored.
-	if name, secretName, found := modelEnvSecretGrant(*policy); found {
+	if name, secretName, found := modelEnvSecretGrant(*policy); found && modelRun && needsModel {
 		p, _ := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
 		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunModelEnvSecret, secretName, name)},
 			map[string]any{"variable": name, "grant": secretName})
 		return llmTransport{}, injections, providerDispatch{}, false
 	}
 	// The host-mount subscription path: a policy blessed with the operator's
-	// resident ~/.claude must not hand it to a provider run.
+	// resident ~/.claude must not hand it to any run.
 	policy.WorkspaceMounts = slices.DeleteFunc(slices.Clone(policy.WorkspaceMounts), func(wm types.WorkspaceMount) bool {
 		return wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget
 	})
-	modelRun := isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) && run.Task != harnessLoginTask
 	var lane providerLane
 	if run.ModelProviderID != "" && modelRun {
 		var kind types.ModelProviderKind
@@ -290,6 +276,11 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		}
 	}
 	injections = s.dropLegacyModelInjections(ctx, run, injections, lane.hosts(s), s.modelServingHosts(siteCfg))
+	if run.Task == harnessLoginTask {
+		// A Claude sign-in (`claude setup-token`) mints its OAuth token against
+		// the public host and must never be redirected to the brokered route.
+		sandboxEnv[envAnthropicBaseURL] = "https://api.anthropic.com"
+	}
 	if !modelRun {
 		return llmTransport{}, injections, providerDispatch{}, true
 	}
@@ -350,9 +341,8 @@ func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, sit
 // refuseProviderDispatch fails the run closed (CAS from STARTING, so a
 // concurrent kill's KILLED stands) before any credential is authored, and
 // writes its run.create failure row (#532): `provider` is the id the run chose
-// ("" when it chose none); kind, "" when it is not known (an unreadable block,
-// or a provider id that does not exist), is recorded twice, as `kind` and as
-// the legacy `mechanism` field; a credential refusal adds `reason:
+// ("" when it chose none); `kind` is omitted when it is not known (an
+// unreadable block, or a provider id that does not exist); a credential refusal adds `reason:
 // model_credential`, the class the console's audit reader (runEndingFromAudit)
 // grades a credential ending by. extra adds what else the refusal names (an
 // env_secret refusal's `variable` and `grant`).
@@ -361,7 +351,7 @@ func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun,
 	data := map[string]any{"error": d.msg, "provider": run.ModelProviderID}
 	maps.Copy(data, extra)
 	if kind != "" {
-		data["kind"], data["mechanism"] = kind, string(kind)
+		data["kind"] = kind
 	}
 	if d.credential {
 		data["reason"] = llmRefusalAuditReason
@@ -385,37 +375,35 @@ func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun,
 // host, which fails the sidecar at startup. It must run before every arm
 // authors: it deletes the very names the arms write.
 func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant, laneHosts []string, serving func(string) bool) []runner.InjectionGrant {
+	model := s.modelCredentialInjection(laneHosts, serving)
+	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
+		if model(ig.Rule) {
+			s.auditDroppedInjection(ctx, run, ig, "model_credential_not_provider_authored")
+			return true
+		}
+		return false
+	})
+}
+
+// modelCredentialInjection is the strip's test: whether an injection rule
+// would credential a model, by the secret it names or the host it is bound
+// for (dropLegacyModelInjections' list). A revive applies it to a stored
+// config (stripRevivedModelInjections).
+func (s *Server) modelCredentialInjection(laneHosts []string, serving func(string) bool) func(egress.InjectionRule) bool {
 	hosts := slices.Clone(laneHosts)
 	for _, h := range harnessCatalog {
 		if h.Gateway != nil {
 			hosts = append(hosts, h.Gateway.host, gatewayHost(s.cfg.LLMGateways[h.Gateway.host]))
 		}
 	}
-	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		name := ig.Rule.SecretName
-		model := strings.HasPrefix(name, providerSecretPrefix) ||
+	return func(r egress.InjectionRule) bool {
+		name := r.SecretName
+		return strings.HasPrefix(name, providerSecretPrefix) ||
 			name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret ||
 			name == types.AWSSSOAccessTokenSecret || name == bedrockAPIKeySecret ||
-			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, ig.Rule.Host) }) ||
-			serving(ig.Rule.Host)
-		if model {
-			s.auditDroppedInjection(ctx, run, ig, "model_credential_not_provider_authored")
-		}
-		return model
-	})
-}
-
-// dropUnauthoredProviderInjections is the legacy path's half of "only the
-// provider arm names a provider credential": with no provider chosen, every
-// injection naming one came from a policy, never from dispatch.
-func (s *Server) dropUnauthoredProviderInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
-	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		if !strings.HasPrefix(ig.Rule.SecretName, providerSecretPrefix) {
-			return false
-		}
-		s.auditDroppedInjection(ctx, run, ig, "model_provider_not_dispatch_authored")
-		return true
-	})
+			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, r.Host) }) ||
+			serving(r.Host)
+	}
 }
 
 func (s *Server) auditDroppedInjection(ctx context.Context, run types.AgentRun, ig runner.InjectionGrant, reason string) {

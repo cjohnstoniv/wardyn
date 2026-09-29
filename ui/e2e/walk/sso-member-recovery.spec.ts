@@ -47,7 +47,7 @@
  * makeMemberActionable() for their own.
  *
  * 0.7.7 adds L0 and L. L0 CAPTURES the admin's own AWS session and then lapses
- * it (ensureActionable's roster-pin flip — 0.7.8: a never-captured admin never
+ * it (ensureActionable's pin flip — 0.7.8: a never-captured admin never
  * emitted harness_credential_aws at all, so the case proved nothing about the
  * row it was named for), so it sits right before F, which re-signs the admin
  * in from whatever L0 left them at. L makes its own lapse (makeMemberActionable)
@@ -80,13 +80,8 @@ import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-sta
 // rail), by constant name handed over from their own canon docs.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
-import {
-  MEMBER_GETTING_STARTED,
-  RAIL_CREDENTIAL,
-  RAIL_RECORDING_ON,
-  RECORDING_DISABLED_TITLE,
-  YOUR_MODEL_KEY,
-} from "../../src/app/components/wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
+import { RAIL_PROVIDER } from "../../src/app/components/wardyn/copy/new-run-rail";
 import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import { expandCard } from "../fixtures";
 import {
@@ -94,12 +89,12 @@ import {
   LOGIN_DONE,
   MEMBER_EMAIL,
   SANDBOX_UP,
-  SSO_START_URL,
+  WALK_PROVIDER,
+  WALK_PROVIDER_NAME,
   awaitCapture,
   awaitSelfRunStarted,
   dexSignIn,
   dexSignOut,
-  getRoster,
   launchAgentRun,
   makeMemberActionable,
   me,
@@ -121,12 +116,13 @@ test.describe.configure({ mode: "serial" });
 // the absence of the terminal UNREADABLE error would miss a wait that had
 // silently flipped to retrying.
 
-/** The 409 body of POST /setup/harness-login inside the no-credential preview
- *  (internal/api/membermode_preview.go's userViewPreviewSignInRefusal — Go-side
- *  and unexported, so there is no TS constant to import; lane member-preview's
- *  canon hands the spelling over verbatim and pins it from the Go side). */
-const MEMBER_PREVIEW_SIGNIN_REFUSAL =
-  "Exit the user view to sign in to AWS — the capture would land on your own identity.";
+/** The 409 body of POST /model-providers/{id}/sign-in inside the no-credential
+ *  preview (internal/api/provider_signin.go's mpsPreview — Go-side and
+ *  unexported, so there is no TS constant to import). */
+const MEMBER_PREVIEW_SIGNIN_REFUSAL = "Exit the user view to sign in — the capture would land on your own identity.";
+
+/** The strip's line for a lapsed session on the walk's provider. */
+const STRIP_EXPIRED = CONNECTIONS.C6_LINE(WALK_PROVIDER_NAME);
 
 /** The kind context/namespace the walk installed into, so case E can taint the
  *  node and read the run pod's phase. scripts/kind-sso-walk.sh exports both. */
@@ -229,8 +225,8 @@ async function myLoginRuns(page: Page): Promise<RunRow[]> {
  *   - "wait until a login run exists" is ALREADY true and returns instantly,
  *     which is why every caller passes the set of ids it saw BEFORE opening the
  *     pane and waits for one that is not in it. That wait doubles as the
- *     barrier that stops a `page.goto` firing while POST /setup/harness-login
- *     is still in flight — a navigation would abort it;
+ *     barrier that stops a `page.goto` firing while the provider's POST
+ *     /sign-in is still in flight — a navigation would abort it;
  *   - picking the FIRST "harness login" row on the board picks the wrong run:
  *     runs.tsx orders `attention, active, done`, and KILLED ranks as attention,
  *     so the top row is a dead run from the previous file. The row is
@@ -305,15 +301,14 @@ async function gotoAgentsTab(page: Page): Promise<void> {
 
 /** An ADMIN's own AWS sign-in, which is NOT on /setup.
  *
- *  /setup renders the operator Getting Started for an operator; the member's
- *  CTA lives on member-getting-started.tsx. The admin's own sign-in is the
- *  Agents tab's model-access block (agents-tab.tsx), which mounts the SAME
- *  HarnessLoginPane with the same startURLManaged suppression. */
+ *  /setup renders the operator Getting Started for an operator. A person's
+ *  credential for a provider is theirs as a person, added from the User view:
+ *  the admin's own sign-in is the provider's row on /account's connections
+ *  card, which opens the same door and the same HarnessLoginPane. */
 async function openAdminLoginPane(page: Page): Promise<void> {
-  await gotoAgentsTab(page);
+  await page.goto("/account");
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) await start.click();
+  await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
 }
 
 // A red must never leave the cluster tainted — not for the cases after it, and
@@ -352,29 +347,19 @@ test.afterEach(async ({ page }) => {
 
 // ── B — the member's own card, while they are still signed in ───────────────
 
-test("B (ui-member-model-key): a per_user member's card names their OWN AWS sign-in", async ({ page }) => {
+test("B: a member's connection row names their OWN AWS sign-in", async ({ page }) => {
   // FIRST, and that is not cosmetic: the member is `live` only until case A's
-  // pin flip moves it. The before-sign-in half of this card is proven
-  // by sso-member.spec.ts's second case plus the lane's own vitest matrix — the
-  // ONE thing only a live walk can show is the SIGNED-IN branch under a real
-  // per_user roster row, with a real captured session behind it.
-  //
-  // #541 fix review: this install has no model-providers block, which keeps
-  // "Your model key" as Getting Started's own door (and this card) until #548
-  // converts every install to a provider block.
+  // pin flip moves it. The before-sign-in half of this row is proven by
+  // sso-member.spec.ts's second case — the ONE thing only a live walk can show
+  // is the SIGNED-IN branch with a real captured session behind it.
   await dexSignIn(page, MEMBER_EMAIL);
   expect((await modelAccess(page)).state, "sso-member.spec.ts must leave the member live").toBe("live");
 
   await page.goto("/setup");
-  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_BODY)).toBeVisible();
-  // The 0.7.4 sentence this replaced — "Model access is already configured for
-  // you", under the chip "Provided by your admin" — is the field report's
-  // finding 2 verbatim. Its ABSENCE is the assertion.
-  await expect(page.getByText(YOUR_MODEL_KEY.PROVIDED_BODY)).toHaveCount(0);
-  await expect(page.getByText(YOUR_MODEL_KEY.PROVIDED_CHIP)).toHaveCount(0);
+  await expect(page.getByText(CONNECTIONS.SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
   // …and the page lede names whose sign-in it is.
-  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER_PER_USER)).toBeVisible();
+  await expect(page.getByText(CONNECTIONS.LEDE)).toBeVisible();
   await dexSignOut(page);
 });
 
@@ -393,10 +378,10 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   // `expired_signin`, and the "Sign in to AWS" CTA comes back — which is what
   // (iii) below and case C both need.
   //
-  // The per_user row, its start URL and its pin go through the API: the Agents
-  // tab no longer carries them (they live on a Bedrock provider), and this walk
-  // runs on the no-provider-block roster lane until the conversion moves it
-  // onto one. The console Save below round-trips them untouched.
+  // The start URL and the pin live on the walk's Bedrock provider and go
+  // through the API; the Agents tab carries only which agents are on and each
+  // one's default provider, and the console Save below round-trips the
+  // default untouched.
   const pin = await makeMemberActionable(request);
 
   await dexSignIn(page, ADMIN_EMAIL);
@@ -418,25 +403,29 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
 
-  // The save ROUND-TRIPS: the server still holds the row the console loaded.
-  const saved = (await getRoster(request)).find((a) => a.id === "claude-code");
-  expect(saved, "the console save did not keep the per_user row it loaded").toMatchObject({
-    mechanism: "bedrock_sso",
-    credential_source: "per_user",
-    sso_start_url: SSO_START_URL,
-    sso_account_id: pin.account,
-    sso_role_name: pin.role,
+  // The save ROUND-TRIPS: the server still holds the default the console
+  // loaded, and the provider still carries the pin case A wrote.
+  const roster = await page.evaluate(async () => {
+    const r = await fetch("/api/v1/agent-providers", { credentials: "include" });
+    return ((await r.json()) as { agents?: Array<Record<string, unknown>> }).agents ?? [];
   });
+  expect(
+    roster.find((a) => a.id === "claude-code"),
+    "the console save did not keep the default it loaded",
+  ).toMatchObject({ default_provider: WALK_PROVIDER });
+  const bedrock = await page.evaluate(async (id: string) => {
+    const r = await fetch("/api/v1/model-providers", { credentials: "include" });
+    const body = (await r.json()) as { providers?: Array<{ id: string; bedrock?: Record<string, string> }> };
+    return body.providers?.find((p) => p.id === id)?.bedrock ?? {};
+  }, WALK_PROVIDER);
+  expect(bedrock).toMatchObject({ sso_account_id: pin.account, sso_role_name: pin.role });
   // …and ONE row is enabled, which is this deployment's whole shape.
   //
-  // THE WIRE FIELD IS `disabled`, NOT `enabled` (types.AgentProviders). An
-  // earlier draft read `.enabled` and compared it to `false`: that is
-  // `undefined === false` on every row, so it asserted nothing — and it would
-  // not have caught a save that silently re-enabled the other two. Reading the
-  // whole enabled SET, rather than each row, is also what makes this fail if a
-  // future catalog id appears and defaults on.
+  // THE WIRE FIELD IS `disabled`, NOT `enabled` (types.AgentProviders). Reading
+  // the whole enabled SET, rather than each row, is also what makes this fail
+  // if a future catalog id appears and defaults on.
   expect(
-    (await getRoster(request)).filter((a) => !a.disabled).map((a) => a.id),
+    roster.filter((a) => !a.disabled).map((a) => a.id),
     "this deployment must carry exactly one enabled agent row",
   ).toEqual(["claude-code"]);
   await dexSignOut(page);
@@ -456,37 +445,30 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await page.keyboard.press("Escape");
 
   // (iii) an ORG SETTING is ENFORCED on the member, not merely saved: the pin
-  // flip has made them actionable, and their sign-in pane has NO start-URL
-  // field at all — the org's portal wins (harness-login-pane.tsx's
-  // startURLManaged, passed only by member-getting-started.tsx).
+  // flip has made them actionable, and the server says which pair to pick.
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+  expect((await modelAccess(page)).action ?? "", "the lapse names the pinned pair").toContain(pin.account);
   await page.goto("/setup");
-  const cta = page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first();
-  await expect(cta).toBeVisible({ timeout: 60_000 });
-  await cta.click();
-  await expect(page.getByTestId("login-intro")).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeVisible();
-  await expect(page.getByTestId("login-start-url-prompt")).toHaveCount(0);
-  await expect(page.getByLabel(AGENTS.FIELD_SSO_START_URL)).toHaveCount(0);
-  // Leave the pane WITHOUT launching: case C opens its own sandbox, and a
-  // second live device code would be the one thing this walk must not mint.
-  await page.getByRole("button", { name: "Cancel" }).first().click();
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first()).toBeVisible({ timeout: 60_000 });
+  // Not opened: the pane launches its login sandbox the moment it opens, and
+  // case C opens its own — a second live device code would be the one thing
+  // this walk must not mint.
 });
 
 test("A(rail): the New Run rail states THIS run's credential residency, with no click", async ({ page }) => {
-  // The field report's finding 1, live: on a per_user/bedrock_sso estate the
+  // The field report's finding 1, live: on a bedrock_sso provider estate the
   // rail must say the AWS credential is RESIDENT — the opposite of 0.7.4's
   // unconditional "Never written into the sandbox" — and it must say so on the
   // DEFAULT path, before any Preflight click, because that is the state a
   // member is in while deciding whether to sign in at all.
   //
-  // Lane ui-rail-truth's handoff: /setup/status's harness row carries
-  // credential_residency "sandbox" for this roster shape whether or not the
-  // member has signed in, which is the only shape the status surface grades.
+  // The rail reads it off the one provider this run would use: a bedrock_sso
+  // provider's AWS credentials sign inside the sandbox, signed in or not.
   await dexSignIn(page, MEMBER_EMAIL);
   await page.goto("/runs/new");
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
 
+  await expect(page.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeVisible();
   // …and Recording states the truth about a stock Helm install rather than
@@ -499,32 +481,21 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   // asserts through it: on this estate recording is off, and the promise must
   // not be on screen beside the sentence that says so.
   await expect(page.getByText(RAIL_RECORDING_ON)).toHaveCount(0);
-  // …and the honest-absence arm is NOT what rendered: this estate's roster row
+  // …and the honest-absence arm is NOT what rendered: this estate's provider
   // settles residency without a dry run, so RESOLVED_AT_LAUNCH belongs to every
   // OTHER estate and would be the quiet failure here.
   await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
 
-  // ── A(rail)+ — 0.7.6 finding 1: the rail names the PERSON's state ─────────
+  // ── A(rail)+ — the PERSON's state, on the shell's strip ──────────────────
   //
-  // Case A left this member `expired_signin` (the pin flip), so the state the
-  // rail must name here is the LAPSE, not the first run. The `not_configured`
-  // sentence has exactly one seat on this walk — before the member's first
-  // capture — and is asserted there, in sso-member.spec.ts's case I, together
-  // with the `NO_PROVIDER` negative below.
-  await expect(page.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeVisible({ timeout: 60_000 });
-  // THE FINDING-1 NEGATIVE, in the state the field report was written about:
-  // this deployment IS connected (the admin's per_user roster row exists), so
-  // the deployment-level sentence would be a falsehood on this estate. 0.7.5
-  // rendered nothing at all here; the assertion pins that the fix did not
-  // instead over-fire the other warning.
+  // Case A left this member `expired_signin` (the pin flip). The rail names
+  // the provider and where its credential lives; the lapse itself is the
+  // strip's, which the rail does not claim, so its button stays.
+  await expect(page.getByText(STRIP_EXPIRED)).toBeVisible({ timeout: 60_000 });
+  // THE FINDING-1 NEGATIVE: this deployment IS connected (the provider
+  // exists), so the deployment-level sentence would be a falsehood here.
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
-  // Two controls, DISTINCT accessible names (U-13's actual rule). The rail's
-  // own is an aria-label, so it is the accessible name Playwright matches; the
-  // strip's button is gone here because the rail CLAIMED the door, and `exact`
-  // is what makes that assertion mean anything — the default name match is a
-  // substring, and the rail's visible LABEL is the strip's name.
-  await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
-  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
 });
 
 // ── C — the sandbox signs itself in, and the Runs list joins that session ───
@@ -592,9 +563,9 @@ test("C (login-sandbox-selfrun): the sign-in sandbox runs the pair itself and th
   // …and it COMPLETED, with no console around it and nothing typed.
   await awaitCapture(page, screen);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
-  // The stored blob is THIS run's — source_run_id survives redaction on the
-  // caller's own per-user AWS row alone, which is what lets a member
-  // corroborate their own sign-in at all.
+  // The stored blob is THIS run's — source_run_id rides the caller's own
+  // provider_access row, which is what lets a member corroborate their own
+  // sign-in at all.
   await expect.poll(async () => (await ownAWSRow(page)).source_run_id, { timeout: 120_000 }).toBe(loginRun.id);
 });
 
@@ -627,10 +598,9 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
 
   const after = await ownAWSRow(page);
   expect(after.source_run_id, "the stored capture did not move to the retry's run").not.toBe(before.source_run_id);
-  // source_run_id is the WHOLE witness, by design: redactSetupStatusForUser
-  // keeps it on the caller's own per_user aws row and strips captured_at
-  // ("operator credential-lifecycle detail"), so a member's session — the only
-  // one this case may use — never sees a capture time to compare.
+  // source_run_id is the WHOLE witness, by design: the caller's own
+  // provider_access row carries no capture time, so a member's session — the
+  // only one this case may use — never sees one to compare.
   // The pane corroborates a marker against the SERVER before it claims a
   // capture; this sentence is what it shows when the server disagrees. On a
   // healthy walk it must never render.
@@ -886,23 +856,20 @@ test("I (model-access-banner): the strip rides every screen and clears without a
   request,
 }) => {
   // Finding 2's live half that only a real capture can show. The FIRST-RUN
-  // sentence (MODEL_ACCESS_BANNER.NOT_SIGNED_IN) is asserted in
-  // sso-member.spec.ts's case I, which is the one seat on the walk where a
-  // member has never signed in — by the time this file runs the member owns a
-  // stored session and nothing in the product deletes one (DELETE
-  // /setup/harness-credential is operator-only AND scoped to the caller's own
-  // subject). So this case drives the LAPSE arm, which is the one that can be
-  // reached honestly here, and it is the arm that carries the door.
+  // sentence is asserted in sso-member.spec.ts's case I, which is the one seat
+  // on the walk where a member has never signed in — by the time this file
+  // runs the member owns a stored session. So this case drives the LAPSE arm,
+  // which is the one that can be reached honestly here, and it is the arm that
+  // carries the door.
   await dexSignIn(page, MEMBER_EMAIL);
   await ensureActionable(page, request);
 
   // (1) The Runs board — the strip, the sign-in, and no set-aside: a lapse of
-  // something you already had is never dismissable (model-access-copy.ts's
-  // NOT_NOW is offered for the first-run state and a dead SHARED credential
-  // only). The strip is a LAZY chunk behind `Suspense fallback={null}` and says
+  // something you already had is never dismissable (providerStripLine offers
+  // NOT_NOW for the first-run state only). The strip is a LAZY chunk behind `Suspense fallback={null}` and says
   // nothing until /me resolves, so it is awaited, never read on the first frame.
   await page.goto("/runs");
-  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(STRIP_EXPIRED)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: MODEL_ACCESS_BANNER.NOT_NOW })).toHaveCount(0);
 
@@ -914,7 +881,7 @@ test("I (model-access-banner): the strip rides every screen and clears without a
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   await expect(page).toHaveURL(/\/workspaces$/);
-  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(STRIP_EXPIRED)).toBeVisible({ timeout: 60_000 });
 
   // THE NO-RELOAD WITNESS, planted before the door opens. "The strip is gone
   // without a reload" is the claim; a strip that vanished because the document
@@ -931,15 +898,13 @@ test("I (model-access-banner): the strip rides every screen and clears without a
     await p.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
     await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
     await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
-    const start = p.getByRole("button", { name: "Start login" });
-    if (await start.isVisible().catch(() => false)) await start.click();
   });
 
   // (4) The three things the door promises on a completed capture: the toast
   // (CONSOLE-RULES §9 — a surface that disappears is not a confirmation), the
   // strip gone, and the page never left or reloaded.
   await expect(page.getByText(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByText(STRIP_EXPIRED)).toHaveCount(0, { timeout: 60_000 });
   await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
   expect(page.url(), "the door navigated instead of opening in place").toBe(urlBefore);
   expect(
@@ -995,7 +960,7 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
     await ensureActionable(page, request);
     const prior = new Set((await myLoginRuns(page)).map((r) => r.id));
     await openLoginPane(page);
-    // The budget IS the assertion. openLoginPane returns once "Start login" has
+    // The budget IS the assertion. openLoginPane returns once the sign-in has
     // been clicked, so the clock below starts no earlier than the POST — which
     // only makes it stricter.
     const started = Date.now();
@@ -1052,19 +1017,14 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
   page,
   request,
 }) => {
-  // The 0.7.6 field report's exact shape, on the walk: a per_user roster, an
-  // install that never marked onboarding complete, and an admin whose OWN
-  // session has lapsed. 0.7.8 rewrote this case: the ORIGINAL 0.7.7 version
-  // never captured the admin's own AWS session at all, so harness_credential_aws
-  // (h.Captured-gated — internal/api/modelaccess.go's harnessCredentialCheck)
-  // never appeared and the case exercised llm_provider/bedrock_provider's
-  // per_user arms instead — real rows, but not the one the 0.7.6 field report
-  // was actually about. This version captures the admin's own session first,
+  // The 0.7.6 field report's exact shape, on the walk: a per-person provider,
+  // an install that never marked onboarding complete, and an admin whose OWN
+  // session has lapsed. This case captures the admin's own session first,
   // through the SAME pane F uses below, then lapses it exactly the way the
-  // owner's did in the field: a roster-pin flip (ensureActionable, the shared
-  // helper C/D/E/L all use).
+  // owner's did in the field: a pin flip (ensureActionable, the shared helper
+  // C/D/E/L all use).
   //
-  // ensureActionable's flip is the ROSTER's one shared pin — it lapses EVERY
+  // ensureActionable's flip is the PROVIDER's one pin — it lapses EVERY
   // captured session under the old pair, not just this admin's. Nothing
   // downstream in this file depends on a live admin session surviving into F
   // (F re-signs one in itself), so the side effect is harmless here — but it
@@ -1083,10 +1043,6 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
     };
   });
   expect(status.onboarding_complete, "the walk's fresh install never marks onboarding complete").toBeFalsy();
-  expect(
-    status.checks?.find((c) => c.id === "harness_credential_aws")?.status,
-    "the admin's own captured AWS session was just lapsed by the pin flip — the row the 0.7.6 field report's gate misread",
-  ).toBe("warn");
   // The non-vacuity guard, restated against the 0.7.8 contract: every
   // warn/fail row present must be non-blocking, or the assertion below (New
   // Run stays put) would be meaningless — a truly blocking row SHOULD gate.
@@ -1107,15 +1063,12 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
   ).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
 
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
-  // /setup/status read. The rail's per-person line renders off that same read,
+  // /setup/status read. The rail's provider line renders off that same read,
   // so once it is on screen the answer that used to bounce us has landed — and
   // the page is still New Run.
   await page.goto("/runs/new");
   await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
-  // EXPIRED, not NOT_SIGNED_IN: new-run-rail.tsx's ModelAccessLine reads
-  // `expired_signin` to RAIL_MODEL_ACCESS.EXPIRED — a captured-then-lapsed
-  // session, not "never signed in".
-  await expect(page.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
   await expect(page).toHaveURL(/\/runs\/new$/);
 });
 
@@ -1126,9 +1079,8 @@ test("F (member-preview): an admin previews the state a member is in before they
   await dexSignIn(page, ADMIN_EMAIL);
   expect((await me(page)).operator).toBe(true);
   // The menu item is GRANTED by the server, not decided by the console: /me
-  // publishes user_preview_available and it is true only under a per_user
-  // roster row — which this deployment has.
-  expect((await me(page)).user_preview_available, "the walk's roster row is per_user; the preview must be offered").toBe(
+  // publishes user_preview_available.
+  expect((await me(page)).user_preview_available, "the walk's provider is per-person; the preview must be offered").toBe(
     true,
   );
 
@@ -1137,7 +1089,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // and the ceiling this case exists to prove (your session is HIDDEN, not
   // removed, and comes back on exit) would be unprovable. It is NOT on /setup:
   // an operator's /setup is the operator Getting Started, so the admin's own
-  // sign-in is the Agents tab's (openAdminLoginPane).
+  // sign-in is /account's (openAdminLoginPane).
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
@@ -1152,27 +1104,17 @@ test("F (member-preview): an admin previews the state a member is in before they
   // per-principal credential lookup still finds the admin's own session.
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("not_configured");
-  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
-  // #541 fix review: this deployment has no model-providers block (a per_user
-  // roster row alone), which keeps "Your model key" as Getting Started's own
-  // door until #548 converts every install to a provider block; its own
-  // connections-summary chip falls back to legacySummary
-  // (lib/model-connections.ts), reading the same not_configured state: Needs
-  // you.
+  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
 
   // …and the one door that could WRITE inside the preview is refused, because a
   // capture made here would land on the admin's own identity and overwrite
   // their real session.
   //
-  // THE CTA IS NOT THE REQUEST. Under startURLManaged the pane opens in phase
-  // `intro` and POST /setup/harness-login is sent only by "Start login"
-  // (harness-login-pane.tsx's launch) — so a case that clicked the CTA and then
-  // waited for the 409 sentence would have waited for a request it never made.
-  // The sentence is Go-side (userViewPreviewSignInRefusal) and reaches the console
-  // as the pane's error, which renders in its role="alert" region.
+  // The pane sends the provider's POST /sign-in the moment it opens. The
+  // sentence is Go-side (mpsPreview) and reaches the console as the pane's
+  // error, which renders in its role="alert" region.
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
-  await page.getByRole("button", { name: "Start login" }).click();
   await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
   // The refused sign-in's dialog is modal and stays open on its error, which
   // hides the page behind it (and the banner's Exit button) from the
@@ -1225,8 +1167,6 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
     await p.getByRole("button", { name: /^Launch/ }).click();
     await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
     await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
-    const start = p.getByRole("button", { name: "Start login" });
-    if (await start.isVisible().catch(() => false)) await start.click();
   });
 
   // The relaunch fired from the door's completion navigates straight to the

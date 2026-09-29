@@ -69,12 +69,6 @@ var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
 	// credential that cannot be read refuses with the sentence alone" case
 	// pins the second.
 	"run_model_provider.go:Server.enforceRunModelProvider": {2, "both 5xx (StatusServiceUnavailable): a transient store failure is no door (multi-provider §5.8); TestProviderJoin_DoorsEveryKind and TestRunModelProviderDoors pin both reason-less"},
-	// enforceCreateLLMMechanism's one outage arm: an AWS Bedrock SSO renewal
-	// that got no answer at all (not a refusal, an absence of one) must not
-	// open the console's sign-in door the way a real credential refusal
-	// does — TestCreateRun_AnUnansweredRenewalIsRefusedWithoutTheClass pins
-	// this 422 carrying no class.
-	"runs_dispatch_llm_mechanism.go:Server.enforceCreateLLMMechanism": {1, "4xx (StatusUnprocessableEntity): an unanswered renewal is not a refusal class; TestCreateRun_AnUnansweredRenewalIsRefusedWithoutTheClass pins it reason-less so the sign-in door does not open over \"try again\""},
 	// driveBindFailure.write's own bare arm: f.reason=="" is the
 	// runner-capabilities-unreadable 503 (driveBindFailureHere); f.silent is
 	// either of driveShareBindFailure's two ctx.Err()!=nil arms, which DO

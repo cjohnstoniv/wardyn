@@ -175,11 +175,6 @@ var knownIntegrationConfigKeys = map[string]map[string]bool{
 // presented on a host that serves a model (modelServingHosts).
 const integration400ModelHost = "egress: %q serves a model — a model credential comes only from a model provider, so an integration's credential can't be presented there"
 
-// integration400AIKind refuses an AI-kind write: model access is a model
-// provider now, and effectiveIntegrations leaves a stored AI row out of every
-// resolver, so a row written here would grant nothing.
-const integration400AIKind = "kind: %q is model access, which is set up under Settings → Model providers — an integration no longer carries it"
-
 // validateIntegrationWrite enforces an operator-authored Integration's
 // structural + security invariants before it is persisted (PUT
 // /integrations/{id}, and defensively on adopt): id shape (integrationRefRE,
@@ -213,9 +208,6 @@ func validateIntegrationWrite(in types.Integration) error {
 	// integrations_run.go). It simply can no longer be edited through this
 	// endpoint. This is a deliberate capability removal, recorded under BREAKING
 	// in the changelog — not a validation tightening that fell out of a refactor.
-	if types.AIProviderKind(in.Kind) {
-		return fmt.Errorf(integration400AIKind, in.Kind)
-	}
 	if !types.ClosedIntegrationKinds[in.Kind] {
 		return fmt.Errorf("kind: %q is not a supported integration kind (want one of: %s)",
 			in.Kind, strings.Join(types.ClosedIntegrationKindList(), ", "))

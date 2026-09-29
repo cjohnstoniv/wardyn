@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -33,8 +34,8 @@ func (s ssoBindingStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, err
 	return s.run, nil
 }
 
-// GetSiteConfig is the roster read the upload handler makes to decide WHOSE
-// namespace the capture lands in (0.7.2). Zero value = legacy/shared.
+// GetSiteConfig is the live block the upload re-reads before storing: a
+// capture lands only while its provider is still the one it was launched for.
 func (s ssoBindingStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.siteCfg, nil
 }
@@ -43,46 +44,26 @@ func (s ssoBindingStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]ty
 	return s.events, nil
 }
 
-// operatorStartURL / operatorRegion are what the OPERATOR asked for: the
-// access-portal URL that arrived with POST /setup/harness-login and was
-// recorded on harness.login.start, and the boot-config SSO region
-// handleHarnessLogin requires before an aws-sso login run may launch.
+// operatorStartURL / operatorRegion are what the ADMIN configured: the
+// provider's access-portal URL and region, recorded on harness.login.start at
+// launch (uploadProvider carries both).
 const (
 	operatorStartURL = "https://my-sso.awsapps.com/start"
 	operatorRegion   = "us-west-2"
 )
 
-// loginRunFor / loginStartedFor are the two pieces of trusted server state an
-// aws-sso login run carries: the run row, and the harness.login.start event
-// launchHarnessLoginRun wrote with the operator's own access-portal URL.
+// loginRunFor is the run row an aws-sso login run carries: trusted server
+// state, beside the harness.login.start row uploadStamp writes.
 func loginRunFor(runID uuid.UUID) types.AgentRun {
 	return types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent}
 }
 
-func loginStartedFor(runID uuid.UUID) []types.AuditEvent {
-	return []types.AuditEvent{{
-		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
-		Action: "harness.login.start", Target: runID.String(), Outcome: "success",
-		Data: mustJSON(map[string]any{
-			"provider": awsSSOProvider, "sso_start_url": operatorStartURL,
-		}),
-	}}
-}
-
-// newSSOBindingSrv wires a Server whose boot config and login-run audit trail
-// both declare the operator's values, and returns a run token for that run.
+// newSSOBindingSrv wires a Server whose live block and login-run audit trail
+// both declare the admin's values, and returns a run token for that run.
 func newSSOBindingSrv(t *testing.T) (*Server, *memSecrets, string, uuid.UUID) {
 	t.Helper()
-	h := newHarness(t)
-	runID := uuid.New()
-	st := ssoBindingStore{run: loginRunFor(runID), events: loginStartedFor(runID)}
-	sec := &memSecrets{m: map[string][]byte{}}
-	cfg := baseTestConfig(h, st)
-	cfg.Secrets = sec
-	cfg.BedrockRegion = operatorRegion
-	srv := New(cfg)
-	h.srv = srv
-	return srv, sec, h.mintRunToken(t, runID), runID
+	srv, sec, _, tok, runID := newPinnedSSOSrv(t, "", "", uploadModel)
+	return srv, sec, tok, runID
 }
 
 func ssoBlobBody(startURL, region, accessToken string) string {
@@ -103,8 +84,8 @@ func ssoBlobBody(startURL, region, accessToken string) string {
 // the blob to the operator's own declaration. Without it, code running
 // inside the vendor login sandbox could PUT a structurally perfect blob
 // naming an attacker's IdP and region; it would land under the operator-wide
-// reserved harness name, and resolveBedrockAuth would pick it ahead of the
-// host ~/.aws mount and the static-key lanes for every later Bedrock run,
+// reserved harness name, and every later Bedrock run credentialed from it
+// would carry it,
 // baking the attacker's start_url/account/role into that run's ~/.aws/config
 // and appending the attacker region's oidc./portal.sso. hosts to its egress
 // allowlist.
@@ -121,7 +102,7 @@ func TestUploadSSOToken_ForeignIdPRejected(t *testing.T) {
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("%s: code = %d, want 400; body=%s", name, w.Code, w.Body.String())
 			}
-			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+			if _, ok := uploadedBlob(sec, uploadOwner); ok {
 				t.Errorf("%s: a blob unbound to the operator's own declaration must not be stored", name)
 			}
 		})
@@ -137,7 +118,7 @@ func TestUploadSSOToken_OperatorBoundBlobAccepted(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("operator-bound blob: code = %d, want 204; body=%s", w.Code, w.Body.String())
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; !ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); !ok {
 		t.Fatal("operator-bound blob was not stored")
 	}
 }
@@ -158,7 +139,8 @@ func TestUploadSSOToken_SecondCaptureRefused(t *testing.T) {
 		t.Fatalf("second capture: code = %d, want 409; body=%s", w.Code, w.Body.String())
 	}
 	var blob awsSSOBlob
-	if err := json.Unmarshal(sec.m[harnessCredSecretName(awsSSOProvider)], &blob); err != nil {
+	stored, _ := uploadedBlob(sec, uploadOwner)
+	if err := json.Unmarshal(stored, &blob); err != nil {
 		t.Fatalf("stored blob: %v", err)
 	}
 	if blob.AccessToken != "genuine-token" {
@@ -178,31 +160,20 @@ func TestUploadSSOToken_SecondCaptureRefused(t *testing.T) {
 // account to be PRESENT, never that it was the RIGHT one.
 //
 // Two bindings close that, both against trusted server state: the LAUNCH-TIME
-// roster pin (read back off this run's own harness.login.start row, never off
-// the live roster) and the account the configured Bedrock model lives in.
+// provider pin (read back off this run's own harness.login.start row, never
+// off the live block) and the account the provider's Bedrock model lives in.
 
-// pinnedLoginStarted is loginStartedFor PLUS the launch-time account/role pin.
-func pinnedLoginStarted(runID uuid.UUID, pinAccount, pinRole string) []types.AuditEvent {
-	ev := loginStartedFor(runID)
-	ev[0].Data = mustJSON(map[string]any{
-		"provider": awsSSOProvider, "sso_start_url": operatorStartURL,
-		"sso_account_id": pinAccount, "sso_role_name": pinRole,
-	})
-	return ev
-}
-
-// newPinnedSSOSrv is newSSOBindingSrv with a launch-time pin and the
-// operator's configured Bedrock model.
+// newPinnedSSOSrv wires a login run launched for a provider pinned to
+// pinAccount/pinRole ("" = unpinned) on model, with that provider live.
 func newPinnedSSOSrv(t *testing.T, pinAccount, pinRole, model string) (*Server, *memSecrets, *harness, string, uuid.UUID) {
 	t.Helper()
 	h := newHarness(t)
 	runID := uuid.New()
-	st := ssoBindingStore{run: loginRunFor(runID), events: pinnedLoginStarted(runID, pinAccount, pinRole)}
+	p := uploadProvider(pinAccount, pinRole, model)
+	st := ssoBindingStore{run: loginRunFor(runID), events: uploadStamp(runID, p, uploadOwner), siteCfg: uploadSite(p)}
 	sec := &memSecrets{m: map[string][]byte{}}
 	cfg := baseTestConfig(h, st)
 	cfg.Secrets = sec
-	cfg.BedrockRegion = operatorRegion
-	cfg.BedrockModel = model
 	srv := New(cfg)
 	h.srv = srv
 	return srv, sec, h, h.mintRunToken(t, runID), runID
@@ -240,7 +211,7 @@ func TestUploadSSOToken_AccountIDNotRowPinRejected(t *testing.T) {
 	if !strings.Contains(body, "111111111111") || !strings.Contains(body, "222222222222") {
 		t.Errorf("refusal = %s, want it to name both what was captured and what is pinned", body)
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
 		t.Error("a capture that disagrees with the pin must not be stored — it is baked verbatim into every later run's ~/.aws/config")
 	}
 }
@@ -257,7 +228,7 @@ func TestUploadSSOToken_RoleNameNotRowPinRejected(t *testing.T) {
 	if !strings.Contains(body, "BedrockRunner") || !strings.Contains(body, "ReadOnly") {
 		t.Errorf("refusal = %s, want it to name both roles", body)
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
 		t.Error("a capture whose ROLE disagrees with the pin must not be stored")
 	}
 }
@@ -276,7 +247,7 @@ func TestUploadSSOToken_AccountIDNotModelARNAccountRejected(t *testing.T) {
 	if !strings.Contains(body, "222222222222") || !strings.Contains(body, "111111111111") {
 		t.Errorf("refusal = %s, want it to name the session's account and the model's", body)
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); ok {
 		t.Error("a session for an account the configured model does not live in must not be stored")
 	}
 }
@@ -299,7 +270,7 @@ func TestUploadSSOToken_NonARNModelSkipsAccountBinding(t *testing.T) {
 			if code != http.StatusNoContent {
 				t.Fatalf("code = %d, want 204 (a model naming no account cannot disagree with one); body=%s", code, body)
 			}
-			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; !ok {
+			if _, ok := uploadedBlob(sec, uploadOwner); !ok {
 				t.Error("nothing was stored — a non-ARN model must SKIP the account check, not fail it")
 			}
 		})
@@ -315,7 +286,7 @@ func TestUploadSSOToken_PinnedPairAccepted(t *testing.T) {
 	if code != http.StatusNoContent {
 		t.Fatalf("code = %d, want 204; body=%s", code, body)
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; !ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); !ok {
 		t.Error("an agreeing capture was not stored")
 	}
 }
@@ -396,7 +367,7 @@ func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
 			if code != tc.wantStatus {
 				t.Fatalf("code = %d, want %d", code, tc.wantStatus)
 			}
-			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+			if _, ok := uploadedBlob(sec, uploadOwner); ok {
 				t.Error("a refused capture was stored")
 			}
 			rows := 0
@@ -447,6 +418,12 @@ type failingPutSecrets struct {
 
 func (f *failingPutSecrets) Put(context.Context, string, []byte) error {
 	return errors.New("secret store is unavailable")
+}
+
+// For keeps the failure on the owner's namespace, the one a provider sign-in
+// is written to.
+func (f *failingPutSecrets) For(owner string) secretstore.Store {
+	return &failingPutSecrets{memSecrets: f.memSecrets.For(owner).(*memSecrets)}
 }
 
 // TestBedrockModelAccount is the tree's first ARN parser, and the only question
@@ -547,7 +524,7 @@ func TestAWSSSOPinEnv(t *testing.T) {
 // no account in the model) nothing else looks at them at all — so a 13-digit
 // account id, or a role name IAM cannot name, was discovered later as somebody's
 // 403. One rule, both doors: awsAccountID / iamRoleName, the same two the admin's
-// own pin takes (validateAgentSSOPin).
+// own pin takes (validateProviderBedrock).
 func TestUploadSSOToken_WrongShapedAccountOrRoleRejected(t *testing.T) {
 	for name, blob := range map[string]string{
 		"a 13-digit account id":        ssoBlobFor("1234567890123", "BedrockRunner"),
@@ -562,7 +539,7 @@ func TestUploadSSOToken_WrongShapedAccountOrRoleRejected(t *testing.T) {
 			if code != http.StatusBadRequest {
 				t.Fatalf("code = %d, want 400; body=%s", code, body)
 			}
-			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+			if _, ok := uploadedBlob(sec, uploadOwner); ok {
 				t.Error("a wrong-shaped identity was stored")
 			}
 			rows := 0
@@ -599,7 +576,7 @@ func TestUploadSSOToken_PinIsTheEscapeHatchForACrossAccountModel(t *testing.T) {
 	if code != http.StatusNoContent {
 		t.Fatalf("the PINNED account was refused because the model lives elsewhere: code = %d; body=%s", code, body)
 	}
-	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; !ok {
+	if _, ok := uploadedBlob(sec, uploadOwner); !ok {
 		t.Error("the pinned capture was not stored")
 	}
 
@@ -609,7 +586,7 @@ func TestUploadSSOToken_PinIsTheEscapeHatchForACrossAccountModel(t *testing.T) {
 	if code2 != http.StatusBadRequest {
 		t.Fatalf("a session for an account the PIN does not name was accepted: code = %d; body=%s", code2, body2)
 	}
-	if _, ok := sec2.m[harnessCredSecretName(awsSSOProvider)]; ok {
+	if _, ok := uploadedBlob(sec2, uploadOwner); ok {
 		t.Error("a capture that disagrees with the pin was stored")
 	}
 }

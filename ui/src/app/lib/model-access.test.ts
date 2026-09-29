@@ -5,139 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { MODEL_ACCESS_AGENT, modelAccessDoor, providerAttention, resolveDoor } from "./model-access";
+import { providerAttention, resolveDoor } from "./model-access";
 import { AGENTS, modelAccessActionLine } from "./workspace-providers-copy";
 import { absoluteTime } from "./format";
 import { aheadByHours } from "./test-clock";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "./test-fixtures";
-import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "./types";
-
-// The fixtures are REAL server shapes (internal/api/modelaccess.go's
-// setupModelAccess + userModelAccess), not hand-picked field bags: whose
-// credential a row grades is the whole question this predicate answers, and a
-// fixture that cannot occur would prove a render no daemon produces.
-
-/** An enabled per_user + bedrock_sso claude-code row — the deployment shape
- *  where every person signs in for themselves. */
-function perUserRow(id = MODEL_ACCESS_AGENT): SetupHarnessTool {
-  return {
-    id,
-    display: id,
-    has_gateway: false,
-    has_login: true,
-    enabled: true,
-    mechanism: "bedrock_sso",
-    credential_source: "per_user",
-  };
-}
-
-/** The `shared` roster row: ONE credential for everybody, the operator's. */
-function sharedRow(): SetupHarnessTool {
-  return {
-    id: MODEL_ACCESS_AGENT,
-    display: "claude-code",
-    has_gateway: false,
-    has_login: true,
-    enabled: true,
-    mechanism: "bedrock_sso",
-    credential_source: "shared",
-  };
-}
-
-function statusFor(access: SetupModelAccess | undefined, harnesses: SetupHarnessTool[]): SetupStatus {
-  return baseStatus({ model_access: access, harnesses });
-}
-
-const OPERATOR = { operator: true };
-const MEMBER = { operator: false };
-
-describe("modelAccessDoor — perUser is the claude-code row, never another agent's", () => {
-  it("an enabled per_user bedrock_sso claude-code row makes the door per-user", () => {
-    const door = modelAccessDoor(
-      statusFor({ state: "not_configured", action: AGENTS.SIGN_IN_AWS }, [perUserRow()]),
-      MEMBER,
-    );
-    expect(door.perUser).toBe(true);
-    expect(door.needsAttention).toBe(true);
-    expect(door.actionable).toBe(true);
-    expect(door.action).toBe(AGENTS.SIGN_IN_AWS);
-  });
-
-  it("a per_user row for a DIFFERENT agent does not", () => {
-    // `per_user` requires bedrock_sso but NOT claude-code (agent_providers.go),
-    // so a codex per-user row is savable — and model_access grades the
-    // claude-code row alone (modelaccess.go's modelAccessAgent).
-    const door = modelAccessDoor(statusFor({ state: "not_configured" }, [perUserRow("codex")]), MEMBER);
-    expect(door.perUser).toBe(false);
-  });
-
-  it("a DISABLED claude-code per_user row does not (the server scopes it to the operator)", () => {
-    const off = { ...perUserRow(), enabled: false };
-    expect(modelAccessDoor(statusFor({ state: "not_configured" }, [off]), MEMBER).perUser).toBe(false);
-  });
-});
-
-describe("modelAccessDoor — the shared-dead state is audience-aware (Codex #7)", () => {
-  // awsSSOCredentialState returns shared_expired for a missing OR dead shared
-  // credential for its ADMIN too — setupModelAccess grades the credential's
-  // scope, not the viewer's role — so without the operator arm an admin with an
-  // ordinary dead shared credential reads "ask your admin" with no button.
-  it("needs attention for everyone, and is actionable only for the operator", () => {
-    const status = statusFor(
-      { state: "shared_expired", action: "Your admin's model credential expired — ask them to reconnect it" },
-      [sharedRow()],
-    );
-    expect(modelAccessDoor(status, MEMBER)).toMatchObject({ needsAttention: true, actionable: false });
-    expect(modelAccessDoor(status, OPERATOR)).toMatchObject({ needsAttention: true, actionable: true });
-  });
-
-  it("an admin's shared-row `expiring` is actionable (their own repair path)", () => {
-    // passthrough, never compared to the clock — modelAccessDoor forwards the
-    // server's deadline/action verbatim (model-access.ts:138), it never grades
-    // them against Date.now().
-    const status = statusFor(
-      { state: "expiring", action: "Sign in again before 2026-09-19T14:03:22Z", deadline: "2026-09-19T14:03:22Z" },
-      [sharedRow()],
-    );
-    const door = modelAccessDoor(status, OPERATOR);
-    expect(door.actionable).toBe(true);
-    expect(door.perUser).toBe(false);
-    expect(door.deadline).toBe("2026-09-19T14:03:22Z");
-  });
-
-  it("a pin-contradicted session is expired_signin, and carries the server's two-pair sentence", () => {
-    const action =
-      "Your stored AWS session is for account 111111111111 / role Old; this row now allows 222222222222 / New — sign in again.";
-    const door = modelAccessDoor(statusFor({ state: "expired_signin", action }, [perUserRow()]), MEMBER);
-    expect(door.actionable).toBe(true);
-    expect(door.action).toBe(action);
-  });
-});
-
-describe("modelAccessDoor — the states with nothing to say", () => {
-  it("`live` needs no attention", () => {
-    expect(modelAccessDoor(statusFor({ state: "live" }, [perUserRow()]), MEMBER).needsAttention).toBe(false);
-  });
-
-  it("`not_applicable` (a mechanism principal, not a person) needs no attention", () => {
-    expect(modelAccessDoor(statusFor({ state: "not_applicable" }, [perUserRow()]), OPERATOR)).toMatchObject({
-      needsAttention: false,
-      actionable: false,
-    });
-  });
-
-  it("an absent model_access (a legacy install, or an older daemon) needs no attention", () => {
-    expect(modelAccessDoor(statusFor(undefined, []), OPERATOR)).toMatchObject({
-      state: "",
-      needsAttention: false,
-      actionable: false,
-    });
-  });
-
-  it("a null status (nothing fetched yet) needs no attention", () => {
-    expect(modelAccessDoor(null, OPERATOR).needsAttention).toBe(false);
-  });
-});
+import type { SetupStatus } from "./types";
 
 describe("modelAccessActionLine — the deadline is localised, never a raw UTC stamp", () => {
   it("re-composes `expiring` through the frozen template with the viewer's own clock", () => {
@@ -160,8 +33,8 @@ describe("modelAccessActionLine — the deadline is localised, never a raw UTC s
   });
 
   it("never rewords any other state's action", () => {
-    const action = "Your admin's model credential expired — ask them to reconnect it";
-    expect(modelAccessActionLine({ state: "shared_expired", action })).toBe(action);
+    const action = "Your stored AWS session is for another account — sign in again.";
+    expect(modelAccessActionLine({ state: "expired_signin", action })).toBe(action);
     expect(modelAccessActionLine(undefined)).toBe("");
   });
 });
@@ -170,9 +43,9 @@ describe("modelAccessActionLine — the deadline is localised, never a raw UTC s
 describe("resolveDoor — which door an entrance opens", () => {
   const { bedrock, claude, gateway, anthropicKey } = MODEL_PROVIDERS;
 
-  it("with no provider block, a login request is today's door", () => {
-    expect(resolveDoor(baseStatus(), { login: "aws" }, "user")).toEqual({ kind: "legacy", login: "aws" });
-    expect(resolveDoor(baseStatus(), { login: "anthropic" }, "user")).toEqual({ kind: "legacy", login: "anthropic" });
+  it("with no provider block there is no door (#548: the provider door is the only one)", () => {
+    expect(resolveDoor(baseStatus(), { login: "aws" }, "user")).toBeNull();
+    expect(resolveDoor(baseStatus(), { login: "anthropic" }, "user")).toBeNull();
     expect(resolveDoor(baseStatus(), { provider: "bedrock-prod" }, "user")).toBeNull();
   });
 
@@ -205,9 +78,9 @@ describe("resolveDoor — which door an entrance opens", () => {
     expect(resolveDoor(offDefault, { login: "aws" }, "user")).toMatchObject({ provider: { id: "bedrock-prod" } });
   });
 
-  it("a login request with no provider of its kind stays today's door (the server's refusal says where to go)", () => {
+  it("a login request with no provider of its kind opens no door", () => {
     const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
-    expect(resolveDoor(status, { login: "aws" }, "user")).toEqual({ kind: "legacy", login: "aws" });
+    expect(resolveDoor(status, { login: "aws" }, "user")).toBeNull();
   });
 
   it("a provider request opens that provider's door: a sign-in, or a key/token with whether one is stored", () => {
@@ -222,9 +95,9 @@ describe("resolveDoor — which door an entrance opens", () => {
     expect(resolveDoor(status, { provider: "nobody" }, "user")).toBeNull();
   });
 
-  it("the provider doors are User view only: the Admin view keeps today's door and opens no provider door", () => {
+  it("the provider doors are User view only: the Admin view opens no door", () => {
     const status = providerStatus([{ provider: bedrock, defaultFor: ["claude-code"] }]);
-    expect(resolveDoor(status, { login: "aws" }, "admin")).toEqual({ kind: "legacy", login: "aws" });
+    expect(resolveDoor(status, { login: "aws" }, "admin")).toBeNull();
     expect(resolveDoor(status, { provider: "bedrock-prod" }, "admin")).toBeNull();
   });
 });

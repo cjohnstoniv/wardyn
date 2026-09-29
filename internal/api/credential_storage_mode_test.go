@@ -37,7 +37,7 @@ func TestCredentialStorageMode(t *testing.T) {
 // redaction ever starts zeroing it.
 func TestSetupStatus_CredentialStorageSurvivesMemberRedaction(t *testing.T) {
 	full := SetupStatus{CredentialStorage: "key_vault"}
-	got := redactSetupStatusForUser(full, false, false)
+	got := redactSetupStatusForUser(full)
 	if got.CredentialStorage != "key_vault" {
 		t.Fatalf("redacted CredentialStorage = %q, want it kept (\"key_vault\")", got.CredentialStorage)
 	}

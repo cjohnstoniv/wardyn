@@ -87,15 +87,15 @@ absent for the rest of the session.
 - In the preview, `GET /setup/status` grades your model access
   `not_configured` with "Sign in to AWS", and a Claude Code run is refused
   at create with the same sentence a member who has not signed in meets.
-- `POST /setup/harness-login` answers `409`: *"Exit the user view to sign
-  in to AWS — the capture would land on your own identity."*
+- `POST /model-providers/{id}/sign-in` answers `409`: *"Exit the user view
+  to sign in — the capture would land on your own identity."*
 - Nothing is deleted: your session sits untouched in the store and comes
   back the moment you exit.
 - The transition is audited as `auth.user_view.set` (`auth.member_mode`
   dual-emitted alongside it through 0.8.x) with `no_credential: true`
   beside `enabled` and `real_role`.
 
-Inside the preview, **signing in is refused** — `POST /setup/harness-login`
+Inside the preview, **signing in is refused** — `POST /model-providers/{id}/sign-in`
 answers `409` while the posture is on, deliberately. The preview shows a
 new member's STATE, not their flow, and a sign-in completed there would
 capture a credential against the admin's own principal. The preview's band
