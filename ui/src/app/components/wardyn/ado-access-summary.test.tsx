@@ -16,7 +16,9 @@ describe("ADOAccessSummary — the saved-policy summary line", () => {
     unmount();
     const admin = render(<ADOAccessSummary caps={["read", "policy_admin"]} />);
     expect(admin.container.textContent).toBe("Azure DevOps: Read · Change branch policies High risk");
-    expect(screen.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeInTheDocument();
+    // Both the size token and the danger tone survive: a cn()/tailwind-merge
+    // badge dropped text-danger in favour of text-meta.
+    expect(screen.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toHaveClass("text-meta", "text-danger");
   });
 
   it("names a partly chosen group by capability, and never folds high risk into a group", () => {

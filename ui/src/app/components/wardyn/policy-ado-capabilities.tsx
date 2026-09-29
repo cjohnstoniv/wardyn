@@ -17,7 +17,9 @@ import type { RunPolicySpec } from "../../lib/types";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, type ADOCapabilityInfo } from "../../lib/ado-capabilities";
 import { ADO_ACCESS, adoCapName, adoGroupName } from "../../lib/ado-access-copy";
 import { Checkbox } from "../ui/checkbox";
-import { cn } from "../ui/utils";
+// clsx, not cn: tailwind-merge doesn't know the text-meta/text-body size
+// tokens, so clsx() drops them whenever a text colour class is merged in.
+import { clsx } from "clsx";
 import { SectionLabel } from "./primitives";
 import { HighRiskBadge } from "./ado-access-summary";
 
@@ -53,7 +55,7 @@ function CapabilityRow({
   const inert = locked && !checked;
   return (
     <li
-      className={cn("flex items-start gap-2.5 border-b border-border py-2 last:border-b-0", inert && "cursor-not-allowed")}
+      className={clsx("flex items-start gap-2.5 border-b border-border py-2 last:border-b-0", inert && "cursor-not-allowed")}
       title={locked ? ADO_ACCESS.LOCKED : undefined}
       aria-disabled={inert || undefined}
     >
@@ -67,14 +69,14 @@ function CapabilityRow({
       )}
       <Checkbox
         id={id}
-        className={cn("mt-0.5", inert && "sr-only")}
+        className={clsx("mt-0.5", inert && "sr-only")}
         disabled={inert}
         checked={checked}
         onCheckedChange={(v) => onToggle(v === true)}
       />
-      <label htmlFor={id} className={cn("min-w-0 text-body leading-snug", inert && "cursor-not-allowed")}>
+      <label htmlFor={id} className={clsx("min-w-0 text-body leading-snug", inert && "cursor-not-allowed")}>
         <span
-          className={cn(
+          className={clsx(
             "font-medium",
             checked ? "text-foreground" : "text-muted-foreground",
             locked && "line-through decoration-danger/70",
@@ -121,12 +123,12 @@ export function ADOCapabilitiesSection({
           return (
             <fieldset
               key={g.id}
-              className={cn("mt-2.5 overflow-hidden rounded-lg border", risk ? "border-danger/60" : "border-border")}
+              className={clsx("mt-2.5 overflow-hidden rounded-lg border", risk ? "border-danger/60" : "border-border")}
             >
               <legend className="sr-only">{title}</legend>
               <div
                 aria-hidden="true"
-                className={cn("px-3 py-2 text-xs font-semibold", risk ? "bg-danger-subtle text-danger" : "bg-muted")}
+                className={clsx("px-3 py-2 text-xs font-semibold", risk ? "bg-danger-subtle text-danger" : "bg-muted")}
               >
                 {title}
               </div>

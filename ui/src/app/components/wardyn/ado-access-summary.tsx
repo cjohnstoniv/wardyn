@@ -10,14 +10,21 @@
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../lib/ado-capabilities";
 import { ADO_ACCESS, adoCapName } from "../../lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR, ADO_GROUP_COPY } from "../../lib/workspace-providers-copy";
-import { Chip } from "./primitives";
-import { cn } from "../ui/utils";
+import { clsx } from "clsx";
 
+// Its own span, not a Chip: Chip merges classes through cn(), and
+// tailwind-merge doesn't know the text-meta size token, so it read text-meta as
+// a colour and dropped the danger tone.
 export function HighRiskBadge({ className }: { className?: string }) {
   return (
-    <Chip tone="danger" className={cn("px-1.5 py-0 text-meta font-semibold", className)}>
+    <span
+      className={clsx(
+        "inline-flex w-fit items-center whitespace-nowrap rounded-full border border-danger/25 bg-danger-subtle px-1.5 text-meta font-semibold leading-4 text-danger",
+        className,
+      )}
+    >
       {ADO_ENTRA_EDITOR.HIGH_RISK_BADGE}
-    </Chip>
+    </span>
   );
 }
 
@@ -46,7 +53,7 @@ export function ADOAccessSummary({ caps, className }: { caps: unknown; className
   const { parts, highRisk } = adoAccessSummary(caps);
   if (parts.length === 0) return null;
   return (
-    <p className={cn("text-xs text-muted-foreground", className)} data-testid="ado-access-summary">
+    <p className={clsx("text-xs text-muted-foreground", className)} data-testid="ado-access-summary">
       {ADO_ACCESS.SUMMARY_PREFIX} <b className="font-semibold text-foreground">{parts.join(" · ")}</b>
       {highRisk && (
         <>
