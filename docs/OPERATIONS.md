@@ -3214,14 +3214,18 @@ it.
   sealed config, and brokered sidecar uploads go through the proxy) and the
   ingest. A proxy dispatched before 0.7.12 still dials `http://wardynd:8080`
   and gets `404` on every call after an upgrade (on the chart it has no route
-  back at all: the runs namespace is never granted the `http` port). On Docker,
-  restart such runs with `POST /api/v1/admin/runs/restart`, which hands the
-  proxy the current URL and CA, or stop them before upgrading. On Kubernetes
-  such runs cannot be restarted: the substrate implements no
-  `runner.ProxyReviver` (the agent pod pins the proxy pod's IP), so the restart
-  refuses each one with `runner.ErrReviveUnsupported` and reason
-  `revive_unsupported`. Stop them (before upgrading, or after with
-  `POST /api/v1/runs/{id}/kill`) and start a new run instead. The proxy authenticates
+  back at all: the runs namespace is never granted the `http` port). Such a
+  run cannot be restarted on either runner. On Docker it has no stored proxy
+  config (migration 0093 records one only for runs dispatched from then on), so
+  `POST /api/v1/admin/runs/restart` answers it `ok:false` with reason
+  `revive_config_not_stored`, and a single revive is a `409` (see
+  [Run lifetime](operations/run-lifetime.md), "Upgrading to this release"). On
+  Kubernetes the substrate implements no `runner.ProxyReviver` (the agent pod
+  pins the proxy pod's IP), so the restart refuses it with
+  `runner.ErrReviveUnsupported` and reason `revive_unsupported`. On both, stop
+  such runs (before upgrading, or after with `POST /api/v1/runs/{id}/kill`) and
+  start a new run instead. The restart still replaces the proxy of a run whose
+  config a supported release stored. The proxy authenticates
   to `wardynd` with its run token (bearer, not mTLS —
   `threatmodel/THREAT-MODEL.md` B6).
 

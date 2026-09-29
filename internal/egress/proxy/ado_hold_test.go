@@ -410,3 +410,35 @@ func TestADOHold_AFirstAskAnsweredWithoutTheCapabilityIsRefused(t *testing.T) {
 		t.Error("the run was widened to a capability nobody granted")
 	}
 }
+
+// A push to main that nobody may be asked about (always_deny, above the
+// ceiling) is refused in terms of where the run may push, not the control
+// plane's policy_bypass sentence; a real bypass (a PR completed with
+// bypassPolicy) keeps that sentence, and a raised review keeps its own.
+func TestADOHold_RunBranchRefusalReplacesTheControlPlaneSentence(t *testing.T) {
+	bypass := fmt.Sprintf("Wardyn refused this Azure DevOps request: it needs %q, and this run's policy refuses more access without asking.",
+		adoscope.Label(adoscope.CapPolicyBypass))
+	push := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
+	for _, reason := range []string{"capability_always_deny", "capability_above_ceiling"} {
+		cp := newCapControlPlane(t)
+		cp.refuse, cp.refuseReason = bypass, reason
+		h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+		rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", push, nil)
+		h.mustRefuse(t, rec, "this run may push only to its own branch")
+		if strings.Contains(rec.Body.String(), adoscope.Label(adoscope.CapPolicyBypass)) {
+			t.Errorf("%s: the push refusal names a branch policy: %s", reason, rec.Body.String())
+		}
+	}
+
+	cp := newCapControlPlane(t)
+	cp.refuse, cp.refuseReason = bypass, "capability_always_deny"
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+	h.mustRefuse(t, h.do(t, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1?api-version=7.1",
+		`{"status":"completed","completionOptions":{"bypassPolicy":true}}`, nil), "refuses more access without asking")
+
+	review := "Wardyn refused this Azure DevOps request and asked a person to approve \"x\" (approval 1). Retry once it is approved."
+	cp = newCapControlPlane(t)
+	cp.refuse, cp.refuseReason = review, "capability_review"
+	h = newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", push, nil), "(approval 1). Retry once it is approved.")
+}

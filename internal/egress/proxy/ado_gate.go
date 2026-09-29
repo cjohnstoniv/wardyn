@@ -47,14 +47,37 @@ func adoRefProtected(string) bool { return true }
 // adoRunRefProtected is the ONE protected-ref predicate both Azure DevOps
 // doors use — the REST gate's classifier and the git broker's push check — so
 // a ref needs the same capability whichever door moves it. adoRefProtected
-// with one exception: a ref inside this run's own branch namespace
-// (refs/heads/wardyn/<run-id>/…) needs code_write, not policy_bypass.
+// with two exceptions, each needing code_write, not policy_bypass: a ref
+// inside this run's own branch namespace (refs/heads/wardyn/<run-id>/…), and
+// any ref at all when the run's policy sets git_push_any_branch — Azure
+// DevOps' own branch policies then decide, as a GitHub ruleset does on the
+// App lane.
 func (p *Proxy) adoRunRefProtected(ref string) bool {
+	if p.policy.GitPushAnyBranch() {
+		return false
+	}
 	prefix := BranchNSPrefix(p.runID)
 	if strings.HasPrefix(ref, prefix) && len(ref) > len(prefix) {
 		return false
 	}
 	return adoRefProtected(ref)
+}
+
+// adoRunBranchMove reports whether v is policy_bypass only because it moves a
+// ref outside this run's branch namespace (adoRunRefProtected): a ref-move
+// verdict naming refs. A pull request completed with bypassPolicy, and an
+// Update Ref whose ref the catalogue cannot see, name none.
+func adoRunBranchMove(v adoscope.Verdict) bool {
+	return v.Capability == adoscope.CapPolicyBypass && len(v.Refs) > 0
+}
+
+// adoRunBranchRefusal is the sentence for a refused adoRunBranchMove: it says
+// where this run may push and which policy field widens that, rather than
+// naming a branch policy nobody consulted.
+func (p *Proxy) adoRunBranchRefusal() string {
+	return "Wardyn refused this push: this run may push only to its own branch (" +
+		strings.TrimPrefix(BranchNSPrefix(p.runID), "refs/heads/") +
+		"…). Pushing to other branches needs a policy with git_push_any_branch: true."
 }
 
 // adoGitVerbs are the git smart-HTTP endpoints. They are refused on the
@@ -73,6 +96,9 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 		return src
 	}
 	msg, held := adoCheck(r, host, grant, p.adoRunRefProtected)
+	if held != nil && adoRunBranchMove(*held) {
+		msg = p.adoRunBranchRefusal()
+	}
 	// Push rules sit between hard refusals and the one liftable refusal: a
 	// content write is judged before anyone is asked to grant a capability.
 	if msg != "" && held == nil {

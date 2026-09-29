@@ -58,10 +58,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exposes none of that surface. A local install (loopback `http://` control plane) has no internal
   listener and is unchanged. Every shipped caller already dials the internal listener (compose,
   Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
-  still dials the console and now gets `404` on every call. On Docker, restart such runs
-  (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
-  On Kubernetes the restart refuses them (`revive_unsupported`, #1342): stop them and start a new
-  run instead.
+  still dials the console and now gets `404` on every call. Such a run cannot be restarted: on
+  Docker it has no stored proxy config (`revive_config_not_stored`), and on Kubernetes the restart
+  refuses it (`revive_unsupported`, #1342). Stop such runs before upgrading (or kill them after) and
+  start a new run instead.
 
 ### Added
 
@@ -364,7 +364,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A request
   raised before this release has no `updates`, still reads the same in the console and API, and
   matches no new push.
-
+- **The Azure DevOps (Entra) lane honours `git_push_any_branch` (#1370).** With it on, a push or
+  REST ref move to a branch outside the run's `refs/heads/wardyn/<run-id>/` namespace needs
+  `code_write`, not `policy_bypass`, on both doors (the git broker and the REST gate), and Azure
+  DevOps' own branch policies decide; each such git push is recorded as
+  `brokered:git:branch-ns-off`, as on the GitHub lanes. Without it nothing changes, but the refusal
+  now says the run may push only to its own branch and names the switch, instead of claiming a
+  branch policy was bypassed. A pull request completed with `bypassPolicy`, Update Ref, annotated
+  tags and fork syncs still need `policy_bypass`.
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
