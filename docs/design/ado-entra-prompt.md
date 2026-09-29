@@ -235,9 +235,7 @@ the sentence that whatever is allowed happens under that person's name at Azure 
 you're approving:" (this one request) and "Blast radius:" (what the capability covers for as long as
 it is held) — the shipped two-line shape.
 
-**The protected-ref variant is a different capability, not a warning on the same one.** Any ref move
-onto a policy-protected ref classifies as `policy_bypass`, on both doors (the git broker's pkt-line
-commands and the REST `refs`/`pushes` bodies). The card names the policy that will not stop it.
+**A ref outside the run's own branch is a rule of the run, not a capability.** Any ref move outside `refs/heads/wardyn/<run-id>/…`, on either door (the git broker's pkt-line commands and the REST `refs`/`pushes`/`annotatedtags`/`cherrypicks`/`reverts` requests), is refused unless the run's policy sets `git_push_any_branch`; with it on, the move is `code_write` and Azure DevOps' own policies decide. `policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy`. The card names no branch policy: Wardyn never reads one (owner ruling 2026-09-29).
 
 **Four states have no decision to make, and draw no buttons.** Above the ceiling; always refused;
 refused by the run's governance policy; and a write Wardyn cannot classify. Drawing a disabled
@@ -284,7 +282,7 @@ not run because the sign-in had ended.
   separately) — which changes two chips and two remedies and **is not a seventh state**; plus
   shared-and-live (which reuses the existing "Provided by your admin" chip and deliberately makes no
   per-person claim).
-- **Card, decidable** — push; push past a branch policy; change a branch policy; complete a pull
+- **Card, decidable** — push; complete a pull request past its policies; change a branch policy; complete a pull
   request. Live, and in the list.
 - **Card, not decidable** — above the ceiling; always refused; refused by governance; unclassifiable;
   not yours to decide; timed out; cancelled with the run.
@@ -606,10 +604,6 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `DISCONNECT_CONFIRM_TITLE` | Disconnect Azure DevOps? |
 | `DISCONNECT_CONFIRM_BODY` | Runs you start after this can't reach Azure DevOps. Runs already going keep the connection they started with. Signing in to Wardyn again reconnects you — to stop that, withdraw the permission from your Microsoft account's My Apps page. |
 | `ACCESS_SHARED_NOTE` | Rendered when the row uses a shared token and that token works. It is deliberately not a per-person claim: the run does not act as this person. |
-
-A ref's policy summary on the card ("Protected: 2 reviewers required, build must pass") is rendered
-from what Azure DevOps reports about that ref. It is not frozen here, because it is the forge's
-description of the forge's own configuration and Wardyn does not author it.
 
 `ACCESS_LIVE_ORG` renders with **no action line and no button** — that is the point of the whole
 surface. `ACCESS_NOT_CONNECTED` never renders alone: it always carries one of the four `CAUSE_*`
