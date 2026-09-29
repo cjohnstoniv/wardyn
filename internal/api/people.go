@@ -23,6 +23,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -140,6 +141,11 @@ func (s *Server) handleCreatePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	case s.isReservedPrincipal(req.Principal):
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPersonPrincipalReserved, "principal: that subject is reserved for a non-person identity")
+		return
+	case want.ObjectID == "" && s.cfg.OIDC != nil && s.cfg.OIDC.KeysPeopleByObjectID() &&
+		strings.HasPrefix(strings.ToLower(req.Principal), entraPrincipalPrefix):
+		// No sign-in can become such a subject (PrincipalFor refuses it).
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPersonPrincipalReserved, "principal: the entra: namespace is set by tenant_id and object_id, never as a subject")
 		return
 	case email != "" && !validPersonEmail(email):
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPersonEmailInvalid, "email: invalid")
@@ -375,7 +381,50 @@ func (k peopleKeying) PrincipalFor(ctx context.Context, subj oidc.Subject) (stri
 	case !samePersonKey(p, subj):
 		return subj.Sub, false, nil
 	}
+	// Someone already known here by their pairwise sub keeps it: re-keying
+	// them would leave everything they own behind, with no way back.
+	known, err := k.subKnown(ctx, subj.Sub)
+	if err != nil {
+		return "", false, err
+	}
+	if known {
+		k.attachIgnored(ctx, subj, p.Principal)
+		return subj.Sub, false, nil
+	}
 	return p.Principal, false, nil
+}
+
+// subKnown reports whether sub already names someone here: a person record,
+// or an API token, SSH key, run or workspace they own. Read only when a sign-in
+// matches an object-id person, so an ordinary sign-in pays nothing.
+func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
+	if _, err := k.ps.GetPerson(ctx, sub); !errors.Is(err, store.ErrNotFound) {
+		return err == nil, err
+	}
+	st := k.s.cfg.Store
+	if toks, err := st.ListAPITokensByPrincipal(ctx, sub); err != nil || len(toks) > 0 {
+		return len(toks) > 0, err
+	}
+	if keys, err := st.ListSSHKeysByPrincipal(ctx, sub); err != nil || len(keys) > 0 {
+		return len(keys) > 0, err
+	}
+	if rp, ok := st.(store.RunsFilteredPager); ok {
+		runs, err := rp.ListRunsFiltered(ctx, store.RunFilter{Owner: sub, IncludeKilled: true}, store.Page{Limit: 1})
+		if err != nil || len(runs) > 0 {
+			return len(runs) > 0, err
+		}
+	}
+	wss, err := st.ListWorkspaces(ctx)
+	return slices.ContainsFunc(wss, func(w types.Workspace) bool { return w.OwnedBy == sub }), err
+}
+
+// attachIgnored writes the denied person.attach for a sign-in that matched an
+// object-id person but kept its own, already-known sub.
+func (k peopleKeying) attachIgnored(ctx context.Context, subj oidc.Subject, principal string) {
+	slog.WarnContext(ctx, "api: an Entra sign-in matched a person set up by object id, but its sub already names someone here; it keeps its sub",
+		"sub", subj.Sub, "person", principal)
+	k.s.recordAudit(ctx, k.s.auditEvent(nil, types.ActorHuman, subj.Sub, "person.attach", principal, "denied",
+		mustJSON(map[string]any{"reason": "sub_known", "sub": subj.Sub, "issuer": subj.Issuer, "tenant_id": subj.TenantID, "object_id": subj.ObjectID})))
 }
 
 func samePersonKey(p types.Person, subj oidc.Subject) bool {

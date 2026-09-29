@@ -166,6 +166,10 @@ type Session struct {
 	// UserViewTypeName the instant DropUserView fires, before it is cleared —
 	// see UserViewTypeName's doc for why this is the only chance to record it.
 	UserViewDroppedName string `json:"uvdn,omitempty"`
+
+	// attached is the token's own Subject when admission resolved it to a
+	// person set up by object id (RecordAttach). Never encoded: unexported.
+	attached *Subject
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -209,11 +213,20 @@ type Subject struct {
 // only when KeysPeopleByObjectID; every other issuer signs in as its `sub`, exactly as before.
 type PersonKeying interface {
 	// PrincipalFor is the principal s signs in as: the person keyed by exactly s.Issuer,
-	// s.TenantID and s.ObjectID if there is one, else s.Sub. refused is true when s.Sub itself
+	// s.TenantID and s.ObjectID if there is one and s.Sub names no one yet, else s.Sub. refused is true when s.Sub itself
 	// names a person keyed by an object id this token does not carry. An email never enters it.
 	PrincipalFor(ctx context.Context, s Subject) (principal string, refused bool, err error)
 	// Attached records an admitted sign-in that resolved to such a person, naming both parties.
 	Attached(r *http.Request, s Subject, principal string)
+}
+
+// RecordAttach reports sess's attach to PersonKeying.Attached when admission
+// resolved it to a person set up by object id. Each door calls it once it has
+// no refusal left to make, so a refused sign-in or exchange records none.
+func (a *Authenticator) RecordAttach(r *http.Request, sess Session) {
+	if k := a.personKeying(); k != nil && sess.attached != nil {
+		k.Attached(r, *sess.attached, sess.Sub)
+	}
 }
 
 // AttachPersonKeying joins k to this Authenticator; nil detaches.

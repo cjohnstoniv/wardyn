@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,7 @@ const (
 type entraPeoplePG struct {
 	peoplePG
 	issuer string
+	sign   func(claims map[string]any) string
 	signIn func(sub, tid, oid string)
 }
 
@@ -84,13 +86,16 @@ func newEntraPeoplePG(t *testing.T) entraPeoplePG {
 	e.h.srv.router = e.h.srv.routes()
 	e.super = accessSession(t, "root", "root@corp.example", oidc.RoleAdmin, []string{})
 	e.sec = accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
-	return entraPeoplePG{peoplePG: e, issuer: issuer, signIn: func(sub, tid, oid string) {
-		claims, _ := json.Marshal(map[string]any{
+	sign := func(claims map[string]any) string {
+		raw, _ := json.Marshal(claims)
+		return gooidctest.SignIDToken(priv, "entra-key", "RS256", string(raw))
+	}
+	return entraPeoplePG{peoplePG: e, issuer: issuer, sign: sign, signIn: func(sub, tid, oid string) {
+		idToken = sign(map[string]any{
 			"iss": issuer, "sub": sub, "aud": "wardyn-client", "nonce": "entra-nonce",
 			"email": personEmail, "groups": []string{"eng"}, "tid": tid, "oid": oid,
 			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
 		})
-		idToken = gooidctest.SignIDToken(priv, "entra-key", "RS256", string(claims))
 	}}
 }
 
@@ -241,6 +246,12 @@ func TestPeopleEntra_CreateRules(t *testing.T) {
 			t.Errorf("%s: %d %s, want 422", name, w.Code, w.Body.String())
 		}
 	}
+	// The entra: namespace as a plain subject: no sign-in could ever become it.
+	for _, p := range []string{"entra:" + entraTenant + ":9a8b7c6d-5e4f-3a2b-1c0d-000000000000", "ENTRA:X:Y"} {
+		if w := e.createEntraPerson(t, `{"principal":"`+p+`"}`); w.Code != http.StatusUnprocessableEntity || errorReason(w) != "person_principal_reserved" {
+			t.Errorf("plain principal %q: %d %s, want 422 person_principal_reserved", p, w.Code, w.Body.String())
+		}
+	}
 	other := "0b1c2d3e-4f50-6172-8394-111111111111"
 	if _, _, err := e.st.CreatePerson(context.Background(), types.Person{
 		Principal: "entra:" + other + ":" + entraObject, Issuer: "https://sts.windows.net/" + other + "/",
@@ -266,5 +277,111 @@ func TestPeopleEntra_CreateRules(t *testing.T) {
 	}
 	if w := doSSO(t, plain.h.srv, http.MethodPost, "/api/v1/people", plain.sec, `{`+key+`}`); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("object-id form off Entra: %d %s, want 422", w.Code, w.Body.String())
+	}
+}
+
+// TestPeopleEntra_KnownSubKeepsItsPrincipal: an object-id person created for
+// someone who has ALREADY signed in, and is known here under their pairwise
+// sub, never re-keys them. Their next sign-in keeps the sub and everything it
+// owns, writes no attach, and records the ignored match as a denied
+// person.attach naming both.
+func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// known makes pairwise-a known from its first session and returns the
+		// check its second session must pass.
+		known func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(second *http.Cookie) bool
+	}{
+		{"confirmed by sub, with a minted token", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+			if w := e.createPerson(t, e.sec, "pairwise-a", ""); w.Code != http.StatusCreated {
+				t.Fatalf("confirm by sub: %d %s", w.Code, w.Body.String())
+			}
+			tok := decodeToken(t, e.mintFor(t, e.sec, "pairwise-a"))
+			return func(second *http.Cookie) bool { return e.seesToken(t, second, tok.ID.String()) }
+		}},
+		{"confirmed by sub only", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+			if w := e.createPerson(t, e.sec, "pairwise-a", ""); w.Code != http.StatusCreated {
+				t.Fatalf("confirm by sub: %d %s", w.Code, w.Body.String())
+			}
+			return func(second *http.Cookie) bool {
+				return decodeToken(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/tokens", second, `{"name":"who"}`)).Principal == "pairwise-a"
+			}
+		}},
+		{"their own API token", func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(*http.Cookie) bool {
+			w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/tokens", first, `{"name":"mine"}`)
+			tok := decodeToken(t, w)
+			return func(second *http.Cookie) bool { return e.seesToken(t, second, tok.ID.String()) }
+		}},
+		{"a run", func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(*http.Cookie) bool {
+			var run createRunResponse
+			if err := json.Unmarshal(mustCreate(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", first, `{"agent":"claude-code","task":"t"}`)).Body.Bytes(), &run); err != nil {
+				t.Fatal(err)
+			}
+			return func(second *http.Cookie) bool {
+				return doSSO(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String(), second, "").Code == http.StatusOK
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEntraPeoplePG(t)
+			e.signIn("pairwise-a", entraTenant, entraObject)
+			_, first := e.callback(t)
+			if first == nil {
+				t.Fatal("first sign-in refused")
+			}
+			check := c.known(t, e, first)
+			if w := e.createEntraPerson(t, `{"tenant_id":"`+entraTenant+`","object_id":"`+entraObject+`"}`); w.Code != http.StatusCreated {
+				t.Fatalf("object-id create: %d %s", w.Code, w.Body.String())
+			}
+			e.signIn("pairwise-a", entraTenant, entraObject)
+			_, second := e.callback(t)
+			if second == nil || !check(second) {
+				t.Fatalf("second sign-in: session %v, want still pairwise-a with what it owns", second)
+			}
+			rows := e.auditRows("person.attach")
+			if len(rows) != 1 || rows[0].Outcome != "denied" || rows[0].Actor != "pairwise-a" || rows[0].Target != entraPerson ||
+				!strings.Contains(string(rows[0].Data), `"reason":"sub_known"`) {
+				t.Fatalf("person.attach rows = %+v, want one denied sub_known naming pairwise-a and the person", rows)
+			}
+			if p, err := e.st.GetPerson(context.Background(), entraPerson); err != nil || p.FirstSignedInAt != nil {
+				t.Errorf("object-id person = %+v (%v), want never signed in", p, err)
+			}
+		})
+	}
+}
+
+// TestPeopleEntra_ExchangeRecordsAttachOnlyWhenAdmitted: a portal's token
+// exchange for an object-id person writes person.attach only once it mints;
+// its own later refusal (outside the portal's group) writes none.
+func TestPeopleEntra_ExchangeRecordsAttachOnlyWhenAdmitted(t *testing.T) {
+	e := newEntraPeoplePG(t)
+	if w := e.createEntraPerson(t, `{"tenant_id":"`+entraTenant+`","object_id":"`+entraObject+`","email":"`+personEmail+`"}`); w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/admin/delegates", e.super,
+		`{"name":"front end","idp_client_id":"`+delegPortalClient+`","group":"portal-users"}`)
+	var d types.Delegate
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &d) != nil {
+		t.Fatalf("register portal: %d %s", w.Code, w.Body.String())
+	}
+	exchange := func(group string) int {
+		subject := e.sign(map[string]any{
+			"iss": e.issuer, "sub": "pairwise-a", "aud": "wardyn-client", "azp": delegPortalClient,
+			"email": personEmail, "groups": []string{group}, "tid": entraTenant, "oid": entraObject,
+			"iat": time.Now().Unix(), "exp": time.Now().Add(5 * time.Minute).Unix(),
+		})
+		form := url.Values{"grant_type": {grantTypeTokenExchange}, "subject_token": {subject}, "subject_token_type": {tokenTypeAccessToken}}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/token", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetBasicAuth(d.ID.String(), d.Credential)
+		w := httptest.NewRecorder()
+		e.h.srv.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := exchange("eng"); code != http.StatusForbidden || len(e.auditRows("person.attach")) != 0 {
+		t.Fatalf("exchange outside the portal's group: %d, %d person.attach rows; want 403 and none", code, len(e.auditRows("person.attach")))
+	}
+	if code := exchange("portal-users"); code != http.StatusOK || len(e.auditRows("person.attach")) != 1 {
+		t.Fatalf("admitted exchange: %d, %d person.attach rows; want 200 and one", code, len(e.auditRows("person.attach")))
 	}
 }

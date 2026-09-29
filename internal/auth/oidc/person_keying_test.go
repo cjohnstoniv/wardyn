@@ -146,9 +146,15 @@ func TestVerifySubjectTokenPersonKeying(t *testing.T) {
 	auth.AttachPersonKeying(k)
 	c := env.subjectClaims()
 	c["tid"], c["oid"] = keyTenant, keyObject
-	sess, denied := auth.VerifySubjectToken(httptest.NewRequest(http.MethodPost, "/api/v1/token", nil), env.sign(t, c), testPortalClient, nil)
-	if denied != "" || sess.Sub != keyPerson || len(k.attached) != 1 {
-		t.Fatalf("exchange = %q, %q, attaches %d; want the object-id person, one attach", sess.Sub, denied, len(k.attached))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/token", nil)
+	sess, denied := auth.VerifySubjectToken(r, env.sign(t, c), testPortalClient, nil)
+	if denied != "" || sess.Sub != keyPerson || len(k.attached) != 0 {
+		t.Fatalf("exchange = %q, %q, attaches %d; want the object-id person, no attach before the caller admits it", sess.Sub, denied, len(k.attached))
+	}
+	auth.RecordAttach(r, sess)
+	auth.RecordAttach(r, writoidc.Session{Sub: "someone-else"})
+	if len(k.attached) != 1 || k.attached[0].Sub != "person-sub" {
+		t.Fatalf("attaches after RecordAttach = %+v, want exactly this exchange's", k.attached)
 	}
 }
 

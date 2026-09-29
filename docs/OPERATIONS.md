@@ -2254,13 +2254,22 @@ in any case, is refused (no real Entra `sub` has a colon). Each such sign-in
 writes a `person.attach` audit row naming the person and the pairwise `sub`.
 
 Set up by object id only someone who has **never signed in**. Someone who has
-already signed in is known under their pairwise `sub`; a second, object-id
-record would give their next sign-in a new principal and leave their earlier
-runs and tokens behind. If you give their email, `POST /people` refuses that
-with `409` because the email already names their subject. Confirm such a person
-by `principal` (the `sub` on one of their tokens or runs) instead. Setting up an
-Entra person by email alone is not supported. On any other issuer the object-id
-form is refused `422`, and sign-in keys people by `sub` exactly as before.
+already signed in is known under their pairwise `sub`, and an object-id record
+never re-keys them. If you give their email, `POST /people` refuses the record
+with `409`, because the email already names their subject. Without an email
+Wardyn cannot tell at create time (it does not record a sign-in's `oid`), so
+the check happens at sign-in instead. A sign-in that matches the record but
+whose `sub` already names someone here keeps that `sub`: a person record, or an
+API token, SSH key, run or workspace they own. It does not attach, and it
+writes a `person.attach` row with outcome `denied` and `reason:"sub_known"`
+naming both. The record then stays unused. Confirm such a person by `principal`
+(the `sub` on one of their tokens or runs) instead. Someone who signed in but
+owns none of those (only stored secrets or credentials, say) is not detected,
+and would become the object-id person. Setting up an Entra person by email alone
+is not supported. On an Entra issuer the plain form refuses a `principal` in
+the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in
+can become it. On any other issuer the object-id form is refused `422`, and
+sign-in keys people by `sub` exactly as before.
 
 `POST /people` answers `409` rather than create an ambiguous identity. That
 happens when the email already names another known subject, when the subject is

@@ -291,6 +291,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
+	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
@@ -387,13 +388,14 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
 			"sub", sub, "unreadable_claims", cc.unreadable)
 	}
-	if k := a.personKeying(); k != nil && sub != subj.Sub {
-		k.Attached(r, subj, sub)
-	}
-	return Session{
+	sess := Session{
 		Sub: sub, Email: cc.email, Name: cc.name, Role: role, UserType: d.UserType,
 		Groups: groups, GroupsTruncated: groupsTruncated,
-	}, ""
+	}
+	if sub != subj.Sub {
+		sess.attached = &subj
+	}
+	return sess, ""
 }
 
 // deriveLogin is CallbackHandler's step (5), role and user-type derivation —
