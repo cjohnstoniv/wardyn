@@ -97,6 +97,7 @@ func TestConformanceK8s(t *testing.T) {
 	// Exercise the assembled production path: the orchestrator over the k8s
 	// substrate is what the control plane actually runs.
 	r := orchestrator.New(sub)
+	cs, ns := conformanceClientset(t)
 
 	conformance.Run(t, r, conformance.Options{
 		SandboxImage: agentImage,
@@ -115,6 +116,7 @@ func TestConformanceK8s(t *testing.T) {
 		// into an unset request: the driver's fake-clientset tests can pin what
 		// Wardyn SENDS, never what a real apiserver then defaults.
 		EphemeralStorageProbe: ephemeralStorageProbe,
+		UserDrives:            k8sDriveFixture(t, cs, ns, agentImage),
 		// DefaultRouteProbe: nil (deliberately). This substrate declares
 		// StructuralEgress:false — it proves L1 (NetworkPolicy), never L0
 		// (see internal/runner/k8s's package doc) — so conformance.go's own
@@ -129,6 +131,10 @@ func TestConformanceK8s(t *testing.T) {
 
 	t.Run("ExecIsAcceptedWithADiskBudget", func(t *testing.T) {
 		testExecIsAcceptedWithADiskBudget(t, r, agentImage)
+	})
+
+	t.Run("AgentCannotReachAnythingButTheProxy", func(t *testing.T) {
+		testAgentCannotReachAnythingButTheProxy(t, r, agentImage)
 	})
 }
 
