@@ -254,12 +254,15 @@ var bareErrorBodyAllowlist = map[string]bareWriteErrorEntry{
 }
 
 // reasonConstOutsideReasonFilesAllowlist is the string consts declared outside
-// reasonsGoFiles that are reviewed as NOT wire reasons although they reach a
-// reason position (writeErrorReason's argument, errorBody.Reason). Keyed
-// "file:const". A wire reason declared beside its lane instead of in the
-// closed set is invisible to TestReasonDocsMatchReasonsGo, which reads only
-// reasonsGoFiles.
-var reasonConstOutsideReasonFilesAllowlist = map[string]string{}
+// reasonsGoFiles that are reviewed as NOT wire reasons, although they are
+// reason-named or reach a reason position (writeErrorReason's argument,
+// errorBody.Reason). Keyed "file:const". A wire reason declared beside its lane
+// instead of in the closed set is invisible to TestReasonDocsMatchReasonsGo,
+// which reads only reasonsGoFiles.
+var reasonConstOutsideReasonFilesAllowlist = map[string]string{
+	"runs_create_requirements.go:reasonRequirementModelHost":        "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
+	"runs_create_requirements.go:reasonRequirementModelHostUnknown": "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
+}
 
 // findBareErrorBodyLiterals walks file for an errorBody{...} composite
 // literal with no Reason: key, keyed "file:enclosing-symbol" -> each site's
@@ -325,6 +328,41 @@ func topLevelStringConsts(file *ast.File) []string {
 		}
 	}
 	return names
+}
+
+// findReasonConstsOutsideReasonFiles walks file's top-level consts for a
+// string const named reason* whose value has a wire reason's own shape
+// (reasonWireValueShape), keyed "file:const" -> its trimmed source line. It
+// catches a declaration the use-site check cannot: one reached through a local
+// variable, or not used yet. Prose consts that merely start with "reason"
+// (harness.go's explanations) fail the shape test and are not reasons.
+func findReasonConstsOutsideReasonFiles(fset *token.FileSet, name string, file *ast.File, src []byte) map[string]string {
+	found := map[string]string{}
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, id := range vs.Names {
+				if i >= len(vs.Values) || !strings.HasPrefix(id.Name, "reason") {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if v, err := strconv.Unquote(lit.Value); err == nil && reasonWireValueShape.MatchString(v) {
+					found[name+":"+id.Name] = strings.TrimSpace(exprSourceLine(src, fset.Position(id.Pos()).Line))
+				}
+			}
+		}
+	}
+	return found
 }
 
 // isNonEmptyStringLit reports whether e is a string literal other than "".
@@ -496,7 +534,8 @@ func TestNoAdHocErrorBodyOrReasonLiteral(t *testing.T) {
 	bareBodies := map[string][]string{}
 	adHocLiterals := map[string][]string{}
 	var identUses []reasonIdentUse
-	constFile := map[string]string{} // top-level string const -> its declaring file
+	constFile := map[string]string{}  // top-level string const -> its declaring file
+	strayDecls := map[string]string{} // reason-named wire-shaped consts declared outside reasonsGoFiles
 	fset := token.NewFileSet()
 	scanned := 0
 	for _, e := range entries {
@@ -524,6 +563,11 @@ func TestNoAdHocErrorBodyOrReasonLiteral(t *testing.T) {
 		identUses = append(identUses, idents...)
 		for _, c := range topLevelStringConsts(file) {
 			constFile[c] = name
+		}
+		if !slices.Contains(reasonsGoFiles, name) {
+			for k, v := range findReasonConstsOutsideReasonFiles(fset, name, file, src) {
+				strayDecls[k] = v
+			}
 		}
 	}
 	if scanned == 0 {
@@ -576,14 +620,14 @@ func TestNoAdHocErrorBodyOrReasonLiteral(t *testing.T) {
 
 	// A const in a reason position but declared outside the closed set is a
 	// wire reason TestReasonDocsMatchReasonsGo cannot see, whatever it is named.
-	strayUsed := map[string]bool{}
+	flagged := map[string]bool{}
 	for _, u := range identUses {
 		file, ok := constFile[u.ident]
 		if !ok || slices.Contains(reasonsGoFiles, file) {
 			continue
 		}
 		key := file + ":" + u.ident
-		strayUsed[key] = true
+		flagged[key] = true
 		if _, ok := reasonConstOutsideReasonFilesAllowlist[key]; ok {
 			continue
 		}
@@ -591,11 +635,27 @@ func TestNoAdHocErrorBodyOrReasonLiteral(t *testing.T) {
 			"move it into the closed set (and docs/sdk.md) — TestReasonDocsMatchReasonsGo reads only those files — "+
 			"or, for a value that is not a wire reason, add %q to reasonConstOutsideReasonFilesAllowlist with why.",
 			u.symbolKey, u.ident, u.snippet, u.ident, reasonsGoFiles, key)
+		strayDecls[key] = "" // reported here; the declaration check below need not repeat it
+	}
+	declKeys := make([]string, 0, len(strayDecls))
+	for k := range strayDecls {
+		declKeys = append(declKeys, k)
+	}
+	sort.Strings(declKeys)
+	for _, k := range declKeys {
+		flagged[k] = true
+		if _, ok := reasonConstOutsideReasonFilesAllowlist[k]; ok || strayDecls[k] == "" {
+			continue
+		}
+		t.Errorf("%s declares a reason const outside %v: %s\n"+
+			"move it into the closed set (and docs/sdk.md) — TestReasonDocsMatchReasonsGo reads only those files — "+
+			"or, for a value that is not a wire reason, add %q to reasonConstOutsideReasonFilesAllowlist with why.",
+			k, reasonsGoFiles, strayDecls[k], k)
 	}
 	for k, why := range reasonConstOutsideReasonFilesAllowlist {
-		if !strayUsed[k] {
+		if !flagged[k] {
 			t.Errorf("reasonConstOutsideReasonFilesAllowlist has a stale entry %q (%s) — "+
-				"the const is gone, moved, or no longer used as a reason; shrink the allowlist by removing it", k, why)
+				"the const is gone, moved, or no longer reason-named or used as a reason; shrink the allowlist by removing it", k, why)
 		}
 	}
 	t.Logf("scanned %d files, %d bare-errorBody and %d stray-const allowlisted site(s), 0 ad-hoc-literal exceptions",
