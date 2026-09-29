@@ -37,7 +37,7 @@ import { useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard
 import { UNSAVED } from "../../../lib/unsaved-copy";
 import { useWriteDropped } from "../../../lib/use-write-dropped";
 import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
-import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { IMAGES } from "../../../lib/availability-copy";
 import { Button } from "../../ui/button";
@@ -343,7 +343,7 @@ export function ProvidersScreen() {
               {!operator && <OperatorOnlyHint />}
               {operator && changedLines.length > 0 && (
                 <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
-                  {PROVIDERS_DRAFT.UNSAVED_MARKER}
+                  {PROVIDERS_EXTRA.UNSAVED_MARKER}
                 </span>
               )}
               {writeDropped && (

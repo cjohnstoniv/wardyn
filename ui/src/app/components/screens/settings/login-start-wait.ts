@@ -57,7 +57,7 @@ export const RUN_POLL_SLOW_START_MS = 60_000;
 // deadline above at once. Fifteen consecutive failures is evidence; one is not.
 export const RUN_POLL_MIN_FAILURES = 15;
 
-// DRAFT (M2 canon pending) — the healthy-but-slow wait. Hedged on purpose: the
+// The healthy-but-slow wait. Hedged on purpose: the
 // pane cannot PROVE a pull is what it is waiting on (see the header), so it
 // states what it knows — reads are working, the run is not up — and names the
 // pull as the usual cause rather than as the diagnosis.
@@ -71,14 +71,14 @@ export const RUN_POLL_MIN_FAILURES = 15;
 export const LOGIN_SANDBOX_SLOW_START =
   "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes.";
 
-// DRAFT (M2 canon pending) — reads are failing, but not for long enough to give
+// Reads are failing, but not for long enough to give
 // up. Without this a 300-second budget would show "Starting…" for five minutes
 // while the daemon was down, which is the same lie the old 30s budget told in
 // the other direction.
 export const LOGIN_SANDBOX_READ_RETRYING =
   "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally.";
 
-// DRAFT (M2 canon pending) — the wait ending on a REASON rather than a clock.
+// The wait ending on a REASON rather than a clock.
 // The sentence that follows is the SUBSTRATE's (statusDetailSentence); this is
 // only the lead-in that names the speaker, as SANDBOX_REFUSAL_LEAD_IN does.
 //

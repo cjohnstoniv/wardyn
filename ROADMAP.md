@@ -33,6 +33,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.11** | Patch: Azure DevOps projects and repositories whose names carry spaces or other permitted characters (`Payments Platform`, `Card Auth (v2).Service`) import, launch, clone, fetch and push; every door stores one spelling of the address, and approvals name the repository the same way on the REST and git paths | **Shipped (pre-alpha)** — `v0.7.11`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.12** | Patch: stored credentials are sealed with AES-256-GCM per row, bound to their owner and name (envelope v1, a one-way conversion on first boot); the control-plane → proxy hop that carries credential values is TLS 1.3, pinned to a CA wardynd mints; every secret-carrying boot setting accepts a `_FILE` path (Vault Agent / CSI), with an opt-in chart mode; an Azure DevOps address's host now ends at `?` or `#` | **Shipped (pre-alpha)** — `v0.7.12`, 2026-09-23 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.13** | Patch: wardynd refuses to start on a database a newer wardynd migrated, naming the newest migration it does not ship, with `WARDYN_ALLOW_UNKNOWN_MIGRATIONS` as the break-glass; a rollback drill proves the refusal writes nothing and that restoring the pre-upgrade dump boots clean. Upgrade to 0.7.13 before 0.8 | **Shipped (pre-alpha)** — `v0.7.13`, 2026-09-28 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.8.0** | **Least-privilege Azure DevOps per run**: an admin sets the Entra row's capability ceiling and default profile in the console; a run policy picks the run's capabilities, a member stands only what an admin granted (the rest is held for approval or refused), `policy_bypass` means only a pull request completed past its policies, and a push outside the run's branch follows `git_push_any_branch` while Azure DevOps enforces its own branch policies. Also: user types in the User view, model providers chosen per run on each person's own connection, an ended run extended and revived with its files kept, a rebuilt Runs page, and a Kubernetes agent that starts only once its proxy is ready. Upgrade from 0.7.13 | **Shipped (pre-alpha)** — `v0.8.0`, 2026-09-29 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
@@ -183,7 +184,7 @@ shipped behavior; none is scheduled.
   isn't mistaken for a live plan.
 - **Age-key rotation is offline and operator-driven.** `wardynd -rotate-age-key`
   now re-encrypts every stored secret to a fresh identity in one transaction
-  ([docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Rotating the age key"), so the old
+  ([docs/operations/secrets-and-keys.md](docs/operations/secrets-and-keys.md#rotating-the-age-key)'s "Rotating the age key"), so the old
   "no rotation path at all" ceiling is gone. What remains: the daemon has to be
   **stopped** for it, and nothing enforces that — no wardynd holds a
   process-lifetime advisory lock, so the tool can refuse a second concurrent

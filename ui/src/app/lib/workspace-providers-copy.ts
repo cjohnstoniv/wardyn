@@ -308,27 +308,23 @@ export function modelAccessActionLine(
 }
 
 
-// AGENTS_DRAFT — new strings not yet in the frozen §7.7 table
-// DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
-// §7.7 AGENTS table above — workspace-providers-copy.test.ts's byte-check
-// parses only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW
-// export beside it (never inside it) is what keeps that gate meaningful.
-// Canon rows staged for the M2 sitting land in
-// docs/design/workspace-providers-prompt.md, the same doc §7.2-§7.5/§7.7
-// above were transcribed from (the working sheet itself is gitignored
-// campaign evidence, not a path this shipped file can point at).
-export const AGENTS_DRAFT = {
+// AGENTS_EXTRA — shipped copy, frozen by #206, not part of the byte-parity
+// §7.7 table above — workspace-providers-copy.test.ts's byte-check parses
+// only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW export
+// beside it (never inside it) is what keeps that gate meaningful. These rows
+// started as a draft in docs/design/workspace-providers-prompt.md, the same
+// doc §7.2-§7.5/§7.7 above were transcribed from.
+export const AGENTS_EXTRA = {
   // The roster pin labels, reused by the provider editor's Bedrock SSO fields.
   FIELD_SSO_ACCOUNT_ID: "Pinned AWS account id",
   FIELD_SSO_ROLE_NAME: "Pinned IAM role name",
 } as const;
 
-// PROVIDERS_DRAFT — new strings not yet in the frozen §7.2 table
-// DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
-// §7.2 PROVIDERS table — kept in a separate export for the same reason
-// AGENTS_DRAFT is (the byte-check parses only PROVIDERS/PROVIDER_MEMBER/
+// PROVIDERS_EXTRA — shipped copy, frozen by #206, not part of the
+// byte-parity §7.2 table — kept in a separate export for the same reason
+// AGENTS_EXTRA is (the byte-check parses only PROVIDERS/PROVIDER_MEMBER/
 // AGENTS out of the doc).
-export const PROVIDERS_DRAFT = {
+export const PROVIDERS_EXTRA = {
   // F4-F3 (Appendix A V8, corrected verdict): the keep-draft-mounted 412
   // banner's SECOND control — discards the admin's own unsaved edits and
   // reloads the server's version. NO "Save over theirs" arm: a security
@@ -353,3 +349,94 @@ export const PROVIDERS_DRAFT = {
   SAVED_DANGLING_REFS: (refs: string[]) =>
     `Saved, but ${refs.length === 1 ? "this secret isn't" : "these secrets aren't"} stored: ${refs.join(", ")}.`,
 } as const;
+
+// ADO_ENTRA_EDITOR / ADO_GROUP_COPY / ADO_CAP_COPY — the Azure DevOps row's
+// Entra section (entra-editor.tsx), transcribed from the approved G1 mock's
+// strings table. Not in the frozen §7 doc tables, so separate exports, the
+// PROVIDERS_DRAFT way. The mock's "See Part 2." (a pointer inside the review
+// packet itself) is left off PER_RUN_POINTER.
+export const ADO_ENTRA_EDITOR = {
+  SECTION_TITLE: "Azure DevOps sign-in (Entra)",
+  SECTION_LEAD:
+    "Each person signs in as themselves; Wardyn never holds a standing Azure DevOps credential. One organisation per deployment — a second Entra row is refused.",
+  FIELD_TENANT: "Tenant ID",
+  FIELD_TENANT_HINT: "The Entra directory this organisation signs in against.",
+  FIELD_CLIENT: "Client ID",
+  FIELD_CLIENT_HINT: "The app registration’s application (client) ID.",
+  REST_TOGGLE: "Allow REST API calls",
+  REST_TOGGLE_HINT:
+    "Off restricts every run on this row to git only — clone and push. On allows the capabilities below through the same proxy gate.",
+  CEILING_TITLE: "What runs may ever do",
+  CEILING_LEAD:
+    "The ceiling. Unchecking one here removes it everywhere — from the default profile below, from a member's own saved policy, and from what a person can ever approve mid-run.",
+  DEFAULT_TITLE: "What a run gets by default",
+  DEFAULT_LEAD:
+    "The profile every run on this row starts with, before any saved policy narrows it. Bound to the ceiling above — a capability off the ceiling can't be a default, so its box is disabled here, not just unchecked. Contribute-only is the obvious default; nothing High risk ever defaults on.",
+  HIGH_RISK_WARN:
+    "Every capability below can affect repositories, people or runs beyond this one. Grant it deliberately, not as part of a default.",
+  HIGH_RISK_BADGE: "High risk",
+  DEFAULT_OFF_CEILING_TIP: "Off the ceiling — check it above first",
+  DEFAULT_HIGH_RISK_TIP: "On the ceiling, but never defaulted — grant per run instead",
+  PER_RUN_POINTER_LEAD: "Policies → Azure DevOps access.",
+  PER_RUN_POINTER: "A member's own saved policy can narrow this further, per run — never past the ceiling above.",
+  READ_ONLY_NOTE: "You can see this configuration but not change it. Ask an administrator with access to Workspace providers.",
+  ERROR_TITLE: "These providers can't be saved as written.",
+  ERROR_DEFAULT_OFF_CEILING: (name: string) =>
+    `“${name}” is a default but isn't on the ceiling — uncheck it as a default, or put it back on the ceiling.`,
+} as const;
+
+// The five groups of lib/ado-capabilities.ts, as the mock names them. The
+// ceiling draws `name`; the default section and the read-only view draw the
+// short High-risk name (HIGH_RISK_BADGE), as the mock does.
+export const ADO_GROUP_COPY: Record<string, { name: string; lead: string }> = {
+  read: { name: "Read", lead: "Look, never change." },
+  contribute: { name: "Contribute", lead: "The everyday group — push to the run's own branch, open a pull request." },
+  work: { name: "Work tracking", lead: "Work items and the wiki." },
+  pipelines: { name: "Pipelines & packages", lead: "Run existing pipelines, publish packages." },
+  high_risk: {
+    name: "High risk — admin-level changes",
+    lead: "Reaches past this one run: the organisation's rules, identities and credentials.",
+  },
+};
+
+// Every grantable capability's name and consequence line. The keys mirror
+// adoscope's grantable set; workspace-providers-copy.test.ts reads
+// internal/adoscope/capability.go and fails when the two diverge.
+export const ADO_CAP_COPY: Record<string, { name: string; consequence: string }> = {
+  read: { name: "Read", consequence: "See code, work items, pipelines, wikis, feeds and settings — never change anything." },
+  code_write: {
+    name: "Push to the run's own branch",
+    consequence: "Push commits and move branches — nothing outside this run's own branch unless its policy allows any branch.",
+  },
+  pr: { name: "Open pull requests", consequence: "Open, review and complete pull requests without bypassing a branch policy." },
+  work_write: { name: "Work items", consequence: "Create and update work items." },
+  wiki_write: { name: "Wiki", consequence: "Write wiki pages." },
+  build_execute: {
+    name: "Run pipelines & releases",
+    consequence: "Queue a pipeline run, or create, deploy and delete a release.",
+  },
+  packaging_write: { name: "Publish packages", consequence: "Publish a package to a feed." },
+  policy_admin: {
+    name: "Change branch policies",
+    consequence:
+      "Change repository policies (branch rules, required reviewers) — affects every future push and PR, not just this run's.",
+  },
+  policy_bypass: {
+    name: "Bypass branch policies",
+    consequence: "Complete a pull request without its required reviewers or checks.",
+  },
+  repo_admin: { name: "Manage repositories", consequence: "Create, rename or delete a repository — other people's work included." },
+  security_admin: {
+    name: "Change permissions & identities",
+    consequence: "Change who can do what across the whole organisation — permissions, groups, directory identities.",
+  },
+  serviceendpoint_admin: {
+    name: "Manage service connections",
+    consequence: "Change a service connection, including the cloud credential it holds.",
+  },
+  build_admin: {
+    name: "Change pipeline definitions",
+    consequence: "Change what a pipeline or release runs for every future run, not just this one.",
+  },
+  project_admin: { name: "Manage projects", consequence: "Create, change or delete a project." },
+};

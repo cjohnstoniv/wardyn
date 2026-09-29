@@ -41,20 +41,18 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
 // anyone decided it — internal/types/types.go ApprovalCancelled). Every other
 // state is title-cased from the wire value by ApprovalStateBadge; this one is a
 // key so the owner's wording lands in one place.
-// DRAFT (M2) — not yet owner-frozen.
+// Frozen by #206 (matches workspace-providers-prompt.md §7.6 verbatim).
 export const APPROVAL = {
   STATE_CANCELLED: "Cancelled",
   // B4, console half: what a human reads WHERE the Approve/Deny pair used to
   // be once the run has ended, and on the decided row the cascade wrote. One
   // string for both surfaces on purpose — they state the same fact, and two
   // copies would be two wordings of it.
-  // DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6.
   CANCELLED_BODY: "The run ended before anyone decided this. Nothing was approved and nothing was denied.",
   // P0.3 (R3-F001/F108/F145): an egress_domain approval is HOST-WIDE — the
   // server strips any port before it keys the decision (approvalHostKey,
   // internal/egress/proxy/approvals.go). 0.7.2 aligns the three surfaces to SAY
   // so rather than rely on it quietly; the port-scoped semantic is 0.8's.
-  // DRAFT (M2 canon pending).
   HOST_WIDE_NOTE: "This covers the host, not one port — an approval here answers every port on it.",
 } as const;
 

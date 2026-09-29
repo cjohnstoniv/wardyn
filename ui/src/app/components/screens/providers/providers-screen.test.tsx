@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
-import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { IMAGES } from "../../../lib/availability-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -283,13 +283,13 @@ describe("ProvidersScreen", () => {
     });
     renderScreen();
     const row = await screen.findByTestId("provider-row-github");
-    expect(screen.queryAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toHaveLength(0);
+    expect(screen.queryAllByText(PROVIDERS_EXTRA.UNSAVED_MARKER)).toHaveLength(0);
     expect(screen.queryByTestId("page-header-dirty-chip")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tab-dirty-chip-git")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tab-dirty-chip-storage")).not.toBeInTheDocument();
 
     await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
-    expect(screen.getAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(PROVIDERS_EXTRA.UNSAVED_MARKER).length).toBeGreaterThan(0);
     // #460 review — the PageHeader chip and BOTH Segmented tab chips (Git and
     // Storage share this one draft), each pinned by their own testid: a
     // mutation removing just one of these three would pass the marker-only
@@ -299,7 +299,7 @@ describe("ProvidersScreen", () => {
     expect(screen.getByTestId("tab-dirty-chip-storage")).toHaveTextContent(UNSAVED.DIRTY_CHIP);
 
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
-    await waitFor(() => expect(screen.queryAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toHaveLength(0));
+    await waitFor(() => expect(screen.queryAllByText(PROVIDERS_EXTRA.UNSAVED_MARKER)).toHaveLength(0));
     expect(screen.queryByTestId("page-header-dirty-chip")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tab-dirty-chip-git")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tab-dirty-chip-storage")).not.toBeInTheDocument();
@@ -381,7 +381,7 @@ describe("ProvidersScreen", () => {
     );
     // ONE control on the banner: Discard mine and reload. No "Save over
     // theirs" — a second re-PUT arm the corrected verdict refused.
-    expect(screen.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeInTheDocument();
     expect(screen.queryByText(/save over theirs/i)).not.toBeInTheDocument();
     // Save providers is STILL on screen (the draft is still there to save) —
     // an ordinary retry sends If-Match, as the sibling test below pins.

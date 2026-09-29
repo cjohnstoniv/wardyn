@@ -60,7 +60,7 @@ export const MEMBER_GETTING_STARTED = {
   MODEL_CONNECTIONS_WHERE: "in Your account",
 } as const;
 
-// DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator
+// X3-F4, the MEMBER's empty runs board. The operator
 // first-run funnel it replaces is a host-barrier readout plus a setup
 // checklist: redacted blank for a member, and pointing at routes their role
 // cannot reach. These lines are what a member can actually do instead. Sited

@@ -113,10 +113,9 @@ func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 }
 
 // TestResolveAccountRole_LeavesBlankOnPortalFailure covers the non-fatal
-// residual: any portal failure (network, non-2xx, decode, empty list) must
-// leave the caller free to upload a blank account/role rather than erroring
-// out of run() entirely — a resolution failure must never turn into an
-// upload failure.
+// residual: any portal failure (network, non-2xx, decode, empty list) returns
+// ok=false with no refusal, and run() then uploads nothing and says why
+// (lookupFailedRefusal) rather than sending a blank account/role.
 func TestResolveAccountRole_LeavesBlankOnPortalFailure(t *testing.T) {
 	prevBase := ssoPortalBase
 	ssoPortalBase = func(string) string { return "http://127.0.0.1:1" } // nothing listening
@@ -749,8 +748,8 @@ func TestResolveAccountRole_PortalUnreachableUnderPin(t *testing.T) {
 	ssoPortalBase = func(string) string { return "http://127.0.0.1:1" }
 	t.Cleanup(func() { ssoPortalBase = prevBase })
 	if _, _, refusal, ok := pickAccountRole("tok", "us-east-1", ssoPin{accountID: rightAccount, roleName: rightRole}); ok || refusal != "" {
-		// listAccounts fails first here, which is the pre-existing best-effort
-		// miss: blank pair, no refusal, and the control plane 400s it.
+		// listAccounts fails first here: no pair and no refusal, so run()
+		// uploads nothing and prints lookupFailedRefusal.
 		t.Errorf("an unreachable portal at the ACCOUNT list = (%q,%v), want the best-effort miss", refusal, ok)
 	}
 }
@@ -887,5 +886,149 @@ func TestSSOPortalGETIsBounded(t *testing.T) {
 	}
 	if ok {
 		t.Error("an unbounded portal body decoded successfully — the read is not capped")
+	}
+}
+
+// slowKeys models a person: the chooser prompt appears, and the first answer
+// arrives only after they have come back from the AWS tab and typed it.
+type slowKeys struct {
+	delay time.Duration
+	r     io.Reader
+	slept bool
+}
+
+func (s *slowKeys) Read(p []byte) (int, error) {
+	if !s.slept {
+		time.Sleep(s.delay)
+		s.slept = true
+	}
+	return s.r.Read(p)
+}
+
+func shrinkResolveTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := resolveTimeout
+	resolveTimeout = d
+	t.Cleanup(func() { resolveTimeout = prev })
+}
+
+// TestRun_ChooserAnswerSlowerThanPortalTimeout: the person answers the account
+// prompt after longer than resolveTimeout. The role lookup that follows must
+// still work — the deadline is per portal request, not per pick — so the chosen
+// pair is what goes up, never a blank one.
+func TestRun_ChooserAnswerSlowerThanPortalTimeout(t *testing.T) {
+	portal := multiAccountPortal(t)
+	shrinkResolveTimeout(t, 250*time.Millisecond)
+	prevIn, prevTTY := stdin, stdinIsTerminal
+	stdin = &slowKeys{delay: 750 * time.Millisecond, r: strings.NewReader("2\n1\n")}
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdin, stdinIsTerminal = prevIn, prevTTY })
+
+	uploaded, out := runHelper(t, portal)
+	if uploaded == nil {
+		t.Fatalf("nothing was uploaded; stdout = %q", out)
+	}
+	var got struct {
+		AccountID string `json:"account_id"`
+		RoleName  string `json:"role_name"`
+	}
+	if err := json.Unmarshal(uploaded, &got); err != nil {
+		t.Fatalf("decode uploaded body: %v", err)
+	}
+	if got.AccountID != rightAccount || got.RoleName != rightRole {
+		t.Errorf("uploaded %q/%q, want the CHOSEN %q/%q", got.AccountID, got.RoleName, rightAccount, rightRole)
+	}
+}
+
+// TestRun_LookupFailureUploadsNothingAndSaysWhy: when the portal cannot list
+// the accounts, or cannot list the chosen account's roles, no blob goes up
+// (the control plane would only 400 a blank pair) and the person reads one
+// plain sentence saying what to do.
+func TestRun_LookupFailureUploadsNothingAndSaysWhy(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"accounts": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) },
+		"roles": func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/assignment/accounts" {
+				_, _ = w.Write([]byte(`{"accountList":[{"accountId":"111111111111","accountName":"a"}]}`))
+				return
+			}
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	}
+	for name, handler := range cases {
+		t.Run(name, func(t *testing.T) {
+			token := awsssofake.New()
+			t.Cleanup(token.Close)
+			srv := httptest.NewServer(handler)
+			t.Cleanup(srv.Close)
+			prevBase := ssoPortalBase
+			ssoPortalBase = func(string) string { return srv.URL }
+			t.Cleanup(func() { ssoPortalBase = prevBase })
+			withoutTerminal(t)
+
+			uploaded, out := runHelper(t, token)
+			if uploaded != nil {
+				t.Errorf("a failed lookup uploaded %q; want nothing", uploaded)
+			}
+			line := assertFailLine(t, out)
+			if !strings.Contains(line, lookupFailedRefusal) {
+				t.Errorf("fail line = %q, want the plain lookup sentence %q", line, lookupFailedRefusal)
+			}
+		})
+	}
+}
+
+// pagedPortal serves accounts over two pages and the roles of the last account
+// over two pages, following the portal's next_token / nextToken contract.
+func pagedPortal(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next_token")
+		switch r.URL.Path {
+		case "/assignment/accounts":
+			if next == "" {
+				_, _ = w.Write([]byte(`{"accountList":[{"accountId":"111111111111","accountName":"one"},{"accountId":"222222222222","accountName":"two"}],"nextToken":"p2"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"accountList":[{"accountId":"333333333333","accountName":"three"}]}`))
+		case "/assignment/roles":
+			if next == "" {
+				_, _ = w.Write([]byte(`{"roleList":[{"roleName":"RoleOnPageOne"}],"nextToken":"r2"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"roleList":[{"roleName":"RoleOnPageTwo"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	prevBase := ssoPortalBase
+	ssoPortalBase = func(string) string { return srv.URL }
+	t.Cleanup(func() { ssoPortalBase = prevBase })
+}
+
+// TestRun_ChooserOffersEveryPageOfAccountsAndRoles: accounts and roles past the
+// portal's first page are offered, and choosing one of them uploads it.
+func TestRun_ChooserOffersEveryPageOfAccountsAndRoles(t *testing.T) {
+	pagedPortal(t)
+	token := awsssofake.New()
+	t.Cleanup(token.Close)
+	withTerminal(t, "3\n2\n")
+
+	uploaded, out := runHelper(t, token)
+	for _, want := range []string{"111111111111", "333333333333", "RoleOnPageOne", "RoleOnPageTwo"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chooser output does not offer %q; stdout = %q", want, out)
+		}
+	}
+	var got struct {
+		AccountID string `json:"account_id"`
+		RoleName  string `json:"role_name"`
+	}
+	if err := json.Unmarshal(uploaded, &got); err != nil {
+		t.Fatalf("decode uploaded body %q: %v", uploaded, err)
+	}
+	if got.AccountID != "333333333333" || got.RoleName != "RoleOnPageTwo" {
+		t.Errorf("uploaded %q/%q, want the page-two pair 333333333333/RoleOnPageTwo", got.AccountID, got.RoleName)
 	}
 }

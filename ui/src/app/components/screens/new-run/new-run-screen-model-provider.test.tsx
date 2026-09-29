@@ -10,7 +10,7 @@
 // Its own copy of the screen's mock harness — see new-run-screen-launch.test.tsx's
 // header for why every suite duplicates it rather than sharing one module.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -223,7 +223,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
   // arriving afterward must not un-pick the person's own choice — pin beats
   // an AUTOMATIC previousId (the earlier test above), but an EXPLICIT one
   // always outranks the pin (model-provider-lane.ts's doc comment).
-  it("an explicit pick survives a workspace pin that arrives ~800ms later", async () => {
+  it("an explicit pick survives a workspace pin that arrives after it", async () => {
     getSetupStatusMock.mockResolvedValue(
       providerStatus([
         { provider: gateway, defaultFor: ["claude-code"], state: "live" },
@@ -231,24 +231,15 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
         { provider: anthropicKey, state: "live" },
       ]),
     );
+    // The test, not the clock, decides when the workspace list resolves: on a
+    // slow runner a fixed 800ms timer fired before step 1 could observe the
+    // automatic default, and the pin (correctly) replaced it first.
+    let resolveWorkspaces: (value: unknown) => void = () => {};
     listWorkspacesMock.mockImplementation(
       () =>
-        new Promise((resolve) =>
-          setTimeout(
-            () =>
-              resolve([
-                {
-                  id: "ws1",
-                  name: "repo-a",
-                  kind: "local_dir",
-                  source: "/home/agent/repo-a",
-                  status: "scanned",
-                  llm_cred: { provider_ref: anthropicKey.id }, // a THIRD candidate, never picked by the person
-                },
-              ]),
-            800,
-          ),
-        ),
+        new Promise((resolve) => {
+          resolveWorkspaces = resolve;
+        }),
     );
     renderScreenWithWorkspace("ws1");
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
@@ -260,12 +251,23 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     await user.click(await screen.findByRole("option", { name: RAIL_PROVIDER.OPTION("Claude subscription", "sign-in", "signed in") }));
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id));
 
-    // 3. ~800ms later the workspace resolves, pinning a THIRD candidate the
-    // person never touched. Waiting past that instant (a real timer, not a
-    // fake one — the mock's own setTimeout(800) above) is the only way to
-    // prove the pin actually arrived and was still overridden, not merely
-    // that it never got a chance to run.
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    // 3. Only now does the workspace resolve, pinning a THIRD candidate the
+    // person never touched. Resolving it and letting its effects run proves the
+    // pin actually arrived and was still overridden, not merely that it never
+    // got a chance to run.
+    await act(async () => {
+      resolveWorkspaces([
+        {
+          id: "ws1",
+          name: "repo-a",
+          kind: "local_dir",
+          source: "/home/agent/repo-a",
+          status: "scanned",
+          llm_cred: { provider_ref: anthropicKey.id }, // a THIRD candidate, never picked by the person
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
 
     // 4. The explicit pick stands — never displaced by the late pin.
     expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id);

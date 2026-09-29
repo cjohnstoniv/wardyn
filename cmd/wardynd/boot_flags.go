@@ -430,7 +430,7 @@ func parseBootFlags() *bootFlags {
 		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
 		openaiGatewayFormat:     flagEnv("openai-gateway-format", "WARDYN_OPENAI_GATEWAY_FORMAT", "", `same as -anthropic-gateway-format, for OpenAI's gateway (default "Bearer %s")`),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
-		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/OPERATIONS.md"),
+		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/operations/secrets-and-keys.md"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		driveProbeImage: flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),
@@ -546,13 +546,13 @@ func parseBootFlags() *bootFlags {
 		// one in a usage string as the argument placeholder ("-rotate-age-key path").
 		rotateAgeKey: flag.String("rotate-age-key", "", "maintenance mode, daemon must be stopped: mint a new age identity, rewrap every stored secret's data key from "+
 			"WARDYN_AGE_KEY's key to it in one transaction, replace the key file at `path` (previous kept as <path>.bak), then exit. "+
-			"That file must already hold the current identity as a bare AGE-SECRET-KEY-... line; see docs/OPERATIONS.md"),
+			"That file must already hold the current identity as a bare AGE-SECRET-KEY-... line; see docs/operations/secrets-and-keys.md"),
 
 		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
-		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/OPERATIONS.md (default false)"),
+		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/operations/secrets-and-keys.md (default false)"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
-		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit key at its latest version), then exit; values are never decrypted. See docs/OPERATIONS.md (default false)"),
+		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:          registerVaultFlags(),
 		hostCapacity:   registerHostCapacityFlags(),
 		azure:          registerAzureFlags(),

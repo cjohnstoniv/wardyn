@@ -22,6 +22,9 @@
 //     EphemeralDiskEnforcement `eviction`, a run that writes past its DiskMiB
 //     limit really does die, and a run with an oversized limit still schedules
 //     (its request is the small floor, never a copy of the limit).
+//  8. User drives: a drive inside the substrate's ceiling binds at
+//     runner.DriveTarget, writable by uid 1000 with DAC intact beneath it, and
+//     a drive outside that ceiling is refused at CreateSandbox.
 package conformance
 
 import (
@@ -83,6 +86,11 @@ type Options struct {
 	// root (the Kubernetes substrate runs the agent as uid 1000 whatever the
 	// image's USER) and logging them otherwise.
 	AgentUserImage string
+	// UserDrives, when non-nil, is the substrate's user-drive fixture: a drive
+	// its ceiling allows and drives it must refuse. Nil ⇒ the UserDrives case
+	// is skipped (the must-pass floor in scripts/test-report.sh reddens that
+	// skip on a real substrate). See UserDriveFixture.
+	UserDrives *UserDriveFixture
 }
 
 func (o Options) timeout() time.Duration {
@@ -113,6 +121,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("ExecStreamLoopbackRelay", func(t *testing.T) { testExecStreamLoopbackRelay(t, r, opts) })
 	t.Run("EphemeralDiskLimit", func(t *testing.T) { testEphemeralDiskLimit(t, r, opts) })
 	t.Run("ManagedFiles", func(t *testing.T) { testManagedFiles(t, r, opts) })
+	t.Run("UserDrives", func(t *testing.T) { testUserDrives(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.
@@ -673,14 +682,26 @@ func createStrongestSandboxWith(t *testing.T, ctx context.Context, r runner.Runn
 const conformanceCleanupTimeout = 60 * time.Second
 
 // minimalSpec returns a SandboxSpec with a unique RunID suitable for
-// conformance testing. No secrets, no proxy config, no resource limits.
+// conformance testing. No secrets, no resource limits, and the smallest proxy
+// config the real wardyn-proxy loads (LoadableProxyConfig).
 func minimalSpec(image string) runner.SandboxSpec {
 	return runner.SandboxSpec{
 		RunID: uuid.New(),
 		Image: image,
 		// ConfinementClass deliberately left empty; callers set it.
-		Labels: map[string]string{"wardyn.conformance": "true"},
+		Labels:      map[string]string{"wardyn.conformance": "true"},
+		ProxyConfig: LoadableProxyConfig(),
 	}
+}
+
+// LoadableProxyConfig is the smallest ProxyConfig proxy.LoadConfigBytes
+// accepts. A zero value is refused ("control_plane_url is required"), and the
+// k8s driver waits for its proxy pod to be Ready, so a sandbox without it never
+// starts there. The URL only has to pass startup, not be reachable: Injection
+// is empty, so nothing calls it. Loopback, because the proxy refuses plaintext
+// to any other host (hoptls.CheckURL).
+func LoadableProxyConfig() runner.ProxyConfig {
+	return runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:9", RunToken: "conformance"}
 }
 
 // loopbackRelayPort is the in-sandbox port the loopback-relay case uses. It is
@@ -857,4 +878,30 @@ func drainBoth(sess *runner.ExecSession) func() string {
 		defer mu.Unlock()
 		return buf.String()
 	}
+}
+
+// ExecKeyValues runs script in the sandbox through ExecStream and returns its
+// `key=value` stdout lines (parseKeyValueLines' rules). For probes that report
+// several verdicts at once: one exec, one recording, one transport to trust.
+func ExecKeyValues(t *testing.T, ctx context.Context, r runner.Runner, ref, script string) map[string]string {
+	t.Helper()
+	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", script}})
+	if err != nil {
+		t.Fatalf("ExecStream: %v", err)
+	}
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		_, _ = io.Copy(io.Discard, sess.Stderr)
+	}()
+	if sess.Stdin != nil {
+		_ = sess.Stdin.Close()
+	}
+	out, _ := io.ReadAll(sess.Stdout)
+	<-stderrDone
+	if _, err := sess.Wait(); err != nil {
+		t.Fatalf("Wait on the probe: %v", err)
+	}
+	t.Logf("probe output:\n%s", out)
+	return parseKeyValueLines(string(out))
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
 
@@ -239,7 +240,7 @@ func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
 
 // One rule per ref across both doors: a REST push to the run's own branch
 // namespace needs code_write, exactly as a git push through the broker does
-// (adoRunRefProtected).
+// (adoRunBranchRule).
 func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
 	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
 	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `work","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
@@ -249,27 +250,107 @@ func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
 	}
 }
 
-// A REST push to any other ref is a protected-ref move and needs
-// policy_bypass, as on the git door.
-func TestADOGate_NonRunRefPushNeedsPolicyBypass(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+// A REST push to any other ref is refused as the run's own-branch rule —
+// whatever capabilities the run holds, policy_bypass included — and never
+// worded as a branch policy nobody consulted.
+func TestADOGate_NonRunRefPushIsRefusedWhateverTheCapabilities(t *testing.T) {
+	h := newADOHarness(t, adoscope.GrantableCapabilities()...)
 	body := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
-	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil),
-		string(adoscope.CapPolicyBypass))
+	rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil)
+	h.mustRefuse(t, rec, "this run may push only to its own branch (wardyn/"+h.p.runID.String()+"/…)")
+	if !strings.Contains(rec.Body.String(), "git_push_any_branch: true") || strings.Contains(strings.ToLower(rec.Body.String()), "branch polic") {
+		t.Errorf("refusal does not name the switch, or names a branch policy: %s", rec.Body.String())
+	}
 }
 
-// Update Ref names its branch in ?filter=, which the gate never classifies: a
-// PATCH on refs whose body names the run's own namespace is still a branch
-// lock, and needs policy_bypass with or without the filter.
-func TestADOGate_RefPatchNeedsPolicyBypassWhateverTheBodyNames(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
-	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `work"}],"isLocked":true}`
-	for _, target := range []string{
-		"/acme/proj/_apis/git/repositories/app/refs?filter=heads/main&api-version=7.1",
-		"/acme/proj/_apis/git/repositories/app/refs?api-version=7.1",
-	} {
-		h.mustRefuse(t, h.do(t, http.MethodPatch, target, body, nil), string(adoscope.CapPolicyBypass))
+// adoRunBranchRule across the switch: the run's own namespace always passes;
+// any other ref is refused unless the policy sets git_push_any_branch.
+func TestADORunBranchRule_AnyBranchSwitch(t *testing.T) {
+	for _, anyBranch := range []bool{false, true} {
+		p := &Proxy{runID: uuid.New(), policy: CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: anyBranch})}
+		if msg := p.adoRunBranchRule([]string{BranchNSPrefix(p.runID) + "work"}); msg != "" {
+			t.Errorf("any-branch=%v: the run's own namespace is refused: %s", anyBranch, msg)
+		}
+		for _, ref := range []string{"refs/heads/main", "refs/tags/v1", BranchNSPrefix(p.runID), BranchNSPrefix(uuid.New()) + "work"} {
+			if msg := p.adoRunBranchRule([]string{BranchNSPrefix(p.runID) + "work", ref}); (msg == "") != anyBranch {
+				t.Errorf("any-branch=%v: adoRunBranchRule(%q) = %q", anyBranch, ref, msg)
+			}
+		}
 	}
+}
+
+// With git_push_any_branch a REST push to main needs code_write only and is
+// forwarded; without code_write it is still refused, as code_write.
+func TestADOGate_AnyBranchPushNeedsCodeWrite(t *testing.T) {
+	body := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
+	const target = "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1"
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	if rec := h.do(t, http.MethodPost, target, body, nil); rec.Code/100 != 2 {
+		t.Fatalf("any-branch push to main under code_write: status %d body %s, want it forwarded", rec.Code, rec.Body.String())
+	}
+
+	ro := newADOHarness(t, adoscope.CapRead)
+	ro.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	ro.mustRefuse(t, ro.do(t, http.MethodPost, target, body, nil), "("+string(adoscope.CapCodeWrite)+")")
+}
+
+// The switch widens where a push may land, never a real policy bypass: a pull
+// request completed with bypassPolicy still needs policy_bypass, spelled as one.
+func TestADOGate_AnyBranchLeavesPRBypassPolicyBypass(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR)
+	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1?api-version=7.1",
+		`{"status":"completed","completionOptions":{"bypassPolicy":true}}`, nil)
+	h.mustRefuse(t, rec, "("+string(adoscope.CapPolicyBypass)+")")
+	if !strings.Contains(rec.Body.String(), adoscope.Label(adoscope.CapPolicyBypass)) {
+		t.Errorf("a real bypass is not refused as one: %s", rec.Body.String())
+	}
+}
+
+// Update Ref names its branch in ?filter=: the run's own-branch rule reads
+// it there, whatever ref the body names; with no filter the ref cannot be
+// checked and the request is refused as that.
+func TestADOGate_RefPatchReadsTheFilter(t *testing.T) {
+	h := newADOHarness(t, adoscope.GrantableCapabilities()...)
+	const refs = "/acme/proj/_apis/git/repositories/app/refs"
+	body := `{"isLocked":true}`
+	h.mustRefuse(t, h.do(t, http.MethodPatch, refs+"?filter=heads/main&api-version=7.1", body, nil), "may push only to its own branch")
+	h = newADOHarness(t, adoscope.GrantableCapabilities()...)
+	h.mustRefuse(t, h.do(t, http.MethodPatch, refs+"?api-version=7.1", body, nil), "names no ref Wardyn can check")
+	h = newADOHarness(t, adoscope.GrantableCapabilities()...)
+	h.mustRefuse(t, h.do(t, http.MethodPatch, refs+"?filter=heads/wardyn/x&filter=heads/main", body, nil), "names no ref Wardyn can check")
+
+	ok := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	rec := ok.do(t, http.MethodPatch, refs+"?filter=heads/wardyn/"+ok.p.runID.String()+"/work&api-version=7.1", body, nil)
+	if log := ok.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+		t.Fatalf("a lock on the run's own branch under code_write was not forwarded (status %d): %s", rec.Code, log)
+	}
+}
+
+// Annotated tags and REST cherry-picks/reverts create a ref, so they are held
+// to the same rule: a tag, or a generated branch outside the run's own branch,
+// is refused whatever the run holds; a generated branch inside it is code_write.
+func TestADOGate_TagsAndGeneratedBranchesFollowTheRunBranchRule(t *testing.T) {
+	const repo = "/acme/proj/_apis/git/repositories/app/"
+	for _, tc := range []struct{ name, path, body string }{
+		{"annotated tag", repo + "annotatedtags", `{"name":"v1","taggedObject":{"objectId":"` + zeroOID + `"},"message":"m"}`},
+		{"cherry-pick onto main", repo + "cherrypicks", `{"generatedRefName":"refs/heads/main-pick","ontoRefName":"refs/heads/main"}`},
+		{"revert onto main", repo + "reverts", `{"generatedRefName":"refs/heads/undo","ontoRefName":"refs/heads/main"}`},
+	} {
+		h := newADOHarness(t, adoscope.GrantableCapabilities()...)
+		h.mustRefuse(t, h.do(t, http.MethodPost, tc.path+"?api-version=7.1", tc.body, nil), "may push only to its own branch")
+	}
+
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	body := `{"generatedRefName":"` + BranchNSPrefix(h.p.runID) + `undo","ontoRefName":"refs/heads/main"}`
+	h.do(t, http.MethodPost, repo+"reverts?api-version=7.1", body, nil)
+	if log := h.log(); strings.Contains(log, ruleSourceADODenied) {
+		t.Fatalf("a revert onto the run's own branch under code_write was refused: %s", log)
+	}
+	ro := newADOHarness(t, adoscope.CapRead)
+	body = `{"generatedRefName":"` + BranchNSPrefix(ro.p.runID) + `undo","ontoRefName":"refs/heads/main"}`
+	ro.mustRefuse(t, ro.do(t, http.MethodPost, repo+"reverts", body, nil), "("+string(adoscope.CapCodeWrite)+")")
 }
 
 // The plain forward lane refuses a host with an Azure DevOps grant outright: an

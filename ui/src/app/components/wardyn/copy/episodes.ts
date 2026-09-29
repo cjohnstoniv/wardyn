@@ -49,7 +49,7 @@ export const EPISODES_COPY = {
   MEMBER_YOUR_PATH: "Your path",
 } as const;
 
-// DRAFT (M2 canon pending) — X4-F3 (runs-first-run-demos.tsx's "See it work"
+// X4-F3 (runs-first-run-demos.tsx's "See it work"
 // grid subtitle): the prior sentence "No model, no key, no repo" was
 // contradicted ten lines below by needsModel/needsSecret — some demo cards
 // genuinely require a connected model or a stored secret. Canon key:

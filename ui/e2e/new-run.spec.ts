@@ -659,13 +659,11 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
   });
 
-  // KNOWN DEFECT, pinned: under a Bedrock SSO provider the rail's provider
-  // section (the provider line above the residency sentence and chip) pushes
-  // Launch about 25px below a 1280x650 viewport, and it cannot be scrolled
-  // into view. test.fail keeps the measurement honest: it turns red the day
-  // the rail is fixed, and the fix then deletes this marker.
-  test("KNOWN DEFECT: under a Bedrock SSO provider, Launch stays reachable at 1280x650", async ({ page }) => {
-    test.fail();
+  // Under a Bedrock SSO provider the rail's provider section (the provider
+  // line above the residency sentence and chip) once pushed Launch about 25px
+  // below a 1280x650 viewport, out of scroll reach. The launch panel split out
+  // of new-run-screen.tsx (#1360) keeps it reachable; this pins that.
+  test("under a Bedrock SSO provider, Launch stays reachable at 1280x650", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 650 });
     await bedrockProviderStatus(page);
 

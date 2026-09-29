@@ -11,12 +11,11 @@
 import { clockTime } from "../../../lib/format";
 import type { AuditEvent } from "../../../lib/types";
 
-// DRAFT (M2 canon pending)
 export function sessionOptionLabel(e: AuditEvent): string {
   return `Session ended ${clockTime(e.time)} · ${e.actor}`;
 }
 
-// DRAFT (M2 canon pending) — F1-F11: picking an attach session whose cast is
+// F1-F11: picking an attach session whose cast is
 // missing must render this SESSION-scoped copy, not the RUN-scoped "This run
 // has no captured terminal session" — a fact about the whole run must never
 // be asserted from a fetch that only ever checked one SPECIFIC session.

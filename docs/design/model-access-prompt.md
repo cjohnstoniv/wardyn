@@ -297,7 +297,7 @@ folded in, per this lane's own instruction not to widen into a redesign:
   surfaces this lane names. They remain `DRAFT (M2 canon pending)` in the shipped code; a future
   canon round should cover the cockpit/approvals/board surface as its own unit rather than as a
   subsection of this one.
-- **`AGENTS_DRAFT` and `PROVIDERS_DRAFT`** (`lib/workspace-providers-copy.ts`) — new strings
+- **`AGENTS_EXTRA` and `PROVIDERS_EXTRA`** (`lib/workspace-providers-copy.ts`) — new strings
   rendered on the Providers screen's Agents tab (`components/screens/providers/agents-tab.tsx`) and
   the Providers screen itself (`providers-screen.tsx`), including the per-user sign-in banner and
   the pinned-account/role fields. The source comments beside both exports say explicitly where their

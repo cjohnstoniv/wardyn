@@ -32,7 +32,7 @@ import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { useWriteDropped } from "../../../lib/use-write-dropped";
 import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
-import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { AvailabilityControl } from "../../wardyn/availability-control";
@@ -457,7 +457,7 @@ export function AgentsTab({
           {!operator && <OperatorOnlyHint />}
           {operator && changedLines.length > 0 && (
             <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
-              {PROVIDERS_DRAFT.UNSAVED_MARKER}
+              {PROVIDERS_EXTRA.UNSAVED_MARKER}
             </span>
           )}
           {writeDropped && (

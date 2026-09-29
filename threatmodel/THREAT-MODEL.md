@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.13)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.8.0)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -3065,8 +3065,8 @@ residuals particular to holding:
   hold ends.
 - **The Azure DevOps Entra lane runs the rules before its capability gate.**
   `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before
-  `awaitADOCapability`, so nobody is asked for `code_write` or `policy_bypass`
-  on a push the rules refuse, and a review hold is decided before any capability
+  `awaitADOCapability`, so nobody is asked for `code_write` on a push the
+  rules refuse, and a review hold is decided before any capability
   hold. Its refusals are the plain `403` the other lanes give, not the lane's
   receive-pack-status refusal, so git prints `HTTP 403` there as elsewhere.
   Azure DevOps' trees cannot be read (the forge comparison reads GitHub only),

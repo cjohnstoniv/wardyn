@@ -122,23 +122,43 @@ async function refusedRun(page: Page, provider: (typeof P)[keyof typeof P], sent
     }
     await route.fulfill({ response, json });
   });
-  // The run.create/failure row #532's dispatch refusal writes.
+  // The run.create/failure row #532's dispatch refusal writes. CACHE-AND-SERVE
+  // per URL (mockMemberSetupStatus's reason, fixtures.ts) — run-detail.tsx
+  // fires this endpoint several times AT ONCE for one page load (the
+  // unfiltered trail, the session.recording-prefixed one, and — fixture 6 is
+  // always terminal — three more filtered by run.complete/run.kill/
+  // run.autostop), and a real route.fetch() PER MATCH races Playwright
+  // disposing an in-flight one before its own .json() reads it
+  // ("apiResponse.json: Response has been disposed"), which then drops that
+  // request's audit page (its Promise.allSettled leg stays "rejected") and
+  // can lose the ending this run.create row carries. One real fetch per
+  // distinct URL — each filter is its own query and must not share another's
+  // rows — cached by the in-flight PROMISE so two matches on the same URL
+  // never race each other's fetch either (#1291).
+  const auditByUrl = new Map<string, Promise<Record<string, unknown>[]>>();
   await page.route("**/api/v1/audit*", async (route) => {
-    const response = await route.fetch();
-    const rows = (await response.json()) as Record<string, unknown>[];
-    if (!Array.isArray(rows) || rows.length === 0) return route.fulfill({ response, json: rows });
-    rows.unshift({
-      id: randomUUID(),
-      time: new Date().toISOString(),
-      run_id: rows[0].run_id,
-      actor_type: "system",
-      actor: "wardynd",
-      action: "run.create",
-      target: String(rows[0].run_id),
-      outcome: "failure",
-      data: { error: sentence, reason: "model_credential", provider: provider.id, kind: provider.kind, mechanism: provider.kind },
-    });
-    await route.fulfill({ response, json: rows });
+    const url = route.request().url();
+    let cached = auditByUrl.get(url);
+    if (!cached) {
+      cached = (async () => {
+        const rows = (await (await route.fetch()).json()) as Record<string, unknown>[];
+        if (!Array.isArray(rows) || rows.length === 0) return rows;
+        rows.unshift({
+          id: randomUUID(),
+          time: new Date().toISOString(),
+          run_id: rows[0].run_id,
+          actor_type: "system",
+          actor: "wardynd",
+          action: "run.create",
+          target: String(rows[0].run_id),
+          outcome: "failure",
+          data: { error: sentence, reason: "model_credential", provider: provider.id, kind: provider.kind, mechanism: provider.kind },
+        });
+        return rows;
+      })();
+      auditByUrl.set(url, cached);
+    }
+    await route.fulfill({ json: await cached });
   });
 }
 

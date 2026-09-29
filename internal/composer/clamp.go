@@ -280,6 +280,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 		li.ClassifiedMarkers = slices.Clone(s.LLMInspection.ClassifiedMarkers)
 		out.LLMInspection = &li
 	}
+	out.AzureDevOpsCapabilities = slices.Clone(s.AzureDevOpsCapabilities)
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)

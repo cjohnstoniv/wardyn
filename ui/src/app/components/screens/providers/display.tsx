@@ -10,6 +10,7 @@
 import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { unescapeADOName } from "../../../lib/scm-provider";
+import { entraDefaultsOffCeiling } from "./entra-editor";
 
 export const KIND_LABEL: Record<GitProviderKind, string> = {
   github: PROVIDERS.KIND_GITHUB,
@@ -102,16 +103,18 @@ export function baseURLError(raw: string, kind: GitProviderKind): string | null 
 
 // Whether this row is one the server is GUARANTEED to refuse, so the screen can
 // withhold Save rather than spend a round trip on a 400 it already knows about.
-// Both arms mirror validateWorkspaceProviders exactly, and NEITHER is gated on
+// Every arm mirrors validateWorkspaceProviders exactly, and NONE is gated on
 // `disabled`: the server validates every row it is handed, on or off.
 //
 // The zero-address arm exists for this (V1 r2): baseURLError("") returns
 // null by design — a blank LINE in a textarea is not an error — so without
 // it an emptied field flags nothing and commits `base_urls: []`, which the
 // server refuses and which leaves the row's credential lanes with no host
-// to key by.
+// to key by. The entra arm is providers400EntraProf: a default outside the
+// ceiling.
 export function gitRowInvalid(row: GitProvider): boolean {
   if (row.base_urls.length === 0) return true;
+  if (entraDefaultsOffCeiling(row.entra).length > 0) return true;
   return row.base_urls.some((u) => baseURLError(u, row.kind) !== null);
 }
 

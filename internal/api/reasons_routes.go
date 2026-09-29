@@ -166,6 +166,10 @@ const (
 	reasonPolicyRequestInvalid    = "policy_request_invalid"     // the create/update body fails decodePolicyRequest
 	reasonPolicySecretRefsInvalid = "policy_secret_refs_invalid" // a secret reference in the spec fails shape validation
 	reasonPolicyNameConflict      = "policy_name_conflict"       // a policy by that name already exists
+	// Shared by the policy CRUD door, POST /runs' inline_policy and a launch
+	// preset's inline_policy: the spec's
+	// azure_devops_capabilities names something the catalogue cannot grant.
+	reasonADOCapabilityUnknown = "ado_capability_unknown"
 )
 
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field

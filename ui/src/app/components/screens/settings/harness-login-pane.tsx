@@ -89,15 +89,20 @@ const RUN_POLL_MS = 2000;
 // reads, while a measured 131-second cold pull with healthy reads never tripped
 // it at all (finding 6).
 
-// DRAFT (M2 canon pending) — the same wait ending badly on a run that carries
+// The same wait ending badly on a run that carries
 // no failure_hint of its own (a kill, a stop). Says only what is known: the
 // sandbox is gone and nothing was captured.
 const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready — nothing was captured. Try again.";
+// The watch gave up with no done marker ever seen, so no verdict of its own —
+// e.g. the chooser was never answered. Must not claim the sandbox reported a capture.
+export const LOGIN_NOT_COMPLETED =
+  "The sign-in did not complete — the sandbox never reported a finished sign-in. " +
+  "If it asked you to choose an account or role, sign in again and answer in the terminal.";
 // LOGIN_SANDBOX_UNREADABLE lives in ./login-pane-copy (imported and re-exported
 // above): the live walk asserts through it, and a Playwright spec cannot import
 // THIS module — it reaches AttachTerminal's xterm.css, which Node cannot load.
 
-// DRAFT (M2 canon pending) — the sandbox signs itself in now. The aws-sso image
+// The sandbox signs itself in now. The aws-sso image
 // starts the chained command in its own tmux session before its prep
 // (deploy/images/aws-sso/agent-run → signin-pane.sh), and every attach path —
 // this pane, the Runs list, `wardyn attach`, ssh — joins that one session. So the
@@ -644,7 +649,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         return;
       }
       failedRef.current = true;
-      setError(verifyFailSentenceRef.current || CAPTURE_NOT_CORROBORATED);
+      setError(verifyFailSentenceRef.current || LOGIN_NOT_COMPLETED);
       setPhase("error");
     });
     // review-1 S2: return-to-visible wakes the watch too (the same idiom

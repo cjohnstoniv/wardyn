@@ -631,6 +631,11 @@ type governanceCeiling struct {
 	Limits   types.GovernanceLimits
 	Profile  *types.GovernanceProfile
 	Warnings []string
+	// Operator is true when this principal is not clamped (isOperator: the
+	// admin view, the admin token, local mode). The zero value is the clamped
+	// member, so a ceiling built without asking stays bounded. Dispatch reads it
+	// for the Azure DevOps standing rule (adoStandingBound).
+	Operator bool
 }
 
 // errGroupsSnapshotStale is the 403-class resolver failure: this caller's group
@@ -788,7 +793,11 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 // once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
-	if s.isOperator(ctx) || s.cfg.Store == nil {
+	if s.isOperator(ctx) {
+		deployment.Operator = true
+		return deployment, nil
+	}
+	if s.cfg.Store == nil {
 		return deployment, nil
 	}
 

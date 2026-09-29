@@ -83,6 +83,7 @@ import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
 import { RAIL_PROVIDER } from "../../src/app/components/wardyn/copy/new-run-rail";
 import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
+import { expandCard } from "../fixtures";
 import {
   ADMIN_EMAIL,
   LOGIN_DONE,
@@ -291,6 +292,8 @@ async function gotoAgentsTab(page: Page): Promise<void> {
     }
     await expect(page.getByTestId("providers-card")).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
+  // #1200: the Settings cards start collapsed; the "Open" link is in the body.
+  await expandCard(page, PROVIDERS.TITLE);
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();

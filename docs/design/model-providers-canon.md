@@ -106,8 +106,8 @@ line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API k
 and E4 — the two rows `docs/design/model-providers-mock/canon.html` Table 1 left as "#538 builds it".
 The agent reasons reused, `INTEGRATIONS.X_BEDROCK_CODEX` and `INTEGRATIONS.X_SUB_CODEX`, are
 `lib/integrations.ts`'s own; the AWS sign-in labels reused, `AGENTS.FIELD_SSO_START_URL`,
-`AGENTS.MECHANISM_BEDROCK_SSO`, `AGENTS.MECHANISM_BEDROCK_BEARER`, `AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID`
-and `AGENTS_DRAFT.FIELD_SSO_ROLE_NAME`, are `lib/workspace-providers-copy.ts`'s own.
+`AGENTS.MECHANISM_BEDROCK_SSO`, `AGENTS.MECHANISM_BEDROCK_BEARER`, `AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID`
+and `AGENTS_EXTRA.FIELD_SSO_ROLE_NAME`, are `lib/workspace-providers-copy.ts`'s own.
 
 `PROVIDER_EDITOR.REGION` — the packet's frozen table calls the four Bedrock labels (including
 "Region") "Reused" as a group, but no shipped `Region` Field constant existed to pin against, only

@@ -100,6 +100,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	// refuses ado_grant rather than running with the Azure DevOps gate off.
 	adoGrant := base
 	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}, Hosts: []string{"dev.azure.com"}}
+	adoCaps := base
+	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapRead}
 
 	for _, tc := range []struct {
 		name string
@@ -113,6 +115,7 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		// above refuses; alone the key is refused too.
 		{"unattended", unattended, "unattended"},
 		{"azure devops grant", adoGrant, "ado_grant"},
+		{"azure devops capabilities chosen by the policy", adoCaps, "policy.azure_devops_capabilities"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)

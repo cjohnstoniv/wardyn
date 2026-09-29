@@ -33,7 +33,7 @@ function escalation(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
       repo: "payments-api",
       ref_class: "",
       tool: "Azure DevOps",
-      cmd: "Push commits and move branches that no policy protects (code_write) in acme/payments-api",
+      cmd: "Push commits and create or move branches, inside this run's own branch unless its policy allows any branch (code_write) in acme/payments-api",
     },
     state: "PENDING",
     requested_at: new Date().toISOString(),
@@ -73,16 +73,42 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByText("Push")).toBeInTheDocument();
     expect(within(card).getByText("acme/payments-api")).toBeInTheDocument();
     expect(
-      within(card).getByText("Push commits and move branches that no policy protects (code_write) in acme/payments-api"),
+      within(card).getByText("Push commits and create or move branches, inside this run's own branch unless its policy allows any branch (code_write) in acme/payments-api"),
     ).toBeInTheDocument();
-    // Not protected — no Ref class row.
+    // Inside the run's own branch — no Ref class row.
     expect(within(card).queryByText(ADO.REQ_FIELD_REF_CLASS)).not.toBeInTheDocument();
     // F8 — Acts as, from run.created_by.
     expect(within(card).getByText(ADO.REQ_FIELD_ACTS_AS)).toBeInTheDocument();
     expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
   });
 
-  it("shows a Ref class row, and the bypass heading, for a protected-ref escalation", async () => {
+  // A ref outside the run's own branch reaches a person only as a code_write
+  // ask (git_push_any_branch on, code_write not yet held): the row says where
+  // the ref is, never that a branch policy protects it. "protected" is the
+  // legacy spelling an older stored row carries for the same case.
+  for (const refClass of ["outside_run_namespace", "protected"] as const) {
+    it(`shows "Outside this run's own branch" for ref_class ${refClass}`, async () => {
+      renderCard(
+        <AdoCapabilityCard
+          item={escalation({
+            requested_scope: { ...escalation().requested_scope, ref_class: refClass },
+          })}
+          securityOperator
+          run={OWNER}
+          busy={null}
+          onApprove={vi.fn()}
+          onDeny={vi.fn()}
+        />,
+      );
+      const card = await screen.findByTestId("ado-capability-card");
+      expect(within(card).getByText(ADO.REQ_FIELD_REF_CLASS)).toBeInTheDocument();
+      expect(within(card).getByText("Outside this run's own branch")).toBeInTheDocument();
+      expect(within(card).queryByText(ADO.REQ_CHANGE_PR_BYPASS)).not.toBeInTheDocument();
+      expect(card.textContent ?? "").not.toMatch(/protected|branch policy/i);
+    });
+  }
+
+  it("says a policy_bypass ask completes this pull request past its policies, with no ref class", async () => {
     renderCard(
       <AdoCapabilityCard
         item={escalation({
@@ -93,9 +119,9 @@ describe("AdoCapabilityCard — the escalation states", () => {
             grant_id: "grant_1",
             capability: "policy_bypass",
             repo: "payments-api",
-            ref_class: "protected",
+            ref_class: "",
             tool: "Azure DevOps",
-            cmd: "Land changes past a branch policy (policy_bypass) in acme/payments-api, on a protected branch",
+            cmd: "Complete a pull request without its required reviewers or checks (policy_bypass) in acme / payments-api",
           },
         })}
         securityOperator
@@ -106,9 +132,9 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(ADO.CAP_POLICY_BYPASS)).toBeInTheDocument();
-    expect(within(card).getByText(ADO.REQ_FIELD_REF_CLASS)).toBeInTheDocument();
-    expect(within(card).getByText(ADO.REQ_REF_CLASS_PROTECTED)).toBeInTheDocument();
+    expect(within(card).getByText("Bypass branch policies")).toBeInTheDocument();
+    expect(within(card).getByText("Complete this pull request past its policies")).toBeInTheDocument();
+    expect(within(card).queryByText(ADO.REQ_FIELD_REF_CLASS)).not.toBeInTheDocument();
   });
 
   it("falls back to the raw wire capability, in mono, for a capability with no §7.4 label", async () => {

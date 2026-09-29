@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
-import { WORKSPACE_DETAIL_DRAFT } from "../../lib/workspace-copy";
+import { WORKSPACE_DETAIL_EXTRA } from "../../lib/workspace-copy";
 
 vi.mock("../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn().mockResolvedValue({ runner: { driver: "docker" } }) } }));
 vi.mock("../../lib/api/workspaces", () => ({ workspaces: { createWorkspace: vi.fn() } }));
@@ -165,7 +165,7 @@ describe("AddWorkspaceDialog — one honest Auto image choice", () => {
     expect(within(group).getAllByRole("button")).toHaveLength(2);
     expect(
       within(group).getByRole("button", {
-        name: new RegExp(`^${WORKSPACE_DETAIL_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_TITLE}`, "i"),
+        name: new RegExp(`^${WORKSPACE_DETAIL_EXTRA.ADD_WORKSPACE_IMAGE_AUTO_TITLE}`, "i"),
       }),
     ).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: /pinned image ref/i })).toBeInTheDocument();

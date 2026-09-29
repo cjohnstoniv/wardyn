@@ -97,6 +97,7 @@ func TestConformanceK8s(t *testing.T) {
 	// Exercise the assembled production path: the orchestrator over the k8s
 	// substrate is what the control plane actually runs.
 	r := orchestrator.New(sub)
+	cs, ns := conformanceClientset(t)
 
 	conformance.Run(t, r, conformance.Options{
 		SandboxImage: agentImage,
@@ -115,6 +116,7 @@ func TestConformanceK8s(t *testing.T) {
 		// into an unset request: the driver's fake-clientset tests can pin what
 		// Wardyn SENDS, never what a real apiserver then defaults.
 		EphemeralStorageProbe: ephemeralStorageProbe,
+		UserDrives:            k8sDriveFixture(t, cs, ns, agentImage),
 		// DefaultRouteProbe: nil (deliberately). This substrate declares
 		// StructuralEgress:false — it proves L1 (NetworkPolicy), never L0
 		// (see internal/runner/k8s's package doc) — so conformance.go's own
@@ -129,6 +131,10 @@ func TestConformanceK8s(t *testing.T) {
 
 	t.Run("ExecIsAcceptedWithADiskBudget", func(t *testing.T) {
 		testExecIsAcceptedWithADiskBudget(t, r, agentImage)
+	})
+
+	t.Run("AgentCannotReachAnythingButTheProxy", func(t *testing.T) {
+		testAgentCannotReachAnythingButTheProxy(t, r, agentImage)
 	})
 }
 
@@ -180,18 +186,10 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner, agentImage str
 		Image:            agentImage,
 		ConfinementClass: caps.ConfinementClasses[len(caps.ConfinementClasses)-1],
 		Labels:           map[string]string{"wardyn.conformance": "true"},
-		// UNLIKE the rest of this suite's minimalSpec()-shaped sandboxes, this
-		// one needs its proxy sidecar ACTUALLY LISTENING — the probe's own
-		// positive control (line 92 below) dials it. The REAL wardyn-proxy
-		// binary (required by this whole suite for the boot-time canary; see
-		// this file's doc comment) refuses to start at all on a zero-value
-		// ProxyConfig ("control_plane_url is required", proxy.LoadConfigBytes)
-		// — confirmed empirically: every OTHER subtest here never notices
-		// because none of them ever dial the proxy, only this one does.
-		// ControlPlaneURL only needs to pass startup, not be reachable —
-		// Injection stays empty, so nothing tries to actually call it. Loopback,
-		// because the proxy refuses plaintext to any other host (hoptls.CheckURL).
-		ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:9", RunToken: "conformance"},
+		// The probe's own positive control dials the proxy sidecar, and the
+		// REAL wardyn-proxy refuses a zero-value ProxyConfig; see
+		// conformance.LoadableProxyConfig.
+		ProxyConfig: conformance.LoadableProxyConfig(),
 	}
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {
@@ -264,7 +262,8 @@ func testExecIsAcceptedWithADiskBudget(t *testing.T, r runner.Runner, agentImage
 		Labels:           map[string]string{"wardyn.conformance": "true"},
 		// Comfortably larger than the probe writes: this case is about ADMISSION,
 		// and an eviction here would be a different (and confusing) verdict.
-		Resources: runner.Resources{DiskMiB: 512},
+		Resources:   runner.Resources{DiskMiB: 512},
+		ProxyConfig: conformance.LoadableProxyConfig(),
 	}
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {

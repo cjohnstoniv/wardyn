@@ -13,7 +13,9 @@ import {
   loginFlow,
   SELFRUN_MARKER,
   LOGIN_SANDBOX_UNREADABLE,
+  LOGIN_NOT_COMPLETED,
 } from "./harness-login-pane";
+import { CAPTURE_NOT_CORROBORATED, CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import { SIGNIN_PROGRESS } from "./login-pane-copy";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
@@ -335,5 +337,37 @@ describe("HarnessLoginPane — the starting phase", () => {
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent("the sandbox image could not be pulled");
     expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
+  });
+});
+
+// The watch gives up on a sign-in whose sandbox never printed the done marker
+// (the person never answered the account/role chooser, and the sandbox idled
+// out). No capture was ever reported, so the alert must not say one was.
+describe("HarnessLoginPane — the watch gives up with no capture ever reported", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
+    getSetupStatusMock.mockReset().mockResolvedValue({ harness: [], providers: [] });
+    listAuditMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("says the sign-in did not complete, not that the sandbox reported a capture", async () => {
+    render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await screen.findByTestId("fake-terminal");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "COMPLETED" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CAPTURE_POST_RUN_GRACE_MS + 60_000);
+    });
+
+    const alertBox = screen.getByRole("alert");
+    expect(alertBox).toHaveTextContent(LOGIN_NOT_COMPLETED);
+    expect(alertBox).not.toHaveTextContent(CAPTURE_NOT_CORROBORATED);
+    expect(alertBox).not.toHaveTextContent(/reported a capture/i);
   });
 });

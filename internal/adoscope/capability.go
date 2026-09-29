@@ -34,17 +34,19 @@ const (
 	// starts from. WIDER than "read the code" — it can also read
 	// service-connection config, groups/users and directory identities.
 	CapRead Capability = "read"
-	// CapCodeWrite is a commit, a push or a ref move that no branch policy
-	// protects.
+	// CapCodeWrite is a commit, a push or a ref move. The caller holds a ref
+	// move to the run's own branch namespace unless the run's policy sets
+	// git_push_any_branch; that rule is the run's, never a capability's.
 	CapCodeWrite Capability = "code_write"
 	// CapPR is creating, updating, reviewing or completing a pull request
 	// WITHOUT bypassing policy.
 	CapPR Capability = "pr"
 	// CapPolicyAdmin is editing the branch policies themselves.
 	CapPolicyAdmin Capability = "policy_admin"
-	// CapPolicyBypass is landing a change THROUGH a policy: a PR completed
-	// with bypassPolicy, or a ref moved on a protected branch. Azure DevOps
-	// asks only write scope for both, hence the split from CapCodeWrite.
+	// CapPolicyBypass is completing a pull request with
+	// completionOptions.bypassPolicy — the one request whose body asks Azure
+	// DevOps to skip its own policies. Azure DevOps asks only write scope for
+	// it, hence the split from CapPR.
 	CapPolicyBypass Capability = "policy_bypass"
 	// CapRepoAdmin is creating, renaming or deleting a repository.
 	CapRepoAdmin Capability = "repo_admin"
@@ -145,10 +147,10 @@ func GrantableCapabilityList() string {
 // drift into a second definition of what a capability permits.
 var labels = map[Capability]string{
 	CapRead:                 "Read code, work items, pipelines, releases, wikis and feeds — including service connection settings, the organisation's groups and users, and directory identities",
-	CapCodeWrite:            "Push commits and move branches that no policy protects",
+	CapCodeWrite:            "Push commits and create or move branches, inside this run's own branch unless its policy allows any branch",
 	CapPR:                   "Open, review and complete pull requests",
 	CapPolicyAdmin:          "Change the branch policies themselves",
-	CapPolicyBypass:         "Land changes past a branch policy",
+	CapPolicyBypass:         "Complete a pull request without its required reviewers or checks",
 	CapRepoAdmin:            "Create, rename and delete repositories",
 	CapSecurityAdmin:        "Change permissions and identities",
 	CapServiceEndpointAdmin: "Change service connections and the credentials they hold",
@@ -165,6 +167,37 @@ var labels = map[Capability]string{
 	CapDeniedInternal:     "Not available: the organisation's internal web API",
 	CapUnclassifiedWrite:  "Not available: a write this deployment does not recognize",
 	CapUnclassifiedRead:   "Not available: a read this deployment does not recognize",
+}
+
+// shortLabels are the console's canon short names (the owner-approved Azure
+// DevOps access mock), for a Go-authored sentence a person reads beside that
+// console — a launch refusal naming the capability. ADO_CAP_COPY in
+// ui/src/app/lib/workspace-providers-copy.ts carries the same names, and
+// ui/src/app/lib/ado-access-copy.test.ts pins the two together.
+var shortLabels = map[Capability]string{
+	CapRead:                 "Read",
+	CapCodeWrite:            "Push to the run's own branch",
+	CapPR:                   "Open pull requests",
+	CapWorkWrite:            "Work items",
+	CapWikiWrite:            "Wiki",
+	CapBuildExecute:         "Run pipelines & releases",
+	CapPackagingWrite:       "Publish packages",
+	CapPolicyAdmin:          "Change branch policies",
+	CapPolicyBypass:         "Bypass branch policies",
+	CapRepoAdmin:            "Manage repositories",
+	CapSecurityAdmin:        "Change permissions & identities",
+	CapServiceEndpointAdmin: "Manage service connections",
+	CapBuildAdmin:           "Change pipeline definitions",
+	CapProjectAdmin:         "Manage projects",
+}
+
+// ShortLabel is c's canon short name, or its wire name for a value outside
+// the grantable set.
+func ShortLabel(c Capability) string {
+	if l, ok := shortLabels[c]; ok {
+		return l
+	}
+	return string(c)
 }
 
 // Label is c's plain-language rendering, or "" for a value outside the set —

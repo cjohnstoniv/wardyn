@@ -360,7 +360,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	llm, injections := plan.llm, plan.injections
-	ado, ok := s.authorADOEntraLane(ctx, run, adoRun, adoInject, ceiling.adoEntra, plan, &policy, sandboxEnv, injections)
+	ado, ok := s.authorADOEntraLane(ctx, run, adoRun, adoInject, ceiling.adoEntra, ceiling.adoStanding, plan, &policy, sandboxEnv, injections)
 	if !ok {
 		return
 	}

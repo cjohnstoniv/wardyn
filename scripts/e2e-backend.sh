@@ -339,12 +339,14 @@ SQL
   # titleGroups) — #1197 D2 removed grouping-by-title from this page
   # entirely (it groups by need-then-time now), so that shared title has no
   # feature left to exercise, and every row here is addressed by its own task
-  # text (runs.spec.ts's openRuns and its per-row click tests all rely on it).
+  # text (openRuns and its per-row click tests, duplicated across
+  # runs.spec.ts/runs-header.spec.ts/runs-detail.spec.ts/runs-cockpit.spec.ts,
+  # all rely on it).
   local titles=("" "" "" "" "" "" "" "" "")
   for i in "${!agents[@]}"; do
     # review C-02: fixture 4 (rn=5, fixed to COMPLETED below) carries a
     # NON-DEFAULT audit-derived field (tool_approvals) on its own run.create
-    # row, so runs.spec.ts's clone tests can pin that a clone reads THAT row
+    # row, so runs-detail.spec.ts's clone tests can pin that a clone reads THAT row
     # (createRequestFromAudit) rather than just the run row, which carries no
     # tool_approvals at all. audit_events is append-only (a live trigger
     # refuses UPDATE/DELETE), so this has to ride the create body, not a
@@ -405,7 +407,7 @@ SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', 
        '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL
-  # review R-03: fixture 6 (FAILED, rn=7 above) is runs.spec.ts's "worst
+  # review R-03: fixture 6 (FAILED, rn=7 above) is runs-detail.spec.ts's "worst
   # realistic case" for the header's width trade — a bare seeded run under-
   # represented every sibling fact a REAL failed run carries alongside
   # failure_hint: no exit code, no workspace path, a short repo, nothing
