@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
-import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E } from "../../../lib/workspace-providers-copy";
+import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../lib/workspace-providers-copy";
 import { gitRowInvalid } from "./display";
 import { EntraEditor } from "./entra-editor";
 import { GitTab } from "./git-tab";
@@ -59,6 +59,27 @@ describe("EntraEditor", () => {
     expect(defaults().getByRole("checkbox", { name: name("policy_admin") })).not.toBeChecked();
     expect(screen.getByText(E.HIGH_RISK_WARN)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("draws each group in the mock's order: High risk leads with Change branch policies", () => {
+    render(<Harness initial={entraRow()} />);
+    const names = ceiling().getAllByRole("checkbox").map((b) => b.getAttribute("aria-label"));
+    expect(names.slice(3, 5)).toEqual([name("work_write"), name("wiki_write")]);
+    expect(names.slice(7)).toEqual(
+      ["policy_admin", "policy_bypass", "repo_admin", "security_admin", "serviceendpoint_admin", "build_admin", "project_admin"].map(name),
+    );
+  });
+
+  // cn() (tailwind-merge) drops text-meta/text-body when a text colour joins
+  // them; both the size and the colour must reach the DOM.
+  it("keeps both the size and the colour class on names and leads", () => {
+    render(<Harness initial={entraRow()} />);
+    expect(screen.getByText(ADO_GROUP_COPY.high_risk.name)).toHaveClass("text-body", "text-danger");
+    expect(screen.getAllByText(ADO_GROUP_COPY.read.name)[0]).toHaveClass("text-body");
+    expect(screen.getByText(ADO_GROUP_COPY.read.lead)).toHaveClass("text-meta", "text-muted-foreground");
+    expect(screen.getByText(ADO_GROUP_COPY.high_risk.lead)).toHaveClass("text-meta", "text-danger");
+    expect(ceiling().getByText(name("pr"))).toHaveClass("text-body", "text-foreground");
+    expect(ceiling().getByText(name("work_write"))).toHaveClass("text-body", "text-muted-foreground");
   });
 
   it("an empty default profile reads as Read, the server's own reading", () => {
@@ -124,8 +145,8 @@ describe("EntraEditor", () => {
       entra: {
         tenant_id: CLIENT,
         client_id: CLIENT,
-        capability_ceiling: ["code_write", "policy_admin", "pr", "read", "work_write"],
-        default_profile: ["code_write", "read", "work_write"],
+        capability_ceiling: ["read", "code_write", "pr", "work_write", "policy_admin"],
+        default_profile: ["read", "code_write", "work_write"],
         token_mode: "bearer",
         rest_api: false,
       },
