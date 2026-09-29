@@ -563,10 +563,11 @@ export function NewRunScreen() {
                 govFloorApplies). A tier the floor forbids or the host can't
                 build is DROPPED, never shown disabled (the global picker
                 rule); ONE qualifying tier collapses to the decided row, NONE
-                shows the T-9 requirement card (its own REQUIREMENT_TITLE
-                fallback is what names "No sandbox runner" for the host-level
-                #214 case; requirementNote below overrides it only for the
-                governance-floor shape, hence its effectiveFloor condition).
+                shows the T-9 requirement card. requirementNote below names
+                the active floor whenever one is set — every fresh form has
+                one, the default spec's CC1 — so TierPicker's own
+                REQUIREMENT_TITLE shows only when no floor is authored; the
+                no-runner (#214) reason is the rail's noBarrier line.
                 Review P2-1/P2-3: decidedLine/pickOneNote override
                 TierPicker's defaults, which assume a governance floor and a
                 browser-persisted pick — neither true here. */}
