@@ -756,4 +756,12 @@ describe("GitTab — several rows of one kind", () => {
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: PERM.REMOVE }));
     expect(latest).toEqual([first]);
   });
+
+  it("two enabled rows of one kind share no DOM id, and each Base URLs field has its own name", () => {
+    const gh = (id: string, path: string): GitProvider => ({ id, kind: "github", base_urls: [`https://github.com/${path}`] });
+    const { container } = render(<Harness initial={[gh("acme", "acme"), gh("other", "other")]} />);
+    expect(screen.getAllByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveLength(2);
+    const ids = [...container.querySelectorAll("[id]")].map((el) => el.id);
+    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+  });
 });

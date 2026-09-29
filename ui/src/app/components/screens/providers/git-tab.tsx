@@ -161,6 +161,9 @@ function Row({
   const patMeta = patLaneMeta(patBrokerEnabled);
   const laneMeta = (lane: GitLane) => (lane === "pat" ? patMeta : LANE_META[lane as keyof typeof LANE_META]);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
+  // Prefixes this row's DOM ids: a kind can hold several rows, and two must
+  // never share a label target.
+  const uid = React.useId();
   // The textarea's raw text, held here rather than derived from
   // row.base_urls.join("\n") every render: splitting on every keystroke fed the
   // filtered array straight back into `value`, so a newline could never survive
@@ -292,9 +295,9 @@ function Row({
       ) : (
         <div className="space-y-4 p-3">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label={PROVIDERS.FIELD_BASE_URLS} hint={PROVIDERS.BASE_URLS_HINT} htmlFor={`provider-${kind}-base-urls`}>
+            <Field label={PROVIDERS.FIELD_BASE_URLS} hint={PROVIDERS.BASE_URLS_HINT} htmlFor={`${uid}provider-${kind}-base-urls`}>
               <Textarea
-                id={`provider-${kind}-base-urls`}
+                id={`${uid}provider-${kind}-base-urls`}
                 className="font-mono"
                 rows={3}
                 aria-invalid={invalidLines.length > 0 || noAddresses}
@@ -360,7 +363,7 @@ function Row({
           <div role="radiogroup" aria-label={`${KIND_LABEL[kind]} credentials`} className="space-y-2" {...credGroup.containerProps}>
             {!host && <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.LANES_NEED_ADDRESS}</p>}
             <CredentialLane
-              id={`lane-${kind}-pat`}
+              id={`${uid}lane-${kind}-pat`}
               title="Personal access token"
               hint={
                 patBrokerEnabled
@@ -377,7 +380,7 @@ function Row({
 
             {kind === "github" && appLaneAvailable(kind, row.base_urls) && (
               <CredentialLane
-                id={`lane-${kind}-app`}
+                id={`${uid}lane-${kind}-app`}
                 title="GitHub App"
                 hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
                 connected={!!host && githubApp}
@@ -391,7 +394,7 @@ function Row({
 
             {sshLaneAvailable(row.base_urls) && (
               <CredentialLane
-                id={`lane-${kind}-ssh`}
+                id={`${uid}lane-${kind}-ssh`}
                 title="SSH key"
                 hint="A per-run copy is written inside the sandbox for the clone, then shredded."
                 connected={!!host && present.includes(sshName)}
