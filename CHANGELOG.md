@@ -58,10 +58,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exposes none of that surface. A local install (loopback `http://` control plane) has no internal
   listener and is unchanged. Every shipped caller already dials the internal listener (compose,
   Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
-  still dials the console and now gets `404` on every call. On Docker, restart such runs
-  (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
-  On Kubernetes the restart refuses them (`revive_unsupported`, #1342): stop them and start a new
-  run instead.
+  still dials the console and now gets `404` on every call. Such a run cannot be restarted: on
+  Docker it has no stored proxy config (`revive_config_not_stored`), and on Kubernetes the restart
+  refuses it (`revive_unsupported`, #1342). Stop such runs before upgrading (or kill them after) and
+  start a new run instead.
 
 ### Added
 
