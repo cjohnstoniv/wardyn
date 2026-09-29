@@ -157,7 +157,6 @@ const (
 	envGitBrokerRepos = "WARDYN_GIT_BROKER_REPOS"
 )
 
-// DRAFT (M2 canon pending)
 const (
 	// helperRefusePlaintext is the stderr note for a credential request whose
 	// transport is not https (B11a-F3). It goes to STDERR, never stdout: git

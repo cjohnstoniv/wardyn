@@ -47,9 +47,8 @@ func TestGetPlainHTTPEmitsNothing(t *testing.T) {
 	if minted.Load() {
 		t.Fatal("plain-http credential request must not even mint — the credential is never created, not merely withheld")
 	}
-	// Asserted THROUGH the DRAFT constant, never against a literal: the wording
-	// is still pending canon, and a test pinning a copy of it would have to be
-	// edited by the canon pass instead of surviving it.
+	// Asserted THROUGH the constant, never against a literal copy of the
+	// wording.
 	if want := fmt.Sprintf(helperRefusePlaintext, "http"); stderr.String() != want {
 		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}

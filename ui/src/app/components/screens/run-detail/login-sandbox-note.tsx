@@ -36,7 +36,7 @@ export const HARNESS_LOGIN_TASK = "harness login";
 // Mirrors awsSSOAgent (internal/api/harnesscred.go), pinned by the same test.
 export const AWS_SSO_LOGIN_AGENT = "aws-sso";
 
-// DRAFT (M2 canon pending) — says the three things the page could not: what the
+// Says the three things the page could not: what the
 // box is, what the terminal below is waiting for, and that nobody has to clean it
 // up. The old sentence sent the reader to Getting Started to sign in, which was
 // the right advice when this terminal was a bare shell and the console pane was

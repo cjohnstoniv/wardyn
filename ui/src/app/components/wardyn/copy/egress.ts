@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// DRAFT (M2 canon pending) — F5-F3. Removing an allowed host is PUT
+// F5-F3. Removing an allowed host is PUT
 // .../approved-egress plus, for an operator-authored requirements row, PUT
 // .../requirements. A row that is in NEITHER — a host the workspace's own scan
 // seeded — has no write to make: the pair fired, nothing changed, and the row

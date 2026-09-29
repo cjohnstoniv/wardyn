@@ -12,7 +12,7 @@
 // the whole live walk fail with "No tests found" while typecheck stayed green.
 // harness-login-pane.tsx re-exports both, so the console and vitest are unmoved.
 
-// DRAFT (M2 canon pending) — the wait ending because Wardyn can no longer READ
+// The wait ending because Wardyn can no longer READ
 // the run (a daemon restart mid-pull, a pruned run, a 403 after a roster edit).
 // Distinct from the "stopped before it was ready" sentence on purpose: that one
 // asserts the sandbox stopped, which the pane has not established — all it
@@ -20,7 +20,7 @@
 export const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
-// DRAFT (M2 canon pending) — U-8: the aws blurb's opening clause under
+// U-8: the aws blurb's opening clause under
 // `startURLManaged` (every per_user member). The unmanaged clause asks the
 // reader to give Wardyn their organization's access portal URL — and under a
 // managed row there is no field to give it in, the server ignores a supplied one
@@ -30,7 +30,7 @@ export const LOGIN_SANDBOX_UNREADABLE =
 export const AWS_BLURB_MANAGED_OPENING =
   "Your admin set your organization's AWS access portal; there is nothing to enter.";
 
-// DRAFT (M2 canon pending) — the first line the aws-sso image's sign-in pane
+// The first line the aws-sso image's sign-in pane
 // prints (deploy/images/aws-sso/login-hint.sh's banner starts with it). The
 // console types the login command only if this never appears; see the pane's
 // grace-timer comment for why.

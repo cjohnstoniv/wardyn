@@ -14,7 +14,7 @@ import {
   navToRoute,
   sidebarLink,
 } from "./fixtures";
-import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
@@ -282,8 +282,8 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     const documentPreview = page.locator("pre");
     await expect(documentPreview).toContainText("https://github.com/acme");
     await expect(documentPreview).toContainText("https://git.corp.example/team");
-    await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
-    await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+    await page.getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY }).click();
+    await expect(page.getByText(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST)).toBeVisible();
     const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
     const clipboardDraft = JSON.parse(clipboardText);
     const githubRow = (clipboardDraft.git as { base_urls?: string[] }[]).find((g) =>
@@ -293,7 +293,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 
     // Discard mine and reload is still there, now beside Copy, not the only
     // exit.
-    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
+    await expect(page.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeVisible();
 
     // Clean up the route intercept and the in-memory draft edit before the
     // next serial test reads the real, unmodified stored document.
@@ -316,7 +316,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // #460 added the same "Unsaved changes" chip in three more places
     // (PageHeader, Git tab, Storage tab), so this targets the beside-Save
     // marker by its own testid rather than the now-ambiguous text.
-    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_EXTRA.UNSAVED_MARKER);
 
     await sidebarLink(page, "Settings").click();
     const dialog = page.getByRole("alertdialog");

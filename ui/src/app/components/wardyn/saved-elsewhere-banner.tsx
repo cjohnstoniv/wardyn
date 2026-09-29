@@ -16,7 +16,7 @@ import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
-import { PROVIDERS, PROVIDERS_DRAFT } from "../../lib/workspace-providers-copy";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 
 // Q460-3's clipboard-failure fallback: select the text so the person can copy
 // it themselves with their own Ctrl/Cmd-C, rather than leaving them with
@@ -44,7 +44,7 @@ export function SavedElsewhereBanner({
   const { copied, copyAsync } = useCopyToClipboard();
   const textRef = React.useRef<HTMLPreElement>(null);
   React.useEffect(() => {
-    if (copied) toast.success(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST);
+    if (copied) toast.success(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST);
   }, [copied]);
 
   const handleCopy = async () => {
@@ -64,14 +64,14 @@ export function SavedElsewhereBanner({
       </pre>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={handleCopy}>
-          <Copy className="size-3.5" /> {PROVIDERS_DRAFT.CONFLICT_COPY}
+          <Copy className="size-3.5" /> {PROVIDERS_EXTRA.CONFLICT_COPY}
         </Button>
         {/* #217: ghost, not outline — Copy is the one this banner wants
             pressed first, and Discard is no longer its only exit. Never a
             "save over theirs" arm — a security document is never
             last-writer-wins from this banner. */}
         <Button variant="ghost" size="sm" onClick={onDiscard}>
-          {PROVIDERS_DRAFT.DISCARD_AND_RELOAD}
+          {PROVIDERS_EXTRA.DISCARD_AND_RELOAD}
         </Button>
       </div>
     </div>

@@ -356,7 +356,7 @@ function foldRedirectEndpoint(raw: string): string {
   return s.slice(0, authorityEnd).toLowerCase() + s.slice(authorityEnd);
 }
 
-// DRAFT (M2 canon pending) — F3-F5: a duplicate `from` is producible today (no
+// F3-F5: a duplicate `from` is producible today (no
 // client/server guard existed), and the rail keys redirects BY `from` — a
 // collision would silently shadow one row's probe result with the other's.
 // The plan's own correction rejects index-keying (`:409-415` shifts every

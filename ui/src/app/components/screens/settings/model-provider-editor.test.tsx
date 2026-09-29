@@ -16,7 +16,7 @@ import type { ModelProvidersList } from "../../../lib/api/model-providers";
 import { T } from "../../../lib/integrations";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR as E, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
-import { AGENTS, AGENTS_DRAFT, PROVIDERS as WS_PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_EXTRA, PROVIDERS as WS_PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { ModelProviderEditor, type ModelProviderEditorProps } from "./model-provider-editor";
 import { addressChanged, providerIdFrom } from "./model-provider-draft";
 
@@ -291,8 +291,8 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     expect(screen.getByLabelText(E.REGION)).toBeRequired();
     expect(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL)).toHaveValue("");
     expect(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeRequired();
-    expect(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toHaveValue("");
-    expect(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toHaveValue("");
+    expect(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toHaveValue("");
+    expect(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toHaveValue("");
     expect(screen.getByText(E.SSO_SETUP_HINT)).toBeInTheDocument();
 
     expect(box("Claude Code")).toBeChecked();
@@ -313,8 +313,8 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
     expect(screen.getByLabelText(E.REGION)).toBeInTheDocument();
     expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
-    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
-    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toBeNull();
   });
 
   it("filled: saves the SSO fields under bedrock, and the ticked agent's model", async () => {
@@ -324,8 +324,8 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     await user.type(screen.getByLabelText(E.NAME), "Bedrock (prod)");
     await user.type(screen.getByLabelText(E.REGION), "us-east-1");
     await user.type(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
-    await user.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID), "111122223333");
-    await user.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME), "WardynBedrockUser");
+    await user.type(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID), "111122223333");
+    await user.type(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME), "WardynBedrockUser");
     await user.type(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
 

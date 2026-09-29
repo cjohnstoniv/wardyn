@@ -398,8 +398,8 @@ const apprStateMeta: Record<string, Tone> = {
   CANCELLED: "neutral",
 };
 // Every state's label is title-cased from the wire value; CANCELLED is the one
-// with an owner-facing copy key (copy.ts APPROVAL.STATE_CANCELLED, DRAFT M2),
-// so the wording lives in one place rather than being derived here.
+// with an owner-facing copy key (copy.ts APPROVAL.STATE_CANCELLED), so the
+// wording lives in one place rather than being derived here.
 const apprStateLabel: Record<string, string> = {
   CANCELLED: APPROVAL.STATE_CANCELLED,
 };

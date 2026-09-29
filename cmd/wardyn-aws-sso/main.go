@@ -249,35 +249,23 @@ func serverSentence(err error) string {
 	return body.Error
 }
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
-
 // The refusals this helper prints after the fail marker, and the chooser's own
 // prompt block. Every one of them is read by a person on the login terminal.
 const (
-	// DRAFT (M2 canon pending)
 	pinAccountNotEntitledRefusal = "this deployment pins AWS sign-ins for this agent to account %s, which this sign-in does not reach — ask an admin to change the pin, or ask your cloud team for access to that account"
-	// DRAFT (M2 canon pending)
-	pinRoleNotInAccountRefusal = "this deployment pins AWS sign-ins for this agent to role %s in account %s, which this sign-in cannot assume there — ask an admin to change the pin, or ask your cloud team to grant you that role"
-	// DRAFT (M2 canon pending)
-	chooserNoTerminalRefusal = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the agent row; this session reaches %s"
-	// DRAFT (M2 canon pending)
-	portalUnreachableRefusal = "the AWS access portal could not be reached — try the sign-in again"
-	// DRAFT (M2 canon pending)
-	chooserGaveUpRefusal = "nothing was chosen after three tries — ask an admin to pin the account and role on the agent row so this sign-in has nothing to guess"
+	pinRoleNotInAccountRefusal   = "this deployment pins AWS sign-ins for this agent to role %s in account %s, which this sign-in cannot assume there — ask an admin to change the pin, or ask your cloud team to grant you that role"
+	chooserNoTerminalRefusal     = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the agent row; this session reaches %s"
+	portalUnreachableRefusal     = "the AWS access portal could not be reached — try the sign-in again"
+	chooserGaveUpRefusal         = "nothing was chosen after three tries — ask an admin to pin the account and role on the agent row so this sign-in has nothing to guess"
 )
 
 // The chooser's prompt block, verbatim from the plan.
 const (
-	// DRAFT (M2 canon pending)
 	chooserAccountsHeader = "wardyn: this sign-in reaches %d AWS accounts; choose the one your Bedrock model lives in."
-	// DRAFT (M2 canon pending)
-	chooserOptionLine = "  %d) %s  %s"
-	// DRAFT (M2 canon pending)
-	chooserAccountPrompt = "wardyn: account [1-%d]:"
-	// DRAFT (M2 canon pending)
-	chooserRolesHeader = "wardyn: choose the role your runs should assume in account %s."
-	// DRAFT (M2 canon pending)
-	chooserRolePrompt = "wardyn: role [1-%d]:"
+	chooserOptionLine     = "  %d) %s  %s"
+	chooserAccountPrompt  = "wardyn: account [1-%d]:"
+	chooserRolesHeader    = "wardyn: choose the role your runs should assume in account %s."
+	chooserRolePrompt     = "wardyn: role [1-%d]:"
 )
 
 // ssoPin is the admin's roster pin, delivered to this sandbox as launch env by
@@ -474,13 +462,9 @@ var ssoPortalBase = func(region string) string {
 	return raw
 }
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
-
 // endpointOverrideIgnoredLine is the ONE stderr line an unparseable
 // AWS_ENDPOINT_URL_SSO gets. Args: the variable name, the offending value, the
 // regional URL used instead.
-//
-// DRAFT (M2 canon pending)
 const endpointOverrideIgnoredLine = "wardyn-aws-sso: ignoring %s=%q (not an absolute http(s) URL) — using %s"
 
 // portalAccount is one entitlement ListAccounts returns.

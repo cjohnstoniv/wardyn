@@ -31,10 +31,10 @@ import { Label } from "../ui/label";
 import { HttpError, setToken, wfetch } from "../../lib/api/core";
 import { health, type Me } from "../../lib/api/health";
 import { useReauth } from "../../lib/reauth";
-import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "../../lib/reauth-copy";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "../../lib/reauth-copy";
 import { unsavedSnapshot } from "../../lib/unsaved-registry";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
-import { PROVIDERS_DRAFT } from "../../lib/workspace-providers-copy";
+import { PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 import { SIGNIN } from "../../lib/sign-in-copy";
 import { SSO_SIGN_IN, TOKEN_LABEL } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
@@ -106,7 +106,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const { copied, copy } = useCopyToClipboard();
 
   React.useEffect(() => {
-    if (copied) toast.success(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST);
+    if (copied) toast.success(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST);
   }, [copied]);
 
   React.useEffect(() => {
@@ -232,7 +232,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
 
   const copyButton = unsavedSnapshot() !== null && (
     <Button type="button" variant="outline" size="sm" onClick={() => copy(unsavedSnapshot() ?? "")}>
-      <Copy className="size-3.5" /> {PROVIDERS_DRAFT.CONFLICT_COPY}
+      <Copy className="size-3.5" /> {PROVIDERS_EXTRA.CONFLICT_COPY}
     </Button>
   );
 
@@ -271,7 +271,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
             <DialogFooter>
               {copyButton}
               <Button type="button" onClick={goToRuns}>
-                {REAUTH_DRAFT.GO_TO_RUNS}
+                {REAUTH_EXTRA.GO_TO_RUNS}
               </Button>
             </DialogFooter>
           ) : (

@@ -52,7 +52,7 @@ import {
 import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
-import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { NO_BARRIER, SITE } from "../../wardyn/copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
@@ -392,7 +392,7 @@ export function SetupScreen({
         const result = await healthApi.putSiteConfig(next, siteConfigEtag);
         await reloadSiteConfig();
         if (result.danglingSecretRefs.length > 0) {
-          toast.warning(PROVIDERS_DRAFT.SAVED_DANGLING_REFS(result.danglingSecretRefs));
+          toast.warning(PROVIDERS_EXTRA.SAVED_DANGLING_REFS(result.danglingSecretRefs));
         }
         // A POINTER on the wire: only a PRESENT positive number is a narrowed-
         // sources warning — never `?? 0`, which would claim "narrowed nothing"

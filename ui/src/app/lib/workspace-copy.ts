@@ -52,10 +52,10 @@ export const C = {
     "Repos are cloned fresh into the sandbox — nothing on your machine is touched, so there's nothing to protect with read-only.",
 };
 
-// WORKSPACE_DETAIL_DRAFT
-// DRAFT (M2 canon pending): new strings staged for review — not part of the frozen `C`
-// export above (workspace-copy.test.ts's byte-checks parse only `C`).
-export const WORKSPACE_DETAIL_DRAFT = {
+// WORKSPACE_DETAIL_EXTRA
+// Shipped copy, frozen by #206 — not part of the byte-parity `C` export above
+// (workspace-copy.test.ts's byte-checks parse only `C`).
+export const WORKSPACE_DETAIL_EXTRA = {
   // F5-F6: the Add-workspace dialog's one honest image choice — replaces the
   // two dishonest "devcontainer.json" / "standard sandbox image" picks that
   // stored byte-identical state. TITLE is used at both the OptionCard and the

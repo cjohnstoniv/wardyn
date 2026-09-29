@@ -119,7 +119,7 @@ export const PEOPLE = {
   OPERATOR_EMAILS_EMPTY: "None set.",
   IDP_NOTE:
     'Creating people and groups, and assigning Entra App Roles, happens in your identity provider — mapping a role here only tells Wardyn what to do with a value your IdP already sends. "Assignment required" on the app registration is Entra\'s gate, not this one\'s.',
-  // R1-F112 (DRAFT, M2 canon pending): a demotion made here revokes the
+  // R1-F112: a demotion made here revokes the
   // outstanding wdn_ tokens it demotes, silently, on the wire today — this is
   // the receipt for that side effect. Inline-pluralised, PEOPLE.ADD_CTA's
   // shape (ASSIGNED_COUNT's, one level up in governance-copy.ts).

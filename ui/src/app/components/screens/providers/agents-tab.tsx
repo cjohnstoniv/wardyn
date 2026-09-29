@@ -40,7 +40,7 @@ import {
   MODEL_ACCESS_ACTIONABLE,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
-  PROVIDERS_DRAFT,
+  PROVIDERS_EXTRA,
   modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
@@ -583,7 +583,7 @@ export function AgentsTab({
           {!operator && <OperatorOnlyHint />}
           {operator && changedLines.length > 0 && (
             <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
-              {PROVIDERS_DRAFT.UNSAVED_MARKER}
+              {PROVIDERS_EXTRA.UNSAVED_MARKER}
             </span>
           )}
           {writeDropped && (
