@@ -76,7 +76,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   expect(res.status()).toBe(201);
   const stored = (await res.json()) as { id: string; spec: RunPolicySpec };
   try {
-    expect(stored.spec.azure_devops_capabilities).toEqual(["policy_admin", "read"]);
+    expect(stored.spec.azure_devops_capabilities).toEqual(["read", "policy_admin"]);
     await expect(dialog).toBeHidden();
 
     // The list names what it grants (the mock's second example policy).
@@ -85,7 +85,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
 
     // Read back what the server stored, then reopen it in the editor.
     const got = await request.get(`/api/v1/policies/${stored.id}`, { headers: auth });
-    expect(((await got.json()) as { spec: RunPolicySpec }).spec.azure_devops_capabilities).toEqual(["policy_admin", "read"]);
+    expect(((await got.json()) as { spec: RunPolicySpec }).spec.azure_devops_capabilities).toEqual(["read", "policy_admin"]);
     await policyRow(page, name).click();
     const sheet = page.getByRole("dialog").filter({ hasText: name });
     await sheet.getByRole("button", { name: "Edit policy" }).click();

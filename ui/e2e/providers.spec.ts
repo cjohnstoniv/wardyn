@@ -953,8 +953,8 @@ test.describe("providers — the Azure DevOps Entra section (real writes, real r
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(snap.git[0].entra).toEqual(
       expect.objectContaining({
-        capability_ceiling: ["code_write", "policy_admin", "read"],
-        default_profile: ["code_write", "read"],
+        capability_ceiling: ["read", "code_write", "policy_admin"],
+        default_profile: ["read", "code_write"],
       }),
     );
 

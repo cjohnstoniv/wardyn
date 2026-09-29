@@ -17,7 +17,9 @@ import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../li
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
-import { cn } from "../../ui/utils";
+// clsx, not cn: tailwind-merge doesn't know the text-meta/text-body size
+// tokens, so cn() drops them whenever a text colour class is merged in.
+import { clsx } from "clsx";
 
 // An empty default_profile reads as ["read"] on the server
 // (ADOEntraConfig.Profile), so the checklist shows that.
@@ -79,7 +81,7 @@ function CapRow({
   const info = ADO_CAPABILITIES.find((c) => c.cap === cap);
   return (
     <div
-      className={cn("grid grid-cols-[20px_1fr] gap-2 py-1.5", locked && "cursor-not-allowed", bad && "rounded-md bg-danger-subtle")}
+      className={clsx("grid grid-cols-[20px_1fr] gap-2 py-1.5", locked && "cursor-not-allowed", bad && "rounded-md bg-danger-subtle")}
       title={tip}
       data-testid={id}
     >
@@ -100,7 +102,7 @@ function CapRow({
       )}
       <label htmlFor={id} className="min-w-0 leading-snug">
         <span
-          className={cn(
+          className={clsx(
             "text-body font-medium",
             bad ? "text-danger" : checked ? "text-foreground" : "text-muted-foreground",
             locked && "line-through decoration-danger/70",
@@ -132,12 +134,12 @@ function Groups({
         const risk = g.id === "high_risk";
         const copy = ADO_GROUP_COPY[g.id];
         return (
-          <div key={g.id} className={cn("overflow-hidden rounded-lg border", risk ? "border-danger" : "border-border")}>
-            <div className={cn("flex flex-wrap items-baseline gap-2 px-3 py-2", risk ? "bg-danger-subtle" : "bg-muted/40")}>
-              <span className={cn("text-body font-semibold", risk && "text-danger")}>
+          <div key={g.id} className={clsx("overflow-hidden rounded-lg border", risk ? "border-danger" : "border-border")}>
+            <div className={clsx("flex flex-wrap items-baseline gap-2 px-3 py-2", risk ? "bg-danger-subtle" : "bg-muted/40")}>
+              <span className={clsx("text-body font-semibold", risk && "text-danger")}>
                 {ceilingView ? copy.name : risk ? E.HIGH_RISK_BADGE : copy.name}
               </span>
-              {ceilingView && <span className={cn("text-meta", risk ? "text-danger" : "text-muted-foreground")}>{copy.lead}</span>}
+              {ceilingView && <span className={clsx("text-meta", risk ? "text-danger" : "text-muted-foreground")}>{copy.lead}</span>}
             </div>
             {ceilingView && risk && (
               <p className="border-t border-dashed border-danger bg-danger-subtle px-3 py-1.5 text-meta text-danger">{E.HIGH_RISK_WARN}</p>

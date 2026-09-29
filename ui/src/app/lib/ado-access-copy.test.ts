@@ -30,6 +30,6 @@ describe("ADO_CAP_COPY names — the same names Go's launch refusal uses", () =>
     const goNames: Record<string, string> = {};
     for (const m of block![1].matchAll(/(Cap\w+):\s*"([^"]+)"/g)) goNames[consts.get(m[1])!] = m[2];
     expect(Object.fromEntries(Object.entries(ADO_CAP_COPY).map(([cap, c]) => [cap, c.name]))).toEqual(goNames);
-    expect(Object.keys(ADO_CAP_COPY).sort()).toEqual(ADO_CAPABILITIES.map((c) => c.cap));
+    expect(Object.keys(ADO_CAP_COPY).sort()).toEqual(ADO_CAPABILITIES.map((c) => c.cap).sort());
   });
 });

@@ -71,8 +71,9 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
     render(<Harness initial={BASE} seen={seen} ceiling={CEILING} />);
     const picks = ["Open pull requests", "Read", "Push to the run's own branch"];
     for (const name of picks) await userEvent.click(box(name));
-    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["code_write", "pr", "read"]);
+    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["read", "code_write", "pr"]);
     for (const name of picks) await userEvent.click(box(name));
+    expect(seen.at(-1)).not.toHaveProperty("azure_devops_capabilities");
     expect(seen.at(-1)).toEqual(BASE);
   });
 
@@ -87,6 +88,10 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
     expect(row).toHaveAttribute("aria-disabled", "true");
     expect(within(row).getByText("✕")).toHaveAttribute("aria-hidden", "true");
     expect(within(row).getByText("Manage service connections")).toHaveClass("line-through");
+    // The label keeps its size token beside a colour class (cn() dropped it).
+    expect(within(row).getByText("Manage service connections").closest("label")).toHaveClass("text-body");
+    expect(within(row).getByText("✕")).toHaveClass("text-meta", "text-danger");
+    expect(within(row).getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toHaveClass("text-meta", "text-danger");
     await userEvent.click(within(row).getByText("Manage service connections"));
     expect(seen).toHaveLength(0);
     // What the ceiling grants is not locked.
