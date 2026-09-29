@@ -687,7 +687,7 @@ jobs:
           # calls, read from the file each one tees ALONE: $log interleaves all
           # three summaries, and its last one is always a roles leg's.
           # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 above fixes the AWS walk to exactly
-          # sso-member + sso-member-recovery; each roles leg runs sso-roles alone.
+          # sso-member + sso-member-recovery + sso-concurrency; each roles leg runs sso-roles alone.
           # Every one of those specs' WARDYN_TEST_K8S guard is satisfied here, so
           # "0 failed, 0 skipped" is what this job's own configuration implies.
           evidence=test/reports/e2e/kind-sso
@@ -721,7 +721,7 @@ jobs:
               exit 1
             fi
           }
-          expect_per_spec_summaries "$evidence/walk.log" 2
+          expect_per_spec_summaries "$evidence/walk.log" 3
           expect_summary "$evidence/roles-sso.log" 1
           expect_summary "$evidence/roles-sso-only.log" 1
           # Shared with kind-sso-ado-walk below (scripts/test-kind-sso-walk-log.sh
