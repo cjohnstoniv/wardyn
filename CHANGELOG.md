@@ -8,6 +8,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **A recipe for running CI jobs as confined one-shot runs (#1111).** `docs/ci-jobs-as-runs.md` puts
+  the pieces in order: a governance profile for a dedicated CI principal, a pinned image, a runner
+  token delivered as an `env_secret` grant, a sealed run policy, `wardyn run --wait` with the job's
+  exit code, and what the audit trail records. It ends with a worked example of a self-hosted
+  Forgejo runner that registers, takes one job and exits, inside a confined run. Every command in it
+  was run against a compose install.
+
 ### Fixed
 
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer
