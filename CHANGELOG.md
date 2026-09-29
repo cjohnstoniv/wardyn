@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-29
+
 ### Security
 
 - **An operator's stored model key no longer reaches a run through an integration or a workspace
