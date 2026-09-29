@@ -227,6 +227,35 @@ func TestTheWidenedMarkerIsExpiredSecurely(t *testing.T) {
 	}
 }
 
+// TestAnUnwidenedLoginStartExpiresAStaleSecureMarker: under secure cookies the
+// marker an earlier widened attempt left is named __Host-wardyn_oidc_widened,
+// so a login start that asks for nothing extra must look for it under that
+// prefixed name, or the stale marker survives and the next callback is
+// retried as if this redirect had been widened.
+func TestAnUnwidenedLoginStartExpiresAStaleSecureMarker(t *testing.T) {
+	e := newEntraLogin(t, true) // no sink attached: this login is never widened
+	req := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
+	req.AddCookie(&http.Cookie{Name: "__Host-wardyn_oidc_widened", Value: "1"})
+	w := httptest.NewRecorder()
+	e.auth.LoginHandler(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("LoginHandler: status %d", w.Code)
+	}
+	found := false
+	for _, c := range w.Result().Cookies() {
+		if c.Name != "__Host-wardyn_oidc_widened" {
+			continue
+		}
+		found = true
+		if !c.Secure || c.MaxAge >= 0 {
+			t.Errorf("the stale marker's deletion is Secure=%v MaxAge=%d; want Secure and expired", c.Secure, c.MaxAge)
+		}
+	}
+	if !found {
+		t.Fatal("an unwidened login start left a stale prefixed widened marker in place")
+	}
+}
+
 // TestAnUnretriedRefusalIsLogged is F2: a refusal outside the retry set still
 // answers as it always has, but its code and description reach the log.
 func TestAnUnretriedRefusalIsLogged(t *testing.T) {

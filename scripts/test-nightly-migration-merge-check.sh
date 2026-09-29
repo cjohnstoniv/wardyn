@@ -27,6 +27,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# A developer's global/system git config (commit.gpgsign, hooks paths, init
+# defaults) must not reach the fixture's seed commits.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # ── fake gh / fake go on PATH ────────────────────────────────────────────
@@ -288,6 +292,117 @@ case7() {
 edit_main_go_a() { echo "package seventy" >"$1/main.go"; }
 edit_main_go_b() { echo "package seventyone" >"$1/main.go"; }
 
+# ── 8. a PR set aside for conflicting with a culprit is requeued ───────────
+# PR 80 breaks vet and edits main.go; PR 81 conflicts only with 80 (same
+# line of main.go). Round one merges 80, sets 81 aside and blames 80; round
+# two must merge 81 onto origin/main, so the summary counts it, and it must
+# not be listed as set aside. A check that drops conflicted PRs after a
+# culprit instead of requeuing them would report "0 of 2".
+case8() {
+  local dir="$TMP/case8"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 80 edit_main_go_broken
+  make_pr "$dir/seed" "$dir/origin.git" 81 edit_main_go_b
+  FAKE_GH_PRS="$(gh_prs_json "$dir" 80 81)"
+  export FAKE_GH_PRS
+  local summary="$dir/summary.md" out rc=0
+  out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || fail "the culprit must fail the job"
+  grep -q "PR #80 breaks go vet" "$summary" || fail "summary must blame PR #80: $(cat "$summary")"
+  grep -q "PR #81 breaks" "$summary" && fail "PR #81 must not be blamed: $(cat "$summary")"
+  grep -q "1 of 2 PR(s) merged together" "$summary" \
+    || fail "PR #81 conflicted only with the culprit, so it must merge on the next round: $(cat "$summary")"
+  grep -qF -- '- #81' "$summary" && fail "PR #81 must not be listed as set aside: $(cat "$summary")"
+  echo "ok  a PR that conflicted only with the culprit is requeued and merges the next round"
+}
+edit_main_go_broken() { echo "package eighty" >"$1/main.go"; : >"$1/VET_BROKEN"; }
+
+# ── 9. two culprits in one run are both named ──────────────────────────────
+# 91 breaks vet, 93 breaks the db test, 90/92/94 are good. Round one blames
+# 91, round two (on top of 90) blames 93, round three passes.
+case9() {
+  local dir="$TMP/case9"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 90 add_0004
+  make_pr "$dir/seed" "$dir/origin.git" 91 add_0005_broken
+  make_pr "$dir/seed" "$dir/origin.git" 92 add_0006
+  make_pr "$dir/seed" "$dir/origin.git" 93 add_0007_db_broken
+  make_pr "$dir/seed" "$dir/origin.git" 94 add_0008
+  FAKE_GH_PRS="$(gh_prs_json "$dir" 90 91 92 93 94)"
+  export FAKE_GH_PRS
+  local summary="$dir/summary.md" out rc=0
+  out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || fail "the culprits must fail the job"
+  grep -q "PR #91 breaks go vet" "$summary" || fail "summary must blame PR #91: $(cat "$summary")"
+  grep -qF "PR #93 breaks go test ./internal/db -run Migrat" "$summary" \
+    || fail "summary must blame PR #93 for the db test: $(cat "$summary")"
+  local n
+  for n in 90 92 94; do
+    grep -q "PR #$n breaks" "$summary" && fail "PR #$n must not be blamed: $(cat "$summary")"
+  done
+  grep -q "3 of 5 PR(s) merged together" "$summary" \
+    || fail "the three good PRs must still merge: $(cat "$summary")"
+  echo "ok  a second culprit in the same run is named alongside the first"
+}
+add_0007_db_broken() { echo "-- new" >"$1/internal/db/migrations/0007_d.sql"; : >"$1/DB_TEST_BROKEN"; }
+add_0008() { echo "-- new" >"$1/internal/db/migrations/0008_e.sql"; }
+
+# ── 10. a culprit at index 0 (the lo=-1 path) is named alone ───────────────
+# The broken PR is the first one merged, so nothing before it passes and the
+# search must fall back to origin/main as the last good commit.
+case10() {
+  local dir="$TMP/case10"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 100 add_0004_broken
+  make_pr "$dir/seed" "$dir/origin.git" 101 add_0005
+  make_pr "$dir/seed" "$dir/origin.git" 102 add_0006
+  FAKE_GH_PRS="$(gh_prs_json "$dir" 100 101 102)"
+  export FAKE_GH_PRS
+  local summary="$dir/summary.md" out rc=0
+  out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || fail "the culprit must fail the job"
+  grep -q "PR #100 breaks go vet" "$summary" || fail "summary must blame PR #100: $(cat "$summary")"
+  grep -qF "On top of origin/main." "$summary" || fail "the first PR is blamed on top of bare origin/main: $(cat "$summary")"
+  grep -q "PR #101 breaks" "$summary" && fail "PR #101 must not be blamed: $(cat "$summary")"
+  grep -q "PR #102 breaks" "$summary" && fail "PR #102 must not be blamed: $(cat "$summary")"
+  grep -q "2 of 3 PR(s) merged together" "$summary" \
+    || fail "the other two PRs must merge without the culprit: $(cat "$summary")"
+  echo "ok  a culprit at index 0 is named alone and the rest still merge"
+}
+add_0004_broken() { echo "-- new" >"$1/internal/db/migrations/0004_a.sql"; : >"$1/VET_BROKEN"; }
+
+# ── 11. the stacked-base retarget warning (pass 1) ─────────────────────────
+# 110 is stacked on 'old-stack', which is no open PR's head: warned. 111 is
+# stacked on 112's head (still open), 113 is on feature/x and 114 on
+# release/0.8: none warned. Only 112 targets main.
+case11() {
+  local dir="$TMP/case11"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 112 add_0004
+  FAKE_GH_PRS="$dir/prs.json"
+  cat >"$FAKE_GH_PRS" <<'JSON'
+[
+{"number":110,"headRefName":"pr-110","baseRefName":"old-stack","isDraft":false},
+{"number":111,"headRefName":"pr-111","baseRefName":"pr-112","isDraft":false},
+{"number":112,"headRefName":"pr-112","baseRefName":"main","isDraft":false},
+{"number":113,"headRefName":"pr-113","baseRefName":"feature/x","isDraft":false},
+{"number":114,"headRefName":"pr-114","baseRefName":"release/0.8","isDraft":false}
+]
+JSON
+  export FAKE_GH_PRS
+  local summary="$dir/summary.md" out rc=0
+  out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a stacked-base warning is informational, not a failure: $out"
+  grep -qF "::warning::PR #110 is stacked on 'old-stack'" <<<"$out" || fail "PR #110 must be warned: $out"
+  local n
+  for n in 111 113 114; do
+    grep -qF "PR #$n is stacked" <<<"$out" && fail "PR #$n must not be warned: $out"
+  done
+  grep -q "^1 PR(s) stacked on a merged/closed base" "$summary" \
+    || fail "summary must count exactly one stacked finding: $(cat "$summary")"
+  echo "ok  the stacked-base warning names only a PR whose base is no longer open"
+}
+
 case1
 case2
 case3
@@ -295,5 +410,9 @@ case4
 case5
 case6
 case7
+case8
+case9
+case10
+case11
 
 echo "test-nightly-migration-merge-check: all cases passed"
