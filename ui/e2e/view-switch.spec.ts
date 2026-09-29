@@ -41,16 +41,25 @@ interface Session {
 async function ssoAdminSession(context: BrowserContext, extra: Record<string, unknown> = {}): Promise<Session> {
   const session: Session = { userView: false, viewType: null, posts: [], failNext: false };
   const types = (extra.user_view_types as { id: string; name: string }[] | undefined) ?? [];
+  // CACHE-AND-SERVE the real fetch, not route.fetch()+refulfill per match — a
+  // real round trip PER match races Playwright disposing an in-flight route's
+  // response ("apiResponse.json: Response has been disposed"). One real
+  // fetch caches the base body; every match still re-derives its own answer
+  // from the mutable `session` above (the view can flip between calls), just
+  // layered onto the cached base instead of a fresh network round trip.
+  let cachedBase: Record<string, unknown> | null = null;
   await context.route("**/api/v1/me", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
+    if (!cachedBase) {
+      cachedBase = (await (await route.fetch()).json()) as Record<string, unknown>;
+    }
+    const json: Record<string, unknown> = { ...cachedBase };
     Object.assign(json, { method: "sso", user_view: session.userView }, extra);
     if (session.userView) {
       Object.assign(json, { role: "user", operator: false, security_operator: false });
       const chosen = types.find((t) => t.id === session.viewType);
       if (chosen) json.user_type = chosen;
     }
-    await route.fulfill({ response, json });
+    await route.fulfill({ json });
   });
   await context.route("**/api/v1/me/view", async (route) => {
     const body = route.request().postDataJSON() as { view: string; no_credential?: boolean; user_type?: string };
