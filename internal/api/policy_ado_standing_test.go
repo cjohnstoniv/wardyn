@@ -85,6 +85,11 @@ func adoStandingLaunch(t *testing.T, c adoStandingCase, defaults, ceiling []ados
 	if ok && len(f.st.grants) > 0 {
 		f.grantID = f.st.grants[0].ID
 	}
+	// run.policy.resolve audits this policy as what the run may do: it must
+	// name the standing set the gate enforces, not the list the member asked for.
+	if ok && lane.gate != nil && len(c.picked) > 0 && !slices.Equal(resolved.AzureDevOpsCapabilities, lane.gate.Capabilities) {
+		t.Errorf("audited policy capabilities = %v, gate = %v", resolved.AzureDevOpsCapabilities, lane.gate.Capabilities)
+	}
 	return f, lane, ok
 }
 

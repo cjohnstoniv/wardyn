@@ -161,7 +161,7 @@ func (a adoEntraRun) snapshot() adoEntraScopeSnapshot {
 }
 
 // adoStandingBound is who bounds a run's STANDING Azure DevOps capabilities
-// (owner ruling 2026-09-29, "admin-granted profiles"): standing access comes
+// (owner ruling 2026-09-28, "admin-granted profiles"): standing access comes
 // only from what an admin configured.
 //
 //   - An operator's policy list stands, bounded by the row's ceiling alone.
@@ -585,6 +585,10 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if !permitted {
 		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, "ado_capabilities_none_permitted",
 			adoNonePermitted(policy.AzureDevOpsCapabilities))
+	}
+	if ado.capsFromPolicy {
+		// run.policy.resolve audits this policy: record the bounded list.
+		policy.AzureDevOpsCapabilities = slices.Clone(ado.caps)
 	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {
