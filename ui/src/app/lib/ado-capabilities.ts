@@ -30,21 +30,22 @@ export interface ADOCapabilityInfo {
   hint?: string;
 }
 
-// In adoscope.GrantableCapabilities()' own (sorted) order.
-// ado-capabilities.test.ts pins the set to internal/adoscope/capability.go.
+// In the approved mock's order: group by group, and within a group the order
+// the mock draws (High risk leads with policy_admin). ado-capabilities.test.ts
+// pins the set to internal/adoscope/capability.go and the order to this list.
 export const ADO_CAPABILITIES: readonly ADOCapabilityInfo[] = [
-  { cap: "build_admin", group: "high_risk", highRisk: true },
-  { cap: "build_execute", group: "pipelines", highRisk: false, label: ADO.CAP_BUILD_EXECUTE, hint: ADO.CAP_BUILD_EXECUTE_HINT },
+  { cap: "read", group: "read", highRisk: false, label: ADO.CAP_READ, hint: ADO.CAP_READ_HINT },
   { cap: "code_write", group: "contribute", highRisk: false, label: ADO.CAP_CODE_WRITE, hint: ADO.CAP_CODE_WRITE_HINT },
+  { cap: "pr", group: "contribute", highRisk: false, label: ADO.CAP_PR, hint: ADO.CAP_PR_HINT },
+  { cap: "work_write", group: "work", highRisk: false, label: ADO.CAP_WORK_WRITE, hint: ADO.CAP_WORK_WRITE_HINT },
+  { cap: "wiki_write", group: "work", highRisk: false, label: ADO.CAP_WIKI_WRITE, hint: ADO.CAP_WIKI_WRITE_HINT },
+  { cap: "build_execute", group: "pipelines", highRisk: false, label: ADO.CAP_BUILD_EXECUTE, hint: ADO.CAP_BUILD_EXECUTE_HINT },
   { cap: "packaging_write", group: "pipelines", highRisk: false },
   { cap: "policy_admin", group: "high_risk", highRisk: true, label: ADO.CAP_POLICY_ADMIN, hint: ADO.CAP_POLICY_ADMIN_HINT },
   { cap: "policy_bypass", group: "high_risk", highRisk: true, label: ADO.CAP_POLICY_BYPASS, hint: ADO.CAP_POLICY_BYPASS_HINT },
-  { cap: "pr", group: "contribute", highRisk: false, label: ADO.CAP_PR, hint: ADO.CAP_PR_HINT },
-  { cap: "project_admin", group: "high_risk", highRisk: true },
-  { cap: "read", group: "read", highRisk: false, label: ADO.CAP_READ, hint: ADO.CAP_READ_HINT },
   { cap: "repo_admin", group: "high_risk", highRisk: true, label: ADO.CAP_REPO_ADMIN, hint: ADO.CAP_REPO_ADMIN_HINT },
   { cap: "security_admin", group: "high_risk", highRisk: true },
   { cap: "serviceendpoint_admin", group: "high_risk", highRisk: true },
-  { cap: "wiki_write", group: "work", highRisk: false, label: ADO.CAP_WIKI_WRITE, hint: ADO.CAP_WIKI_WRITE_HINT },
-  { cap: "work_write", group: "work", highRisk: false, label: ADO.CAP_WORK_WRITE, hint: ADO.CAP_WORK_WRITE_HINT },
+  { cap: "build_admin", group: "high_risk", highRisk: true },
+  { cap: "project_admin", group: "high_risk", highRisk: true },
 ];

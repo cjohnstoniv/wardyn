@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as WorkspaceProvidersCopy from "./workspace-providers-copy";
-import { AGENTS, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
+import { ADO_CAP_COPY, ADO_GROUP_COPY, AGENTS, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
+import { ADO_CAPABILITY_GROUPS } from "./ado-capabilities";
 import { MEMBER } from "./governance-copy";
 import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
@@ -185,5 +187,25 @@ describe("workspace-providers-copy — the reuse and no-shadow rules §5 spells 
     ]) {
       expect(all).not.toContain(serverOnly);
     }
+  });
+});
+
+// The Entra editor's capability labels mirror adoscope's grantable set. Read
+// the Go file by path (the runs.wire.fields.test.ts way), so a capability added
+// or removed on either side fails here.
+describe("ADO_CAP_COPY — one name and consequence per grantable capability", () => {
+  it("names exactly grantableCapabilities in internal/adoscope/capability.go", () => {
+    const src = readFileSync(resolve(process.cwd(), "../internal/adoscope/capability.go"), "utf8");
+    const block = /var grantableCapabilities = map\[Capability\]bool\{([\s\S]*?)\n\}/.exec(src);
+    expect(block).not.toBeNull();
+    const consts = new Map<string, string>();
+    for (const m of src.matchAll(/^\s*(Cap\w+)\s+Capability = "([^"]+)"/gm)) consts.set(m[1], m[2]);
+    const grantable = [...block![1].matchAll(/(Cap\w+):\s*true/g)].map((m) => consts.get(m[1]));
+    expect(grantable).toHaveLength(14);
+    expect(Object.keys(ADO_CAP_COPY).sort()).toEqual([...grantable].sort());
+  });
+
+  it("gives every capability group a name and a lead", () => {
+    expect(Object.keys(ADO_GROUP_COPY).sort()).toEqual(ADO_CAPABILITY_GROUPS.map((g) => g.id).sort());
   });
 });

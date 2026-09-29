@@ -125,6 +125,12 @@ An administrator turns this on per git provider row, not globally. The fields th
 No secret is pasted onto this row. The tenant and client IDs identify the app registration; the
 credential itself is captured per person at sign-in and never touches the row.
 
+Once the row carries the `entra` lane, **Workspace providers → Git → Azure DevOps** edits these fields
+in the console: tenant and client IDs, **Allow REST API calls** (`rest_api`), the ceiling (**What runs
+may ever do**) and the default profile (**What a run gets by default**), saved with the rest of the
+providers document. A default box stays disabled until its capability is on the ceiling, and a
+default left outside a narrowed ceiling blocks the save; the server refuses it too.
+
 **The ceiling is the hard bound; the default profile is where a run starts.** A run may ask for
 anything up to the ceiling and have it held for approval; it can never reach past the ceiling at all.
 `read` is the recommended default profile — every write, including push, then starts as something a

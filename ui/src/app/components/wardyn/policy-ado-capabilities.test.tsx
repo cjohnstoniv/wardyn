@@ -47,7 +47,7 @@ describe("ADOCapabilitiesSection — azure_devops_capabilities as a checklist", 
       [ADO.CAP_CODE_WRITE, "code_write"],
     ];
     for (const [label, cap] of picks) await userEvent.click(box(label, cap));
-    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["code_write", "pr", "read"]);
+    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["read", "code_write", "pr"]);
     for (const [label, cap] of picks) await userEvent.click(box(label, cap));
     expect(seen.at(-1)).not.toHaveProperty("azure_devops_capabilities");
     expect(seen.at(-1)).toEqual(BASE);
