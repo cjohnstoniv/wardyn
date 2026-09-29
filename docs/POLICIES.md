@@ -970,7 +970,7 @@ match always wins: a path both lists match is refused and nothing is asked.
   request stays in the console; pushing the same commits again waits on that
   same request rather than raising another.
 - **What an approval covers.** The approval's `requested_scope` is
-  `{"repo","branch","acts_as","acts_as_kind","acts_as_label","paths","paths_total","commits","paths_digest"}`:
+  `{"repo","branch","acts_as","acts_as_kind","acts_as_label","paths","paths_total","commits","updates","paths_digest"}`:
   the repository as the run's grant names it (`github.com/<owner>/<repo>`, or
   `<host>/<path>` on the `git_pat` lane —
   `dev.azure.com/<org>/<project>/_git/<repo>` for Azure DevOps); the ref the
@@ -982,12 +982,16 @@ match always wins: a path both lists match is refused and nothing is asked.
   whose secret is in the owner's own namespace, `operator` for the operator's
   shared secret); the first ten matched paths, sorted, and
   how many matched in all; the object ids the push sets its refs to, sorted;
-  and a SHA-256 over **every** matched path, sorted and NUL-terminated. The
-  scope is the dedup key — two identical pushes are one request — and commits
-  are content addresses, so a retry git repacks carries the same commits in
-  different bytes and is let through on the approval already given. The key is
-  the whole scope: the same commits pushed to another repository or branch are
-  a new request and are held again. A denial sticks for the rest of the run:
+  each ref paired with the object id it is set to (`updates`, sorted by ref,
+  all zeros for a delete); and a SHA-256 over **every** matched path, sorted
+  and NUL-terminated. The scope is the dedup key — two identical pushes are
+  one request — and commits are content addresses, so a retry git repacks
+  carries the same commits in different bytes and is let through on the
+  approval already given. The key is the whole scope: the same commits pushed
+  to another repository or branch, or to the same branches in a different
+  assignment (commits swapped between refs, a ref deleted instead of set), are
+  a new request and are held again. A request raised before `updates` existed
+  matches no push this release makes, so such a push asks afresh. A denial sticks for the rest of the run:
   the same push is refused without asking again. A request that expires or is cancelled undecided is forgotten, and the
   next push of those commits asks afresh.
 - **Bounded.** At most 16 pushes are held at once and 256 different pushes are

@@ -39,6 +39,7 @@ func heldPush(n int, actsAs string) (types.PushContentScope, types.PushPathList)
 		Repo: "github.com/octocat/hello-world", Branch: "refs/heads/wardyn/run/work", ActsAs: actsAs,
 		Paths: paths[:min(n, types.PushContentMaxPaths)], PathsTotal: n,
 		Commits: []string{strings.Repeat("a", 40)}, PathsDigest: types.PushPathsDigest(paths),
+		Updates: []types.PushRefUpdate{{Ref: "refs/heads/wardyn/run/work", New: strings.Repeat("a", 40)}},
 	}, types.NewPushPathList(paths)
 }
 

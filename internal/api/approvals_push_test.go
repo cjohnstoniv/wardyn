@@ -28,6 +28,7 @@ func pushContentScopeJSON(t *testing.T) string {
 		Paths:       []string{".github/workflows/ci.yml"},
 		PathsTotal:  1,
 		Commits:     []string{strings.Repeat("a", 40)},
+		Updates:     []types.PushRefUpdate{{Ref: "refs/heads/wardyn/run/work", New: strings.Repeat("a", 40)}},
 		PathsDigest: strings.Repeat("0", 64),
 	})
 	if err != nil {

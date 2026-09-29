@@ -354,6 +354,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A held push's approval binds each ref to its commit.** A `push_content` approval named the
+  push's refs and its commits as two separately sorted lists, so a later push setting the same
+  refs to the same commits in a different assignment (commits swapped between refs, or a ref
+  deleted instead of set) was forwarded on the earlier approval. The approval's
+  `requested_scope` now carries `updates`, each ref paired with the object id it is set to (all
+  zeros for a delete), and both the proxy's remembered decisions and the control plane's dedup
+  key it; a push that assigns them differently is held and asked about again. The control plane
+  refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A request
+  raised before this release has no `updates`, still reads the same in the console and API, and
+  matches no new push.
+
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
