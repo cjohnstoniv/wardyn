@@ -20,7 +20,10 @@ import (
 // envelope v1 row under the KEK of its purpose, and returns the rows it
 // converted. Single-writer (db.SecretConvertLockKey) and all-or-nothing: a v0
 // row that fails to decrypt aborts the whole transaction, naming the row,
-// rather than silently skipping a credential — idempotent and resumable.
+// rather than silently skipping a credential — idempotent and resumable. On a
+// later-row or commit failure the rows it opened before failing are returned
+// with the error (the failing row is not among them: its value was never
+// opened), so the caller can record each read although nothing was committed.
 func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretstore.Row, error) {
 	if s.kek == nil {
 		return nil, fmt.Errorf("pg secretstore: convert: no local key is configured")
@@ -51,13 +54,13 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 	converted := make([]secretstore.Row, 0, len(all))
 	for i, e := range all {
 		if err := s.convertRow(ctx, tx, legacy, e); err != nil {
-			return nil, fmt.Errorf("pg secretstore: v0 conversion ABORTED after %d of %d rows (nothing committed; the store is still v0 and older wardynd can still read it): %s %w",
+			return converted, fmt.Errorf("pg secretstore: v0 conversion ABORTED after %d of %d rows (nothing committed; the store is still v0 and older wardynd can still read it): %s %w",
 				i, len(all), rowRef(e.ownedBy, e.name), err)
 		}
 		converted = append(converted, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Found: true})
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)
+		return converted, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)
 	}
 	return converted, nil
 }

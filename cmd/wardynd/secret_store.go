@@ -191,8 +191,9 @@ const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_
 // no age key (id nil) it refuses while any local row remains; with a key
 // service that wraps every write, it refuses an age key no row is sealed
 // under any more (refuseIdleAgeKey). An alternate
-// backend keeps its own format and is left alone. Each converted row was a
-// read of its value, recorded as a secret.read with purpose boot.
+// backend keeps its own format and is left alone. Each row the conversion
+// opened was a read of its value, recorded as a secret.read with purpose boot
+// (outcome failure for the rows an aborted conversion opened before it failed).
 func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool, rec audit.Recorder) error {
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
@@ -226,11 +227,13 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 		return nil
 	}
 	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), id)
+	// An aborted conversion still opened the rows it returns: each is a read
+	// with outcome failure, since nothing it did was committed.
+	for _, row := range converted {
+		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, err)
+	}
 	if err != nil {
 		return fmt.Errorf("refusing to start: %w", err)
-	}
-	for _, row := range converted {
-		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, nil)
 	}
 	if len(converted) > 0 {
 		slog.Info("wardynd: converted stored secrets to envelope v1; an older wardynd can no longer read them", slog.Int("secrets", len(converted)))

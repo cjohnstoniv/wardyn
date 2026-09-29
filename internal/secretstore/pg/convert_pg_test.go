@@ -137,8 +137,8 @@ func TestPG_ConvertV0_AbortsOnAnUndecryptableRowAndCommitsNothing(t *testing.T) 
 	if err == nil {
 		t.Fatal("ConvertV0 succeeded over a row the key cannot decrypt")
 	}
-	if n := len(converted); n != 0 {
-		t.Errorf("aborted conversion returned %d", n)
+	if n := len(converted); n != len(v0Fixture) {
+		t.Errorf("aborted conversion returned %d opened rows, want the %d it opened before bob's", n, len(v0Fixture))
 	}
 	for _, want := range []string{"ABORTED", rowRef("bob@corp.example", "openai-api-key"), "nothing committed"} {
 		if !strings.Contains(err.Error(), want) {
@@ -152,6 +152,63 @@ func TestPG_ConvertV0_AbortsOnAnUndecryptableRowAndCommitsNothing(t *testing.T) 
 		was := before[k]
 		if r.version != 0 || !bytes.Equal(r.ct, was.ct) {
 			t.Errorf("%s changed although the conversion aborted", k)
+		}
+	}
+}
+
+// #1071: an aborted conversion hands back the rows it opened before failing,
+// so the boot can record each read; the failing row's value was never opened,
+// so it is not among them, and nothing is committed.
+func TestPG_ConvertV0_AnAbortReturnsTheRowsItOpenedFirst(t *testing.T) {
+	pool := rekeyDatabase(t)
+	id, stray := mustIdentity(t), mustIdentity(t)
+	seedV0(t, pool, id, "", "a-first", "first")
+	seedV0(t, pool, stray, "", "b-second", "second")
+	s, _ := New(pool, id)
+
+	converted, err := s.ConvertV0(context.Background(), id)
+	if err == nil || !strings.Contains(err.Error(), rowRef("", "b-second")) {
+		t.Fatalf("ConvertV0 = %v, want an abort naming b-second", err)
+	}
+	if len(converted) != 1 || converted[0].Name != "a-first" || converted[0].Owner != "" || !converted[0].Found {
+		t.Fatalf("returned rows = %+v, want only a-first", converted)
+	}
+	for k, r := range rawRows(t, pool) {
+		if r.version != 0 {
+			t.Errorf("%s is enc_version %d after an aborted conversion, want 0", k, r.version)
+		}
+	}
+}
+
+// #1071: a commit failure after every row decrypted returns all of them with
+// the error, and leaves every row v0. The commit is made to fail by a deferred
+// constraint trigger, which fires only at COMMIT.
+func TestPG_ConvertV0_ACommitFailureReturnsEveryOpenedRow(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id := mustIdentity(t)
+	seedV0(t, pool, id, "", "a-first", "first")
+	seedV0(t, pool, id, "", "b-second", "second")
+	for _, q := range []string{
+		`CREATE FUNCTION fail_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced commit failure'; END $$`,
+		`CREATE CONSTRAINT TRIGGER fail_at_commit AFTER UPDATE ON secrets DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fail_at_commit()`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, _ := New(pool, id)
+
+	converted, err := s.ConvertV0(ctx, id)
+	if err == nil || !strings.Contains(err.Error(), "convert commit") {
+		t.Fatalf("ConvertV0 = %v, want a commit failure", err)
+	}
+	if len(converted) != 2 || converted[0].Name != "a-first" || converted[1].Name != "b-second" {
+		t.Fatalf("returned rows = %+v, want a-first and b-second", converted)
+	}
+	for k, r := range rawRows(t, pool) {
+		if r.version != 0 {
+			t.Errorf("%s is enc_version %d after a failed commit, want 0", k, r.version)
 		}
 	}
 }

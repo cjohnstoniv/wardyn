@@ -295,10 +295,13 @@ func (s *Store) atTarget(target string, e envelope) bool {
 	return e.version == extVersion && store == target
 }
 
-// migrateRow moves one row under the row's store-mode write lock. The old
-// external copy is removed only AFTER the row flip commits: a failure there
-// leaves an orphan the error names, never a row pointing at nothing. soft
-// reports an old copy the store kept soft-deleted.
+// migrateRow moves one row under the row's store-mode write lock, held to the
+// commit. Moving to a store, the old local copy goes with the flip. Moving to
+// local, the old external copy is removed INSIDE the transaction, between the
+// UPDATE and the commit — deleteLocked's order — so a concurrent store-mode
+// Put of the row waits on the lock and can never re-point it at the derived
+// path this migrator is about to delete. A failed delete rolls the row back to
+// its live copy. soft reports an old copy the store kept soft-deleted.
 func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRead func(owner, name string)) (moved, soft bool, err error) {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
@@ -336,7 +339,13 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		if err != nil {
 			return false, false, fmt.Errorf("write to %s: %w", target, err)
 		}
-		if err := flipRow(ctx, tx, owner, name, extVersion, target+":"+loc, nil, nil); err != nil {
+		err = flipRow(ctx, tx, owner, name, extVersion, target+":"+loc, nil, nil)
+		if err == nil {
+			if err = tx.Commit(ctx); err != nil {
+				err = fmt.Errorf("commit: %w", err)
+			}
+		}
+		if err != nil {
 			if derr := s.ext.Delete(context.WithoutCancel(ctx), owner, name, loc); derr != nil {
 				return false, false, fmt.Errorf("%w; the value written to %s could not be removed again (%v) — `wardynd -reconcile` lists it", err, target, derr)
 			}
@@ -356,12 +365,15 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 	store, loc := splitRef(e.kekID)
 	dctx, rep := secretstore.WithDeleteReport(ctx)
 	if err := s.ext.Delete(dctx, owner, name, loc); err != nil {
-		return false, false, fmt.Errorf("the row now holds the value locally, but its old copy in %s was not removed: %w — remove it there (`wardynd -reconcile` lists it)", store, err)
+		return false, false, fmt.Errorf("the old copy in %s was not removed, so the row was rolled back and still points at it: %w", store, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, false, fmt.Errorf("commit: %w — the old copy in %s was already removed, so the row points at nothing until its credential is set again (`wardynd -reconcile` lists it)", err, store)
 	}
 	return true, rep.Store != "" && !rep.Purged, nil
 }
 
-// flipRow rewrites one locked row to its new location and commits.
+// flipRow rewrites one locked row to its new location. The caller commits.
 func flipRow(ctx context.Context, tx pgx.Tx, owner, name string, version int16, kekID string, wrapped, ct []byte) error {
 	if wrapped == nil {
 		wrapped, ct = []byte{}, []byte{}
@@ -371,9 +383,6 @@ func flipRow(ctx context.Context, tx pgx.Tx, owner, name string, version int16, 
 		owner, name, version, kekID, wrapped, ct,
 	); err != nil {
 		return fmt.Errorf("update: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

@@ -795,6 +795,115 @@ func TestStoreMode_DeleteRacesPutWithoutOrphan(t *testing.T) {
 	}
 }
 
+// holdBeforeDelete holds an external delete BEFORE it runs, until release: the
+// window between a migration's flip and its removal of the old copy.
+type holdBeforeDelete struct {
+	secretstore.External
+	reached, resume chan struct{}
+	hit, once       sync.Once
+}
+
+func (b *holdBeforeDelete) Delete(ctx context.Context, owner, name, ref string) error {
+	b.hit.Do(func() { close(b.reached) })
+	select {
+	case <-b.resume:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return b.External.Delete(ctx, owner, name, ref)
+}
+
+func (b *holdBeforeDelete) release() { b.once.Do(func() { close(b.resume) }) }
+
+// #1082: migrating a row to local removes its external copy while still
+// holding the row's lock. The delete is held before it runs; a store-mode
+// Put of the same row must WAIT on the lock (not land in the window between
+// the flip and the delete), then read the row as local and write the new value
+// to the one Vault path, where the migrator's delete can no longer reach it.
+func TestMigrate_ToLocalHoldsTheRowLockThroughTheDelete(t *testing.T) {
+	ctx := t.Context()
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	barrier := &holdBeforeDelete{External: newFakeStore(t, f), reached: make(chan struct{}), resume: make(chan struct{})}
+	t.Cleanup(barrier.release)
+	id, _ := age.GenerateX25519Identity()
+	st := storeMode(t, pool, barrier, id)
+	view := st.For("alice")
+	if err := view.Put(ctx, "review-key", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+
+	migDone := make(chan error, 1)
+	go func() {
+		_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
+		migDone <- err
+	}()
+	select {
+	case <-barrier.reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the migrator's external delete did not reach the barrier")
+	}
+	putDone := make(chan error, 1)
+	go func() { putDone <- view.Put(ctx, "review-key", []byte("v2")) }()
+	waitOnRowLock(t, pool)
+	barrier.release()
+
+	for what, ch := range map[string]chan error{"Migrate": migDone, "the concurrent Put": putDone} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s did not finish", what)
+		}
+	}
+	if got, err := view.Get(ctx, "review-key"); err != nil || string(got) != "v2" {
+		t.Fatalf("Get = (%q, %v), want the re-saved v2", got, err)
+	}
+	if n := vaultPaths(f); n != 1 {
+		t.Fatalf("%d live %s, want exactly one", n, "Vault paths")
+	}
+}
+
+// failDelete refuses every external delete.
+type failDelete struct{ secretstore.External }
+
+func (failDelete) Delete(context.Context, string, string, string) error {
+	return errors.New("delete refused")
+}
+
+// #1082: a failed delete of the old copy rolls the row back to it: the
+// migration aborts naming the row, and the row still reads its value.
+func TestMigrate_ToLocalRollsBackWhenTheOldCopyCannotBeRemoved(t *testing.T) {
+	ctx := t.Context()
+	pool := throwawayDB(t)
+	ext := newFakeStore(t, newFakeVault(t))
+	id, _ := age.GenerateX25519Identity()
+	st := storeMode(t, pool, failDelete{ext}, id)
+	view := st.For("alice")
+	if err := view.Put(ctx, "review-key", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
+	if err == nil || !strings.Contains(err.Error(), "review-key") || !strings.Contains(err.Error(), "delete refused") {
+		t.Fatalf("Migrate = %v, want an abort naming the row and the refused delete", err)
+	}
+	var k string
+	if err := pool.QueryRow(ctx, `SELECT kek_id FROM secrets WHERE owned_by='alice' AND name='review-key'`).Scan(&k); err != nil || !strings.HasPrefix(k, Name+":") {
+		t.Fatalf("kek_id = (%q, %v), want the row still pointing at %s", k, err, Name)
+	}
+	if got, err := view.Get(ctx, "review-key"); err != nil || string(got) != "v1" {
+		t.Fatalf("Get = (%q, %v), want v1 still readable", got, err)
+	}
+}
+
+func vaultPaths(f *fakeVault) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.kv)
+}
+
 // putBarrier holds a store-mode Put of "second" after its external write,
 // while it holds the row's advisory lock and has not yet touched the row.
 type putBarrier struct {
