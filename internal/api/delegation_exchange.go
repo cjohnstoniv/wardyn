@@ -137,6 +137,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "mint delegated token failed")
 		return
 	}
+	s.cfg.OIDC.RecordAttach(r, sess)
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, delegateActor(d.ID), "delegation.exchange",
 		t.Principal, "success", mustJSON(map[string]any{
 			"grant": t.ID, "expires_at": t.ExpiresAt, "user_type": t.UserType, "role": sess.Role,

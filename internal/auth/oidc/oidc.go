@@ -166,6 +166,10 @@ type Session struct {
 	// UserViewTypeName the instant DropUserView fires, before it is cleared —
 	// see UserViewTypeName's doc for why this is the only chance to record it.
 	UserViewDroppedName string `json:"uvdn,omitempty"`
+
+	// attached is the token's own Subject when admission resolved it to a
+	// person set up by object id (RecordAttach). Never encoded: unexported.
+	attached *Subject
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -189,6 +193,93 @@ type Authenticator struct {
 	// grants is the optional login-grant sink, letting a login also acquire a downstream credential.
 	// Unattached (zero value), behavior matches a deployment that never heard of it.
 	grants loginGrantHook
+
+	// entra is whether IssuerURL is Microsoft Entra ID, fixed in New: the only issuer whose
+	// sign-ins consult people (PersonKeying).
+	entra     bool
+	peopleMu  sync.RWMutex
+	peopleKey PersonKeying
+}
+
+// Subject is who a verified token names, as PersonKeying reads it: the issuer and raw `sub` every
+// token carries, and Entra ID's tenant (`tid`) and tenant-stable object id (`oid`) claims.
+type Subject struct {
+	Issuer, Sub, TenantID, ObjectID string
+}
+
+// PersonKeying resolves an Entra ID sign-in to a person an admin set up by object id before their
+// first sign-in (#1195). Entra's `sub` is pairwise — per application registration, unknowable
+// until that first sign-in — so such a person is keyed by (issuer, tid, oid) instead. Consulted
+// only when KeysPeopleByObjectID; every other issuer signs in as its `sub`, exactly as before.
+type PersonKeying interface {
+	// PrincipalFor is the principal s signs in as: the person keyed by exactly s.Issuer,
+	// s.TenantID and s.ObjectID if there is one and s.Sub names no one yet, else s.Sub. refused is true when s.Sub itself
+	// names a person keyed by an object id this token does not carry. An email never enters it.
+	PrincipalFor(ctx context.Context, s Subject) (principal string, refused bool, err error)
+	// Attached records an admitted sign-in that resolved to such a person, naming both parties.
+	Attached(r *http.Request, s Subject, principal string)
+}
+
+// RecordAttach reports sess's attach to PersonKeying.Attached when admission
+// resolved it to a person set up by object id. Each door calls it once it has
+// no refusal left to make, so a refused sign-in or exchange records none.
+func (a *Authenticator) RecordAttach(r *http.Request, sess Session) {
+	if k := a.personKeying(); k != nil && sess.attached != nil {
+		k.Attached(r, *sess.attached, sess.Sub)
+	}
+}
+
+// AttachPersonKeying joins k to this Authenticator; nil detaches.
+func (a *Authenticator) AttachPersonKeying(k PersonKeying) {
+	a.peopleMu.Lock()
+	defer a.peopleMu.Unlock()
+	a.peopleKey = k
+}
+
+func (a *Authenticator) personKeying() PersonKeying {
+	a.peopleMu.RLock()
+	defer a.peopleMu.RUnlock()
+	return a.peopleKey
+}
+
+// KeysPeopleByObjectID reports whether a person may be set up by Entra object id here: the
+// issuer is Entra ID.
+func (a *Authenticator) KeysPeopleByObjectID() bool { return a.entra }
+
+// entraIssuerHosts are the Microsoft Entra ID sign-in authorities (global, US Government, China)
+// for v2.0 issuers, plus the global v1.0 issuer host, matched on the exact host.
+var entraIssuerHosts = map[string]bool{
+	"login.microsoftonline.com": true, "login.microsoftonline.us": true,
+	"login.partner.microsoftonline.cn": true, "sts.windows.net": true,
+}
+
+func isEntraIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	return err == nil && u.Scheme == "https" && entraIssuerHosts[strings.ToLower(u.Host)]
+}
+
+// resolvePerson is admit's PersonKeying step: the principal subj signs in as, or the auth_error
+// of a refusal. With nothing attached, or on any issuer but Entra, it is subj.Sub untouched. A
+// lookup error denies the login, like an unreadable role-mapping store.
+func (a *Authenticator) resolvePerson(r *http.Request, subj Subject, reserved func(string) bool, onDenied func(*http.Request, string)) (principal, denied string) {
+	k := a.personKeying()
+	if k == nil || !a.entra {
+		return subj.Sub, ""
+	}
+	principal, refused, err := k.PrincipalFor(r.Context(), subj)
+	if err != nil {
+		slog.Error("oidc: pre-created person lookup unavailable, denying login (fail closed)", "error", err)
+		return "", authErrorRoleCheckUnavailable
+	}
+	if refused || (reserved != nil && reserved(principal)) {
+		slog.Warn("oidc: login denied — the subject names a person set up under an Entra object id this token does not carry",
+			"sub", subj.Sub, "issuer", subj.Issuer)
+		if onDenied != nil {
+			onDenied(r, DenialReservedPrincipal)
+		}
+		return "", authErrorSignInRefused
+	}
+	return principal, ""
 }
 
 // New constructs an Authenticator by performing OIDC discovery against cfg.IssuerURL. hmacKey signs
@@ -262,6 +353,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		hmacKey:                hmacKey,
 		httpClient:             httpClient,
 		groupsScopeUnrequested: groupsScopeUnrequested,
+		entra:                  isEntraIssuer(cfg.IssuerURL),
 	}, nil
 }
 
