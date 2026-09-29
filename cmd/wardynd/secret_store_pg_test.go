@@ -414,3 +414,46 @@ func TestPG_ServedStoreSweepsExpiredCredentials(t *testing.T) {
 		t.Fatalf("DeleteExpired = %+v, %v; want bob's expired sign-in", gone, err)
 	}
 }
+
+// TestPG_AbortedBootConversionRecordsTheRowsItOpenedAsFailures (#1071): a v0 row
+// the key cannot read aborts boot and commits nothing, yet the row opened
+// before it was read. Through the real audit chain, that read is one
+// secret.read, purpose boot, outcome failure, naming the row and no value; the
+// row that would not decrypt was never opened and records nothing.
+func TestPG_AbortedBootConversionRecordsTheRowsItOpenedAsFailures(t *testing.T) {
+	pool := envelopeDB(t)
+	ctx := t.Context()
+	id, _ := age.GenerateX25519Identity()
+	stray, _ := age.GenerateX25519Identity()
+	seedOwnedV0Row(t, pool, id, "", "a-first", []byte("value-of-the-first-row"))
+	seedOwnedV0Row(t, pool, stray, "", "b-second", []byte("under-another-key"))
+	rec, _, _, _, err := buildAuditChain(ctx, "", "", "", pool, secretmask.NewRegistry())
+	if err != nil {
+		t.Fatalf("build the audit chain: %v", err)
+	}
+
+	if _, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, rec); err == nil {
+		t.Fatal("boot succeeded over an undecryptable v0 row")
+	}
+	evs := secretAuditRows(t, pool)
+	if len(evs) != 1 {
+		t.Fatalf("aborted boot wrote %d secret.* audit rows, want exactly one (the first row's)", len(evs))
+	}
+	var d map[string]string
+	if err := json.Unmarshal(evs[0].Data, &d); err != nil {
+		t.Fatalf("decode data %s: %v", evs[0].Data, err)
+	}
+	if ev := evs[0]; ev.Action != "secret.read" || ev.Target != "a-first" || ev.Outcome != "failure" ||
+		d["purpose"] != string(secretstore.PurposeBoot) || d["store"] != "pg" {
+		t.Errorf("row = (%s, %s, %s, %v), want (secret.read, a-first, failure, purpose boot, store pg)", ev.Action, ev.Target, ev.Outcome, d)
+	}
+	if strings.Contains(string(evs[0].Data), "value-of-the-first-row") {
+		t.Error("the failure row carries a value")
+	}
+	for _, r := range []string{"a-first", "b-second"} {
+		var v int16
+		if err := pool.QueryRow(ctx, `SELECT enc_version FROM secrets WHERE name=$1`, r).Scan(&v); err != nil || v != 0 {
+			t.Errorf("%s enc_version = (%d, %v) after the aborted boot, want 0", r, v, err)
+		}
+	}
+}

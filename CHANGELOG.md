@@ -41,6 +41,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   portal's `nextToken`, so an account or role listed after the first page was never offered in the
   chooser and could not be picked or pinned. It now follows `nextToken` until the list is complete,
   and stops after 100 pages, saying so, if a portal never stops returning one.
+- **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
+  it runs (#1082).** The migrator removed a row's old Vault copy after the row had committed and
+  released its lock, so a store-mode save of the same credential in that window re-pointed the row
+  at the same Vault path and the removal deleted the new value, leaving the row pointing at
+  nothing. (Key Vault was exposed only when the re-save landed in the same second as the old
+  version.) The removal now runs under the row's lock again and leaves a value the row has just
+  been re-pointed at alone; a concurrent save waits for it. A failed removal still leaves an
+  orphan the error names.
+- **An aborted boot conversion of legacy secrets now records the rows it read (#1071).** When a
+  legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
+  row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
+  was recorded nowhere; the abort itself is still in the boot log, naming the row.
 
 ## [0.8.0] — 2026-09-29
 

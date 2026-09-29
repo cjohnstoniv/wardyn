@@ -659,7 +659,10 @@ transaction, safe while a daemon serves; idempotent and resumable.
    above, while any local row remains.
 
 `-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value
-is removed from Vault once its row holds it locally.
+is removed from Vault once its row holds it locally and has committed. The
+removal runs under the row's lock and skips a value a concurrent save has
+just put back at the same path. If the removal fails, the old copy stays
+in Vault and the error names it; `wardynd -reconcile` lists it.
 
 - Each run writes one `secret.migrate` audit row and one `secret.read`
   per value it moved.
