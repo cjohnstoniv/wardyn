@@ -160,15 +160,66 @@ func (a adoEntraRun) snapshot() adoEntraScopeSnapshot {
 	}
 }
 
+// adoStandingBound is who bounds a run's STANDING Azure DevOps capabilities
+// (owner ruling 2026-09-29, "admin-granted profiles"): standing access comes
+// only from what an admin configured.
+//
+//   - An operator's policy list stands, bounded by the row's ceiling alone.
+//   - A member's stands only where it meets the row's default_profile or their
+//     governance ADO list — whatever policy source it came from (inline, a
+//     saved policy assigned or not, a preset), which is why it is applied here
+//     and not at resolve. The rest is not standing: the capability arm refuses
+//     it under always_deny and raises a request under deny_with_review.
+//
+// The zero value is the member with no governance list, so a lane that never
+// resolved a principal cannot stand anything past the row's default_profile.
+type adoStandingBound struct {
+	operator bool
+	// governance is the member's ceiling's azure_devops_capabilities.
+	governance []adoscope.Capability
+}
+
+// adoStandingFor reads the bound off the launching principal's ceiling.
+func adoStandingFor(c governanceCeiling) adoStandingBound {
+	return adoStandingBound{operator: c.Operator, governance: slices.Clone(c.Spec.AzureDevOpsCapabilities)}
+}
+
 // withPolicyCapabilities puts the run policy's azure_devops_capabilities in
-// place of the row's default_profile. It only CHOOSES: authorADOEntraInjection
-// still refuses a choice outside the row's ceiling, and the resolver re-checks
-// the live ceiling on every request. An empty choice keeps the default.
-func (a adoEntraRun) withPolicyCapabilities(picked []adoscope.Capability) adoEntraRun {
-	if len(picked) > 0 {
-		a.caps, a.capsFromPolicy = slices.Clone(picked), true
+// place of the row's default_profile, bounded by b. An absent choice keeps the
+// default. An explicit choice is never widened back to the default: a member's
+// list that meets nothing they may stand is refused (ok=false), not replaced.
+// authorADOEntraInjection still refuses a choice outside the row's ceiling,
+// and the resolver re-checks the live ceiling on every request.
+func (a adoEntraRun) withPolicyCapabilities(picked []adoscope.Capability, b adoStandingBound) (adoEntraRun, bool) {
+	if len(picked) == 0 {
+		return a, true
 	}
-	return a
+	if !b.operator {
+		var kept []adoscope.Capability
+		for _, c := range picked {
+			if slices.Contains(a.caps, c) || slices.Contains(b.governance, c) {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			return a, false
+		}
+		picked = kept
+	}
+	a.caps, a.capsFromPolicy = slices.Clone(picked), true
+	return a, true
+}
+
+// adoNonePermitted is the launch refusal for a member's explicit list that
+// meets nothing they may hold as standing access.
+func adoNonePermitted(picked []adoscope.Capability) string {
+	names := make([]string, len(picked))
+	for i, c := range picked {
+		names[i] = "“" + adoscope.ShortLabel(c) + "”"
+	}
+	return "Can't launch with this policy. It asks for " + strings.Join(names, ", ") + " on Azure DevOps, and none of " +
+		"it is in this provider's default profile or in the Azure DevOps access your administrator granted you. " +
+		"Launch without azure_devops_capabilities to get the provider's default, or ask an admin to grant the access."
 }
 
 // capsSource names where the run's capabilities came from, for a refusal.
@@ -519,8 +570,8 @@ func (s *Server) adoEntraGradeHolds(ctx context.Context, run types.AgentRun, g a
 // run has already been marked FAILED and dispatch must stop —
 // authorBedrockSSOInjection's contract, deliberately identical.
 func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado adoEntraRun, on bool,
-	grade adoEntraGrade, plan dispatchLLMPlan, policy *types.RunPolicySpec, sandboxEnv map[string]string,
-	injections []runner.InjectionGrant,
+	grade adoEntraGrade, standing adoStandingBound, plan dispatchLLMPlan, policy *types.RunPolicySpec,
+	sandboxEnv map[string]string, injections []runner.InjectionGrant,
 ) (adoEntraLane, bool) {
 	// Ahead of the `on` short-circuit: the case that matters is the one where
 	// dispatch WOULD author a lane the grade did not include.
@@ -530,7 +581,11 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if !on {
 		return adoEntraLane{injections: injections}, true
 	}
-	ado = ado.withPolicyCapabilities(policy.AzureDevOpsCapabilities)
+	ado, permitted := ado.withPolicyCapabilities(policy.AzureDevOpsCapabilities, standing)
+	if !permitted {
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, "ado_capabilities_none_permitted",
+			adoNonePermitted(policy.AzureDevOpsCapabilities))
+	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {
 		return adoEntraLane{injections: injections}, false

@@ -87,6 +87,11 @@ type dispatchCeiling struct {
 	// bedrock is the same freeze for the Amazon Bedrock model credential
 	// (bedrockCredGrade, runs_autonomy_bedrock.go), on the same argument.
 	bedrock bedrockCredGrade
+	// adoStanding bounds the run's STANDING Azure DevOps capabilities
+	// (adoStandingBound, runs_dispatch_ado_inject.go). It rides here because
+	// half of a member's bound, the row's default_profile, is known only at
+	// dispatch, and the other half is this principal's ceiling.
+	adoStanding adoStandingBound
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -111,12 +116,13 @@ type dispatchCeiling struct {
 // the Bedrock model credential, and bedrockCredUngraded() answers it for the
 // same lanes.
 func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockCredGrade) dispatchCeiling {
+	standing := adoStandingFor(c)
 	if c.Profile == nil {
-		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock}
+		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock, adoStanding: standing}
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
-		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado, bedrock: bedrock,
+		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 	}
 }
 
