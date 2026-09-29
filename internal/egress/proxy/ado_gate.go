@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -40,41 +41,27 @@ type ADOGrant struct {
 	Capabilities []adoscope.Capability
 }
 
-// adoRefProtected is the base protected-ref rule: no grant carries a
-// protected-branch list yet, so every ref counts as protected. Fail closed.
-func adoRefProtected(string) bool { return true }
-
-// adoRunRefProtected is the ONE protected-ref predicate both Azure DevOps
-// doors use — the REST gate's classifier and the git broker's push check — so
-// a ref needs the same capability whichever door moves it. adoRefProtected
-// with two exceptions, each needing code_write, not policy_bypass: a ref
-// inside this run's own branch namespace (refs/heads/wardyn/<run-id>/…), and
-// any ref at all when the run's policy sets git_push_any_branch — Azure
-// DevOps' own branch policies then decide, as a GitHub ruleset does on the
-// App lane.
-func (p *Proxy) adoRunRefProtected(ref string) bool {
-	if p.policy.GitPushAnyBranch() {
-		return false
-	}
+// adoOutsideRunBranch reports whether any of refs lies outside this run's own
+// branch namespace (refs/heads/wardyn/<run-id>/…).
+func (p *Proxy) adoOutsideRunBranch(refs []string) bool {
 	prefix := BranchNSPrefix(p.runID)
-	if strings.HasPrefix(ref, prefix) && len(ref) > len(prefix) {
-		return false
+	return slices.ContainsFunc(refs, func(ref string) bool {
+		return !strings.HasPrefix(ref, prefix) || len(ref) == len(prefix)
+	})
+}
+
+// adoRunBranchRule is the ONE ref rule both Azure DevOps doors apply — the
+// REST gate to a classified ref move, the git broker to a push — so a ref is
+// held the same way whichever door moves it. It is the run's branch-namespace
+// confinement, as on the GitHub App lane: a ref outside the run's own branch
+// is refused unless the run's policy sets git_push_any_branch, and no
+// capability or approval lifts that. With the switch on, the move needs only
+// code_write and Azure DevOps' own branch policies decide. Returns the refusal
+// sentence, or "".
+func (p *Proxy) adoRunBranchRule(refs []string) string {
+	if p.policy.GitPushAnyBranch() || !p.adoOutsideRunBranch(refs) {
+		return ""
 	}
-	return adoRefProtected(ref)
-}
-
-// adoRunBranchMove reports whether v is policy_bypass only because it moves a
-// ref outside this run's branch namespace (adoRunRefProtected): a ref-move
-// verdict naming refs. A pull request completed with bypassPolicy, and an
-// Update Ref whose ref the catalogue cannot see, name none.
-func adoRunBranchMove(v adoscope.Verdict) bool {
-	return v.Capability == adoscope.CapPolicyBypass && len(v.Refs) > 0
-}
-
-// adoRunBranchRefusal is the sentence for a refused adoRunBranchMove: it says
-// where this run may push and which policy field widens that, rather than
-// naming a branch policy nobody consulted.
-func (p *Proxy) adoRunBranchRefusal() string {
 	return "Wardyn refused this push: this run may push only to its own branch (" +
 		strings.TrimPrefix(BranchNSPrefix(p.runID), "refs/heads/") +
 		"…). Pushing to other branches needs a policy with git_push_any_branch: true."
@@ -95,10 +82,7 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	if !ok {
 		return src
 	}
-	msg, held := adoCheck(r, host, grant, p.adoRunRefProtected)
-	if held != nil && adoRunBranchMove(*held) {
-		msg = p.adoRunBranchRefusal()
-	}
+	msg, held := adoCheck(r, host, grant, p.adoRunBranchRule)
 	// Push rules sit between hard refusals and the one liftable refusal: a
 	// content write is judged before anyone is asked to grant a capability.
 	if msg != "" && held == nil {
@@ -135,7 +119,9 @@ func (p *Proxy) refuseADOPlain(w http.ResponseWriter, r *http.Request) bool {
 // adoCheck returns "" when r may be forwarded, else the refusal sentence. held
 // is non-nil only for the ONE refusal a person may lift — a grantable
 // capability the run does not hold — and names what the request needs.
-func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(string) bool) (string, *adoscope.Verdict) {
+// refRule is applied to a ref move's refs before the capability check
+// (adoRunBranchRule); its refusal is never liftable.
+func adoCheck(r *http.Request, host string, grant ADOGrant, refRule func([]string) string) (string, *adoscope.Verdict) {
 	path := adoRawPath(r)
 	if !adoOrgMatches(host, path, grant.Organization) {
 		return fmt.Sprintf("Wardyn refused this Azure DevOps request: this run is granted the %q organisation only.", grant.Organization), nil
@@ -153,9 +139,9 @@ func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(st
 		Method:       r.Method,
 		Host:         host,
 		Path:         path,
+		RawQuery:     r.URL.RawQuery,
 		Header:       r.Header,
 		Org:          grant.Organization,
-		RefProtected: refProtected,
 		BodyWithheld: true,
 	}
 	v, err := adoscope.Classify(req)
@@ -167,8 +153,16 @@ func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(st
 		req.BodyWithheld, req.BodyPeek = false, peek
 		v, err = adoscope.Classify(req)
 	}
+	if errors.Is(err, adoscope.ErrNoRef) {
+		return "Wardyn refused this Azure DevOps request: it names no ref Wardyn can check.", nil
+	}
 	if err != nil {
 		return "Wardyn refused this Azure DevOps request: it could not tell what access the request needs.", nil
+	}
+	if len(v.Refs) > 0 {
+		if msg := refRule(v.Refs); msg != "" {
+			return msg, nil
+		}
 	}
 	if adoscope.Permits(grant.Capabilities, v) {
 		return "", nil

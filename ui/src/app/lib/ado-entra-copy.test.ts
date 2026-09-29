@@ -33,7 +33,9 @@ import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-pa
 // CONNECT_POPUP_OPEN (#628's approved sign-in progress packet) one more (219),
 // and §10's 23 rows (S10 round 2/3's 19 capability-card additions, plus §10.7's
 // 2 rows for issue #458 — the not-applicable Settings card and the owner
-// fallback) bring the live count to 242.
+// fallback) bring the live count to 242. The 2026-09-29 policy_bypass split
+// deleted §7's seven unrendered protected-ref keys (212) and replaced §10.2's
+// protected ref class with two keys (24): 236.
 //
 // Two normalisations, both documented rules rather than fudges (the drives
 // precedent):
@@ -64,8 +66,8 @@ const render = (docKey: string) => renderFromNamespaces(docKey, [ADO]);
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("ado-entra-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 242 frozen keys in the doc (219 from §7, 23 from §10)", () => {
-    expect(doc.size).toBe(242);
+  it("finds all 236 frozen keys in the doc (212 from §7, 24 from §10)", () => {
+    expect(doc.size).toBe(236);
   });
 
   it("(#458) NOT_APPLICABLE_BODY and REQ_OWNER_FALLBACK are byte-exact", () => {
