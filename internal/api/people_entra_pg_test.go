@@ -1,0 +1,270 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"golang.org/x/oauth2"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+const (
+	entraTenant = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+	entraObject = "9a8b7c6d-5e4f-3a2b-1c0d-ef0123456789"
+	entraPerson = "entra:" + entraTenant + ":" + entraObject
+)
+
+// entraPeoplePG is peoplePG behind an authenticator whose issuer IS Entra ID
+// (https://login.microsoftonline.com/<tid>/v2.0), reached over a loopback TLS
+// fake through the split-horizon issuer rewrite, so the REAL sign-in callback
+// runs against the real person store. signIn sets the next id_token the fake
+// token endpoint returns. OnLogin does what cmd/wardynd's refreshLoginStamps
+// does with the api-token and person stamps.
+type entraPeoplePG struct {
+	peoplePG
+	issuer string
+	signIn func(sub, tid, oid string)
+}
+
+func newEntraPeoplePG(t *testing.T) entraPeoplePG {
+	t.Helper()
+	e := newPeoplePG(t)
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := "/" + entraTenant + "/v2.0"
+	issuer := "https://login.microsoftonline.com" + prefix
+	idp := &gooidctest.Server{PublicKeys: []gooidctest.PublicKey{{PublicKey: priv.Public(), KeyID: "entra-key", Algorithm: "RS256"}}}
+	idp.SetIssuer(issuer)
+	var idToken string
+	mux := http.NewServeMux()
+	mux.HandleFunc(prefix+"/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "expires_in": 3600, "id_token": idToken})
+	})
+	mux.Handle(prefix+"/", http.StripPrefix(prefix, idp))
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+
+	st := e.st
+	auth, err := oidc.New(context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client()), oidc.Config{
+		IssuerURL: issuer, InternalIssuerURL: srv.URL + prefix,
+		ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
+		RoleMap: map[string]string{
+			"root@corp.example": oidc.RoleAdmin, "sec@corp.example": oidc.RoleSecurityAdmin,
+		},
+		DefaultRole: oidc.RoleUser,
+		OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
+			if err := st.RefreshAPITokenIdentity(ctx, sub, role, userType, groups, truncated); err != nil {
+				t.Error(err)
+			}
+			if err := st.MarkPersonSignedIn(ctx, sub, time.Now().UTC()); err != nil {
+				t.Error(err)
+			}
+		},
+	}, accessTestHMACKey)
+	if err != nil {
+		t.Fatalf("oidc.New against the Entra-issuer fake: %v", err)
+	}
+	e.h.srv.cfg.OIDC = auth
+	e.h.srv.router = e.h.srv.routes()
+	e.super = accessSession(t, "root", "root@corp.example", oidc.RoleAdmin, []string{})
+	e.sec = accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
+	return entraPeoplePG{peoplePG: e, issuer: issuer, signIn: func(sub, tid, oid string) {
+		claims, _ := json.Marshal(map[string]any{
+			"iss": issuer, "sub": sub, "aud": "wardyn-client", "nonce": "entra-nonce",
+			"email": personEmail, "groups": []string{"eng"}, "tid": tid, "oid": oid,
+			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+		})
+		idToken = gooidctest.SignIDToken(priv, "entra-key", "RS256", string(claims))
+	}}
+}
+
+// callback drives GET /auth/callback for the id_token signIn set, returning
+// the response and the session cookie it issued (nil when refused).
+func (e entraPeoplePG) callback(t *testing.T) (*httptest.ResponseRecorder, *http.Cookie) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state=s1&code=c1", nil)
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: "s1"})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: "entra-nonce"})
+	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: "v1"})
+	w := httptest.NewRecorder()
+	e.h.srv.Handler().ServeHTTP(w, r)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "wardyn_session" && c.Value != "" {
+			return w, c
+		}
+	}
+	return w, nil
+}
+
+func (e entraPeoplePG) createEntraPerson(t *testing.T, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return doSSO(t, e.h.srv, http.MethodPost, "/api/v1/people", e.sec, body)
+}
+
+// seesToken reports whether a session's own token list (/me/tokens) holds id:
+// it only ever lists the caller's own.
+func (e entraPeoplePG) seesToken(t *testing.T, sess *http.Cookie, id string) bool {
+	t.Helper()
+	w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/me/tokens", sess, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/me/tokens: %d %s", w.Code, w.Body.String())
+	}
+	return strings.Contains(w.Body.String(), id)
+}
+
+// TestPeopleEntra_AttachesOnlyOnExactObjectID is #1195 end to end through the
+// real callback: an Entra person set up by tenant and object id is attached by
+// exactly (issuer, tid, oid) and by nothing else — not their email, not their
+// object id in another tenant, not a sub spelling their principal — and until
+// that attach their minted token keeps its unknown-groups stamp and the row
+// stays unsigned. The attach is audited naming both parties, and a later
+// sign-in under a different pairwise sub (the app re-registered) is still them.
+func TestPeopleEntra_AttachesOnlyOnExactObjectID(t *testing.T) {
+	e := newEntraPeoplePG(t)
+	ctx := context.Background()
+	w := e.createEntraPerson(t, `{"tenant_id":"`+entraTenant+`","object_id":"`+entraObject+`","email":"`+personEmail+`"}`)
+	var p types.Person
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &p) != nil ||
+		p.Principal != entraPerson || p.Issuer != e.issuer || p.TenantID != entraTenant || p.ObjectID != entraObject {
+		t.Fatalf("create by object id: %d %s, want 201 keyed %s under %s", w.Code, w.Body.String(), entraPerson, e.issuer)
+	}
+	tok := decodeToken(t, e.mintFor(t, e.sec, entraPerson))
+	untouched := func(when string) {
+		t.Helper()
+		got, err := e.st.GetPerson(ctx, entraPerson)
+		if err != nil || got.FirstSignedInAt != nil {
+			t.Errorf("%s: person = %+v (%v), want still unsigned", when, got, err)
+		}
+		toks, err := e.st.ListAPITokensByPrincipal(ctx, entraPerson)
+		if err != nil || len(toks) != 1 || toks[0].GroupsTruncated == nil || !*toks[0].GroupsTruncated {
+			t.Errorf("%s: tokens = %+v (%v), want the unknown-groups stamp kept", when, toks, err)
+		}
+		if n := len(e.auditRows("person.attach")); n != 0 {
+			t.Errorf("%s: %d person.attach rows, want none", when, n)
+		}
+	}
+
+	for _, c := range []struct{ name, sub, tid, oid string }{
+		{"same email, another object id", "pairwise-b", entraTenant, "9a8b7c6d-5e4f-3a2b-1c0d-000000000000"},
+		{"same object id, another tenant", "pairwise-c", "0b1c2d3e-4f50-6172-8394-000000000000", entraObject},
+		{"no tid or oid claims", "pairwise-d", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e.signIn(c.sub, c.tid, c.oid)
+			w, sess := e.callback(t)
+			if sess == nil {
+				t.Fatalf("sign-in refused: %d %s", w.Code, w.Header().Get("Location"))
+			}
+			if e.seesToken(t, sess, tok.ID.String()) {
+				t.Errorf("a non-matching sign-in sees the person's token")
+			}
+			untouched(c.name)
+		})
+	}
+	for _, c := range []struct{ name, sub string }{
+		{"a sub spelling the principal, another object id", entraPerson},
+		{"the principal's sub in another case", strings.ToUpper(entraPerson)},
+		{"a reserved sub carrying the exact key", adminTokenPrincipal},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			oid := "9a8b7c6d-5e4f-3a2b-1c0d-000000000000"
+			if c.sub == adminTokenPrincipal {
+				oid = entraObject
+			}
+			e.signIn(c.sub, entraTenant, oid)
+			w, sess := e.callback(t)
+			if sess != nil || !strings.Contains(w.Header().Get("Location"), "auth_error=sign_in_refused") {
+				t.Fatalf("sign-in as %q = %d %s, want refused", c.sub, w.Code, w.Header().Get("Location"))
+			}
+			untouched(c.name)
+		})
+	}
+
+	for i, sub := range []string{"pairwise-a", "pairwise-after-reregistration"} {
+		e.signIn(sub, entraTenant, entraObject)
+		_, sess := e.callback(t)
+		if sess == nil || !e.seesToken(t, sess, tok.ID.String()) {
+			t.Fatalf("exact-key sign-in as %s: session %v, want the person with their token", sub, sess)
+		}
+		rows := e.auditRows("person.attach")
+		if len(rows) != i+1 || rows[i].Actor != entraPerson || rows[i].Target != entraPerson ||
+			!strings.Contains(string(rows[i].Data), `"sub":"`+sub+`"`) || !strings.Contains(string(rows[i].Data), `"object_id":"`+entraObject+`"`) {
+			t.Fatalf("person.attach rows = %+v, want row %d naming the person and sub %s", rows, i, sub)
+		}
+	}
+	if got, err := e.st.GetPerson(ctx, entraPerson); err != nil || got.FirstSignedInAt == nil {
+		t.Errorf("person after the exact-key sign-in = %+v (%v), want first_signed_in_at stamped", got, err)
+	}
+	if toks, err := e.st.ListAPITokensByPrincipal(ctx, entraPerson); err != nil || len(toks) != 1 || toks[0].GroupsTruncated == nil || *toks[0].GroupsTruncated {
+		t.Errorf("tokens after the exact-key sign-in = %+v (%v), want re-stamped from the sign-in's groups", toks, err)
+	}
+}
+
+// TestPeopleEntra_CreateRules: on Entra, the object-id form takes exactly a
+// GUID tenant and object id and no principal; it confirms the same key in any
+// case, refuses one recorded under another issuer, and a principal with no
+// person record mints nothing. Off Entra the object-id form is refused, so a
+// non-Entra deployment keys people exactly as before.
+func TestPeopleEntra_CreateRules(t *testing.T) {
+	e := newEntraPeoplePG(t)
+	key := `"tenant_id":"` + entraTenant + `","object_id":"` + entraObject + `"`
+	if w := e.createEntraPerson(t, `{`+key+`}`); w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	if w := e.createEntraPerson(t, `{"tenant_id":"`+strings.ToUpper(entraTenant)+`","object_id":"`+entraObject+`"}`); w.Code != http.StatusOK {
+		t.Errorf("confirm in upper case: %d %s, want 200", w.Code, w.Body.String())
+	}
+	for name, body := range map[string]string{
+		"principal and object id":  `{"principal":"pat-sub",` + key + `}`,
+		"tenant only":              `{"tenant_id":"` + entraTenant + `"}`,
+		"object id not a GUID":     `{"tenant_id":"` + entraTenant + `","object_id":"pat@corp.example"}`,
+		"braced GUID":              `{"tenant_id":"{` + entraTenant + `}","object_id":"` + entraObject + `"}`,
+		"urn GUID is not 36 chars": `{"tenant_id":"urn:uuid:` + entraTenant + `","object_id":"` + entraObject + `"}`,
+	} {
+		if w := e.createEntraPerson(t, body); w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s, want 422", name, w.Code, w.Body.String())
+		}
+	}
+	other := "0b1c2d3e-4f50-6172-8394-111111111111"
+	if _, _, err := e.st.CreatePerson(context.Background(), types.Person{
+		Principal: "entra:" + other + ":" + entraObject, Issuer: "https://sts.windows.net/" + other + "/",
+		TenantID: other, ObjectID: entraObject, CreatedBy: "root",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.createEntraPerson(t, `{"tenant_id":"`+other+`","object_id":"`+entraObject+`"}`); w.Code != http.StatusConflict {
+		t.Errorf("same key under another issuer: %d %s, want 409", w.Code, w.Body.String())
+	}
+	// A sign-in carrying that row's tid and oid, from this deployment's issuer.
+	e.signIn("pairwise-x", other, entraObject)
+	if _, sess := e.callback(t); sess == nil || len(e.auditRows("person.attach")) != 0 {
+		t.Errorf("tid and oid equal, issuer not: session %v, attaches %d; want its own sub, none", sess, len(e.auditRows("person.attach")))
+	}
+	if w := e.mintFor(t, e.sec, "entra:"+entraTenant+":9a8b7c6d-5e4f-3a2b-1c0d-000000000000"); w.Code != http.StatusNotFound {
+		t.Errorf("mint for an object id with no person: %d, want 404", w.Code)
+	}
+
+	plain := newPeoplePG(t)
+	if plain.h.srv.cfg.OIDC.KeysPeopleByObjectID() {
+		t.Fatal("a non-Entra issuer keys people by object id")
+	}
+	if w := doSSO(t, plain.h.srv, http.MethodPost, "/api/v1/people", plain.sec, `{`+key+`}`); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("object-id form off Entra: %d %s, want 422", w.Code, w.Body.String())
+	}
+}

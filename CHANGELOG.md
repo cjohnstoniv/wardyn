@@ -8,6 +8,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
+  Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
+  Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
+  principal is `entra:<tid>:<oid>`. A sign-in becomes that person only when its issuer, `tid` and
+  `oid` claims equal the recorded ones exactly — never by email, never by a `sub` in the `entra:`
+  namespace, which a sign-in is refused for — and every such sign-in is audited as `person.attach`
+  naming the person and the pairwise `sub`. Minted tokens keep their unknown-groups stamp until
+  that sign-in. Other issuers are unchanged, and refuse the object-id form. Migration
+  `0099_people_entra_object_id` adds the key columns to `people`.
+
 ## [0.8.0] — 2026-09-29
 
 ### Security

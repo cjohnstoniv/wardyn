@@ -83,6 +83,9 @@ type callbackClaims struct {
 	// unreadable: claims sent in a shape this build can't decode; stamps the
 	// snapshot partial and blocks a role-widening default.
 	unreadable []string
+	// issuer, tid, oid: the Subject a pre-created Entra person is keyed by
+	// (resolvePerson). tid/oid are empty when absent or not strings.
+	issuer, tid, oid string
 }
 
 // decodeCallbackClaims reads the login claims off a verified id_token. Only the
@@ -147,7 +150,17 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	if err := idToken.Claims(&dc); err != nil {
 		unreadableClaims = append(unreadableClaims, "_claim_names")
 	}
+	// Entra's tenant and object id, decoded apart so an IdP sending either in
+	// another shape loses only the object-id keying, never the login.
+	var ec struct {
+		Tid string `json:"tid"`
+		Oid string `json:"oid"`
+	}
+	_ = idToken.Claims(&ec)
 	return callbackClaims{
+		issuer:        idToken.Issuer,
+		tid:           ec.Tid,
+		oid:           ec.Oid,
 		email:         claims.Email,
 		emailVerified: claims.EmailVerified,
 		name:          claims.Name,
@@ -265,7 +278,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	// refused login never yields a downstream credential, and a credential
 	// that fails to store must not cost this person the session they just
 	// earned (login_grant.go). The session itself carries no token.
-	a.captureLoginGrant(r.Context(), idToken.Subject, token)
+	a.captureLoginGrant(r.Context(), sess.Sub, token)
 
 	// (6) Create a Wardyn session.
 	sess.Expiry = idToken.Expiry
@@ -298,6 +311,13 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 			onDenied(r, DenialReservedPrincipal)
 		}
 		return Session{}, authErrorSignInRefused
+	}
+	// On Entra, a person set up by object id signs in as that person
+	// (resolvePerson); everyone else is their sub.
+	subj := Subject{Issuer: cc.issuer, Sub: sub, TenantID: cc.tid, ObjectID: cc.oid}
+	sub, denied := a.resolvePerson(r, subj, reserved, onDenied)
+	if denied != "" {
+		return Session{}, denied
 	}
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
@@ -366,6 +386,9 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 		groupsTruncated = true
 		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
 			"sub", sub, "unreadable_claims", cc.unreadable)
+	}
+	if k := a.personKeying(); k != nil && sub != subj.Sub {
+		k.Attached(r, subj, sub)
 	}
 	return Session{
 		Sub: sub, Email: cc.email, Name: cc.name, Role: role, UserType: d.UserType,

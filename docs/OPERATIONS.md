@@ -745,7 +745,10 @@ A few things that don't fit the grid:
   seat (`local:<os-user>`) stays reserved by its prefix, but a custom
   `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains
   set — unset it, and a person whose `sub` is that name would own the runs
-  local mode created under it. Keep it set.
+  local mode created under it. Keep it set. On an Entra ID issuer a `sub`
+  starting with `entra:`, in any case, is refused the same way: that namespace
+  belongs to people set up by object id (see "Tokens for a person who never
+  signs in").
 - **The same claim values do double duty.** The `roles`/`groups` values a role
   mapping matches are the exact same login-time snapshot a `/permissions`
   capability grant's `subject_type=group` matches against (see "Subjects, and
@@ -2218,6 +2221,7 @@ never holds a long-lived token for anyone.
 | Call | What |
 |---|---|
 | `POST /api/v1/people` `{"principal":"<sub>","email":"<email>"}` | create the person, or confirm the one already there (`201` / `200`) |
+| `POST /api/v1/people` `{"tenant_id":"<tid>","object_id":"<oid>","email":"<email>"}` | Entra ID only: the same, keyed by the tenant and object id (see below); the principal is `entra:<tid>:<oid>` |
 | `POST /api/v1/people/{principal}/tokens` `{"name":"ci"}` | mint a `wdn_` token owned by that person; the plaintext is in this response only |
 | `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included; revoke one with `DELETE /api/v1/tokens/{id}` |
 
@@ -2232,11 +2236,31 @@ lands on a different principal and reaches none of this person's runs, tokens,
 secrets or drive. The real person signing in under a subject you mistyped also
 attaches to nothing: revoke the orphaned tokens and create the person again.
 
-On an identity provider whose `sub` is an opaque per-application id (Entra ID),
-you cannot know the subject before the person's first sign-in. There, create
-the person from a subject you have already seen, for example the `principal` on
-one of their existing tokens or runs. Setting up an Entra person by email alone
-is not supported.
+**On Entra ID, key a person who has never signed in by object id.** Entra's
+`sub` is pairwise: it is different for every app registration and unknown until
+the person's first sign-in. So on a deployment whose issuer is Entra ID
+(`login.microsoftonline.com`, `.us`, `login.partner.microsoftonline.cn` or
+`sts.windows.net`), create them with `tenant_id` and `object_id` instead of
+`principal`. Both are GUIDs; find them as described in
+[deploy/azure-entra-sso/README.md](../deploy/azure-entra-sso/README.md#pre-creating-a-person-by-object-id).
+Their principal is `entra:<tenant_id>:<object_id>`, which is what you pass as
+`{principal}` to mint or list their tokens. Wardyn records this deployment's
+issuer with them. A sign-in becomes this person only when its issuer, `tid`
+and `oid` claims all equal the recorded ones exactly, and then on every
+sign-in, so re-registering the app does not orphan them. Nothing else attaches
+them: not the email, not the object id under another tenant or issuer, and not
+a `sub` spelling their principal. A sign-in whose `sub` starts with `entra:`,
+in any case, is refused (no real Entra `sub` has a colon). Each such sign-in
+writes a `person.attach` audit row naming the person and the pairwise `sub`.
+
+Set up by object id only someone who has **never signed in**. Someone who has
+already signed in is known under their pairwise `sub`; a second, object-id
+record would give their next sign-in a new principal and leave their earlier
+runs and tokens behind. If you give their email, `POST /people` refuses that
+with `409` because the email already names their subject. Confirm such a person
+by `principal` (the `sub` on one of their tokens or runs) instead. Setting up an
+Entra person by email alone is not supported. On any other issuer the object-id
+form is refused `422`, and sign-in keys people by `sub` exactly as before.
 
 `POST /people` answers `409` rather than create an ambiguous identity. That
 happens when the email already names another known subject, when the subject is
