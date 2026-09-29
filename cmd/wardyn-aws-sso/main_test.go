@@ -113,10 +113,9 @@ func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 }
 
 // TestResolveAccountRole_LeavesBlankOnPortalFailure covers the non-fatal
-// residual: any portal failure (network, non-2xx, decode, empty list) must
-// leave the caller free to upload a blank account/role rather than erroring
-// out of run() entirely — a resolution failure must never turn into an
-// upload failure.
+// residual: any portal failure (network, non-2xx, decode, empty list) returns
+// ok=false with no refusal, and run() then uploads nothing and says why
+// (lookupFailedRefusal) rather than sending a blank account/role.
 func TestResolveAccountRole_LeavesBlankOnPortalFailure(t *testing.T) {
 	prevBase := ssoPortalBase
 	ssoPortalBase = func(string) string { return "http://127.0.0.1:1" } // nothing listening
@@ -749,8 +748,8 @@ func TestResolveAccountRole_PortalUnreachableUnderPin(t *testing.T) {
 	ssoPortalBase = func(string) string { return "http://127.0.0.1:1" }
 	t.Cleanup(func() { ssoPortalBase = prevBase })
 	if _, _, refusal, ok := pickAccountRole("tok", "us-east-1", ssoPin{accountID: rightAccount, roleName: rightRole}); ok || refusal != "" {
-		// listAccounts fails first here, which is the pre-existing best-effort
-		// miss: blank pair, no refusal, and the control plane 400s it.
+		// listAccounts fails first here: no pair and no refusal, so run()
+		// uploads nothing and prints lookupFailedRefusal.
 		t.Errorf("an unreachable portal at the ACCOUNT list = (%q,%v), want the best-effort miss", refusal, ok)
 	}
 }
@@ -919,9 +918,9 @@ func shrinkResolveTimeout(t *testing.T, d time.Duration) {
 // pair is what goes up, never a blank one.
 func TestRun_ChooserAnswerSlowerThanPortalTimeout(t *testing.T) {
 	portal := multiAccountPortal(t)
-	shrinkResolveTimeout(t, 50*time.Millisecond)
+	shrinkResolveTimeout(t, 250*time.Millisecond)
 	prevIn, prevTTY := stdin, stdinIsTerminal
-	stdin = &slowKeys{delay: 150 * time.Millisecond, r: strings.NewReader("2\n1\n")}
+	stdin = &slowKeys{delay: 750 * time.Millisecond, r: strings.NewReader("2\n1\n")}
 	stdinIsTerminal = func() bool { return true }
 	t.Cleanup(func() { stdin, stdinIsTerminal = prevIn, prevTTY })
 
