@@ -354,6 +354,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Kubernetes starts the agent only once its proxy is ready.** An assigned proxy pod IP used to
+  count as a started proxy, so a proxy stuck in `ImagePullBackOff` or still staging its config
+  accompanied a RUNNING agent with no working proxy. The agent pod is now created only after the
+  proxy's init container has completed and its container is Ready: the IP within the 90-second
+  `podIPWaitTimeout`, then Ready within the 3-minute `canaryWaitTimeout` the agent image already
+  has. A terminal proxy state (`ImagePullBackOff`, `ErrImagePull`, `CrashLoopBackOff`,
+  `CreateContainerConfigError`, a failed init or an exited proxy) fails the run at once, naming the
+  container and the reason, and the run's objects are rolled back.
 - **Azure DevOps `policy_bypass` means only a pull request completed with `bypassPolicy` (#1372).**
   A push or REST ref move outside the run's own `refs/heads/wardyn/<run-id>/` branch is now governed
   only by `git_push_any_branch`: off, it is refused whatever the run holds and is never held for an

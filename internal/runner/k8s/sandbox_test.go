@@ -30,13 +30,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// installProxyIPReactor scripts the proxy pod's Get to report a PodIP
-// immediately (no real polling latency in tests) — "wardyn-proxy-" is a
-// prefix ONLY the proxy pod name carries among objects routed through a
-// "pods" reactor (the Secret/NetworkPolicy names sharing a "wardyn-proxy-"
-// stem are different resource kinds entirely). Reads the REAL stored pod via
+// installProxyIPReactor scripts the proxy pod's Get to report a PodIP and a
+// Ready proxy container immediately (no real polling latency in tests) —
+// "wardyn-proxy-" is a prefix ONLY the proxy pod name carries among objects
+// routed through a "pods" reactor (the Secret/NetworkPolicy names sharing a
+// "wardyn-proxy-" stem are different resource kinds entirely). Reads the REAL stored pod via
 // cs.Tracker() (lock-safe: never the typed clientset, see
-// installCanaryReactor's doc for why) and overlays ONLY Status.PodIP, so a
+// installCanaryReactor's doc for why) and overlays ONLY that status, so a
 // caller that Gets the same pod again later (e.g. to inspect its Spec) still
 // sees everything CreateSandbox actually set — a bare synthesized stub here
 // would leave Spec.Containers empty and panic such a caller.
@@ -53,6 +53,11 @@ func installProxyIPReactor(t *testing.T, cs *fake.Clientset, ip string) {
 		}
 		pod := obj.(*corev1.Pod).DeepCopy()
 		pod.Status.PodIP = ip
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name:  proxyContainerName,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			Ready: true,
+		}}
 		return true, pod, nil
 	})
 }
