@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-09-29
+
 ### Fixed
 
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer
