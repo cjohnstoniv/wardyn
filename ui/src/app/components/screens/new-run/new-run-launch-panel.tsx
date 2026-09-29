@@ -9,10 +9,8 @@
 // comment); this component is the same contract one level up — it assembles
 // RunRail's nested `launch`/`preflight`/`modelProvider` objects, and derives
 // `startup`/`workspaceUnavailable`/`problem` (each read ONLY by this panel),
-// from the flat, explicit fields new-run-screen.tsx already computes. That
-// assembly and those three derivations move out of the screen along with the
-// JSX that used them; nothing here reads or writes any of the screen's own
-// React state.
+// from the flat, explicit fields new-run-screen.tsx already computes. Nothing
+// here reads or writes any of the screen's own React state.
 import * as React from "react";
 import type {
   ConfinementClass,
@@ -90,7 +88,7 @@ export interface NewRunLaunchPanelProps {
   agentRow: SetupHarnessTool | undefined;
 
   /** RunRail's `modelProvider` object, flattened — undefined (no section)
-   *  whenever `isAgent` is false, same as the screen's own prior ternary. */
+   *  whenever `isAgent` is false: a Shell/exec run has no model-provider door. */
   isAgent: boolean;
   providerCandidates: SetupModelProvider[];
   providerAccess: SetupProviderAccess[] | undefined;
@@ -253,6 +251,10 @@ export function NewRunLaunchPanel({
         spinning: launchSpinning,
         inFlight: launching,
         problem,
+        // noBarrier follows workspaceUnavailable's rule (#1328 review F4 — ONE
+        // source of truth: the rail's own disabled check already folds
+        // `noBarrier` in, so `disabled` never duplicates it): the rail states
+        // ITS OWN reason beside Launch, so `problem` never also carries it.
         workspaceUnavailable,
         noBarrier,
         error,

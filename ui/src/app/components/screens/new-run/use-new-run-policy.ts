@@ -12,7 +12,8 @@
 // authored floor on every parse, and up-clamping the Barrier Seg to the
 // active floor) — that is why this is a hook rather than a pure function like
 // policy-lane.ts's. React state (specText, parsedFloor, useSaved, …) stays
-// owned by NewRunScreen; this hook only derives from it.
+// owned by NewRunScreen: the hook derives from it and writes back only through
+// its two effects (setParsedFloor, patch, pristineCc).
 import * as React from "react";
 import {
   CC_ORDER as ORDERED_CLASSES,
@@ -41,8 +42,10 @@ export interface UseNewRunPolicyParams {
   govFloor: ConfinementClass | undefined;
   operator: boolean;
   workspaces: Workspace[];
-  /** B4b's clone-barrier ref (new-run-screen.tsx) — the up-clamp effect below
-   *  writes it on the same up-clamp the /setup/status effect seeds it from. */
+  /** The Barrier's dirty-check baseline (new-run-screen.tsx's pristineCc, next
+   *  to pristineSpec) — the up-clamp effect below moves it with its own write,
+   *  as the /setup/status effect does when it re-seeds the class, so a
+   *  machine-made clamp never reads as an operator edit. */
   pristineCc: React.MutableRefObject<ConfinementClass | undefined>;
 }
 
@@ -162,13 +165,11 @@ export function useNewRunPolicy({
   // grows no empty rail section.
   const specForRules = useSaved ? selectedPolicy?.spec : merged?.spec;
   const toolRules = React.useMemo(() => (specForRules ? toolRulesSummary(specForRules) : null), [specForRules]);
-  const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
 
   return {
     parsed,
     unparseableFloor,
     selectedPolicy,
-    floor,
     effectiveFloor,
     governanceBinding,
     qualifying,
@@ -179,7 +180,6 @@ export function useNewRunPolicy({
     added,
     specForRules,
     toolRules,
-    hasAdditions,
     adoDoor,
   };
 }

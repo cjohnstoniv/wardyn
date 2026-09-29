@@ -8,11 +8,14 @@
 // Review screen was the first place the consequences of your choices appeared.
 //
 // A RE-LAYOUT, not a re-model: buildSpec()/impliedEgressHosts() are reused
-// verbatim, so the launch payload is exactly what the wizard produced.
+// verbatim, so the launch payload is exactly what the wizard produced — the
+// governance contract is the tested part; this is about when the operator SEES
+// it, not what it is.
 //
 // The Confinement and Network cards are GONE — `inline_policy` on POST /runs is
-// the identical struct a saved policy stores, so this screen and /policies now
-// author it through ONE component (wardyn/policy-panel.tsx). What the JSON
+// the identical struct a saved policy stores, validated by the same validator,
+// so this screen and /policies now author it through ONE component
+// (wardyn/policy-panel.tsx). What the JSON
 // cannot know (the Workspace card's mounts/repos, the grant lanes' grants and
 // hosts) is unioned back in by mergeRunSelections and NAMED on screen, never
 // merged behind the operator's back.
@@ -82,7 +85,8 @@ export function NewRunScreen() {
   const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
   // Visibility is not capability: the workspace list is NOT narrowed by the
   // `workspace` grant (a hidden workspace makes the launch gate's refusal
-  // unexplainable). Ungranted rows are annotated instead.
+  // unexplainable and the grant undiscoverable). Ungranted rows are annotated
+  // instead.
   const operator = useOperator();
   const securityOperator = useSecurityOperator(), operatorResolved = useOperatorResolved(), caps = useMyCapabilities(!operator);
   // B4b — "Start a run like this one". The run cockpit hands the prefill over
@@ -94,7 +98,8 @@ export function NewRunScreen() {
   // cockpit rendered at all.
   const prefill = (useLocation().state as { prefill?: RunPrefill } | null)?.prefill;
   // Seed with CC1 — a harmless placeholder the /setup/status effect below
-  // replaces with the server's own strongest-installed-class default.
+  // replaces with the server's own strongest-installed-class default. There is
+  // no per-browser default left to seed this from (see default-confinement.ts).
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState("CC1", prefill?.state),
   );
@@ -106,6 +111,8 @@ export function NewRunScreen() {
   // The DEFAULT body floors at CC1 — NOT Minimal's authored CC2. A hardcoded
   // CC2 default would open every fresh /runs/new on a Fence-only host
   // fail-closed, all tiers dead, before the operator authored anything.
+  // Clicking the Minimal CHIP afterwards is an authored act and still floors
+  // CC2 — that corner stays, with its reason line and preflight naming it.
   const [specText, setSpecText] = React.useState(() => defaultSpecText());
   // The floor the LAST SUCCESSFUL parse authored — sticky across a broken
   // edit: a half-typed document must not momentarily drop the floor and
@@ -143,9 +150,10 @@ export function NewRunScreen() {
   // #542/#922 — this person's own model providers (already filtered to what
   // they may use, #832/#1015) and connection state. Same "unknown stays
   // unknown" rule as harnesses: undefined until the read lands, which also
-  // keeps the rail's provider picker from rendering before there is anything
-  // to pick from, and is the one member-safe signal for #922's
-  // pinned-provider-availability check.
+  // keeps the rail's provider picker from rendering (and forcing a
+  // preselection) before there is anything to pick from, and is the one
+  // member-safe signal for #922's pinned-provider-availability check. Read off
+  // the SAME /setup/status fetch below, never a second one.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
   const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>(undefined);
@@ -170,9 +178,12 @@ export function NewRunScreen() {
   // on docker, a Kata RuntimeClass on k8s), so T-9 names the SAME honest
   // reason environment-step.tsx computes instead of a generic "not installed".
   const [vaultReason, setVaultReason] = React.useState<string | undefined>(undefined);
-  // The Workspace card's drive block: this caller's allocation and door, read
-  // off the shell's ONE GET /me (operator-context.tsx's useUserDrive) rather
-  // than a second read of this screen's own.
+  // The Workspace card's drive block: this caller's allocation (nil means none)
+  // and door ("" means open), read off the shell's ONE GET /me
+  // (operator-context.tsx's useUserDrive) rather than a second read of this
+  // screen's own. With no provider above, on an older daemon, or after a
+  // failed read it is null/"" — which renders as today's card, the same
+  // answer the server's own resolver gives.
   const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
 
   React.useEffect(() => {
@@ -189,15 +200,19 @@ export function NewRunScreen() {
   }, []);
 
   // #1197 L2: the title default tracks the task's first line until the
-  // operator writes their own. patch() below is a stable useCallback.
+  // operator writes their own. Keyed on state.task (and the edited flag) alone,
+  // so it never fires on an unrelated field's change.
   React.useEffect(() => {
     if (titleUserEdited) return;
     setState((s) => ({ ...s, title: titleFromTask(s.task) }));
   }, [state.task, titleUserEdited]);
 
   // ONE /setup/status read for everything this screen needs: model-access
-  // readiness, the harness catalog, and which barriers this host can build.
-  // `unreachable` distinguishes "couldn't check" from a real empty list.
+  // readiness, the harness catalog, and which barriers this host can build —
+  // runner.confinement_classes, the same field every other surface reads, never
+  // a separately-polled mirror. `unreachable` distinguishes "couldn't check"
+  // from a real empty list, so there is no retry-on-empty heuristic to
+  // reimplement.
   React.useEffect(() => {
     let alive = true;
     setupApi
@@ -278,8 +293,10 @@ export function NewRunScreen() {
 
   // The envelope-field detach funnel retired with the controls it guarded;
   // confinementClass is now guarded by the floor-DISABLE below instead, which
-  // is strictly stronger. Detach now has exactly one trigger: editing the
-  // spec text (see onSpecChange).
+  // is strictly stronger: a one-time up-clamp alone would re-open the
+  // below-floor 422 (runs_create.go's floor check, on both the policy_id and
+  // inline paths) the moment the operator lowered the Seg afterwards. Detach
+  // now has exactly one trigger: editing the spec text (see onSpecChange).
   const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
 
   const isAgent = state.runType === "agent";
@@ -320,7 +337,9 @@ export function NewRunScreen() {
 
   // F2 (#612) — the primary workspace's own pinned provider (llm_cred.provider_ref),
   // the SAME "pin" the server falls back to (cmp.Or(requested, pin),
-  // run_model_provider.go) — read the primary the same way the server does.
+  // run_model_provider.go) — read the primary the same way the server does
+  // (wizard-types.ts's primaryWorkspaceId), so this rail can never pin a
+  // different workspace's credential than the run actually inherits.
   const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
   const pin = workspaces.find((w) => w.id === primaryWsId)?.llm_cred?.provider_ref;
 
@@ -344,11 +363,6 @@ export function NewRunScreen() {
     providerGateState,
     patch,
   });
-
-  // needsTask / workspaceUnavailable / problem all move into
-  // NewRunLaunchPanel now — they feed only its `launch` block, and the panel
-  // computes them from the same explicit inputs this screen used to (see its
-  // own header).
 
   // Launch + preflight state and actions — see use-launch.ts's header for why
   // this lane is a hook rather than a pure function like policy-lane.ts's.
@@ -376,13 +390,10 @@ export function NewRunScreen() {
     onLaunchError: policy.adoDoor.notifyLaunchError,
   });
 
-  // startupLine (what happens the moment this launches) also moves into
-  // NewRunLaunchPanel — it is the panel's own `startup` line and nothing
-  // else reads it.
-
   const added = policy.added;
   const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
-  // #181 — same source as toolRules above; a shell command has no
+  // #181 — same source as the rail's toolRules (use-new-run-policy.ts's
+  // specForRules); a shell command has no
   // specForRules at all (RunRail's pushRulesIsSet reads undefined as "no
   // section"). `unattended` mirrors isInteractive's own doc: a shell command
   // is unattended by definition, and so is an agent run left on batch mode.
@@ -443,8 +454,10 @@ export function NewRunScreen() {
       </div>
 
       {/* B4b — a clone says what it carried and what it could not (the
-          tool-approval posture, never the credentials). Review F4: a composer
-          launch's RunPrefill carries source:"composer", skipping this banner. */}
+          tool-approval posture came across, the credentials deliberately did
+          not). A prefilled form that looks hand-typed is the failure mode: the
+          operator would have no way to know. Review F4: a composer launch's
+          RunPrefill carries source:"composer", skipping this banner. */}
       {prefill && prefill.source !== "composer" && (
         <div
           role="status"
@@ -452,7 +465,8 @@ export function NewRunScreen() {
         >
           <p>{RUN.CLONE_NOTE}</p>
           {/* Create re-clamps against the caller's governance ceiling, so a
-              member cloning an admin's run is narrowed at launch. */}
+              member cloning an admin's run is narrowed at launch — said here,
+              before Launch, rather than as a warning after it. */}
           <p>{RUN.CLONE_CEILING_NOTE}</p>
           {/* An inline policy is never stored, so the barrier below is this
               wizard's default, not the original run's document. */}
@@ -479,7 +493,8 @@ export function NewRunScreen() {
                   // button only.
                   maxLength={200}
                   // Native datalist: existing titles are offered as you type,
-                  // so joining a family is a pick, not an exact retype.
+                  // so joining a family is a pick, not an exact retype. No combobox
+                  // library, and typing something new still just works.
                   list="nr-known-titles"
                   placeholder="Refactor the payments module"
                   value={state.title}
@@ -545,10 +560,14 @@ export function NewRunScreen() {
             {/* #1200 — the shared TierPicker: only what THIS run can actually
                 use (installed ∧ at-or-above the active floor, folding in the
                 governance ceiling only where the server would clamp to it —
-                govFloorApplies). A tier the floor forbids is DROPPED, never
-                shown disabled (the global picker rule); ONE qualifying tier
-                collapses to the decided row, NONE shows the T-9 requirement
-                card. Review P2-1/P2-3: decidedLine/pickOneNote override
+                govFloorApplies). A tier the floor forbids or the host can't
+                build is DROPPED, never shown disabled (the global picker
+                rule); ONE qualifying tier collapses to the decided row, NONE
+                shows the T-9 requirement card (its own REQUIREMENT_TITLE
+                fallback is what names "No sandbox runner" for the host-level
+                #214 case; requirementNote below overrides it only for the
+                governance-floor shape, hence its effectiveFloor condition).
+                Review P2-1/P2-3: decidedLine/pickOneNote override
                 TierPicker's defaults, which assume a governance floor and a
                 browser-persisted pick — neither true here. */}
             <TierPicker
@@ -640,10 +659,13 @@ export function NewRunScreen() {
                 <p className="text-xs text-warning">{AGENTS.FLOOR_UNPARSEABLE(policy.unparseableFloor)}</p>
               )}
 
-              {/* What buildSpec unions in AFTER the parse, named out loud: the
-                  Workspace card's attachments, the grant lanes' grants, and the
-                  hosts those grants must reach — entries the document itself
-                  cannot know. Saved-policy runs launch by REFERENCE, so nothing
+              {/* What buildSpec unions in AFTER the parse, named out loud. A
+                  policy the operator did not write is one they cannot be held
+                  to — and these are exactly the entries the document itself
+                  cannot know: the Workspace card's attachments, the grant
+                  lanes' grants, and the hosts those grants must reach (an
+                  api_key grant whose host is not on the allowlist
+                  authenticates nothing, allow_all_egress included). Saved-policy runs launch by REFERENCE, so nothing
                   is merged into a stored spec. */}
               {!useSaved && hasAdditions && added && (
                 <div
@@ -685,9 +707,10 @@ export function NewRunScreen() {
           </SectionCard>
         </div>
 
-        {/* Right: the live rail, a fixed 320px. NewRunLaunchPanel derives
-            startup/workspaceUnavailable/problem itself from the raw fields
-            below — see its own header for why. */}
+        {/* Right: the live rail, a fixed 320px. startup, workspaceUnavailable and
+            problem are derived inside the panel from the same raw fields Launch
+            reads, so the rail cannot describe or gate one run while Launch
+            sends another. */}
         <NewRunLaunchPanel
           governanceProfile={governanceProfile}
           savedPolicy={policy.selectedPolicy}
