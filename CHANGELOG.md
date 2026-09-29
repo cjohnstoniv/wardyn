@@ -11,8 +11,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Fixed
 
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer
-  the chooser.** When the AWS access portal reaches more than one account and the agent row has no
-  pin, the helper asks which account and role. Its single 15-second deadline started before that
+  the chooser.** When the AWS access portal reaches more than one account and the model provider has
+  no pin, the helper asks which account and role. Its single 15-second deadline started before that
   question, so an answer given at human speed found the role lookup already expired, and the helper
   uploaded a blank account and role. The control plane refused it with "sso token blob is missing
   required fields (account_id, role_name)" and nothing was stored. Each portal request now has its
