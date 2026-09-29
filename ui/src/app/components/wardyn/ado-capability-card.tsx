@@ -99,8 +99,8 @@ const CAP_THING: Record<string, string> = {
 };
 
 // Q3 (mock §9): teal Approve / plain Deny on an ordinary card; on the two
-// capabilities that move something PAST a policy or CHANGE the policy
-// itself, nothing is teal and Deny is destructive. "Same rule, one fewer
+// capabilities that complete a pull request PAST its policies or CHANGE a
+// policy itself, nothing is teal and Deny is destructive. "Same rule, one fewer
 // button" — the ruling was given against the three-button drawing and
 // re-read onto the shipped Approve+caret+Deny control (Q2).
 const DESTRUCTIVE_CAPABILITIES = new Set(["policy_bypass", "policy_admin"]);
@@ -283,15 +283,20 @@ export function AdoCapabilityCard({
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">{ADO.REQ_FIELD_REPOSITORY}</dt>
         <dd className="font-mono text-xs text-foreground">{where || "—"}</dd>
-        {scopeData.ref_class === "protected" && (
+        {(scopeData.ref_class === "outside_run_namespace" || scopeData.ref_class === "protected") && (
           // No ref NAME reaches the client (the canonical scope carries only
-          // ref_class) — see this file's own top comment. The capability
-          // heading above already says "past a branch policy" for this
-          // case; this row states the fact §2.3 asks for without inventing
-          // a ref.
+          // ref_class) — see this file's own top comment. "protected" is the
+          // legacy spelling an older row stored for the same case: a ref
+          // outside the run's own branch, never a branch policy Wardyn read.
           <>
             <dt className="text-muted-foreground">{ADO.REQ_FIELD_REF_CLASS}</dt>
-            <dd className="text-xs text-foreground">{ADO.REQ_REF_CLASS_PROTECTED}</dd>
+            <dd className="text-xs text-foreground">{ADO.REQ_REF_CLASS_OUTSIDE_RUN}</dd>
+          </>
+        )}
+        {scopeData.capability === "policy_bypass" && (
+          <>
+            <dt className="text-muted-foreground">{ADO.REQ_FIELD_CHANGE}</dt>
+            <dd className="text-xs text-foreground">{ADO.REQ_CHANGE_PR_BYPASS}</dd>
           </>
         )}
         <dt className="text-muted-foreground">{ADO.REQ_FIELD_COMMAND}</dt>

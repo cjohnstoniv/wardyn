@@ -6,7 +6,6 @@ package adoscope
 import (
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 )
 
@@ -24,6 +23,9 @@ func TestClassifyWithheldBodyAsksOnlyWhereTheBodyDecides(t *testing.T) {
 		withheld(http.MethodPatch, "dev.azure.com", "/acme/proj/_apis/git/pullrequests/5"),
 		withheld(http.MethodPost, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/refs"),
 		withheld(http.MethodPost, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/pushes"),
+		withheld(http.MethodPost, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/annotatedtags"),
+		withheld(http.MethodPost, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/cherrypicks"),
+		withheld(http.MethodPost, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/reverts"),
 		withheld(http.MethodPost, "dev.azure.com", "/acme/_apis/wit/$batch"),
 		withheld(http.MethodOptions, "dev.azure.com", "/acme/_apis"),
 	}
@@ -55,10 +57,8 @@ func TestClassifyWithheldBodyAsksOnlyWhereTheBodyDecides(t *testing.T) {
 func TestRESTRefNamesAreHeldToTheGitRule(t *testing.T) {
 	const pushes = "/acme/proj/_apis/git/repositories/app/pushes"
 	const refs = "/acme/proj/_apis/git/repositories/app/refs"
-	runNS := func(ref string) bool { return !strings.HasPrefix(ref, "refs/heads/wardyn/RUN/") }
 	onPush := func(name string) Request {
 		r := adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"`+name+`"}]}`)
-		r.RefProtected = runNS
 		return r
 	}
 	runCases(t, []caseT{

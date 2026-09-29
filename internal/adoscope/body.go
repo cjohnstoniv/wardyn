@@ -201,11 +201,9 @@ type refUpdate struct {
 	Name string `json:"name"`
 }
 
-// refWrite classifies a ref move: CapCodeWrite on an ordinary branch,
-// CapPolicyBypass on a policy-protected one — a distinction Azure DevOps
-// doesn't make in its scopes, hence parsing ref names here. Names are
-// returned on every verdict so the caller can re-decide off its per-run
-// protected-branch cache without re-parsing a body it no longer has.
+// refWrite classifies a ref move (Update Refs, or a push): CapCodeWrite, with
+// the ref names the body carries, so the caller can hold them to the run's
+// branch namespace — a rule of the run, not of Azure DevOps' scopes.
 func refWrite(req Request) (Verdict, error) {
 	body, err := peekBody(req)
 	if err != nil {
@@ -215,11 +213,80 @@ func refWrite(req Request) (Verdict, error) {
 	if err != nil {
 		return Verdict{}, err
 	}
-	v := Verdict{Capability: CapCodeWrite, Refs: refs}
-	if req.RefProtected != nil && slices.ContainsFunc(refs, req.RefProtected) {
-		v.Capability = CapPolicyBypass
+	return Verdict{Capability: CapCodeWrite, Refs: refs}, nil
+}
+
+// filterRefWrite classifies Update Ref (PATCH refs?filter=heads/<branch>):
+// CapCodeWrite on "refs/" + the ONE filter value. A query that does not parse,
+// or a missing, empty or repeated filter — in any key spelling, since the
+// service reads keys without regard to case — names no ref that can be checked.
+func filterRefWrite(req Request) (Verdict, error) {
+	q, err := url.ParseQuery(req.RawQuery)
+	if err != nil {
+		return Verdict{}, ErrNoRef
 	}
-	return v, nil
+	var filters []string
+	for k, vs := range q {
+		if strings.EqualFold(strings.TrimSpace(k), "filter") {
+			filters = append(filters, vs...)
+		}
+	}
+	if len(filters) != 1 || strings.TrimSpace(filters[0]) == "" {
+		return Verdict{}, ErrNoRef
+	}
+	return oneRef("refs/" + filters[0])
+}
+
+// annotatedTagWrite classifies Annotated Tags – Create: CapCodeWrite on
+// refs/tags/<name>, the tag the body's name creates.
+func annotatedTagWrite(req Request) (Verdict, error) {
+	body, err := peekBody(req)
+	if err != nil {
+		return Verdict{}, err
+	}
+	var tag struct {
+		Name string `json:"name"`
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return Verdict{}, ErrNoRef
+	}
+	if err := decodeUnique(body, &tag); err != nil {
+		return Verdict{}, err
+	}
+	if strings.TrimSpace(tag.Name) == "" {
+		return Verdict{}, ErrNoRef
+	}
+	return oneRef("refs/tags/" + tag.Name)
+}
+
+// generatedRefWrite classifies Cherry Picks and Reverts – Create: CapCodeWrite
+// on the branch the body's generatedRefName creates.
+func generatedRefWrite(req Request) (Verdict, error) {
+	body, err := peekBody(req)
+	if err != nil {
+		return Verdict{}, err
+	}
+	var op struct {
+		GeneratedRefName string `json:"generatedRefName"`
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return Verdict{}, ErrNoRef
+	}
+	if err := decodeUnique(body, &op); err != nil {
+		return Verdict{}, err
+	}
+	if strings.TrimSpace(op.GeneratedRefName) == "" {
+		return Verdict{}, ErrNoRef
+	}
+	return oneRef(op.GeneratedRefName)
+}
+
+// oneRef is a CapCodeWrite verdict on ref, held to CheckRefName.
+func oneRef(ref string) (Verdict, error) {
+	if err := CheckRefName(ref); err != nil {
+		return Verdict{}, err
+	}
+	return Verdict{Capability: CapCodeWrite, Refs: []string{ref}}, nil
 }
 
 // refNames are the refs a ref-update or push body names. Two endpoint shapes
@@ -228,7 +295,7 @@ func refWrite(req Request) (Verdict, error) {
 // classified: "none visible" is not an answer a policy can apply to.
 func refNames(body []byte) ([]string, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
-		return nil, fmt.Errorf("adoscope: a ref update with no body names no branch to gate")
+		return nil, ErrNoRef
 	}
 	var updates []refUpdate
 	if bytes.TrimSpace(body)[0] == '[' {
@@ -256,20 +323,20 @@ func refNames(body []byte) ([]string, error) {
 		out = append(out, name)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("adoscope: a ref update naming no branch cannot be gated")
+		return nil, ErrNoRef
 	}
 	return out, nil
 }
 
 // CheckRefName refuses a ref name git would not accept, or that a
-// protected-ref check could read differently from the service. It is the one
+// run-namespace check could read differently from the service. It is the one
 // ref-name rule both Azure DevOps doors apply, so a name one door refuses
 // cannot move a ref through the other.
 //
 //   - ".." is a traversal: "refs/heads/wardyn/<run>/../../main" passes a
 //     run-namespace prefix test and names main;
-//   - a backslash is a separator to the service but not to a protected-branch
-//     cache keyed by the forward-slash spelling;
+//   - a backslash is a separator to the service but not to a namespace
+//     prefix test keyed by the forward-slash spelling;
 //   - space, tab, "^", "~", ":", "?", "*" and "[" are forbidden by git's own
 //     check-ref-format;
 //   - a control byte (LF/CR above all) is how a second command rides a

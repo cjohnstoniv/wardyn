@@ -142,7 +142,7 @@ func TestADONames_EdgeSpellingsRefusedAtBothDoors(t *testing.T) {
 	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}
 	for _, repo := range []string{"Repo.", "%20Repo", "Repo%20", "a%2Fb", "a%252Fb"} {
 		rest := httptest.NewRequest(http.MethodGet, "https://dev.azure.com/acme/proj/_apis/git/repositories/"+repo+"/items", nil)
-		if msg, _ := adoCheck(rest, "dev.azure.com", grant, adoRefProtected); msg == "" {
+		if msg, _ := adoCheck(rest, "dev.azure.com", grant, refuseEveryRef); msg == "" {
 			t.Errorf("REST door forwarded repository %q", repo)
 		}
 		path := "/wardyn/git/dev.azure.com/acme/proj/_git/" + repo + "/info/refs"
