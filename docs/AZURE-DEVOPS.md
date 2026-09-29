@@ -205,8 +205,9 @@ or a REST call that moves a ref (`pushes`, or `refs` with the refs in the body).
 - **With `git_push_any_branch: true` on the run's policy, a push to any branch needs `code_write`
   only.** Wardyn forwards it with the person's own credential, and Azure DevOps' branch policies
   and permissions decide: a protected `main` still rejects someone who lacks the permission to
-  push to it. Each such push is recorded as `brokered:git:branch-ns-off`, as on the GitHub lanes
-  (see [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
+  push to it. Each such git push is recorded as `brokered:git:branch-ns-off`, as on the GitHub
+  lanes; a REST ref move keeps the ordinary `brokered:ado` row (see
+  [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
 - **The switch never touches a real bypass.** Completing a pull request with
   `completionOptions.bypassPolicy: true` still needs `policy_bypass`, and so do Update Ref (`PATCH`
   on `refs`, whose ref sits in a query Wardyn does not read), annotated tags and fork syncs.
