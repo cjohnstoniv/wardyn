@@ -21,14 +21,15 @@ import (
 
 // adoLaneWithPolicy drives the one dispatch call the override lives in,
 // authorADOEntraLane, for the fixture row (ceiling read+code_write+pr, default
-// read+code_write) under a policy choosing caps.
+// read+code_write) under an OPERATOR's policy choosing caps (a member's is
+// bounded further; policy_ado_standing_test.go).
 func adoLaneWithPolicy(t *testing.T, caps []adoscope.Capability) (adoEntraLane, bool, *adoTestStore, *memAudit) {
 	t.Helper()
 	st := &adoTestStore{}
 	s, audit := newADODispatchServer(st)
 	policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, AzureDevOpsCapabilities: caps}
 	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: uuid.New()}, adoTestRun(t), true,
-		adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: "CERT", mitmCAKeyPEM: "KEY"}, &policy, map[string]string{}, nil)
+		adoEntraUngraded(), adoStandingBound{operator: true}, dispatchLLMPlan{mitmCACertPEM: "CERT", mitmCAKeyPEM: "KEY"}, &policy, map[string]string{}, nil)
 	return lane, ok, st, audit
 }
 
@@ -151,13 +152,12 @@ func TestValidatePolicySpec_ADOCapabilities(t *testing.T) {
 	}
 }
 
-// The member half, through the real resolveRunPolicy chokepoint: a member's
-// inline choice is intersected with THEIR ceiling's list, and dropped when that
-// list is empty (the field can widen past a row's default_profile without an
-// approval, so a silent ceiling is no permission). The ceiling's list is a
-// bound, never a grant, so nothing is ever inherited from it. An operator is
-// the ceiling-setting authority and keeps exactly what they wrote.
-func TestResolveRunPolicy_MemberADOCapabilitiesClamp(t *testing.T) {
+// The member half, through the real resolveRunPolicy chokepoint: resolve no
+// longer narrows a member's azure_devops_capabilities, because their bound
+// needs the row's default_profile, which only dispatch knows. What resolve must
+// keep is the difference between an explicit list and none at all, so dispatch
+// never reads a narrowed-to-nothing choice as "use the default".
+func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.T) {
 	r, pr, pa := adoscope.CapRead, adoscope.CapPR, adoscope.CapPolicyAdmin
 	profile := func(caps ...adoscope.Capability) *types.GovernanceProfile {
 		return &types.GovernanceProfile{ID: uuid.New(), Name: "ado",
@@ -168,14 +168,12 @@ func TestResolveRunPolicy_MemberADOCapabilitiesClamp(t *testing.T) {
 		profile  *types.GovernanceProfile
 		operator bool
 		inline   []adoscope.Capability
-		want     []adoscope.Capability
 	}{
-		{name: "member: intersected with the ceiling's list", profile: profile(r, pr), inline: []adoscope.Capability{r, pa}, want: []adoscope.Capability{r}},
-		{name: "member: a silent ceiling drops the choice", profile: profile(), inline: []adoscope.Capability{r, pa}, want: nil},
-		{name: "member, unassigned: the default ceiling is silent too", inline: []adoscope.Capability{r, pa}, want: nil},
-		{name: "member: none named stays unset", profile: profile(r, pr), want: nil},
-		{name: "member: an empty intersection goes unset", profile: profile(r, pr), inline: []adoscope.Capability{pa}, want: nil},
-		{name: "operator: unclamped", profile: profile(r), operator: true, inline: []adoscope.Capability{r, pa}, want: []adoscope.Capability{r, pa}},
+		{name: "member: outside the ceiling's list", profile: profile(r, pr), inline: []adoscope.Capability{r, pa}},
+		{name: "member: a silent ceiling", profile: profile(), inline: []adoscope.Capability{r}},
+		{name: "member, unassigned", inline: []adoscope.Capability{r, pa}},
+		{name: "member: none named stays unset", profile: profile(r, pr)},
+		{name: "operator", profile: profile(r), operator: true, inline: []adoscope.Capability{r, pa}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -194,29 +192,31 @@ func TestResolveRunPolicy_MemberADOCapabilitiesClamp(t *testing.T) {
 			if !ok {
 				t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 			}
-			if !slices.Equal(got.AzureDevOpsCapabilities, tc.want) {
-				t.Errorf("azure_devops_capabilities = %v, want %v", got.AzureDevOpsCapabilities, tc.want)
+			if !slices.Equal(got.AzureDevOpsCapabilities, tc.inline) {
+				t.Errorf("azure_devops_capabilities = %v, want the choice %v", got.AzureDevOpsCapabilities, tc.inline)
 			}
 		})
 	}
 }
 
-// The review's reproduction, end to end: a member under a profile whose list
-// is [read pr], on the fixture row (default_profile [read code_write]), sends
-// an inline policy naming nothing, one naming only what the profile does not
-// allow, or no policy at all. Each must dispatch with the row's
-// default_profile — never with pr, which neither the member nor the row's
-// default granted and no approval was taken for.
-func TestMemberADOCapabilities_CeilingListIsNeverAGrant(t *testing.T) {
+// A member under a profile whose list is [read pr], on the fixture row
+// (default_profile [read code_write]): naming nothing, or sending no policy,
+// dispatches the row's default_profile — the ceiling's list is never inherited
+// unasked. Naming only what neither the default nor the list permits refuses
+// the launch instead of falling back to the default.
+func TestMemberADOCapabilities_CeilingListIsNeverInherited(t *testing.T) {
 	prof := &types.GovernanceProfile{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
 		MinConfinementClass: types.CC2, AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapRead, adoscope.CapPR}}}
 	inline := func(caps ...adoscope.Capability) *types.RunPolicySpec {
 		return &types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: caps}
 	}
-	for name, req := range map[string]*createRunRequest{
-		"inline, nothing chosen":          {Agent: "claude-code", InlinePolicy: inline()},
-		"inline, disjoint [policy_admin]": {Agent: "claude-code", InlinePolicy: inline(adoscope.CapPolicyAdmin)},
-		"no policy at all":                {Agent: "claude-code"},
+	for name, tc := range map[string]struct {
+		req     *createRunRequest
+		refused bool
+	}{
+		"inline, nothing chosen":          {req: &createRunRequest{Agent: "claude-code", InlinePolicy: inline()}},
+		"no policy at all":                {req: &createRunRequest{Agent: "claude-code"}},
+		"inline, disjoint [policy_admin]": {req: &createRunRequest{Agent: "claude-code", InlinePolicy: inline(adoscope.CapPolicyAdmin)}, refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
@@ -226,17 +226,24 @@ func TestMemberADOCapabilities_CeilingListIsNeverAGrant(t *testing.T) {
 			ctx := operatorCtx("sub-ado", "ado@corp.example", oidc.RoleUser)
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 			w := httptest.NewRecorder()
-			spec, _, _, ok := srv.resolveRunPolicy(ctx, w, r, req, true)
+			spec, _, _, ok := srv.resolveRunPolicy(ctx, w, r, tc.req, true)
 			if !ok {
 				t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 			}
-			if spec.AzureDevOpsCapabilities != nil {
-				t.Errorf("resolved azure_devops_capabilities = %v, want unset", spec.AzureDevOpsCapabilities)
+			ceiling, err := srv.effectiveCeiling(ctx)
+			if err != nil {
+				t.Fatal(err)
 			}
 			st := &adoTestStore{}
 			ds, _ := newADODispatchServer(st)
 			lane, ok := ds.authorADOEntraLane(context.Background(), types.AgentRun{ID: uuid.New()}, adoTestRun(t), true,
-				adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: "CERT", mitmCAKeyPEM: "KEY"}, &spec, map[string]string{}, nil)
+				adoEntraUngraded(), adoStandingFor(ceiling), dispatchLLMPlan{mitmCACertPEM: "CERT", mitmCAKeyPEM: "KEY"}, &spec, map[string]string{}, nil)
+			if tc.refused {
+				if ok || lane.gate != nil || len(st.grants) != 0 {
+					t.Errorf("dispatched gate = %+v (ok %v), want the launch refused", lane.gate, ok)
+				}
+				return
+			}
 			want := []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
 			if !ok || lane.gate == nil || !slices.Equal(lane.gate.Capabilities, want) {
 				t.Errorf("dispatched gate = %+v (ok %v), want the row's default_profile %v", lane.gate, ok, want)

@@ -74,7 +74,7 @@ const escalationRow: ApprovalRequest = {
     repo: "payments-api",
     ref_class: "",
     tool: "Azure DevOps",
-    cmd: "Push commits and move branches that no policy protects (code_write) in acme/payments-api",
+    cmd: "Push commits and create or move branches, inside this run's own branch unless its policy allows any branch (code_write) in acme/payments-api",
   },
   state: "PENDING",
   requested_at: new Date().toISOString(),

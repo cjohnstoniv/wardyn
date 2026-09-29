@@ -420,13 +420,14 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 // principal who writes the org's ceilings be the one principal none of them
 // bind, which is the self-exemption the whole tier is designed not to have.
 //
-// It ALSO returns the caller's resolved governance ceiling (zero-valued for the
-// operator short-circuit, which never reads one): the create path's tool-
-// approval derivation needs the same ceiling this function's refusals were
-// decided under, and re-resolving would read the rows a second time.
+// It ALSO returns the caller's resolved governance ceiling (zero-valued but for
+// Operator on the operator short-circuit, which reads no rows): the create
+// path's tool-approval derivation needs the same ceiling this function's
+// refusals were decided under, and re-resolving would read the rows a second
+// time.
 func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req createRunRequest) (governanceCeiling, bool) {
 	if s.isOperator(r.Context()) {
-		return governanceCeiling{}, false
+		return governanceCeiling{Operator: true}, false
 	}
 	// One capability snapshot for every field below (capBatch's ctx memo).
 	r = r.WithContext(withCapBatch(r.Context()))

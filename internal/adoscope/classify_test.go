@@ -4,6 +4,7 @@
 package adoscope
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -306,100 +307,104 @@ func TestClassifyPullRequestBodyPeek(t *testing.T) {
 	})
 }
 
-// HAZARD 5 — a ref move onto a policy-protected branch. Azure DevOps asks for
-// the same write scope either way, so the ref names in the body are the only
-// place the difference exists.
+// HAZARD 5 — a ref move. Azure DevOps asks for the same write scope for any
+// branch, and the run's own-branch rule is the caller's, so a ref move is
+// code_write and names every ref it moves — whichever route carries the name.
 func TestClassifyRefMove(t *testing.T) {
-	refs := "/acme/proj/_apis/git/repositories/r1/refs"
-	pushes := "/acme/proj/_apis/git/repositories/r1/pushes"
-	protect := func(r Request, names ...string) Request {
-		r.RefProtected = func(ref string) bool { return slices.Contains(names, ref) }
-		return r
-	}
+	const repo = "/acme/proj/_apis/git/repositories/r1/"
+	refs, pushes := repo+"refs", repo+"pushes"
 	refsBody := `[{"name":"refs/heads/feature/x","oldObjectId":"0","newObjectId":"1"}]`
-	mainBody := `[{"name":"refs/heads/main","oldObjectId":"0","newObjectId":"1"}]`
-	pushBody := `{"refUpdates":[{"name":"refs/heads/main"}],"commits":[{"comment":"c"}]}`
+	withQuery := func(r Request, q string) Request { r.RawQuery = q; return r }
 	runCases(t, []caseT{
-		{
-			name:     "an unprotected ref move is a code write, and the refs come back",
-			req:      protect(adoReq(http.MethodPost, refs, refsBody), "refs/heads/main"),
-			want:     CapCodeWrite,
-			wantRefs: []string{"refs/heads/feature/x"},
-		},
-		{
-			name:     "a protected ref move is a POLICY BYPASS, not a code write",
-			req:      protect(adoReq(http.MethodPost, refs, mainBody), "refs/heads/main"),
-			want:     CapPolicyBypass,
-			wantRefs: []string{"refs/heads/main"},
-		},
-		{
-			name:     "with no oracle the refs still come back, for the caller's own cache",
-			req:      adoReq(http.MethodPost, refs, mainBody),
-			want:     CapCodeWrite,
-			wantRefs: []string{"refs/heads/main"},
-		},
+		{name: "an Update Refs body", req: adoReq(http.MethodPost, refs, refsBody), want: CapCodeWrite, wantRefs: []string{"refs/heads/feature/x"}},
 		{
 			name:     "a push body carries its refs under refUpdates",
-			req:      protect(adoReq(http.MethodPost, pushes, pushBody), "refs/heads/main"),
-			want:     CapPolicyBypass,
+			req:      adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"refs/heads/main"}],"commits":[{"comment":"c"}]}`),
+			want:     CapCodeWrite,
 			wantRefs: []string{"refs/heads/main"},
 		},
 		{
-			name:     "an unprotected push",
-			req:      protect(adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"refs/heads/topic"}]}`), "refs/heads/main"),
+			name:     "every ref comes back",
+			req:      adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic"},{"name":"refs/heads/main"}]`),
 			want:     CapCodeWrite,
-			wantRefs: []string{"refs/heads/topic"},
-		},
-		{
-			name: "one protected ref among several is enough",
-			req: protect(adoReq(http.MethodPost, refs,
-				`[{"name":"refs/heads/topic"},{"name":"refs/heads/main"}]`), "refs/heads/main"),
-			want:     CapPolicyBypass,
 			wantRefs: []string{"refs/heads/topic", "refs/heads/main"},
 		},
+		{name: "a backslashed ref name", req: adoReq(http.MethodPost, refs, `[{"name":"refs\\heads\\main"}]`), wantErr: true},
+		{name: "and its push twin", req: adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"refs\\heads\\main"}]}`), wantErr: true},
+		{name: "one backslashed ref among plain ones", req: adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic"},{"name":"refs/heads\\main"}]`), wantErr: true},
+		{name: "a ref update naming no branch", req: adoReq(http.MethodPost, refs, `[]`), wantErr: true},
+		{name: "a ref update with no body", req: adoReq(http.MethodPost, refs, ""), wantErr: true},
+		{name: "a ref update with a repeated key", req: adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic","name":"refs/heads/main"}]`), wantErr: true},
+		// Update Ref names its ONE ref in ?filter=, never in the body.
 		{
-			name:    "a ref name spelled with backslashes cannot be checked against the cache",
-			req:     protect(adoReq(http.MethodPost, refs, `[{"name":"refs\\heads\\main"}]`), "refs/heads/main"),
-			wantErr: true,
+			name:     "Update Ref reads its ref from the filter, not the body",
+			req:      withQuery(adoReq(http.MethodPatch, refs, `{"refUpdates":[{"name":"refs/heads/wardyn/RUN/x"}],"isLocked":true}`), "filter=heads/main&api-version=7.1"),
+			want:     CapCodeWrite,
+			wantRefs: []string{"refs/heads/main"},
 		},
 		{
-			name:    "and its push twin",
-			req:     protect(adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"refs\\heads\\main"}]}`), "refs/heads/main"),
-			wantErr: true,
+			name:     "a filter key in any case",
+			req:      withQuery(adoReq(http.MethodPatch, refs, `{"isLocked":true}`), "FILTER=heads/wardyn/RUN/x"),
+			want:     CapCodeWrite,
+			wantRefs: []string{"refs/heads/wardyn/RUN/x"},
 		},
 		{
-			name:    "one backslashed ref among plain ones still refuses the whole update",
-			req:     protect(adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic"},{"name":"refs/heads\\main"}]`), "refs/heads/main"),
-			wantErr: true,
+			name:     "a PUT on refs is held to the same rule",
+			req:      withQuery(adoReq(http.MethodPut, refs, `{"isLocked":true}`), "filter=heads/wardyn/RUN/x"),
+			want:     CapCodeWrite,
+			wantRefs: []string{"refs/heads/wardyn/RUN/x"},
 		},
-		{name: "a ref update naming no branch cannot be gated", req: adoReq(http.MethodPost, refs, `[]`), wantErr: true},
-		{name: "a ref update with no body cannot be gated", req: adoReq(http.MethodPost, refs, ""), wantErr: true},
 		{
-			name:    "a ref update with a repeated key is refused",
-			req:     adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic","name":"refs/heads/main"}]`),
-			wantErr: true,
-		},
-		// Update Ref (PATCH refs?filter=heads/main) names its ref in the query,
-		// which Request.Path never carries: a body naming an unprotected ref must
-		// not make a branch lock a code write.
-		{
-			name: "a PATCH on refs is policy_bypass whatever ref its body names",
-			req:  adoReq(http.MethodPatch, refs, `{"refUpdates":[{"name":"refs/heads/feature/x"}],"isLocked":true}`),
-			want: CapPolicyBypass,
-		},
-		{name: "a PATCH on refs with the documented lock body", req: adoReq(http.MethodPatch, refs, `{"isLocked":true}`), want: CapPolicyBypass},
-		{name: "a PATCH on refs with no body", req: adoReq(http.MethodPatch, refs, ""), want: CapPolicyBypass},
-		{name: "a PUT on refs is held to the same rule", req: adoReq(http.MethodPut, refs, `{"isLocked":true}`), want: CapPolicyBypass},
-		{
-			name: "a POST raised to PATCH by an override is policy_bypass too",
+			name: "a POST raised to PATCH reads the filter too",
 			req: func() Request {
-				r := adoReq(http.MethodPost, refs, refsBody)
+				r := withQuery(adoReq(http.MethodPost, refs, refsBody), "filter=heads/main")
 				r.Header = hdr("X-HTTP-Method-Override", "PATCH")
 				return r
 			}(),
-			want: CapPolicyBypass,
+			want:     CapCodeWrite,
+			wantRefs: []string{"refs/heads/main"},
 		},
+		{name: "Update Ref with no filter", req: adoReq(http.MethodPatch, refs, `{"isLocked":true}`), wantErr: true},
+		{name: "Update Ref with an empty filter", req: withQuery(adoReq(http.MethodPatch, refs, ""), "filter="), wantErr: true},
+		{name: "Update Ref with two filters", req: withQuery(adoReq(http.MethodPatch, refs, ""), "filter=heads/wardyn/RUN/x&Filter=heads/main"), wantErr: true},
+		{name: "Update Ref with a query that does not parse", req: withQuery(adoReq(http.MethodPatch, refs, ""), "filter=heads/wardyn/RUN/x;filter=heads/main"), wantErr: true},
+		{name: "Update Ref with a traversal", req: withQuery(adoReq(http.MethodPatch, refs, ""), "filter=heads/wardyn/RUN/../../main"), wantErr: true},
+		// Annotated Tags – Create names the tag it creates.
+		{name: "an annotated tag", req: adoReq(http.MethodPost, repo+"annotatedtags", `{"name":"v1","taggedObject":{"objectId":"1"},"message":"m"}`), want: CapCodeWrite, wantRefs: []string{"refs/tags/v1"}},
+		{name: "an annotated tag with no name", req: adoReq(http.MethodPost, repo+"annotatedtags", `{"message":"m"}`), wantErr: true},
+		// Cherry Picks / Reverts – Create create the branch generatedRefName names (D1).
+		{
+			name:     "a cherry-pick creates its generated branch",
+			req:      adoReq(http.MethodPost, repo+"cherrypicks", `{"generatedRefName":"refs/heads/pick","ontoRefName":"refs/heads/main","source":{"commitList":[{"commitId":"1"}]}}`),
+			want:     CapCodeWrite,
+			wantRefs: []string{"refs/heads/pick"},
+		},
+		{
+			name:     "a revert creates its generated branch",
+			req:      adoReq(http.MethodPost, repo+"reverts", `{"generatedRefName":"refs/heads/wardyn/RUN/undo","ontoRefName":"refs/heads/main"}`),
+			want:     CapCodeWrite,
+			wantRefs: []string{"refs/heads/wardyn/RUN/undo"},
+		},
+		{name: "a revert naming no generated branch", req: adoReq(http.MethodPost, repo+"reverts", `{"ontoRefName":"refs/heads/main"}`), wantErr: true},
+		{name: "a cherry-pick with a repeated key", req: adoReq(http.MethodPost, repo+"cherrypicks", `{"generatedRefName":"refs/heads/wardyn/RUN/x","GeneratedRefName":"refs/heads/main"}`), wantErr: true},
+		// A fork sync may name its refs or none (every ref): unclassified until parsed.
+		{name: "a fork sync", req: adoReq(http.MethodPost, repo+"forksyncrequests", `{}`), want: CapUnclassifiedWrite},
 	})
+}
+
+// A ref move whose ref cannot be read answers ErrNoRef, so the gate can say so.
+func TestClassifyUnreadableRefIsErrNoRef(t *testing.T) {
+	const repo = "/acme/proj/_apis/git/repositories/r1/"
+	for _, req := range []Request{
+		adoReq(http.MethodPatch, repo+"refs", `{"isLocked":true}`),
+		adoReq(http.MethodPost, repo+"refs", `[]`),
+		adoReq(http.MethodPost, repo+"annotatedtags", `{"message":"m"}`),
+		adoReq(http.MethodPost, repo+"cherrypicks", `{"ontoRefName":"refs/heads/main"}`),
+	} {
+		if _, err := Classify(req); !errors.Is(err, ErrNoRef) {
+			t.Errorf("%s %s: err = %v, want ErrNoRef", req.Method, req.Path, err)
+		}
+	}
 }
 
 // HAZARD 6 — organisation pinning. A row admits ONE organisation, and a
@@ -487,9 +492,8 @@ func TestClassifyWriteAreas(t *testing.T) {
 		{name: "creating a repository", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories", `{}`), want: CapRepoAdmin},
 		{name: "deleting a repository", req: adoReq(http.MethodDelete, "/acme/proj/_apis/git/repositories/r1", ""), want: CapRepoAdmin},
 		{name: "writing a file", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/items", `{}`), want: CapCodeWrite},
-		{name: "reverting a commit", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/reverts", `{}`), want: CapCodeWrite},
-		{name: "an annotated tag is a ref move", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/annotatedtags", `{}`), want: CapPolicyBypass},
-		{name: "a fork sync is a ref move", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/forksyncrequests", `{}`), want: CapPolicyBypass},
+		{name: "reverting a commit onto a new branch", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/reverts", `{"generatedRefName":"refs/heads/undo"}`), want: CapCodeWrite, wantRefs: []string{"refs/heads/undo"}},
+		{name: "a fork sync is unclassified", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/forksyncrequests", `{}`), want: CapUnclassifiedWrite},
 		{name: "an import replaces the repository", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/importrequests", `{}`), want: CapRepoAdmin},
 		{name: "an access control list", req: adoReq(http.MethodPost, "/acme/_apis/accesscontrollists/ns1", `{}`), want: CapSecurityAdmin},
 		{name: "a directory identity", req: onHost("vssps.dev.azure.com", adoReq(http.MethodPost, "/acme/_apis/graph/users", `{}`)), want: CapSecurityAdmin},

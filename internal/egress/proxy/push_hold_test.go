@@ -190,6 +190,7 @@ func TestPushHoldForwardsOnApprove(t *testing.T) {
 		Paths:       []string{".github/workflows/ci.yml"},
 		PathsTotal:  1,
 		Commits:     []string{newCommit(t, body)},
+		Updates:     []types.PushRefUpdate{{Ref: ref, New: newCommit(t, body)}},
 		PathsDigest: got.PathsDigest,
 	}
 	if gj, wj := mustJSON(t, got), mustJSON(t, want); gj != wj {

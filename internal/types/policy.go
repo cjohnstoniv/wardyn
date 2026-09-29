@@ -183,8 +183,8 @@ type RunPolicySpec struct {
 	// preserves today's behaviour.
 	ToolRules []ToolRule `json:"tool_rules,omitempty"`
 	// GitPushAnyBranch turns OFF branch-namespace confinement for THIS run's brokered pushes (GitHub
-	// App and opted-in git_pat lanes). By default the broker forwards a push only under
-	// refs/heads/wardyn/<run-id>/, so an agent can't rewrite main — right for an autonomous run,
+	// App, opted-in git_pat and Azure DevOps Entra lanes). By default the broker forwards a push only
+	// under refs/heads/wardyn/<run-id>/, so an agent can't rewrite main — right for an autonomous run,
 	// wrong for a human-driven sandbox using an external tool with its own branch names. true =
 	// forward to any branch the granted token may write, audited per push; the grant's own GitHub
 	// ruleset still bounds what the token can touch. Operator-authored, never agent-settable.

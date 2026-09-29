@@ -33,3 +33,27 @@ describe("ADO_CAP_COPY names — the same names Go's launch refusal uses", () =>
     expect(Object.keys(ADO_CAP_COPY).sort()).toEqual(ADO_CAPABILITIES.map((c) => c.cap).sort());
   });
 });
+
+// Owner ruling 2026-09-28: policy_bypass is ONLY a pull request completed with
+// bypassPolicy, and the run's own-branch rule is Wardyn's, never a branch
+// policy Wardyn read. The copy must not say otherwise, in the console or in the
+// Go labels a refusal quotes.
+describe("ADO capability copy — no branch policy Wardyn never read", () => {
+  it("pins the owner-approved names and consequence lines", () => {
+    expect(ADO_CAP_COPY.policy_bypass).toEqual({
+      name: "Bypass branch policies",
+      consequence: "Complete a pull request without its required reviewers or checks.",
+    });
+    expect(ADO_CAP_COPY.code_write.name).toBe("Push to the run's own branch");
+    expect(ADO_CAP_COPY.code_write.consequence).toContain("outside this run's own branch");
+  });
+
+  it("never says a branch is protected, or that no policy protects it", () => {
+    const labels = /var labels = map\[Capability\]string\{([\s\S]*?)\n\}/.exec(
+      readFileSync(join(repoRoot(), "internal/adoscope/capability.go"), "utf8"),
+    );
+    expect(labels).not.toBeNull();
+    const all = [...Object.values(ADO_CAP_COPY).map((c) => c.consequence), labels![1]].join("\n");
+    expect(all).not.toMatch(/no policy protects|protected branch|policy-protected|past a branch policy/i);
+  });
+});

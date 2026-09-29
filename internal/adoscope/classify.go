@@ -13,8 +13,8 @@ import (
 
 // Request is ONE candidate Azure DevOps request, as much of it as a classifier
 // can be given without buffering the whole body. A struct rather than a
-// parameter list because Org and RefProtected are properties of the row and
-// run, not of the request, and neither can be guessed from the bytes.
+// parameter list because Org is a property of the row, not of the request,
+// and cannot be guessed from the bytes.
 type Request struct {
 	// Method is the HTTP method as it arrived on the request line. An
 	// override header may RAISE it — see Classify.
@@ -23,6 +23,9 @@ type Request struct {
 	Host string
 	// Path is the request's path, still percent-encoded and WITHOUT the query string.
 	Path string
+	// RawQuery is the request's query string as it arrived. Only Update Ref
+	// reads it: that route names its ref in ?filter=, not in the body.
+	RawQuery string
 	// Header may be nil. Keys are compared case-insensitively, so
 	// wire-spelling vs. canonicalised map keys read the same way.
 	Header http.Header
@@ -33,11 +36,6 @@ type Request struct {
 	// Org is the organisation the provider row pinned. REQUIRED: an unpinned
 	// request is refused.
 	Org string
-	// RefProtected answers whether one ref is covered by a branch policy,
-	// given the full ref name as the request body spelled it. Optional — when
-	// nil, a ref move classifies as CapCodeWrite and the caller gets the ref
-	// names in Verdict.Refs to re-decide against its own cache.
-	RefProtected func(ref string) bool
 	// BodyWithheld marks a request whose body the caller has not read. A
 	// route classified by the body fails with ErrNeedsBody instead, and the
 	// caller peeks and asks again.
@@ -48,12 +46,17 @@ type Request struct {
 // classifies by the body: peek the body, clear BodyWithheld and ask again.
 var ErrNeedsBody = errors.New("adoscope: this route is classified on its body")
 
+// ErrNoRef is Classify's answer for a ref move whose ref it cannot read — no
+// name, or more than one candidate spelling — so the caller's ref rule has
+// nothing to apply to.
+var ErrNoRef = errors.New("adoscope: the request names no ref this catalogue can check")
+
 // Verdict is one classification.
 type Verdict struct {
 	// Capability is the ONE access this request needs.
 	Capability Capability
-	// Refs are the ref names the request's body named, if any. Always
-	// returned for a ref move, whether or not RefProtected was supplied.
+	// Refs are the full ref names a ref move creates or moves — always set
+	// for one, so the caller can hold them to the run's branch namespace.
 	Refs []string
 }
 
@@ -72,7 +75,7 @@ var writeMethods = []string{http.MethodPost, http.MethodPut, http.MethodPatch, h
 //
 // GIT-OVER-HTTP IS OUT OF SCOPE and refused by name: the ref names a push
 // carries live in a pack protocol this catalogue does not parse, so no
-// answer here could tell a clone from a push onto a protected branch.
+// answer here could tell a clone from a push outside the run's own branch.
 func Classify(req Request) (Verdict, error) {
 	method, err := effectiveMethod(req.Method, req.Header)
 	if err != nil {
@@ -457,19 +460,17 @@ func witWrite(r route, req Request) (Verdict, error) {
 }
 
 // gitCodeWriteResources are the git sub-resources that change code without
-// touching a branch policy or the repository object itself.
-var gitCodeWriteResources = []string{
-	"items", "commits", "merges", "cherrypicks", "reverts", "suggestions",
-}
+// moving a ref, touching a branch policy or the repository object itself.
+var gitCodeWriteResources = []string{"items", "commits", "merges", "suggestions"}
 
-// gitRefMoveResources create or move a ref whose name this catalogue does not
-// read out of the body; held to policy_bypass like every other REST ref move.
-var gitRefMoveResources = []string{"annotatedtags", "forksyncrequests"}
+// gitGeneratedRefResources create the branch their body names in
+// generatedRefName (Cherry Picks and Reverts – Create): a ref move.
+var gitGeneratedRefResources = []string{"cherrypicks", "reverts"}
 
 // gitWrite is the git area, carrying four capabilities behind one scope: the
 // repository object (CapRepoAdmin), its policies (CapPolicyAdmin), its pull
-// requests (CapPR), and its refs (CapCodeWrite or CapPolicyBypass, decided by
-// the body). POSITIONAL split, since one segment is a caller-chosen repository name.
+// requests (CapPR, or CapPolicyBypass when the body asks to bypass policy), and
+// its refs (CapCodeWrite, with the refs the request names). POSITIONAL split, since one segment is a caller-chosen repository name.
 func gitWrite(method string, r route, req Request) (Verdict, error) {
 	switch r.res {
 	case "repositories":
@@ -491,15 +492,20 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 		// An import request replaces the repository's content wholesale.
 		return Verdict{Capability: CapRepoAdmin}, nil
 	case "refs":
-		// PATCH on refs is Update Ref, naming its ref in the ?filter= query
-		// this catalogue never sees, so the run-ref rule cannot apply here.
-		// Only POST (Update Refs, refs named in the body) is read ref by ref.
+		// POST is Update Refs, naming its refs in the body; anything else is
+		// Update Ref, naming its one ref in ?filter=.
 		if method != http.MethodPost {
-			return Verdict{Capability: CapPolicyBypass}, nil
+			return filterRefWrite(req)
 		}
 		return refWrite(req)
 	case "pushes":
 		return refWrite(req)
+	case "annotatedtags":
+		return annotatedTagWrite(req)
+	case "forksyncrequests":
+		// A fork sync may name its refs, or none (every ref): unclassified
+		// until its body is parsed.
+		return Verdict{Capability: CapUnclassifiedWrite}, nil
 	case "pullrequests":
 		return pullRequestWrite(method, req)
 	case "policyconfigurations":
@@ -507,8 +513,8 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 	case "permissions":
 		return Verdict{Capability: CapSecurityAdmin}, nil
 	default:
-		if slices.Contains(gitRefMoveResources, res) {
-			return Verdict{Capability: CapPolicyBypass}, nil
+		if slices.Contains(gitGeneratedRefResources, res) {
+			return generatedRefWrite(req)
 		}
 		if slices.Contains(gitCodeWriteResources, res) {
 			return Verdict{Capability: CapCodeWrite}, nil

@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -188,42 +187,8 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	}
 
 	warns = clampPushRules(&out, ceiling, warns)
-	warns = clampADOCapabilities(&out, ceiling, warns)
 
 	return out, warns
-}
-
-// clampADOCapabilities bounds azure_devops_capabilities. The field can WIDEN a run past its Azure
-// DevOps row's default_profile (up to the row's ceiling, with no approval), so a proposal may only
-// choose within what the operator's policy itself names: a silent ceiling drops the proposal's
-// choice, and a set one is intersected with the ceiling's list. The ceiling's list is a BOUND, never
-// a grant: an unset proposal stays unset and an empty intersection goes unset, and either way the
-// run keeps the row's default_profile — never wider than the member's own choice or that default.
-func clampADOCapabilities(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	if len(ceiling.AzureDevOpsCapabilities) == 0 {
-		if len(out.AzureDevOpsCapabilities) > 0 {
-			warns = append(warns, "azure_devops_capabilities dropped: operator policy names none, so the run keeps the provider's default")
-			out.AzureDevOpsCapabilities = nil
-		}
-		return warns
-	}
-	var kept []adoscope.Capability
-	var dropped []string
-	for _, c := range out.AzureDevOpsCapabilities {
-		if slices.Contains(ceiling.AzureDevOpsCapabilities, c) {
-			kept = append(kept, c)
-		} else {
-			dropped = append(dropped, string(c))
-		}
-	}
-	if len(dropped) > 0 {
-		warns = append(warns, fmt.Sprintf("dropped %d Azure DevOps capability(ies) not in operator policy: %s", len(dropped), strings.Join(dropped, ",")))
-	}
-	if len(kept) == 0 && len(out.AzureDevOpsCapabilities) > 0 {
-		warns = append(warns, "azure_devops_capabilities dropped: nothing chosen is in the operator policy's list, so the run keeps the provider's default")
-	}
-	out.AzureDevOpsCapabilities = kept
-	return warns
 }
 
 // clampPushRules only narrows push_rules: a silent ceiling passes the proposal through unclamped;

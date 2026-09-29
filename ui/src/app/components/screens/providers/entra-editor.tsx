@@ -10,7 +10,7 @@
 //
 // Grouping and the High-risk flag come from lib/ado-capabilities.ts; every
 // string from workspace-providers-copy.ts.
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { ADOEntraConfig, GitProvider } from "../../../lib/api/providers";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../../lib/ado-capabilities";
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../lib/workspace-providers-copy";
@@ -79,6 +79,9 @@ function CapRow({
   onChange: (on: boolean) => void;
 }) {
   const info = ADO_CAPABILITIES.find((c) => c.cap === cap);
+  // The testid stays the bare `id`; the DOM id also carries this editor's own
+  // prefix, so two Azure DevOps rows on one screen never share a label target.
+  const domId = `${useId()}${id}`;
   return (
     <div
       className={clsx("grid grid-cols-[20px_1fr] gap-2 py-1.5", locked && "cursor-not-allowed", bad && "rounded-md bg-danger-subtle")}
@@ -88,11 +91,11 @@ function CapRow({
       {locked ? (
         <span className="relative mt-0.5 inline-flex size-4 items-center justify-center rounded border-[1.5px] border-danger bg-danger-subtle text-[11px] font-bold leading-none text-danger">
           <span aria-hidden="true">✕</span>
-          <input type="checkbox" id={id} className="sr-only" aria-label={nameOf(cap)} checked={false} disabled readOnly />
+          <input type="checkbox" id={domId} className="sr-only" aria-label={nameOf(cap)} checked={false} disabled readOnly />
         </span>
       ) : (
         <Checkbox
-          id={id}
+          id={domId}
           className="mt-0.5"
           aria-label={nameOf(cap)}
           checked={checked}
@@ -100,7 +103,7 @@ function CapRow({
           onCheckedChange={(v) => onChange(v === true)}
         />
       )}
-      <label htmlFor={id} className="min-w-0 leading-snug">
+      <label htmlFor={domId} className="min-w-0 leading-snug">
         <span
           className={clsx(
             "text-body font-medium",
@@ -161,6 +164,7 @@ export function EntraEditor({
   operator: boolean;
   onUpdate: (next: GitProvider) => void;
 }) {
+  const uid = useId();
   const cfg: ADOEntraConfig = row.entra ?? { tenant_id: "", client_id: "" };
   const set = (patch: Partial<ADOEntraConfig>) => onUpdate({ ...row, entra: { ...cfg, ...patch } });
   const ceiling = cfg.capability_ceiling ?? [];
@@ -174,18 +178,18 @@ export function EntraEditor({
         <h4 className="text-sm font-medium text-foreground">{E.SECTION_TITLE}</h4>
         <p className="mt-0.5 text-body text-muted-foreground">{E.SECTION_LEAD}</p>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <Field label={E.FIELD_TENANT} hint={operator ? E.FIELD_TENANT_HINT : undefined} htmlFor="entra-tenant">
+          <Field label={E.FIELD_TENANT} hint={operator ? E.FIELD_TENANT_HINT : undefined} htmlFor={`${uid}entra-tenant`}>
             <Input
-              id="entra-tenant"
+              id={`${uid}entra-tenant`}
               className="font-mono"
               disabled={!operator}
               value={cfg.tenant_id}
               onChange={(e) => set({ tenant_id: e.target.value.trim() })}
             />
           </Field>
-          <Field label={E.FIELD_CLIENT} hint={operator ? E.FIELD_CLIENT_HINT : undefined} htmlFor="entra-client">
+          <Field label={E.FIELD_CLIENT} hint={operator ? E.FIELD_CLIENT_HINT : undefined} htmlFor={`${uid}entra-client`}>
             <Input
-              id="entra-client"
+              id={`${uid}entra-client`}
               className="font-mono"
               disabled={!operator}
               value={cfg.client_id}

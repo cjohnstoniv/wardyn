@@ -18,7 +18,7 @@ import { ADO } from "../src/app/lib/ado-entra-copy";
 
 const APPROVAL_ID = "e2e-ado-escalation-1";
 
-function escalationRow(runId: string) {
+function escalationRow(runId: string, scope: Record<string, string> = {}) {
   return {
     id: APPROVAL_ID,
     run_id: runId,
@@ -33,7 +33,8 @@ function escalationRow(runId: string) {
       repo: "payments-api",
       ref_class: "",
       tool: "Azure DevOps",
-      cmd: "Push commits and move branches that no policy protects (code_write) in acme/payments-api",
+      cmd: "Push commits and create or move branches, inside this run's own branch unless its policy allows any branch (code_write) in acme/payments-api",
+      ...scope,
     },
     state: "PENDING",
     requested_at: new Date().toISOString(),
@@ -99,5 +100,41 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
     releaseApprove();
     await expect(card).toHaveCount(0);
     expect(approveBody).toMatchObject({ decision_scope: "once" });
+  });
+
+  // Owner ruling 2026-09-28: a ref class names a ref outside this run's own
+  // branch, never a branch policy; a policy_bypass ask is a pull request
+  // completed past its policies, with no ref class.
+  test("names a ref outside the run's own branch, and a pull request completed past its policies", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    const rows = [
+      { ...escalationRow(runId, { ref_class: "outside_run_namespace" }), id: "e2e-ado-outside-1" },
+      {
+        ...escalationRow(runId, {
+          capability: "policy_bypass",
+          cmd: "Complete a pull request without its required reviewers or checks (policy_bypass) in acme / payments-api",
+        }),
+        id: "e2e-ado-bypass-1",
+      },
+    ];
+    await page.route("**/api/v1/approvals*", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ json: rows });
+        return;
+      }
+      await route.continue();
+    });
+
+    await gotoConsole(page);
+    await navTo(page, "Approvals");
+
+    const cards = page.getByTestId("ado-capability-card");
+    await expect(cards).toHaveCount(2);
+    const outside = cards.filter({ has: page.getByRole("heading", { name: "Push", exact: true }) });
+    await expect(outside.getByText("Outside this run's own branch", { exact: true })).toBeVisible();
+    const bypass = cards.filter({ has: page.getByRole("heading", { name: "Bypass branch policies", exact: true }) });
+    await expect(bypass.getByText("Complete this pull request past its policies", { exact: true })).toBeVisible();
+    await expect(bypass.getByText(ADO.REQ_FIELD_REF_CLASS, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/protected|past a branch policy/i)).toHaveCount(0);
   });
 });

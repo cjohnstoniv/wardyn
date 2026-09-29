@@ -61,9 +61,9 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
-| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
+| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane; since 0.8.0 the per-person Azure DevOps (Entra) lane too — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
-| `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, in place of the provider row's `default_profile`, so a saved policy works as a saved access profile. Each entry must be a grantable capability (`read`, `code_write`, `pr`, `policy_admin`, …); anything else is a `400` with reason `ado_capability_unknown`. It chooses only **within** the row's `capability_ceiling`: a run naming a capability outside it is refused at launch, never silently granted, and the live ceiling is re-checked on every request. Under a governance ceiling a member's choice is intersected with the ceiling's own list, and dropped when that list is empty or nothing chosen is in it; the ceiling's list is a bound, never a grant, so an unset choice stays unset (the row's `default_profile` applies), including for a member who launches with no policy at all. Inert for a run not on that lane. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md). |
+| `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, in place of the provider row's `default_profile`, so a saved policy works as a saved access profile. Each entry must be a grantable capability (`read`, `code_write`, `pr`, `policy_admin`, …); anything else is a `400` with reason `ado_capability_unknown`. It chooses only **within** the row's `capability_ceiling`: a run naming a capability outside it is refused at launch, never silently granted, and the live ceiling is re-checked on every request. For a member (including an admin in the user view) the list stands only where it is in the row's `default_profile` or in their governance profile's own `azure_devops_capabilities` (the default policy's when none is assigned), whatever the policy source: inline, a saved policy assigned or not, or a preset. The rest is not standing: `deny_with_review` asks for it mid-run and `always_deny` refuses it. A narrower choice is always honoured, and a choice that leaves nothing permitted refuses the launch with reason `ado_capabilities_none_permitted` rather than falling back to the default. An unset choice stays unset (the row's `default_profile` applies), including for a member who launches with no policy at all; the governance list is never inherited unasked. An admin's own run keeps its list, bounded by the ceiling alone. Inert for a run not on that lane. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md). |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -426,7 +426,12 @@ since 0.7.2: `git_push_any_branch` opts out the GitHub-App lane
 (`internal/egress/proxy/git_broker.go`) AND the never-resident `git_pat` lane
 (`internal/egress/proxy/pat_broker.go`), which the never-resident-`git_pat`
 row's own brokered-cleartext parsing (see `WARDYN_GIT_PAT_BROKER`,
-[ENV.md](ENV.md)) makes reachable the same way.
+[ENV.md](ENV.md)) makes reachable the same way. Since 0.8.0 it also opts out
+the per-person Azure DevOps (Entra) lane, where a ref outside the run's
+namespace then needs `code_write` instead of being refused outright
+(`internal/egress/proxy/ado_gate.go`'s `adoRunBranchRule`) and Azure
+DevOps' own branch policies decide — see
+[AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
 
 Setting it on a run's policy also grades **high** on the Review rail
 (`composer.Grade`), which is where a human sees what a run may do before
@@ -970,7 +975,7 @@ match always wins: a path both lists match is refused and nothing is asked.
   request stays in the console; pushing the same commits again waits on that
   same request rather than raising another.
 - **What an approval covers.** The approval's `requested_scope` is
-  `{"repo","branch","acts_as","acts_as_kind","acts_as_label","paths","paths_total","commits","paths_digest"}`:
+  `{"repo","branch","acts_as","acts_as_kind","acts_as_label","paths","paths_total","commits","updates","paths_digest"}`:
   the repository as the run's grant names it (`github.com/<owner>/<repo>`, or
   `<host>/<path>` on the `git_pat` lane —
   `dev.azure.com/<org>/<project>/_git/<repo>` for Azure DevOps); the ref the
@@ -982,12 +987,16 @@ match always wins: a path both lists match is refused and nothing is asked.
   whose secret is in the owner's own namespace, `operator` for the operator's
   shared secret); the first ten matched paths, sorted, and
   how many matched in all; the object ids the push sets its refs to, sorted;
-  and a SHA-256 over **every** matched path, sorted and NUL-terminated. The
-  scope is the dedup key — two identical pushes are one request — and commits
-  are content addresses, so a retry git repacks carries the same commits in
-  different bytes and is let through on the approval already given. The key is
-  the whole scope: the same commits pushed to another repository or branch are
-  a new request and are held again. A denial sticks for the rest of the run:
+  each ref paired with the object id it is set to (`updates`, sorted by ref,
+  all zeros for a delete); and a SHA-256 over **every** matched path, sorted
+  and NUL-terminated. The scope is the dedup key — two identical pushes are
+  one request — and commits are content addresses, so a retry git repacks
+  carries the same commits in different bytes and is let through on the
+  approval already given. The key is the whole scope: the same commits pushed
+  to another repository or branch, or to the same branches in a different
+  assignment (commits swapped between refs, a ref deleted instead of set), are
+  a new request and are held again. A request raised before `updates` existed
+  matches no push this release makes, so such a push asks afresh. A denial sticks for the rest of the run:
   the same push is refused without asking again. A request that expires or is cancelled undecided is forgotten, and the
   next push of those commits asks afresh.
 - **Bounded.** At most 16 pushes are held at once and 256 different pushes are
@@ -996,8 +1005,8 @@ match always wins: a path both lists match is refused and nothing is asked.
   the `git_pat` lane (GitHub, GitLab, Azure DevOps over a PAT), whatever either
   lane's branch switch says, and the Azure DevOps **Entra** lane (`/wardyn/git/`
   for a host the run's per-person Azure DevOps grant covers), where the rules
-  run before the capability check — nobody is asked for `code_write` or
-  `policy_bypass` on a push the rules refuse. There the card's `acts_as_kind`
+  run before the capability check — nobody is asked for `code_write` on a
+  push the rules refuse. There the card's `acts_as_kind`
   is `ado_entra` and its label is the person whose sign-in the push uses. The
   lane's REST door holds the same way — see **Every door, not only git's**.
 

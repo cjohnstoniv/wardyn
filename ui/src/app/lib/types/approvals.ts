@@ -166,7 +166,8 @@ export interface AdoCapabilityScope {
   grant_id: string;
   capability: string;
   repo: string;
-  ref_class?: "protected" | "";
+  // "protected" is the legacy spelling an older row stored for the same case.
+  ref_class?: "outside_run_namespace" | "protected" | "";
   tool: string;
   cmd: string;
 }
@@ -225,6 +226,9 @@ export interface PushContentScope {
   paths: string[];
   paths_total: number;
   commits: string[];
+  // Each ref paired with what the push sets it to (all zeros for a delete) —
+  // part of the dedup key, never rendered. Absent on a row raised before it.
+  updates?: { ref: string; new: string }[];
   paths_digest: string;
   acts_as_kind: "github_app" | "git_pat" | "ado_entra";
   acts_as_label: string;
