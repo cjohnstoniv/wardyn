@@ -342,7 +342,11 @@ pass "stack up and healthy (${BASE})"
 # Healthy alone does not prove the Bedrock subnet guard checked the fake: it
 # also boots when it could not resolve the host or read the control-plane
 # subnet, WARNing the check UNVERIFIED.
-compose logs wardynd >"${EVIDENCE_DIR}/wardynd-boot.log" 2>&1
+compose logs wardynd >"${EVIDENCE_DIR}/wardynd-boot.log" 2>&1 || die "could not read wardynd's boot log"
+# A positive marker too: an empty or failed capture must not read as a pass.
+# The plain-HTTP Bedrock WARN is logged right after the guard returns nil.
+grep -qF "WARDYN_BEDROCK_BASE_URL is plain http://" "${EVIDENCE_DIR}/wardynd-boot.log" \
+  || die "wardynd's boot log does not show the Bedrock guard completing (no plain-HTTP Bedrock WARN)"
 if grep -qE "could not resolve WARDYN_BEDROCK_BASE_URL|could not determine the docker control-plane network's subnet" "${EVIDENCE_DIR}/wardynd-boot.log"; then
   die "wardynd booted without checking the fake's address against the control-plane subnet (UNVERIFIED WARN in its log)"
 fi
