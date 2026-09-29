@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
 
@@ -250,12 +251,66 @@ func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
 }
 
 // A REST push to any other ref is a protected-ref move and needs
-// policy_bypass, as on the git door.
+// policy_bypass, as on the git door — refused in terms of where the run may
+// push, not of a branch policy nobody consulted.
 func TestADOGate_NonRunRefPushNeedsPolicyBypass(t *testing.T) {
 	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
 	body := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
-	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil),
-		string(adoscope.CapPolicyBypass))
+	rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil)
+	h.mustRefuse(t, rec, "this run may push only to its own branch (wardyn/"+h.p.runID.String()+"/…)")
+	if !strings.Contains(rec.Body.String(), "git_push_any_branch: true") || strings.Contains(rec.Body.String(), adoscope.Label(adoscope.CapPolicyBypass)) {
+		t.Errorf("refusal does not name the switch, or names a branch policy: %s", rec.Body.String())
+	}
+
+	ok := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPolicyBypass)
+	if rec := ok.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil); rec.Code/100 != 2 {
+		t.Fatalf("push to main under policy_bypass: status %d body %s, want it forwarded", rec.Code, rec.Body.String())
+	}
+}
+
+// adoRunRefProtected across the switch: the run's own namespace is never
+// protected; any other ref is, unless the policy sets git_push_any_branch.
+func TestADORunRefProtected_AnyBranchSwitch(t *testing.T) {
+	for _, anyBranch := range []bool{false, true} {
+		p := &Proxy{runID: uuid.New(), policy: CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: anyBranch})}
+		if p.adoRunRefProtected(BranchNSPrefix(p.runID) + "work") {
+			t.Errorf("any-branch=%v: the run's own namespace counts as protected", anyBranch)
+		}
+		for _, ref := range []string{"refs/heads/main", "refs/tags/v1", BranchNSPrefix(uuid.New()) + "work"} {
+			if got := p.adoRunRefProtected(ref); got == anyBranch {
+				t.Errorf("any-branch=%v: adoRunRefProtected(%q) = %v", anyBranch, ref, got)
+			}
+		}
+	}
+}
+
+// With git_push_any_branch a REST push to main needs code_write only and is
+// forwarded; without code_write it is still refused, as code_write.
+func TestADOGate_AnyBranchPushNeedsCodeWrite(t *testing.T) {
+	body := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
+	const target = "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1"
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	if rec := h.do(t, http.MethodPost, target, body, nil); rec.Code/100 != 2 {
+		t.Fatalf("any-branch push to main under code_write: status %d body %s, want it forwarded", rec.Code, rec.Body.String())
+	}
+
+	ro := newADOHarness(t, adoscope.CapRead)
+	ro.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	ro.mustRefuse(t, ro.do(t, http.MethodPost, target, body, nil), "("+string(adoscope.CapCodeWrite)+")")
+}
+
+// The switch widens where a push may land, never a real policy bypass: a pull
+// request completed with bypassPolicy still needs policy_bypass, spelled as one.
+func TestADOGate_AnyBranchLeavesPRBypassPolicyBypass(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR)
+	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1?api-version=7.1",
+		`{"status":"completed","completionOptions":{"bypassPolicy":true}}`, nil)
+	h.mustRefuse(t, rec, "("+string(adoscope.CapPolicyBypass)+")")
+	if !strings.Contains(rec.Body.String(), adoscope.Label(adoscope.CapPolicyBypass)) {
+		t.Errorf("a real bypass is not refused as one: %s", rec.Body.String())
+	}
 }
 
 // Update Ref names its branch in ?filter=, which the gate never classifies: a

@@ -288,13 +288,17 @@ func TestADOGitBroker_PushWithoutCodeWriteIsRefusedInGitsTerms(t *testing.T) {
 
 // A push outside the run's branch namespace moves a protected ref — every ref
 // is protected until a grant says otherwise, as on the REST gate — and needs
-// policy_bypass.
+// policy_bypass; git is told where the run may push, not about a branch
+// policy nobody consulted.
 func TestADOGitBroker_ProtectedRefNeedsPolicyBypass(t *testing.T) {
 	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	h.commit(t, dir, "main")
 	out, err := h.git(t, "-C", dir, "push", "origin", "main")
-	mustBeGitRefusal(t, out, err, string(adoscope.CapPolicyBypass))
+	mustBeGitRefusal(t, out, err, "this run may push only to its own branch (wardyn/"+h.runID.String()+"/…)")
+	if !strings.Contains(out, "git_push_any_branch: true") || strings.Contains(out, adoscope.Label(adoscope.CapPolicyBypass)) {
+		t.Errorf("refusal does not name the switch, or names a branch policy:\n%s", out)
+	}
 	h.finish(t)
 
 	h = newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPolicyBypass)
@@ -303,6 +307,32 @@ func TestADOGitBroker_ProtectedRefNeedsPolicyBypass(t *testing.T) {
 	if out, err := h.git(t, "-C", dir, "push", "origin", "main"); err != nil {
 		t.Fatalf("push to main with policy_bypass: %v\n%s", err, out)
 	}
+	h.finish(t)
+}
+
+// With git_push_any_branch a push to main needs code_write only: it lands, and
+// the forward is marked as the App lane marks an unconfined push. Without
+// code_write it is still refused, as code_write.
+func TestADOGitBroker_AnyBranchPushNeedsCodeWrite(t *testing.T) {
+	anyBranch := func(p *Proxy, _ string) { p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true}) }
+	h := newADOGitHarnessWith(t, anyBranch, adoscope.CapRead, adoscope.CapCodeWrite)
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+	if out, err := h.push(t, dir, "main"); err != nil {
+		t.Fatalf("any-branch push to main under code_write: %v\n%s", err, out)
+	}
+	local, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	remote, err := exec.Command("git", "-C", h.bare, "rev-parse", "refs/heads/main").Output()
+	if err != nil || string(remote) != string(local) {
+		t.Fatalf("main in the repository = %q (%v), want the pushed %q", remote, err, local)
+	}
+	if log := h.finish(t); !strings.Contains(log, `"`+ruleSourceGitNSOff+`"`) {
+		t.Errorf("the any-branch push has no %s row:\n%s", ruleSourceGitNSOff, log)
+	}
+
+	h = newADOGitHarnessWith(t, anyBranch, adoscope.CapRead)
+	dir = h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+	out, err := h.push(t, dir, "main")
+	mustBeGitRefusal(t, out, err, "("+string(adoscope.CapCodeWrite)+")")
 	h.finish(t)
 }
 

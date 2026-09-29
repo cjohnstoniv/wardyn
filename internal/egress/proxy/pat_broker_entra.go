@@ -97,11 +97,22 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			need = adoscope.CapCodeWrite
 		}
 	}
-	if v := adoGitVerdict(need, push); !adoscope.Permits(grant.Capabilities, v) &&
-		!p.refuseADOGit(w, r, host, &v, push, fmt.Sprintf(
-			"Wardyn refused this git request: it needs %q (%s), and this run was not granted it.",
-			adoscope.Label(need), need)) {
-		return
+	if v := adoGitVerdict(need, push); !adoscope.Permits(grant.Capabilities, v) {
+		msg := fmt.Sprintf("Wardyn refused this git request: it needs %q (%s), and this run was not granted it.",
+			adoscope.Label(need), need)
+		if adoRunBranchMove(v) {
+			msg = p.adoRunBranchRefusal()
+		}
+		if !p.refuseADOGit(w, r, host, &v, push, msg) {
+			return
+		}
+	}
+	// A push forwarded under git_push_any_branch is marked as the App lane
+	// marks one (ruleSourceGitNSOff), so the audit shows its refs went
+	// unconfined.
+	allowSrc := ruleSourceADOGit
+	if push != nil && p.policy.GitPushAnyBranch() {
+		allowSrc = ruleSourceGitNSOff
 	}
 
 	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)
@@ -129,7 +140,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	// (push_advert.go). Without it a shallow clone's push is thin and every
 	// one of them is refused as uninspectable.
 	noThin := p.noThinAdvert(r, verb)
-	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, ruleSourceADOGit, ruleSourceADOGitDenied,
+	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, allowSrc, ruleSourceADOGitDenied,
 		func(out *http.Request) {
 			if noThin {
 				out.Header.Set("Accept-Encoding", "identity")
