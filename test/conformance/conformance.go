@@ -673,14 +673,26 @@ func createStrongestSandboxWith(t *testing.T, ctx context.Context, r runner.Runn
 const conformanceCleanupTimeout = 60 * time.Second
 
 // minimalSpec returns a SandboxSpec with a unique RunID suitable for
-// conformance testing. No secrets, no proxy config, no resource limits.
+// conformance testing. No secrets, no resource limits, and the smallest proxy
+// config the real wardyn-proxy loads (LoadableProxyConfig).
 func minimalSpec(image string) runner.SandboxSpec {
 	return runner.SandboxSpec{
 		RunID: uuid.New(),
 		Image: image,
 		// ConfinementClass deliberately left empty; callers set it.
-		Labels: map[string]string{"wardyn.conformance": "true"},
+		Labels:      map[string]string{"wardyn.conformance": "true"},
+		ProxyConfig: LoadableProxyConfig(),
 	}
+}
+
+// LoadableProxyConfig is the smallest ProxyConfig proxy.LoadConfigBytes
+// accepts. A zero value is refused ("control_plane_url is required"), and the
+// k8s driver waits for its proxy pod to be Ready, so a sandbox without it never
+// starts there. The URL only has to pass startup, not be reachable: Injection
+// is empty, so nothing calls it. Loopback, because the proxy refuses plaintext
+// to any other host (hoptls.CheckURL).
+func LoadableProxyConfig() runner.ProxyConfig {
+	return runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:9", RunToken: "conformance"}
 }
 
 // loopbackRelayPort is the in-sandbox port the loopback-relay case uses. It is

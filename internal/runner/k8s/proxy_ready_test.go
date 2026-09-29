@@ -193,3 +193,27 @@ func TestWaitPodIP_SchedulingAndStartBounds(t *testing.T) {
 		})
 	}
 }
+
+// TestCreateSandbox_ProxyFailureNamesItsCause: wardyn-proxy logs why it refused
+// to stderr, so both proxy-pod containers must fall back to their log tail for
+// the termination message proxyStartFailure reports — else a refused config
+// fails every run with "(exit code 1, Error): " and nothing after it.
+func TestCreateSandbox_ProxyFailureNamesItsCause(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.9")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
+		if c.TerminationMessagePolicy != corev1.TerminationMessageFallbackToLogsOnError {
+			t.Errorf("proxy pod container %s: TerminationMessagePolicy = %q, want %q", c.Name, c.TerminationMessagePolicy, corev1.TerminationMessageFallbackToLogsOnError)
+		}
+	}
+}
