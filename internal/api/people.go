@@ -395,7 +395,7 @@ func (k peopleKeying) PrincipalFor(ctx context.Context, subj oidc.Subject) (stri
 }
 
 // subKnown reports whether sub already names someone here: a person record,
-// or an API token, SSH key, run or workspace they own. Read only when a sign-in
+// or an API token, SSH key, run, workspace or stored secret they own. Read only when a sign-in
 // matches an object-id person, so an ordinary sign-in pays nothing.
 func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
 	if _, err := k.ps.GetPerson(ctx, sub); !errors.Is(err, store.ErrNotFound) {
@@ -415,7 +415,16 @@ func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
 		}
 	}
 	wss, err := st.ListWorkspaces(ctx)
-	return slices.ContainsFunc(wss, func(w types.Workspace) bool { return w.OwnedBy == sub }), err
+	if err != nil || slices.ContainsFunc(wss, func(w types.Workspace) bool { return w.OwnedBy == sub }) {
+		return err == nil, err
+	}
+	if k.s.cfg.Secrets == nil {
+		return false, nil
+	}
+	// Unfiltered: the reserved names (a sign-in's own captured credentials)
+	// are exactly what a re-key would orphan.
+	names, err := k.s.cfg.Secrets.For(sub).List(ctx)
+	return len(names) > 0, err
 }
 
 // attachIgnored writes the denied person.attach for a sign-in that matched an

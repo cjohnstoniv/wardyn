@@ -16,6 +16,7 @@ import (
 	"time"
 
 	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -311,6 +312,36 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 			w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/tokens", first, `{"name":"mine"}`)
 			tok := decodeToken(t, w)
 			return func(second *http.Cookie) bool { return e.seesToken(t, second, tok.ID.String()) }
+		}},
+		{"a stored secret only", func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(*http.Cookie) bool {
+			if w := doSSO(t, e.h.srv, http.MethodPut, "/api/v1/secrets/my-key", first, `{"value":"pairwise-a-own-value"}`); w.Code/100 != 2 {
+				t.Fatalf("put own secret: %d %s", w.Code, w.Body.String())
+			}
+			return func(second *http.Cookie) bool {
+				w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/secrets", second, "")
+				return w.Code == http.StatusOK && strings.Contains(w.Body.String(), `"my-key"`)
+			}
+		}},
+		{"an SSH key only", func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(*http.Cookie) bool {
+			if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/ssh-keys", first, featureTestKey); w.Code != http.StatusCreated {
+				t.Fatalf("add own ssh key: %d %s", w.Code, w.Body.String())
+			}
+			return func(second *http.Cookie) bool {
+				return strings.Contains(doSSO(t, e.h.srv, http.MethodGet, "/api/v1/me/ssh-keys", second, "").Body.String(), `"laptop"`)
+			}
+		}},
+		{"a workspace only", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+			ws, err := e.st.CreateWorkspace(context.Background(), types.Workspace{
+				ID: uuid.New(), Name: "ws-a", OwnedBy: "pairwise-a", Status: types.WorkspaceScanned,
+				Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func(second *http.Cookie) bool {
+				return doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workspaces/"+ws.ID.String(), second, "").Code == http.StatusOK
+			}
 		}},
 		{"a run", func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(*http.Cookie) bool {
 			var run createRunResponse

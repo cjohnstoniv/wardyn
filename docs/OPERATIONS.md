@@ -2260,12 +2260,11 @@ with `409`, because the email already names their subject. Without an email
 Wardyn cannot tell at create time (it does not record a sign-in's `oid`), so
 the check happens at sign-in instead. A sign-in that matches the record but
 whose `sub` already names someone here keeps that `sub`: a person record, or an
-API token, SSH key, run or workspace they own. It does not attach, and it
+API token, SSH key, run, workspace or stored secret they own (a secret includes
+the credential a sign-in captures for them). It does not attach, and it
 writes a `person.attach` row with outcome `denied` and `reason:"sub_known"`
 naming both. The record then stays unused. Confirm such a person by `principal`
-(the `sub` on one of their tokens or runs) instead. Someone who signed in but
-owns none of those (only stored secrets or credentials, say) is not detected,
-and would become the object-id person. Setting up an Entra person by email alone
+(the `sub` on one of their tokens or runs) instead. Setting up an Entra person by email alone
 is not supported. On an Entra issuer the plain form refuses a `principal` in
 the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in
 can become it. On any other issuer the object-id form is refused `422`, and
