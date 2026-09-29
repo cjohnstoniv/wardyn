@@ -1224,6 +1224,26 @@ jobs:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
         run: ./scripts/nightly-migration-merge-check.sh
 
+  # Managed-settings drift probe (#1279, from #705). internal/agentpolicy writes
+  # keys into /etc/claude-code/managed-settings.json that only the Claude Code CLI
+  # itself honours; a CLI that stops knowing one ignores it silently. This installs
+  # the EXACT version deploy/images/claude-code/Dockerfile pins (the script reads it
+  # from there and refuses a channel) and fails naming any key absent from that
+  # CLI. It runs no model and needs no credential. NOTIFY_EXEMPT until it has gone
+  # green once: see scripts/test-repo-guards.sh.
+  managed-settings-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false # the probe runs a third-party CLI; keep the token out of .git/config
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24' # the agent image's base is node:24
+      - name: Probe the pinned Claude Code CLI for managed-settings drift
+        run: ./scripts/check-managed-settings-drift.sh
+
   notify-new-lanes:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg]
     if: failure()
