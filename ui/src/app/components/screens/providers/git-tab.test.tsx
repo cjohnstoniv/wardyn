@@ -11,7 +11,8 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
-import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { ADO_ENTRA_EDITOR as E, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { PERM } from "../../../lib/permissions-copy";
 import { GitTab } from "./git-tab";
 
 const setSecretMock = vi.fn();
@@ -692,5 +693,67 @@ describe("GitTab", () => {
     const row = screen.getByTestId("provider-row-github");
     expect(within(row).getByText(PROVIDERS.ROW_DISABLED_HINT)).toBeInTheDocument();
     expect(within(row).getByText(PROVIDERS.BASE_URLS_REQUIRED)).toBeInTheDocument();
+  });
+});
+
+// The server accepts several rows of one kind (distinct ids); every one is
+// shown, and an edit or a removal touches only the row it was made on.
+describe("GitTab — several rows of one kind", () => {
+  const adoRow = (id: string, disabled = false): GitProvider => ({
+    id,
+    kind: "azure_devops",
+    base_urls: [`https://dev.azure.com/${id}`],
+    disabled,
+    lanes: ["entra"],
+    credential_source: "per_user",
+    entra: {
+      tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
+      client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
+      capability_ceiling: ["read"],
+      default_profile: ["read"],
+    },
+  });
+
+  it("editing the Entra section of one row leaves the other row untouched", async () => {
+    let latest: GitProvider[] = [];
+    const second = adoRow("previous-org", true);
+    render(<Harness initial={[adoRow("current-org"), second]} onLatest={(g) => (latest = g)} />);
+    const first = screen.getByTestId("provider-row-azure_devops");
+    await userEvent.click(within(first).getByRole("switch", { name: E.REST_TOGGLE }));
+    expect(latest.map((r) => r.id)).toEqual(["current-org", "previous-org"]);
+    expect(latest[0].entra?.rest_api).toBe(false);
+    expect(latest[1]).toEqual(second);
+  });
+
+  it("the second row's own editor and switch edit only that row", async () => {
+    let latest: GitProvider[] = [];
+    const first = adoRow("current-org");
+    render(<Harness initial={[first, adoRow("previous-org", true)]} onLatest={(g) => (latest = g)} />);
+    const other = screen.getByTestId("provider-row-azure_devops-previous-org");
+    await userEvent.click(within(other).getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — Azure DevOps — previous-org` }));
+    expect(latest[0]).toEqual(first);
+    expect(latest[1].disabled).toBe(false);
+  });
+
+  it("removing one row keeps the other, and the dialog names that row's id and host", async () => {
+    let latest: GitProvider[] = [];
+    const first = adoRow("current-org");
+    const second = adoRow("previous-org", true);
+    render(<Harness initial={[first, second]} onLatest={(g) => (latest = g)} />);
+    await userEvent.click(within(screen.getByTestId("provider-row-azure_devops")).getByRole("button", { name: PERM.REMOVE }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText(/current-org · dev\.azure\.com\/current-org/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: PERM.REMOVE }));
+    expect(latest).toEqual([second]);
+  });
+
+  it("removing the second row keeps the first byte for byte", async () => {
+    let latest: GitProvider[] = [];
+    const first = adoRow("current-org");
+    render(<Harness initial={[first, adoRow("previous-org", true)]} onLatest={(g) => (latest = g)} />);
+    await userEvent.click(within(screen.getByTestId("provider-row-azure_devops-previous-org")).getByRole("button", { name: PERM.REMOVE }));
+    expect(within(screen.getByRole("alertdialog")).getByText(/previous-org · dev\.azure\.com\/previous-org/)).toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: PERM.REMOVE }));
+    expect(latest).toEqual([first]);
   });
 });

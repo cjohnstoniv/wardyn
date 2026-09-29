@@ -354,6 +354,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The provider editor no longer overwrites or removes a hidden row of the same kind.** The Git tab now
+  shows every row of a kind, each with its own switch, Entra section and Remove button, and edits or
+  removes only the row it was made on by id. The Remove confirmation names that row's id and host.
+
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with

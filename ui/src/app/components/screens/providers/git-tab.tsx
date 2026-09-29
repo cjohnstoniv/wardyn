@@ -126,6 +126,8 @@ function rowHost(row: GitProvider): string {
 
 function Row({
   kind,
+  title,
+  testId,
   row,
   present,
   githubApp,
@@ -137,6 +139,10 @@ function Row({
   onStatusRefresh,
 }: {
   kind: GitProviderKind;
+  /** The row's heading: the kind's label, plus the row id when the kind has
+   *  more than one row so each one is told apart. */
+  title: string;
+  testId: string;
   row: GitProvider | undefined;
   present: string[];
   githubApp: boolean;
@@ -206,7 +212,7 @@ function Row({
         <div className="flex items-center gap-3 p-3">
           <span className="size-3.5 rounded-full border border-border-strong" aria-hidden="true" />
           <div className="min-w-0 flex-1">
-            <span className="block text-sm font-medium text-foreground">{KIND_LABEL[kind]}</span>
+            <span className="block text-sm font-medium text-foreground">{title}</span>
             <span className="block text-meta text-muted-foreground">{PROVIDERS.ROW_ABSENT_HINT}</span>
           </div>
           <Button variant="outline" size="sm" disabled={!operator} onClick={onAdd}>
@@ -236,16 +242,16 @@ function Row({
   const noAddresses = normalizeBaseURLText(baseURLText).length === 0;
 
   return (
-    <div className="rounded-lg border border-border" data-testid={`provider-row-${kind}`}>
+    <div className="rounded-lg border border-border" data-testid={testId}>
       <div className="flex items-center gap-3 border-b border-border p-3">
         <Switch
           checked={!row.disabled}
           disabled={!operator}
-          label={`${PROVIDERS.FIELD_ENABLED} — ${KIND_LABEL[kind]}`}
+          label={`${PROVIDERS.FIELD_ENABLED} — ${title}`}
           onChange={(checked) => onUpdate({ ...row, disabled: !checked })}
         />
         <div className="min-w-0 flex-1">
-          <span className="block text-sm font-medium text-foreground">{KIND_LABEL[kind]}</span>
+          <span className="block text-sm font-medium text-foreground">{title}</span>
           <span className="block truncate font-mono text-meta text-muted-foreground">{hosts}</span>
         </div>
         {/* Mock states 1 & 3: the row's own on/off fact as a neutral chip —
@@ -471,6 +477,10 @@ function Row({
                 wrong half. */}
             <AlertDialogTitle>{PROVIDERS.REMOVE_CONFIRM_TITLE(KIND_LABEL[kind])}</AlertDialogTitle>
             <AlertDialogDescription>{PROVIDERS.REMOVE_CONFIRM_BODY}</AlertDialogDescription>
+            {/* The exact row, by id and host — a kind can hold several rows. */}
+            <p className="break-all font-mono text-meta text-foreground">
+              {row.id} · {hosts}
+            </p>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
@@ -525,12 +535,12 @@ export function GitTab({
    *  would discard an unsaved base-URL draft edit on this or a sibling row). */
   onStatusRefresh: () => void;
 }) {
-  const rowFor = (kind: GitProviderKind) => git.find((r) => r.kind === kind);
+  // Rows are addressed by id: the server accepts several rows of one kind, so
+  // an edit or a removal touches only the row it was made on and every other
+  // row passes through untouched.
+  const updateRow = (id: string, next: GitProvider) => onChange(git.map((r) => (r.id === id ? next : r)));
 
-  const updateRow = (kind: GitProviderKind, next: GitProvider) =>
-    onChange(git.some((r) => r.kind === kind) ? git.map((r) => (r.kind === kind ? next : r)) : [...git, next]);
-
-  const removeRow = (kind: GitProviderKind) => onChange(git.filter((r) => r.kind !== kind));
+  const removeRow = (id: string) => onChange(git.filter((r) => r.id !== id));
 
   const addRow = (kind: GitProviderKind) =>
     // A fresh Azure DevOps row starts at `https://dev.azure.com/` — invalid on
@@ -559,21 +569,36 @@ export function GitTab({
         </div>
       ) : (
         <div className="space-y-3">
-          {ALL_KINDS.map((kind) => (
-            <Row
-              key={kind}
-              kind={kind}
-              row={rowFor(kind)}
-              present={present}
-              githubApp={githubApp}
-              operator={operator}
-              patBrokerEnabled={patBrokerEnabled}
-              onUpdate={(next) => updateRow(kind, next)}
-              onRemove={() => removeRow(kind)}
-              onAdd={() => addRow(kind)}
-              onStatusRefresh={onStatusRefresh}
-            />
-          ))}
+          {ALL_KINDS.flatMap((kind) => {
+            const rows = git.filter((r) => r.kind === kind);
+            const shared = { kind, present, githubApp, operator, patBrokerEnabled, onStatusRefresh };
+            if (rows.length === 0) {
+              return [
+                <Row
+                  key={kind}
+                  {...shared}
+                  title={KIND_LABEL[kind]}
+                  testId={`provider-row-${kind}`}
+                  row={undefined}
+                  onUpdate={() => {}}
+                  onRemove={() => {}}
+                  onAdd={() => addRow(kind)}
+                />,
+              ];
+            }
+            return rows.map((row, i) => (
+              <Row
+                key={`${kind}/${row.id}`}
+                {...shared}
+                title={rows.length > 1 ? `${KIND_LABEL[kind]} — ${row.id}` : KIND_LABEL[kind]}
+                testId={i === 0 ? `provider-row-${kind}` : `provider-row-${kind}-${row.id}`}
+                row={row}
+                onUpdate={(next) => updateRow(row.id, next)}
+                onRemove={() => removeRow(row.id)}
+                onAdd={() => {}}
+              />
+            ));
+          })}
         </div>
       )}
 
