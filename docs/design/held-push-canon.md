@@ -19,7 +19,7 @@ Approval kind `push_content`. `requested_scope`:
 | `paths` | ≤10, sorted; `core.quotePath`-quoted (e.g. `"caf\303\251.yml"` for `café.yml`) — the card unquotes each one for DISPLAY only (`unquoteGitPath`); the stored/exported form never changes |
 | `paths_total` | exact count; the audit row holds the list's digest, the audit export inlines the full list (`internal/api/approvals_push.go`'s `recordPushPathList`/`withPushPaths`) |
 | `commits` | for an Azure DevOps REST push this is the SHA-256 of the request body, not a commit — never rendered as "commits" |
-| `updates` | `[{ref, new}]` sorted by ref: each ref paired with what it is set to (all zeros for a delete) — part of the dedup key, never rendered; absent on rows raised before 0.8.0 |
+| `updates` | `[{ref, new}]` sorted by ref: each ref paired with what it is set to (all zeros for a delete) — part of the dedup key, never rendered; absent on a row raised before it existed |
 | `paths_digest` | the dedup key's own hash — never rendered |
 
 Only admins/security-admins may decide (`canDecideApproval` falls through to

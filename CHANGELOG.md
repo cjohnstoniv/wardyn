@@ -361,9 +361,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `requested_scope` now carries `updates`, each ref paired with the object id it is set to (all
   zeros for a delete), and both the proxy's remembered decisions and the control plane's dedup
   key it; a push that assigns them differently is held and asked about again. The control plane
-  refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A request
-  raised before this release has no `updates`, still reads the same in the console and API, and
-  matches no new push.
+  refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A stored
+  request without `updates` still reads the same in the console and API, and matches no new push.
 - **The Azure DevOps (Entra) lane honours `git_push_any_branch` (#1370).** With it on, a push or
   REST ref move to a branch outside the run's `refs/heads/wardyn/<run-id>/` namespace needs
   `code_write`, not `policy_bypass`, on both doors (the git broker and the REST gate), and Azure
