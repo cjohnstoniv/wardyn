@@ -87,7 +87,7 @@ absent for the rest of the session.
 - In the preview, `GET /setup/status` grades your model access
   `not_configured` with "Sign in to AWS", and a Claude Code run is refused
   at create with the same sentence a member who has not signed in meets.
-- `POST /model-providers/{id}/sign-in` answers `409`: *"Exit member mode
+- `POST /model-providers/{id}/sign-in` answers `409`: *"Exit the user view
   to sign in — the capture would land on your own identity."*
 - Nothing is deleted: your session sits untouched in the store and comes
   back the moment you exit.

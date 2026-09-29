@@ -344,8 +344,8 @@ func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T)
 	}
 }
 
-// modelCredFixture is newOwnerFixture whose surviving api.anthropic.com
-// injection is an api_key grant on anthropic-api-key, held by an enabled
+// modelCredFixture is newOwnerFixture whose surviving artifactory.corp.example
+// injection is an api_key grant on artifactory-token, held by an enabled
 // integration and present in the operator's namespace.
 func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	t.Helper()
@@ -354,18 +354,20 @@ func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := slices.IndexFunc(c.Injection, func(in proxy.InjectionConfig) bool { return in.Host == "api.anthropic.com" })
+	i := slices.IndexFunc(c.Injection, func(in proxy.InjectionConfig) bool { return in.Host == "artifactory.corp.example" })
 	f.st.credGrants = []types.CredentialGrant{{ID: c.Injection[i].GrantID, RunID: f.run.ID,
-		Spec: apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key")}}
-	f.st.site.Integrations = []types.Integration{{ID: "anthropic", Name: "Anthropic", Kind: types.IntegrationKindGitHost,
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key"}}}}
-	sec := &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
+		Spec: apiKeyGrantSpec("artifactory.corp.example", "artifactory-token")}}
+	f.st.site.Integrations = []types.Integration{{ID: "artifactory", Name: "Artifactory", Kind: types.IntegrationKindGitHost,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "artifactory-token"}}}}
+	sec := &memSecrets{m: map[string][]byte{"artifactory-token": []byte("art-test")}}
 	f.srv.cfg.Secrets = sec
 	return f, sec
 }
 
-// TestRevive_RefusesChangedOrDeletedProvider: the model credential the revived
-// proxy would inject is re-checked up front. Its secret erased from every
+// TestRevive_RefusesChangedOrDeletedProvider: the api_key credential the
+// revived proxy would inject is re-checked up front. (One on a model host is
+// stripped before this check unless the run's provider authored it:
+// TestPG_ReviveStripsAModelCredentialNoProviderAuthored.) Its secret erased from every
 // namespace the injection sink reads, or the integration holding it disabled,
 // refuses the revive naming the host, instead of a proxy whose first model
 // call fails. Either namespace the sink reads (the owner's, then the
@@ -378,14 +380,14 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 		reason  string
 	}{
 		{"unchanged", func(*reviveFixture, *memSecrets) {}, ""},
-		{"credential erased", func(_ *reviveFixture, sec *memSecrets) { delete(sec.m, "anthropic-api-key") }, "model_credential_erased"},
+		{"credential erased", func(_ *reviveFixture, sec *memSecrets) { delete(sec.m, "artifactory-token") }, "model_credential_erased"},
 		{"integration disabled", func(f *reviveFixture, _ *memSecrets) { f.st.site.Integrations[0].Disabled = true }, "model_provider_disabled"},
 		{"integration deleted, secret kept", func(f *reviveFixture, _ *memSecrets) { f.st.site.Integrations = nil }, ""},
 		{"the owner's own key kept, the operator's erased", func(f *reviveFixture, sec *memSecrets) {
-			if err := sec.For(f.run.CreatedBy).Put(context.Background(), "anthropic-api-key", []byte("sk-ant-own")); err != nil {
+			if err := sec.For(f.run.CreatedBy).Put(context.Background(), "artifactory-token", []byte("art-own")); err != nil {
 				t.Fatal(err)
 			}
-			delete(sec.m, "anthropic-api-key")
+			delete(sec.m, "artifactory-token")
 		}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -398,7 +400,7 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 				}
 				return
 			}
-			if code != http.StatusConflict || !strings.Contains(body, "api.anthropic.com") {
+			if code != http.StatusConflict || !strings.Contains(body, "artifactory.corp.example") {
 				t.Fatalf("revive = %d %s; want 409 naming the host", code, body)
 			}
 			f.assertReviveRefused(t, tc.reason)

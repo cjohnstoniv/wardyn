@@ -119,7 +119,7 @@ test.describe.configure({ mode: "serial" });
 /** The 409 body of POST /model-providers/{id}/sign-in inside the no-credential
  *  preview (internal/api/provider_signin.go's mpsPreview — Go-side and
  *  unexported, so there is no TS constant to import). */
-const MEMBER_PREVIEW_SIGNIN_REFUSAL = "Exit member mode to sign in — the capture would land on your own identity.";
+const MEMBER_PREVIEW_SIGNIN_REFUSAL = "Exit the user view to sign in — the capture would land on your own identity.";
 
 /** The strip's line for a lapsed session on the walk's provider. */
 const STRIP_EXPIRED = CONNECTIONS.C6_LINE(WALK_PROVIDER_NAME);

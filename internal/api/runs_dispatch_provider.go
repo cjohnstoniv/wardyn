@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -374,24 +375,35 @@ func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun,
 // host, which fails the sidecar at startup. It must run before every arm
 // authors: it deletes the very names the arms write.
 func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant, laneHosts []string, serving func(string) bool) []runner.InjectionGrant {
+	model := s.modelCredentialInjection(laneHosts, serving)
+	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
+		if model(ig.Rule) {
+			s.auditDroppedInjection(ctx, run, ig, "model_credential_not_provider_authored")
+			return true
+		}
+		return false
+	})
+}
+
+// modelCredentialInjection is the strip's test: whether an injection rule
+// would credential a model, by the secret it names or the host it is bound
+// for (dropLegacyModelInjections' list). A revive applies it to a stored
+// config (stripRevivedModelInjections).
+func (s *Server) modelCredentialInjection(laneHosts []string, serving func(string) bool) func(egress.InjectionRule) bool {
 	hosts := slices.Clone(laneHosts)
 	for _, h := range harnessCatalog {
 		if h.Gateway != nil {
 			hosts = append(hosts, h.Gateway.host, gatewayHost(s.cfg.LLMGateways[h.Gateway.host]))
 		}
 	}
-	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		name := ig.Rule.SecretName
-		model := strings.HasPrefix(name, providerSecretPrefix) ||
+	return func(r egress.InjectionRule) bool {
+		name := r.SecretName
+		return strings.HasPrefix(name, providerSecretPrefix) ||
 			name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret ||
 			name == types.AWSSSOAccessTokenSecret || name == bedrockAPIKeySecret ||
-			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, ig.Rule.Host) }) ||
-			serving(ig.Rule.Host)
-		if model {
-			s.auditDroppedInjection(ctx, run, ig, "model_credential_not_provider_authored")
-		}
-		return model
-	})
+			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, r.Host) }) ||
+			serving(r.Host)
+	}
 }
 
 func (s *Server) auditDroppedInjection(ctx context.Context, run types.AgentRun, ig runner.InjectionGrant, reason string) {

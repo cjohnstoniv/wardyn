@@ -38,7 +38,7 @@ const (
 	mpsNoPortal    = "model provider %q has no AWS access portal or region set — ask your admin to set them before you sign in"
 	mpsAccounts    = "model provider %q serves models in more than one AWS account and pins none — ask your admin to pin the account and role before you sign in"
 	mpsNoImage     = "signing in to Claude needs the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
-	mpsPreview     = "Exit member mode to sign in — the capture would land on your own identity."
+	mpsPreview     = "Exit the user view to sign in — the capture would land on your own identity."
 	mpsUnreadable  = "Wardyn couldn't read its model providers just now — nothing was started. Try again in a moment."
 	mpsCaptureBody = `body must be {"run_id":"<your sign-in run>","token":"<the claude setup-token output>"}`
 	mpsAWSByHelper = "%q stores your AWS sign-in itself when you finish it in the sign-in sandbox — there is nothing to paste"

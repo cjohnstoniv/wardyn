@@ -134,7 +134,7 @@ bare exact hostname, because proxy-side injection resolves through
 
 ## Model access comes from a model provider
 
-Since 0.8 a model run is credentialed by the model provider it chose
+Since 0.8.2 a model run is credentialed by the model provider it chose
 (`enforceRunModelProvider`, `internal/api/run_model_provider.go`) from its
 owner's own key, token or sign-in, or by nothing.
 
@@ -163,7 +163,7 @@ owner's own key, token or sign-in, or by nothing.
 (`decodeAndValidateCreateRun`, `internal/api/runs_create_validate.go`).
 
 - A workspace pins a model provider (`LLMCred.ProviderRef`), never an
-  integration. The upgrade to 0.8 converts a 0.7 integration pin, an
+  integration. The 0.8.2 upgrade converts a 0.7.x or 0.8.0 integration pin, an
   integration's `DefaultFor: agent_runs` mark and the agent roster's model
   credential fields into model providers and drops the AI integration
   rows (`0099_model_provider_conversion`, see

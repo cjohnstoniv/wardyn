@@ -197,7 +197,7 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 		Policy:            types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
 		Injection: []runner.InjectionGrant{
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.openai.com", Header: "Authorization", Format: "Bearer %s"}},
-			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}},
+			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "artifactory.corp.example", Header: "x-api-key", Format: "%s"}},
 		},
 		PATGrants:     map[string]proxy.PATGrant{"pat.example": {GrantID: uuid.New()}, "git.example": {GrantID: uuid.New()}},
 		MITMCACertPEM: "ca-cert",

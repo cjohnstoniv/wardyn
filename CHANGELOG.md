@@ -10,8 +10,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- **A run's model credential comes only from its model provider; the upgrade converts 0.7's model
-  configuration and there is no alias window (#548).** Migration `0099_model_provider_conversion`
+- **A run's model credential comes only from its model provider; the 0.8.2 upgrade converts 0.7.x
+  and 0.8.0 model configuration and there is no alias window (#548).** Migration `0099_model_provider_conversion`
   runs once, in one transaction: the AI integration rows (`anthropic_api_key`,
   `anthropic_subscription`, `openai_api_key`, `bedrock`) become model providers of the same id and
   are then **dropped from site config**; each agent roster row's model lane joins a provider of that
@@ -38,7 +38,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   provider serves a harness. Dispatch drops every model credential a policy carries that its
   provider did not author, with or without a provider block (`run.injection.drop`, reason
   `model_credential_not_provider_authored`), and an `env_secret` grant setting a model variable is
-  refused either way. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
+  refused either way. A revive or admin "Restart with current limits" applies the same strip to the
+  run's stored proxy config, so a run dispatched before the upgrade comes back without the
+  operator's model key. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
   and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
   row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
   CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
