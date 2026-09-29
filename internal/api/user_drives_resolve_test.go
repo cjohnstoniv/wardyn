@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -243,9 +242,7 @@ func drivePreviewShareServer(t *testing.T, st *driveStore, homes ...string) *Ser
 		t.Fatalf("resolve tempdir: %v", err)
 	}
 	for _, h := range homes {
-		if err := os.MkdirAll(filepath.Join(root, h), 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
+		mustMkdirAll(t, filepath.Join(root, h), 0o700)
 	}
 	st.drive.HostRoot = root
 	srv := driveServerOn(st, "docker")
@@ -1354,9 +1351,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		}
 		// And the positive control on the SAME server: the directory exists, so
 		// the refusal is about the home rather than about share drives.
-		if err := os.MkdirAll(filepath.Join(srv.cfg.UserDriveHostRoots[0], "bob"), 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
+		mustMkdirAll(t, filepath.Join(srv.cfg.UserDriveHostRoots[0], "bob"), 0o700)
 		if w := previewDriveHTTP(t, srv, []string{"bob"}, []string{"eng"}); w.Code != http.StatusOK {
 			t.Fatalf("code = %d, want 200 once the home is there; body=%s", w.Code, w.Body.String())
 		}

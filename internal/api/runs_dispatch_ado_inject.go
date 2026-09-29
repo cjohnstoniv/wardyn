@@ -136,6 +136,10 @@ type adoEntraRun struct {
 	tokenMode        types.ADOTokenMode
 	credentialSource types.CredentialSource
 	caps             []adoscope.Capability
+	// capsFromPolicy records that caps came from the run policy's
+	// azure_devops_capabilities rather than the row's default_profile, so a
+	// refusal names the source the operator has to edit.
+	capsFromPolicy bool
 	// ceiling is the row's CapabilityCeiling at dispatch. It is not part of the
 	// snapshot — the resolver reads the LIVE ceiling — but a profile already
 	// outside it is refused here rather than authored and refused on first use.
@@ -154,6 +158,103 @@ func (a adoEntraRun) snapshot() adoEntraScopeSnapshot {
 		TokenMode:        string(a.tokenMode),
 		Capabilities:     slices.Clone(a.caps),
 	}
+}
+
+// adoStandingBound is who bounds a run's STANDING Azure DevOps capabilities
+// (owner ruling 2026-09-28, "admin-granted profiles"): standing access comes
+// only from what an admin configured.
+//
+//   - An operator's policy list stands, bounded by the row's ceiling alone.
+//   - A member's stands only where it meets the row's default_profile or their
+//     governance ADO list — whatever policy source it came from (inline, a
+//     saved policy assigned or not, a preset), which is why it is applied here
+//     and not at resolve. The rest is not standing: the capability arm refuses
+//     it under always_deny and raises a request under deny_with_review.
+//
+// The zero value is the member with no governance list, so a lane that never
+// resolved a principal cannot stand anything past the row's default_profile.
+type adoStandingBound struct {
+	operator bool
+	// governance is the member's ceiling's azure_devops_capabilities.
+	governance []adoscope.Capability
+}
+
+// adoStandingFor reads the bound off the launching principal's ceiling.
+func adoStandingFor(c governanceCeiling) adoStandingBound {
+	return adoStandingBound{operator: c.Operator, governance: slices.Clone(c.Spec.AzureDevOpsCapabilities)}
+}
+
+// withPolicyCapabilities puts the run policy's azure_devops_capabilities in
+// place of the row's default_profile, bounded by b. An absent choice keeps the
+// default. An explicit choice is never widened back to the default: a member's
+// list that meets nothing they may stand is refused (ok=false), not replaced.
+// authorADOEntraInjection still refuses a choice outside the row's ceiling,
+// and the resolver re-checks the live ceiling on every request.
+func (a adoEntraRun) withPolicyCapabilities(picked []adoscope.Capability, b adoStandingBound) (adoEntraRun, bool) {
+	if len(picked) == 0 {
+		return a, true
+	}
+	if !b.operator {
+		var kept []adoscope.Capability
+		for _, c := range picked {
+			if slices.Contains(a.caps, c) || slices.Contains(b.governance, c) {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			return a, false
+		}
+		picked = kept
+	}
+	a.caps, a.capsFromPolicy = slices.Clone(picked), true
+	return a, true
+}
+
+// adoNonePermitted is the launch refusal for a member's explicit list that
+// meets nothing they may hold as standing access.
+func adoNonePermitted(picked []adoscope.Capability) string {
+	names := make([]string, len(picked))
+	for i, c := range picked {
+		names[i] = "“" + adoscope.ShortLabel(c) + "”"
+	}
+	return "Can't launch with this policy. It asks for " + strings.Join(names, ", ") + " on Azure DevOps, and none of " +
+		"it is in this provider's default profile or in the Azure DevOps access your administrator granted you. " +
+		"Launch without azure_devops_capabilities to get the provider's default, or ask an admin to grant the access."
+}
+
+// capsSource names where the run's capabilities came from, for a refusal.
+func (a adoEntraRun) capsSource() string {
+	if a.capsFromPolicy {
+		return "run policy's azure_devops_capabilities"
+	}
+	return "provider row's default_profile"
+}
+
+// adoCapsOutside is caps minus ceiling, in caps' order.
+func adoCapsOutside(caps, ceiling []adoscope.Capability) []adoscope.Capability {
+	var out []adoscope.Capability
+	for _, c := range caps {
+		if !slices.Contains(ceiling, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// adoPolicyPastCeiling is the launch refusal a person reads under the FAILED
+// badge when their run policy names capabilities outside the row's ceiling —
+// the approved mock's sentence, naming each capability by its console name.
+func adoPolicyPastCeiling(outside []adoscope.Capability) string {
+	names := make([]string, len(outside))
+	for i, c := range outside {
+		names[i] = "“" + adoscope.ShortLabel(c) + "”"
+	}
+	list := names[0]
+	if n := len(names); n > 1 {
+		list = strings.Join(names[:n-1], ", ") + " and " + names[n-1]
+	}
+	return "Can't launch with this policy. It grants " + list + " for Azure DevOps, which is outside what your " +
+		"administrator allows on this provider. Ask an admin to widen the ceiling, or pick a different saved policy."
 }
 
 // resolveADOEntraRun decides whether THIS run is on the per-person Azure DevOps
@@ -469,8 +570,8 @@ func (s *Server) adoEntraGradeHolds(ctx context.Context, run types.AgentRun, g a
 // run has already been marked FAILED and dispatch must stop —
 // authorBedrockSSOInjection's contract, deliberately identical.
 func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado adoEntraRun, on bool,
-	grade adoEntraGrade, plan dispatchLLMPlan, policy *types.RunPolicySpec, sandboxEnv map[string]string,
-	injections []runner.InjectionGrant,
+	grade adoEntraGrade, standing adoStandingBound, plan dispatchLLMPlan, policy *types.RunPolicySpec,
+	sandboxEnv map[string]string, injections []runner.InjectionGrant,
 ) (adoEntraLane, bool) {
 	// Ahead of the `on` short-circuit: the case that matters is the one where
 	// dispatch WOULD author a lane the grade did not include.
@@ -479,6 +580,15 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	}
 	if !on {
 		return adoEntraLane{injections: injections}, true
+	}
+	ado, permitted := ado.withPolicyCapabilities(policy.AzureDevOpsCapabilities, standing)
+	if !permitted {
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, "ado_capabilities_none_permitted",
+			adoNonePermitted(policy.AzureDevOpsCapabilities))
+	}
+	if ado.capsFromPolicy {
+		// run.policy.resolve audits this policy: record the bounded list.
+		policy.AzureDevOpsCapabilities = slices.Clone(ado.caps)
 	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {
@@ -520,13 +630,18 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	}
 	if _, err := adoscope.ScopesFor(ado.caps); err != nil {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_not_grantable",
-			"This run's Azure DevOps provider row grants a capability Wardyn will not mint a credential for: "+err.Error())
+			"This run's Azure DevOps capabilities (from the "+ado.capsSource()+") name a capability Wardyn will not mint a credential for: "+err.Error())
 	}
 	// Empty is NOT within anything: a run granted nothing has no business
 	// holding a credential.
 	if len(ado.caps) == 0 || !subsetOf(ado.caps, ado.ceiling) {
+		if outside := adoCapsOutside(ado.caps, ado.ceiling); ado.capsFromPolicy && len(outside) > 0 {
+			return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling", adoPolicyPastCeiling(outside))
+		}
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling",
-			"This run's Azure DevOps default profile names a capability outside the provider row's own ceiling")
+			fmt.Sprintf("This run was not launched: its Azure DevOps capabilities %v (from the %s) are not all inside "+
+				"the provider row's capability_ceiling %v. Nothing outside the ceiling is ever granted — narrow the "+
+				"capabilities, or ask an administrator to widen the ceiling.", ado.caps, ado.capsSource(), ado.ceiling))
 	}
 	if caCertPEM == "" || caKeyPEM == "" {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "no_run_certificate_authority",

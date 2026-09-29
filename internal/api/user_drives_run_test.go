@@ -487,9 +487,7 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 	newShare := func(t *testing.T) (root string, st *driveStore) {
 		t.Helper()
 		root = t.TempDir()
-		if err := os.MkdirAll(filepath.Join(root, "bob"), 0o755); err != nil {
-			t.Fatalf("mkdir home: %v", err)
-		}
+		mustMkdirAll(t, filepath.Join(root, "bob"), 0o755)
 		d := driveFixture(func(d *types.UserDrive) {
 			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
 			d.Writable = true
@@ -660,9 +658,7 @@ func (r driveProbeRunner) ProbeDrive(context.Context, types.DriveMount) (runner.
 func driveProbeShare(t *testing.T) (root string, st *driveStore, ctx context.Context) {
 	t.Helper()
 	root = t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "bob"), 0o755); err != nil {
-		t.Fatalf("mkdir home: %v", err)
-	}
+	mustMkdirAll(t, filepath.Join(root, "bob"), 0o755)
 	d := driveFixture(func(d *types.UserDrive) {
 		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
 		d.Writable = true
@@ -888,9 +884,7 @@ func TestSeedRequestDriveMountCarriesTheDrivesOwnRoot(t *testing.T) {
 	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 	srv, _ := driveRunServer(st, "docker")
 	srv.cfg.UserDriveHostRoots = []string{dir}
-	if err := os.MkdirAll(filepath.Join(dir, "sub-drive-bob"), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	mustMkdirAll(t, filepath.Join(dir, "sub-drive-bob"), 0o700)
 
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx(nil, false))
 	if !ok || mount == nil {

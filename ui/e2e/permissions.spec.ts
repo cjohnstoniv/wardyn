@@ -4,7 +4,7 @@
  */
 
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
-import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../src/app/lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA } from "../src/app/lib/permissions-copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ test.describe("permissions — an inert grant renders neutral, never live", () =
     await navTo(page, "Permissions");
 
     const table = page.getByRole("table");
-    await expect(table.getByText(PERM_DRAFT.INERT_CHIP)).toBeVisible();
+    await expect(table.getByText(PERM_EXTRA.INERT_CHIP)).toBeVisible();
     await expect(table.getByText(PERM.EFFECT_ALLOW, { exact: true })).toHaveCount(0);
     await expect(table.getByText(PERM.EFFECT_DENY, { exact: true })).toHaveCount(0);
   });

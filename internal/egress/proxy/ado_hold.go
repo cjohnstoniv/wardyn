@@ -143,9 +143,10 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	if ask.repo != "" {
 		q.Set("repo", ask.repo)
 	}
-	if v.Capability == adoscope.CapPolicyBypass {
-		// A protected-ref move; a ref in the run's own namespace is code_write, not this class.
-		q.Set("ref_class", "protected")
+	if len(v.Refs) > 0 && p.adoOutsideRunBranch(v.Refs) {
+		// A ref move outside the run's own branch (only reachable under git_push_any_branch). A
+		// pull request completed with bypassPolicy moves no ref and carries no class.
+		q.Set("ref_class", "outside_run_namespace")
 	}
 	out, err := resolveInjectionQuery(ctx, inj.base, inj.token.Get(), grantID, q, inj.client)
 	if err == nil {

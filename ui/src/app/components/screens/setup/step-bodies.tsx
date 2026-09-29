@@ -71,7 +71,7 @@ export function CheckRow({ check }: { check: SetupCheck }) {
 // the permanent "About this host" facts, spanning steps 2–7 as a single honest
 // go/no-go view.
 
-// DRAFT (M2 canon pending) — distinct from "Worth a look" (non-blocking fail
+// Distinct from "Worth a look" (non-blocking fail
 // or warn): nothing here is wrong, there's just a fix available for something
 // that was never required.
 const REVIEW_GROUP_OPTIONAL = "Optional — not blocking";

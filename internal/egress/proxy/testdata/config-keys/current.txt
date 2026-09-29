@@ -37,6 +37,7 @@ policy.allow_all_egress
 policy.allowed_domains
 policy.allowed_methods
 policy.auto_stop_after_sec
+policy.azure_devops_capabilities
 policy.denied_domains
 policy.eligible_grants
 policy.eligible_grants.kind

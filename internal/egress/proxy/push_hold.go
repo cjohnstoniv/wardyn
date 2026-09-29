@@ -12,16 +12,17 @@ package proxy
 // first-use egress hold (approvals.go); git waits on the open request,
 // which it won't abort unless http.lowSpeedLimit/lowSpeedTime are set.
 //
-// THE KEY. A push is identified by its repository, the refs it updates, the
-// commits it sets them to, and a digest of every matched path — not by its
-// pack bytes, which a retry repacks. The control plane dedupes PENDING rows
-// on the whole scope; pushHolds maps the same key to the row's id and
-// outcome, so:
+// THE KEY. A push is identified by its repository, each ref it updates paired
+// with the commit it sets that ref to (a delete included), and a digest of
+// every matched path — not by its pack bytes, which a retry repacks. The
+// control plane dedupes PENDING rows on the whole scope; pushHolds maps the
+// same key to the row's id and outcome, so:
 //
 //   - an approved push is forwarded, and so is every later push of the same
-//     commits to the same repository and branch, without a second question
-//     — identical commits are identical content. The same commits to
-//     ANOTHER repository or branch are held again;
+//     commits to the same repository and branches, each commit to the same
+//     branch, without a second question — identical commits are identical
+//     content. The same commits to ANOTHER repository or branch, or to the
+//     same branches in a different assignment, are held again;
 //   - a denied push stays denied for the rest of the run;
 //   - a hold that times out leaves its row PENDING; a retry waits on that
 //     same row instead of raising a second one;
@@ -43,6 +44,7 @@ package proxy
 // the control plane to keep with the approval.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -143,27 +145,37 @@ type heldPush struct {
 // pushScope builds the approval's requested_scope from the sorted matched
 // paths, and the key pushHolds files it under.
 func pushScope(paths []string, cmds []gitpack.Command, t pushTarget) (types.PushContentScope, string) {
-	var refs, commits []string
-	for _, c := range cmds {
-		refs = append(refs, c.Ref)
+	updates := make([]types.PushRefUpdate, len(cmds))
+	var refs, commits, pairs []string
+	for i, c := range cmds {
+		updates[i] = types.PushRefUpdate{Ref: c.Ref, New: c.New}
 		if strings.Trim(c.New, "0") != "" { // a delete sets its ref to nothing
 			commits = append(commits, c.New)
 		}
 	}
-	slices.Sort(refs)
+	slices.SortFunc(updates, func(a, b types.PushRefUpdate) int {
+		return cmp.Or(strings.Compare(a.Ref, b.Ref), strings.Compare(a.New, b.New))
+	})
+	updates = slices.Compact(updates)
+	for _, u := range updates {
+		refs = append(refs, u.Ref)
+		pairs = append(pairs, u.Ref+" "+u.New)
+	}
 	slices.Sort(commits)
 	s := types.PushContentScope{
 		Repo:        t.repo,
-		Branch:      strings.Join(slices.Compact(refs), ", "),
+		Branch:      strings.Join(refs, ", "),
 		ActsAs:      t.actsAs,
 		Paths:       paths[:min(len(paths), types.PushContentMaxPaths)],
 		PathsTotal:  len(paths),
 		Commits:     slices.Compact(commits),
+		Updates:     updates,
 		PathsDigest: types.PushPathsDigest(paths),
 	}
 	// The WHOLE question, as the control plane dedups it: an approval of these
-	// commits for one repository and branch says nothing about another.
-	return s, strings.Join([]string{s.Repo, s.Branch, s.PathsDigest, strings.Join(s.Commits, ",")}, "\x00")
+	// commits for one repository, each set to its own ref, says nothing about
+	// another repository or another assignment of them to refs.
+	return s, strings.Join([]string{s.Repo, s.PathsDigest, strings.Join(pairs, ",")}, "\x00")
 }
 
 // quotePath is p as git names it with core.quotePath on (quote_c_style):

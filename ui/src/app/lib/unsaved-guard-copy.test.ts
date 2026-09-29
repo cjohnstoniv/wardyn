@@ -6,7 +6,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NAV, UNSAVED } from "./unsaved-copy";
-import { PROVIDERS, PROVIDERS_DRAFT } from "./workspace-providers-copy";
+import { PROVIDERS, PROVIDERS_EXTRA } from "./workspace-providers-copy";
 import { parseFrozenTables } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the sign-in/
@@ -22,7 +22,7 @@ import { parseFrozenTables } from "./copy-doc-parity";
 // from wardyn/copy/shell.ts's UNSAVED_GUARD, which names UNSAVED.DISCARD
 // "LEAVE" — unsaved-copy.ts already renames it back on the way out); CONFLICT.*
 // and PROVIDERS.DISCARD_AND_RELOAD stay in workspace-providers-copy.ts's
-// PROVIDERS/PROVIDERS_DRAFT under their own, differently-spelled names
+// PROVIDERS/PROVIDERS_EXTRA under their own, differently-spelled names
 // (SAVED_ELSEWHERE_TITLE/BODY, CONFLICT_COPY/CONFLICT_COPIED_TOAST). Because
 // the doc key and the module's own key diverge for several rows, this suite
 // renders from an explicit map (the governance-copy.test.ts precedent) rather
@@ -39,9 +39,9 @@ const rendered: Record<string, string> = {
   "UNSAVED.DISCARD": UNSAVED.DISCARD,
   "CONFLICT.TITLE": PROVIDERS.SAVED_ELSEWHERE_TITLE,
   "CONFLICT.BODY": PROVIDERS.SAVED_ELSEWHERE_BODY,
-  "CONFLICT.COPY_MINE": PROVIDERS_DRAFT.CONFLICT_COPY,
-  "CONFLICT.COPIED_TOAST": PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST,
-  "PROVIDERS.DISCARD_AND_RELOAD": PROVIDERS_DRAFT.DISCARD_AND_RELOAD,
+  "CONFLICT.COPY_MINE": PROVIDERS_EXTRA.CONFLICT_COPY,
+  "CONFLICT.COPIED_TOAST": PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST,
+  "PROVIDERS.DISCARD_AND_RELOAD": PROVIDERS_EXTRA.DISCARD_AND_RELOAD,
   "NAV.SETTINGS": NAV.SETTINGS,
 };
 

@@ -81,7 +81,7 @@ export const S = {
   BEDROCK_CONFIG_NOTE:
     "Region and model come from the daemon's own config (WARDYN_BEDROCK_REGION / WARDYN_BEDROCK_MODEL) — set them where wardynd starts, not here.",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
-  // DRAFT (M2 canon pending) — a per_user Bedrock row's sign-in is per person
+  // A per_user Bedrock row's sign-in is per person
   // (the connected check below reads the CALLER's own model_access, not a
   // deployment-wide fact), and this note says so. The Agents tab no longer
   // declares such a lane (#539): a new per-person lane is a model provider,
@@ -90,7 +90,7 @@ export const S = {
   // per_user roster row.
   BEDROCK_PER_USER_NOTE:
     "This lane is per person: each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's. A new per-person lane is set up under Model providers.",
-  // DRAFT (M2 canon pending) — U-02: not_applicable is the shared
+  // U-02: not_applicable is the shared
   // admin-token principal's own answer (no session of its own, ever) —
   // reading the deployment-wide `!!bedrockRow` fact instead paints a green
   // "Connected" badge over an absent credential for exactly this principal.
@@ -101,13 +101,13 @@ export const S = {
   // an instruction with no door behind it.
   BEDROCK_PER_USER_MECHANISM:
     "Per person — this caller is a mechanism, not a person, so it has no sign-in of its own. Each person's own AWS session carries their runs.",
-  // DRAFT (M2 canon pending) — under per_user, resolveBedrockAuth skips the
+  // Under per_user, resolveBedrockAuth skips the
   // bearer/host-mount/static-key arms outright — a stored bearer key still
   // deletes fine (SecretLane stays visible), but it is never read while the
   // row is per_user, so the card says so rather than implying it might be.
   BEDROCK_BEARER_UNUSED_PER_USER:
     "Not read while this lane is per person — each person's own AWS sign-in carries their runs.",
-  // DRAFT (M2 canon pending) — PR #352 review, finding 3: the bearer field's
+  // PR #352 review, finding 3: the bearer field's
   // per_user twin of BEDROCK_PER_USER_NOTE. A per_user BEARER row is the one
   // case this card offers a non-operator an editable credential at all
   // (#337); silence there read as an operator-only field like every other
@@ -115,7 +115,7 @@ export const S = {
   // since the fact is true of whoever owns the row, operator included.
   BEDROCK_BEARER_OWN_NOTE:
     "This lane is per person: each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's. A new per-person lane is set up under Model providers.",
-  // DRAFT (M2 canon pending) — PR #352 review, finding 4: the disabled field's
+  // PR #352 review, finding 4: the disabled field's
   // own reason, for the row shape where it stays operator-only (a shared row,
   // or no row at all — deriveIntegrations' default). Without this the only
   // explanation on screen was the card-level OperatorOnlyHint, which reads
@@ -288,6 +288,8 @@ export function SecretLane({
    *  Save must not compete with it. */
   saveVariant?: "default" | "secondary";
 }) {
+  // Two lanes can share a secret name (two rows on one host), never a DOM id.
+  const uid = React.useId();
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   // Only ever true after an explicit Replace: a stored secret is write-only, so
@@ -349,9 +351,9 @@ export function SecretLane({
   return (
     <div className="space-y-3">
       {extra}
-      <Field label={label} htmlFor={`v-${secretName}`} hint={hint}>
+      <Field label={label} htmlFor={`${uid}v-${secretName}`} hint={hint}>
         <Input
-          id={`v-${secretName}`}
+          id={`${uid}v-${secretName}`}
           type="password"
           autoComplete="off"
           value={value}

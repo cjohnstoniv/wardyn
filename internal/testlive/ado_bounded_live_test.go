@@ -31,8 +31,8 @@ import (
 //     get 403 without any request being raised.
 //
 // The branch is inside the run's own namespace, refs/heads/wardyn/<run-id>/:
-// the git broker counts every other ref as protected, so a push there asks for
-// policy_bypass, not code_write (adoRunRefProtected, internal/egress/proxy).
+// the git broker refuses every other ref outright unless the run's policy sets
+// git_push_any_branch (adoRunBranchRule, internal/egress/proxy).
 //
 // It writes to the repository (one scratch branch, deleted at step 3), so it
 // has its own gate, WARDYN_LIVE_ADO_WRITE, instead of LL2's.

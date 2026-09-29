@@ -209,7 +209,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM
 #    the age key does not match. Also verify an application secret, which a
 #    row count cannot prove: launch a run against any workspace/policy that
 #    depends on a previously-stored secret and confirm it starts without a
-#    decrypt error (see "Rotating the age key"):
+#    decrypt error (see docs/operations/secrets-and-keys.md "Rotating the age key"):
 wardyn run --agent claude-code --workspace <workspace-id>
 #    and, if this deployment allocates user drives, that a drive came back with
 #    its bytes rather than as a fresh empty volume — step 5 is the only thing
@@ -3214,14 +3214,18 @@ it.
   sealed config, and brokered sidecar uploads go through the proxy) and the
   ingest. A proxy dispatched before 0.7.12 still dials `http://wardynd:8080`
   and gets `404` on every call after an upgrade (on the chart it has no route
-  back at all: the runs namespace is never granted the `http` port). On Docker,
-  restart such runs with `POST /api/v1/admin/runs/restart`, which hands the
-  proxy the current URL and CA, or stop them before upgrading. On Kubernetes
-  such runs cannot be restarted: the substrate implements no
-  `runner.ProxyReviver` (the agent pod pins the proxy pod's IP), so the restart
-  refuses each one with `runner.ErrReviveUnsupported` and reason
-  `revive_unsupported`. Stop them (before upgrading, or after with
-  `POST /api/v1/runs/{id}/kill`) and start a new run instead. The proxy authenticates
+  back at all: the runs namespace is never granted the `http` port). Such a
+  run cannot be restarted on either runner. On Docker it has no stored proxy
+  config (migration 0093 records one only for runs dispatched from then on), so
+  `POST /api/v1/admin/runs/restart` answers it `ok:false` with reason
+  `revive_config_not_stored`, and a single revive is a `409` (see
+  [Run lifetime](operations/run-lifetime.md), "Upgrading to this release"). On
+  Kubernetes the substrate implements no `runner.ProxyReviver` (the agent pod
+  pins the proxy pod's IP), so the restart refuses it with
+  `runner.ErrReviveUnsupported` and reason `revive_unsupported`. On both, stop
+  such runs (before upgrading, or after with `POST /api/v1/runs/{id}/kill`) and
+  start a new run instead. The restart still replaces the proxy of a run whose
+  config a supported release stored. The proxy authenticates
   to `wardynd` with its run token (bearer, not mTLS —
   `threatmodel/THREAT-MODEL.md` B6).
 
@@ -4094,6 +4098,10 @@ size:
   PodSandbox creation, *before* any application image is pulled. A cold pull can therefore never trip
   it; an unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an
   operator most often sees just before this error.
+- The proxy image's pull, its config-staging init container and its container becoming Ready are then
+  bounded by `canaryWaitTimeout` below, counted from the proxy pod's creation. The agent pod is not
+  created before the proxy is Ready. A terminal proxy state (`ImagePullBackOff`, `CrashLoopBackOff`, a
+  failed init, …) fails the run at once instead of waiting it out.
 - `canaryWaitTimeout` = **3 minutes** (same file) is the agent image's PULL bound. It bounds the wait
   for the agent pod's main container to reach Running, which is where a genuine first pull of an
   arbitrary agent image is spent. A first pull of the `aws-sso` image was measured at **131 seconds**

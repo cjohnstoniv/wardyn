@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -107,7 +108,7 @@ func TestHandleGetSCMAccess_UnreadableAnswers5xx(t *testing.T) {
 func TestSCMAccessInformational_UnreadableLeavesTheFactOut(t *testing.T) {
 	s := newSCMTestServer(t, adoTestSiteConfig(false), true)
 	s.cfg.Secrets = wedgedSecrets{err: errSCMTestWedged}
-	if v := s.scmAccessValue(context.Background(), adoTestSiteConfig(false), "alice"); v != (SCMAccess{}) {
+	if v := s.scmAccessValue(context.Background(), adoTestSiteConfig(false), "alice"); !reflect.DeepEqual(v, SCMAccess{}) {
 		t.Errorf("scmAccessValue = %+v, want the zero value", v)
 	}
 	if gc := s.gitCredentialFactForRepos(context.Background(), "alice", []string{scmTestADORepo}); gc != nil {

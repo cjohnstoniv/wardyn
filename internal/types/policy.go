@@ -12,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
 
 // policy.go carries the RUN POLICY seam — RunPolicy plus every shape its spec is made of: the
@@ -181,8 +183,8 @@ type RunPolicySpec struct {
 	// preserves today's behaviour.
 	ToolRules []ToolRule `json:"tool_rules,omitempty"`
 	// GitPushAnyBranch turns OFF branch-namespace confinement for THIS run's brokered pushes (GitHub
-	// App and opted-in git_pat lanes). By default the broker forwards a push only under
-	// refs/heads/wardyn/<run-id>/, so an agent can't rewrite main — right for an autonomous run,
+	// App, opted-in git_pat and Azure DevOps Entra lanes). By default the broker forwards a push only
+	// under refs/heads/wardyn/<run-id>/, so an agent can't rewrite main — right for an autonomous run,
 	// wrong for a human-driven sandbox using an external tool with its own branch names. true =
 	// forward to any branch the granted token may write, audited per push; the grant's own GitHub
 	// ruleset still bounds what the token can touch. Operator-authored, never agent-settable.
@@ -196,6 +198,12 @@ type RunPolicySpec struct {
 	// PushRules while this run's only git-capable grant is ssh_key is legal but UNENFORCEABLE (SSH
 	// has no broker seam) — composer.Grade surfaces that as a medium-risk WARNING, never a refusal.
 	PushRules *PushRulesSpec `json:"push_rules,omitempty"`
+	// AzureDevOpsCapabilities chooses THIS run's capabilities on the per-person Azure DevOps lane,
+	// in place of the provider row's default_profile — which is what lets a saved policy act as a
+	// saved access profile. It chooses only WITHIN the row's capability_ceiling: dispatch refuses a
+	// run naming anything outside it, and the resolver re-checks the live ceiling on every request.
+	// Empty/absent keeps the row's default_profile. Inert for a run not on that lane.
+	AzureDevOpsCapabilities []adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
 }
 
 // PushRulesSpec declares content rules for a run's brokered git pushes — the counterpart to
@@ -310,6 +318,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
 	out.UIApps = append([]UIApp(nil), s.UIApps...)
 	out.ToolRules = append([]ToolRule(nil), s.ToolRules...)
+	out.AzureDevOpsCapabilities = append([]adoscope.Capability(nil), s.AzureDevOpsCapabilities...)
 	if s.LLMInspection != nil {
 		li := *s.LLMInspection
 		// Deep-copy the nested slice fields too, or this "clone" still aliases

@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-29
+
 ### Security
 
 - **An operator's stored model key no longer reaches a run through an integration or a workspace
@@ -58,13 +60,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exposes none of that surface. A local install (loopback `http://` control plane) has no internal
   listener and is unchanged. Every shipped caller already dials the internal listener (compose,
   Helm, host mode, both runners' proxies, the ground-truth ingest). A proxy dispatched before 0.7.12
-  still dials the console and now gets `404` on every call. On Docker, restart such runs
-  (`POST /api/v1/admin/runs/restart`, which hands the proxy the current URL and CA) or stop them.
-  On Kubernetes the restart refuses them (`revive_unsupported`, #1342): stop them and start a new
-  run instead.
+  still dials the console and now gets `404` on every call. Such a run cannot be restarted: on
+  Docker it has no stored proxy config (`revive_config_not_stored`), and on Kubernetes the restart
+  refuses it (`revive_unsupported`, #1342). Stop such runs before upgrading (or kill them after) and
+  start a new run instead.
 
 ### Added
 
+- **The console edits the Azure DevOps row's Entra settings.** On **Workspace providers → Git**, an
+  Azure DevOps row that carries the `entra` lane now shows its tenant and client IDs, the REST toggle,
+  the capability ceiling and the default profile, grouped with the High-risk capabilities flagged.
+  A default outside the ceiling can't be checked, and one left outside a narrowed ceiling blocks Save.
+  A caller who can't edit sees it read-only.
+
+- **A run policy can choose a run's Azure DevOps capabilities (#1363).** A new
+  `azure_devops_capabilities` field replaces the provider row's `default_profile` for the runs a
+  policy governs, so a saved policy works as a saved access profile (for example
+  `["read", "code_write", "pr"]` or `["read", "policy_admin"]`). The policy editor's "Azure DevOps
+  access" section sets it as a grouped checklist that locks every capability off the row's
+  ceiling, and the Policies list and New Run's saved-policy picker summarise it ("Azure DevOps:
+  Read · Contribute"). `scm_access` (on `/setup/status` and `GET /me/scm-access`) now carries the
+  row's `capability_ceiling` for that. It chooses only within the ceiling: a run naming a
+  capability outside it is refused at launch with a sentence naming each one, and an entry the
+  catalogue cannot grant is a `400` with reason `ado_capability_unknown`. A member's choice is intersected with their governance
+  ceiling's own list; that list is a bound, never a grant. Absent keeps today's behaviour.
+  docs/AZURE-DEVOPS.md now says that opening a pull request needs `pr`, not `code_write`.
 - **The User view picks a user type (#912).** With more than one user type configured, the User
   view side of the console switch becomes a dropdown, preselecting the admin's last choice; the
   eyebrow it shows while looking through a type reopens the same picker without leaving the view.
@@ -336,6 +356,52 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Kubernetes starts the agent only once its proxy is ready.** An assigned proxy pod IP used to
+  count as a started proxy, so a proxy stuck in `ImagePullBackOff` or still staging its config
+  accompanied a RUNNING agent with no working proxy. The agent pod is now created only after the
+  proxy's init container has completed and its container is Ready: the IP within the 90-second
+  `podIPWaitTimeout`, then Ready within the 3-minute `canaryWaitTimeout` the agent image already
+  has. A terminal proxy state (`ImagePullBackOff`, `ErrImagePull`, `CrashLoopBackOff`,
+  `CreateContainerConfigError`, a failed init or an exited proxy) fails the run at once, naming the
+  container and the reason, and the run's objects are rolled back.
+- **A held push's approval binds each ref to its commit.** A `push_content` approval named the
+  push's refs and its commits as two separately sorted lists, so a later push setting the same
+  refs to the same commits in a different assignment (commits swapped between refs, or a ref
+  deleted instead of set) was forwarded on the earlier approval. The approval's
+  `requested_scope` now carries `updates`, each ref paired with the object id it is set to (all
+  zeros for a delete), and both the proxy's remembered decisions and the control plane's dedup
+  key it; a push that assigns them differently is held and asked about again. The control plane
+  refuses a raise whose `updates` is missing or disagrees with `branch` and `commits`. A stored
+  request without `updates` still reads the same in the console and API, and matches no new push.
+- **A member's policy no longer gives them standing Azure DevOps access an admin did not grant.**
+  A member's `azure_devops_capabilities` (inline, a saved policy assigned to them or not, or a
+  preset) now stands only where it is in the provider row's `default_profile` or in their
+  governance profile's Azure DevOps list; the rest is asked for mid-run under `deny_with_review`
+  and refused under `always_deny`. Previously a saved policy could stand `pr` above the default
+  with no approval. A narrower choice is always honoured: `["read"]` under a `[read, code_write]`
+  default is exactly `read` (it used to fall back to the default). A choice that leaves nothing
+  permitted refuses the launch with reason `ado_capabilities_none_permitted`. An admin's own run is
+  unchanged.
+- **Azure DevOps `policy_bypass` means only a pull request completed with `bypassPolicy` (#1372).**
+  A push or REST ref move outside the run's own `refs/heads/wardyn/<run-id>/` branch is now governed
+  only by `git_push_any_branch`: off, it is refused whatever the run holds and is never held for an
+  approval (as on the GitHub App lane); on, it needs `code_write`. Update Ref reads its ref from
+  `?filter=`, annotated tags from their `name`, and REST cherry-picks and reverts from
+  `generatedRefName`, each held to the same rule; a ref move whose ref cannot be read is refused as
+  one that "names no ref Wardyn can check", and a fork sync is unclassified. The approval's
+  `ref_class` is `outside_run_namespace` (a stored `protected` row still reads, shown the same way),
+  and the capability copy no longer calls any branch "protected" or says a policy was consulted:
+  "Bypass branch policies" is "Complete a pull request without its required reviewers or checks."
+- **The Azure DevOps (Entra) lane honours `git_push_any_branch` (#1370).** With it on, a push or
+  REST ref move to a branch outside the run's `refs/heads/wardyn/<run-id>/` namespace needs
+  `code_write`, not `policy_bypass`, on both doors (the git broker and the REST gate), and Azure
+  DevOps' own branch policies decide; each such git push is recorded as
+  `brokered:git:branch-ns-off`, as on the GitHub lanes. Without it such a move is refused whatever
+  the run holds (see the `policy_bypass` entry above), and the refusal says the run may push only to
+  its own branch and names the switch, instead of claiming a branch policy was bypassed.
+- **The provider editor no longer overwrites or removes a hidden row of the same kind.** The Git tab now
+  shows every row of a kind, each with its own switch, Entra section and Remove button, and edits or
+  removes only the row it was made on by id. The Remove confirmation names that row's id and host.
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with

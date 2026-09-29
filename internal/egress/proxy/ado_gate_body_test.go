@@ -15,6 +15,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
 
+// refuseEveryRef is a ref rule refusing every ref move, for the tests whose
+// requests move none.
+func refuseEveryRef([]string) string { return "refused: a ref move" }
+
 // Only the body routes are peeked. A 1 MiB wiki attachment and an npm publish
 // classify on their path and stream through whole; the 256 KiB peek bound
 // applies only where the body decides the capability.
@@ -31,7 +35,7 @@ func TestADOGate_LargeBodyOnAPathOnlyRouteStreamsThrough(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPut, tc.path, bytes.NewReader(big))
 			r.Header.Set("Content-Length", strconv.Itoa(len(big)))
 			grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{tc.want}}
-			if msg, held := adoCheck(r, tc.host, grant, adoRefProtected); msg != "" || held != nil {
+			if msg, held := adoCheck(r, tc.host, grant, refuseEveryRef); msg != "" || held != nil {
 				t.Fatalf("adoCheck = %q, %v; want forwarded under %s", msg, held, tc.want)
 			}
 			got, err := io.ReadAll(r.Body)
@@ -40,7 +44,7 @@ func TestADOGate_LargeBodyOnAPathOnlyRouteStreamsThrough(t *testing.T) {
 			}
 			// The capability is the one the path names: without it, refused.
 			r = httptest.NewRequest(http.MethodPut, tc.path, bytes.NewReader(big))
-			if msg, held := adoCheck(r, tc.host, ADOGrant{Organization: "acme"}, adoRefProtected); held == nil || held.Capability != tc.want {
+			if msg, held := adoCheck(r, tc.host, ADOGrant{Organization: "acme"}, refuseEveryRef); held == nil || held.Capability != tc.want {
 				t.Fatalf("ungranted: adoCheck = %q, %v; want a hold naming %s", msg, held, tc.want)
 			}
 		})
@@ -94,7 +98,7 @@ func TestADOGate_ChunkedBypassCompletionIsPeeked(t *testing.T) {
 	r.ContentLength = -1
 	r.Header.Del("Content-Length")
 	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead, adoscope.CapPR}}
-	if msg, held := adoCheck(r, adoHost, grant, adoRefProtected); held == nil || held.Capability != adoscope.CapPolicyBypass {
+	if msg, held := adoCheck(r, adoHost, grant, refuseEveryRef); held == nil || held.Capability != adoscope.CapPolicyBypass {
 		t.Fatalf("adoCheck = %q, %v; want a hold naming %s", msg, held, adoscope.CapPolicyBypass)
 	}
 }

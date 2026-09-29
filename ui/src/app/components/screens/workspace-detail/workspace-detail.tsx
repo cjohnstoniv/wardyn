@@ -20,7 +20,7 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
-import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
+import { WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { useMyCapabilities } from "../../../lib/capabilities";
 import { DENIED } from "../../../lib/permissions-copy";
@@ -439,7 +439,7 @@ export function WorkspaceDetailScreen() {
       </div>
 
       <div className="mt-4 flex flex-col gap-4">
-        <DetailSectionCard title="Recorded sessions" subtitle={WORKSPACE_COPY_DRAFT.SESSIONS_SUBTITLE}>
+        <DetailSectionCard title="Recorded sessions" subtitle={WORKSPACE_COPY_EXTRA.SESSIONS_SUBTITLE}>
           <RecordPane
             ws={ws}
             notice={recordNotice}

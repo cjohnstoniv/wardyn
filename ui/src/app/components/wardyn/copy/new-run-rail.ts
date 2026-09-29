@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// DRAFT (M2 canon pending) — the New Run rail's TRUTH block
+// The New Run rail's TRUTH block.
 // Appendix A finding 1: the rail rendered two unconditional security claims —
 // "Minted at launch, injected by the proxy. Never written into the sandbox." and
 // "Every keystroke and every outbound connection." — neither of which consulted
@@ -124,7 +124,7 @@ export const RAIL_PROVIDER = {
     `${name}, the default for ${harness}, is turned off. Ask your admin.`,
 } as const;
 
-// DRAFT (M2 canon pending) — U-15: the New Run rail's "recording is on"
+// U-15: the New Run rail's "recording is on"
 // sentence. It was an inline literal in the rail and re-typed in its vitest and
 // in ui/e2e/new-run.spec.ts, while its DISABLED twin
 // (RECORDING_DISABLED_TITLE, right above) was already a shared constant — so a

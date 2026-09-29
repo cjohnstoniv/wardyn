@@ -39,6 +39,7 @@ func heldPush(n int, actsAs string) (types.PushContentScope, types.PushPathList)
 		Repo: "github.com/octocat/hello-world", Branch: "refs/heads/wardyn/run/work", ActsAs: actsAs,
 		Paths: paths[:min(n, types.PushContentMaxPaths)], PathsTotal: n,
 		Commits: []string{strings.Repeat("a", 40)}, PathsDigest: types.PushPathsDigest(paths),
+		Updates: []types.PushRefUpdate{{Ref: "refs/heads/wardyn/run/work", New: strings.Repeat("a", 40)}},
 	}, types.NewPushPathList(paths)
 }
 
@@ -273,7 +274,8 @@ func TestPushPathListFromAPreviousReleaseProxy(t *testing.T) {
 	f := newPathFixture(t, "sub-owner")
 	for i, n := range []int{150, 7} {
 		scope, _ := heldPush(n, f.actsAs)
-		scope.Commits = []string{fmt.Sprintf("%040d", i)}
+		scope.Commits = []string{fmt.Sprintf("%040d", i+1)} // not all zeros: that is a delete
+		scope.Updates[0].New = scope.Commits[0]
 		code, id := f.raise(t, string(mustJSON(map[string]any{"kind": types.ApprovalPushContent, "requested_scope": scope})))
 		if code != http.StatusCreated {
 			t.Fatalf("n=%d raise without path_list: %d", n, code)
@@ -302,7 +304,8 @@ func burstRaise(t *testing.T, n int, raise func(body string) int, actsAs string)
 		go func() {
 			defer wg.Done()
 			scope, list := heldPush(20, actsAs)
-			scope.Commits = []string{fmt.Sprintf("%040d", i)}
+			scope.Commits = []string{fmt.Sprintf("%040d", i+1)} // not all zeros: that is a delete
+			scope.Updates[0].New = scope.Commits[0]
 			codes[i] = raise(raiseBody(types.ApprovalPushContent, scope, &list))
 		}()
 	}
@@ -339,6 +342,7 @@ func TestPushPathListCapUnderBurst(t *testing.T) {
 	rows, lists := f.counts()
 	scope, list := heldPush(20, f.actsAs)
 	scope.Commits = []string{strings.Repeat("f", 40)}
+	scope.Updates[0].New = scope.Commits[0]
 	if code, _ := f.raise(t, raiseBody(types.ApprovalPushContent, scope, &list)); code != http.StatusTooManyRequests {
 		t.Errorf("a raise at rest past the cap: %d, want 429", code)
 	}
@@ -562,11 +566,47 @@ func TestPG_PushPathListCapUnderBurst(t *testing.T) {
 	before, _ := pg.CountApprovalsForRun(ctx, runID)
 	scope, list := heldPush(20, actsAs)
 	scope.Commits = []string{strings.Repeat("f", 40)}
+	scope.Updates[0].New = scope.Commits[0]
 	if w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", token,
 		raiseBody(types.ApprovalPushContent, scope, &list)); w.Code != http.StatusTooManyRequests {
 		t.Errorf("a raise at rest past the cap: %d, want 429", w.Code)
 	}
 	if after, _ := pg.CountApprovalsForRun(ctx, runID); after != before {
 		t.Errorf("the refused raise wrote an approval: %d -> %d", before, after)
+	}
+}
+
+// TestPG_PushScopeWithoutUpdatesMatchesNoNewRaise: a PENDING row stored
+// before scopes carried updates still reads back, and a raise of the same
+// push that now names each ref's commit is a new request, not that row.
+func TestPG_PushScopeWithoutUpdatesMatchesNoNewRaise(t *testing.T) {
+	srv, pg, runID, token, actsAs := pgPathFixture(t)
+	ctx := context.Background()
+	scope, list := heldPush(3, actsAs)
+	old := scope
+	old.Updates = nil
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trimmed map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &trimmed); err != nil {
+		t.Fatal(err)
+	}
+	delete(trimmed, "updates")
+	stored, err := pgApprovalService{PG: pg}.Request(ctx, types.ApprovalRequest{
+		RunID: runID, Kind: types.ApprovalPushContent, RequestedScope: mustJSON(trimmed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, srv, http.MethodGet, "/api/v1/approvals/"+stored.ID.String()+"/paths", adminToken, "")
+	var l types.PushPathList
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &l) != nil || !slices.Equal(l.Paths, scope.Paths) {
+		t.Fatalf("the stored row's paths: %d %s, want its scope's paths", w.Code, w.Body.String())
+	}
+	w = do(t, srv, http.MethodPost, "/api/v1/internal/approvals", token, raiseBody(types.ApprovalPushContent, scope, &list))
+	var raised types.ApprovalRequest
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &raised) != nil || raised.ID == stored.ID {
+		t.Fatalf("raise with updates: %d, id %s; want 201 and a new row, not %s", w.Code, raised.ID, stored.ID)
 	}
 }

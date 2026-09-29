@@ -34,6 +34,7 @@ import { SectionCard } from "./new-run-primitives";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
+import { ADOAccessSummary } from "../../wardyn/ado-access-summary";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
@@ -147,6 +148,7 @@ export function NewRunScreen() {
   // pinned-provider-availability check.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
+  const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> — grouping is by
   // EXACT string, so a family needs a character-perfect retype without it.
   const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
@@ -210,6 +212,7 @@ export function NewRunScreen() {
         // unreachable read to undefined, off the same bit this effect reads.
         setModelProviders(resolvedModelProviders(st));
         setProviderAccess(st.unreachable ? undefined : st.provider_access);
+        setAdoCeiling(st.unreachable ? undefined : st.scm_access?.capability_ceiling);
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
@@ -588,6 +591,7 @@ export function NewRunScreen() {
                 preflightBusy={preflighting}
                 preflightDisabled={useSaved && !state.selectedPolicyId}
                 interactive={isInteractive}
+                adoCeiling={adoCeiling}
                 savedPolicy={{
                   active: useSaved,
                   onActiveChange: (v: boolean) => {
@@ -609,6 +613,7 @@ export function NewRunScreen() {
                           ))}
                         </SelectContent>
                       </Select>
+                      <ADOAccessSummary caps={savedPolicies.find((p) => p.id === state.selectedPolicyId)?.spec.azure_devops_capabilities} />
                       {/* Rulebook §9: an empty picker carries the action that
                           fills it. M-1b: Policies is Admin view only, so the
                           door renders only for the tier that authors them. */}

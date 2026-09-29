@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -188,9 +187,7 @@ func TestDriveShareProbeDoesNotStackBehindAStrandedOne(t *testing.T) {
 // offer the drive. That it does not is the whole observation.
 func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "bob"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mustMkdirAll(t, filepath.Join(root, "bob"), 0o755)
 	d := driveFixture(func(d *types.UserDrive) {
 		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
 		d.Writable = true

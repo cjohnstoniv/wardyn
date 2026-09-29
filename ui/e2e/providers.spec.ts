@@ -14,7 +14,7 @@ import {
   navToRoute,
   sidebarLink,
 } from "./fixtures";
-import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
@@ -282,8 +282,8 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     const documentPreview = page.locator("pre");
     await expect(documentPreview).toContainText("https://github.com/acme");
     await expect(documentPreview).toContainText("https://git.corp.example/team");
-    await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
-    await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+    await page.getByRole("button", { name: PROVIDERS_EXTRA.CONFLICT_COPY }).click();
+    await expect(page.getByText(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST)).toBeVisible();
     const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
     const clipboardDraft = JSON.parse(clipboardText);
     const githubRow = (clipboardDraft.git as { base_urls?: string[] }[]).find((g) =>
@@ -293,7 +293,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 
     // Discard mine and reload is still there, now beside Copy, not the only
     // exit.
-    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
+    await expect(page.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeVisible();
 
     // Clean up the route intercept and the in-memory draft edit before the
     // next serial test reads the real, unmodified stored document.
@@ -316,7 +316,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // #460 added the same "Unsaved changes" chip in three more places
     // (PageHeader, Git tab, Storage tab), so this targets the beside-Save
     // marker by its own testid rather than the now-ambiguous text.
-    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_EXTRA.UNSAVED_MARKER);
 
     await sidebarLink(page, "Settings").click();
     const dialog = page.getByRole("alertdialog");
@@ -894,5 +894,70 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
     await expect(reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
     await expect(reloaded.getByText(/standard/i)).toHaveCount(0);
+  });
+});
+
+// G1: the Azure DevOps row's Entra section, on a real backend. The row is
+// seeded over the API (the lane itself is not switched on from this screen);
+// the ceiling and the default are then set in the browser, saved, reloaded,
+// and read back from both the screen and the wire.
+test.describe("providers — the Azure DevOps Entra section (real writes, real reload)", () => {
+  test("setting the ceiling and the default persists across a reload", async ({ page }) => {
+    await resetProviders(page);
+    const etag = (await page.request.get("/api/v1/workspace-providers", { headers: auth })).headers()["etag"];
+    const put = await page.request.put("/api/v1/workspace-providers", {
+      headers: etag ? { ...auth, "If-Match": etag } : auth,
+      data: {
+        git: [
+          {
+            id: "azure_devops",
+            kind: "azure_devops",
+            base_urls: ["https://dev.azure.com/wardyn-e2e"],
+            lanes: ["entra"],
+            credential_source: "per_user",
+            entra: {
+              tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
+              client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
+              capability_ceiling: ["read"],
+              default_profile: ["read"],
+            },
+          },
+        ],
+      },
+    });
+    expect(put.status()).toBe(200);
+
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    const ceiling = row.getByRole("group", { name: ADO_ENTRA_EDITOR.CEILING_TITLE });
+    const defaults = row.getByRole("group", { name: ADO_ENTRA_EDITOR.DEFAULT_TITLE });
+    const push = ADO_CAP_COPY.code_write.name;
+    const policy = ADO_CAP_COPY.policy_admin.name;
+
+    // Off the ceiling, so its default is locked until the ceiling admits it.
+    await expect(defaults.getByRole("checkbox", { name: push })).toBeDisabled();
+    await ceiling.getByRole("checkbox", { name: push }).click();
+    await ceiling.getByRole("checkbox", { name: policy }).click();
+    await defaults.getByRole("checkbox", { name: push }).click();
+    await saveProviders(page);
+
+    await page.reload();
+    const reloaded = page.getByTestId("provider-row-azure_devops");
+    const ceiling2 = reloaded.getByRole("group", { name: ADO_ENTRA_EDITOR.CEILING_TITLE });
+    const defaults2 = reloaded.getByRole("group", { name: ADO_ENTRA_EDITOR.DEFAULT_TITLE });
+    await expect(ceiling2.getByRole("checkbox", { name: push })).toBeChecked();
+    await expect(ceiling2.getByRole("checkbox", { name: policy })).toBeChecked();
+    await expect(defaults2.getByRole("checkbox", { name: push })).toBeChecked();
+    await expect(defaults2.getByRole("checkbox", { name: policy })).not.toBeChecked();
+
+    const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
+    expect(snap.git[0].entra).toEqual(
+      expect.objectContaining({
+        capability_ceiling: ["read", "code_write", "policy_admin"],
+        default_profile: ["read", "code_write"],
+      }),
+    );
+
+    await resetProviders(page);
   });
 });

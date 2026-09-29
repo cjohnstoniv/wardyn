@@ -53,7 +53,7 @@ export const RUN_COCKPIT = {
   // consequential action that deserves a stop, same as this one.
   takeOverConfirm: (principal: string) =>
     `${principal} is driving this session now. Taking over disconnects them and records you as the holder in the audit trail.`,
-  // DRAFT (M2 canon pending) — F1-F1: an interactive run canAttach may open
+  // F1-F1: an interactive run canAttach may open
   // once it reaches RUNNING (PENDING/STARTING/WAITING_FOR_CONFIRMATION so
   // far) must not be told OPERATOR_ONLY_REASON, which is false for them —
   // that sentence is for the caller who can never attach, not the one who

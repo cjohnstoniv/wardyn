@@ -289,6 +289,13 @@ export interface RunPolicySpec {
   // never a refusal. Authored via PushRulesSection (policy-push-rules.tsx,
   // #57) beside the raw JSON, same as tool_rules.
   push_rules?: PushRulesSpec;
+  // This run's Azure DevOps capabilities on the per-person lane, in place of the
+  // provider row's default_profile (mirrors Go's
+  // RunPolicySpec.AzureDevOpsCapabilities). Chosen only within the row's
+  // capability_ceiling — a run naming anything outside it is refused at launch.
+  // Omitted keeps the row's default. Authored via ADOCapabilitiesSection
+  // (policy-ado-capabilities.tsx) beside the raw JSON.
+  azure_devops_capabilities?: string[];
 }
 
 export interface RunPolicy {

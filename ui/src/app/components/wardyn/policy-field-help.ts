@@ -156,7 +156,7 @@ export const FIELD_HELP = {
     ],
   },
   git_push_any_branch: {
-    what: "Turns OFF branch-namespace confinement (default ON) for this run's brokered GitHub pushes.",
+    what: "Turns OFF branch-namespace confinement (default ON) for this run's brokered GitHub and Azure DevOps pushes.",
     values:
       "true | false (default). For a sandbox a human drives through an external tool that names its own branches — every such push is marked brokered:git:branch-ns-off in audit, on or off.",
     doc: "git_push_any_branch-the-per-run-opt-out",
@@ -172,5 +172,12 @@ export const FIELD_HELP = {
       "deny_paths (refused) + require_review_paths (held for an admin's decision) — path patterns anchored at the repository root, ** crosses segments — plus max_inspect_pack_mib (0-64, default 32) and hold_seconds (0-600, default 120). Enforced on every brokered git lane. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
     doc: "push_rules--pushrulesspec",
     snippet: { deny_paths: [".github/workflows/**"] },
+  },
+  azure_devops_capabilities: {
+    what: "This run's Azure DevOps capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
+    values:
+      "A list of grantable capabilities: read, code_write, pr, policy_admin, policy_bypass, repo_admin, … — anything else is refused on write. Only within the provider's capability_ceiling: a run naming anything outside it is refused at launch. Opening a pull request needs pr, not code_write. Omitted keeps the provider's default.",
+    doc: "top-level",
+    snippet: ["read", "code_write", "pr"],
   },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;
