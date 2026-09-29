@@ -37,7 +37,7 @@ pin="${pins#ARG CLAUDE_CODE_VERSION=}"
 [[ "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "CLAUDE_CODE_VERSION='$pin' is not an exact x.y.z version — the probe never tests a channel"
 
 # 2. What Wardyn writes: every JSON key in the frozen documents, and the file path.
-keys="$(cat "$POLICY_DIR"/testdata/*-managed-settings.json | grep -oE '"[A-Za-z][A-Za-z0-9]*"[[:space:]]*:' | sed -E 's/^"([^"]*)".*/\1/' | sort -u)"
+keys="$(cat "$POLICY_DIR"/testdata/*-managed-settings.json | grep -oE '"[^"]+"[[:space:]]*:' | sed -E 's/^"([^"]*)".*/\1/' | sort -u)"
 [ -n "$keys" ] || die "no managed-settings keys found under $POLICY_DIR/testdata — the probe would pass vacuously"
 path="$(sed -nE 's/^const ClaudeCodeManagedSettingsPath = "([^"]+)"$/\1/p' "$POLICY_DIR/agentpolicy.go")"
 [ -n "$path" ] || die "ClaudeCodeManagedSettingsPath not found in $POLICY_DIR/agentpolicy.go"
