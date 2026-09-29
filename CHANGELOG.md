@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
+  it runs (#1082).** The migrator removed a row's old Vault or Key Vault copy after the row had
+  committed and released its lock, so a store-mode save of the same credential in that window was
+  deleted with it, leaving the row pointing at nothing. The removal now happens under the row's
+  lock, before the commit: a concurrent save waits and lands after it. If the old copy cannot be
+  removed, the row is rolled back to it and the migration stops, naming the row.
+- **An aborted boot conversion of legacy secrets now records the rows it read (#1071).** When a
+  legacy (v0) secret that will not decrypt stops boot, each row opened before it is recorded as a
+  `secret.read` with purpose `boot` and outcome `failure`, where it was recorded nowhere; the abort
+  itself is still in the boot log, naming the row.
+
 ## [0.8.0] — 2026-09-29
 
 ### Security
