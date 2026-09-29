@@ -65,6 +65,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The console edits the Azure DevOps row's Entra settings.** On **Workspace providers → Git**, an
+  Azure DevOps row that carries the `entra` lane now shows its tenant and client IDs, the REST toggle,
+  the capability ceiling and the default profile, grouped with the High-risk capabilities flagged.
+  A default outside the ceiling can't be checked, and one left outside a narrowed ceiling blocks Save.
+  A caller who can't edit sees it read-only.
+
 - **A run policy can choose a run's Azure DevOps capabilities (#1363).** A new
   `azure_devops_capabilities` field replaces the provider row's `default_profile` for the runs a
   policy governs, so a saved policy works as a saved access profile (for example
