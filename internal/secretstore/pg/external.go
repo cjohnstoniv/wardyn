@@ -295,13 +295,12 @@ func (s *Store) atTarget(target string, e envelope) bool {
 	return e.version == extVersion && store == target
 }
 
-// migrateRow moves one row under the row's store-mode write lock, held to the
-// commit. Moving to a store, the old local copy goes with the flip. Moving to
-// local, the old external copy is removed INSIDE the transaction, between the
-// UPDATE and the commit — deleteLocked's order — so a concurrent store-mode
-// Put of the row waits on the lock and can never re-point it at the derived
-// path this migrator is about to delete. A failed delete rolls the row back to
-// its live copy. soft reports an old copy the store kept soft-deleted.
+// migrateRow moves one row under the row's store-mode write lock. Moving to
+// local, the old external copy is removed only AFTER the row flip commits: a
+// failure there leaves an orphan the error names, never a row pointing at
+// nothing. The removal runs under the row's lock again (removeOldExternal), so
+// a store-mode Put of the row cannot land between its recheck and its delete.
+// soft reports an old copy the store kept soft-deleted.
 func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRead func(owner, name string)) (moved, soft bool, err error) {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
@@ -362,15 +361,48 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 	if err := flipRow(ctx, tx, owner, name, encVersion, k.ID(), wrapped, ct); err != nil {
 		return false, false, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, false, fmt.Errorf("commit: %w", err)
+	}
 	store, loc := splitRef(e.kekID)
+	soft, err = s.removeOldExternal(ctx, owner, name, store, loc)
+	if err != nil {
+		return false, false, fmt.Errorf("the row now holds the value locally, but its old copy in %s was not removed: %w — remove it there (`wardynd -reconcile` lists it)", store, err)
+	}
+	return true, soft, nil
+}
+
+// removeOldExternal deletes the external copy a row held before it moved to
+// local, in a second transaction that holds the row's lock: a store-mode Put
+// that landed after the flip may have re-pointed the row at the very object
+// being deleted (Vault's path is derived from the row), and the delete would
+// take the new value with it. When the row now points at the same object, the
+// Put reused it and it is left alone. soft reports a copy the store kept.
+func (s *Store) removeOldExternal(ctx context.Context, owner, name, store, loc string) (soft bool, err error) {
+	tx, err := beginReadCommitted(ctx, s.pool)
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := lockRow(ctx, tx, owner, name); err != nil {
+		return false, err
+	}
+	var version int16
+	var kekID string
+	err = tx.QueryRow(ctx, `SELECT enc_version, kek_id FROM secrets WHERE owned_by=$1 AND name=$2 FOR UPDATE`, owner, name).Scan(&version, &kekID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("lock: %w", err)
+	}
+	if err == nil && version == extVersion {
+		if curStore, curLoc := splitRef(kekID); curStore == store && secretstore.RefObject(curLoc) == secretstore.RefObject(loc) {
+			return false, nil
+		}
+	}
 	dctx, rep := secretstore.WithDeleteReport(ctx)
 	if err := s.ext.Delete(dctx, owner, name, loc); err != nil {
-		return false, false, fmt.Errorf("the old copy in %s was not removed, so the row was rolled back and still points at it: %w", store, err)
+		return false, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, false, fmt.Errorf("commit: %w — the old copy in %s was already removed, so the row points at nothing until its credential is set again (`wardynd -reconcile` lists it)", err, store)
-	}
-	return true, rep.Store != "" && !rep.Purged, nil
+	return rep.Store != "" && !rep.Purged, nil
 }
 
 // flipRow rewrites one locked row to its new location. The caller commits.

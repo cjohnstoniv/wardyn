@@ -213,6 +213,39 @@ func TestPG_ConvertV0_ACommitFailureReturnsEveryOpenedRow(t *testing.T) {
 	}
 }
 
+// #1071: a row whose value was decrypted and whose UPDATE then failed was
+// opened, so it is returned with the error for the boot to record. A BEFORE
+// UPDATE trigger fails the update of b-second alone.
+func TestPG_ConvertV0_ARowThatFailsAfterDecryptingIsStillReturned(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id := mustIdentity(t)
+	seedV0(t, pool, id, "", "a-first", "first")
+	seedV0(t, pool, id, "", "b-second", "second")
+	for _, q := range []string{
+		`CREATE FUNCTION fail_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced update failure'; END $$`,
+		`CREATE TRIGGER fail_update BEFORE UPDATE ON secrets FOR EACH ROW WHEN (OLD.name = 'b-second') EXECUTE FUNCTION fail_update()`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, _ := New(pool, id)
+
+	converted, err := s.ConvertV0(ctx, id)
+	if err == nil || !strings.Contains(err.Error(), rowRef("", "b-second")) || !strings.Contains(err.Error(), "forced update failure") {
+		t.Fatalf("ConvertV0 = %v, want an abort naming b-second", err)
+	}
+	if len(converted) != 2 || converted[0].Name != "a-first" || converted[1].Name != "b-second" {
+		t.Fatalf("returned rows = %+v, want a-first and b-second (both were opened)", converted)
+	}
+	for k, r := range rawRows(t, pool) {
+		if r.version != 0 {
+			t.Errorf("%s is enc_version %d after the abort, want 0", k, r.version)
+		}
+	}
+}
+
 // TestPG_ConvertV0_IsSingleWriter pins the advisory lock itself, not just
 // the outcome (row FOR UPDATE alone would already convert each row once): while
 // another session holds db.SecretConvertLockKey, a conversion must be seen

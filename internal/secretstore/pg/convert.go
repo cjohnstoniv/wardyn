@@ -21,9 +21,10 @@ import (
 // converted. Single-writer (db.SecretConvertLockKey) and all-or-nothing: a v0
 // row that fails to decrypt aborts the whole transaction, naming the row,
 // rather than silently skipping a credential — idempotent and resumable. On a
-// later-row or commit failure the rows it opened before failing are returned
-// with the error (the failing row is not among them: its value was never
-// opened), so the caller can record each read although nothing was committed.
+// later-row or commit failure the rows it opened are returned with the error,
+// the failing row among them when its value was opened before it failed (a
+// row that will not decrypt was never opened), so the caller can record each
+// read although nothing was committed.
 func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretstore.Row, error) {
 	if s.kek == nil {
 		return nil, fmt.Errorf("pg secretstore: convert: no local key is configured")
@@ -53,11 +54,14 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 	// Row at a time, so at most ONE plaintext is resident at any moment.
 	converted := make([]secretstore.Row, 0, len(all))
 	for i, e := range all {
-		if err := s.convertRow(ctx, tx, legacy, e); err != nil {
+		opened, err := s.convertRow(ctx, tx, legacy, e)
+		if opened {
+			converted = append(converted, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Found: true})
+		}
+		if err != nil {
 			return converted, fmt.Errorf("pg secretstore: v0 conversion ABORTED after %d of %d rows (nothing committed; the store is still v0 and older wardynd can still read it): %s %w",
 				i, len(all), rowRef(e.ownedBy, e.name), err)
 		}
-		converted = append(converted, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Found: true})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return converted, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)
@@ -65,24 +69,26 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 	return converted, nil
 }
 
-func (s *Store) convertRow(ctx context.Context, tx pgx.Tx, legacy age.Identity, e envelope) error {
+// convertRow re-seals one row. opened reports that its value was decrypted,
+// whether or not the conversion then succeeded: that is a read to record.
+func (s *Store) convertRow(ctx context.Context, tx pgx.Tx, legacy age.Identity, e envelope) (opened bool, err error) {
 	plain, err := ageDecrypt(legacy, e.ct)
 	if err != nil {
-		return fmt.Errorf("does not decrypt with WARDYN_AGE_KEY: %w", err)
+		return false, fmt.Errorf("does not decrypt with WARDYN_AGE_KEY: %w", err)
 	}
 	k := s.writer(e.ownedBy, e.name)
 	wrapped, ct, err := seal(ctx, k, e.ownedBy, e.name, plain)
 	if err != nil {
-		return err
+		return true, err
 	}
 	_, err = tx.Exec(ctx,
 		`UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6
 		  WHERE owned_by=$1 AND name=$2 AND enc_version=0`,
 		e.ownedBy, e.name, encVersion, k.ID(), wrapped, ct)
 	if err != nil {
-		return fmt.Errorf("update: %w", err)
+		return true, fmt.Errorf("update: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // LocalRows counts rows only a local KEK (or the age key itself, for v0) can
