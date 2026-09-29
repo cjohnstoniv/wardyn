@@ -67,10 +67,10 @@ var adminTokenCompareAllowed = map[string]string{
 
 // TestNoNewAdminTokenPrincipalCompare fails on any mention of the admin
 // token's principal string not on the allow-list above, and on an allow-list
-// entry that no longer exists.
+// entry that no longer exists or whose line now appears twice.
 func TestNoNewAdminTokenPrincipalCompare(t *testing.T) {
 	root := repoRoot(t)
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -98,13 +98,19 @@ func TestNoNewAdminTokenPrincipalCompare(t *testing.T) {
 				lastLine = n
 				text := strings.TrimSpace(lines[n-1])
 				key := filepath.ToSlash(rel) + "|" + text
-				if _, ok := adminTokenCompareAllowed[key]; !ok {
+				seen[key]++
+				if _, ok := adminTokenCompareAllowed[key]; ok && seen[key] > 1 {
+					// Each entry is one reviewed line; an identical second line is a new
+					// mention the review never saw (a grant hiding behind a refusal's text).
+					t.Errorf("%s:%d repeats an allow-listed line: %s\n"+
+						"the allow-list covers each line once; a second copy needs its own review "+
+						"and text that differs from the first", rel, n, text)
+				} else if !ok {
 					t.Errorf("%s:%d mentions the admin token's principal string: %s\n"+
 						"a principal string can be spelled by an identity provider; grant on what authenticated the request "+
 						"(ActorSystem, AgentRun.OperatorOwned), or add a refusing site to adminTokenCompareAllowed with its reason",
 						rel, n, text)
 				}
-				seen[key] = true
 			}
 			return nil
 		})
@@ -113,7 +119,7 @@ func TestNoNewAdminTokenPrincipalCompare(t *testing.T) {
 		}
 	}
 	for key := range adminTokenCompareAllowed {
-		if !seen[key] {
+		if seen[key] == 0 {
 			t.Errorf("allow-list entry no longer matches any line: %s", key)
 		}
 	}
