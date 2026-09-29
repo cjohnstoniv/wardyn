@@ -61,7 +61,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
-| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
+| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane; since 0.8.0 the per-person Azure DevOps (Entra) lane too — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, in place of the provider row's `default_profile`, so a saved policy works as a saved access profile. Each entry must be a grantable capability (`read`, `code_write`, `pr`, `policy_admin`, …); anything else is a `400` with reason `ado_capability_unknown`. It chooses only **within** the row's `capability_ceiling`: a run naming a capability outside it is refused at launch, never silently granted, and the live ceiling is re-checked on every request. Under a governance ceiling a member's choice is intersected with the ceiling's own list, and dropped when that list is empty or nothing chosen is in it; the ceiling's list is a bound, never a grant, so an unset choice stays unset (the row's `default_profile` applies), including for a member who launches with no policy at all. Inert for a run not on that lane. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md). |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
@@ -426,7 +426,12 @@ since 0.7.2: `git_push_any_branch` opts out the GitHub-App lane
 (`internal/egress/proxy/git_broker.go`) AND the never-resident `git_pat` lane
 (`internal/egress/proxy/pat_broker.go`), which the never-resident-`git_pat`
 row's own brokered-cleartext parsing (see `WARDYN_GIT_PAT_BROKER`,
-[ENV.md](ENV.md)) makes reachable the same way.
+[ENV.md](ENV.md)) makes reachable the same way. Since 0.8.0 it also opts out
+the per-person Azure DevOps (Entra) lane, where a ref outside the run's
+namespace then needs `code_write` instead of `policy_bypass`
+(`internal/egress/proxy/ado_gate.go`'s `adoRunRefProtected`) and Azure
+DevOps' own branch policies decide — see
+[AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
 
 Setting it on a run's policy also grades **high** on the Review rail
 (`composer.Grade`), which is where a human sees what a run may do before

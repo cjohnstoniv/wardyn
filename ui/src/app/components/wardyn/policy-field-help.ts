@@ -156,7 +156,7 @@ export const FIELD_HELP = {
     ],
   },
   git_push_any_branch: {
-    what: "Turns OFF branch-namespace confinement (default ON) for this run's brokered GitHub pushes.",
+    what: "Turns OFF branch-namespace confinement (default ON) for this run's brokered GitHub and Azure DevOps pushes.",
     values:
       "true | false (default). For a sandbox a human drives through an external tool that names its own branches — every such push is marked brokered:git:branch-ns-off in audit, on or off.",
     doc: "git_push_any_branch-the-per-run-opt-out",

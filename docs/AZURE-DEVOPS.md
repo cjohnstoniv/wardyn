@@ -168,10 +168,10 @@ above grants some subset of these, and a run can never be handed one the ceiling
 | Capability | What it allows |
 |---|---|
 | `read` | Clone, browse history, view work items, boards, builds, packages, and wiki pages |
-| `code_write` | Push commits and create or move a branch no policy protects — a git push only to refs under `refs/heads/wardyn/<run-id>/`. Opening a pull request is `pr`, not this |
+| `code_write` | Push commits and create or move a branch no policy protects — a git push only to refs under `refs/heads/wardyn/<run-id>/`, or to any branch when the run's policy sets `git_push_any_branch: true` (see [How pushes work](#how-pushes-work)). Opening a pull request is `pr`, not this |
 | `pr` | Open, update, comment on, vote on and complete a pull request, without bypassing a policy |
 | `policy_admin` | Create or change branch policies — required reviewers, build validation, merge strategy |
-| `policy_bypass` | Complete a pull request with a policy bypass, or move a protected ref directly, skipping a policy rather than satisfying it |
+| `policy_bypass` | Complete a pull request with a policy bypass, or move a protected ref directly, skipping a policy rather than satisfying it. Without `git_push_any_branch`, every ref outside the run's own namespace counts as protected |
 | `repo_admin` | Create, rename, or delete a repository; change its default branch |
 | `security_admin` | Read or change Azure DevOps permission assignments |
 | `serviceendpoint_admin` | Read, create, or change service connections |
@@ -191,6 +191,25 @@ The person (or an admin) sees it in the Wardyn UI and answers **allow once** —
 — or **allow for this run** — the capability joins what the rest of the run may do without asking
 again. Either way, an answer can never reach past the row's capability ceiling: that ceiling is the
 one thing nobody, including an admin approving in the moment, can grant past.
+
+### How pushes work
+
+A push is checked the same way whichever door it takes: a `git push` through Wardyn's git broker,
+or a REST call that moves a ref (`pushes`, or `refs` with the refs in the body).
+
+- **By default a run pushes only to its own branch namespace**, `refs/heads/wardyn/<run-id>/…`,
+  which needs `code_write`. Wardyn has no copy of the organisation's branch policies, so every other
+  ref counts as protected and needs `policy_bypass`. A push refused for that reason says so: *"this
+  run may push only to its own branch (wardyn/<run-id>/…). Pushing to other branches needs a policy
+  with git_push_any_branch: true."*
+- **With `git_push_any_branch: true` on the run's policy, a push to any branch needs `code_write`
+  only.** Wardyn forwards it with the person's own credential, and Azure DevOps' branch policies
+  and permissions decide: a protected `main` still rejects someone who lacks the permission to
+  push to it. Each such push is recorded as `brokered:git:branch-ns-off`, as on the GitHub lanes
+  (see [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
+- **The switch never touches a real bypass.** Completing a pull request with
+  `completionOptions.bypassPolicy: true` still needs `policy_bypass`, and so do Update Ref (`PATCH`
+  on `refs`, whose ref sits in a query Wardyn does not read), annotated tags and fork syncs.
 
 ## Request flow
 
