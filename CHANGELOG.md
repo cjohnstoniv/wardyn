@@ -21,6 +21,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the `entra:` namespace is refused `422`. Minted tokens keep their unknown-groups stamp until
   that sign-in. Other issuers are unchanged, and refuse the object-id form. Migration
   `0099_people_entra_object_id` adds the key columns to `people`.
+- **A recipe for running CI jobs as confined one-shot runs (#1111).** `docs/ci-jobs-as-runs.md` puts
+  the pieces in order: a governance profile for a dedicated CI principal, a pinned image, a runner
+  token delivered as an `env_secret` grant, a sealed run policy, `wardyn run --wait` with the job's
+  exit code, and what the audit trail records. It ends with a worked example of a self-hosted
+  Forgejo runner that registers, takes one job and exits, inside a confined run. Every command in it
+  was run against a compose install.
 
 ### Fixed
 
