@@ -6,10 +6,12 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -201,7 +203,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: create proxy config secret: %w", err))
 	}
 
-	// (4) Proxy pod, then poll for its CNI-assigned IP.
+	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
 	proxyPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
 		Spec: corev1.PodSpec{
@@ -278,7 +280,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	proxyIP, err := d.waitPodIP(ctx, proxyPodName(spec.RunID), spec.NotifyWaiting)
 	if err != nil {
-		return fail(fmt.Errorf("k8s: proxy pod never got an IP: %w", err))
+		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
 
 	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" to
@@ -511,36 +513,66 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 	}
 }
 
-// waitPodIP polls podName until its CNI-assigned Status.PodIP is set,
-// reporting why via onWaiting (nil-safe, once per change). It's the FIRST
-// wait CreateSandbox blocks on, so on a cluster with nowhere to schedule it's
-// the one a person sits through — the CNI assigns the IP before any image pull.
+// waitPodIP polls the proxy pod until it is READY — its init container done
+// and its main container Ready — and returns its CNI-assigned PodIP. An IP
+// alone proves nothing: the CNI assigns it before any image pull, so a proxy
+// stuck in ImagePullBackOff or still staging its config already has one.
+// Reports why via onWaiting (nil-safe, once per change). It's the FIRST wait
+// CreateSandbox blocks on, so on a cluster with nowhere to schedule it's the
+// one a person sits through.
 func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(string)) (string, error) {
 	var ip string
+	var lastPod *corev1.Pod
 	var lastReason string
 	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, podIPWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
 		}
-		if pod.Status.PodIP != "" {
-			ip = pod.Status.PodIP
-			return true, nil
-		}
+		lastPod = pod
 		if reason := waitingReason(pod); reason != lastReason {
 			lastReason = reason
 			if onWaiting != nil {
 				onWaiting(reason)
 			}
 		}
+		if err := proxyStartFailure(pod); err != nil {
+			return false, err
+		}
 		for _, cs := range pod.Status.ContainerStatuses {
-			if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
-				return false, fmt.Errorf("proxy container stuck waiting (%s): %s", w.Reason, w.Message)
+			if cs.Name == proxyContainerName && cs.Ready && pod.Status.PodIP != "" {
+				ip = pod.Status.PodIP
+				return true, nil
 			}
 		}
 		return false, nil
 	})
+	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil {
+		// A container's own Waiting reason first: podStuckReason reads only the
+		// pod, and would call an init-blocked pod one "with no container status".
+		if why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod)); why != "" {
+			return "", fmt.Errorf("%w (%s)", err, why)
+		}
+	}
 	return ip, err
+}
+
+// proxyStartFailure is non-nil once the proxy pod is in a state waiting cannot
+// fix: a terminal Waiting reason on its init or main container, a failed init,
+// or a main container that exited. The "proxy container stuck waiting (" shape
+// is what the control plane's stuckStartupFromFailureHint reads back.
+func proxyStartFailure(pod *corev1.Pod) error {
+	for _, cs := range slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses) {
+		if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
+			return fmt.Errorf("proxy container stuck waiting (%s): %s: %s", w.Reason, cs.Name, w.Message)
+		}
+		t := cs.State.Terminated
+		if t == nil || (cs.Name == stageProxyConfigInitName && t.ExitCode == 0) {
+			continue
+		}
+		return fmt.Errorf("proxy container %s exited before the proxy was ready (exit code %d, %s): %s", cs.Name, t.ExitCode, t.Reason, t.Message)
+	}
+	return nil
 }
 
 func protoPtr(p corev1.Protocol) *corev1.Protocol          { return &p }

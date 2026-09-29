@@ -354,6 +354,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Kubernetes starts the agent only once its proxy is ready.** An assigned proxy pod IP used to
+  count as a started proxy, so a proxy stuck in `ImagePullBackOff` or still staging its config
+  accompanied a RUNNING agent with no working proxy. The agent pod is now created only after the
+  proxy's init container has completed and its container is Ready, inside the same 90-second
+  `podIPWaitTimeout`. A terminal proxy state (`ImagePullBackOff`, `ErrImagePull`,
+  `CrashLoopBackOff`, `CreateContainerConfigError`, a failed init or an exited proxy) fails the run
+  at once, naming the container and the reason, and the run's objects are rolled back.
 - **Revive and the admin restart name the Kubernetes refusal (#1342).** A run whose runner
   substrate cannot replace its proxy (Kubernetes: the agent pod pins the proxy pod's IP, so the
   substrate implements no `runner.ProxyReviver`) is refused by `POST /api/v1/runs/{id}/revive` with
