@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { ADO_CAPABILITIES } from "./ado-capabilities";
-import { ADO_CAP_NAME } from "./ado-access-copy";
+import { ADO_CAP_COPY } from "./workspace-providers-copy";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -19,8 +19,8 @@ function repoRoot(): string {
 }
 
 // The dispatch refusal names a capability in Go (adoscope.ShortLabel); the
-// console names it here. One name per capability, whichever side speaks.
-describe("ADO_CAP_NAME — the same names Go's launch refusal uses", () => {
+// console names it in workspace-providers-copy.ts. One name per capability, whichever side speaks.
+describe("ADO_CAP_COPY names — the same names Go's launch refusal uses", () => {
   it("names every grantable capability exactly as adoscope's shortLabels does", () => {
     const src = readFileSync(join(repoRoot(), "internal/adoscope/capability.go"), "utf8");
     const consts = new Map<string, string>();
@@ -29,7 +29,7 @@ describe("ADO_CAP_NAME — the same names Go's launch refusal uses", () => {
     expect(block).not.toBeNull();
     const goNames: Record<string, string> = {};
     for (const m of block![1].matchAll(/(Cap\w+):\s*"([^"]+)"/g)) goNames[consts.get(m[1])!] = m[2];
-    expect(ADO_CAP_NAME).toEqual(goNames);
-    expect(Object.keys(ADO_CAP_NAME).sort()).toEqual(ADO_CAPABILITIES.map((c) => c.cap));
+    expect(Object.fromEntries(Object.entries(ADO_CAP_COPY).map(([cap, c]) => [cap, c.name]))).toEqual(goNames);
+    expect(Object.keys(ADO_CAP_COPY).sort()).toEqual(ADO_CAPABILITIES.map((c) => c.cap));
   });
 });

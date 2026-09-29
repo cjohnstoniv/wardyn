@@ -202,7 +202,7 @@ func adoPolicyPastCeiling(outside []adoscope.Capability) string {
 	if n := len(names); n > 1 {
 		list = strings.Join(names[:n-1], ", ") + " and " + names[n-1]
 	}
-	return "Can’t launch with this policy. It grants " + list + " for Azure DevOps, which is outside what your " +
+	return "Can't launch with this policy. It grants " + list + " for Azure DevOps, which is outside what your " +
 		"administrator allows on this provider. Ask an admin to widen the ceiling, or pick a different saved policy."
 }
 

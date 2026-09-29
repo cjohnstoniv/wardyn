@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import type { RunPolicySpec } from "../../lib/types";
 import { ADO_CAPABILITIES } from "../../lib/ado-capabilities";
 import { ADO_ACCESS } from "../../lib/ado-access-copy";
+import { ADO_ENTRA_EDITOR } from "../../lib/workspace-providers-copy";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 
 const BASE: RunPolicySpec = {
@@ -59,7 +60,7 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
     // The badge sits inside each capability's label; the group's own heading
     // says "High risk" too, outside any label.
     const badges = (scope: HTMLElement) =>
-      within(scope).getAllByText(ADO_ACCESS.HIGH_RISK_BADGE).filter((el) => el.closest("label"));
+      within(scope).getAllByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE).filter((el) => el.closest("label"));
     expect(badges(risky)).toHaveLength(n);
     expect(within(risky).getByText(ADO_ACCESS.HIGH_RISK_WARN_MEMBER)).toBeInTheDocument();
     expect(badges(document.body)).toHaveLength(n);
@@ -68,7 +69,7 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
   it("writes the checked set in catalogue order, and drops the key when nothing is checked", async () => {
     const seen: RunPolicySpec[] = [];
     render(<Harness initial={BASE} seen={seen} ceiling={CEILING} />);
-    const picks = ["Open pull requests", "Read", "Push to the run’s own branch"];
+    const picks = ["Open pull requests", "Read", "Push to the run's own branch"];
     for (const name of picks) await userEvent.click(box(name));
     expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["code_write", "pr", "read"]);
     for (const name of picks) await userEvent.click(box(name));
@@ -80,7 +81,7 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
     render(<Harness initial={BASE} seen={seen} ceiling={CEILING} />);
     const locked = box("Manage service connections");
     expect(locked).toBeDisabled();
-    expect(locked).toHaveAccessibleName(`Manage service connections ${ADO_ACCESS.HIGH_RISK_BADGE} ${ADO_ACCESS.LOCKED}`);
+    expect(locked).toHaveAccessibleName(`Manage service connections ${ADO_ENTRA_EDITOR.HIGH_RISK_BADGE} ${ADO_ACCESS.LOCKED}`);
     const row = locked.closest("li")!;
     expect(row).toHaveAttribute("title", ADO_ACCESS.LOCKED);
     expect(row).toHaveAttribute("aria-disabled", "true");

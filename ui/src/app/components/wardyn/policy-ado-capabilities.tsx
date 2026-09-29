@@ -15,7 +15,7 @@
 // nothing is locked: dispatch is still the gate.
 import type { RunPolicySpec } from "../../lib/types";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, type ADOCapabilityInfo } from "../../lib/ado-capabilities";
-import { ADO_ACCESS, ADO_CAP_NAME, ADO_GROUP_NAME } from "../../lib/ado-access-copy";
+import { ADO_ACCESS, adoCapName, adoGroupName } from "../../lib/ado-access-copy";
 import { Checkbox } from "../ui/checkbox";
 import { cn } from "../ui/utils";
 import { SectionLabel } from "./primitives";
@@ -47,7 +47,7 @@ function CapabilityRow({
   onToggle: (on: boolean) => void;
 }) {
   const id = `ado-cap-${info.cap}`;
-  const name = ADO_CAP_NAME[info.cap] ?? info.cap;
+  const name = adoCapName(info.cap);
   // A locked capability a stored policy already names stays uncheckable, so the
   // person can take it out; one it does not name cannot be put in.
   const inert = locked && !checked;
@@ -117,7 +117,7 @@ export function ADOCapabilitiesSection({
       <div className="mt-1">
         {ADO_CAPABILITY_GROUPS.map((g) => {
           const risk = g.id === "high_risk";
-          const title = ADO_GROUP_NAME[g.id];
+          const title = adoGroupName(g.id);
           return (
             <fieldset
               key={g.id}

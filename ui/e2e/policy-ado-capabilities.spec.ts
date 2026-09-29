@@ -5,6 +5,7 @@
 
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
 import { ADO_ACCESS } from "../src/app/lib/ado-access-copy";
+import { ADO_ENTRA_EDITOR } from "../src/app/lib/workspace-providers-copy";
 import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Locator, Page } from "@playwright/test";
 
@@ -92,7 +93,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
     await expect(edit).toBeVisible();
     await expect(capBox(edit, "Change branch policies")).toBeChecked();
     await expect(capBox(edit, "Read")).toBeChecked();
-    await expect(capBox(edit, "Push to the run’s own branch")).not.toBeChecked();
+    await expect(capBox(edit, "Push to the run's own branch")).not.toBeChecked();
     await edit.getByRole("button", { name: "Cancel" }).click();
     await expect(edit).toBeHidden();
   } finally {
@@ -128,7 +129,7 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
     await page.getByRole("combobox", { name: "Saved policy" }).click();
     await page.getByRole("option", { name: `ADO repo-policy admin ${stamp}` }).click();
     await expect(summary).toHaveText(/^Azure DevOps: Read · Change branch policies\s*High risk$/);
-    await expect(summary.getByText(ADO_ACCESS.HIGH_RISK_BADGE)).toBeVisible();
+    await expect(summary.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();
   } finally {
     for (const id of ids) expect((await request.delete(`/api/v1/policies/${id}`, { headers: auth })).ok()).toBe(true);
   }

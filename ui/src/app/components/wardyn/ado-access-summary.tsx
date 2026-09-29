@@ -8,14 +8,15 @@
 // and beside each row on the Policies screen, so a person picks a policy
 // without opening it to find out what it grants.
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../lib/ado-capabilities";
-import { ADO_ACCESS, ADO_CAP_NAME, ADO_GROUP_NAME } from "../../lib/ado-access-copy";
+import { ADO_ACCESS, adoCapName } from "../../lib/ado-access-copy";
+import { ADO_ENTRA_EDITOR, ADO_GROUP_COPY } from "../../lib/workspace-providers-copy";
 import { Chip } from "./primitives";
 import { cn } from "../ui/utils";
 
 export function HighRiskBadge({ className }: { className?: string }) {
   return (
     <Chip tone="danger" className={cn("px-1.5 py-0 text-meta font-semibold", className)}>
-      {ADO_ACCESS.HIGH_RISK_BADGE}
+      {ADO_ENTRA_EDITOR.HIGH_RISK_BADGE}
     </Chip>
   );
 }
@@ -33,8 +34,8 @@ export function adoAccessSummary(caps: unknown): { parts: string[]; highRisk: bo
     const picked = inGroup.filter((c) => chosen.has(c.cap));
     if (picked.length === 0) continue;
     if (g.id === "high_risk") highRisk = true;
-    if (g.id !== "high_risk" && picked.length === inGroup.length) parts.push(ADO_GROUP_NAME[g.id]);
-    else parts.push(...picked.map((c) => ADO_CAP_NAME[c.cap] ?? c.cap));
+    if (g.id !== "high_risk" && picked.length === inGroup.length) parts.push(ADO_GROUP_COPY[g.id].name);
+    else parts.push(...picked.map((c) => adoCapName(c.cap)));
   }
   return { parts, highRisk };
 }

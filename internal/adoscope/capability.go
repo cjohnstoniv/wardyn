@@ -169,11 +169,12 @@ var labels = map[Capability]string{
 
 // shortLabels are the console's canon short names (the owner-approved Azure
 // DevOps access mock), for a Go-authored sentence a person reads beside that
-// console — a launch refusal naming the capability. ui/src/app/lib/ado-access-copy.ts
-// carries the same names, and its vitest pins the two together.
+// console — a launch refusal naming the capability. ADO_CAP_COPY in
+// ui/src/app/lib/workspace-providers-copy.ts carries the same names, and
+// ui/src/app/lib/ado-access-copy.test.ts pins the two together.
 var shortLabels = map[Capability]string{
 	CapRead:                 "Read",
-	CapCodeWrite:            "Push to the run’s own branch",
+	CapCodeWrite:            "Push to the run's own branch",
 	CapPR:                   "Open pull requests",
 	CapWorkWrite:            "Work items",
 	CapWikiWrite:            "Wiki",
