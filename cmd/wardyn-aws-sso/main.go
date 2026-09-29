@@ -261,10 +261,10 @@ func serverSentence(err error) string {
 const (
 	pinAccountNotEntitledRefusal = "this deployment pins AWS sign-ins for this agent to account %s, which this sign-in does not reach — ask an admin to change the pin, or ask your cloud team for access to that account"
 	pinRoleNotInAccountRefusal   = "this deployment pins AWS sign-ins for this agent to role %s in account %s, which this sign-in cannot assume there — ask an admin to change the pin, or ask your cloud team to grant you that role"
-	chooserNoTerminalRefusal     = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the agent row; this session reaches %s"
+	chooserNoTerminalRefusal     = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the model provider; this session reaches %s"
 	portalUnreachableRefusal     = "the AWS access portal could not be reached — try the sign-in again"
-	chooserGaveUpRefusal         = "nothing was chosen after three tries — ask an admin to pin the account and role on the agent row so this sign-in has nothing to guess"
-	lookupFailedRefusal          = "the AWS access portal did not return your accounts and roles, so nothing was saved — sign in again, or ask an admin to pin the account and role on the agent row"
+	chooserGaveUpRefusal         = "nothing was chosen after three tries — ask an admin to pin the account and role on the model provider so this sign-in has nothing to guess"
+	lookupFailedRefusal          = "the AWS access portal did not return your accounts and roles, so nothing was saved — sign in again, or ask an admin to pin the account and role on the model provider"
 )
 
 // The chooser's prompt block, verbatim from the plan.
@@ -754,7 +754,9 @@ const maxPortalPages = 100
 // portalPaged follows nextToken (sent back as the next_token query parameter)
 // until the portal stops returning one, handing every page to collect. A failed
 // page fails the whole listing: a partial list would let a pin be refused as
-// "not in that account" for a role that sits on a page never read.
+// "not in that account" for a role that sits on a page never read. Reaching
+// maxPortalPages is the one exception: it returns what was read and prints a
+// warning that the list may be incomplete.
 func portalPaged(ctx context.Context, client *http.Client, rawURL, accessToken string, collect func(*portalPage)) (status int, ok bool) {
 	next := ""
 	for pages := 0; pages < maxPortalPages; pages++ {
