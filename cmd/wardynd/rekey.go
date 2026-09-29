@@ -46,7 +46,7 @@ const rekeyConnectTimeout = 30 * time.Second
 // for the life of the process: after this returns it would decrypt nothing and
 // would write any new secret under the retired key. db.SecretRekeyLockKey
 // refuses a second concurrent ROTATION but cannot see a serving daemon — see
-// that constant's honest ceiling, and the runbook in docs/OPERATIONS.md.
+// that constant's honest ceiling, and the runbook in docs/operations/secrets-and-keys.md.
 //
 // Deliberately NOT migrated on the way in (unlike the serving boot's
 // connectAndMigrate): "rotate my key" must not be a disguised schema upgrade. A

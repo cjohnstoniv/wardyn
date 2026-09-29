@@ -10,7 +10,7 @@ import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
 import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/sign-in-copy";
 import { SESSION_ENDED_REASON } from "../src/app/lib/api/core";
-import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "../src/app/lib/reauth-copy";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "../src/app/lib/reauth-copy";
 
 // Auth / sign-in lane.
 //
@@ -573,7 +573,7 @@ test.describe("the page is checked against the re-authenticated role", () => {
     await signInInDialog(page);
 
     await expect(reauthDialog(page).getByText(REAUTH_DIALOG.ROLE_CHANGED_BODY)).toBeVisible();
-    await reauthDialog(page).getByRole("button", { name: REAUTH_DRAFT.GO_TO_RUNS }).click();
+    await reauthDialog(page).getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }).click();
     await expect(page).toHaveURL(/\/runs$/);
     await expect(reauthDialog(page)).toHaveCount(0);
   });

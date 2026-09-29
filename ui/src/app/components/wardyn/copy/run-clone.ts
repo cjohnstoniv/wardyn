@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// DRAFT (M2 canon pending) — B4b, the clone of a run that ended.
+// B4b, the clone of a run that ended.
 export const RUN = {
   // The affordance the killed panel's own advice ("Start a new run if the work
   // still needs doing") never had.
@@ -16,17 +16,17 @@ export const RUN = {
   // records only that there was one. A named ceiling beats a silent default.
   CLONE_INLINE_POLICY_CEILING:
     "This run used an inline policy, which isn't stored — pick a saved policy or write one again.",
-  // DRAFT (M2) — §7.6's staged RUN_CLONE_CEILING_NOTE, which shipped nowhere
-  // until now. It is the console half of §7 B4b's "create re-clamps": a member
+  // §7.6's RUN_CLONE_CEILING_NOTE, frozen by #206. It is the console half of
+  // §7 B4b's "create re-clamps": a member
   // cloning an admin's run is narrowed AT LAUNCH, not flattered in this form,
   // and the banner has to say so before they press Launch rather than after.
   CLONE_CEILING_NOTE:
     "Your ceiling applies again at launch — anything this run had above it is narrowed, with the reason.",
-  // DRAFT (M2 canon pending) — F2-F5: a saved-policy reference that no longer
+  // F2-F5: a saved-policy reference that no longer
   // resolves (deleted elsewhere) needs its own reason; "pick a saved policy,
   // or write a custom one" is false once one WAS picked.
   POLICY_GONE: "That saved policy no longer exists — pick another.",
-  // DRAFT (M2 canon pending) — F2-F2: the original sentence claimed the saved
+  // F2-F2: the original sentence claimed the saved
   // lane merges nothing; runs_create.go's create door prepends the attached
   // Workspace card's mounts even when launching by policy_id. Named, not
   // silently contradicted.

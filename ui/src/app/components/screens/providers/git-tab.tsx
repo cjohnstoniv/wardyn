@@ -39,6 +39,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
+import { EntraEditor } from "./entra-editor";
 
 const ALL_LANES: LegacyGitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
@@ -55,8 +56,8 @@ function availableLanes(kind: GitProviderKind, baseUrls: string[]): LegacyGitLan
   return ALL_LANES.filter((l) => !laneUnavailableReason(l, kind, baseUrls));
 }
 
-// The lanes this tab does not render at all — today just "entra", which is
-// configured elsewhere and is not one of ALL_LANES.
+// The lanes this tab does not render as a checkbox — today just "entra",
+// which is not one of ALL_LANES (its block is edited in entra-editor.tsx).
 //
 // They are PRESERVED across every toggle here. Rewriting `lanes` from the
 // rendered set alone dropped them, and the drop was not cosmetic: a row whose
@@ -454,6 +455,10 @@ function Row({
                 saveVariant="secondary"
               />
             </LaneBody>
+          )}
+          {/* The entra lane's own section — only on a row that carries it. */}
+          {kind === "azure_devops" && (row.entra || row.lanes?.includes("entra")) && (
+            <EntraEditor row={row} operator={operator} onUpdate={onUpdate} />
           )}
         </div>
       )}

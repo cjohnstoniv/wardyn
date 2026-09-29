@@ -42,7 +42,7 @@ CC3 Kata microVM), whether an LLM path exists, secret-store durability — then
 walks the rail's steps to your first run. Whatever you configure has to pass a live
 probe before that step unlocks; nothing is ambient, so a run reaches an
 integration only when its workspace requires it by name (see
-[OPERATIONS.md](OPERATIONS.md) → "Model access resolves" for the one exception).
+[operations/integrations.md](operations/integrations.md#model-access-resolves--it-does-not-default-to-none) → "Model access resolves" for the one exception).
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 

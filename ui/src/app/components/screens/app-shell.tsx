@@ -304,7 +304,7 @@ const SESSION_CHECK_MS = 15 * 1000;
 // anything. Three states name the THIRD one instead of collapsing it into
 // the second.
 export type SessionExpiryState = "none" | "soon" | "expired";
-// DRAFT (M2 canon pending) — F3-F11's two new arms.
+// F3-F11's two new arms.
 // Exported so a suite asserting the banner stack's order reads the shipped
 // sentence rather than a second, hand-copied one.
 export const SESSION_EXPIRY_COPY = {

@@ -38,36 +38,36 @@ export function isTerminalStatusReason(reason: string | null | undefined): boole
   return !!reason && TERMINAL_STATUS_REASONS.includes(reason);
 }
 
-// Draft strings (M2 canon pending)
+// Shipped copy, frozen by #206.
 // One block, one file. Every test asserts through these constants.
 
-// DRAFT (M2 canon pending) — the ordinary wait. The kubelet reports
+// The ordinary wait. The kubelet reports
 // ContainerCreating for a pull and for everything else it does before a
 // container runs (canary.go's own comment), so the pull is named as the usual
 // cause, conditionally, never as the diagnosis — the hedge login-pane-copy.ts's
 // U-12 note settled on.
 export const STARTING_CONTAINER_CREATING =
   "Starting the sandbox. The first start after an update can take a couple of minutes while the image downloads."; // no k8s nouns for a member; still conditional
-// DRAFT (M2 canon pending) — docker only, the one place a first pull can
+// Docker only, the one place a first pull can
 // honestly be asserted (ensureImage).
 export const STARTING_FIRST_PULL =
   "Downloading the image. The first start after an update takes a couple of minutes."; // Codex #11: imagePresent=false proves the image is not cached now — pruning invalidates any "never ran here" claim
-// DRAFT (M2 canon pending) — the pod exists but nothing will take it. Not terminal.
+// The pod exists but nothing will take it. Not terminal.
 export const STARTING_UNSCHEDULABLE = "Waiting for a machine with room for this sandbox.";
-// DRAFT (M2 canon pending) — Pending with no container status at all.
+// Pending with no container status at all.
 export const STARTING_WAITING_FOR_NODE = "Waiting for a machine to start it on.";
-// DRAFT (M2 canon pending) — terminal; the registry's own words follow the colon
+// Terminal; the registry's own words follow the colon
 // because they name the fix.
 export const STUCK_IMAGE_PULL = "The image could not be pulled:";
-// DRAFT (M2 canon pending) — terminal, and nothing about the cluster will change it.
+// Terminal, and nothing about the cluster will change it.
 export const STUCK_IMAGE_NAME = "That image reference is not valid:";
-// DRAFT (M2 canon pending) — terminal. The image exists; the kubelet would not
+// Terminal. The image exists; the kubelet would not
 // make a container from it.
 export const STUCK_CREATE_CONTAINER = "The sandbox container could not be created:";
-// DRAFT (M2 canon pending) — terminal for a start: the container starts and
+// Terminal for a start: the container starts and
 // exits, repeatedly.
 export const STUCK_CRASH_LOOP = "The sandbox container keeps exiting as it starts:";
-// DRAFT (M2 canon pending) — the lead-in for a reason this console has no
+// The lead-in for a reason this console has no
 // sentence for. Prefixed so a bare `pod: SomeReason: msg` never leads: the same
 // honest degradation failure_hint already has, with a word in front of it
 // saying that the rest is the platform talking.

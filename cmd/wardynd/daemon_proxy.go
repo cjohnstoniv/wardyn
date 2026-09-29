@@ -18,16 +18,12 @@ import (
 	"golang.org/x/net/http/httpproxy"
 )
 
-// DRAFT (M2 canon pending)
-
 const (
 	// daemonProxyInvalidRefusal is the BOOT REFUSAL for a WARDYN_DAEMON_PROXY_URL
 	// that fails to parse as a proxy. %s is a CLASSIFICATION of the failure
 	// ("not a URL", "an unsupported scheme", "missing a host") — NEVER the raw
 	// value or the url.Parse error text, either of which could echo a
 	// credential-bearing URL into the boot log.
-	//
-	// DRAFT (M2 canon pending)
 	daemonProxyInvalidRefusal = "refusing to start: WARDYN_DAEMON_PROXY_URL is %s — " +
 		"it decides where wardynd's OWN outbound calls go, including the AWS SSO token renewal that " +
 		"carries your client secret and refresh token; fix it or unset it"
@@ -37,8 +33,6 @@ const (
 	// This refusal applies ONLY to the plain WARDYN_DAEMON_PROXY_URL: a
 	// credentialed proxy is reached via WARDYN_DAEMON_PROXY_SECRET (a file
 	// path) instead, below.
-	//
-	// DRAFT (M2 canon pending)
 	daemonProxyUserinfoRefusal = "refusing to start: WARDYN_DAEMON_PROXY_URL must not embed a " +
 		"credential (user:pass@) — put the credential in a file and point WARDYN_DAEMON_PROXY_SECRET at it, " +
 		"or put the proxy's credential in the proxy"

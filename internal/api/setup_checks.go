@@ -556,7 +556,7 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 		checks = append(checks, SetupCheck{
 			ID: "kek_local", Label: "Credential key", Status: "warn",
 			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
-			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/operations/secrets-and-keys.md), then run `wardynd -rewrap`.",
 		})
 	}
 	if !platformSeparate {

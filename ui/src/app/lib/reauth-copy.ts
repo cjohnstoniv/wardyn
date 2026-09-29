@@ -7,7 +7,7 @@
 // (reauth-copy.test.ts parses that table back and compares every row).
 //
 // Reused rather than restated here: "Copy my changes" and its toast
-// (workspace-providers-copy.ts PROVIDERS_DRAFT), "Not now"
+// (workspace-providers-copy.ts PROVIDERS_EXTRA), "Not now"
 // (model-access-copy.ts MODEL_ACCESS_BANNER.NOT_NOW) and "Sign in with SSO"
 // (sign-in.tsx SSO_SIGN_IN). The full sign-in screen's own notice is
 // SESSION_ENDED_REASON in lib/api/core.ts.
@@ -29,8 +29,8 @@ export const REAUTH_BAR = {
   CTA: "Sign in",
 } as const;
 
-// DRAFT (canon pending): the role-changed view's continue action. The mock
-// froze the body sentence but not the button under it.
-export const REAUTH_DRAFT = {
+// Shipped copy, frozen by #206: the role-changed view's continue action. The
+// mock froze the body sentence but not the button under it.
+export const REAUTH_EXTRA = {
   GO_TO_RUNS: "Go to Runs",
 } as const;

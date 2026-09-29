@@ -26,7 +26,7 @@ import { HttpError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage, relativeTime } from "../../lib/format";
-import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT, type CapabilityKind } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
   AgentRun,
   CapabilityEffect,
@@ -423,8 +423,8 @@ export function PermissionsScreen() {
                           (never alongside it — the row's real effect is
                           moot while the value can't canonicalize). */}
                       {g.inert ? (
-                        <Chip tone="neutral" title={PERM_DRAFT.INERT_REMEDY}>
-                          {PERM_DRAFT.INERT_CHIP}
+                        <Chip tone="neutral" title={PERM_EXTRA.INERT_REMEDY}>
+                          {PERM_EXTRA.INERT_CHIP}
                         </Chip>
                       ) : (
                         // Amber for allow — a widened blast radius, never a

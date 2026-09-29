@@ -370,7 +370,9 @@ describe("GitTab", () => {
     it("an entra lane leaves the three legacy checkboxes unchecked — the field narrows", () => {
       render(<Harness initial={[entraRow]} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      for (const box of within(row).getAllByRole("checkbox")) {
+      // The lane checkboxes only: the row's Entra section draws its own.
+      const lanes = within(row).getByRole("group", { name: PROVIDERS.FIELD_LANES });
+      for (const box of within(lanes).getAllByRole("checkbox")) {
         expect(box).toHaveAttribute("aria-checked", "false");
       }
     });

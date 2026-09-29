@@ -18,7 +18,7 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { isTerminalRunState, type SetupStatus } from "../../../lib/types";
 
-// DRAFT (M2 canon pending) — S-13 (blind security review, lens-S.md): the PTY
+// S-13 (blind security review, lens-S.md): the PTY
 // success marker is sandbox-forgeable by construction (a replaced/malicious
 // login image can print it without ever completing a real capture), so the
 // pane no longer trusts the marker alone. On doneMarker it re-fetches
@@ -47,12 +47,12 @@ import { isTerminalRunState, type SetupStatus } from "../../../lib/types";
 export const CAPTURE_NOT_CORROBORATED =
   "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again. " +
   "If it keeps happening, the sandbox's report and the server disagree — check the run's audit trail.";
-// DRAFT (M2 canon pending) — R-3: getSetupStatus RESOLVES a synthetic
+// R-3: getSetupStatus RESOLVES a synthetic
 // `unreachable` payload for a 5xx or a dropped socket, it does not throw. An
 // honest capture that DID land would then be accused of not existing. One
 // retry, then this: the check failed, not the sign-in.
 export const CAPTURE_CHECK_UNREACHABLE = "Wardyn couldn't reach the server to verify this sign-in — try again.";
-// DRAFT (M2 canon pending) — R-8: the corroboration is a round trip the
+// R-8: the corroboration is a round trip the
 // operator otherwise experiences as a terminal that stopped scrolling. Says
 // what is happening WITHOUT claiming the capture the server has not confirmed.
 export const CAPTURE_VERIFYING = "Checking with Wardyn that the session was stored…";
@@ -214,7 +214,7 @@ export function extractSignedIn(buf: string): boolean {
   return /successfully logged into/i.test(buf);
 }
 
-// DRAFT (M2 canon pending) — round-2 UX S10 + nits: no "Signed in." verdict on
+// Round-2 UX S10 + nits: no "Signed in." verdict on
 // forgeable evidence (the CLI's line, like the done marker, is a PTY string —
 // S-13's own reasoning, applied one step earlier). chooseAccountRole prompts
 // TWICE when the roster row carries no account/role pin (`wardyn: account

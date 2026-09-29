@@ -65,6 +65,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The console edits the Azure DevOps row's Entra settings.** On **Workspace providers → Git**, an
+  Azure DevOps row that carries the `entra` lane now shows its tenant and client IDs, the REST toggle,
+  the capability ceiling and the default profile, grouped with the High-risk capabilities flagged.
+  A default outside the ceiling can't be checked, and one left outside a narrowed ceiling blocks Save.
+  A caller who can't edit sees it read-only.
+
+- **A run policy can choose a run's Azure DevOps capabilities (#1363).** A new
+  `azure_devops_capabilities` field replaces the provider row's `default_profile` for the runs a
+  policy governs, so a saved policy works as a saved access profile (for example
+  `["read", "code_write", "pr"]` or `["read", "policy_admin"]`). The policy editor's "Azure DevOps
+  access" section sets it as a grouped checklist that locks every capability off the row's
+  ceiling, and the Policies list and New Run's saved-policy picker summarise it ("Azure DevOps:
+  Read · Contribute"). `scm_access` (on `/setup/status` and `GET /me/scm-access`) now carries the
+  row's `capability_ceiling` for that. It chooses only within the ceiling: a run naming a
+  capability outside it is refused at launch with a sentence naming each one, and an entry the
+  catalogue cannot grant is a `400` with reason `ado_capability_unknown`. A member's choice is intersected with their governance
+  ceiling's own list; that list is a bound, never a grant. Absent keeps today's behaviour.
+  docs/AZURE-DEVOPS.md now says that opening a pull request needs `pr`, not `code_write`.
 - **The User view picks a user type (#912).** With more than one user type configured, the User
   view side of the console switch becomes a dropdown, preselecting the admin's last choice; the
   eyebrow it shows while looking through a type reopens the same picker without leaving the view.

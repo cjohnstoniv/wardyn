@@ -12,7 +12,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/api/model-providers";
-import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { RAIL_PROVIDER } from "../../wardyn/copy/new-run-rail";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -671,7 +671,7 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     expect(screen.getByText(PROVIDERS.SAVED_ELSEWHERE_BODY)).toBeInTheDocument();
     // The row stays mounted — there is still something on screen to save.
     expect(screen.getByTestId("agent-row-claude-code")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD })).toBeInTheDocument();
     expect(screen.queryByText(/save over theirs/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
     expect(putAgentProvidersMock).toHaveBeenCalledTimes(1);

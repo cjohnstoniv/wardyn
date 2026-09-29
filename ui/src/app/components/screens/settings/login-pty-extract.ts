@@ -10,7 +10,7 @@
 // Re-exported from the pane so this pane's own tests (which import
 // `extractSetupToken` et al. from "./harness-login-pane") keep their path.
 
-// DRAFT (M2 canon pending) — U2-05: the refusal
+// U2-05: the refusal
 // sentence below the lead-in is the sandbox's prose, printed by
 // cmd/wardyn-aws-sso — the very binary a forged login image replaces (the S-13
 // threat model, applied to the success path). Rendered bare inside Wardyn's

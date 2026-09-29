@@ -71,6 +71,8 @@ import {
 } from "../wardyn/availability-control";
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
+import { ADOAccessSummary } from "../wardyn/ado-access-summary";
+import { setup as setupApi } from "../../lib/api/setup";
 
 // The starter spec that prefills the "create" editor IS the panel's Minimal
 // template — one const, no hand-maintained twin to drift.
@@ -239,6 +241,7 @@ export function PoliciesScreen() {
                   >
                     <TableCell>
                       <span className="font-medium text-foreground">{p.name}</span>
+                      <ADOAccessSummary caps={p.spec.azure_devops_capabilities} className="mt-0.5" />
                     </TableCell>
                     <TableCell>
                       <Mono>{p.id}</Mono>
@@ -501,6 +504,14 @@ function PolicyEditor({
     initial.current = { name: seedName, specText: seedSpec };
   }, [editor]);
 
+  // The Azure DevOps row's ceiling, so the editor locks what a run could never
+  // be granted. Unknown (no row, unreachable) locks nothing.
+  const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>();
+  React.useEffect(() => {
+    if (!editor) return;
+    void setupApi.getSetupStatus().then((st) => setAdoCeiling(st.scm_access?.capability_ceiling)).catch(() => {});
+  }, [editor]);
+
   const dirty = name !== initial.current.name || specText !== initial.current.specText;
 
   const save = async () => {
@@ -585,7 +596,7 @@ function PolicyEditor({
               required
             />
           </Field>
-          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} />
+          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} adoCeiling={adoCeiling} />
           {/* The creation form asks; an existing policy's list lives on its
               sheet, except right after a refused list write. */}
           {(!editing || partial) && (

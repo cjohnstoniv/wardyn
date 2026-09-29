@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -224,6 +225,26 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		rows := scmAccessRows(t, s, ctx, sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured {
 			t.Fatalf("alice read bob's connection: got %+v", rows)
+		}
+	})
+
+	// The policy editor locks what the row's ceiling does not grant, so the
+	// ceiling rides the answer; a row with no entra block carries none.
+	t.Run("per-user row: carries the row's capability_ceiling, read-only", func(t *testing.T) {
+		sc := adoTestSiteConfig(false)
+		ceiling := []adoscope.Capability{adoscope.CapRead, adoscope.CapPolicyAdmin}
+		sc.WorkspaceProviders.Git[0].Entra = &types.ADOEntraConfig{CapabilityCeiling: ceiling}
+		s := newSCMTestServer(t, sc, true)
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
+		if len(rows) != 1 || !slices.Equal(rows[0].CapabilityCeiling, ceiling) {
+			t.Fatalf("got %+v, want the row's ceiling %v", rows, ceiling)
+		}
+		rows[0].CapabilityCeiling[0] = adoscope.CapPolicyBypass
+		if sc.WorkspaceProviders.Git[0].Entra.CapabilityCeiling[0] != adoscope.CapRead {
+			t.Fatal("the answer aliases the row's own ceiling")
+		}
+		if rows := scmAccessRows(t, s, context.Background(), adoTestSiteConfig(false), "alice"); len(rows) != 1 || rows[0].CapabilityCeiling != nil {
+			t.Fatalf("a row with no entra block: got %+v, want no ceiling", rows)
 		}
 	})
 

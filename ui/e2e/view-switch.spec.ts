@@ -7,7 +7,7 @@ import type { BrowserContext, Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
 import { CONSOLE_VIEW, USER_PREVIEW, VIEW_DROPPED, VIEW_TO_ADMIN } from "../src/app/components/wardyn/copy/console-view";
 import { NO_BARRIER, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
-import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 
 // M-2 — the Console view switch and the per-view chrome
 // (admin-member-modes-design.md §2.2, §2.4, §3; packet M-A).
@@ -41,16 +41,25 @@ interface Session {
 async function ssoAdminSession(context: BrowserContext, extra: Record<string, unknown> = {}): Promise<Session> {
   const session: Session = { userView: false, viewType: null, posts: [], failNext: false };
   const types = (extra.user_view_types as { id: string; name: string }[] | undefined) ?? [];
+  // CACHE-AND-SERVE the real fetch, not route.fetch()+refulfill per match — a
+  // real round trip PER match races Playwright disposing an in-flight route's
+  // response ("apiResponse.json: Response has been disposed"). One real
+  // fetch caches the base body; every match still re-derives its own answer
+  // from the mutable `session` above (the view can flip between calls), just
+  // layered onto the cached base instead of a fresh network round trip.
+  let cachedBase: Record<string, unknown> | null = null;
   await context.route("**/api/v1/me", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
+    if (!cachedBase) {
+      cachedBase = (await (await route.fetch()).json()) as Record<string, unknown>;
+    }
+    const json: Record<string, unknown> = { ...cachedBase };
     Object.assign(json, { method: "sso", user_view: session.userView }, extra);
     if (session.userView) {
       Object.assign(json, { role: "user", operator: false, security_operator: false });
       const chosen = types.find((t) => t.id === session.viewType);
       if (chosen) json.user_type = chosen;
     }
-    await route.fulfill({ response, json });
+    await route.fulfill({ json });
   });
   await context.route("**/api/v1/me/view", async (route) => {
     const body = route.request().postDataJSON() as { view: string; no_credential?: boolean; user_type?: string };
@@ -128,7 +137,7 @@ test.describe("the view switch", () => {
     await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).first().click();
     const row = page.getByTestId("provider-row-github");
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
-    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_EXTRA.UNSAVED_MARKER);
 
     await segment(page, CONSOLE_VIEW.USER).click();
     const dialog = page.getByRole("alertdialog");
@@ -306,11 +315,14 @@ test.describe("who sees the switch", () => {
   });
 
   test("the admin token on an SSO install: no switch, and the eyebrow still names the view", async ({ page }) => {
+    // Cache-and-serve (see ssoAdminSession): one real fetch, every match served from it.
+    let healthz: Record<string, unknown> | null = null;
     await page.route("**/healthz", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.sso = true;
-      await route.fulfill({ response, json });
+      if (!healthz) {
+        healthz = (await (await route.fetch()).json()) as Record<string, unknown>;
+        healthz.sso = true;
+      }
+      await route.fulfill({ json: healthz });
     });
     await gotoConsole(page, "admin");
     await expect(page.getByRole("group", { name: CONSOLE_VIEW.GROUP })).toHaveCount(0);
@@ -341,14 +353,17 @@ test.describe("the slimmed avatar menu and the preview", () => {
 
   test("Preview as a new user sits on the Permissions header; its band is the way out", async ({ page, context }) => {
     const session = await ssoAdminSession(context, { user_preview_available: true });
+    // Cache-and-serve the real fetch (see ssoAdminSession); each match still
+    // re-derives its answer from the mutable session onto a copy of the base.
+    let meBase: Record<string, unknown> | null = null;
     await context.route("**/api/v1/me", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
+      if (!meBase) meBase = (await (await route.fetch()).json()) as Record<string, unknown>;
+      const json: Record<string, unknown> = { ...meBase };
       Object.assign(json, { method: "sso", user_view: session.userView, user_preview_available: !session.userView });
       if (session.userView) {
         Object.assign(json, { role: "user", operator: false, security_operator: false, user_view_no_credential: true });
       }
-      await route.fulfill({ response, json });
+      await route.fulfill({ json });
     });
     await gotoConsole(page, "admin");
     await sidebarLink(page, "Permissions").click();
@@ -400,11 +415,16 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     // A settled, empty probe — the deployment genuinely has no barrier, so
     // the CTA this test clicks actually renders (context-level: it must
     // survive the full reload switchView triggers).
+    // Cache-and-serve (see ssoAdminSession): the console re-reads this on every
+    // poll, so a real round trip per match would race the response disposal.
+    let setupStatus: Record<string, unknown> | null = null;
     await context.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
-      await route.fulfill({ response, json });
+      if (!setupStatus) {
+        const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+        body.runner = { ...(body.runner as object), driver: "docker", confinement_classes: [] };
+        setupStatus = body;
+      }
+      await route.fulfill({ json: setupStatus });
     });
     await gotoConsole(page);
 

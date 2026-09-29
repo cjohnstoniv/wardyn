@@ -125,10 +125,23 @@ An administrator turns this on per git provider row, not globally. The fields th
 No secret is pasted onto this row. The tenant and client IDs identify the app registration; the
 credential itself is captured per person at sign-in and never touches the row.
 
+Once the row carries the `entra` lane, **Workspace providers → Git → Azure DevOps** edits these fields
+in the console: tenant and client IDs, **Allow REST API calls** (`rest_api`), the ceiling (**What runs
+may ever do**) and the default profile (**What a run gets by default**), saved with the rest of the
+providers document. A default box stays disabled until its capability is on the ceiling, and a
+default left outside a narrowed ceiling blocks the save; the server refuses it too.
+
 **The ceiling is the hard bound; the default profile is where a run starts.** A run may ask for
 anything up to the ceiling and have it held for approval; it can never reach past the ceiling at all.
 `read` is the recommended default profile — every write, including push, then starts as something a
 run has to ask for rather than something it already has.
+
+**A run policy can choose the run's capabilities instead.** A policy's `azure_devops_capabilities`
+replaces the default profile for the runs it governs, so a saved policy in **Policies** works as a
+saved access profile — for example `["read", "code_write", "pr"]` for a contributor, and
+`["read", "policy_admin"]` for someone who manages branch policies. It chooses only within the
+ceiling: a run naming a capability outside it is refused at launch and granted nothing. See
+[POLICIES.md](POLICIES.md).
 
 ## What a member sees
 
@@ -155,8 +168,8 @@ above grants some subset of these, and a run can never be handed one the ceiling
 | Capability | What it allows |
 |---|---|
 | `read` | Clone, browse history, view work items, boards, builds, packages, and wiki pages |
-| `code_write` | Push commits; open and update a pull request |
-| `pr` | Act on a pull request beyond opening it — comment, vote, complete a normal (non-bypassing) merge |
+| `code_write` | Push commits and create or move a branch no policy protects — a git push only to refs under `refs/heads/wardyn/<run-id>/`. Opening a pull request is `pr`, not this |
+| `pr` | Open, update, comment on, vote on and complete a pull request, without bypassing a policy |
 | `policy_admin` | Create or change branch policies — required reviewers, build validation, merge strategy |
 | `policy_bypass` | Complete a pull request with a policy bypass, or move a protected ref directly, skipping a policy rather than satisfying it |
 | `repo_admin` | Create, rename, or delete a repository; change its default branch |

@@ -6,7 +6,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-// DRAFT (M2 canon pending)
 const COPY_FAILED_TOAST = "Copy failed — your browser blocked clipboard access.";
 
 // useCopyToClipboard — the "copy, flip a copied flag, reset it after a beat"
