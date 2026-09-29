@@ -103,7 +103,8 @@ func TestADOEntraLane_PolicyCapabilityOutsideCeilingIsRefused(t *testing.T) {
 		t.Fatalf("run.create audit rows = %d, want 1", len(rows))
 	}
 	data := string(rows[0].Data)
-	for _, want := range []string{`"reason":"capability_ceiling"`, "run policy's azure_devops_capabilities", "policy_admin"} {
+	for _, want := range []string{`"reason":"capability_ceiling"`,
+		"Can’t launch with this policy. It grants “Change branch policies” for Azure DevOps, which is outside what your administrator allows on this provider."} {
 		if !strings.Contains(data, want) {
 			t.Errorf("refusal %s does not say %q", data, want)
 		}
@@ -262,5 +263,18 @@ func TestPresetInlinePolicy_UnknownADOCapabilityIsItsOwnReason(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
 	if w.Code != http.StatusBadRequest || got.Reason != reasonADOCapabilityUnknown {
 		t.Fatalf("status=%d body=%s, want 400 %s", w.Code, w.Body.String(), reasonADOCapabilityUnknown)
+	}
+}
+
+// The refusal names every capability past the ceiling by its console name.
+func TestADOPolicyPastCeiling_NamesEachCapability(t *testing.T) {
+	one := adoPolicyPastCeiling([]adoscope.Capability{adoscope.CapServiceEndpointAdmin})
+	if want := "Can’t launch with this policy. It grants “Manage service connections” for Azure DevOps, which is outside " +
+		"what your administrator allows on this provider. Ask an admin to widen the ceiling, or pick a different saved policy."; one != want {
+		t.Errorf("one:\n got %q\nwant %q", one, want)
+	}
+	three := adoPolicyPastCeiling([]adoscope.Capability{adoscope.CapWikiWrite, adoscope.CapPolicyAdmin, adoscope.CapProjectAdmin})
+	if !strings.Contains(three, "It grants “Wiki”, “Change branch policies” and “Manage projects” for Azure DevOps") {
+		t.Errorf("three: %q", three)
 	}
 }

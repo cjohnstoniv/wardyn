@@ -308,6 +308,9 @@ export interface PolicyPanelProps {
    * conservative default-false frame — a stored policy has no run mode).
    */
   interactive?: boolean;
+  /** The Azure DevOps row's capability_ceiling (/setup/status scm_access);
+   *  capabilities off it render locked. Undefined = unknown, nothing locked. */
+  adoCeiling?: readonly string[];
   /**
    * Run instance: the "Reuse a saved policy" half of the mode row. The screen
    * owns the policy list and the selection; this is only where it renders and
@@ -329,6 +332,7 @@ export function PolicyPanel({
   preflightBusy,
   preflightDisabled,
   interactive,
+  adoCeiling,
   savedPolicy,
   className,
 }: PolicyPanelProps) {
@@ -454,6 +458,7 @@ export function PolicyPanel({
           {parsed.ok && (
             <ADOCapabilitiesSection
               spec={parsed.spec}
+              ceiling={adoCeiling}
               onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
             />
           )}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -88,6 +89,10 @@ type SCMAccess struct {
 	// scmaccess.go grades Azure DevOps rows only) — paired with Org as the
 	// stable key a list of these needs, in place of a row id.
 	Kind string `json:"kind,omitempty"`
+	// CapabilityCeiling is the row's capability_ceiling: the most any run on it
+	// may hold. The policy editor locks every capability outside it, since a
+	// policy naming one is refused at launch. Read-only here.
+	CapabilityCeiling []adoscope.Capability `json:"capability_ceiling,omitempty"`
 }
 
 // adoAccessState grades one PER-USER row's captured sign-in into the
@@ -218,6 +223,9 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		}
 	}
 	out := SCMAccess{State: adoAccessState(isMechanism, found), Org: adoOrgDisplay(row), Kind: string(row.Kind)}
+	if row.Entra != nil {
+		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
+	}
 	switch {
 	case out.State != modelAccessLive:
 	case blob.signInEnded():

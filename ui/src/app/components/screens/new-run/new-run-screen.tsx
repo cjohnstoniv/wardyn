@@ -44,6 +44,7 @@ import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
+import { ADOAccessSummary } from "../../wardyn/ado-access-summary";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
@@ -174,6 +175,7 @@ export function NewRunScreen() {
   // me" (#922). Read off the SAME /setup/status fetch above, never a second one.
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
+  const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> under the Title input.
   // Grouping is by EXACT string, so without this the operator has to retype a
   // title character-perfect for a run to ever join its family — the feature
@@ -255,6 +257,7 @@ export function NewRunScreen() {
         // unreachable read to undefined, off the same bit this effect reads.
         setModelProviders(resolvedModelProviders(st));
         setProviderAccess(st.unreachable ? undefined : st.provider_access);
+        setAdoCeiling(st.unreachable ? undefined : st.scm_access?.capability_ceiling);
         if (st.unreachable) return;
         setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
@@ -810,6 +813,7 @@ export function NewRunScreen() {
                 preflightBusy={preflighting}
                 preflightDisabled={useSaved && !state.selectedPolicyId}
                 interactive={isInteractive}
+                adoCeiling={adoCeiling}
                 savedPolicy={{
                   active: useSaved,
                   onActiveChange: (v: boolean) => { 
@@ -831,6 +835,7 @@ export function NewRunScreen() {
                           ))}
                         </SelectContent>
                       </Select>
+                      <ADOAccessSummary caps={savedPolicies.find((p) => p.id === state.selectedPolicyId)?.spec.azure_devops_capabilities} />
                       {/* Rulebook §9: an empty picker carries the action that
                           fills it. With no stored policies this lane was a
                           dropdown with nothing in it and no way out. */}

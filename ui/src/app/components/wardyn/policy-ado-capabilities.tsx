@@ -3,17 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The azure_devops_capabilities editor — a checklist beside the spec, the same
-// shape as ToolRulesSection: it reads and writes the one document the textarea
-// shows, so there is no second source of truth. Grouping, risk and labels come
-// from lib/ado-capabilities.ts.
+// The policy editor's "Azure DevOps access" section — azure_devops_capabilities
+// as a grouped checklist beside the spec, the same shape as ToolRulesSection: it
+// reads and writes the one document the textarea shows, so there is no second
+// source of truth. Layout and copy are the owner-approved mock's (mock-08,
+// Member · State 4).
 //
-// DRAFT: layout and copy await the approved mock (mock-first law).
+// A capability off the row's ceiling renders LOCKED — a red crossed box and a
+// struck-through name — because a policy naming it is refused at launch. When
+// the ceiling is unknown (no Azure DevOps row, or /setup/status unreadable)
+// nothing is locked: dispatch is still the gate.
 import type { RunPolicySpec } from "../../lib/types";
-import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../lib/ado-capabilities";
+import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, type ADOCapabilityInfo } from "../../lib/ado-capabilities";
+import { ADO_ACCESS, ADO_CAP_NAME, ADO_GROUP_NAME } from "../../lib/ado-access-copy";
 import { Checkbox } from "../ui/checkbox";
-import { Chip, SectionLabel } from "./primitives";
-import { Mono } from "./code-block";
+import { cn } from "../ui/utils";
+import { SectionLabel } from "./primitives";
+import { HighRiskBadge } from "./ado-access-summary";
 
 // Put the checked set back on the wire, in catalogue order. Nothing checked
 // drops the key: absent and [] both mean "the provider row's default".
@@ -29,70 +35,120 @@ export function withADOCapabilities(spec: RunPolicySpec, cap: string, on: boolea
   return next;
 }
 
+function CapabilityRow({
+  info,
+  checked,
+  locked,
+  onToggle,
+}: {
+  info: ADOCapabilityInfo;
+  checked: boolean;
+  locked: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const id = `ado-cap-${info.cap}`;
+  const name = ADO_CAP_NAME[info.cap] ?? info.cap;
+  // A locked capability a stored policy already names stays uncheckable, so the
+  // person can take it out; one it does not name cannot be put in.
+  const inert = locked && !checked;
+  return (
+    <li
+      className={cn("flex items-start gap-2.5 border-b border-border py-2 last:border-b-0", inert && "cursor-not-allowed")}
+      title={locked ? ADO_ACCESS.LOCKED : undefined}
+      aria-disabled={inert || undefined}
+    >
+      {inert && (
+        <span
+          aria-hidden="true"
+          className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[4px] border-[1.5px] border-danger bg-danger-subtle text-meta font-bold leading-none text-danger"
+        >
+          ✕
+        </span>
+      )}
+      <Checkbox
+        id={id}
+        className={cn("mt-0.5", inert && "sr-only")}
+        disabled={inert}
+        checked={checked}
+        onCheckedChange={(v) => onToggle(v === true)}
+      />
+      <label htmlFor={id} className={cn("min-w-0 text-body leading-snug", inert && "cursor-not-allowed")}>
+        <span
+          className={cn(
+            "font-medium",
+            checked ? "text-foreground" : "text-muted-foreground",
+            locked && "line-through decoration-danger/70",
+          )}
+        >
+          {name}
+        </span>
+        {info.highRisk && (
+          <>
+            {" "}
+            <HighRiskBadge className="ml-1 align-middle" />
+          </>
+        )}
+        {locked && (
+          <>
+            {" "}
+            <span className="sr-only">{ADO_ACCESS.LOCKED}</span>
+          </>
+        )}
+      </label>
+    </li>
+  );
+}
+
 export function ADOCapabilitiesSection({
   spec,
   onSpecChange,
+  ceiling,
 }: {
   spec: RunPolicySpec;
   onSpecChange: (next: RunPolicySpec) => void;
+  /** The Azure DevOps row's capability_ceiling; undefined = unknown, nothing locked. */
+  ceiling?: readonly string[];
 }) {
   const chosen = Array.isArray(spec.azure_devops_capabilities) ? spec.azure_devops_capabilities : [];
   return (
     <div className="rounded-lg border border-border p-3">
-      <div className="mb-2 flex items-center gap-2">
-        <SectionLabel>Azure DevOps capabilities</SectionLabel>
-        <Chip tone="neutral" mono className="ml-auto">
-          azure_devops_capabilities
-        </Chip>
-      </div>
-      <p className="mb-3 text-xs leading-snug text-muted-foreground">
-        What a run under this policy may do in Azure DevOps, in place of the provider&apos;s default.
-        Only within the provider&apos;s ceiling: a run naming anything outside it is refused at launch.
-        Leave all unchecked to keep the provider&apos;s default.
-      </p>
-      <div className="space-y-3">
-        {ADO_CAPABILITY_GROUPS.map((g) => (
-          <fieldset key={g.id}>
-            <legend className="mb-1.5">
-              <SectionLabel>{g.title}</SectionLabel>
-            </legend>
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {ADO_CAPABILITIES.filter((c) => c.group === g.id).map(({ cap, label, hint, highRisk }) => {
-                const id = `ado-cap-${cap}`;
-                return (
-                  <li key={cap} className="flex items-start gap-2">
-                    <Checkbox
-                      id={id}
-                      className="mt-0.5"
-                      aria-describedby={hint ? `${id}-hint` : undefined}
-                      checked={chosen.includes(cap)}
-                      onCheckedChange={(v) => onSpecChange(withADOCapabilities(spec, cap, v === true))}
-                    />
-                    {/* The hint sits outside the label: inside it, "Rename, fork…"
-                        joined the accessible name and answered a search for the
-                        dialog's own "Name" field. */}
-                    <div className="min-w-0 text-body leading-snug">
-                      <label htmlFor={id}>
-                        {label ?? <Mono>{cap}</Mono>}
-                        {label && <span className="ml-1.5 font-mono text-meta text-muted-foreground">{cap}</span>}
-                      </label>
-                      {highRisk && (
-                        <Chip tone="danger" className="ml-1.5">
-                          High risk
-                        </Chip>
-                      )}
-                      {hint && (
-                        <span id={`${id}-hint`} className="block text-meta text-muted-foreground">
-                          {hint}
-                        </span>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </fieldset>
-        ))}
+      <SectionLabel>{ADO_ACCESS.SECTION_TITLE}</SectionLabel>
+      <p className="mt-1 text-xs leading-snug text-muted-foreground">{ADO_ACCESS.SECTION_LEAD}</p>
+      <div className="mt-1">
+        {ADO_CAPABILITY_GROUPS.map((g) => {
+          const risk = g.id === "high_risk";
+          const title = ADO_GROUP_NAME[g.id];
+          return (
+            <fieldset
+              key={g.id}
+              className={cn("mt-2.5 overflow-hidden rounded-lg border", risk ? "border-danger/60" : "border-border")}
+            >
+              <legend className="sr-only">{title}</legend>
+              <div
+                aria-hidden="true"
+                className={cn("px-3 py-2 text-xs font-semibold", risk ? "bg-danger-subtle text-danger" : "bg-muted")}
+              >
+                {title}
+              </div>
+              {risk && (
+                <p className="border-t border-dashed border-danger bg-danger-subtle px-3 py-1.5 text-xs text-danger">
+                  {ADO_ACCESS.HIGH_RISK_WARN_MEMBER}
+                </p>
+              )}
+              <ul className="px-3">
+                {ADO_CAPABILITIES.filter((c) => c.group === g.id).map((info) => (
+                  <CapabilityRow
+                    key={info.cap}
+                    info={info}
+                    checked={chosen.includes(info.cap)}
+                    locked={ceiling !== undefined && !ceiling.includes(info.cap)}
+                    onToggle={(on) => onSpecChange(withADOCapabilities(spec, info.cap, on))}
+                  />
+                ))}
+              </ul>
+            </fieldset>
+          );
+        })}
       </div>
     </div>
   );

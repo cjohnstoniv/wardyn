@@ -179,6 +179,33 @@ func (a adoEntraRun) capsSource() string {
 	return "provider row's default_profile"
 }
 
+// adoCapsOutside is caps minus ceiling, in caps' order.
+func adoCapsOutside(caps, ceiling []adoscope.Capability) []adoscope.Capability {
+	var out []adoscope.Capability
+	for _, c := range caps {
+		if !slices.Contains(ceiling, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// adoPolicyPastCeiling is the launch refusal a person reads under the FAILED
+// badge when their run policy names capabilities outside the row's ceiling —
+// the approved mock's sentence, naming each capability by its console name.
+func adoPolicyPastCeiling(outside []adoscope.Capability) string {
+	names := make([]string, len(outside))
+	for i, c := range outside {
+		names[i] = "“" + adoscope.ShortLabel(c) + "”"
+	}
+	list := names[0]
+	if n := len(names); n > 1 {
+		list = strings.Join(names[:n-1], ", ") + " and " + names[n-1]
+	}
+	return "Can’t launch with this policy. It grants " + list + " for Azure DevOps, which is outside what your " +
+		"administrator allows on this provider. Ask an admin to widen the ceiling, or pick a different saved policy."
+}
+
 // resolveADOEntraRun decides whether THIS run is on the per-person Azure DevOps
 // lane, from the provider rows that admitted its own repositories.
 //
@@ -549,6 +576,9 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	// Empty is NOT within anything: a run granted nothing has no business
 	// holding a credential.
 	if len(ado.caps) == 0 || !subsetOf(ado.caps, ado.ceiling) {
+		if outside := adoCapsOutside(ado.caps, ado.ceiling); ado.capsFromPolicy && len(outside) > 0 {
+			return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling", adoPolicyPastCeiling(outside))
+		}
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling",
 			fmt.Sprintf("This run was not launched: its Azure DevOps capabilities %v (from the %s) are not all inside "+
 				"the provider row's capability_ceiling %v. Nothing outside the ceiling is ever granted — narrow the "+
