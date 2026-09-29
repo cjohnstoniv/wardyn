@@ -340,6 +340,9 @@ export interface SCMAccess {
    *  with `org` as the stable key a list of these needs, in place of a row
    *  id (review finding F4, Go scmaccess.go's SCMAccess.Kind: "NO ROW ID"). */
   kind?: string;
+  /** The row's capability_ceiling — the most any run on it may hold. The
+   *  policy editor locks every capability outside it. Read-only. */
+  capability_ceiling?: string[];
 }
 
 // One model provider as THIS PRINCIPAL sees it (internal/api.SetupModelProvider)

@@ -167,6 +167,37 @@ var labels = map[Capability]string{
 	CapUnclassifiedRead:   "Not available: a read this deployment does not recognize",
 }
 
+// shortLabels are the console's canon short names (the owner-approved Azure
+// DevOps access mock), for a Go-authored sentence a person reads beside that
+// console — a launch refusal naming the capability. ADO_CAP_COPY in
+// ui/src/app/lib/workspace-providers-copy.ts carries the same names, and
+// ui/src/app/lib/ado-access-copy.test.ts pins the two together.
+var shortLabels = map[Capability]string{
+	CapRead:                 "Read",
+	CapCodeWrite:            "Push to the run's own branch",
+	CapPR:                   "Open pull requests",
+	CapWorkWrite:            "Work items",
+	CapWikiWrite:            "Wiki",
+	CapBuildExecute:         "Run pipelines & releases",
+	CapPackagingWrite:       "Publish packages",
+	CapPolicyAdmin:          "Change branch policies",
+	CapPolicyBypass:         "Bypass branch policies",
+	CapRepoAdmin:            "Manage repositories",
+	CapSecurityAdmin:        "Change permissions & identities",
+	CapServiceEndpointAdmin: "Manage service connections",
+	CapBuildAdmin:           "Change pipeline definitions",
+	CapProjectAdmin:         "Manage projects",
+}
+
+// ShortLabel is c's canon short name, or its wire name for a value outside
+// the grantable set.
+func ShortLabel(c Capability) string {
+	if l, ok := shortLabels[c]; ok {
+		return l
+	}
+	return string(c)
+}
+
 // Label is c's plain-language rendering, or "" for a value outside the set —
 // never a guess, so an unrecognized capability can't render as understood.
 func Label(c Capability) string { return labels[c] }
