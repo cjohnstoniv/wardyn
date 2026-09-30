@@ -27,7 +27,7 @@ vi.mock("../../../lib/api/ado-pat", async () => {
 const TENANT = "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f";
 const CLIENT = "3b241101-e2bb-4255-8caf-4136c566a962";
 
-const at = (h: number, m: number) => new Date(2026, 8, 29, h, m).toISOString();
+const at = (h: number, m: number) => new Date(2000, 8, 29, h, m).toISOString();
 
 function row(entra: Partial<NonNullable<GitProvider["entra"]>> = {}, over: Partial<GitProvider> = {}): GitProvider {
   return {

@@ -18,7 +18,7 @@ vi.mock("../../../lib/api/ado-pat", async () => {
   return { ...actual, adoPat: { ...actual.adoPat, runTokens: (id: string) => runTokensMock(id) } };
 });
 
-const at = (h: number, m: number) => new Date(2026, 8, 29, h, m).toISOString();
+const at = (h: number, m: number) => new Date(2000, 8, 29, h, m).toISOString();
 const tok = (over: Partial<ADORunToken> = {}): ADORunToken => ({ created_at: at(9, 2), valid_to: at(17, 2), ...over });
 
 beforeEach(() => {
@@ -59,27 +59,16 @@ describe("AdoRunTokens", () => {
     expect(screen.queryByText(ADO_PAT.RUN_PAUSED)).not.toBeInTheDocument();
   });
 
-  it("6e: a failed renewal says when the token stops working and to sign in again", async () => {
-    await draw([tok({ renewal_failed: true })]);
-    expect(await screen.findByText(ADO_PAT.RUN_RENEWAL_FAILED("17:02"))).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Wardyn couldn't renew this run's token, so it stops working at 17:02. Sign in to Azure DevOps again to keep this run going.",
-    );
-  });
-
   it("6f: a revoke that failed says when the token expires and where to revoke it by hand", async () => {
     await draw([tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" })]);
     expect(await screen.findByText(ADO_PAT.RUN_REVOKE_FAILED("17:02"))).toBeInTheDocument();
   });
 
-  it("7: a widening shows the old token revoked (access added), the new one, and the added access", async () => {
-    await draw([
-      tok({ created_at: at(9, 20), valid_to: at(17, 20), added_capabilities: ["pr"] }),
-      tok({}),
-    ]);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 (access added)")).toBeInTheDocument();
+  it("7: a token replaced before its renewal point carries no note, and no 'Access added' line", async () => {
+    await draw([tok({ created_at: at(9, 20), valid_to: at(17, 20) }), tok({})]);
+    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02")).toBeInTheDocument();
     expect(screen.getByText("Azure DevOps token: created 09:20 · expires 17:20")).toBeInTheDocument();
-    expect(screen.getByText(/^Access added 09:20: .+ \(new token\)$/)).toBeInTheDocument();
+    expect(screen.queryByText(/Access added/)).not.toBeInTheDocument();
   });
 
   it("draws nothing for a run that holds no token", async () => {

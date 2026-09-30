@@ -42,6 +42,29 @@ async function openAccountCard(page: Page, title = "Azure DevOps"): Promise<void
   await expandCard(page, title);
 }
 
+// Tokens a run held, seeded as ado_run_pats rows: the run page reads them from
+// the daemon's own GET /runs/{id}/ado-tokens, not from a splice. A token value
+// is never stored, so the rows carry none. The caller removes what it seeded.
+interface SeededToken {
+  createdAt: Date;
+  validTo: Date;
+  revokedAt?: Date;
+  reason?: string;
+  lastError?: string;
+}
+function seedRunTokens(runId: string, tokens: SeededToken[]): void {
+  const at = (d?: Date) => (d ? `'${d.toISOString()}'::timestamptz` : "NULL");
+  for (const t of tokens) {
+    sql(
+      `INSERT INTO ado_run_pats (run_id, authorization_id, owner, provider_row_id, org, scope, valid_to, created_at, revoked_at, revoke_reason, last_error) ` +
+        `VALUES ('${runId}', gen_random_uuid(), 'e2e-owner', 'azure_devops', 'wardyn-e2e', 'vso.code', ${at(t.validTo)}, ${at(t.createdAt)}, ${at(t.revokedAt)}, '${t.reason ?? ""}', '${t.lastError ?? ""}')`,
+    );
+  }
+}
+function clearRunTokens(runId: string): void {
+  sql(`DELETE FROM ado_run_pats WHERE run_id = '${runId}'`);
+}
+
 const noHorizontalScroll = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
 
@@ -65,7 +88,7 @@ test.describe("the person's Azure DevOps card, a row that creates a token for ea
       token_mode: "minted_pat",
       state: "live",
       source: "org",
-      last_token: { created_at: new Date(2026, 8, 29, 9, 2).toISOString(), revoked_at: new Date(2026, 8, 29, 9, 41).toISOString() },
+      last_token: { created_at: new Date(2000, 8, 29, 9, 2).toISOString(), revoked_at: new Date(2000, 8, 29, 9, 41).toISOString() },
     };
     await popup.waitForEvent("close");
 
@@ -128,7 +151,7 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
       bodies.push(route.request().postDataJSON() as Record<string, unknown>);
       const reason = refusals[bodies.length - 1];
       if (reason) return route.fulfill({ status: 422, json: { error: "refused", reason } });
-      access = { ...own, state: "live", source: "own", expires_on: "2026-10-27" };
+      access = { ...own, state: "live", source: "own", expires_on: "2000-10-27" };
       await route.fulfill({ json: { state: "live", org: ORG } });
     });
     await openAccountCard(page);
@@ -142,7 +165,7 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
     );
 
     await dialog.getByLabel(ADO_PAT.OWN_FIELD_TOKEN).fill("pasted-secret");
-    await dialog.getByLabel(ADO_PAT.OWN_FIELD_EXPIRES).fill("2027-03-01");
+    await dialog.getByLabel(ADO_PAT.OWN_FIELD_EXPIRES).fill("2000-03-01");
     await dialog.getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }).click();
     await expect(dialog.getByText(ADO_PAT.OWN_MISMATCH)).toBeVisible();
     await dialog.getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }).click();
@@ -150,10 +173,10 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
     await dialog.getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }).click();
     await expect(dialog.getByText(ADO_PAT.OWN_REJECTED)).toBeVisible();
 
-    await dialog.getByLabel(ADO_PAT.OWN_FIELD_EXPIRES).fill("2026-10-27");
+    await dialog.getByLabel(ADO_PAT.OWN_FIELD_EXPIRES).fill("2000-10-27");
     await dialog.getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }).click();
     await expect(dialog).toHaveCount(0);
-    expect(bodies.at(-1)).toEqual({ org: ORG, token: "pasted-secret", expires_on: "2026-10-27" });
+    expect(bodies.at(-1)).toEqual({ org: ORG, token: "pasted-secret", expires_on: "2000-10-27" });
     await expect(page.getByText(ADO_PAT.OWN_EXPIRING_LINE("wardyn-e2e", "27 October"))).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
   });
@@ -167,13 +190,13 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
     await expect(page.getByText(ADO_PAT.OWN_CHIP_EXPIRING(3))).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
 
-    access = { ...own, state: "expired_signin", cause: "token_expired", source: "own", expires_on: "2026-09-01" };
+    access = { ...own, state: "expired_signin", cause: "token_expired", source: "own", expires_on: "2000-09-01" };
     await page.reload();
     await expandCard(page, "Azure DevOps");
     await expect(page.getByText(ADO_PAT.OWN_EXPIRED_BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).toBeVisible();
 
-    access = { ...own, org: "https://tfs.example.com/collection", state: "live", source: "own", expires_on: "2026-10-27" };
+    access = { ...own, org: "https://tfs.example.com/collection", state: "live", source: "own", expires_on: "2000-10-27" };
     await page.reload();
     await expandCard(page, ADO_PAT.OWN_SERVER_TITLE);
     await expect(page.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeVisible();
@@ -243,25 +266,41 @@ test.describe("New Run, a row that creates a token for each run", () => {
 });
 
 test.describe("the run page", () => {
-  test("lists each token oldest first, the paused note, and a failed renewal (Credentials widget)", async ({ page }) => {
+  test("lists each token oldest first from the daemon: renewed, revoked with its reason, and a revoke that failed (Credentials widget)", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
-    const t = (h: number, m: number) => new Date(2026, 8, 29, h, m);
-    await page.route(`**/api/v1/runs/${runId}/ado-tokens`, (route) =>
-      route.fulfill({
-        json: [
-          { created_at: t(15, 2).toISOString(), valid_to: t(23, 2).toISOString(), renewal_failed: true },
-          { created_at: t(9, 2).toISOString(), valid_to: t(17, 2).toISOString(), revoked_at: t(17, 2).toISOString(), revoke_reason: "expired" },
-        ],
-      }),
-    );
+    const t = (h: number, m: number) => new Date(2000, 8, 29, h, m);
+    clearRunTokens(runId);
+    try {
+      seedRunTokens(runId, [
+        // Replaced at 15:02, its 75% renewal point, and closed at its own expiry.
+        { createdAt: t(9, 2), validTo: t(17, 2), revokedAt: t(17, 2), reason: "expired" },
+        // Ended with its run, and Azure DevOps refused the revoke: it lives to 23:02 on its own.
+        { createdAt: t(15, 2), validTo: t(23, 2), revokedAt: t(15, 40), reason: "run_end", lastError: "revoke refused" },
+      ]);
+      await gotoConsole(page);
+      await navToRoute(page, `/runs/${runId}`);
+      const tokens = page.getByTestId("ado-run-tokens");
+      await expect(tokens.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeVisible();
+      const lines = tokens.locator("p:not([role=alert])");
+      await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created 09:02 · expires 17:02 (renewed)`);
+      await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created 15:02 · expires 23:02 · revoked 15:40 (run ended)`);
+      await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(t(23, 2))));
+    } finally {
+      clearRunTokens(runId);
+    }
+  });
+
+  test("a run that holds no token draws no Azure DevOps token list", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    clearRunTokens(runId);
     await gotoConsole(page);
+    // The daemon's own answer for a run that holds none: an empty list.
+    const answered = page.waitForResponse((r) => r.url().includes(`/api/v1/runs/${runId}/ado-tokens`));
     await navToRoute(page, `/runs/${runId}`);
-    const tokens = page.getByTestId("ado-run-tokens");
-    await expect(tokens.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeVisible();
-    const lines = tokens.locator("p:not([role=alert])");
-    await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created 09:02 · expires 17:02 (renewed)`);
-    await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created 15:02 · expires 23:02`);
-    await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_RENEWAL_FAILED(clock(t(23, 2))));
+    const res = await answered;
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual([]);
+    await expect(page.getByTestId("ado-run-tokens")).toHaveCount(0);
   });
 
   test("the approval card adds the token line only for a run whose token Wardyn creates", async ({ page }) => {
@@ -289,22 +328,24 @@ test.describe("the run page", () => {
       if (route.request().method() !== "GET") return route.continue();
       await route.fulfill({ json: [row] });
     });
-    let holds = true;
-    await page.route(`**/api/v1/runs/${runId}/ado-tokens`, (route) =>
-      route.fulfill({ json: holds ? [{ created_at: new Date().toISOString(), valid_to: new Date(Date.now() + 3_600_000).toISOString() }] : [] }),
-    );
-    await gotoConsole(page);
-    await navToRoute(page, `/runs/${runId}`);
-    await page.getByRole("tab", { name: /Approvals/ }).click();
-    const card = page.getByTestId("ado-capability-card");
-    await expect(card).toBeVisible();
-    await expect(card.getByText(ADO_PAT.APPROVAL_WIDENS)).toBeVisible();
+    clearRunTokens(runId);
+    try {
+      seedRunTokens(runId, [{ createdAt: new Date(), validTo: new Date(Date.now() + 3_600_000) }]);
+      await gotoConsole(page);
+      await navToRoute(page, `/runs/${runId}`);
+      await page.getByRole("tab", { name: /Approvals/ }).click();
+      const card = page.getByTestId("ado-capability-card");
+      await expect(card).toBeVisible();
+      await expect(card.getByText(ADO_PAT.APPROVAL_WIDENS)).toBeVisible();
 
-    holds = false;
-    await page.reload();
-    await page.getByRole("tab", { name: /Approvals/ }).click();
-    await expect(page.getByTestId("ado-capability-card")).toBeVisible();
-    await expect(page.getByText(ADO_PAT.APPROVAL_WIDENS)).toHaveCount(0);
+      clearRunTokens(runId);
+      await page.reload();
+      await page.getByRole("tab", { name: /Approvals/ }).click();
+      await expect(page.getByTestId("ado-capability-card")).toBeVisible();
+      await expect(page.getByText(ADO_PAT.APPROVAL_WIDENS)).toHaveCount(0);
+    } finally {
+      clearRunTokens(runId);
+    }
   });
 });
 
@@ -321,11 +362,10 @@ test.describe("no horizontal scroll at 390px", () => {
       cause: "token_expired",
     };
     await spliceAccess(page, () => ({ default_profile: ["code_read"], ...access }));
-    await page.route(`**/api/v1/runs/${runId}/ado-tokens`, (route) =>
-      route.fulfill({
-        json: [{ created_at: new Date(2026, 8, 29, 9, 2).toISOString(), valid_to: new Date(2026, 8, 29, 17, 2).toISOString(), renewal_failed: true }],
-      }),
-    );
+    clearRunTokens(runId);
+    seedRunTokens(runId, [
+      { createdAt: new Date(2000, 8, 29, 9, 2), validTo: new Date(2000, 8, 29, 17, 2), revokedAt: new Date(2000, 8, 29, 9, 41), reason: "run_end", lastError: "revoke refused" },
+    ]);
     // The sidebar is collapsed at this width, so go straight to each page.
     await page.goto("/account");
     await expandCard(page, "Azure DevOps");
@@ -344,5 +384,6 @@ test.describe("no horizontal scroll at 390px", () => {
     await page.goto(`/runs/${runId}`);
     await expect(page.getByTestId("ado-run-tokens")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
+    clearRunTokens(runId);
   });
 });

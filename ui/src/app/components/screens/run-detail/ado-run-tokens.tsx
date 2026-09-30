@@ -33,13 +33,7 @@ export function AdoRunTokens({ runId, paused, live }: { runId: string; paused: b
           {l.text}
         </p>
       ))}
-      {view.added.map((a) => (
-        <p key={a} className="mt-1 text-xs text-muted-foreground">
-          {a}
-        </p>
-      ))}
       {view.paused && <p className="mt-1 text-xs text-muted-foreground">{ADO_PAT.RUN_PAUSED}</p>}
-      {view.renewalFailedAt && <Amber>{ADO_PAT.RUN_RENEWAL_FAILED(view.renewalFailedAt)}</Amber>}
       {view.revokeFailedAt.map((t, i) => (
         <Amber key={i}>{ADO_PAT.RUN_REVOKE_FAILED(t)}</Amber>
       ))}

@@ -26,7 +26,7 @@ import { ADO_PAT_REASON, adoPatRefusalReason } from "./api/ado-pat";
 import { HttpError } from "./api/core";
 
 // Local-time instants, so the clock text is the same in any timezone.
-const at = (h: number, m: number, day = 29) => new Date(2026, 8, day, h, m).toISOString();
+const at = (h: number, m: number, day = 29) => new Date(2000, 8, day, h, m).toISOString();
 const access = (over: Partial<SCMAccessPAT>): SCMAccessPAT => ({ state: "live", org: "https://dev.azure.com/wardyn-live-test", ...over }) as SCMAccessPAT;
 
 describe("times", () => {
@@ -34,19 +34,19 @@ describe("times", () => {
     expect(formatClock(at(9, 2))).toBe("09:02");
     expect(formatClock(at(0, 5))).toBe("00:05");
     expect(formatClock(at(17, 2))).toBe("17:02");
-    expect(formatDay(new Date(2026, 9, 27).toISOString())).toBe("27 October");
+    expect(formatDay(new Date(2000, 9, 27).toISOString())).toBe("27 October");
   });
   it("reads a date-only string as a calendar day in the reader's zone, not midnight UTC", () => {
-    expect(formatDay("2026-10-27")).toBe("27 October");
-    expect(formatDay("2026-01-01")).toBe("1 January");
-    const now = new Date(2026, 9, 24, 12, 0).getTime();
-    expect(daysLeft("2026-10-27", now)).toBe(3);
+    expect(formatDay("2000-10-27")).toBe("27 October");
+    expect(formatDay("2000-01-01")).toBe("1 January");
+    const now = new Date(2000, 9, 24, 12, 0).getTime();
+    expect(daysLeft("2000-10-27", now)).toBe(3);
   });
   it("counts whole days to an expiry, rounding up, never below zero", () => {
-    const now = new Date(2026, 8, 29, 12, 0).getTime();
-    expect(daysLeft(new Date(2026, 8, 30, 8, 0).toISOString(), now)).toBe(1);
-    expect(daysLeft(new Date(2026, 9, 2, 12, 0).toISOString(), now)).toBe(3);
-    expect(daysLeft(new Date(2026, 8, 1).toISOString(), now)).toBe(0);
+    const now = new Date(2000, 8, 29, 12, 0).getTime();
+    expect(daysLeft(new Date(2000, 8, 30, 8, 0).toISOString(), now)).toBe(1);
+    expect(daysLeft(new Date(2000, 9, 2, 12, 0).toISOString(), now)).toBe(3);
+    expect(daysLeft(new Date(2000, 8, 1).toISOString(), now)).toBe(0);
   });
 });
 
@@ -119,20 +119,20 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
 
 describe("patCardView: a row where each person adds their own token (state 10)", () => {
   const own = { token_mode: "own_pat" } as const;
-  const now = new Date(2026, 9, 24, 12, 0).getTime();
+  const now = new Date(2000, 9, 24, 12, 0).getTime();
   it("no token yet offers Add", () => {
     const v = patCardView(access({ ...own, state: "not_configured" }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Not connected", tone: "neutral" });
     expect(v.action).toBe("add_token");
   });
   it("expiring counts the days and offers Replace", () => {
-    const v = patCardView(access({ ...own, state: "expiring", expires_on: "2026-10-27" }), "Azure DevOps", now)!;
+    const v = patCardView(access({ ...own, state: "expiring", expires_on: "2000-10-27" }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Expires in 3 days", tone: "warning" });
     expect(v.body).toEqual(["Your token for wardyn-live-test expires on 27 October."]);
     expect(v.action).toBe("replace_token");
   });
   it("live shows the expiry line under Connected", () => {
-    const v = patCardView(access({ ...own, expires_on: "2026-10-27" }), "Azure DevOps", now)!;
+    const v = patCardView(access({ ...own, expires_on: "2000-10-27" }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Connected", tone: "success" });
     expect(v.body).toEqual(["Your token for wardyn-live-test expires on 27 October."]);
   });
@@ -217,7 +217,6 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
   it("6a: an active token is one plain line", () => {
     const v = runTokenView([tok({})], false);
     expect(v.lines).toEqual([{ text: "Azure DevOps token: created 09:02 · expires 17:02", old: false }]);
-    expect(v.added).toEqual([]);
     expect(v.paused).toBe(false);
   });
   it("6b: a renewed token is never revoked early: the older one reads (renewed), from its position", () => {
@@ -260,27 +259,21 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
     const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: "mystery" })], false);
     expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02");
   });
-  it("6e: a failed renewal names when the live token stops working", () => {
-    expect(runTokenView([tok({ renewal_failed: true })], false).renewalFailedAt).toBe("17:02");
-    expect(runTokenView([tok({ renewal_failed: true, revoked_at: at(10, 0), revoke_reason: "run_end" })], false).renewalFailedAt).toBeNull();
-  });
   it("6f: a revoke that was abandoned names when the token expires on its own", () => {
     expect(runTokenView([tok({ revoke_failed: true })], false).revokeFailedAt).toEqual(["17:02"]);
   });
-  it("7: a widening adds an 'Access added' line naming the capability", () => {
-    const v = runTokenView(
-      [
-        tok({ created_at: at(9, 20), valid_to: at(17, 20), added_capabilities: ["pr"] }),
-        tok({}),
-      ],
-      false,
-    );
+  it("7: a token replaced before its renewal point is not called renewed: the wire does not say why, so no note", () => {
+    // Replaced at 09:20, 18 minutes into an eight-hour life (a widening, a resume or a restart).
+    const v = runTokenView([tok({ created_at: at(9, 20), valid_to: at(17, 20) }), tok({})], false);
     expect(v.lines.map((l) => l.text)).toEqual([
-      "Azure DevOps token: created 09:02 · expires 17:02 (access added)",
+      "Azure DevOps token: created 09:02 · expires 17:02",
       "Azure DevOps token: created 09:20 · expires 17:20",
     ]);
-    expect(v.added).toHaveLength(1);
-    expect(v.added[0]).toMatch(/^Access added 09:20: .+ \(new token\)$/);
+    expect(v.lines.map((l) => l.text).join()).not.toMatch(/access added|renewed|revoked/);
+  });
+  it("a token replaced at its 75% renewal point (a minute early at most) is renewed", () => {
+    const v = runTokenView([tok({ created_at: at(15, 1), valid_to: at(23, 2) }), tok({})], false);
+    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
   });
   it("lists oldest first whatever order the wire sends", () => {
     const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({})], false);

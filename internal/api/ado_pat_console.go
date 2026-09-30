@@ -26,11 +26,9 @@ const adoPATAuditDisconnect = "ado_pat.disconnect"
 
 // ADOPATAccess is what /me/scm-access adds to a per-user row for the token
 // console (the TS ADOPATAccess mirror). SCMAccess embeds it, so its fields sit
-// beside SCMAccess's own on the wire.
+// beside SCMAccess's own on the wire. token_mode is SCMAccess's own field: a
+// minted row reads "minted_pat" there, as an own-token row reads "own_pat".
 type ADOPATAccess struct {
-	// TokenMode is "minted_pat" on a row that creates a token for each run;
-	// absent on a bearer row.
-	TokenMode types.ADOTokenMode `json:"token_mode,omitempty"`
 	// LastToken is the newest token Wardyn created for this person on this
 	// row (minted_pat only), for the card's "last token" line.
 	LastToken *adoLastToken `json:"last_token,omitempty"`
@@ -47,29 +45,29 @@ type adoLastToken struct {
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
 
-// adoPATAccessFor is pr's ADOPATAccess for subject. The last token is a
-// display line, so a record that could not be read leaves it out rather than
-// failing the whole answer.
-func (s *Server) adoPATAccessFor(ctx context.Context, pr perUserADORow, subject string, minted bool) ADOPATAccess {
-	out := ADOPATAccess{DefaultProfile: pr.row.Entra.Profile()}
+// adoPATAccessFor fills the token console's facts on out, the row's SCMAccess:
+// the default profile always, and for a minted row token_mode "minted_pat" and
+// the last token. The last token is a display line, so a record that could not
+// be read leaves it out rather than failing the whole answer.
+func (s *Server) adoPATAccessFor(ctx context.Context, pr perUserADORow, subject string, minted bool, out *SCMAccess) {
+	out.DefaultProfile = pr.row.Entra.Profile()
 	if !minted {
-		return out
+		return
 	}
-	out.TokenMode = types.ADOTokenModeMintedPAT
+	out.TokenMode = string(types.ADOTokenModeMintedPAT)
 	st, ok := s.cfg.Store.(store.RunPATReader)
 	if !ok || subject == "" {
-		return out
+		return
 	}
 	last, found, err := st.LastRunPAT(ctx, subject, pr.row.ID)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: reading a person's last Azure DevOps token failed; the line is left out",
 			slog.Any("err", err))
-		return out
+		return
 	}
 	if found {
 		out.LastToken = &adoLastToken{CreatedAt: last.CreatedAt, RevokedAt: last.RevokedAt}
 	}
-	return out
 }
 
 // handleADODisconnect is DELETE /scm/azure-devops/connection: the caller

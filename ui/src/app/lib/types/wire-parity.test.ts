@@ -207,9 +207,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     // #1428: the Azure DevOps row's `entra` block, which now carries the token
     // lifetimes (pat_max_hours, pat_max_days) the console writes.
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
+    // #1428: the per-person token console's reads.
+    ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
+    ["adoRunToken", "internal/api/ado_pat_console.go", "ADORunToken", "ui/src/app/lib/types/ado-pat.ts"],
+    ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
-    expect(goTags.length).toBeGreaterThanOrEqual(4);
+    expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard (ADOPATAccess has two tags)
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, tsFile), "utf8"), tsName);
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
@@ -246,5 +250,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     for (const m of serverGo.matchAll(/now\.State = "([a-z]+)"/g)) states.add(m[1]);
     const tsStates = /state: ([^;]+);/.exec(tsInterfaceBody(runsTs, "StoredPolicyNow"))![1];
     expect(new Set([...tsStates.matchAll(/"([a-z]+)"/g)].map((m) => m[1]))).toEqual(states);
+  });
+
+  // ADOPATAccess.last_token is an inline object type; adoLastToken is its Go struct.
+  it("adoLastToken: full parity with the TS ADOPATAccess.last_token inline type", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/ado_pat_console.go"), "utf8"), "adoLastToken");
+    expect(goTags.length).toBeGreaterThanOrEqual(2);
+    const adoPatTs = readFileSync(join(root, "ui/src/app/lib/types/ado-pat.ts"), "utf8");
+    expect(new Set(tsInlineKeys(adoPatTs, "ADOPATAccess", "last_token"))).toEqual(new Set(goTags));
   });
 });

@@ -295,7 +295,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	if row.Entra != nil {
 		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
 	}
-	out.ADOPATAccess = s.adoPATAccessFor(ctx, pr, subject, minted)
+	s.adoPATAccessFor(ctx, pr, subject, minted, &out)
 	switch {
 	case unusable:
 		out.State, out.Cause = modelAccessExpiredSignin, ReasonADOPATNeedsConsoleApp

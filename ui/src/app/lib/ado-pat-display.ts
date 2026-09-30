@@ -226,24 +226,35 @@ export interface RunTokenLine {
 
 export interface RunTokenView {
   lines: RunTokenLine[];
-  /** One "Access added" line per widening, in order. */
-  added: string[];
   paused: boolean;
-  /** The clock time a failed renewal's token stops working, when one failed. */
-  renewalFailedAt: string | null;
   /** The clock time each unrevokable token expires. */
   revokeFailedAt: string[];
+}
+
+// A live token is renewed at 75% of its life (the server's renewal point), so a
+// token the next one followed at or after that point was renewed. One replaced
+// earlier was replaced for another reason (a widening, a resume, a restart) that
+// the wire does not name, so it gets no note rather than a guess.
+const RENEWAL_POINT = 0.75;
+const RENEWAL_SLACK_MS = 60_000;
+
+function wasRenewed(t: ADORunToken, next: ADORunToken): boolean {
+  const created = Date.parse(t.created_at);
+  const life = Date.parse(t.valid_to) - created;
+  return Date.parse(next.created_at) >= created + RENEWAL_POINT * life - RENEWAL_SLACK_MS;
 }
 
 /** A run's tokens as the page draws them, oldest first. `paused` is the run's own
  *  state; the token list alone cannot say a run is paused.
  *
- *  A token is never revoked early: one a renewal or a widening replaced is still
- *  live at Azure DevOps until its own expiry. So a token followed by another
- *  reads "(renewed)", or "(access added)" when the next one added access, from
- *  its position, not from a revoke reason. One closed at its own expiry reads
- *  "(expired)". Only a token the server actually revoked (a pause, the run's end,
- *  a disconnect, and the like) names a revoke time and reason. */
+ *  A token is never revoked early: one a renewal replaced is still live at Azure
+ *  DevOps until its own expiry. So a token the next one followed at its renewal
+ *  point reads "(renewed)", from its position and times, not from a revoke
+ *  reason. One closed at its own expiry reads "(expired)". Only a token the
+ *  server actually revoked (a pause, the run's end, a disconnect, and the like)
+ *  names a revoke time and reason. A widening's new token is not told apart from
+ *  another replacement by anything the server sends, so "access added" is not
+ *  drawn. */
 export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenView {
   const sorted = [...tokens].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const lines = sorted.map((t, i) => {
@@ -256,25 +267,19 @@ export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenVi
       return { text: ADO_PAT.RUN_TOKEN_LINE_REVOKED(created, expires, formatClock(t.revoked_at!), reason), old: !!next || paused };
     }
     if (next && !revoked) {
-      const note = (next.added_capabilities?.length ?? 0) > 0 ? ADO_PAT.RUN_TOKEN_NOTE.access_added : ADO_PAT.RUN_TOKEN_NOTE.renewed;
-      return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, note), old: true };
+      const text = wasRenewed(t, next)
+        ? ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.renewed)
+        : ADO_PAT.RUN_TOKEN_LINE(created, expires);
+      return { text, old: true };
     }
     if (t.revoke_reason === "expired") return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.expired), old: true };
     return { text: ADO_PAT.RUN_TOKEN_LINE(created, expires), old: !!next };
   });
   return {
     lines,
-    added: sorted
-      .filter((t) => (t.added_capabilities?.length ?? 0) > 0)
-      .map((t) => ADO_PAT.RUN_ACCESS_ADDED(formatClock(t.created_at), (t.added_capabilities ?? []).map(adoCapName).join(", "))),
     paused,
-    renewalFailedAt: formatClockOrNull(sorted.find((t) => t.renewal_failed && !t.revoked_at)?.valid_to),
     revokeFailedAt: sorted.filter((t) => t.revoke_failed).map((t) => formatClock(t.valid_to)),
   };
-}
-
-function formatClockOrNull(iso: string | undefined): string | null {
-  return iso ? formatClock(iso) : null;
 }
 
 // ---- The admin's row ----

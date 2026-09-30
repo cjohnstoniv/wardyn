@@ -660,7 +660,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     };
     // The write door prefixes its own refusal with the field, as the real server does.
     await spliceProviders(page, minted, () => ({ status: 400, json: { error: `git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}` } }));
-    const checkedAt = new Date(2026, 8, 29, 9, 12).toISOString();
+    const checkedAt = new Date(2000, 8, 29, 9, 12).toISOString();
     let answer: Record<string, unknown> = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
     let checks = 0;
     await page.route("**/api/v1/workspace-providers/git/azure_devops/org-check", async (route) => {
@@ -789,7 +789,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     );
     await page.route("**/api/v1/workspace-providers/git/azure_devops/org-check", (route) =>
       route.fulfill({
-        json: { checked_at: new Date(2026, 8, 29, 9, 12).toISOString(), organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "missing", token_life: "accepted", lifespan: "off" },
+        json: { checked_at: new Date(2000, 8, 29, 9, 12).toISOString(), organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "missing", token_life: "accepted", lifespan: "off" },
       }),
     );
     // The sidebar is collapsed at this width, so go straight to the page.

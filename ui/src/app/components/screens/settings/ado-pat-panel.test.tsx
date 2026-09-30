@@ -32,7 +32,7 @@ vi.mock("../../../lib/api/ado-pat", async () => {
 import { AdoConnectionCard } from "./ado-connection";
 
 const ORG = "https://dev.azure.com/wardyn-live-test";
-const at = (h: number, m: number) => new Date(2026, 8, 29, h, m).toISOString();
+const at = (h: number, m: number) => new Date(2000, 8, 29, h, m).toISOString();
 
 function status(access: Partial<SCMAccessPAT>): SetupStatus {
   return {
@@ -186,9 +186,9 @@ describe("a row where each person adds their own token", () => {
     const add = within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD });
     expect(add).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-secret");
-    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2026-10-27");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2000-10-27");
     await userEvent.click(add);
-    await waitFor(() => expect(storeMock).toHaveBeenCalledWith({ org: ORG, token: "pasted-secret", expires_on: "2026-10-27" }));
+    await waitFor(() => expect(storeMock).toHaveBeenCalledWith({ org: ORG, token: "pasted-secret", expires_on: "2000-10-27" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
@@ -200,7 +200,7 @@ describe("a row where each person adds their own token", () => {
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
     const dialog = await screen.findByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "x");
-    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2027-03-01");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2000-03-01");
     await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }));
     return dialog;
   }
@@ -229,7 +229,7 @@ describe("a row where each person adds their own token", () => {
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
     let dialog = await screen.findByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-secret");
-    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2026-10-27");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2000-10-27");
     await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_CANCEL }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
@@ -257,7 +257,7 @@ describe("a row where each person adds their own token", () => {
   });
 
   it("10: an Azure DevOps Server row is titled as one and says git only", async () => {
-    renderCard({ ...own, org: "https://tfs.example.com/collection", state: "live", expires_on: "2026-10-27" });
+    renderCard({ ...own, org: "https://tfs.example.com/collection", state: "live", expires_on: "2000-10-27" });
     await expandCard(ADO_PAT.OWN_SERVER_TITLE);
     expect(screen.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
