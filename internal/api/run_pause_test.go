@@ -524,6 +524,7 @@ type probeRunner struct {
 	*pauseRunner
 	walking       atomic.Int32
 	walk, sample  func()
+	skip          func()
 	sampleStarted chan struct{}
 	arms          []string
 	armsMu        sync.Mutex
@@ -546,6 +547,9 @@ func (r *probeRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSp
 			return &runner.ExecSession{Stdout: strings.NewReader(cpuReading(40))}, nil
 		}
 		return &runner.ExecSession{Stdout: strings.NewReader(cpuReading(1))}, nil
+	}
+	if arm == "skip" && r.skip != nil {
+		r.skip()
 	}
 	if arm == "" {
 		r.walking.Add(1)
@@ -624,5 +628,67 @@ func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
 	defer pr.armsMu.Unlock()
 	if got := strings.Join(pr.arms, ","); got != "filesystem,skip" {
 		t.Errorf("script arms = %q, want the sample then a poll that walked nothing", got)
+	}
+}
+
+// TestRunPause_RefusedWalkStillDelaysTheSample: a poll that arrives while the
+// sampler is waiting out another walk is refused its own walk, but it still runs
+// the script's other readings, which are CPU too. The sampler waits for it.
+func TestRunPause_RefusedWalkStillDelaysTheSample(t *testing.T) {
+	f, pr, owner := newProbeFixture(t)
+	walkStarted, releaseWalk := make(chan struct{}), make(chan struct{})
+	pr.walk = func() { close(walkStarted); <-releaseWalk }
+	skipStarted, releaseSkip := make(chan struct{}), make(chan struct{})
+	pr.skip = func() { close(skipStarted); <-releaseSkip }
+	pr.sampleStarted = make(chan struct{})
+	path := "/api/v1/runs/" + f.run.ID.String() + "/resources"
+
+	poll1 := make(chan int, 1)
+	go func() { poll1 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
+	<-walkStarted
+	sweepDone := make(chan error, 1)
+	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	time.Sleep(100 * time.Millisecond) // the sampler is waiting out the walk
+	poll2 := make(chan int, 1)
+	go func() { poll2 <- doSSO(t, f.srv, http.MethodGet, path, owner, "").Code }()
+	<-skipStarted // refused its walk, reading the rest of the script
+	close(releaseWalk)
+
+	select {
+	case <-pr.sampleStarted:
+		t.Fatal("the sample opened while a refused poll's readings were still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(releaseSkip)
+	<-pr.sampleStarted
+	for _, c := range []chan int{poll1, poll2} {
+		if code := <-c; code != http.StatusOK {
+			t.Fatalf("poll = %d, want 200", code)
+		}
+	}
+	if err := <-sweepDone; err != nil {
+		t.Fatalf("sweepRunPauses: %v", err)
+	}
+}
+
+// TestRunPause_AbandonedWalkIsWaitedOut: a poll whose request ended mid-walk (a
+// closed tab) leaves `timeout 2 du` running in the sandbox, so the sampler holds
+// off for the grace period instead of reading that walk as the agent's CPU.
+func TestRunPause_AbandonedWalkIsWaitedOut(t *testing.T) {
+	prev := abandonedWalkGrace
+	abandonedWalkGrace = 300 * time.Millisecond
+	t.Cleanup(func() { abandonedWalkGrace = prev })
+	f, pr, owner := newProbeFixture(t)
+	ctx, disconnect := context.WithCancel(context.Background())
+	pr.walk = func() { disconnect() }
+
+	doSSOCtx(t, f.srv, ctx, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
+	start := time.Now()
+	if !f.srv.pause.beginSample(context.Background(), f.run.ID) {
+		t.Fatal("beginSample gave up")
+	}
+	f.srv.pause.endSample(f.run.ID)
+	if waited := time.Since(start); waited < 250*time.Millisecond {
+		t.Errorf("sample opened after %v, want it to wait out the abandoned walk's grace", waited)
 	}
 }

@@ -421,11 +421,13 @@ func TestRunFiles_SandboxGoneBeforeStateFlips(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			logs := captureSlog(t)
 			srv, _, audit, run := newRunFilesHarness(execFn)
 			w := doRunFiles(srv, run.ID, nil)
 			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunInspectTerminal) {
 				t.Fatalf("status = %d body %s, want 409 %s", w.Code, w.Body.String(), reasonRunInspectTerminal)
 			}
+			wantGoneLogged(t, logs, run.ID)
 			if len(audit.events) != 0 {
 				t.Errorf("audit = %+v, want none for a sandbox that is simply gone", audit.events)
 			}
