@@ -122,6 +122,11 @@ export interface WorkspaceLLMCred {
   // The model provider (GET /model-providers id) a run on this workspace uses
   // unless it chooses one itself. internal/types/workspace.go ProviderRef.
   provider_ref?: string;
+  // Set by the server on a read, in place of provider_ref, when the pinned
+  // provider isn't available to this caller: the workspace is pinned, to a
+  // provider they can't use, and its id isn't theirs to see (#1018).
+  // internal/types/workspace.go ProviderUnavailable. Never sent.
+  provider_unavailable?: boolean;
 }
 
 // The tier-1 source library's wire row (Source) lived here; its screen was

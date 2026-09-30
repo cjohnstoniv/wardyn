@@ -79,7 +79,7 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 		return slices.ContainsFunc(candidates, func(p types.ModelProvider) bool { return p.ID == id })
 	}
 	if named := cmp.Or(requested, pin); named != "" {
-		return judgeNamedProvider(sc, agent, named, granted)
+		return judgeNamedProvider(sc, agent, named, requested == "", granted)
 	}
 	if row, ok := agentProviderFor(sc, agent); ok && row.DefaultProvider != "" {
 		d, _ := modelProviderByID(sc.ModelProviders, row.DefaultProvider)
@@ -111,8 +111,11 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 // judgeNamedProvider answers for a provider the request or the workspace pin
 // named: it is the choice, or the run is refused naming it. The grant is asked
 // before the provider's state, so a provider the caller is not granted reads
-// as one that does not exist whatever its state (asMissing).
-func judgeNamedProvider(sc types.SiteConfig, agent, id string, granted func(id string) (bool, error)) (runProviderChoice, error) {
+// as one that does not exist whatever its state (asMissing) — or, when the
+// workspace pin named it (fromPin), is refused naming no provider at all: the
+// caller never named it, and a workspace read hides it from them
+// (pinStamper), so the refusal must not be where they learn it.
+func judgeNamedProvider(sc types.SiteConfig, agent, id string, fromPin bool, granted func(id string) (bool, error)) (runProviderChoice, error) {
 	p, ok := modelProviderByID(sc.ModelProviders, id)
 	if !ok {
 		return providerRefusal(id, "", mpRunStateMissing), nil
@@ -121,6 +124,8 @@ func judgeNamedProvider(sc types.SiteConfig, agent, id string, granted func(id s
 	switch {
 	case err != nil:
 		return runProviderChoice{}, err
+	case !allowed && fromPin:
+		return runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true, providerID: id}, nil
 	case !allowed:
 		c := providerRefusal(id, "", mpRunStateMissing)
 		c.notGranted, c.asMissing = true, true

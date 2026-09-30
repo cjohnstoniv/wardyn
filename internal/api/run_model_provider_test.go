@@ -65,8 +65,10 @@ func TestChooseModelProvider(t *testing.T) {
 		{name: "a requested provider the caller is not granted that is also off", sc: site("", a, off(b)), requested: "b", granted: only("a"),
 			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
 		{name: "the pin, with no request", sc: site("a", a, b), pin: "b", granted: all, wantID: "b"},
+		// A pin the caller cannot use is refused naming no provider: they never
+		// named it, and a workspace read hides it from them (#1018).
 		{name: "a pin the caller is not granted is refused, never passed over", sc: site("a", a, b), pin: "b", granted: only("a"),
-			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
+			wantRefusal: fmt.Sprintf(mpRunNoneGranted, "claude-code"), wantNotGranted: true},
 		{name: "a pin that is off is refused, never passed over", sc: site("a", a, off(b)), pin: "b", granted: all,
 			wantRefusal: refusal("b", mpRunStateOff)},
 		{name: "the default among two candidates", sc: site("b", a, b), granted: all, wantID: "b"},
@@ -230,13 +232,11 @@ func TestRunModelProviderDoors(t *testing.T) {
 		{name: "a workspace pin naming a provider the member is not granted", site: twoKeys, ws: pinned,
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
-			body: onPinned, want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateMissing, mpRunRemedy), denied: true,
-			wantProvider: "corp"},
+			body: onPinned, want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunNoneGranted, "claude-code"), denied: true},
 		{name: "workspace_id: the pin names a provider the member is not granted", site: twoKeys, ws: pinned,
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
-			body: byID(pinned, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateMissing, mpRunRemedy), denied: true,
-			wantProvider: "corp"},
+			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunNoneGranted, "claude-code"), denied: true},
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
 		{name: "workspace_id: a chosen Bedrock provider with no region or model", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,

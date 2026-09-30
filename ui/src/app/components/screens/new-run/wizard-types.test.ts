@@ -15,6 +15,9 @@ import {
   impliedEgressHosts,
   secretAutoGrants,
   titleFromTask,
+  UNUSABLE_PIN,
+  workspaceModelProviderUnavailable,
+  workspacePin,
 } from "./wizard-types";
 import type { Workspace, WorkspaceRequirementsMap } from "../../../lib/types";
 import { makeWorkspace } from "../../../../test/factories";
@@ -333,5 +336,29 @@ describe("resolvedModelProviders", () => {
   it("a reachable status with a real list passes it through unchanged", () => {
     const rows = [{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }];
     expect(resolvedModelProviders({ model_providers: rows })).toBe(rows);
+  });
+});
+
+// #1018: the server hides a pin the caller isn't granted and sends
+// llm_cred.provider_unavailable instead; the console reads the bit.
+describe("a pin the server hid (provider_unavailable)", () => {
+  const hidden = makeWorkspace({ id: "ws1", llm_cred: { provider_unavailable: true } });
+  const visible = makeWorkspace({ id: "ws2", llm_cred: { provider_ref: "corp" } });
+
+  it("is unavailable for an agent run, whatever the caller's list holds", () => {
+    expect(workspaceModelProviderUnavailable(hidden, [{ id: "corp" }])).toBe(true);
+    expect(workspaceModelProviderUnavailable(hidden, [])).toBe(true);
+    expect(workspaceModelProviderUnavailable(visible, [{ id: "corp" }])).toBe(false);
+  });
+
+  it("says nothing where the model-provider arm does not apply (no list)", () => {
+    expect(workspaceModelProviderUnavailable(hidden, undefined)).toBe(false);
+  });
+
+  it("is still a pin to the rail, one no provider id can equal", () => {
+    expect(workspacePin(hidden)).toBe(UNUSABLE_PIN);
+    expect(workspacePin(visible)).toBe("corp");
+    expect(workspacePin(makeWorkspace({ id: "ws3" }))).toBeUndefined();
+    expect(UNUSABLE_PIN).not.toMatch(/^[a-z0-9._-]+$/);
   });
 });

@@ -129,13 +129,35 @@ export function hasSourceNotAdmitted(ws: Workspace): boolean {
 // resolvedModelProviders (below) is what turns the wire's own distinction
 // between the two into this function's own `undefined` vs `[]` contract; this
 // function itself just trusts whatever it's given.
+//
+// Since #1018 the server itself answers this for a pin the caller isn't
+// granted: it sends llm_cred.provider_unavailable in place of the id (which
+// the caller may not see), so the bit alone is "unavailable". The id compare
+// still covers a visible pin the caller's list lacks for another reason.
 export function workspaceModelProviderUnavailable(
   ws: Workspace,
   modelProviders: { id: string }[] | undefined,
 ): boolean {
+  if (!modelProviders) return false;
+  if (ws.llm_cred?.provider_unavailable) return true;
   const ref = ws.llm_cred?.provider_ref;
-  if (!ref || !modelProviders) return false;
+  if (!ref) return false;
   return !modelProviders.some((p) => p.id === ref);
+}
+
+// UNUSABLE_PIN is the rail's pin for a workspace whose pin the server hid
+// (llm_cred.provider_unavailable, #1018): still a pin, to a provider this
+// person can't use, so it must preselect nothing and never let the rail
+// substitute another provider (resolveProviderSelection's non-candidate pin
+// rule). No provider id can equal it: ids are lowercase letters, digits and
+// ._- only.
+export const UNUSABLE_PIN = "(unavailable)";
+
+// workspacePin is the pin the rail reads off a workspace: its provider id, or
+// UNUSABLE_PIN when the server hid one.
+export function workspacePin(ws: Workspace | undefined): string | undefined {
+  if (ws?.llm_cred?.provider_unavailable) return UNUSABLE_PIN;
+  return ws?.llm_cred?.provider_ref || undefined;
 }
 
 // SetupStatus.model_providers is `omitzero` on the wire (setup.go): absent
