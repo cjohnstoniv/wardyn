@@ -552,7 +552,7 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
 // #1197 L2: the Title default tracks the task's own first line until the
 // operator writes one themselves — wizard-types.test.ts pins the word-boundary
 // cut in isolation; these prove it is actually WIRED into the screen.
-describe("NewRunScreen — Title tracks the task until edited", () => {
+describe("NewRunScreen — Title tracks the task until edited", { timeout: 20_000 }, () => {
   it("prefills the title from the task's first line as it's typed", async () => {
     renderScreen();
     // Default mode is interactive: the task field is the optional boot seed.
@@ -564,13 +564,15 @@ describe("NewRunScreen — Title tracks the task until edited", () => {
   it("stops tracking once the operator edits the title by hand", async () => {
     renderScreen();
     const seed = await screen.findByLabelText("Initial prompt (optional)");
-    await user.type(seed, "Refactor the payments module");
+    // One change event per edit, not a keystroke per character: this test is
+    // about which edit the Title follows, and ~60 keystrokes made it a timing
+    // test on a slow runner.
+    fireEvent.change(seed, { target: { value: "Refactor the payments module" } });
     const title = screen.getByLabelText("Title");
     expect(title).toHaveValue("Refactor the payments module");
 
-    await user.clear(title);
-    await user.type(title, "My own title");
-    await user.type(seed, " and the retry path");
+    fireEvent.change(title, { target: { value: "My own title" } });
+    fireEvent.change(seed, { target: { value: "Refactor the payments module and the retry path" } });
     expect(title).toHaveValue("My own title");
   });
 

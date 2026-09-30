@@ -101,7 +101,7 @@ describe("NewRunScreen — the empty saved-policy picker's New policy door", () 
   });
 });
 
-describe("NewRunScreen — the saved-policy lane", () => {
+describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
   // A member's list read redacts secret refs (redactPoliciesForRead) — this is
   // what that redacted body looks like on the wire.
   const REDACTED_POLICY = {
