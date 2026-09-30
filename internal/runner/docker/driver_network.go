@@ -201,6 +201,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.mu.Lock()
 		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg, managed: spec.ManagedFiles}
 		d.mu.Unlock()
+		d.keepExecOutput(name, spec.ExecOutput)
 		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced}, nil
 	}
 
@@ -242,6 +243,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.Record {
 		d.prepareRecordingDirs(ctx, agentResp.ID)
 	}
+	d.keepExecOutput(agentContainerName(spec.RunID), spec.ExecOutput)
 
 	return runner.Sandbox{
 		// The deterministic name, not agentResp.ID: Docker's API accepts either for every call this
@@ -460,6 +462,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	delete(d.mainProc, agentRef)
 	delete(d.creating, agentRef)
 	d.mu.Unlock()
+	d.execOutputs.Delete(agentRef)
 
 	var id uuid.UUID
 	res, err := d.cli.ContainerInspect(ctx, agentRef, client.ContainerInspectOptions{})

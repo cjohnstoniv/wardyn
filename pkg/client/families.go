@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -380,6 +381,30 @@ type RunFiles struct {
 func (c *Client) RunFiles(ctx context.Context, runID uuid.UUID) (RunFiles, error) {
 	var out RunFiles
 	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String()+"/files", nil, &out)
+	return out, err
+}
+
+// RunOutput is GET /runs/{id}/output's body: the end of a task_mode=exec run's
+// combined stdout/stderr.
+type RunOutput struct {
+	Output string `json:"output"`
+	// Truncated: Output does not start at the run's first byte.
+	Truncated bool `json:"truncated"`
+	// Complete: the run has finished, so no more output will come.
+	Complete bool `json:"complete"`
+}
+
+// RunOutput reads the last tail bytes of a task_mode=exec run's output
+// (owner-or-admin); tail <= 0 asks for all the server keeps (8 KiB). 409 for
+// an interactive run, when none is kept, or when it is off; 410 once it has
+// expired. Each refusal carries a run_output_* reason.
+func (c *Client) RunOutput(ctx context.Context, runID uuid.UUID, tail int) (RunOutput, error) {
+	path := "/api/v1/runs/" + runID.String() + "/output"
+	if tail > 0 {
+		path += "?tail=" + strconv.Itoa(tail)
+	}
+	var out RunOutput
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
 	return out, err
 }
 

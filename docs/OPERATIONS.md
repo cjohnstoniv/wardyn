@@ -85,6 +85,29 @@ disposable derived data. Preserve that recovery state as described below.
 Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are
 transient — regenerated on start.
 
+### Exec run output
+
+wardynd keeps the last 8 KiB of each `task_mode=exec` run's combined
+stdout/stderr in memory, so a caller can read the end of a headless run with
+`GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
+else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none.
+
+- **It is not a recording, and not stored.** It lives outside the recording
+  store and works with `WARDYN_RECORDING_STORE=off`; nothing reaches Postgres or
+  a backup, and a wardynd restart drops every tail. It is dropped
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output.
+- **It can hold secrets, like any log.** Values already in Wardyn's masking registry
+  (brokered credentials, `env_secret` grants) are masked as they are written,
+  the same way a recording is. Anything else a command prints — a token it read
+  from a file, a secret a person pasted into the task — is kept verbatim and
+  served to whoever may read the run.
+- **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
+  does not turn this off; a deployment that disables recordings so terminals are
+  not kept should decide on this one too.
+- **On Kubernetes** the tail is read from the agent container's log, which
+  needs `get` on `pods/log` in the runs namespace. Without it the log read is
+  refused, wardynd logs a warning, and the run's tail stays empty.
+
 ### Audit fallback recovery
 
 Keep the spool, `<spool>.consumed`, and `<spool>.quarantine` with the database

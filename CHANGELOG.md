@@ -34,6 +34,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   monotonic per run and `Last-Event-ID` resumes without gaps within the daemon's lifetime; the feed
   is kept in memory, carries no log or secret content, and adds no migration. The Go SDK follows it
   with `RunEvents`; see `docs/sdk.md`.
+- **The end of an exec run's output, with or without recordings (#1232).**
+  `GET /api/v1/runs/{id}/output?tail=<bytes>` returns `{output, truncated, complete}` — the last 8 KiB
+  of a `task_mode=exec` run's combined stdout/stderr, kept in wardynd's memory apart from the
+  recording store, so it works with `WARDYN_RECORDING_STORE=off`. Readable by the run's owner or an
+  admin; anyone else gets the same `404` as `GET /runs/{id}`. An interactive run is refused (`409`,
+  `run_output_interactive`). Values in the masking registry are masked as they are written; anything
+  else a command prints is kept like a log line (OPERATIONS.md "Exec run output"). A tail is dropped
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output (`410`,
+  `run_output_expired`) and on a wardynd restart; `WARDYN_EXEC_OUTPUT_TAIL=off` keeps none. On
+  Kubernetes the tail is read from the agent container's log, which needs `get` on `pods/log`. The
+  Go SDK reads it with `RunOutput`.
 
 ### Changed
 

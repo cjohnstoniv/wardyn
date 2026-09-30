@@ -134,6 +134,7 @@ var queryParamNotAnID = map[string]string{
 	"include":                   "response projection switch",
 	"preset":                    "response projection switch",
 	"rows":                      "terminal geometry",
+	"tail":                      "byte count of a run's output tail, read after the path's run is authorized",
 	"cols":                      "terminal geometry",
 	"type":                      "directory search kind (security tier route)",
 	"q":                         "free-text search over an already-scoped listing: directory search (security tier route) and #1197's run list (every tier)",

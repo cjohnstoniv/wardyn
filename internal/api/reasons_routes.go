@@ -204,6 +204,15 @@ const (
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
 )
 
+// GET /runs/{id}/output (run_output.go).
+const (
+	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; only a task_mode=exec run keeps its output
+	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (not exec, or started before a restart)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
+)
+
 // POST /runs/{id}/resume (run_pause.go).
 const (
 	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
