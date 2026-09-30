@@ -142,10 +142,9 @@ func TestPermitsIsTheGate(t *testing.T) {
 }
 
 // TestScopesForNeverRequestsTheTokenScopes pins that no grantable capability
-// resolves to a token-lifecycle scope. Nothing can use them — Azure DevOps
-// mints personal access tokens only for Microsoft's own clients — and consent,
-// not the request, decides a token's scopes, so asking for one would put it in
-// every run's token.
+// resolves to a token-lifecycle scope. Consent, not the request, decides an
+// Entra token's scopes, so a capability that asked for one would put it in
+// every run's token; only MintScopes names two of them, for the sign-in.
 func TestScopesForNeverRequestsTheTokenScopes(t *testing.T) {
 	all, err := ScopesFor(GrantableCapabilities())
 	if err != nil {
@@ -161,6 +160,124 @@ func TestScopesForNeverRequestsTheTokenScopes(t *testing.T) {
 	}
 	if !slices.Contains(neverRequestedScopes, "vso.tokens") || !slices.Contains(neverRequestedScopes, "vso.pats") {
 		t.Errorf("neverRequestedScopes = %v, want both vso.tokens and vso.pats", neverRequestedScopes)
+	}
+}
+
+// TestPATScope pins the personal access token's scope string: unqualified,
+// sorted, deduplicated, space-joined. The rows use capabilities whose scopes
+// #1409's re-cut of the read catalogue does not touch.
+func TestPATScope(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		caps []Capability
+		want string
+	}{
+		{"one capability, one scope", []Capability{CapCodeWrite}, "vso.code_write"},
+		{"the four that share a scope collapse to it",
+			[]Capability{CapPolicyBypass, CapCodeWrite, CapPR, CapPolicyAdmin}, "vso.code_write"},
+		{"several scopes are sorted and space-joined",
+			[]Capability{CapBuildExecute, CapCodeWrite}, "vso.build_execute vso.code_write vso.release_execute"},
+		{"input order does not matter",
+			[]Capability{CapWorkWrite, CapRepoAdmin, CapBuildAdmin},
+			"vso.build_execute vso.code_manage vso.release_manage vso.work_write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PATScope(tc.caps)
+			if err != nil {
+				t.Fatalf("PATScope(%v) error = %v", tc.caps, err)
+			}
+			if got != tc.want {
+				t.Errorf("PATScope(%v) = %q, want %q", tc.caps, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPATScopeIsScopesForUnqualified holds the seam: PATScope is ScopesFor with
+// the resource prefix off, for every grantable capability, so the two cannot
+// drift into two tables.
+func TestPATScopeIsScopesForUnqualified(t *testing.T) {
+	for _, c := range GrantableCapabilities() {
+		qualified, err := ScopesFor([]Capability{c})
+		if err != nil {
+			t.Fatalf("ScopesFor(%q) error = %v", c, err)
+		}
+		want := strings.ReplaceAll(strings.Join(qualified, " "), ResourceID+"/", "")
+		got, err := PATScope([]Capability{c})
+		if err != nil {
+			t.Fatalf("PATScope(%q) error = %v", c, err)
+		}
+		if got != want {
+			t.Errorf("PATScope(%q) = %q, want ScopesFor unqualified %q", c, got, want)
+		}
+		if strings.Contains(got, "/") {
+			t.Errorf("PATScope(%q) = %q, want no resource qualifier", c, got)
+		}
+	}
+}
+
+// TestPATScopeRefusesWhatIsNotGrantable: a denied area, an unclassified write,
+// an invented capability, or nothing at all is an error and never an empty or
+// partial scope — a token created with no scope must not read as a narrow one.
+func TestPATScopeRefusesWhatIsNotGrantable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		caps []Capability
+	}{
+		{"an invented capability", []Capability{"superuser"}},
+		{"a good one beside a bad one", []Capability{CapCodeWrite, "superuser"}},
+		{"a denied area", []Capability{CapDeniedTokens}},
+		{"the unclassified-write placeholder", []Capability{CapUnclassifiedWrite}},
+		{"no capabilities", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PATScope(tc.caps)
+			if err == nil {
+				t.Fatalf("PATScope(%v) = %q, want an error", tc.caps, got)
+			}
+			if got != "" {
+				t.Errorf("PATScope(%v) = %q with an error, want no scope", tc.caps, got)
+			}
+		})
+	}
+}
+
+// TestMintScopes pins the two permissions the sign-in asks for, qualified, and
+// that no capability's scopes overlap them.
+func TestMintScopes(t *testing.T) {
+	want := []string{ResourceID + "/vso.pats", ResourceID + "/vso.pats_manage"}
+	if got := MintScopes(); !slices.Equal(got, want) {
+		t.Fatalf("MintScopes() = %v, want %v", got, want)
+	}
+	all, err := ScopesFor(GrantableCapabilities())
+	if err != nil {
+		t.Fatalf("ScopesFor(every grantable capability) error = %v", err)
+	}
+	for _, m := range MintScopes() {
+		if slices.Contains(all, m) {
+			t.Errorf("a capability resolves to %q — a mint scope is never a capability's", m)
+		}
+	}
+}
+
+// TestIsTokenScope: the five scopes that let a token create tokens, qualified
+// or not, in any case; and nothing a capability needs.
+func TestIsTokenScope(t *testing.T) {
+	for _, s := range []string{"vso.pats", "vso.pats_manage", "vso.tokens", "vso.tokenadministration", "user_impersonation"} {
+		for _, form := range []string{s, ResourceID + "/" + s, strings.ToUpper(s), strings.ToUpper(ResourceID) + "/" + s} {
+			if !IsTokenScope(form) {
+				t.Errorf("IsTokenScope(%q) = false, want true", form)
+			}
+		}
+	}
+	all, err := ScopesFor(GrantableCapabilities())
+	if err != nil {
+		t.Fatalf("ScopesFor(every grantable capability) error = %v", err)
+	}
+	for _, s := range append(all, "vso.code", "vso.code_write", "openid", "offline_access", "", "vso.pats_extra", "other/vso.pats") {
+		if IsTokenScope(s) {
+			t.Errorf("IsTokenScope(%q) = true, want false", s)
+		}
 	}
 }
 
