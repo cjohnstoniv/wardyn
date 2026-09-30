@@ -201,16 +201,13 @@ func requireDockerAndPGSecrets(t *testing.T) *pgsecrets.Store {
 
 // subHarnessPGDocker mirrors provider_subscription_test.go's subHarness but
 // wires a REAL secret store instead of memSecrets — everything else (the
-// fake Store for run/site-config, the shared-subscription posture off, the
-// resolvable Claude sign-in image) is identical, since only the secret
+// fake Store for run/site-config, the resolvable Claude sign-in image) is identical, since only the secret
 // backend is this file's reason to exist.
 func subHarnessPGDocker(t *testing.T, sec *pgsecrets.Store) *harness {
 	t.Helper()
 	h := newHarness(t)
 	h.srv.cfg.Secrets = sec
 	h.srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
-	h.srv.cfg.SubscriptionPostureOK = false
-	h.srv.cfg.SubscriptionPostureReason = "OIDC/SSO is configured"
 	h.srv.router = h.srv.routes()
 	return h
 }

@@ -129,7 +129,8 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("PUT /secrets: %d, want 204: %s", w.Code, w.Body.String())
 	}
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", alice, `{"agent":"claude-code","task":"t"}`)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", alice,
+		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: %d, want 201: %s", w.Code, w.Body.String())
 	}
