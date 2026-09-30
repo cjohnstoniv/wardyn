@@ -10,7 +10,10 @@ package proxy
 // THIS IS THE BOUNDARY, not a second opinion: an Entra token carries every
 // scope the person ever consented to and no organisation claim, so the
 // organisation pin and capability check below are the only things narrowing
-// what the injected credential can do. Everything that cannot be classified
+// what the injected credential can do. The same holds when the control plane
+// resolves a personal access token (Authorization: Basic base64(":"+PAT)): the
+// proxy injects whatever header the resolve names and applies this gate to
+// every grant, whatever its scheme. Everything that cannot be classified
 // honestly is refused: a classification error, an unrecognized or denied
 // write, a body too large to peek, and git-over-HTTP (git uses the broker
 // path, never the intercepted connection).
@@ -237,6 +240,7 @@ func adoPeekBody(r *http.Request) ([]byte, string) {
 		return nil, "Wardyn refused this Azure DevOps request: its body is too large to check."
 	}
 	r.Body = io.NopCloser(bytes.NewReader(peek))
+	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(peek)), nil } // adoReplayBody
 	if len(peek) == 0 {
 		return nil, ""
 	}
