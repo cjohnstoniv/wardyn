@@ -73,7 +73,7 @@ func (s *refusalStore) ListAPITokensByPrincipal(_ context.Context, principal str
 	return s.tokens[principal], nil
 }
 
-var refusalNow = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+var refusalNow = time.Now().UTC().Truncate(time.Second)
 
 // deniedMint is an ado_pat.mint.denied row as mintRunPAT writes it.
 func deniedMint(age time.Duration, row, owner, refusal string) types.AuditEvent {
@@ -192,6 +192,24 @@ func TestADOPATRefusal_NothingWhenNoRefusalInSevenDays(t *testing.T) {
 	in := &refusalStore{events: []types.AuditEvent{deniedMint(6*24*time.Hour, refusalRow, "sub-p", reasonADOPATPolicyBlocked)}, people: people}
 	if w := getRefusal(t, refusalServer(t, in), admin, refusalRow); w.Code != http.StatusOK {
 		t.Fatalf("6 days old: status %d, want 200", w.Code)
+	}
+}
+
+// Newer denials of other kinds (a person retrying a launch re-mints on every
+// resolve) must not push the policy-blocked refusal out of the read.
+func TestADOPATRefusal_NewerOtherDenialsDoNotHideIt(t *testing.T) {
+	var events []types.AuditEvent // newest first
+	for i := 0; i < 150; i++ {
+		events = append(events, deniedMint(time.Duration(i+1)*time.Minute, refusalRow, "sub-priya", reasonADOPATLifespanPolicy))
+	}
+	for i := 0; i < 100; i++ {
+		events = append(events, deniedMint(time.Duration(i+1)*time.Minute, "other-row", "sub-priya", reasonADOPATPolicyBlocked))
+	}
+	events = append(events, deniedMint(6*time.Hour, refusalRow, "sub-priya", reasonADOPATPolicyBlocked))
+	st := &refusalStore{events: events, people: map[string]types.Person{"sub-priya": {Principal: "sub-priya", Email: "priya@corp.example"}}}
+	w := getRefusal(t, refusalServer(t, st), ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), refusalRow)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "priya@corp.example") {
+		t.Fatalf("status %d body %q, want 200 naming priya behind 250 newer other denials", w.Code, w.Body.String())
 	}
 }
 

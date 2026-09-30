@@ -31,10 +31,11 @@ import (
 const (
 	// adoPATRefusalWindow is how far back a refusal still counts.
 	adoPATRefusalWindow = 7 * 24 * time.Hour
-	// adoPATRefusalScan bounds the audit read: the newest this many denied
-	// mints inside the window. The store cannot filter on an audit row's data,
-	// so the provider row and the refusal are matched here.
-	adoPATRefusalScan = 200
+	// adoPATRefusalScan bounds the audit read: the newest this many policy-
+	// blocked refusals on the row inside the window (the store filters on the
+	// refusal and the row, so other denials never count against it). More than
+	// one, because a refused person with no email on file is passed over.
+	adoPATRefusalScan = 50
 )
 
 // adoPATRefusal is the answer: who was refused and when. Nothing else.
@@ -60,8 +61,9 @@ func (s *Server) handleADOPATRefusal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := pager.QueryAuditEventsFilteredPage(ctx, nil, store.AuditFilter{
-		Action: adoPATAuditMintDenied,
-		Since:  s.cfg.Now().Add(-adoPATRefusalWindow),
+		Action:       adoPATAuditMintDenied,
+		Since:        s.cfg.Now().Add(-adoPATRefusalWindow),
+		DataContains: string(mustJSON(map[string]any{"refusal": reasonADOPATPolicyBlocked, "provider_row": rowID})),
 	}, store.Page{Limit: adoPATRefusalScan})
 	if err != nil {
 		writeServerError(w, r, "read the Azure DevOps token refusals", err)
@@ -70,11 +72,9 @@ func (s *Server) handleADOPATRefusal(w http.ResponseWriter, r *http.Request) {
 	emails := map[string]string{} // owner -> email, "" when none: one lookup per person
 	for _, ev := range rows {     // newest first
 		var d struct {
-			Refusal     string `json:"refusal"`
-			ProviderRow string `json:"provider_row"`
-			Owner       string `json:"owner"`
+			Owner string `json:"owner"`
 		}
-		if json.Unmarshal(ev.Data, &d) != nil || d.Refusal != reasonADOPATPolicyBlocked || d.ProviderRow != rowID || d.Owner == "" {
+		if json.Unmarshal(ev.Data, &d) != nil || d.Owner == "" {
 			continue
 		}
 		email, seen := emails[d.Owner]
