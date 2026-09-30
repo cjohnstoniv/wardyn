@@ -199,17 +199,26 @@ func (s *Server) runADOOrgCheck(ctx context.Context, cfg ADOEntraConfig, owner, 
 // it at once. (nil, nil) when it was created; the refusal when Azure DevOps
 // refused it; an error when the call did not complete.
 func (s *Server) adoOrgCheckCanary(ctx context.Context, cfg ADOEntraConfig, owner, org string, validTo time.Time, res *adoOrgCheckResult) (*adoPATError, error) {
-	pat, err := s.mintADOPAT(ctx, cfg, owner, org, adoPATRequest{DisplayName: adoOrgCheckTokenName, Scope: "vso.profile", ValidTo: validTo})
+	pat, err := s.createADOPAT(ctx, cfg, owner, org, adoPATRequest{DisplayName: adoOrgCheckTokenName, Scope: "vso.profile", ValidTo: validTo}, false)
 	var perr *adoPATError
 	if errors.As(err, &perr) {
 		return perr, nil
 	} else if err != nil {
 		return nil, err
 	}
-	if rerr := s.revokeADOPAT(ctx, cfg, owner, org, pat.AuthorizationID); rerr != nil {
-		res.Unrevoked = append(res.Unrevoked, pat.AuthorizationID)
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, owner, adoPATAuditRevokeFailed, cfg.RowID, "failure",
-			mustJSON(map[string]any{"authorization_id": pat.AuthorizationID, "organisation": org, "reason": "org_check"})))
-	}
+	s.revokeADOOrgCheckCanary(ctx, cfg, owner, org, pat.AuthorizationID, res)
 	return nil, nil
+}
+
+// revokeADOOrgCheckCanary revokes a canary on a context that outlives the
+// request: a browser that disconnected after the create must never leave a
+// live token in the admin's name (canary 2 lives 364 days).
+func (s *Server) revokeADOOrgCheckCanary(ctx context.Context, cfg ADOEntraConfig, owner, org, authorizationID string, res *adoOrgCheckResult) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoPATTimeout)
+	defer cancel()
+	if rerr := s.revokeADOPAT(rctx, cfg, owner, org, authorizationID); rerr != nil {
+		res.Unrevoked = append(res.Unrevoked, authorizationID)
+		s.recordAudit(rctx, s.auditEvent(nil, types.ActorHuman, owner, adoPATAuditRevokeFailed, cfg.RowID, "failure",
+			mustJSON(map[string]any{"authorization_id": authorizationID, "organisation": org, "reason": "org_check"})))
+	}
 }

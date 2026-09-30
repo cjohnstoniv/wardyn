@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -68,6 +69,13 @@ const (
 	scmAccessCausePermissionsMissing = "permissions_missing"
 	scmAccessCauseBlocked            = "blocked"
 )
+
+// adoMintBlockedFor is how long a policy refusal reads as `blocked`. Only a
+// created token clears it, and a launch refused as blocked never creates one,
+// so without a bound the flag would outlive the admin's allow-list fix. Past
+// it the launch goes through and the run's own mint re-checks: a refusal that
+// still holds is recorded again.
+const adoMintBlockedFor = 15 * time.Minute
 
 // SCMAccess is THIS PRINCIPAL's Azure DevOps access answer for ONE row — the
 // shape the Getting-started chip, the Settings connected panel, the New Run
@@ -251,7 +259,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded
 	case minted && !adoBlobCoversMint(blob):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCausePermissionsMissing
-	case minted && !blob.MintBlockedAt.IsZero():
+	case minted && s.cfg.Now().Before(blob.MintBlockedAt.Add(adoMintBlockedFor)):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseBlocked
 	case !minted && !adoBlobCoversBaseline(blob, row):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseConsentNeeded
@@ -412,6 +420,16 @@ const (
 	gitCredentialConsentRefusal = "your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
+// A minted_pat row's three launch refusals, by cause. Each names the fix that
+// is someone else's: the organisation's allow list (the mock's "Blocked by
+// your organisation" wording), the admin's consent, or the console's secret.
+const (
+	gitCredentialBlockedRefusal = "your organisation doesn't let you create personal access tokens — ask an " +
+		"Azure DevOps administrator to add you to the allow list, then start the run again"
+	gitCredentialPermissionsRefusal = "your Azure DevOps sign-in can't create tokens yet — an administrator must " +
+		"grant the token permissions; then connect and start the run again"
+)
+
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —
 // errRepoNotAdmitted's shape (workspace_admission.go), for the launchers
 // that hold no ResponseWriter (record.go's launchRecordRun). A caller matches it with errors.As, on the concrete
@@ -486,6 +504,12 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal}
 		case access.Cause == scmAccessCauseConsentNeeded:
 			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal}
+		case access.Cause == scmAccessCauseBlocked:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal}
+		case access.Cause == scmAccessCausePermissionsMissing:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal}
+		case access.Cause == ReasonADOPATNeedsConsoleApp:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal}
 		}
 		return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialNotConnectedRefusal}
 	}
