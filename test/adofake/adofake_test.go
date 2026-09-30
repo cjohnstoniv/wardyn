@@ -175,7 +175,7 @@ func TestPolicyPostRefusedForReadOnlyToken(t *testing.T) {
 func TestPatLifecycle(t *testing.T) {
 	s := New()
 	defer s.Close()
-	s.RegisterToken("tokens-admin", ScopeTokens)
+	s.RegisterToken("tokens-admin", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
 
 	createBody := []byte(`{"displayName":"ci-token","scope":"vso.code","validTo":"2099-01-01T00:00:00Z","allOrgs":false}`)
@@ -434,7 +434,7 @@ func TestPatRoutesRefuseWrongScopeAndAbsentToken(t *testing.T) {
 func TestPatMintedTokenIsUsableThenRevoked(t *testing.T) {
 	s := New()
 	defer s.Close()
-	s.RegisterToken("admin", ScopeTokens)
+	s.RegisterToken("admin", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
 
 	createBody := []byte(`{"displayName":"usable","scope":"vso.code","validTo":"2099-01-01T00:00:00Z","allOrgs":false}`)
@@ -495,7 +495,7 @@ func TestPatMintedTokenIsUsableThenRevoked(t *testing.T) {
 func TestPatExpiredValidToIsRefused(t *testing.T) {
 	s := New()
 	defer s.Close()
-	s.RegisterToken("admin", ScopeTokens)
+	s.RegisterToken("admin", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
 
 	createBody := []byte(`{"displayName":"expired","scope":"vso.code","validTo":"2000-01-01T00:00:00Z","allOrgs":false}`)

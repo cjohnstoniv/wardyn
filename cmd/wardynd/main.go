@@ -416,6 +416,7 @@ func run() error {
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
+		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:            feats.scanAdvisor,
 		RequireOperatorSetEgress: *f.requireOpSetEgress,

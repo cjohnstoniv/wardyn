@@ -69,9 +69,14 @@ var _ oidc.LoginGrantSink = (*Server)(nil)
 // and asking for less at login would mean a second consent prompt later for
 // anything left out. `openid` is already in the login's base scopes.
 //
-// nil on every doubt: no source wired, no row, an unusable row, or a row
-// against another tenant or application. A nil answer leaves the authorization
-// request exactly as it was.
+// For a minted_pat row the "ceiling" is exactly adoscope.MintScopes (validate
+// holds it to that, S4): the login asks for the two token permissions and
+// never a capability, since a run's access lives in the token it creates. A
+// bearer row's ceiling never names one (validate again).
+//
+// nil on every doubt: no source wired, no row, an unusable row (S1 included),
+// or a row against another tenant or application. A nil answer leaves the
+// authorization request exactly as it was.
 func (s *Server) LoginScopes(ctx context.Context) []string {
 	cfg, ok := s.adoEntraForLogin(ctx, "compose the login request")
 	if !ok {
@@ -158,6 +163,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		"scopes": usable, "source": adoEntraSourceLogin,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
+	s.auditADOPATConnect(ctx, subject, cfg, usable, adoEntraSourceLogin)
 	// After the capture row, never before: captured -> resolved -> retry.
 	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
 }
