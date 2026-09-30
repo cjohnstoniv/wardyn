@@ -96,6 +96,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
   row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
   was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **The run page no longer gets a 500 in the moment a finishing run's sandbox is already gone
+  (#1270).** A short run's pod (or container) is removed a moment before its state flips to
+  finished, and in that window the Sandbox and Files widgets read a sandbox that was not there and
+  got `500`, with an error in the server log. `GET /runs/{id}/resources` and `GET /runs/{id}/files`
+  now answer the same `409 run has finished; its sandbox is gone` the flipped state gets a moment
+  later, and record no failure.
+- **An open run page no longer delays an idle pause (#1287).** With no disk cap enforced, the Sandbox
+  widget's every 4-second poll walked the sandbox's root filesystem (`du`), and that CPU landed in the
+  window the idle pause reads to decide whether the agent is quiet. The walk's result is now reused
+  for a minute (a sandbox too big to walk in time is not walked again on every poll), and the idle
+  reading waits out a walk in progress and holds off a new one while it samples, so it reads the
+  agent alone.
 
 ## [0.8.0] — 2026-09-29
 

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -512,5 +513,116 @@ func TestResumeRun_AVanishedSandboxStaysPaused(t *testing.T) {
 	rows := f.rows("run.resume", "failure")
 	if len(rows) != 1 || !strings.Contains(leaseAuditData(t, rows[0])["error"].(string), "not running") {
 		t.Errorf("run.resume failure rows = %+v, want one naming the sandbox not running", rows)
+	}
+}
+
+// probeRunner models one sandbox whose CPU is shared by every exec in it: the
+// run page's disk walk (script arm "") and the idle sampler (arm "filesystem")
+// run against the same cgroup, so a sample taken while a walk is under way reads
+// busy. walk and sample, when set, run as that exec starts, and may block it.
+type probeRunner struct {
+	*pauseRunner
+	walking       atomic.Int32
+	walk, sample  func()
+	sampleStarted chan struct{}
+	arms          []string
+	armsMu        sync.Mutex
+}
+
+func (r *probeRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	arm := spec.Argv[4]
+	r.armsMu.Lock()
+	r.arms = append(r.arms, arm)
+	r.armsMu.Unlock()
+	if arm == "filesystem" {
+		if r.sampleStarted != nil {
+			close(r.sampleStarted)
+		}
+		if r.sample != nil {
+			r.sample()
+		}
+		busy := r.walking.Load() > 0
+		if busy {
+			return &runner.ExecSession{Stdout: strings.NewReader(cpuReading(40))}, nil
+		}
+		return &runner.ExecSession{Stdout: strings.NewReader(cpuReading(1))}, nil
+	}
+	if arm == "" {
+		r.walking.Add(1)
+		defer r.walking.Add(-1)
+		if r.walk != nil {
+			r.walk()
+		}
+	}
+	return &runner.ExecSession{Stdout: strings.NewReader("proc_count=2\n")}, nil
+}
+
+func newProbeFixture(t *testing.T) (*pauseFixture, *probeRunner, *http.Cookie) {
+	t.Helper()
+	f := newPauseFixture(t, time.Hour)
+	f.st.run.RunLimits.PauseIdleAfterSec = 60
+	pr := &probeRunner{pauseRunner: f.rn}
+	f.srv.cfg.Runner = pr
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+	return f, pr, owner
+}
+
+// TestRunPause_OpenRunPageDoesNotDefeatIdlePause: the run page polls the Sandbox
+// widget, whose disk walk is CPU in the sandbox's cgroup, so a walk under way
+// when the idle sampler reads reads as an agent that is not quiet. The sampler
+// waits the walk out and reads the agent alone, and the run pauses.
+func TestRunPause_OpenRunPageDoesNotDefeatIdlePause(t *testing.T) {
+	f, pr, owner := newProbeFixture(t)
+	walkStarted, releaseWalk := make(chan struct{}), make(chan struct{})
+	pr.walk = func() { close(walkStarted); <-releaseWalk }
+
+	pollDone := make(chan int, 1)
+	go func() {
+		w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
+		pollDone <- w.Code
+	}()
+	<-walkStarted
+
+	sweepDone := make(chan error, 1)
+	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	time.Sleep(100 * time.Millisecond) // the sampler has reached the walk
+	close(releaseWalk)
+
+	if code := <-pollDone; code != http.StatusOK {
+		t.Fatalf("poll = %d, want 200", code)
+	}
+	if err := <-sweepDone; err != nil {
+		t.Fatalf("sweepRunPauses: %v", err)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil {
+		t.Fatal("run not paused: the run page's own disk walk was read as the agent's CPU")
+	}
+}
+
+// TestRunPause_NoWalkStartsInsideTheIdleSample: a poll arriving while the idle
+// sampler holds the sandbox's CPU window does not start a walk; it answers with
+// the widget's other readings.
+func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
+	f, pr, owner := newProbeFixture(t)
+	pr.sampleStarted = make(chan struct{})
+	releaseSample := make(chan struct{})
+	pr.sample = func() { <-releaseSample }
+
+	sweepDone := make(chan error, 1)
+	go func() { sweepDone <- f.srv.sweepRunPauses(context.Background()) }()
+	<-pr.sampleStarted
+
+	w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/resources", owner, "")
+	close(releaseSample)
+	if err := <-sweepDone; err != nil {
+		t.Fatalf("sweepRunPauses: %v", err)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("poll = %d %s, want 200", w.Code, w.Body.String())
+	}
+	pr.armsMu.Lock()
+	defer pr.armsMu.Unlock()
+	if got := strings.Join(pr.arms, ","); got != "filesystem,skip" {
+		t.Errorf("script arms = %q, want the sample then a poll that walked nothing", got)
 	}
 }

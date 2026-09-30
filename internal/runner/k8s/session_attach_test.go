@@ -7,6 +7,8 @@ package k8s
 
 import (
 	"context"
+	"errors"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -234,5 +236,56 @@ func TestAttach_ExecSemanticsResizeAndClose(t *testing.T) {
 	}
 	if err := sess.Close(); err != nil {
 		t.Errorf("second Close must be idempotent, got %v", err)
+	}
+}
+
+// errExecutor is an executor whose stream fails the way an exec into a pod torn
+// down under the read does.
+type errExecutor struct{ err error }
+
+func (e errExecutor) StreamWithContext(context.Context, remotecommand.StreamOptions) error {
+	return e.err
+}
+func (e errExecutor) Stream(remotecommand.StreamOptions) error { return e.err }
+
+// TestExecStream_SandboxGone: a pod that is gone, at the pod Get or on the exec
+// upgrade ("container not found" is the kubelet's text, no typed error), is
+// runner.ErrSandboxGone; any other stream failure is not.
+func TestExecStream_SandboxGone(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	spec := runner.ExecSpec{Argv: []string{"true"}}
+
+	if _, err := d.ExecStream(context.Background(), "no-such-pod", spec); !errors.Is(err, runner.ErrSandboxGone) {
+		t.Errorf("ExecStream on a missing pod = %v, want runner.ErrSandboxGone", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		gone bool
+	}{
+		{"container not found", errors.New(`Internal error occurred: unable to upgrade connection: container not found ("wardyn-agent")`), true},
+		{"pod not found", errors.New("unable to upgrade connection: pod not found"), true},
+		{"dropped connection", errors.New("websocket: close 1006 (abnormal closure)"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d.execFactory = func(string, string, []string, bool, bool) (remotecommand.Executor, error) {
+				return errExecutor{tc.err}, nil
+			}
+			sess, err := d.ExecStream(context.Background(), ref, spec)
+			if err != nil {
+				t.Fatalf("ExecStream: %v", err)
+			}
+			defer sess.Close()
+			_, werr := sess.Wait()
+			if got := errors.Is(werr, runner.ErrSandboxGone); got != tc.gone {
+				t.Errorf("Wait err = %v, ErrSandboxGone = %v, want %v", werr, got, tc.gone)
+			}
+			_, rerr := io.ReadAll(sess.Stdout)
+			if got := errors.Is(rerr, runner.ErrSandboxGone); got != tc.gone {
+				t.Errorf("Stdout err = %v, ErrSandboxGone = %v, want %v", rerr, got, tc.gone)
+			}
+		})
 	}
 }
