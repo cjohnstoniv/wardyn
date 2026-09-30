@@ -17,5 +17,24 @@
 # ships a fix. The strict pass does not skip a no-fix-available CRITICAL, so an
 # entry here is either one we could have patched and chose not to, or one no
 # release of our base fixes yet — say which.
-#
-# Empty on purpose: no image in the scan matrix has an accepted CRITICAL.
+
+# openssh-client / openssh-sftp-server (every agent image). Use-after-free in
+# ssh when a server changes its host key during a key re-exchange. No release
+# of our base fixes it yet: Debian 13 carries 1:10.0p1-7+deb13u4, vulnerable,
+# "minor issue, no DSA"; trixie-backports 10.3p1 is vulnerable too; the fix is
+# 10.4p1+, in forky/sid only. Why it does not reach us: the sandbox's ssh talks
+# only to GitHub and Azure DevOps through the proxy, with StrictHostKeyChecking
+# and the pinned /etc/ssh/ssh_known_hosts, so a server that swaps its host key
+# mid-session needs that host's private key. It was in every bookworm image too.
+# Accepted 2026-09-30 by the owner for 0.8.3; delete when Debian 13 ships a fix.
+CVE-2026-60002
+
+# libxml2 (agent-novnc only). Use-after-free in xmlParseInternalSubset: a
+# crafted XML document can crash the parsing process (denial of service). No
+# release of our base fixes it yet: Debian 13 carries
+# 2.12.7+dfsg+really2.9.14-2.1+deb13u3, vulnerable, "no DSA"; fixed in
+# forky/sid only. Why it does not reach us: the worst case is the novnc
+# sandbox's own process crashing on a document the run itself fed it; nothing
+# outside the sandbox parses through it. Accepted 2026-09-30 by the owner for
+# 0.8.3; delete when Debian 13 ships a fix.
+CVE-2026-6653
