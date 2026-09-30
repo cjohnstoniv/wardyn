@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
+import { CHANGE_HEADING, POLICY_TAB } from "../src/app/components/screens/run-detail/policy-tab-copy";
+import type { Page } from "@playwright/test";
 
 // E2E coverage for "Make a policy from this run" (X2-F6) — run-detail.tsx's
 // Audit tab button opens profile-review.tsx's ProfileReview sheet
@@ -68,5 +70,146 @@ test.describe("Run detail — Make a policy from this run", () => {
     await expect(
       page.getByRole("table").getByRole("row").filter({ hasText: POLICY_NAME }),
     ).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The run page's Policy tab (#1425): the policy a run actually got, where it
+// started from, and what launch changed. GET /runs/{id}/policy is spliced whole
+// (route.fulfill): the seeded backend's runs never dispatch, so none carries the
+// run.policy.resolve row the real read is built from, and the harness's operator
+// token cannot reach the member-tier redaction either — the same reason
+// governance-member.spec.ts splices its member views. The server side (source,
+// changes, redaction, stored_policy_now) is pinned in Go.
+// ---------------------------------------------------------------------------
+const SAVED = "e2e-run-policy";
+
+const RECORDED = {
+  state: "recorded",
+  source: { kind: "stored", policy_id: "3f1c9a2e-7d44-4b1e-9a0c-52e8b6d1f0a7", name: SAVED },
+  spec: {
+    allowed_domains: ["api.anthropic.com", "e2e-policy.example", "registry.npmjs.org"],
+    first_use_approval: "deny_with_review",
+    min_confinement_class: "CC1",
+  },
+  redacted: false,
+  changes: [{ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] }],
+  complete: true,
+  stored_policy_now: { state: "changed", name: SAVED },
+};
+
+// Answers the run's policy read with `body`, and counts the reads so a test can
+// assert none was made before the tab opened.
+async function spliceRunPolicy(page: Page, body: Record<string, unknown>): Promise<{ reads: () => number }> {
+  let reads = 0;
+  await page.route("**/api/v1/runs/*/policy", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    reads++;
+    const runId = route.request().url().match(/\/runs\/([^/]+)\/policy/)?.[1] ?? "";
+    await route.fulfill({ json: { run_id: runId, ...body } });
+  });
+  return { reads: () => reads };
+}
+
+async function openFixture(page: Page, task: string): Promise<void> {
+  await gotoConsole(page);
+  await navTo(page, "Runs");
+  await expect(page.getByText(task)).toBeVisible();
+  await page.getByText(task).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+}
+
+test.describe("Run detail — the Policy tab (#1425)", () => {
+  test("shows what the run got after its saved policy changed, and Copy YAML puts exactly that on the clipboard", async ({
+    page,
+    context,
+  }) => {
+    // Chromium refuses navigator.clipboard.writeText without this (providers.spec.ts).
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    const policy = await spliceRunPolicy(page, RECORDED);
+    await openFixture(page, "e2e fixture 2");
+
+    // The tab is between Approvals and Audit, and nothing was read yet.
+    await expect(page.getByRole("tab", { name: POLICY_TAB.tab })).toBeVisible();
+    const tabs = await page.getByRole("tab").allTextContents();
+    expect(tabs.map((t) => t.trim()).slice(1, 4)).toEqual(["Approvals", POLICY_TAB.tab, "Audit"]);
+    expect(policy.reads()).toBe(0);
+
+    // The identity rail's Policy row is a View link that opens the tab.
+    await page.getByRole("button", { name: "View", exact: true }).click();
+    await expect(page.getByRole("tab", { name: POLICY_TAB.tab })).toHaveAttribute("data-state", "active");
+    const tab = page.getByTestId("run-policy-tab");
+    await expect(tab).toBeVisible();
+    expect(policy.reads()).toBe(1);
+
+    await expect(tab.getByText(POLICY_TAB.sourceStored(SAVED))).toBeVisible();
+    await expect(page.getByTestId("policy-since-banner")).toHaveText(POLICY_TAB.changedSince(SAVED));
+
+    // The workspace's host sits under its own heading, marked as added, and the
+    // host the saved policy has since lost is still what this run got.
+    const group = page.getByRole("heading", { name: CHANGE_HEADING.workspace }).locator("..");
+    await expect(group.getByText("registry.npmjs.org")).toBeVisible();
+    await expect(group).toContainText(POLICY_TAB.chipAdded);
+    await expect(tab.getByText("e2e-policy.example")).toBeVisible();
+    await expect(tab.getByText(POLICY_TAB.scope)).toBeVisible();
+
+    await tab.getByRole("button", { name: POLICY_TAB.viewYaml, exact: true }).click();
+    const block = tab.locator("pre");
+    await expect(block).toContainText("e2e-policy.example");
+    await expect(block).toContainText("registry.npmjs.org");
+
+    await tab.getByRole("button", { name: POLICY_TAB.copyYaml, exact: true }).click();
+    await expect(tab.getByText("Copied")).toBeAttached();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toBe(
+      [
+        "allowed_domains:",
+        "  - api.anthropic.com",
+        "  - e2e-policy.example",
+        "  - registry.npmjs.org",
+        "first_use_approval: deny_with_review",
+        "min_confinement_class: CC1",
+      ].join("\n"),
+    );
+  });
+
+  test("a run that stopped before its sandbox was set up says no policy was applied", async ({ page }) => {
+    await spliceRunPolicy(page, { state: "never", source: { kind: "inline" }, redacted: false, changes: [], complete: true });
+    await openFixture(page, "e2e fixture 6");
+    await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
+    const tab = page.getByTestId("run-policy-tab");
+    await expect(tab.getByText(POLICY_TAB.never)).toBeVisible();
+    await expect(tab.getByText(POLICY_TAB.sourceInline)).toBeVisible();
+    await expect(tab.getByRole("button", { name: POLICY_TAB.copyYaml })).toHaveCount(0);
+  });
+
+  // The admin-token harness cannot reach the member path (the redaction is
+  // server-side on !isSecurityOperator), so the member's read is spliced, as
+  // governance-member.spec.ts does for the ceiling: the served body carries
+  // `redacted` and a `<redacted>` folder source, exactly as the server writes them.
+  test("a member sees Hidden for a folder source, and S-33 above the YAML", async ({ page }) => {
+    await mockMemberRole(page);
+    await spliceRunPolicy(page, {
+      ...RECORDED,
+      redacted: true,
+      changes: [],
+      stored_policy_now: undefined,
+      spec: {
+        ...RECORDED.spec,
+        workspace_mounts: [{ source: "<redacted>", target: "/home/agent/work/shared", read_only: true }],
+      },
+    });
+    await openFixture(page, "e2e fixture 2");
+    await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
+    const tab = page.getByTestId("run-policy-tab");
+
+    await expect(tab.getByText(POLICY_TAB.hidden, { exact: true })).toHaveAttribute("title", POLICY_TAB.hiddenTip);
+    await expect(tab.getByText("/home/agent/work/shared")).toBeVisible();
+    await expect(tab).not.toContainText("<redacted>");
+    await expect(tab.getByText(POLICY_TAB.redacted)).toHaveCount(0);
+
+    await tab.getByRole("button", { name: POLICY_TAB.viewYaml, exact: true }).click();
+    await expect(tab.getByText(POLICY_TAB.redacted)).toBeVisible();
+    await expect(tab.locator("pre")).toContainText("<redacted>");
   });
 });

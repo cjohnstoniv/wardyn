@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { AgentRun, AuditEvent, CredentialGrant, EgressDecision } from "../../../../lib/types";
 
 const getFilesMock = vi.fn();
@@ -258,7 +258,7 @@ describe("IdentityWidget", () => {
   };
 
   it("carries the full task and the description when the run has them", () => {
-    render(<IdentityWidget run={{ ...run, title: "Refund flow", description: "ticket 4412" }} />);
+    render(<IdentityWidget run={{ ...run, title: "Refund flow", description: "ticket 4412" }} onGoPolicy={() => {}} />);
     expect(screen.getByText("Fix the flaky auth tests")).toBeInTheDocument();
     expect(screen.getByText("ticket 4412")).toBeInTheDocument();
   });
@@ -266,25 +266,43 @@ describe("IdentityWidget", () => {
   // An interactive run has no task at all and most runs have no description —
   // empty labelled rows would be worse than none.
   it("shows neither label when there is nothing to say", () => {
-    render(<IdentityWidget run={{ ...run, task: "", description: "" }} />);
+    render(<IdentityWidget run={{ ...run, task: "", description: "" }} onGoPolicy={() => {}} />);
     expect(screen.queryByText("Task")).not.toBeInTheDocument();
     expect(screen.queryByText("Why")).not.toBeInTheDocument();
   });
 
   // UT-7a — "Ran as {type}", named by GET /runs/{id}'s user_type_name.
   it("shows Ran as with the type's name when the run carries one", () => {
-    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} onGoPolicy={() => {}} />);
     expect(screen.getByText("Portfolio manager")).toBeInTheDocument();
     expect(screen.getByText("Ran as")).toBeInTheDocument();
   });
 
+  // #1425: every run has a policy, so the row is unconditional. It opens the
+  // Policy tab; the saved policy's id moves to the hover title.
+  it("always shows a Policy row whose View link opens the Policy tab", () => {
+    const onGoPolicy = vi.fn();
+    render(<IdentityWidget run={run} onGoPolicy={onGoPolicy} />);
+    expect(screen.getByText("Policy")).toBeInTheDocument();
+    const view = screen.getByRole("button", { name: "View" });
+    expect(view).not.toHaveAttribute("title");
+    fireEvent.click(view);
+    expect(onGoPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the saved policy's id on the View link's title, never as visible text", () => {
+    render(<IdentityWidget run={{ ...run, policy_id: "3f1c9a2e-7d44-4b1e-9a0c-52e8b6d1f0a7" }} onGoPolicy={() => {}} />);
+    expect(screen.getByRole("button", { name: "View" })).toHaveAttribute("title", "3f1c9a2e-7d44-4b1e-9a0c-52e8b6d1f0a7");
+    expect(screen.queryByText("3f1c9a2e-7d44-4b1e-9a0c-52e8b6d1f0a7")).not.toBeInTheDocument();
+  });
+
   it("renders no row for a run with no stamped type", () => {
-    render(<IdentityWidget run={run} />);
+    render(<IdentityWidget run={run} onGoPolicy={() => {}} />);
     expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
   });
 
   it("renders no row for a type the server could not name (deleted) — never the raw id", () => {
-    render(<IdentityWidget run={{ ...run, user_type: "deleted-type" }} />);
+    render(<IdentityWidget run={{ ...run, user_type: "deleted-type" }} onGoPolicy={() => {}} />);
     expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
     expect(screen.queryByText("deleted-type")).not.toBeInTheDocument();
   });
@@ -295,7 +313,7 @@ describe("IdentityWidget", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
-      render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+      render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} onGoPolicy={() => {}} />);
       expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes("/user-types"))).toEqual([]);
     } finally {
       vi.unstubAllGlobals();
