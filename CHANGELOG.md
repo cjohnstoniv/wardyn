@@ -95,6 +95,32 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Breaking: Azure DevOps stops using shared credentials (#1429).** A shared personal access token or
+  SSH key was one account's standing credential, used for every person's runs. From this release an
+  Azure DevOps provider row carries only per-person lanes, and both write doors (`PUT
+  /workspace-providers` and `PUT /site-config`) refuse the retired ones with a `400`: a `pat` lane
+  that is not `per_user` (and any `pat` lane on a row of `dev.azure.com` or `*.visualstudio.com`
+  addresses alone), any `ssh` lane, and a row with no lanes at all, which used to mean the shared
+  `pat` and `ssh` lanes. An Azure DevOps Server row, which has no Entra sign-in, is now `lanes:
+  ["pat"]` with `credential_source: per_user` and no `entra` block; a hosted row's own token is
+  `lanes: ["entra"]` with `token_mode: own_pat`. Migration `0102_retire_ado_shared_credentials` rewrites
+  every stored Azure DevOps row that named a shared lane or none: pat and ssh leave its lanes, and a
+  row left with no per-person lane is turned off (`disabled`) with those per-person shapes, keeping its
+  id and addresses; a hosted row that already has the `entra` lane keeps it and stays as it was. A
+  turned-off row still claims its hosts, so **clones from those organisations fail with a reason until
+  an admin chooses how people connect and turns the row on**, and `/setup/status` carries a
+  non-blocking `ado_rows_off` warning until they do. **Upgrading:** at the first start after the
+  upgrade Wardyn **deletes, irreversibly**, these stored secrets for every Azure DevOps host it can
+  name (`dev.azure.com`, `ssh.dev.azure.com`, `vs-ssh.visualstudio.com`, every host an Azure DevOps
+  provider row names, and every `*.visualstudio.com` entry in `scm_hosts`), in the operator's
+  namespace and in every person's namespace: `git-pat-<host>`, `ssh-key-<host>` and
+  `known-hosts-<host>`, where `<host>` is the host with each run of characters other than letters and
+  digits turned into one `-` (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`,
+  `known-hosts-ssh-dev-azure-com`, `git-pat-tfs-corp-example`). A stored secret is write-only and
+  cannot be exported, so **keep your own copy first if you might roll back.** Each namespace that held
+  any is audited once as `ado_shared_credential.retire`, listing names and no values. A known-hosts
+  secret you gave a different name is not deleted. Wardyn's own sealed Azure DevOps names and every
+  other forge's secrets are left alone. GitHub and GitLab rows are unchanged.
 - **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
   to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
   (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
