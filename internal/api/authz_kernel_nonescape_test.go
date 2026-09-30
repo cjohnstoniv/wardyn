@@ -79,6 +79,9 @@ var kernelDoors = map[string][]string{
 	// available_to_you, over the two values that apply to EVERY run type —
 	// the model-provider arm stays client-side, isAgent-gated (#1249).
 	"workspaceAvailableToCaller": {"capWorkspace", "capWorkspaceProvider"},
+	// A member's Azure DevOps disconnect: a row they may not use answers as
+	// no row (D-6).
+	"adoDisconnectRow": {"capWorkspaceProvider"},
 }
 
 // kernelDoorCalls walks internal/api's non-test sources and returns, per

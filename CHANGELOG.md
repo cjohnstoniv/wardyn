@@ -43,6 +43,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
   Migration `0102_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
   with no token value in it.
+- **Azure DevOps per-run tokens: disconnect and a run's token list (#1428).**
+  `DELETE /api/v1/scm/azure-devops/connection` disconnects the caller's own Azure DevOps sign-in: it
+  revokes every live per-run token created in their name (`ado_pat.revoke` reason `disconnect`),
+  deletes the stored sign-in, writes `ado_pat.disconnect` and answers `204`, also when nothing was
+  stored. With no per-person Azure DevOps row the caller may use it answers `404`. A sign-in
+  captured at console login is captured again at the next login. `GET /api/v1/runs/{id}/ado-tokens`
+  lists every token a run held, oldest first: `created_at`, `valid_to`, and once closed
+  `revoked_at`, `revoke_reason` and `revoke_failed`, never a token value or authorization id. The
+  run's owner or an admin reads it; anyone else gets the same `404` as `GET /runs/{id}`.
+  `/me/scm-access` and `/setup/status`'s `scm_access` add `token_mode: minted_pat` on a row that
+  creates tokens, `last_token` and `default_profile`, and the organisation check adds
+  `lifespan_error` when the lifespan policy is unknown. Migration `0103_ado_run_pats_owner_idx` adds
+  an index on `ado_run_pats`.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

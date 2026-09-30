@@ -111,6 +111,8 @@ type SCMAccess struct {
 	// may hold. The policy editor locks every capability outside it, since a
 	// policy naming one is refused at launch. Read-only here.
 	CapabilityCeiling []adoscope.Capability `json:"capability_ceiling,omitempty"`
+	// ADOPATAccess adds the token console's facts (ado_pat_console.go).
+	ADOPATAccess
 }
 
 // adoAccessState grades one PER-USER row's captured sign-in into the
@@ -251,6 +253,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	if row.Entra != nil {
 		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
 	}
+	out.ADOPATAccess = s.adoPATAccessFor(ctx, pr, subject, minted)
 	switch {
 	case unusable:
 		out.State, out.Cause = modelAccessExpiredSignin, ReasonADOPATNeedsConsoleApp

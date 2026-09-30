@@ -303,8 +303,8 @@ func adoBearerMintScopeRefusal(granted []string) string {
 const adoPATAuditConnect = "ado_pat.connect"
 
 // adoPATNeedsConsoleAppRefusal is S1's sentence for the admin.
-const adoPATNeedsConsoleAppRefusal = "Per-run tokens need your Wardyn app registration to have a client secret. " +
-	"Set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect."
+const adoPATNeedsConsoleAppRefusal = "Per-run tokens need this row to use Wardyn's own sign-in app, and that app to have " +
+	"a client secret. Name Wardyn's app here and set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect."
 
 // auditADOPATConnect writes ado_pat.connect after a stored capture on a
 // minted_pat row, and nothing for any other mode. Never a token.
