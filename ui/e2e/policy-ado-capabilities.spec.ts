@@ -73,7 +73,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(29 - CEILING.length);
   await expect(capBox(dialog, "Edit branch policies")).toBeEnabled();
 
-  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
   await capBox(dialog, "Read code").click();
   await capBox(dialog, "Edit branch policies").click();
   await expect(dialog.getByLabel("Spec (JSON)")).toHaveValue(/"azure_devops_capabilities"/);
