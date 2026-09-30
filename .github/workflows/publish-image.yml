@@ -28,7 +28,9 @@ name: Publish wardynd image
 # HEAD under that old tag (acceptable: 0.4.4 is main's lineage). Manually
 # dispatching this workflow AGAINST a v0.4.5+ tag ref still works too
 # (github.ref_type reads "tag" exactly as a push would) — it is simply no
-# longer the AUTOMATIC path for one.
+# longer the AUTOMATIC path for one. ci.yml has no push run on release/**
+# (#1461), so a dispatch on a tag that exists only on release/X.Y finds no push
+# run and skips; that fails closed.
 #
 # Deliberately its OWN workflow file, not a job on ci.yml: ci.yml's push
 # trigger only ever matched branches (main/master), never tags, and widening

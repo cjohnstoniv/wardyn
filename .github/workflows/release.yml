@@ -143,6 +143,8 @@ jobs:
   # ancestor walk could pick a stale run from days earlier, silently passing a
   # tag whose cherry-picks it never saw. The nightly must be a workflow_dispatch
   # run: a scheduled one skips the staging matrix and never qualifies a tree.
+  # The NEWEST such run decides (cancelled ones skipped): a red newest run is
+  # not rescued by an older green one, so re-dispatching is the recovery.
   #
   # The script reads branch protection's LIVE required_status_checks.contexts
   # (the one list RELEASING.md's own PATCH configures, never a second typed
@@ -152,7 +154,7 @@ jobs:
   # publish, so keying the skip on the event name instead of the flag would have
   # let that path through with no gate at all.
   preflight-green:
-    name: Preflight — required contexts + latest nightly green on the tag's tree
+    name: Preflight — required contexts + newest dispatched nightly green on the tag's tree
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

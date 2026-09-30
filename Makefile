@@ -1311,11 +1311,10 @@ DCO_RANGE ?= origin/main..HEAD
 # even when the key is not in the keyring): setting GIT_COMMITTER_EMAIL alone no
 # longer forges it. The key id is not a verification, since a copied signature
 # block names the same key; branch protection is what keeps a forged merge off
-# main. A missing gpg leaves %GK empty and fails the exemption closed.
-# PR ranges end at the PR head instead and
-# never pass this flag — every commit in a PR's own range, merges included,
-# must carry Signed-off-by, even a GitHub-committed one (e.g. from "Update
-# branch") landed on the branch itself (#1070).
+# main. A missing gpg leaves %GK empty and fails the exemption closed. PR ranges
+# end at the PR head instead and never pass this flag — every commit in a PR's
+# own range, merges included, must carry Signed-off-by, even a GitHub-committed
+# one (e.g. from "Update branch") landed on the branch itself (#1070).
 DCO_ALLOW_GITHUB_MERGES ?= 0
 dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."

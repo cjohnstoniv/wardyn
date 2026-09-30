@@ -22,9 +22,12 @@
 # tree of GitHub's merge commit, so a pull request counts only when the two are
 # equal. That fails closed: a PR whose merge moved the tree is never accepted.
 #
-# Nightly evidence. A completed workflow_dispatch run of nightly.yml in this
-# repository whose head commit has the tree, where every name in WATCHED is a
-# success job and there is at least one `multi-arch build (` job, all success.
+# Nightly evidence. The NEWEST completed workflow_dispatch run of nightly.yml in
+# this repository whose head commit has the tree decides, where every name in
+# WATCHED is a success job and there is at least one `multi-arch build (` job,
+# all success. Cancelled runs are skipped, and an in-progress one is not
+# completed; a newer red run is not rescued by an older green one. (CI keeps
+# the first green run instead: dco and gitleaks depend on history.)
 # A scheduled run never counts: it builds nothing to stage, and GitHub may
 # report its skipped matrix as one row named `multi-arch build (${{ matrix.name
 # }})` with conclusion skipped. NEED_STAGING says the caller will promote
@@ -140,6 +143,7 @@ api "repos/${repo}/actions/workflows/nightly.yml/runs" -f status=completed -f pe
 jq_out -r --arg r "${repo}" --arg t "${tree}" '
   [.workflow_runs[]
    | select(.head_repository.full_name == $r and .head_commit.tree_id == $t and .status == "completed")]
+  | map(select(.conclusion != "cancelled"))
   | sort_by(.created_at) | reverse | .[] | [.id, .head_sha, .event] | @tsv'
 nightlies="${JQ}"
 read -ra watched_jobs <<<"${watched}"
@@ -172,9 +176,12 @@ while IFS=$'\t' read -r id head event; do
       fi
     done <<<"${rows}"
   fi
-  if [ "${good}" = 0 ]; then nightly_run="${id}"; nightly_sha="${head}"; break; fi
+  # The newest dispatched run decides: an older green run must not rescue a
+  # newer red one, so re-dispatching is the deliberate way to recover.
+  if [ "${good}" = 0 ]; then nightly_run="${id}"; nightly_sha="${head}"; fi
+  break
 done <<<"${nightlies}"
-[ -n "${nightly_run}" ] || say "no dispatched nightly.yml run is green on tree ${tree}: dispatch it on the candidate branch, wait for it, then retry"
+[ -n "${nightly_run}" ] || say "the newest dispatched nightly.yml run on tree ${tree} is not green, or none exists: dispatch it on the candidate branch, wait for it, then retry"
 
 if [ -z "${ci_run}" ] || [ -z "${nightly_run}" ]; then
   exit 1

@@ -53,11 +53,16 @@ document is that process, written down.
   `ci-full-tree-<tree>` artifact that run uploads, in this repository, finished
   with `success`, whose head commit has that tree (a pull request's run counts
   only when its merge left the tree equal to its head, and otherwise fails
-  closed), with every required status check green in it; plus a dispatched
-  `nightly.yml` run on that tree with every watched job green. `ci.yml` no longer
+  closed), with every required status check green in it; plus the newest
+  dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every
+  watched job green. A newer red nightly is not rescued by an older green one:
+  re-dispatching the nightly is the deliberate recovery. `ci.yml` no longer
   runs on pushes to `release/**`: a release branch fast-forwards to a tree its
   own pull request tested, and that run is the evidence. If no run qualifies,
-  `preflight-green` fails loudly naming what is missing. It never falls back to
+  `preflight-green` fails loudly naming what is missing. When the only CI run on
+  the tree is a release PR whose merge tree differs from its head, rebase the PR
+  head onto the base tip so the merge adds nothing, or push the commit to a
+  `feature/**` branch so `ci.yml` runs on it directly. It never falls back to
   an older or unrelated run. It is belt-and-suspenders, not a replacement for
   reading CI yourself first — a red preflight fails every downstream release
   job, so catching it before pushing the tag is still cheaper than a failed

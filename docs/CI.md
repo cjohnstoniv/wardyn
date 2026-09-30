@@ -379,7 +379,9 @@ branches (#90), not on `main`, so a filtered trigger gave a stacked PR no
 checks at all. `push:` stays narrow to `main`, `master` and `feature/**`, since
 every other commit already gets a run from its own PR. It has no `release/**`:
 `release.yml` accepts CI by tree (#1461), so a release branch's fast-forward
-needs no push run of its own.
+needs no push run of its own. The push-gate DCO exemption for GitHub-made merges
+needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that
+key, update the id in the Makefile's `dco` recipe.
 
 **Before and after #211**, measured from the GitHub Actions API: job times over
 the 60 most recent completed `ci.yml` runs as of 2026-09-21 05:00Z (a "green run" is one

@@ -167,6 +167,18 @@ put "repos/$R/actions/artifacts" "{\"artifacts\":[{\"name\":\"ci-full-tree-$T\",
 put "repos/$R/actions/runs/501" "{\"id\":501,\"path\":\".github/workflows/ci.yml\",\"status\":\"completed\",\"conclusion\":\"cancelled\",\"head_commit\":{\"tree_id\":\"$T\"}}"
 run; want "13 a newer bad run does not hide an older good one" 0
 grep -qx "ci_run=500" <<<"$OUT" && ok "13 the older good run is the one reported" || bad "13 stdout was: $OUT"
+# The nightly half decides by the NEWEST dispatched run on the tree: a newer red
+# run is not rescued by an older green one, but a newer cancelled run is skipped.
+nightly_two() {  # nightly_two <newer conclusion>: run 701 (newer, given conclusion) over green run 700
+  put "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[{\"id\":700,\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"conclusion\":\"failure\",\"created_at\":\"2030-01-02T01:00:00Z\",\"head_sha\":\"$OTHER\",\"head_repository\":{\"full_name\":\"$R\"},\"head_commit\":{\"tree_id\":\"$T\"}},{\"id\":701,\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"conclusion\":\"$1\",\"created_at\":\"2030-01-03T01:00:00Z\",\"head_sha\":\"$OTHER\",\"head_repository\":{\"full_name\":\"$R\"},\"head_commit\":{\"tree_id\":\"$T\"}}]}"
+  put "repos/$R/actions/runs/701/jobs" "$(jobs_json w1 'multi-arch build (wardynd)')"
+}
+baseline 13n; nightly_two failure
+run; want "13 a newer red nightly is not rescued by an older green one" 1 "701"
+baseline 13c; nightly_two cancelled
+put "repos/$R/actions/runs/701/jobs" "$(jobs_json w1 w2 'multi-arch build (wardynd)')"  # even all-green rows: a cancelled run never decides
+run; want "13 a newer cancelled nightly is skipped, the older green one decides" 0
+grep -qx "nightly_run=700" <<<"$OUT" && ok "13 the older green nightly is the one reported" || bad "13 stdout was: $OUT"
 baseline 14; mut "repos/$R/actions/workflows/nightly.yml/runs" ".workflow_runs[0].head_commit.tree_id = \"$OTHER\""
 run; want "14 a nightly on another tree (an ancestor never counts)" 1
 baseline 15; mut "repos/$R/actions/workflows/nightly.yml/runs" '.workflow_runs[0].head_repository.full_name = "fork/wardyn"'
