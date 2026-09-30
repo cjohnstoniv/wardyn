@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -39,6 +40,14 @@ const (
 	// runEventsRetention keeps an ended run's ring for a reconnecting reader.
 	// After it, a reader gets the synthesized ended event alone.
 	runEventsRetention = 10 * time.Minute
+	// maxRunEventStreams bounds one principal's concurrent streams (#1407).
+	// Each is a goroutine, a held connection and a store read per beat, and a
+	// portal serves every viewer of a person through that person's delegated
+	// token, so without it one credential — or a reconnect loop gone wrong —
+	// holds connections without bound. 32 leaves room for a person following
+	// a wide fan-out of their own runs from a portal and the CLI at once. The
+	// admin token is one principal: its callers share one 32.
+	maxRunEventStreams = 32
 )
 
 // runEventHub holds every run's ring. Zero value is ready to use.
@@ -50,6 +59,36 @@ type runEventHub struct {
 	// beat and hold override runEventsBeat and runEventsHold for one server,
 	// so a test need not wait real seconds; zero means the constant.
 	beat, hold time.Duration
+	// streams counts each principal's open streams (maxRunEventStreams).
+	streams map[runEventStreamer]int
+}
+
+// runEventStreamer is who a stream counts against: the actor type with the
+// name, so no principal string shares another kind of caller's slots.
+type runEventStreamer struct {
+	actor types.ActorType
+	name  string
+}
+
+// openStream takes one of who's stream slots, returning its release and
+// whether one was free.
+func (h *runEventHub) openStream(who runEventStreamer) (func(), bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.streams[who] >= maxRunEventStreams {
+		return nil, false
+	}
+	if h.streams == nil {
+		h.streams = map[runEventStreamer]int{}
+	}
+	h.streams[who]++
+	return func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.streams[who]--; h.streams[who] == 0 {
+			delete(h.streams, who)
+		}
+	}, true
 }
 
 type runEventRing struct {
@@ -210,8 +249,10 @@ func (h *runEventHub) since(runID uuid.UUID, after uint64) ([]client.RunEvent, <
 
 // handleRunEvents serves GET /api/v1/runs/{id}/events. Owner-or-admin
 // (getRunAuthorized): a caller who cannot read the run gets the same 404
-// GET /runs/{id} answers. The stream ends after the ended event, after
-// runEventsHold, or when the client or the daemon goes away.
+// GET /runs/{id} answers. A portal's delegated token reads its person's runs
+// (delegationAllowed). One principal holds at most maxRunEventStreams at a
+// time; the next is refused 422 event_stream_cap. The stream ends after the
+// ended event, after runEventsHold, or when the client or the daemon goes away.
 func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -221,11 +262,19 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// After the read gate, so a non-reader gets the 404 and never a slot.
+	actor, principal := actorFromRequest(r)
+	release, ok := s.runEvents.openStream(runEventStreamer{actor, principal})
+	if !ok {
+		s.refuse(w, r, authz.Deny(authz.ReasonEventStreamCap, id.String(),
+			fmt.Sprintf("too many open event streams (max %d) — close one and retry", maxRunEventStreams)).OnRun(id))
+		return
+	}
+	defer release()
 	// A malformed Last-Event-ID replays from the start rather than refusing:
 	// it is a resume hint, and a full replay is never wrong.
 	after, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	openedAt := s.cfg.Now().UTC()
-	principal := principalFromRequest(r)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
 	rc := http.NewResponseController(w)
