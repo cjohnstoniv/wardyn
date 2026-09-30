@@ -356,6 +356,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
 	}
 
+	if spec.ExecOutput != nil {
+		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
+	}
 	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
 }
 

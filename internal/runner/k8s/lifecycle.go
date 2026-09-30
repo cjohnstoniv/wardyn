@@ -150,6 +150,7 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // credential-bearing proxy pod, Secret, and NetworkPolicies survive. Only a
 // ref that is not a wardyn agent pod name at all falls through to a no-op.
 func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *int64) error {
+	d.execOutputs.Delete(ref)
 	ns := d.cfg.Namespace
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
