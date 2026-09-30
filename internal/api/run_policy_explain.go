@@ -232,38 +232,53 @@ func (x *explainer) derive(run types.AgentRun, added []string) {
 	}
 }
 
-// cause is the rule table: the first rule that names the entry wins.
+// cause is the rule table: the first rule that names the entry wins. Rules 1-8
+// read the launch audit rows, rules 9-12 derive a cause from the entry itself.
 func (x *explainer) cause(field, entry string, added bool) (cause, profile string, at *time.Time) {
+	if cause, profile, at, ok := x.evidenceCause(field, entry, added); ok {
+		return cause, profile, at
+	}
+	return x.derivedCause(field, entry, added), "", nil
+}
+
+func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profile string, at *time.Time, ok bool) {
 	ev := x.ev
 	allowAdded, denyAdded := field == fieldAllowed && added, field == fieldDenied && added
 	switch {
 	case allowAdded && ev.workspace[entry]:
-		return causeWorkspace, "", nil
+		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
-		return causeSourceControl, "", nil
+		return causeSourceControl, "", nil, true
 	case x.mirrored(field, entry, added):
-		return causeMirror, "", nil
+		return causeMirror, "", nil, true
 	case allowAdded && ev.model[entry]:
-		return causeModelAccess, "", nil
+		return causeModelAccess, "", nil, true
 	case ev.confine[entry] && (denyAdded || field == fieldAllowed && !added):
-		return causeGitBroker, "", nil
+		return causeGitBroker, "", nil, true
 	case denyAdded && ev.profileDenied[entry], field == fieldDisk && x.profileClampedDisk():
-		return causeProfile, ev.profile, nil
+		return causeProfile, ev.profile, nil, true
 	case field == fieldDisk && ev.diskFilled:
-		return causeOrgDisk, "", nil
+		return causeOrgDisk, "", nil, true
 	case denyAdded && !ev.restart[entry].IsZero():
 		t := ev.restart[entry]
-		return causeRestart, "", &t
-	case allowAdded && x.providerHost[entry]:
-		return causeModelAccess, "", nil
-	case allowAdded && x.adoEntries[entry]:
-		return causeSourceControl, "", nil
-	case ev.bounded && limitsFields[field] && (scalarFields[field] || !added || field == fieldDenied):
-		return causeLimits, "", nil
-	case (denyAdded || field == fieldAllowed && !added) && x.legacyGit(entry):
-		return causeGitBroker, "", nil
+		return causeRestart, "", &t, true
 	}
-	return causeLaunch, "", nil
+	return "", "", nil, false
+}
+
+func (x *explainer) derivedCause(field, entry string, added bool) string {
+	allowAdded, denyAdded := field == fieldAllowed && added, field == fieldDenied && added
+	switch {
+	case allowAdded && x.providerHost[entry]:
+		return causeModelAccess
+	case allowAdded && x.adoEntries[entry]:
+		return causeSourceControl
+	case x.ev.bounded && limitsFields[field] && (scalarFields[field] || !added || field == fieldDenied):
+		return causeLimits
+	case (denyAdded || field == fieldAllowed && !added) && x.legacyGit(entry):
+		return causeGitBroker
+	}
+	return causeLaunch
 }
 
 // mirrored is rule 3: the mirror host itself, the public hosts a mirror

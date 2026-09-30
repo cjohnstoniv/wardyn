@@ -49,7 +49,7 @@ func execRunPolicy(t *testing.T, srv *httptest.Server, args ...string) (stdout s
 
 func recordedView() sdk.RunPolicyView {
 	id := uuid.New()
-	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	at := time.Now().UTC()
 	return sdk.RunPolicyView{
 		RunID: uuid.New(), State: sdk.RunPolicyViewRecorded, Complete: true,
 		Source: sdk.RunPolicySource{Kind: "stored", PolicyID: &id, Name: "ci"},
@@ -99,6 +99,7 @@ func TestRunPolicy_YAMLRoundTripsAsAPolicy(t *testing.T) {
 
 func TestRunPolicy_HeaderLines(t *testing.T) {
 	view := recordedView()
+	restartedOn := view.Changes[2].At.Format("Jan 2, 2006")
 	view.Redacted = true
 	view.Changes = append(view.Changes, sdk.RunPolicyChange{
 		Cause: "limits", Field: "allowed_domains", Removed: []string{"pastebin.com"}, Detail: []string{"Removed pastebin.com."},
@@ -114,7 +115,7 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 			"# Changed when the run started\n",
 			"#   Added for the workspace: registry.npmjs.org\n",
 			"#   Limited by the walled governance profile: corp.example\n",
-			"#   Blocked when the run was restarted on Sep 29, 2026: paste.example\n",
+			"#   Blocked when the run was restarted on " + restartedOn + ": paste.example\n",
 			"#   Narrowed to fit your limits: -pastebin.com\n",
 			"#     Removed pastebin.com.\n",
 			"# Values shown as <redacted> are hidden from you. Fill them in before using this as a policy.\n",

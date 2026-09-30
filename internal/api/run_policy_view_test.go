@@ -565,7 +565,7 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 	deleted := func(s ...string) func(*types.RunPolicySpec) {
 		return func(sp *types.RunPolicySpec) { sp.DeniedDomains = s }
 	}
-	restartAt := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	restartAt := time.Now().UTC().Add(-time.Minute)
 	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", Ecosystem: "npm"},
 	}}
