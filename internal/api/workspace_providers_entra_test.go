@@ -161,9 +161,41 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"the bearer token mode", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeBearer
 		})), false},
-		{"the minted-PAT token mode is REFUSED — only Microsoft's own clients may mint", block(entraRow(func(r *types.GitProvider) {
+		{"the minted-PAT token mode is REFUSED for now — it is not yet available", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
 		})), true},
+		{"own_pat saves with no tenant and no client", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = types.ADOTokenModeOwnPAT
+			r.Entra.TenantID, r.Entra.ClientID = "", ""
+		})), false},
+		{"own_pat with a tenant and client still saves", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = types.ADOTokenModeOwnPAT
+		})), false},
+		{"own_pat that names an alias for its tenant is refused, not stored", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = types.ADOTokenModeOwnPAT
+			r.Entra.TenantID = "common"
+		})), true},
+		{"own_pat still needs a ceiling", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = types.ADOTokenModeOwnPAT
+			r.Entra.TenantID, r.Entra.ClientID = "", ""
+			r.Entra.CapabilityCeiling = nil
+		})), true},
+		{"bearer without a tenant is refused", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = types.ADOTokenModeBearer
+			r.Entra.TenantID = ""
+		})), true},
+		{"an unset mode without a client is refused", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.ClientID = ""
+		})), true},
+		{"pat_max_hours 0 reads as the default", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxHours = 0 })), false},
+		{"pat_max_hours 1", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxHours = 1 })), false},
+		{"pat_max_hours 168", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxHours = 168 })), false},
+		{"pat_max_hours 169", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxHours = 169 })), true},
+		{"pat_max_hours -1", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxHours = -1 })), true},
+		{"pat_max_days 1", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxDays = 1 })), false},
+		{"pat_max_days 90", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxDays = 90 })), false},
+		{"pat_max_days 91", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxDays = 91 })), true},
+		{"pat_max_days -1", block(entraRow(func(r *types.GitProvider) { r.Entra.PATMaxDays = -1 })), true},
 		{"an empty token mode reads as bearer", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = ""
 		})), false},
@@ -231,7 +263,13 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 		}), "no such thing as a shared Entra sign-in"},
 		{"minted_pat", entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
-		}), "only lets Microsoft's own clients mint"},
+		}), "minted_pat is not yet available"},
+		{"pat_max_hours", entraRow(func(r *types.GitProvider) {
+			r.Entra.PATMaxHours = 169
+		}), "Enter 1 to 168 hours."},
+		{"pat_max_days", entraRow(func(r *types.GitProvider) {
+			r.Entra.PATMaxDays = 91
+		}), "Enter 1 to 90 days."},
 		{"the pre-split read id", entraRow(func(r *types.GitProvider) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{"read"}
 		}), `entra.capability_ceiling[0]: "read" is not a capability — want one of: analytics_read, build_admin,`},

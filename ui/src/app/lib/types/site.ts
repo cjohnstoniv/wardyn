@@ -289,10 +289,11 @@ export interface GitProvider {
 // Whose credential a provider row's lanes use.
 export type CredentialSource = "shared" | "per_user";
 
-// How an Entra-lane run presents itself to Azure DevOps. Absent reads as
-// "bearer", the only accepted mode: the server refuses "minted_pat" because
-// Azure DevOps mints personal access tokens only for Microsoft's own clients.
-export type ADOTokenMode = "bearer";
+// How a run presents itself to Azure DevOps on an Entra-lane row (types.ADOTokenMode).
+// Absent reads as "bearer". "minted_pat" (Wardyn creates a token for each run)
+// is named but the server still refuses it: it is not yet available.
+// "own_pat" is a token the person pastes in, and needs no tenant or client.
+export type ADOTokenMode = "bearer" | "minted_pat" | "own_pat";
 
 // The Entra lane's configuration (types.ADOEntraConfig). The capability
 // strings are the classifier's vocabulary (internal/adoscope) — the console
@@ -307,6 +308,10 @@ export interface ADOEntraConfig {
   // inside capability_ceiling.
   default_profile?: string[];
   token_mode?: ADOTokenMode;
+  // The longest a minted_pat run's token lives, 1 to 168. Absent reads as 8.
+  pat_max_hours?: number;
+  // The furthest expiry an own_pat token may carry, 1 to 90. Absent reads as 30.
+  pat_max_days?: number;
   // Whether REST calls are brokered on this lane. ABSENT MEANS TRUE, which is
   // why it is optional rather than a plain boolean the console might write as
   // false by omission.

@@ -41,6 +41,12 @@ const (
 	reasonSigninUnconfigured  = "signin_unconfigured"   // no Entra app registration for this organisation
 	reasonSigninUnreadable    = "signin_unreadable"     // the Entra roster row could not be read
 
+	// Azure DevOps personal access token creation (ado_pat_contract.go).
+	reasonADOPATPolicyBlocked  = "ado_pat_policy_blocked"  // the organisation restricts who may create tokens
+	reasonADOPATLifespanPolicy = "ado_pat_lifespan_policy" // the requested life is above the organisation's maximum
+	reasonADOPATConsentNeeded  = "ado_pat_consent_needed"  // the sign-in's grant cannot create tokens: consent or scope is missing
+	reasonADOPATMintRefused    = "ado_pat_mint_refused"    // any other refusal from the token API
+
 	// AWS SSO resolve only.
 	reasonSSOHostNotPortal = "sso_host_not_portal" // the requested host is outside the credential's own SSO portal
 

@@ -4,20 +4,45 @@
 package adoscope
 
 import (
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // ResourceID is Azure DevOps' first-party application id, the audience every
 // Entra scope for Azure DevOps is qualified by. Fixed and tenant-invariant.
 const ResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
 
-// neverRequestedScopes are the token-lifecycle scopes. SECURITY: nothing in
-// this package may ever put them in a scope or consent set — consent, not the
-// request, decides a token's scopes, so once consented these would ride along
-// in every run's token (Azure DevOps mints PATs only for Microsoft's own
-// first-party clients; measured: 401 TF400813).
-var neverRequestedScopes = []string{"vso.tokens", "vso.pats"}
+// neverRequestedScopes are the token-lifecycle scopes, unqualified. SECURITY:
+// nothing in this package may ever put them in a capability's scope set —
+// consent, not the request, decides an Entra token's scopes, and a token that
+// carries one can create personal access tokens. Only the sign-in that mints a
+// run's token asks for two of them (MintScopes), and never a capability.
+var neverRequestedScopes = []string{
+	"vso.tokens", "vso.pats", "vso.pats_manage", "vso.tokenadministration", "user_impersonation",
+}
+
+// MintScopes are the two delegated Azure DevOps permissions that let Wardyn
+// create and revoke a person's personal access tokens, resource-qualified as
+// an Entra request names them. They are not a capability's scopes and
+// ScopesFor never returns them.
+func MintScopes() []string {
+	return []string{ResourceID + "/vso.pats", ResourceID + "/vso.pats_manage"}
+}
+
+// IsTokenScope reports whether s, qualified by the Azure DevOps resource (its id or its
+// App ID URI) or not, is a scope that lets its holder create personal access tokens. A bearer
+// token whose granted scopes name one must never ride a sandbox's traffic.
+func IsTokenScope(s string) bool {
+	s = strings.ToLower(s)
+	s = strings.TrimPrefix(strings.TrimPrefix(s, ResourceID+"/"), resourceURI)
+	return slices.Contains(neverRequestedScopes, s)
+}
+
+// resourceURI is the App ID URI form of the same resource, which a scope can
+// also be qualified by. Lower case: IsTokenScope compares lower-cased.
+const resourceURI = "https://app.vssps.visualstudio.com/"
 
 // capabilityScopes is the capability -> Entra scope table, and THE ONE
 // PLACE a capability becomes a scope: consent, the person's token request and
@@ -88,6 +113,27 @@ func ScopesFor(caps []Capability) ([]string, error) {
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// PATScope is the scope string of the personal access token a run holds: the
+// scopes of caps, unqualified (a PAT names `vso.code`, not the Entra resource
+// form), sorted, deduplicated and space-joined. It is built from ScopesFor, so
+// the capability -> scope table stays the one place that decides them.
+// SECURITY: a capability that is not grantable is an error, and so is an empty
+// set — a token created with no scope must never stand in for a narrow one.
+func PATScope(caps []Capability) (string, error) {
+	qualified, err := ScopesFor(caps)
+	if err != nil {
+		return "", err
+	}
+	if len(qualified) == 0 {
+		return "", errors.New("adoscope: no capabilities — a personal access token needs at least one scope")
+	}
+	out := make([]string, len(qualified))
+	for i, q := range qualified {
+		out[i] = strings.TrimPrefix(q, ResourceID+"/")
+	}
+	return strings.Join(out, " "), nil
 }
 
 // Permits is THE gate: may a run holding granted perform v? The only
