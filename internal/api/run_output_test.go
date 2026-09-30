@@ -42,7 +42,7 @@ func (c *testClock) advance(d time.Duration) {
 // and a settable clock, plus a seeder for runs owned by sub-member.
 func runOutputServer(t *testing.T, shape ...func(*Config)) (*Server, *testClock, func(types.AgentRun) uuid.UUID) {
 	t.Helper()
-	clock := &testClock{now: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)}
+	clock := &testClock{now: time.Now().UTC()}
 	shape = append([]func(*Config){func(c *Config) {
 		c.RecordingStore = nil
 		c.Now = clock.Now
