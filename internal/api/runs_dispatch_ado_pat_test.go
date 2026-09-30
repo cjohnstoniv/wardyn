@@ -95,7 +95,7 @@ func (f *fakeADOPATs) revokedIDs() []string {
 type adoPATStore struct {
 	*adoCapStore
 	*store.MemRunPATs
-	mu   sync.Mutex
+	mu    sync.Mutex
 	runs  map[uuid.UUID]types.AgentRun
 	hint  string
 	marks []markedRunPAT
