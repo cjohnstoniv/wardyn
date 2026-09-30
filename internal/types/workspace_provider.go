@@ -199,7 +199,8 @@ type ADOEntraConfig struct {
 	// reads as 8; read via PATHours, never directly.
 	PATMaxHours int `json:"pat_max_hours,omitempty"`
 	// PATMaxDays is the furthest expiry an own_pat token may carry (1-90). 0
-	// reads as 30; read via PATDays, never directly.
+	// reads as 30; read via PATDays, never directly. A Server row has no entra
+	// block, so it cannot set this and always reads the default, 30.
 	PATMaxDays int `json:"pat_max_days,omitempty"`
 	// RESTAPI: brokered REST calls, or only git traffic. Default true; read
 	// via RESTAPIEnabled, never directly.
