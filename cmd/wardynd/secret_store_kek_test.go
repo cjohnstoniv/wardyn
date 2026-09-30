@@ -4,6 +4,11 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -44,5 +49,64 @@ func TestRewrapMode_KeyServiceNeedsNoAgeKey(t *testing.T) {
 	*f.vault.kek = kekTransit
 	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY") {
 		t.Fatalf("-rewrap with WARDYN_KEK=transit and no Transit key = %v; want the key service's refusal", err)
+	}
+}
+
+// A platform Transit key needs WARDYN_KEK=transit and a platform role, and
+// names nothing when unset.
+func TestBuildPlatformKEK_FailsClosed(t *testing.T) {
+	for _, tc := range []struct{ name, sel, auth, role, rolePlatform, want string }{
+		{"with WARDYN_KEK=local", "local", "kubernetes", "wardyn", "wardyn-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_KEK=transit"},
+		{"with WARDYN_KEK unset", "", "kubernetes", "wardyn", "wardyn-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_KEK=transit"},
+		{"without a platform role", "transit", "kubernetes", "wardyn", "", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_ROLE_PLATFORM"},
+		{"with token-file auth", "transit", "token-file", "wardyn", "wardyn-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_AUTH=kubernetes"},
+		{"with one role for both", "transit", "kubernetes", "wardyn", "wardyn", "WARDYN_VAULT_ROLE_PLATFORM is the same role as WARDYN_VAULT_ROLE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, _ := testExternalFlags("https://vault.example", "")
+			v.kek, v.transitMount, v.transitKeyPlatform, v.rolePlatform = strp(tc.sel), strp("transit"), strp("wardyn-platform"), strp(tc.rolePlatform)
+			v.auth, v.role = strp(tc.auth), strp(tc.role)
+			k, err := buildPlatformKEK(t.Context(), v, "")
+			if err == nil || k != nil || !strings.Contains(err.Error(), "refusing to start: "+tc.want) {
+				t.Fatalf("buildPlatformKEK = (%v, %v); want a refusal %q", k, err, tc.want)
+			}
+		})
+	}
+	v, _ := testExternalFlags("", "")
+	v.kek, v.transitKeyPlatform = strp("local"), strp("")
+	if k, err := buildPlatformKEK(t.Context(), v, ""); k != nil || err != nil {
+		t.Fatalf("no platform key = (%v, %v); want no key service", k, err)
+	}
+}
+
+// The platform Transit key logs in as WARDYN_VAULT_ROLE_PLATFORM, never as the
+// credential role: a token that reaches the credential key must not reach it.
+func TestBuildPlatformKEK_LogsInAsThePlatformRole(t *testing.T) {
+	var roles []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		roles = append(roles, string(b))
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+	}))
+	defer srv.Close()
+	jwt := filepath.Join(t.TempDir(), "jwt")
+	if err := os.WriteFile(jwt, []byte("sa-jwt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := testExternalFlags(srv.URL, "")
+	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
+	v.kek, v.transitMount, v.transitKeyPlatform = strp("transit"), strp("transit"), strp("wardyn-platform")
+	k, err := buildPlatformKEK(t.Context(), v, "")
+	if err == nil || k != nil || !strings.Contains(err.Error(), `role "wardyn-platform"`) {
+		t.Fatalf("buildPlatformKEK = (%v, %v); want a login refusal as the platform role", k, err)
+	}
+	if len(roles) == 0 {
+		t.Fatal("the platform Transit client never logged in")
+	}
+	for _, body := range roles {
+		if !strings.Contains(body, `"role":"wardyn-platform"`) || strings.Contains(body, "wardyn-cred") {
+			t.Fatalf("login body %s; want the platform role only", body)
+		}
 	}
 }

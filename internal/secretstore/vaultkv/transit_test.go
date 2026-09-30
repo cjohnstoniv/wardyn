@@ -194,3 +194,36 @@ func TestTransit_KEKConformance(t *testing.T) {
 		Disable: func(*testing.T) { set(func() { f.transit.name = "" }) },
 	})
 }
+
+// A wrap names its key: the same key material under another key name does not
+// unwrap it, because the kek_id is part of the associated data. A boot key
+// wrapped under the platform key therefore never opens under the credential
+// key, nor a credential's wrap under the platform key.
+func TestTransit_WrapIsBoundToItsKeyID(t *testing.T) {
+	fc, fp := newFakeVault(t), newFakeVault(t)
+	cred := newFakeTransit(t, fc)
+	plat := newFakeTransitKey(t, fp, "wardyn-platform")
+	// Same key bytes behind both names, so only the kek_id tells them apart.
+	fc.mu.Lock()
+	fp.mu.Lock()
+	fp.transit.versions = fc.transit.versions
+	fp.mu.Unlock()
+	fc.mu.Unlock()
+	ctx := t.Context()
+	bind := kek.Bind("", "wardyn-signing-key")
+	for _, c := range []struct {
+		name           string
+		wrapper, other *Transit
+	}{{"platform to credential", plat, cred}, {"credential to platform", cred, plat}} {
+		w, err := c.wrapper.Wrap(ctx, testDEK(), bind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := c.wrapper.Unwrap(ctx, w, bind); err != nil || !bytes.Equal(got, testDEK()) {
+			t.Fatalf("%s: own Unwrap = (%x, %v)", c.name, got, err)
+		}
+		if _, err := c.other.Unwrap(ctx, w, bind); err == nil || errors.Is(err, secretstore.ErrUnavailable) {
+			t.Fatalf("%s: Unwrap under the other key = %v; want a definitive refusal", c.name, err)
+		}
+	}
+}

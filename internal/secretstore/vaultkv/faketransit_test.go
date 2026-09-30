@@ -139,3 +139,22 @@ func newFakeTransit(t *testing.T, f *fakeVault) *Transit {
 	}
 	return tr
 }
+
+// newFakeTransitKey is newFakeTransit over a fresh key named key, on its own
+// fake Vault: the platform key service of a two-key install.
+func newFakeTransitKey(t *testing.T, f *fakeVault, key string) *Transit {
+	t.Helper()
+	f.transitKey(key)
+	f.mu.Lock()
+	f.jwts["sa-jwt"] = "wardyn"
+	f.mu.Unlock()
+	tr, err := NewTransit(t.Context(), Config{
+		Addr: f.srv.URL, Namespace: f.namespace, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn",
+		K8sTokenFile: writeFile(t, "sa-jwt\n"),
+	}, "transit", key)
+	if err != nil {
+		t.Fatalf("NewTransit(%s): %v", key, err)
+	}
+	tr.c.backoff = 0
+	return tr
+}

@@ -253,3 +253,158 @@ func TestTransitKEK_RotateAgeKeyLeavesTransitRows(t *testing.T) {
 		}
 	}
 }
+
+const bootKey = "wardyn-signing-key"
+
+// platformKeys are the Deps of a store whose boot keys have a Transit key of
+// their own; writes false leaves that key read-only.
+func platformKeys(pool *pgxpool.Pool, cred, plat *Transit, writes bool) secretstore.Deps {
+	d := keys(pool, nil, cred, true)
+	d.PlatformKEK, d.PlatformKEKWrites = plat, writes
+	return d
+}
+
+func mustPut(t *testing.T, s secretstore.Store, owner, name, v string) {
+	t.Helper()
+	if err := s.For(owner).Put(t.Context(), name, []byte(v)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustGet(t *testing.T, s secretstore.Store, owner, name, want string) {
+	t.Helper()
+	if v, err := s.For(owner).Get(t.Context(), name); err != nil || string(v) != want {
+		t.Fatalf("Get(%q, %q) = (%q, %v), want %q", owner, name, v, err, want)
+	}
+}
+
+// With a platform key service the boot keys alone are wrapped under it; every
+// other row, a person's row that borrows a boot key's name included, stays
+// under the credential key. The credential key's holder cannot open a boot
+// key, and a boot key forged under the credential key is refused.
+func TestPlatformKEK_BootKeysWrapApart(t *testing.T) {
+	pool := throwawayDB(t)
+	cred := newFakeTransit(t, newFakeVault(t))
+	plat := newFakeTransitKey(t, newFakeVault(t), "wardyn-platform")
+	s, err := secretstore.New("pg", platformKeys(pool, cred, plat, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, s, "", bootKey, "boot")
+	mustPut(t, s, "", "github-app-key", "cred")
+	mustPut(t, s, "alice", bootKey, "alice")
+	for _, w := range []struct{ owner, name, want string }{
+		{"", bootKey, plat.ID()}, {"", "github-app-key", cred.ID()}, {"alice", bootKey, cred.ID()},
+	} {
+		if k, _ := rowKEK(t, pool, w.owner, w.name); k != w.want {
+			t.Fatalf("row (%q, %q) is sealed under %q, want %q", w.owner, w.name, k, w.want)
+		}
+	}
+	mustGet(t, s, "", bootKey, "boot")
+	mustGet(t, s, "alice", bootKey, "alice")
+
+	// A daemon holding only the credential key cannot read the boot key.
+	if _, err := pgStore(t, pool, nil, cred, true).Get(t.Context(), bootKey); err == nil || errors.Is(err, secretstore.ErrNotFound) || !strings.Contains(err.Error(), "not configured to reach") {
+		t.Fatalf("credential-key-only Get of a boot key = %v; want a refusal naming the key", err)
+	}
+
+	// A boot key written under the credential key (by one who holds it and the
+	// database) is not opened once the platform key service is configured.
+	if _, err := pool.Exec(t.Context(), `DELETE FROM secrets WHERE owned_by='' AND name=$1`, bootKey); err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, pgStore(t, pool, nil, cred, true), "", bootKey, "forged")
+	if v, err := s.Get(t.Context(), bootKey); err == nil || !strings.Contains(err.Error(), "opens boot keys only under") {
+		t.Fatalf("Get of a boot key under the credential key = (%q, %v); want a refusal", v, err)
+	}
+}
+
+// -rewrap moves the boot keys onto the platform key service and, with it
+// read-only, back onto the credential key, at each key's own latest version:
+// a credential row is never touched and a second run does nothing.
+func TestPlatformKEK_RewrapBothWaysIsIdempotent(t *testing.T) {
+	pool := throwawayDB(t)
+	fp := newFakeVault(t)
+	cred := newFakeTransit(t, newFakeVault(t))
+	plat := newFakeTransitKey(t, fp, "wardyn-platform")
+	ctx := t.Context()
+	one := pgStore(t, pool, nil, cred, true)
+	mustPut(t, one, "", bootKey, "boot")
+	mustPut(t, one, "", "github-app-key", "cred")
+	_, credWrap := rowKEK(t, pool, "", "github-app-key")
+
+	rewrap := func(writes bool) secretstorepg.RewrapResult {
+		t.Helper()
+		res, err := secretstorepg.RewrapKeys(ctx, platformKeys(pool, cred, plat, writes))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	check := func(wantKEK string) {
+		t.Helper()
+		if k, _ := rowKEK(t, pool, "", bootKey); k != wantKEK {
+			t.Fatalf("boot key is sealed under %q, want %q", k, wantKEK)
+		}
+		if _, w := rowKEK(t, pool, "", "github-app-key"); string(w) != string(credWrap) {
+			t.Fatal("-rewrap rewrapped a credential row")
+		}
+		mustGet(t, one, "", "github-app-key", "cred")
+	}
+
+	// Onto the platform key.
+	if res := rewrap(true); res.Rewrapped != 1 || res.PlatformKeyService != plat.ID() || res.PlatformKeyVersion != 1 || res.KeyService != cred.ID() || res.KeyVersion != 1 {
+		t.Fatalf("rewrap onto the platform key = %+v", res)
+	}
+	check(plat.ID())
+	if res := rewrap(true); res.Rewrapped != 0 {
+		t.Fatalf("second rewrap moved %d rows", res.Rewrapped)
+	}
+	mustGet(t, secretstoreNew(t, platformKeys(pool, cred, plat, true)), "", bootKey, "boot")
+
+	// A rotation of the platform key alone moves the boot key to v2 once; the
+	// credential key, still at v1, is not chased.
+	fp.rotateTransit()
+	if res := rewrap(true); res.Rewrapped != 1 || res.PlatformKeyVersion != 2 {
+		t.Fatalf("rewrap after rotating the platform key = %+v", res)
+	}
+	if res := rewrap(true); res.Rewrapped != 0 {
+		t.Fatalf("second rewrap after the rotation moved %d rows", res.Rewrapped)
+	}
+
+	// Back onto the credential key.
+	if res := rewrap(false); res.Rewrapped != 1 || res.PlatformKeyService != "" {
+		t.Fatalf("rewrap back = %+v", res)
+	}
+	check(cred.ID())
+	if res := rewrap(false); res.Rewrapped != 0 {
+		t.Fatalf("second rewrap back moved %d rows", res.Rewrapped)
+	}
+	mustGet(t, one, "", bootKey, "boot")
+}
+
+// No platform key service: a boot key is wrapped under the credential key, as
+// before, and the rewrap reports no platform key.
+func TestPlatformKEK_UnsetKeepsOneKey(t *testing.T) {
+	pool := throwawayDB(t)
+	cred := newFakeTransit(t, newFakeVault(t))
+	s := pgStore(t, pool, nil, cred, true)
+	mustPut(t, s, "", bootKey, "boot")
+	if k, w := rowKEK(t, pool, "", bootKey); k != cred.ID() || !strings.HasPrefix(string(w), "vault:v1:") {
+		t.Fatalf("boot key = (%q, %q), want a wrap under the credential key", k, w)
+	}
+	res, err := secretstorepg.RewrapKeys(t.Context(), keys(pool, nil, cred, true))
+	if err != nil || res.Rewrapped != 0 || res.PlatformKeyService != "" || res.PlatformKeyVersion != 0 || res.KeyService != cred.ID() || res.KeyVersion != 1 {
+		t.Fatalf("rewrap = (%+v, %v)", res, err)
+	}
+	mustGet(t, s, "", bootKey, "boot")
+}
+
+func secretstoreNew(t *testing.T, d secretstore.Deps) secretstore.Store {
+	t.Helper()
+	s, err := secretstore.New("pg", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}

@@ -132,3 +132,39 @@ func assertRewrapFailureAudit(t *testing.T, pool *pgxpool.Pool) {
 		t.Fatalf("audit fields = %s; want committed count zero and no names, values, error text or uncommitted key_version", raw)
 	}
 }
+
+type platformMemKEK struct{ *memKEK }
+
+func (platformMemKEK) ID() string { return "transit:transit/test-platform" }
+
+// A platform key service counts as a separate platform key: the secret.rewrap
+// event says so, and the boot key moves onto it while a credential stays put.
+func TestRewrapKeys_PlatformKeyServiceIsSeparate(t *testing.T) {
+	pool := envelopeDB(t)
+	id := mustAgeIdentity(t)
+	s, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"wardyn-signing-key", "a-credential"} {
+		if err := s.Put(t.Context(), name, []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	rec := &capturingRecorder{}
+	err = rewrapKeys(t.Context(), rec, secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true})
+	if err != nil || len(rec.got) != 1 {
+		t.Fatalf("rewrap = %v with %d audit events", err, len(rec.got))
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.got[0].Data, &data); err != nil || data["platform_key_separate"] != true || data["secrets"] != float64(2) {
+		t.Fatalf("audit fields = %s (%v); want platform_key_separate true over 2 rows", rec.got[0].Data, err)
+	}
+	for name, want := range map[string]string{"wardyn-signing-key": plat.ID(), "a-credential": cred.ID()} {
+		var got string
+		if err := pool.QueryRow(t.Context(), `SELECT kek_id FROM secrets WHERE owned_by='' AND name=$1`, name).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s is sealed under %q (%v), want %q", name, got, err, want)
+		}
+	}
+}

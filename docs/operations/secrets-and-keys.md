@@ -600,6 +600,29 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and
   platform policy can sit with fewer people.
 - The second role needs Kubernetes auth.
 
+**Two Transit keys (with `WARDYN_KEK=transit`).** The same split applies to the
+key service. Create a second key of type `aes256-gcm96` on the same Transit
+mount, give `wardyn-platform` `update` on `transit/encrypt/<platform-key>` and
+`transit/decrypt/<platform-key>` only, and leave that key out of
+`wardyn-credentials`' policy (Wardyn cannot check that). Set
+`WARDYN_VAULT_TRANSIT_KEY_PLATFORM=<platform-key>` (chart:
+`secretStore.vault.transitKeyPlatform`).
+
+- wardynd wraps the boot keys (signing, session and SSH host keys) under it,
+  reached as the platform role, and every credential under
+  `WARDYN_VAULT_TRANSIT_KEY` as the credentials role. A leaked credentials
+  token then unwraps no boot key.
+- Boot refuses when it is set with `WARDYN_KEK=local`, without
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or with the two roles the
+  same. With it set, a boot key still under another key is refused at boot.
+- Run `wardynd -rewrap` with the same settings to move the boot keys onto it;
+  it touches no credential row and a second run changes nothing. The run prints
+  the key version to raise `min_decryption_version` to, as for the credential
+  key.
+- `wardynd -rewrap` has no setting yet that moves the boot keys off the
+  platform key again; until it does, unsetting it strands them, and boot
+  refuses by naming the key they are under.
+
 **Policies that name paths instead of `platform/*`.** The platform role's
 policy must cover the whole of `<prefix>/platform/*`, not the boot keys it
 listed when you wrote it. A laptop enrolled into an organisation control

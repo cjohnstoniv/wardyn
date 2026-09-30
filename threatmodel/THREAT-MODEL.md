@@ -2127,13 +2127,25 @@ hiding them would repeat the failure mode we are designed to avoid.
     can forge what this residual lists. (c) **Transit mode**
     (`WARDYN_KEK=transit`): the age key protects nothing once `wardynd -rewrap`
     has moved every row, and boot refuses while it is still set with no row
-    under it. The residual moves to Vault: ONE Transit key and ONE Vault role
-    wrap the boot keys and the credentials alike, so that role's token (or
-    Vault's operators) unwraps both and can forge what this residual lists.
-    What it cannot do from the database alone is pass a credential's wrap off
-    as a boot key's: each wrap's `associated_data` binds `kek_id`, owner and
-    name, so a wrap moved to another row does not unwrap. A separate Transit
-    key and role for the boot keys is a 0.8.x follow-up (#979).
+    under it. The residual moves to Vault. With ONE Transit key and ONE Vault
+    role, that role's token (or Vault's operators) unwraps the boot keys and the
+    credentials alike and can forge what this residual lists. The split:
+    `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` (chart
+    `secretStore.vault.transitKeyPlatform`) wraps the boot keys under a second
+    Transit key that only `WARDYN_VAULT_ROLE_PLATFORM` reaches, and
+    `WARDYN_VAULT_TRANSIT_KEY` wraps the credentials as the credentials role.
+    A leaked credentials-side token, with or without the database, then unwraps
+    no boot key, and it cannot plant one either: wardynd opens a boot key under
+    the platform key alone and refuses one wrapped under the credential key. The
+    same holds the other way for a leaked platform token and the credentials.
+    What the split does not do: the wardynd process holds both tokens, so a
+    compromise of the process still reaches both; it holds only while the
+    credentials role's Vault policy leaves the platform key out, which Wardyn
+    cannot check; and the move onto the platform key (`wardynd -rewrap`) is one
+    more moment at which the credential key vouches for the boot keys. What
+    neither setup lets anyone do from the database alone is pass one wrap off as
+    another's: each wrap's `associated_data` binds `kek_id`, owner and name, so a
+    wrap moved to another row, or to the other key, does not unwrap.
 
 50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`

@@ -67,6 +67,10 @@ func rewrapMode(f *bootFlags) error {
 	if err != nil {
 		return err
 	}
+	platformSvc, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
 	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancelConn()
 	pool, err := db.Connect(connCtx, *f.dsn)
@@ -92,16 +96,20 @@ func rewrapMode(f *bootFlags) error {
 		defer func() { _ = fan.Close() }()
 	}
 
-	return rewrapKeys(ctx, rec, secretstore.Deps{
+	d := secretstore.Deps{
 		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes,
-	})
+	}
+	if platformSvc != nil {
+		d.PlatformKEK, d.PlatformKEKWrites = platformSvc, true
+	}
+	return rewrapKeys(ctx, rec, d)
 }
 
 // rewrapKeys is -rewrap's work once its inputs are checked and its lock held:
 // the rewrap under d's keys, its secret.rewrap event, and what to do next.
 func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) error {
 	res, err := secretstorepg.RewrapKeys(ctx, d)
-	separate := d.PlatformIdentity != nil
+	separate := d.PlatformIdentity != nil || d.PlatformKEK != nil
 	if err != nil {
 		// An abort is audited like secret.migrate's, even when ctx is what
 		// ended the run: under Transit it has already made decrypt calls that
@@ -117,6 +125,9 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion > 0 {
 		fmt.Fprintf(os.Stdout, "every sealed secret is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", res.KeyService, res.KeyVersion, res.KeyVersion)
+	}
+	if res.PlatformKeyVersion > 0 {
+		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %d; raising that Transit key's min_decryption_version to %d now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
 	}
 	return nil
 }
