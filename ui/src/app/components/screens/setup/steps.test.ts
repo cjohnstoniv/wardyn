@@ -320,7 +320,7 @@ describe("walkableDemos — conditional demos are offered only once their precon
     expect(ids(baseStatus({ checks_redacted: true, providers: [], llm_ready: true }))).toContain("agent-in-the-box");
   });
 
-  it("a host CLI login with no model provider does not restore the harness demo", () => {
+  it("a detected host CLI with no model provider does not restore the harness demo", () => {
     const order = ids(
       baseStatus({ llm_ready: false, providers: [{ tool: "claude", installed: true }] }),
     );

@@ -263,10 +263,9 @@ export interface SetupProviderAccess {
 
 export interface SetupStatus {
   ready: boolean;
-  // Server-computed "does SOME run/compose LLM access path exist" (resident
-  // CLI login, a resolved composer backend key, an api-key-ish secret,
-  // Bedrock, a managed harness token, or a configured ai_provider
-  // Integration) — computed BEFORE the member redaction pass and left
+  // Server-computed "does SOME run's LLM access path exist": at least one
+  // enabled model provider serves an agent (Go llmPathExists) — computed
+  // BEFORE the member redaction pass and left
   // untouched by it (see the Go SetupStatus.LLMReady doc comment), so a
   // member's console can answer the question the (redacted-away) `checks` /
   // `providers` detail used to answer. Optional for the same fixture-compat
