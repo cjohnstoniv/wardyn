@@ -80,7 +80,9 @@ ratio is a claim that fails the moment someone runs it.)
 
 **How the gate reads today.** `.github/workflows/ci.yml`'s `dco` job checks every
 commit a change introduces, on both event shapes: on a pull request,
-`make dco DCO_RANGE="$BASE..HEAD"`; on a push, `DCO_RANGE="$BEFORE..HEAD"` derived
+`make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main"` (commits already on main passed
+main's own gate, so a release PR that merges main does not re-judge GitHub's merge
+commits); on a push, `DCO_RANGE="$BEFORE..HEAD"` derived
 from `github.event.before`. It narrows to `-1 HEAD` only when that previous tip is
 unusable — a newly created ref (all-zeros) or a force-push whose old tip this
 clone no longer has. The earlier behaviour, the one those 167 commits arrived
