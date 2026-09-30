@@ -275,14 +275,14 @@ func TestAuthorADOEntraInjection_RefusesWithoutCertificateAuthority(t *testing.T
 	}
 }
 
-// own_pat is not this lane's to issue; a ceiling-escaping profile is not
-// authorable.
+// A token_mode this lane does not know is not issuable; a ceiling-escaping
+// profile is not authorable.
 func TestAuthorADOEntraInjection_RefusesUnissuableConfigurations(t *testing.T) {
-	pat := adoTestRun(t)
-	pat.tokenMode = types.ADOTokenModeOwnPAT
+	unknown := adoTestRun(t)
+	unknown.tokenMode = types.ADOTokenMode("shared_pat")
 	escape := adoTestRun(t)
 	escape.caps = append(escape.caps, adoscope.CapPolicyBypass)
-	for name, ado := range map[string]adoEntraRun{"own_pat": pat, "outside ceiling": escape} {
+	for name, ado := range map[string]adoEntraRun{"unknown token_mode": unknown, "outside ceiling": escape} {
 		st := &adoTestStore{}
 		s, _ := newADODispatchServer(st)
 		policy := types.RunPolicySpec{}
