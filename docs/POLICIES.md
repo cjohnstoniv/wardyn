@@ -28,7 +28,8 @@ and [sdk.md](sdk.md)).
 The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml`
 is a policy file. Reuse is scoped: the document always strict-decodes as a policy,
 and it passes `validatePolicySpec` for a security or super admin, so for them
-`wardyn run --policy-file p.yaml` runs it again as is. For anyone else, mount
+`wardyn run --policy-file p.yaml` runs it again as is, as long as the run's
+allowlist, with what launch added, still fits the per-policy domain cap. For anyone else, mount
 sources read `<redacted>` and grant secret names are dropped: it is a starting
 point, with those values to fill in.
 

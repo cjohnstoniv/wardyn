@@ -20,7 +20,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sources and secret names hidden below the security admin tier. `run.create` records the
   starting policy as `policy_source`, already redacted, and a git-broker run writes a new
   `run.egress.confine` row; no migration. A run from before this reports `complete: false`. The
-  console's Policy tab follows.
+  run page has a Policy tab between Approvals and Audit (a Summary/YAML view with Copy YAML; members see
+  `Hidden` for folder sources), and the identity card's Policy row is now a View link to it for every run.
 - **A run shows its startup progress while its sandbox comes up (#1419).** While a run is Pending or
   Starting, the run page's terminal area shows the sign-in door's step list (Starting the sandbox,
   Downloading the image, then Opening the terminal, Starting the task or Starting the command)

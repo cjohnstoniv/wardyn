@@ -98,7 +98,12 @@ type auditEvidence struct {
 // "launch" is the generic remainder. Without a base only what the evidence
 // rows state can be said, limited to entries present in resolved.
 func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, ev auditEvidence, sc types.SiteConfig, run types.AgentRun) []runPolicyChange {
-	x := &explainer{ev: ev, sc: sc, resolvedDisk: diskMiB(resolved)}
+	x := &explainer{ev: ev, sc: sc, resolvedDisk: diskMiB(resolved), mirrorTo: map[string]bool{}}
+	for _, r := range sc.EgressRedirects {
+		if e := redirectEntry(r); e != "" && slices.Contains(resolved.AllowedDomains, e) {
+			x.mirrorTo[e] = true
+		}
+	}
 	from := base
 	if from == nil {
 		b := x.evidenceBase(resolved)
@@ -166,6 +171,7 @@ type explainer struct {
 	ev           auditEvidence
 	sc           types.SiteConfig
 	resolvedDisk int
+	mirrorTo     map[string]bool // rule 3: mirror entries in the allowlist, from the site config (a tokenless mirror writes no row)
 	providerHost map[string]bool // rule 9
 	adoEntries   map[string]bool // rule 10
 }
@@ -179,7 +185,7 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 		switch field {
 		case fieldAllowed:
 			ev := x.ev
-			return ev.workspace[entry] || ev.sourceControl[entry] || ev.mirror[entry] || ev.model[entry]
+			return ev.workspace[entry] || ev.sourceControl[entry] || ev.mirror[entry] || x.mirrorTo[entry] || ev.model[entry]
 		default:
 			_, restart := x.ev.restart[entry]
 			return x.ev.confine[entry] || x.ev.profileDenied[entry] || restart || x.legacyGit(entry)
@@ -281,16 +287,27 @@ func (x *explainer) derivedCause(field, entry string, added bool) string {
 	return causeLaunch
 }
 
+// redirectEntry is the allowlist entry substituteArtifactEgress writes for a
+// redirect's To: host:port, "" for a To with no host.
+func redirectEntry(r types.EgressRedirect) string {
+	to := strings.ToLower(hostrules.HostOf(r.To))
+	if to == "" {
+		return ""
+	}
+	return net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))
+}
+
 // mirrored is rule 3: the mirror host itself, the public hosts a mirror
-// replaced (only for a redirect whose To a mirror row names), and the deny a
+// replaced (only for a redirect whose To a mirror row or the resolved
+// allowlist names), and the deny a
 // network-only redirect adds on its From host.
 func (x *explainer) mirrored(field, entry string, added bool) bool {
 	switch {
 	case field == fieldAllowed && added:
-		return x.ev.mirror[entry]
+		return x.ev.mirror[entry] || x.mirrorTo[entry]
 	case field == fieldAllowed:
 		for _, r := range x.sc.EgressRedirects {
-			if !x.ev.mirrorHosts[strings.ToLower(hostrules.HostOf(r.To))] {
+			if !x.ev.mirrorHosts[strings.ToLower(hostrules.HostOf(r.To))] && !x.mirrorTo[redirectEntry(r)] {
 				continue
 			}
 			pub := map[string]bool{}

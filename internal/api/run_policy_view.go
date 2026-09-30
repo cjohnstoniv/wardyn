@@ -67,7 +67,7 @@ func newPolicySourceRecord(kind string, id *uuid.UUID, name string, updatedAt *t
 }
 
 // runPolicyResponse is GET /api/v1/runs/{id}/policy. pkg/client carries its own
-// copy (RunPolicy), pinned to this struct by response_parity_test.go.
+// copy (RunPolicyView), pinned to this struct by response_parity_test.go.
 type runPolicyResponse struct {
 	RunID uuid.UUID `json:"run_id"`
 	// State is recorded, not_yet (not terminal, no envelope yet) or never

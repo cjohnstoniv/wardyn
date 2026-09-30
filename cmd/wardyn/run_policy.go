@@ -67,7 +67,9 @@ func runPolicyCmd(client clientFn) *cobra.Command {
 			}
 			person := ""
 			if slices.ContainsFunc(view.Changes, func(ch sdk.RunPolicyChange) bool { return ch.Cause == "limits" }) {
-				person = limitsPerson(cmd, c, id)
+				if person, err = limitsPerson(cmd, c, id); err != nil {
+					return err
+				}
 			}
 			out := cmd.OutOrStdout()
 			for _, line := range runPolicyHeaderLines(view, person) {
@@ -82,24 +84,25 @@ func runPolicyCmd(client clientFn) *cobra.Command {
 }
 
 // limitsPerson is who the limits belong to when the reader is not that person:
-// "" for the run's own creator, else the creator. A failed lookup reads as the
-// creator, so the line never claims "your" for somebody else's run.
-func limitsPerson(cmd *cobra.Command, c *sdk.Client, id uuid.UUID) string {
+// "" for the run's own creator, else the creator. When the run cannot be read
+// the command fails: guessing would print "your limits" for somebody else's run.
+// A failed identity lookup reads as the creator, for the same reason.
+func limitsPerson(cmd *cobra.Command, c *sdk.Client, id uuid.UUID) (string, error) {
 	run, err := c.GetRun(cmd.Context(), id)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	raw, err := c.Me(cmd.Context())
 	if err != nil {
-		return run.CreatedBy
+		return run.CreatedBy, nil
 	}
 	var me struct {
 		Principal string `json:"principal"`
 	}
 	if json.Unmarshal(raw, &me) == nil && me.Principal != "" && me.Principal == run.CreatedBy {
-		return ""
+		return "", nil
 	}
-	return run.CreatedBy
+	return run.CreatedBy, nil
 }
 
 // runPolicyHeaderLines is the comment block above the YAML: where the policy
@@ -112,10 +115,7 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 	if len(v.Changes) > 0 {
 		lines = append(lines, runPolicyHeader)
 		for _, ch := range v.Changes {
-			lines = append(lines, "  "+runPolicyChangeLabel(ch, person)+": "+strings.Join(runPolicyEntries(ch), ", "))
-			for _, d := range ch.Detail {
-				lines = append(lines, "    "+d)
-			}
+			lines = append(lines, runPolicyChangeLabel(ch, person)+": "+strings.Join(runPolicyEntries(ch), ", "))
 		}
 	}
 	if !v.Complete {
@@ -141,6 +141,9 @@ func runPolicySourceLine(s sdk.RunPolicySource) string {
 		return "Started from your organization's default policy."
 	case s.Kind == "profile" && s.Name != "":
 		return fmt.Sprintf("Started from the %s governance profile.", s.Name)
+	case s.Kind == "profile":
+		// A profile since deleted: the console says the same (policy-tab.tsx).
+		return "Started from your organization's default policy."
 	}
 	return "Wardyn set this policy for this run."
 }
@@ -177,9 +180,9 @@ func runPolicyChangeLabel(ch sdk.RunPolicyChange, person string) string {
 	return "Set by Wardyn when the run started"
 }
 
-// runPolicyEntries lists what a change added, then what it removed (each
-// removal marked "-"). A host reads as itself; an entry of any other field is
-// named by its field, as "field=entry".
+// runPolicyEntries lists what a change added, then what it removed. A host
+// reads as itself; an entry of any other field is named by its field, as
+// "field=entry".
 func runPolicyEntries(ch sdk.RunPolicyChange) []string {
 	name := func(e string) string {
 		if ch.Field == "allowed_domains" || ch.Field == "denied_domains" {
@@ -192,7 +195,7 @@ func runPolicyEntries(ch sdk.RunPolicyChange) []string {
 		out = append(out, name(e))
 	}
 	for _, e := range ch.Removed {
-		out = append(out, "-"+name(e))
+		out = append(out, name(e))
 	}
 	return out
 }

@@ -113,11 +113,10 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 		for _, want := range []string{
 			`# Started from the saved policy "ci".`,
 			"# Changed when the run started\n",
-			"#   Added for the workspace: registry.npmjs.org\n",
-			"#   Limited by the walled governance profile: corp.example\n",
-			"#   Blocked when the run was restarted on " + restartedOn + ": paste.example\n",
-			"#   Narrowed to fit your limits: -pastebin.com\n",
-			"#     Removed pastebin.com.\n",
+			"# Added for the workspace: registry.npmjs.org\n",
+			"# Limited by the walled governance profile: corp.example\n",
+			"# Blocked when the run was restarted on " + restartedOn + ": paste.example\n",
+			"# Narrowed to fit your limits: pastebin.com\n",
 			"# Values shown as <redacted> are hidden from you. Fill them in before using this as a policy.\n",
 		} {
 			if !strings.Contains(head, want) {
@@ -135,7 +134,7 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 	})
 	t.Run("someone else reading it names the person", func(t *testing.T) {
 		out, err := execRunPolicy(t, policyViewServer(t, view, "dana@acme.example", "admin"), view.RunID.String())
-		if err != nil || !strings.Contains(out, "#   Narrowed to fit the limits set for dana@acme.example: -pastebin.com\n") {
+		if err != nil || !strings.Contains(out, "# Narrowed to fit the limits set for dana@acme.example: pastebin.com\n") {
 			t.Errorf("err %v, output:\n%s", err, out)
 		}
 	})
@@ -154,6 +153,7 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 			{Kind: "inline"}:                                      "Started from a policy written for this run.",
 			{Kind: "default"}:                                     "Started from your organization's default policy.",
 			{Kind: "profile", Name: "walled"}:                     "Started from the walled governance profile.",
+			{Kind: "profile"}:                                     "Started from your organization's default policy.",
 			{Kind: "unknown"}:                                     "Wardyn set this policy for this run.",
 			{Kind: "inline", Preset: "nightly", PresetVersion: 3}: "Started from a policy written for this run.\n# Launched from the preset \"nightly\", version 3.",
 		} {
@@ -218,5 +218,22 @@ func TestRunPolicy_IsUnderRunAndRejectsABadID(t *testing.T) {
 	}
 	if got := cs.last(); got.method != http.MethodGet || !strings.HasSuffix(got.path, "/policy") {
 		t.Errorf("request = %s %s, want GET .../policy", got.method, got.path)
+	}
+}
+
+func TestRunPolicy_LimitsLineNeverClaimsYourWhenTheRunCannotBeRead(t *testing.T) {
+	view := recordedView()
+	view.Changes = []sdk.RunPolicyChange{{Cause: "limits", Field: "allowed_domains", Removed: []string{"pastebin.com"}}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/policy") {
+			_ = json.NewEncoder(w).Encode(view)
+			return
+		}
+		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	out, err := execRunPolicy(t, srv, view.RunID.String())
+	if err == nil || out != "" {
+		t.Errorf("err %v, stdout %q, want a failure and no policy printed", err, out)
 	}
 }
