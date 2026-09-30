@@ -738,7 +738,9 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     await page.route("**/api/v1/scm/azure-devops/org-check", (route) =>
       route.fulfill({ json: { checked_at: new Date(2026, 8, 29, 9, 12).toISOString(), permissions: "missing", lifespan: "off", blocked_person: "Priya Shah" } }),
     );
-    await gotoProviders(page);
+    // The sidebar is collapsed at this width, so go straight to the page.
+    await page.goto("/admin/providers");
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByTestId("ado-org-check")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
