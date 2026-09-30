@@ -8,8 +8,9 @@ package proxy
 // DevOps on this lane; it enforces the same four things the REST gate does, in git's terms: the
 // organisation pin (an Entra token carries no org claim), the capability check via adoscope.Permits (a
 // push is decided on the pack POST, since the receive-pack advertisement is served to a read-only
-// credential too), the content rules (before any capability ask), and the person's bearer credential via
-// the same injector the REST lane's MITM uses.
+// credential too), the content rules (before any capability ask), and the run's Azure DevOps credential
+// (an Entra bearer or a PAT sent as Basic, as the control plane resolved it) via the same injector the
+// REST lane's MITM uses.
 //
 // SECURITY: a refusal never reaches git as a 401 — git reads a 401 as a credential challenge and prints
 // "could not read Username", which hides the reason.

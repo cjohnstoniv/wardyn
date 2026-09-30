@@ -13,11 +13,13 @@ package proxy
 // tokens-API refusal apply exactly as they do to a bearer.
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -243,6 +245,17 @@ func TestADOGitBroker_BasicPATPushBeyondTheGrantIsRefused(t *testing.T) {
 	}
 	h.finish(t)
 
+	// The run's own-branch rule holds whatever the capabilities: main is refused
+	// before the pack reaches Azure DevOps.
+	off := basicGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	offDir := off.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+	out, err = off.push(t, offDir, "main")
+	mustBeGitRefusal(t, out, err, "this run may push only to its own branch")
+	if n := off.countEndpoint(adofake.EndpointGitReceivePack, ""); n != 0 {
+		t.Errorf("the off-branch pack reached Azure DevOps %d times", n)
+	}
+	off.finish(t)
+
 	other := basicGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
 	if out, err := other.git(t, "clone", "https://dev.azure.com/evil/loot/_git/app", "loot"); err == nil ||
 		!strings.Contains(out, `granted the "acme" Azure DevOps organisation only`) {
@@ -273,4 +286,57 @@ func TestADOGitBroker_BasicPATHeldPushForwardsUnderThePAT(t *testing.T) {
 		t.Errorf("Azure DevOps saw %d pack uploads, want 1", n)
 	}
 	h.finish(t)
+}
+
+// The PAT Lifecycle API's own hosts: a Basic PAT under a grant holding every
+// grantable capability still cannot list, mint, update or revoke a PAT there,
+// whatever the spelling of the path (§4a S3).
+func TestADOGate_BasicPATTokensAPIRefusedOnThePATLifecycleHost(t *testing.T) {
+	for _, tc := range []struct{ name, host, path string }{
+		{"pats", "vssps.dev.azure.com", "/acme/_apis/tokens/pats?api-version=7.1-preview.1"},
+		{"mixed case", "vssps.dev.azure.com", "/acme/_apis/Tokens/PATs?api-version=7.1-preview.1"},
+		{"encoded underscore", "vssps.dev.azure.com", "/acme/%5Fapis/tokens/pats"},
+		{"tokenadmin", "vssps.dev.azure.com", "/acme/_apis/tokenadmin/personalaccesstokens/x"},
+		{"legacy host", "acme.vssps.visualstudio.com", "/_apis/tokens/pats?api-version=7.1-preview.1"},
+	} {
+		for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions} {
+			t.Run(tc.name+" "+m, func(t *testing.T) {
+				fake := adofake.New()
+				t.Cleanup(fake.Close)
+				pat := "pat-" + uuid.NewString()
+				fake.RegisterToken(pat, adofake.ScopeTokens, adofake.ScopeCodeRead)
+				inj := &injector{byHost: map[string]*injEntry{tc.host: {
+					grantID: uuid.New(), header: injectedHeader{name: "Authorization", value: adoBasicPAT(pat)},
+				}}}
+				p, buf := newLocalRouteProxy(t, "http://cp.invalid", "RUNTOK", strings.TrimPrefix(fake.URL(), "http://"), inj, nil)
+				p.mitmHosts = map[string]bool{tc.host: true}
+				p.mitmPorts = map[string]int{tc.host: 443}
+				p.mitmPlaintext = map[string]bool{plaintextKey(tc.host, 443): true}
+				p.adoGrants = adoGrantsByHost{tc.host: {Organization: "acme", Capabilities: adoscope.GrantableCapabilities()}}
+
+				raw := m + " " + tc.path + " HTTP/1.1\r\nHost: " + tc.host + "\r\n"
+				body := ""
+				if m == http.MethodPost || m == http.MethodPut {
+					body = `{"displayName":"x","scope":"app_token"}`
+					raw += "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"
+				}
+				req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(raw + "\r\n" + body)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				p.serveMITMRequest(rec, req, tc.host, 443)
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, body = %s; want 403", rec.Code, rec.Body.String())
+				}
+				if n := len(fake.Requests()); n != 0 {
+					t.Fatalf("the upstream saw %d request(s) the gate refused: %+v", n, fake.Requests())
+				}
+				_ = p.sink.close(context.Background())
+				if !strings.Contains(buf.String(), `"`+ruleSourceADODenied+`"`) {
+					t.Errorf("decision log does not name %s: %s", ruleSourceADODenied, buf.String())
+				}
+			})
+		}
+	}
 }
