@@ -158,7 +158,8 @@ log or secret content:
 
 Each event's `id` is monotonic per run; reconnect with `Last-Event-ID` (the SDK
 does) to resume without gaps. The server sends a `: keepalive` comment every
-15s and closes a held stream after 5 minutes so the reconnect re-authenticates.
+15s, ends the stream at the next keepalive once the caller's session is revoked,
+and closes a held stream after 5 minutes so the reconnect re-authenticates.
 The feed is kept in wardynd's memory: resume works within the daemon's
 lifetime. After a restart a live run's stream carries only what happens next,
 and a run that had already ended answers `ended` alone. The repository clone

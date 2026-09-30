@@ -96,6 +96,11 @@ func (c *Client) runEventsOnce(ctx context.Context, runID uuid.UUID, afterID *ui
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
 		return false, NewAPIError(resp.StatusCode, raw)
 	}
+	// A 2xx that is not a stream (a captive portal, an SPA fallback) carries
+	// no events and never ends; reconnecting to it would spin until ctx.
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		return false, fmt.Errorf("run events: the server answered %q, not text/event-stream", ct)
+	}
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		data, ok := strings.CutPrefix(sc.Text(), "data: ")

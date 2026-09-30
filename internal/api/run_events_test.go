@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,5 +241,170 @@ func TestRunEvents_NonReaderGets404(t *testing.T) {
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+own.String()+"/events", member, "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"type":"ended"`) {
 		t.Fatalf("owner: status %d body %q, want 200 carrying ended", w.Code, w.Body)
+	}
+}
+
+// TestRunEvents_ResumeAtTheEndOfAnEndedRingStillEnds: the ring a reconnecting
+// reader meets can be shorter than the one it followed — synthesized after a
+// restart, written by boot reconcile, or rebuilt after pruning — so its
+// Last-Event-ID can land exactly on the last id. That reader must still be told
+// the run ended, or the SDK reconnects forever.
+func TestRunEvents_ResumeAtTheEndOfAnEndedRingStillEnds(t *testing.T) {
+	srv, st, _ := statusDetailDispatchFixture(t, &fakeRunner{})
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	setState := func(s types.RunState) {
+		st.dispatchTestStore.mu.Lock()
+		st.state = s
+		st.dispatchTestStore.mu.Unlock()
+	}
+
+	previous := uuid.New()
+	t.Run("ended before this daemon: [ended(1)] resumed at 1", func(t *testing.T) {
+		setState(types.RunCompleted)
+		s := openRunEvents(t, ctx, ts.URL, previous, "1")
+		s.expect(client.RunEvent{ID: 1, Type: client.RunEventEnded, State: types.RunCompleted})
+		s.expectClosed()
+	})
+
+	t.Run("boot reconcile: [failed(1), ended(2)] resumed at 2", func(t *testing.T) {
+		reconciled := uuid.New()
+		setState(types.RunRunning)
+		if ok, err := srv.casRunState(ctx, reconciled, types.RunRunning, types.RunFailed); !ok || err != nil {
+			t.Fatalf("casRunState: %v %v", ok, err)
+		}
+		s := openRunEvents(t, ctx, ts.URL, reconciled, "2")
+		s.expect(client.RunEvent{ID: 2, Type: client.RunEventEnded, State: types.RunFailed})
+		s.expectClosed()
+	})
+
+	t.Run("pruned ring of three: [ended(1)] resumed at 1", func(t *testing.T) {
+		pruned := uuid.New()
+		srv.runEvents.moved(pruned, types.RunPending, types.RunStarting)
+		srv.runEvents.moved(pruned, types.RunStarting, types.RunRunning)
+		srv.runEvents.moved(pruned, types.RunRunning, types.RunCompleted)
+		srv.runEvents.mu.Lock()
+		delete(srv.runEvents.rings, pruned)
+		srv.runEvents.mu.Unlock()
+		setState(types.RunCompleted)
+		s := openRunEvents(t, ctx, ts.URL, pruned, "1")
+		s.expect(client.RunEvent{ID: 1, Type: client.RunEventEnded, State: types.RunCompleted})
+		s.expectClosed()
+	})
+
+	t.Run("the SDK resuming at the ring's end returns", func(t *testing.T) {
+		setState(types.RunCompleted)
+		sdkCtx, sdkCancel := context.WithTimeout(ctx, 4*time.Second)
+		defer sdkCancel()
+		var seen []string
+		err := client.New(ts.URL, adminToken).RunEvents(sdkCtx, previous, 1, func(ev client.RunEvent) error {
+			seen = append(seen, ev.Type)
+			return nil
+		})
+		if err != nil || len(seen) != 1 || seen[0] != client.RunEventEnded {
+			t.Fatalf("err=%v events=%v, want nil after ended", err, seen)
+		}
+	})
+}
+
+// TestRunEvents_SettleSynthesizesTheMissingFailed: when the store already says
+// FAILED before the CAS's own emit lands, the ring still gets its failed event,
+// with the phase its last event implies. With no events at all (a previous
+// daemon's run) the phase is unknown, so ended stands alone.
+func TestRunEvents_SettleSynthesizesTheMissingFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		moves [][2]types.RunState
+		want  []client.RunEvent
+	}{
+		"after ready": {
+			moves: [][2]types.RunState{{types.RunPending, types.RunStarting}, {types.RunStarting, types.RunRunning}},
+			want: []client.RunEvent{{Type: client.RunEventProvisioning}, {Type: client.RunEventReady},
+				{Type: client.RunEventFailed, Reason: client.RunFailedRunFailed}, {Type: client.RunEventEnded, State: types.RunFailed}},
+		},
+		"while provisioning": {
+			moves: [][2]types.RunState{{types.RunPending, types.RunStarting}},
+			want: []client.RunEvent{{Type: client.RunEventProvisioning},
+				{Type: client.RunEventFailed, Reason: client.RunFailedStartFailed}, {Type: client.RunEventEnded, State: types.RunFailed}},
+		},
+		"no feed": {want: []client.RunEvent{{Type: client.RunEventEnded, State: types.RunFailed}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var h runEventHub
+			id := uuid.New()
+			for _, m := range tc.moves {
+				h.moved(id, m[0], m[1])
+			}
+			h.settle(id, types.RunFailed)
+			h.moved(id, types.RunRunning, types.RunFailed) // the CAS's own emit, landing late
+			got, _, _ := h.since(id, 0)
+			if len(got) != len(tc.want) {
+				t.Fatalf("feed = %+v, want %+v", got, tc.want)
+			}
+			for i, w := range tc.want {
+				if got[i].Type != w.Type || got[i].Reason != w.Reason || got[i].State != w.State {
+					t.Fatalf("feed[%d] = %+v, want %+v", i, got[i], w)
+				}
+			}
+		})
+	}
+}
+
+// flippableRevocations is a SessionRevocations double whose answer a test
+// changes mid-stream.
+type flippableRevocations struct {
+	fakeAuthzSessionRevocations
+	revoked atomic.Bool
+}
+
+func (f *flippableRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
+	return f.revoked.Load(), nil
+}
+
+// TestRunEvents_RevokedSessionEndsTheStreamAtTheNextKeepalive: authentication
+// runs once per request, so the keepalive re-checks the session cutoff and a
+// revoke lands within one beat rather than one hold.
+func TestRunEvents_RevokedSessionEndsTheStreamAtTheNextKeepalive(t *testing.T) {
+	revs := &flippableRevocations{}
+	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) { c.SessionRevocations = revs })
+	srv.runEvents.hold, srv.runEvents.beat = 0, 10*time.Millisecond
+	id := uuid.New()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: "sub-member", State: types.RunRunning, Agent: "claude-code"}
+	ast.mu.Unlock()
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/runs/"+id.String()+"/events", nil)
+	req.AddCookie(ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("open: %v %v", resp, err)
+	}
+	defer resp.Body.Close()
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	// Held across several beats while the session is live.
+	for beats := 0; beats < 3; {
+		if l, ok := <-lines; !ok {
+			t.Fatal("stream closed while the session was live")
+		} else if l == ": keepalive" {
+			beats++
+		}
+	}
+	revs.revoked.Store(true)
+	for range lines {
+		// drain until the server closes the stream
+	}
+	if ctx.Err() != nil {
+		t.Fatal("stream outlived the revoked session")
 	}
 }

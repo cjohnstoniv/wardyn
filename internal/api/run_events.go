@@ -162,13 +162,28 @@ func (h *runEventHub) onWaiting(runID uuid.UUID, next func(string)) func(string)
 	}
 }
 
-// settle ends a ring whose run the store already reports terminal. A reader
-// landing between a FAILED write and its emit sees ended without the failed
-// event before it.
+// settle ends a ring whose run the store already reports terminal. The store
+// can say FAILED before the CAS's own emit lands (a reader opening in that
+// window, or a keepalive re-read), and moved's failed+ended would then meet a
+// closed ring — so settle writes the failed event itself, with the phase the
+// ring's last event implies. An empty ring (a previous daemon's run) has no
+// phase to infer, and gets ended alone.
 func (h *runEventHub) settle(runID uuid.UUID, state types.RunState) {
-	if state.IsTerminal() {
-		h.append(runID, client.RunEvent{Type: client.RunEventEnded, State: state})
+	if !state.IsTerminal() {
+		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.ringLocked(runID)
+	evs := []client.RunEvent{{Type: client.RunEventEnded, State: state}}
+	if state == types.RunFailed && len(r.events) > 0 {
+		from := types.RunStarting
+		if r.events[len(r.events)-1].Type == client.RunEventReady {
+			from = types.RunRunning
+		}
+		evs = append([]client.RunEvent{{Type: client.RunEventFailed, Reason: failedPhase(from)}}, evs...)
+	}
+	h.appendLocked(runID, r, evs...)
 }
 
 // since returns runID's events after id `after`, the channel the next append
@@ -182,7 +197,15 @@ func (h *runEventHub) since(runID uuid.UUID, after uint64) ([]client.RunEvent, <
 	if after > uint64(len(r.events)) {
 		after = 0
 	}
-	return append([]client.RunEvent(nil), r.events[after:]...), r.wake, r.ended()
+	evs := r.events[after:]
+	if len(evs) == 0 && r.ended() {
+		// A synthesized ring (a previous daemon's, or one rebuilt after pruning)
+		// is shorter than the one the reader followed, so `after` can land on its
+		// last id. Re-sending the terminal event is idempotent; sending nothing
+		// leaves the reader reconnecting forever.
+		evs = r.events[len(r.events)-1:]
+	}
+	return append([]client.RunEvent(nil), evs...), r.wake, r.ended()
 }
 
 // handleRunEvents serves GET /api/v1/runs/{id}/events. Owner-or-admin
@@ -201,6 +224,8 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	// A malformed Last-Event-ID replays from the start rather than refusing:
 	// it is a resume hint, and a full replay is never wrong.
 	after, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
+	openedAt := s.cfg.Now().UTC()
+	principal := principalFromRequest(r)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
 	rc := http.NewResponseController(w)
@@ -216,6 +241,10 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	s.runEvents.settle(id, run.State)
 	for {
 		evs, wake, ended := s.runEvents.since(id, after)
+		// No write deadline (the server sets none, boot_serve.go), so a peer that
+		// stops reading must never fill the socket buffer: one hold is at most
+		// hold/beat keepalives plus the closed vocabulary's few events — a few
+		// KiB — after which the hold timer ends the handler anyway.
 		for _, ev := range evs {
 			data, _ := json.Marshal(ev)
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data); err != nil {
@@ -229,7 +258,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-wake:
 		case <-beat.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || s.sessionRevokedSince(r, principal, openedAt) {
 				return
 			}
 			if cur, err := s.cfg.Store.GetRun(r.Context(), id); err == nil {
@@ -243,4 +272,17 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// sessionRevokedSince reports whether the caller's session was revoked after
+// openedAt. Authentication ran once, when the stream opened; this cuts a
+// revoked session off at the next keepalive instead of at the hold. An
+// unanswerable check ends the stream too — the reconnect re-authenticates.
+// The admin token is not a session, so nothing revokes it here.
+func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt time.Time) bool {
+	if s.cfg.SessionRevocations == nil || principal == adminTokenPrincipal {
+		return false
+	}
+	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
+	return err != nil || revoked
 }

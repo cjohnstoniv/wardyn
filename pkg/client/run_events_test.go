@@ -86,3 +86,21 @@ func TestRunEvents_NotFoundIsAnAPIError(t *testing.T) {
 		t.Fatalf("err = %v, want *APIError 404", err)
 	}
 }
+
+// TestRunEvents_ANonStreamAnswerIsAnError: a 2xx that is not an event stream
+// (a captive portal, an SPA fallback) carries no events and never ends, so
+// RunEvents must refuse it rather than reconnect until ctx runs out.
+func TestRunEvents_ANonStreamAnswerIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<!doctype html>")
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := client.New(srv.URL, testToken).RunEvents(ctx, uuid.New(), 0,
+		func(client.RunEvent) error { t.Fatal("fn called on a non-stream"); return nil })
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want a prompt non-stream error", err)
+	}
+}
