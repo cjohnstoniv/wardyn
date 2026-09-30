@@ -165,6 +165,11 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// abandoned container is never silent), and settle the workspace/record run.
 		// The boot reconciler runs the IDENTICAL sequence via finalizeRunTail, so a
 		// new terminal concern is added in one place, not hand-copied across paths.
+		// A non-zero exit carries no reason of its own; the agent's recording may
+		// (noteModelAccessFromRecording).
+		if terminal == types.RunFailed {
+			s.noteModelAccessFromRecording(base, runID)
+		}
 		s.finalizeRunTail(base, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
 		})

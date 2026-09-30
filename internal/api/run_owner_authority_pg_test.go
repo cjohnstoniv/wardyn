@@ -52,6 +52,10 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	st := h.srv.cfg.Store
 	const owner = "sub-pg-owner"
 
+	// The run's model provider itself still exists (a deleted one refuses on its own).
+	if _, err := st.PutSiteConfig(ctx, types.SiteConfig{ModelProviders: providerBlock(keyProvider("pg-provider", "claude-code"))}); err != nil {
+		t.Fatalf("PutSiteConfig: %v", err)
+	}
 	pol, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "pg-selected"})
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)

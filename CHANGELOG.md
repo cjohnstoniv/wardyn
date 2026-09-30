@@ -85,6 +85,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   variable set in `env` or `extraEnv`. **Upgrade note:** unset the
   retired variables before upgrading, then set up Settings → Model providers and have each person
   connect their own credential (a key, or a Claude or AWS sign-in).
+- **Reviving a live run is bounded to once a minute (#1005).** Each revive of a running run, through
+  `POST /runs/{id}/revive` or the admin "Restart with current limits", removes and recreates its
+  proxy; a second one within a minute of the last that reached the proxy is refused `429`
+  `revive_live_too_soon`. The bound is kept per `wardynd` process, so each replica allows one a
+  minute. A revive of a lost run is never bounded.
 
 ### Fixed
 
@@ -112,6 +117,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for a minute (a sandbox too big to walk in time is not walked again on every poll), and the idle
   reading waits out a walk in progress and holds off a new one while it samples, so it reads the
   agent alone.
+- **Every row of a portal's attach and UI-gateway session names the portal (#1234).** A session
+  entered with an attach ticket minted through a portal wrote `data.via` on its entry rows only;
+  `session.promote` and the UI gateway's `ui.start`, `ui.open`, `ui.close` and re-check refusal rows
+  now carry it too. `PUT /secrets/{name}` and `POST /me/ssh-keys` also refuse a delegated request
+  themselves (`403` `delegation_scope`), not only through the delegation allow-list.
+- **Reviving, restarting or extending a run whose model provider was deleted or turned off is
+  refused up front (#1081).** The revive used to replace the proxy and answer `200`, and the run's
+  first model call was then refused, or a run from before 0.8.2 came back with no model credential.
+  Such a run is now refused `409` with `model_provider_gone` (the provider was deleted, or
+  re-created under the same id) or `model_provider_disabled` (the provider was turned off),
+  audited as `run.revive` or `run.end.set` denied, before anything changes.
+- **Purging a model provider stops masking its people's sign-in secrets (#1001).** An AWS sign-in's
+  refresh token and client secret stayed in the process-wide output mask until `wardynd` restarted
+  after their provider was deleted or moved; they are now let go one sweep grace later, as for any
+  deleted credential.
+- **A run that fails on model access says so, in the agent's own words (#1280).** On the per-user
+  AWS SSO Bedrock lane the proxy cannot see the model's refusal, so such a run ended `FAILED` with no
+  reason. When a run exits non-zero with no reason of its own and its recording's last lines name a
+  model-access problem, that line is its failure hint, quoted as the agent's output, with a pointer
+  to the recording. Only a reader who can open the recording (the run's owner or a super admin)
+  sees the quoted line; a security admin sees the hint without it.
 
 ## [0.8.1] — 2026-09-29
 

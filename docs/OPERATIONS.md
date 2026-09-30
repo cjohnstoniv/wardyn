@@ -2350,7 +2350,9 @@ wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also
 `/attach/ticket`, and the UI-gateway ticket), and `GET /me`. Every other
 route answers `403` with reason `delegation_scope` and an `authz.denied` row —
 including secrets, API tokens, SSH keys, approving or denying the person's own
-held egress, revive, and every admin route. The person is always treated at
+held egress, revive, and every admin route. Setting a secret and adding an SSH
+key also refuse a delegated request in their own handlers, so a later change to
+the allow-list cannot open them. The person is always treated at
 **user** reach, whatever their own role: an admin acting through a portal
 reaches only their own runs. Ownership, secrets, drives and the governance
 ceiling all resolve on the person.
@@ -2618,7 +2620,7 @@ admin walking the member path, not an incident.
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
-| `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
+| `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
