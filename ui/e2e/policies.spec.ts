@@ -53,7 +53,7 @@ async function openCreate(page: Page) {
 // Fill the create form. specJson is written verbatim into the JSON textarea.
 async function fillEditor(page: Page, name: string, specJson: string) {
   const dialog = editorDialog(page);
-  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
   await dialog.getByLabel("Spec (JSON)").fill(specJson);
 }
 
@@ -175,9 +175,9 @@ test("create form requires a name (client-side validation)", async ({ page }) =>
   const submit = dialog.getByRole("button", { name: "Create policy" });
   await expect(submit).toBeDisabled();
   // Type then clear to confirm the disabled state tracks the name field.
-  await dialog.getByLabel("Name").fill("temp");
+  await dialog.getByLabel("Name", { exact: true }).fill("temp");
   await expect(submit).toBeEnabled();
-  await dialog.getByLabel("Name").fill("");
+  await dialog.getByLabel("Name", { exact: true }).fill("");
   await expect(submit).toBeDisabled();
   // Closing leaves the table untouched.
   await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -304,7 +304,7 @@ test("edit round-trip: open editor from the row menu, change the spec, see it re
   const dialog = editEditorDialog(page);
   await expect(dialog).toBeVisible();
   // The editor prefills the existing name and spec.
-  await expect(dialog.getByLabel("Name")).toHaveValue(name);
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue(name);
   await expect(dialog.getByLabel("Spec (JSON)")).toHaveValue(/min_confinement_class/);
 
   // Bump the confinement floor to CC3 and save.
@@ -359,7 +359,7 @@ test("picking a template chip fills the spec, and an edit to it is reflected on 
   const name = uniqueName("template");
   await openCreate(page);
   const dialog = editorDialog(page);
-  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
 
   // "CI baseline" replaces the textarea body wholesale with its template spec.
   await dialog.getByRole("button", { name: "CI baseline" }).click();
@@ -429,7 +429,7 @@ test("push_rules editor: add a row, an invalid pattern shows its error, fixing i
   const name = uniqueName("pushrules");
   await openCreate(page);
   const dialog = editorDialog(page);
-  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
 
   // Two "Add path" buttons exist (Deny, then Hold for review) — the first is Deny's.
   await dialog.getByRole("button", { name: "Add path" }).first().click();

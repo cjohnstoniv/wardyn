@@ -195,27 +195,24 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, reasonMissingScopeSnapshot, credentialReauthScopeChangedRefusal, nil)
 	}
 
-	// (2) + (3): re-derive from the LIVE roster and require equality.
+	// (2) + (3): re-derive from the LIVE provider record and require equality.
 	run, rerr := s.cfg.Store.GetRun(ctx, claims.RunID)
 	if rerr != nil {
 		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, credentialReauthRunUnreadableBody, nil)
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
-		// NEVER resolve a scope from a read that failed: the zero SiteConfig is
-		// indistinguishable from "a roster with no row", whose fallback is the
-		// OPERATOR namespace — the exact substitution this arm refuses.
+		// NEVER resolve a scope from a read that failed.
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, credentialReauthScopeChangedRefusal, nil)
 	}
-	// A run that chose a model provider — or a grant naming one — resolves
-	// only from that provider's record and its owner's own session; the
-	// roster never decides it (providerSSOScopeAt).
-	scope := awsSSOScopeFor(siteCfg, run.Agent, claims.Sub)
-	drift := ""
-	if run.ModelProviderID != "" || snapshot.ProviderUID != "" {
+	// Only a run that chose a model provider, on a grant naming it, resolves —
+	// from that provider's record and its owner's own session
+	// (providerSSOScopeAt). A grant naming no provider was authored before the
+	// model-provider conversion, and no session serves it any more.
+	drift := "model_provider"
+	var scope awsSSOScope
+	if run.ModelProviderID != "" && snapshot.ProviderUID != "" {
 		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
-	} else {
-		drift = snapshot.driftFrom(siteCfg, run.Agent, scope, claims.Sub)
 	}
 	if drift != "" {
 		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
@@ -238,13 +235,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		var refreshFailure string
 		blob, refreshFailure = s.refreshAWSSSOBlob(ctx, scope, blob)
 		switch {
-		// The COMPOSED refusal, not the bare constant: the run-credential-door
-		// lane turned awsSSORefreshSpentSentence into a format string whose %s
-		// is the audience's own remedy (awsSSORefreshSpentRefusal), and
-		// refreshAWSSSOBlob returns the composed form. Compared against the
-		// constant this arm is silently always false, and every spent session
-		// is audited "unavailable" — a reason that names the wrong fix.
-		case refreshFailure == awsSSORefreshSpentRefusal(scope.perUser):
+		case refreshFailure == awsSSORefreshSpentSentence:
 			reason = awsSSOReauthReasonSpent
 		case refreshFailure != "":
 			reason = awsSSOReauthReasonUnavailable
@@ -481,64 +472,6 @@ func (s *Server) grantSnapshot(ctx context.Context, runID, grantID uuid.UUID, ds
 // shared-lane run.
 func (sn awsSSOScopeSnapshot) authored() bool {
 	return sn.Mechanism != "" && sn.CredentialSource != "" && sn.Region != ""
-}
-
-// driftFrom compares the snapshot against the LIVE roster, returning the name
-// of the first field that moved ("" = equal).
-//
-// It compares three different KINDS of fact, and each matters for its own
-// reason. The roster scope (owner, credential source) is the substitution hole
-// itself. The mechanism is the promise enforceConfiguredLLMMechanism makes at
-// dispatch, restated here because a resolve is a second dispatch in every way
-// that matters. The account/role PINS are admin-asserted identity: a row
-// re-pinned mid-run must not have a held run silently resolve against the new
-// pair.
-func (sn awsSSOScopeSnapshot) driftFrom(sc types.SiteConfig, agentID string, scope awsSSOScope, subject string) string {
-	if sn.OwnerSubject != scope.owner {
-		return "owner_subject"
-	}
-	if sn.CredentialSource != awsSSOCredentialSourceLabel(scope) {
-		return "credential_source"
-	}
-	// I2: on the per-user lane the credential's owner is the run's own subject,
-	// which the run token — not the roster, and not the grant — is authority for.
-	// A policy-authored grant naming another owner cannot pass this.
-	if scope.perUser && sn.OwnerSubject != subject {
-		// A field-drift label for the audit row's "drift" key, not the wire
-		// reason enum — every driftFrom cause reaches the wire as
-		// reasonScopeChanged (this lane has no separate owner_not_caller
-		// wire reason, unlike Azure DevOps's own top-level owner check).
-		return "owner_not_caller"
-	}
-	// Legacy open mode has no roster to drift from. When no roster
-	// governs this deployment at all, the three roster-derived arms below have
-	// nothing to compare against, and the two above them ARE the whole equality:
-	// awsSSOScopeFor answers the shared scope for that shape, so
-	// owner=="" + credential_source=="shared" is exactly what dispatch authored.
-	//
-	// Reading a MISSING roster as a WITHDRAWN row would refuse every no-roster
-	// deployment: the refusal's sentence ("the roster changed") would be false
-	// for it — nothing changed, because nothing was ever there.
-	//
-	// agentProvidersConfigured is the ONE place legacy open mode is decided
-	// (agent_providers.go), so this asks it rather than inventing a second rule.
-	if !agentProvidersConfigured(sc) {
-		return ""
-	}
-	row, declared := agentProviderFor(sc, agentID)
-	if !declared || row.Disabled {
-		return "row_withdrawn"
-	}
-	if sn.Mechanism != string(row.Mechanism) {
-		return "mechanism"
-	}
-	if row.SSOAccountID != "" && row.SSOAccountID != sn.SSOAccountID {
-		return "sso_account_id"
-	}
-	if row.SSORoleName != "" && row.SSORoleName != sn.SSORoleName {
-		return "sso_role_name"
-	}
-	return ""
 }
 
 // the resolution side: a sign-in answers the request

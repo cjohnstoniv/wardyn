@@ -34,6 +34,7 @@ vi.mock("./settings/harness-login-pane", () => ({
 }));
 
 let mockScope: Record<string, unknown> = {};
+let mockRunProvider: Record<string, unknown> = {};
 vi.mock("../../lib/api/approvals", () => ({
   approvals: {
     listApprovals: async (state: string) =>
@@ -72,6 +73,7 @@ vi.mock("../../lib/api/runs", () => ({
         confinement_class: "CC2",
         state: "RUNNING",
         created_by: "alice@corp",
+        ...mockRunProvider,
       }),
   },
 }));
@@ -164,7 +166,10 @@ describe("/approvals — a provider run's hold (#543)", () => {
     );
     await screen.findByText(REAUTH_TITLE);
   }
-  afterEach(() => window.history.pushState({}, "", "/"));
+  afterEach(() => {
+    mockRunProvider = {};
+    window.history.pushState({}, "", "/");
+  });
 
   it("the owner: the title, the provider line, and Sign in to AWS opens the hold's OWN provider's door", async () => {
     await mountAt("/approvals", "bob@acme.example");
@@ -174,6 +179,13 @@ describe("/approvals — a provider run's hold (#543)", () => {
     const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
     expect(dialog).toHaveTextContent(`For ${bedrock.name}`);
     expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
+  });
+
+  it("names the provider from the run when this viewer's status does not list it (#996)", async () => {
+    mockRunProvider = { model_provider_id: "unlisted-bedrock", model_provider_name: "Unlisted Bedrock" };
+    await mountAt("/admin/approvals", "ann@acme.example", { ...HOLD, provider: "unlisted-bedrock", provider_uid: "uid-unlisted" });
+    expect(await screen.findByText(REAUTH_ROW.PROVIDER("Unlisted Bedrock"))).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_ROW.PROVIDER("unlisted-bedrock"))).toBeNull();
   });
 
   it("Admin view, another user's hold: whose sign-in it waits on, and no door", async () => {

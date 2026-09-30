@@ -1261,8 +1261,9 @@ func runCmdWithTimeout(t *testing.T, configure func(root *cobra.Command)) (strin
 	select {
 	case err := <-done:
 		return out.String(), err
-	case <-time.After(5 * time.Second):
-		t.Fatal("command did not return within 5s — follow loop likely never exited")
+	// Long enough that a loaded runner is not read as a hang (#1453).
+	case <-time.After(30 * time.Second):
+		t.Fatal("command did not return within 30s — follow loop likely never exited")
 		return "", nil
 	}
 }
@@ -2369,7 +2370,7 @@ func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
 // help on stdout and exits 0. That is the half of the contract subcommandGroup
 // must not break — the compat note covers the typo path only.
 func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
-	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "subscription", "sessions", "device", "source", "ssh-key", "site-config", "drive", "preset", "approvals"} {
+	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "sessions", "device", "source", "ssh-key", "site-config", "drive", "preset", "approvals"} {
 		t.Run(group, func(t *testing.T) {
 			root := rootCmd()
 			var out, errOut strings.Builder

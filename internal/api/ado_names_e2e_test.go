@@ -73,7 +73,7 @@ func TestADONames_ImportLaunchCloneFetchPush(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
 			Header: "Authorization", Value: "Bearer " + bearer, ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
-			Organisation: "contoso", Capabilities: []string{"read", "code_write"},
+			Organisation: "contoso", Capabilities: []string{"code_read", "code_write"},
 		})
 	}))
 	t.Cleanup(cp.Close)

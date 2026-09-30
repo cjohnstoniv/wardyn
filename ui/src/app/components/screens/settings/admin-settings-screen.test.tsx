@@ -105,14 +105,13 @@ beforeEach(() => {
 });
 
 describe("AdminSettingsScreen", () => {
-  it("draws Host, Model providers, Model provider, Providers, User drives, Admin SSH keys — in that order", async () => {
+  it("draws Host, Model providers, Providers, User drives, Admin SSH keys — in that order", async () => {
     renderScreen();
     await screen.findByTestId("user-drives-card");
     const html = document.body.innerHTML;
     const positions = [
       "Host",
       MODEL_PROVIDERS.TITLE,
-      "Model provider",
       "Workspace providers",
       "User drives",
       ADMIN_SSH_KEYS.TITLE,
@@ -132,20 +131,22 @@ describe("AdminSettingsScreen", () => {
     const card = heading.closest("section")!;
     expect(card.parentElement?.lastElementChild).toBe(card);
     const drivesCard = await screen.findByTestId("user-drives-card");
-    // Host, Branding, Model providers (list), Model provider, Providers, User
-    // drives, Admin SSH keys.
-    expect(card.parentElement?.children).toHaveLength(7);
+    // Host, Branding, Model providers (list), Providers, User drives, Admin
+    // SSH keys.
+    expect(card.parentElement?.children).toHaveLength(6);
     // User drives sits directly before it.
     expect(card.previousElementSibling).toBe(drivesCard);
   });
 
-  it("draws the Model providers list above the Model provider card", async () => {
+  // The retired Model provider card is replaced by the Model providers list;
+  // its pointer sentence was never approved canon.
+  it("draws the Model providers list and no Model provider card", async () => {
     renderScreen();
     await screen.findByTestId("model-providers-list");
     await expandCard(MODEL_PROVIDERS.TITLE);
     expect(await screen.findByText(MODEL_PROVIDERS.EMPTY_TITLE)).toBeInTheDocument();
-    const html = document.body.innerHTML;
-    expect(html.indexOf(`>${MODEL_PROVIDERS.TITLE}<`)).toBeLessThan(html.indexOf(">Model provider<"));
+    expect(document.body.innerHTML).not.toContain(">Model provider<");
+    expect(screen.queryByText(/set up as model providers/i)).not.toBeInTheDocument();
   });
 });
 

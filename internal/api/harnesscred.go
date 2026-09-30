@@ -10,37 +10,22 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Managed harness credentials — "subscription token as a first-class secret".
-//
-// A COMPOSE/containerized deployment's distroless wardynd has no host ~/.claude
-// to read, so the resident-subscription path (stage-claude-creds.sh + the
-// internal/subscription resident provider) is host-mode-only; compose fell back
-// to a stale RESIDENT COPY of the token (WARDYN_SUBSCRIPTION_INJECT=off), which
-// contradicts the "secrets never resident" invariant and had no re-auth path.
-//
-// This module lets an operator CONNECT a Claude subscription from anywhere:
-// Wardyn launches an interactive login sandbox, the operator runs
-// `claude setup-token` in the embedded attach terminal (device-style OAuth,
-// remote callback — no localhost dependency), and pastes the printed long-lived
-// (~1yr) token into the setup UI. Wardyn stores it once, age-encrypted, under a
-// RESERVED name and thereafter injects it PROXY-SIDE into every run exactly like
-// the resident subscription token — the sandbox holds only the inert sentinel.
-// Refresh is deferred (setup-token is long-lived); expiry is surfaced honestly
-// and re-auth is re-running the flow.
+// Container sign-in: Wardyn launches an interactive login sandbox for a model
+// provider (POST /model-providers/{id}/sign-in), the person runs the vendor's
+// login in the embedded attach terminal, and the captured credential lands in
+// their own namespace (wardyn-provider-<uid>-oauth / -sso), injected proxy-side
+// into their own runs only.
 
 const (
 	// harnessLoginTask discriminates a managed-harness run from ordinary runs
@@ -67,9 +52,6 @@ type harnessLogin struct {
 	// login sandbox must carry the VENDOR CLI it is logging into, and
 	// agent-base ships none. Empty = follow the catalog.
 	loginImageKey string
-	secretName    string   // reserved store name holding the captured token blob
-	sentinel      string   // injection sentinel (types.ManagedOAuthSecret); "" = no injection
-	injectHost    string   // the ONLY host the sentinel may inject to
 	tokenPrefix   string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
 	egress        []string // region-free hosts the interactive login flow must reach
 	// regionalSSOEgress: the flow also dials region-scoped AWS SSO endpoints,
@@ -92,16 +74,8 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 	switch agent {
 	case awsSSOAgent:
 		return harnessLogin{
-			provider:   awsSSOProvider,
-			agent:      awsSSOAgent,
-			secretName: harnessCredSecretName(awsSSOProvider),
-			// Phase A delivers the captured token as a minimal synthetic ~/.aws in
-			// the sandbox, so there is nothing to inject yet. Phase B fills
-			// sentinel/injectHost in to proxy-inject x-amz-sso_bearer_token on
-			// portal.sso.<region> (that call is authtype:none, so a MITM can set the
-			// header without AWS signing keys) and the token stops being resident.
-			sentinel:   "",
-			injectHost: "",
+			provider: awsSSOProvider,
+			agent:    awsSSOAgent,
 			// No AWS analogue to `sk-ant-oat`: the SSO cache is structured JSON, so
 			// capture validates its SHAPE instead of a prefix.
 			tokenPrefix: "",
@@ -159,17 +133,15 @@ func harnessLoginByProvider(provider string) (harnessLogin, bool) {
 	return harnessLogin{}, false
 }
 
-// managedSentinelAccessToken mirrors the inert placeholder stage-claude-creds.sh
-// writes for the resident path: an obviously-not-live token in the sk-ant-oat
+// managedSentinelAccessToken is an obviously-not-live token in the sk-ant-oat
 // shape so `claude` accepts the field and starts, granting nothing (the proxy
-// overrides Authorization on the wire with the live managed token).
+// overrides Authorization on the wire with the run owner's live token).
 const managedSentinelAccessToken = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token"
 
 // managedSentinelCredsB64 builds the base64 sentinel .credentials.json delivered
-// to a managed run in WARDYN_CLAUDE_MANAGED_B64. All fields are inert by
-// construction (blank refresh, placeholder access, far-future expiry), so it is
-// safe as sandbox env — it carries no secret. Go port of the sentinelization in
-// scripts/stage-claude-creds.sh:117-138.
+// to a Claude subscription run in WARDYN_CLAUDE_MANAGED_B64. All fields are
+// inert by construction (blank refresh, placeholder access, far-future expiry),
+// so it is safe as sandbox env — it carries no secret.
 func managedSentinelCredsB64() string {
 	creds := map[string]any{
 		"claudeAiOauth": map[string]any{
@@ -182,18 +154,6 @@ func managedSentinelCredsB64() string {
 	}
 	b, _ := json.Marshal(creds)
 	return base64.StdEncoding.EncodeToString(b)
-}
-
-// managedInjectReady reports whether a claude-code run with no resident
-// subscription mount and no Bedrock should be credentialed by the Wardyn-managed
-// token: the provider is wired AND a token blob is actually present. This is the
-// dispatch precedence gate (host-staged mount > managed > Bedrock > api-key).
-func (s *Server) managedInjectReady(agent string) bool {
-	if agent != "claude-code" || s.cfg.ManagedToken == nil {
-		return false
-	}
-	_, err := s.cfg.ManagedToken.Peek()
-	return err == nil
 }
 
 // harnessCredSecretName is the reserved store name holding a provider's captured
@@ -263,9 +223,9 @@ type awsSSOBlob struct {
 // guard it is a SHAPE check, not authentication — real validation happens on
 // first use against portal.sso.
 //
-// AccountID/RoleName are required, not merely nice-to-have: resolveBedrockAuth
-// selects this credential (ssoInject) the instant a blob is stored, ahead of
-// the host-mode ~/.aws mount and static-key lanes, and awsSSOConfigFileContents
+// AccountID/RoleName are required, not merely nice-to-have: bedrockSSOAuth
+// serves this credential to every run on its provider the instant a blob is
+// stored, and awsSSOConfigFileContents
 // bakes account_id/role_name VERBATIM into the generated ~/.aws/config INI. A
 // blob missing either (wardyn-aws-sso's best-effort `aws sso list-accounts` /
 // list-account-roles resolution came up empty — no accounts, a timeout, a
@@ -323,13 +283,6 @@ func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, name, lab
 		return zero, false, nil
 	}
 	return blob, true, nil
-}
-
-// readManagedBlob loads a provider's captured setup-token blob; usable = a
-// non-blank token.
-func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedCredBlob, bool, error) {
-	return readHarnessBlob(ctx, s.cfg.Secrets, harnessCredSecretName(provider), "managed credential",
-		func(b managedCredBlob) bool { return strings.TrimSpace(b.Token) != "" })
 }
 
 // readAWSSSOBlob loads the captured AWS SSO credential from the namespace scope
@@ -444,8 +397,8 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 //
 // Recording gate (harnessLoginTask is never recorded): this run's terminal exists
 // to PRINT a ~1yr credential, and because the run mints nothing its mask snapshot
-// is empty by construction — liveMaskWriter is a pass-through, and the paste-time
-// AddGlobal in handleHarnessCredentialPaste lands too late for the cast (masking
+// is empty by construction — liveMaskWriter is a pass-through, and any
+// capture-time AddGlobal lands too late for the cast (masking
 // is write-time). So no masking can protect this session. That gap is CLOSED:
 // newSessionRecorder (attach.go) drops the recorder entirely for a run where
 // runIsUnrecordable(run) is true (run.Task == harnessLoginTask), so no replayable
@@ -615,12 +568,10 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// must not receive a credential, it exists to produce one.
 	extraEnv := hl.loginEnv(t.startURL, t.region, t.pin, s.cfg.AWSSSOEndpointOverride)
 
-	// The launch-time credential scope, stamped — the one authorizeHarnessLogin's
-	// roster read PROVED, passed in, never re-resolved. Re-resolving it at upload
-	// time would let a roster edit mid-run re-point a member's PUT at the
-	// OPERATOR-WIDE credential; re-resolving it HERE, through the fail-open
-	// resolver, would let a mere store blip stamp the same `shared`/"" pair the
-	// stamp exists to prevent.
+	// The launch-time credential scope, stamped — the one signInProvider's
+	// authorization settled for this caller and provider, passed in, never
+	// re-resolved. Re-resolving it at upload time would let a configuration
+	// edit mid-run re-point a capture already in flight.
 	stamp := map[string]any{
 		"provider": hl.provider, "egress": egress,
 		"sso_start_url": t.startURL, // operator config, not a credential
@@ -718,15 +669,6 @@ func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunSt
 	return out, nil
 }
 
-// HTTP: setup/harness-* (humanOrAdmin group)
-
-type harnessLoginRequest struct {
-	Provider string `json:"provider"`
-	// SSOStartURL is required by (and only by) the AWS flow — see
-	// validateSSOStartURL and launchHarnessLoginRun.
-	SSOStartURL string `json:"sso_start_url"`
-}
-
 // validateSSOStartURL guards the one operator-supplied value that gets written
 // into a file inside the sandbox: it must be a plain https URL with no
 // whitespace (a newline would let a paste smuggle extra keys into the generated
@@ -743,235 +685,11 @@ func validateSSOStartURL(raw string) error {
 	return nil
 }
 
+// harnessLoginResponse answers a sign-in launch (handleProviderSignIn).
 type harnessLoginResponse struct {
 	RunID string `json:"run_id"`
 	// State the run is in AS ANSWERED — PENDING, because the answer now
 	// precedes dispatch. The pane polls GET /runs/{id} from here rather
 	// than mounting a terminal on a run the attach-ticket route would 409.
 	State string `json:"state"`
-}
-
-// harnessLoginMechanism is the agent mechanism a login provider's flow actually
-// captures — one row per lane, the house style of this file. "" means no
-// declared mechanism is captured by that flow, which is every provider but AWS
-// (per_user is bedrock_sso-only, types.AgentProvider).
-func harnessLoginMechanism(provider string) types.AgentMechanism {
-	if provider == awsSSOProvider {
-		return types.AgentMechanismBedrockSSO
-	}
-	return ""
-}
-
-// perUserLoginRow finds the ENABLED per_user roster row whose declared mechanism
-// this login flow captures — the row that makes a member's sign-in a thing the
-// org asked for rather than a member launching a sandbox on their own authority.
-//
-// It also carries the ADMIN-OWNED start URL the launch must use: a member's
-// login ignores whatever start URL arrived with the request (see the launch
-// below), so the row is the only source of it.
-//
-// Keyed by agent, not only by mechanism, because the capture that follows this
-// door is scoped by agent (awsSSOScopeFor reads the modelAccessAgent row). If
-// the two ever disagreed — a per_user bedrock_sso row on some OTHER agent id —
-// this door would admit a member whose upload then resolved the ZERO scope and
-// wrote into the OPERATOR namespace. Unreachable today (bedrock_sso is
-// claude-code's lane alone, and validation refuses per_user anywhere else), and
-// closed here rather than left to stay that way by coincidence.
-func perUserLoginRow(sc types.SiteConfig, provider string) (types.AgentProvider, bool) {
-	mech := harnessLoginMechanism(provider)
-	if mech == "" {
-		return types.AgentProvider{}, false
-	}
-	row, ok := agentProviderFor(sc, modelAccessAgent)
-	if !ok || row.Disabled || row.Mechanism != mech || row.CredentialSource != types.CredentialSourcePerUser {
-		return types.AgentProvider{}, false
-	}
-	return row, true
-}
-
-// harnessLoginMemberRefusal / harnessLoginAgentRefusal are the two doors a
-// non-operator meets here. DRAFT (M2 canon pending) — server-refusal shape
-// (docs/design/workspace-providers-prompt.md §7): a lowercase-opening clause
-// naming what was refused, rendered verbatim by the console.
-const (
-	harnessLoginNotPerUserRefusal = "signing in to a model provider yourself is not how this deployment is set up — its model credential is one an admin connects for everyone"
-	// DRAFT (M2 canon pending)
-	harnessLoginAgentRefusal = "you are not granted agent %s — ask an admin to grant it before signing in to its model provider"
-)
-
-// authorizeHarnessLogin decides whether THIS caller may launch a container-login
-// sandbox for provider, and returns the per_user roster row when one governs it.
-//
-// An OPERATOR always may — the route's whole original purpose is an admin
-// connecting the shared credential, and under a per_user row the admin captures
-// their OWN session exactly as anyone else does (it is the one they will be
-// asked about first).
-//
-// Anyone else — a member, and a security admin, who owns their own secrets like
-// any other principal — needs TWO things, and the predicate lives HERE rather
-// than at the router because both are per-request facts the router cannot see:
-// an enabled per_user row for this provider (the org saying "each person signs
-// in"), and capAgent on that row's agent. capAgent, not the login sandbox's own
-// aws-sso image: what a grant bounds is which agent's runs a member may launch,
-// and the credential this captures is for the row's agent.
-//
-// The login lane never passes denyUserRequest: there is no policy, image,
-// workspace or integration in this request to narrow.
-//
-// Returns ok=false when it has already written the refusal.
-func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, provider string) (types.AgentProvider, awsSSOScope, bool) {
-	// Fail closed on an unreadable roster: dropping ok read a store blip as "no
-	// per_user row", so the launch stamped an EMPTY pin ("launched unpinned" at
-	// capture) and the caller's own start URL became the bound portal. A NIL
-	// store is not that blip — no store, no roster, operator-only door — and
-	// awsSSOScopeForAgent reads a missing store the same way.
-	sc, ok := s.siteConfigSnapshot(r.Context())
-	if !ok && s.cfg.Store != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessLoginRosterUnavailable, harnessLoginRosterUnavailable)
-		return types.AgentProvider{}, awsSSOScope{}, false
-	}
-	// Once a model-provider block exists every sign-in is a provider's own
-	// (POST /model-providers/{id}/sign-in): the two doors never both answer.
-	// Decided on this same read, so a blip cannot let one read say "no block"
-	// and another authorize.
-	if sc.ModelProviders != nil {
-		writeErrorReason(w, http.StatusConflict, reasonHarnessLoginLegacyDoorClosed, mpsLegacyDoor)
-		return types.AgentProvider{}, awsSSOScope{}, false
-	}
-	// WHOSE credential this may capture, from THIS proved read.
-	scope := awsSSOScopeFor(sc, modelAccessAgent, runIdentitySubject(r.Context(), principalFromRequest(r)))
-	row, perUser := perUserLoginRow(sc, provider)
-	mechanismCaller := s.cfg.OIDC != nil && runIdentitySubject(r.Context(), principalFromRequest(r)) == adminTokenPrincipal
-	if perUser && mechanismCaller {
-		return types.AgentProvider{}, awsSSOScope{}, s.refuseHarnessLoginMechanismPrincipal(w, r)
-	}
-	if s.isOperator(r.Context()) {
-		return row, scope, true
-	}
-	if !perUser {
-		return types.AgentProvider{}, awsSSOScope{}, !s.refuse(w, r, authz.Deny(authz.ReasonHarnessLoginNotPerUser, "setup.harness_login", harnessLoginNotPerUserRefusal))
-	}
-	if s.denyUserCapability(w, r, capAgent, row.ID, "setup.harness_login",
-		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {
-		return types.AgentProvider{}, awsSSOScope{}, false
-	}
-	return row, scope, true
-}
-
-type harnessCredRequest struct {
-	Token string `json:"token"`
-}
-
-// handleHarnessCredentialPaste stores an operator-pasted setup-token:
-//
-//	PUT /api/v1/setup/harness-credential/{provider}  {token}
-//
-// Auth is the normal humanOrAdmin group (NOT a sandbox route — there is no
-// brokered path to it): the operator pastes into the UI, which posts here. The
-// value is write-only (no API ever returns it) and masked from streams.
-func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Secrets == nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessCredentialNoSecretStore, "no secret store configured")
-		return
-	}
-	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
-	hl, ok := harnessLoginByProvider(provider)
-	if !ok {
-		writeErrorReason(w, http.StatusBadRequest, reasonHarnessCredentialUnknownProvider, "unknown provider: "+provider)
-		return
-	}
-	var req harnessCredRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
-		return
-	}
-	token := strings.TrimSpace(req.Token)
-	// Shape + lane guards, all of them (harnesscred_paste.go): a
-	// captureViaHelper provider is not pasteable at all, and an empty or
-	// over-long token is refused before it reaches the store or the
-	// process-global mask corpus.
-	if msg := harnessPasteRefusal(hl, token); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonHarnessPasteInvalid, msg)
-		return
-	}
-	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
-	raw, _ := json.Marshal(blob)
-	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
-		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), "", hl.secretName)
-		writeServerError(w, r, "store managed credential", err)
-		return
-	}
-	// Register the token PROCESS-GLOBALLY so it is masked out of every run's PTY
-	// capture, asciicast and decision log — not just the runs it is injected into.
-	// A per-run Add cannot cover it: the value is minted outside any run's mint
-	// path, so nothing else ever tells the registry it exists.
-	//
-	// Honest residual: masking is write-time, never retroactive. The login run's
-	// OWN asciicast has already buffered the `claude setup-token` output verbatim
-	// by the time this handler runs, so this does not redact that cast — see
-	// launchHarnessLoginRun for why the login terminal must not be recorded at all.
-	s.cfg.MaskRegistry.AddGlobal("", hl.secretName, s.cfg.Now(), []byte(token)) // nil-safe
-	s.evictManagedToken()
-
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.capture", hl.secretName, "success",
-		mustJSON(map[string]any{"provider": hl.provider, "source": "paste"})))
-	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": true})
-}
-
-// handleHarnessDisconnect deletes a stored managed credential:
-//
-//	DELETE /api/v1/setup/harness-credential/{provider}
-//
-// Scoped the way the capture was. Under a `per_user` row every AWS SSO capture
-// — the operator's own included — lives in For(subject) (storeAWSSSOBlob), so
-// the delete must go through the same scope the write did — an unscoped
-// Delete would remove NOTHING anybody had captured while still answering
-// {"captured": false}, a no-op on a per-user estate. Scoping the delete makes
-// this the CALLER's own blob.
-//
-// Honest ceiling: the route stays operatorOnly, so this revokes the
-// OPERATOR's own captured session, never a named member's. A member's stored
-// session is superseded by their next sign-in, ends at the IdP when an admin
-// revokes the session there, and expires with its OIDC client registration.
-// Self-service member Disconnect and an admin "revoke this person's session"
-// arm are 0.8 items — see docs/OPERATIONS.md "AWS SSO per-user" and the
-// THREAT-MODEL residency row, which say so in those words.
-func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Secrets == nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessCredentialNoSecretStore, "no secret store configured")
-		return
-	}
-	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
-	hl, ok := harnessLoginByProvider(provider)
-	if !ok {
-		writeErrorReason(w, http.StatusBadRequest, reasonHarnessCredentialUnknownProvider, "unknown provider: "+provider)
-		return
-	}
-	st, owner := s.cfg.Secrets, ""
-	if hl.provider == awsSSOProvider {
-		// Only the AWS lane can be per-user (per_user is bedrock_sso-only,
-		// types.AgentProvider); every other provider keeps the operator-wide row
-		// this route has always deleted.
-		// Fail closed on an unreadable roster: read as "not per-user", a store blip
-		// would point this Delete at the OPERATOR-WIDE row, not the caller's own.
-		scope, ok := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent,
-			runIdentitySubject(r.Context(), principalFromRequest(r)))
-		if !ok {
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessLoginRosterUnavailable, harnessDisconnectRosterUnavailable)
-			return
-		}
-		if scope.namespaced() {
-			st, owner = st.For(scope.owner), scope.owner
-		}
-	}
-	if err := st.Delete(r.Context(), hl.secretName); err != nil {
-		writeServerError(w, r, "delete managed credential", err)
-		return
-	}
-	s.forgetCredential(owner, hl.secretName)
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.disconnect", hl.secretName, "success",
-		mustJSON(map[string]any{"provider": hl.provider})))
-	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": false})
 }

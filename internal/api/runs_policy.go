@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -172,7 +173,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
-			projectStatusDetail(runs)
+			s.projectStatusDetailFor(r, runs)
 			return runs, nil
 		}, nil)
 		return
@@ -185,7 +186,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
-			projectStatusDetail(runs)
+			s.projectStatusDetailFor(r, runs)
 			return runs, nil
 		}
 	}
@@ -195,7 +196,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		s.projectRecordingMeta(r, runs)
-		projectStatusDetail(runs)
+		s.projectStatusDetailFor(r, runs)
 		return runs, nil
 	})
 }
@@ -216,7 +217,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// a single run's own detail read must agree with what the list showed.
 	runs := []types.AgentRun{run}
 	s.projectRecordingMeta(r, runs)
-	projectStatusDetail(runs)
+	s.projectStatusDetailFor(r, runs)
 	run = runs[0]
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row
@@ -231,11 +232,58 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: effective ui_apps lookup failed", "run_id", id, "err", err)
 	}
+	providerName, providerDeleted := s.runModelProviderFacts(r.Context(), run)
 	writeJSON(w, http.StatusOK, struct {
 		types.AgentRun
-		UIApps       []types.UIApp `json:"ui_apps,omitempty"`
-		UserTypeName string        `json:"user_type_name,omitempty"`
-	}{AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType)})
+		UIApps               []types.UIApp `json:"ui_apps,omitempty"`
+		UserTypeName         string        `json:"user_type_name,omitempty"`
+		ModelProviderName    string        `json:"model_provider_name,omitempty"`
+		ModelProviderDeleted bool          `json:"model_provider_deleted,omitempty"`
+	}{
+		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
+		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
+	})
+}
+
+// runModelProviderFacts names the model provider a run chose and says whether
+// it is gone (#996), so the run page never guesses "(removed)" from a list the
+// viewer may not be able to see: the setup status lists only what the viewer's
+// own agents use. The row freezes the id alone, so:
+//
+//   - the provider is still in the site config: its live name, deleted=false;
+//   - it is not: deleted=true, with the name the run.create snapshot froze
+//     (empty when that row carries none, and the page then shows the id);
+//   - the site config could not be read: nothing, so nothing is claimed.
+func (s *Server) runModelProviderFacts(ctx context.Context, run types.AgentRun) (name string, deleted bool) {
+	if run.ModelProviderID == "" || s.cfg.Store == nil {
+		return "", false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "api: could not read the site config for the run's model provider", "run_id", run.ID, "error", err)
+		return "", false
+	}
+	if p, ok := modelProviderByID(sc.ModelProviders, run.ModelProviderID); ok {
+		return p.Name, false
+	}
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, effectivePolicyAuditScan)
+	if err != nil {
+		return "", true
+	}
+	for _, ev := range events {
+		if canonicalAction(ev.Action) != "run.create" || ev.Outcome != "success" {
+			continue
+		}
+		var data struct {
+			ModelProvider struct {
+				Name string `json:"name"`
+			} `json:"model_provider"`
+		}
+		if json.Unmarshal(ev.Data, &data) == nil && data.ModelProvider.Name != "" {
+			return data.ModelProvider.Name, true
+		}
+	}
+	return "", true
 }
 
 // runUserTypeName is the display name of the type a run was launched as, for
@@ -283,18 +331,25 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	if err != nil {
 		return nil, err
 	}
-	var apps []types.UIApp
+	envelope, _, _ := latestPolicyResolve(events)
+	return envelope.UIApps, nil
+}
+
+// latestPolicyResolve is the run's last decodable run.policy.resolve envelope
+// and when it was written — last wins, because a re-dispatch supersedes an
+// earlier one. ok=false when there is none, and every caller fails closed on it.
+func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
 		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
-		var spec types.RunPolicySpec
-		if uerr := json.Unmarshal(ev.Data, &spec); uerr != nil {
+		var d effectivePolicyDatum
+		if json.Unmarshal(ev.Data, &d) != nil {
 			continue
 		}
-		apps = spec.UIApps // last wins: a re-dispatch supersedes an earlier envelope
+		envelope, at, ok = d, ev.Time, true
 	}
-	return apps, nil
+	return envelope, at, ok
 }
 
 // resolvePolicy returns the spec + policy id to attach. When policyID is nil it
@@ -314,7 +369,7 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 // admin-authored content, and bounding it to the caller's ceiling needs the
 // full member pipeline rather than a spec swap — that is resolveRunPolicy's
 // job.
-func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling governanceCeiling) (types.RunPolicySpec, *uuid.UUID, error) {
+func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling governanceCeiling) (types.RunPolicySpec, *uuid.UUID, policyOrigin, error) {
 	// Clone before handing the spec out. The ceiling is either cfg.DefaultPolicy
 	// — a process-global shared by every run — or a freshly-read profile row; a
 	// shallow struct copy of either still shares its slice backing arrays, so a
@@ -333,14 +388,18 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 		if !s.isOperator(ctx) {
 			spec.AzureDevOpsCapabilities = nil
 		}
-		return spec, nil, nil
+		origin := policyOrigin{kind: policyKindDefault}
+		if ceiling.Profile != nil {
+			origin = policyOrigin{kind: policyKindProfile, name: ceiling.Profile.Name}
+		}
+		return spec, nil, origin, nil
 	}
 	p, err := s.cfg.Store.GetPolicy(ctx, *policyID)
 	if err != nil {
-		return types.RunPolicySpec{}, nil, err
+		return types.RunPolicySpec{}, nil, policyOrigin{}, err
 	}
 	pid := p.ID
-	return p.Spec.Clone(), &pid, nil
+	return p.Spec.Clone(), &pid, policyOrigin{kind: policyKindStored, name: p.Name, updatedAt: &p.UpdatedAt}, nil
 }
 
 // bestClass returns the strongest class a runner declares (slice is

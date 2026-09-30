@@ -8,6 +8,7 @@
 // one documented exception, in a different domain module).
 
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
+import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -340,9 +341,81 @@ export interface AdminRestartResponse {
 // same handler (runUserTypeName) because GET /user-types is securityOps and a
 // user-tier owner could not resolve the id themselves. Absent for a run with no
 // type or a type since deleted — the Identity widget then shows no "Ran as".
+//
+// model_provider_name and model_provider_deleted (#996) do the same for
+// AgentRun.model_provider_id: the provider's name (live, else the one run.create
+// froze) and — only when true — that it has since been deleted. The server
+// answers them for every viewer, so the page never infers "removed" from a
+// setup status that lists just what the viewer's own agents use. Absent when
+// the run names no provider or the server could not tell.
 export interface RunDetail extends AgentRun {
   ui_apps?: UIApp[];
   user_type_name?: string;
+  model_provider_name?: string;
+  model_provider_deleted?: boolean;
+}
+
+// GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
+// Policy tab). Mirrors the server's runPolicyResponse (internal/api/
+// run_policy_view.go). `spec` strict-decodes as a RunPolicySpec, with values
+// the reader may not see already blanked ("<redacted>") server-side.
+export type RunPolicyState = "recorded" | "not_yet" | "never";
+export type RunPolicySourceKind = "stored" | "inline" | "default" | "profile" | "unknown";
+
+export interface RunPolicySource {
+  kind: RunPolicySourceKind | (string & {});
+  policy_id?: string;
+  name?: string;
+  deleted?: boolean;
+  preset?: string;
+  preset_version?: number;
+}
+
+// The closed set of reasons launch changed a policy; an unknown one reads as "launch".
+export type RunPolicyCause =
+  | "workspace"
+  | "source_control"
+  | "mirror"
+  | "model_access"
+  | "git_broker"
+  | "profile"
+  | "org_disk"
+  | "restart"
+  | "limits"
+  | "launch";
+
+export interface RunPolicyChange {
+  cause: RunPolicyCause | (string & {});
+  // The RunPolicySpec json name the entries belong to.
+  field: string;
+  added?: string[];
+  removed?: string[];
+  // clamp_warnings lines, verbatim (cause "limits" only).
+  detail?: string[];
+  profile?: string;
+  // Restart time (cause "restart" only).
+  at?: string;
+}
+
+export interface StoredPolicyNow {
+  state: "same" | "changed" | "updated" | "deleted";
+  name?: string;
+  updated_at?: string;
+}
+
+export interface RunPolicyView {
+  run_id: string;
+  state: RunPolicyState;
+  recorded_at?: string;
+  source: RunPolicySource;
+  spec?: RunPolicySpec;
+  // Some values are hidden from this reader.
+  redacted: boolean;
+  // Never null.
+  changes: RunPolicyChange[];
+  // False for a run that started before each change was recorded.
+  complete: boolean;
+  stored_policy_now?: StoredPolicyNow;
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror
@@ -668,16 +741,12 @@ export interface PreflightResult {
   // launch itself stays silent. Absent on an older server that predates it.
   warnings?: string[];
   // WHERE this run's model credential will land (internal/api's
-  // gradeModelCredential), graded from the lanes the create/Review mechanism gate
-  // just resolved for THIS body. The rail prefers it over the /setup/status
-  // harness row, which is the same grade taken against the deployment default
-  // policy — and preflightIsCurrent compares the whole request body, so a verdict
+  // modelCredentialFacts): the provider this body chose, its kind and its
+  // residency. preflightIsCurrent compares the whole request body, so a verdict
   // for a different agent can never render.
   //
-  // ABSENT for an exec / non-model run, for a caller whose roster read failed,
-  // and on the 422 answered for a per_user member who has not signed in (a
-  // refusal has no verdict to publish). The status row is the default path for
-  // exactly that reason.
+  // ABSENT for an exec / non-model run, for a run no provider serves, and on a
+  // refusal (a refusal has no verdict to publish).
   model_credential?: ModelCredential;
   // Autonomy is what resolveRunAutonomy decided for THIS body (0.8 #97/#93) —
   // internal/api/preflight.go's preflightResponse.Autonomy. ABSENT (never a
@@ -696,13 +765,12 @@ export interface PreflightResult {
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).
 // A vocabulary of PLACE, not mechanism: this rail's reader is deciding whether a
 // credential may sit inside the sandbox they are about to grant.
-export type ModelCredentialResidency = "proxy" | "sandbox" | "image" | "unknown";
+export type ModelCredentialResidency = "proxy" | "sandbox";
 
-// internal/api.modelCredentialFacts. Member-safe: a lane name, "shared" /
-// "per_user", and a place — no host, no secret name, no access-portal URL.
+// internal/api.modelCredentialFacts. Member-safe: the chosen provider's id and
+// kind, and a place — no host, no secret name, no access-portal URL.
 export interface ModelCredential {
-  mechanism?: string;
+  provider?: string;
+  kind?: string;
   residency: ModelCredentialResidency;
-  credential_source?: string;
-  staged_placeholder?: boolean;
 }

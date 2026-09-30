@@ -5,7 +5,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { connectionRowCopy, connectionRows, connectionsSummary, legacySummary } from "./model-connections";
+import { connectionRowCopy, connectionRows, connectionsSummary } from "./model-connections";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
 import { absoluteTime, relativeTime, shortDate } from "./format";
 import { aheadByHours } from "./test-clock";
@@ -279,84 +279,3 @@ describe("connectionRowCopy — the 'For …' line", () => {
   });
 });
 
-// Getting Started's own fallback for an install with no model-providers block
-// at all (fix review on #541) — reads the SAME model_access/llm_ready pair
-// the retired "Your model key" card used to, so a legacy shared or per_user
-// install still reads an honest chip instead of a false "Not set up".
-describe("legacySummary", () => {
-  it("model_access live: Ready", () => {
-    expect(legacySummary(baseStatus({ model_access: { state: "live" } }))).toEqual({
-      label: CONNECTIONS.SUMMARY_READY,
-      tone: "success",
-    });
-  });
-
-  it("model_access expiring: still Ready — it signs today", () => {
-    expect(legacySummary(baseStatus({ model_access: { state: "expiring" } }))).toEqual({
-      label: CONNECTIONS.SUMMARY_READY,
-      tone: "success",
-    });
-  });
-
-  it("model_access not_configured: Needs you", () => {
-    expect(legacySummary(baseStatus({ model_access: { state: "not_configured" } }))).toEqual({
-      label: CONNECTIONS.SUMMARY_NEEDS_YOU,
-      tone: "warning",
-    });
-  });
-
-  it("model_access expired_signin: Needs you", () => {
-    expect(legacySummary(baseStatus({ model_access: { state: "expired_signin" } }))).toEqual({
-      label: CONNECTIONS.SUMMARY_NEEDS_YOU,
-      tone: "warning",
-    });
-  });
-
-  // Fix review (HIGH): a dead SHARED credential is a credential-health fact,
-  // never a config one — llm_ready is computed at the deployment/config level
-  // (internal/api/setup.go) and stays true regardless, so the llmReady
-  // fallback below must never be reached for this state, or an install whose
-  // one shared credential expired would read Ready.
-  it("model_access shared_expired: the admin's-credential-expired chip, even with llm_ready true", () => {
-    expect(legacySummary(baseStatus({ model_access: { state: "shared_expired" }, llm_ready: true }))).toEqual({
-      label: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
-      tone: "warning",
-    });
-  });
-
-  // #1089 (owner ruling: build it as a chip) — the shared admin-token
-  // principal's own state. Checked ahead of llm_ready for the identical
-  // reason shared_expired is: without this arm, a deployment whose SOME
-  // credential works (llm_ready true) painted this caller's own inapplicable
-  // state as an ordinary "Model access · Ready", indistinguishable from a
-  // real per-person ready session (found by #1042's e2e after #541's rewrite
-  // dropped the old always-visible chip).
-  it("model_access not_applicable: its own chip, even with llm_ready true", () => {
-    expect(legacySummary(baseStatus({ model_access: { state: "not_applicable" }, llm_ready: true }))).toEqual({
-      label: AGENTS.MODEL_ACCESS_NOT_APPLICABLE,
-      tone: "neutral",
-    });
-  });
-
-  // The shared-credential install: no per-principal model_access state at
-  // all, but the deployment-wide llm_ready fallback is true — the exact shape
-  // "Your model key" used to read "Provided by your admin" from.
-  it("no model_access, llm_ready true (a shared install): Ready", () => {
-    expect(legacySummary(baseStatus({ llm_ready: true }))).toEqual({
-      label: CONNECTIONS.SUMMARY_READY,
-      tone: "success",
-    });
-  });
-
-  it("no model_access, llm_ready false: Not set up by your admin", () => {
-    expect(legacySummary(baseStatus({ llm_ready: false }))).toEqual({
-      label: CONNECTIONS.SUMMARY_NOT_SET_UP,
-      tone: "neutral",
-    });
-  });
-
-  it("a status not loaded yet (null/undefined) reads the same as nothing configured", () => {
-    expect(legacySummary(null)).toEqual({ label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" });
-    expect(legacySummary(undefined)).toEqual({ label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" });
-  });
-});

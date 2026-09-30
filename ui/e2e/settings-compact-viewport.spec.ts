@@ -29,7 +29,7 @@ const VIEWPORT = { width: 1280, height: 744 };
 // pixel regression, which this still catches"). Here that jitter is
 // cross-environment line-height rounding on the collapsed card row (measured
 // 65.875px here against the 63.9px waitForSettledSummaries' own comment
-// below records) — compounded over Admin Settings' seven cards, a couple of
+// below records) — compounded over Admin Settings' six cards, a couple of
 // px each. TOLERANCE_PX is nowhere near what a real defect produces: the
 // mutation proof below (Host defaulting open) adds ~200px on its own.
 const TOLERANCE_PX = 24;
@@ -76,8 +76,8 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
       /^Admin SSH keys \d+ admin key/,
     ]);
 
-    // Collapsed by default: none of the seven cards' bodies are in the DOM.
-    for (const title of ["Host", "Branding", "Model providers", "Model provider", "Workspace providers", "User drives", "Admin SSH keys"]) {
+    // Collapsed by default: none of the six cards' bodies are in the DOM.
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
     }
@@ -96,7 +96,7 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     // from the page's initial status load.
     await waitForSettledSummaries(page, [/^Your SSH keys \d+ key/]);
 
-    for (const title of ["Model provider", "Your SSH keys"]) {
+    for (const title of ["Your SSH keys"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
     }
@@ -114,7 +114,7 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     await navToRoute(page, "/admin/settings");
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
 
-    for (const title of ["Host", "Branding", "Model providers", "Model provider", "Workspace providers", "User drives", "Admin SSH keys"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -127,7 +127,7 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     // own heading, or on "Model providers" would also hit its expanded
     // body's unrelated `<h4>` empty-state heading ("No model providers
     // yet").
-    for (const title of ["Host", "Branding", "Model providers", "Model provider", "Workspace providers", "User drives", "Admin SSH keys"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {
       await expect(page.getByRole("heading", { name: new RegExp(`^${title}( |$)`), level: 3 })).toBeVisible();
     }
   });

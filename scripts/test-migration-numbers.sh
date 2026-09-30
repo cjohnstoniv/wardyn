@@ -19,6 +19,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# A developer's global/system git config (commit.gpgsign, hooks paths, init
+# defaults) must not reach the fixture's seed commits.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # ── build a bare 'origin' whose main has migrations 0001..0003 ──────────────

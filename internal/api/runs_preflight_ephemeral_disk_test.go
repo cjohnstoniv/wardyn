@@ -39,7 +39,7 @@ func previewEphemeralDiskMiB(t *testing.T, requested int, site types.SiteConfig,
 		spec.Resources = &types.ResourceLimits{DiskMiB: requested}
 	}
 	w := httptest.NewRecorder()
-	got, _, _, ok := srv.resolveRunPolicy(ctx, w, r, &createRunRequest{Agent: "claude-code", InlinePolicy: &spec}, true)
+	got, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r, &createRunRequest{Agent: "claude-code", InlinePolicy: &spec}, true)
 	if !ok {
 		t.Fatalf("preflight resolve refused: %d %s", w.Code, w.Body.String())
 	}

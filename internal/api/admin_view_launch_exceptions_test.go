@@ -119,30 +119,15 @@ func TestSiteConfigProbes_LaunchFromAdminView(t *testing.T) {
 	}
 }
 
-// TestHarnessLogin_LaunchesFromAdminView: harness login (humanOrAdminAuth;
-// authorizeHarnessLogin's isOperator arm) still launches for an admin sitting
-// in the Admin view, under both rosters. The shared row is the design's QM-10
-// case — "the shared harness login stays admin until MP-4b" — where the admin
-// connects the org's one credential; the per_user row is the admin capturing
-// their OWN session, as anyone else does.
-func TestHarnessLogin_LaunchesFromAdminView(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		row  types.AgentProvider
-		body string
-	}{
-		{"shared row", types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO}, `{"provider":"anthropic"}`},
-		{"per_user row", perUserAWSRow(), `{"provider":"aws"}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := perUserLoginSrvWithRunner(t, &fakeRunner{}, tc.row)
-			cookie := memberModeSSOSession(t, "sub-admin-view-harness-login", "av-login@corp.example", oidc.RoleAdmin, false)
-
-			w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", cookie, tc.body)
-			if w.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (reached past S1, not refused by it); body=%s", w.Code, w.Body.String())
-			}
-		})
+// TestProviderSignIn_LaunchesFromAdminView: a provider's sign-in door still
+// launches for an admin sitting in the Admin view — the admin captures their
+// OWN session, as anyone else does.
+func TestProviderSignIn_LaunchesFromAdminView(t *testing.T) {
+	srv, _, _, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
+	cookie := memberModeSSOSession(t, "sub-admin-view-harness-login", "av-login@corp.example", oidc.RoleAdmin, false)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/model-providers/bedrock-prod/sign-in", cookie, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (reached past S1, not refused by it); body=%s", w.Code, w.Body.String())
 	}
 }
 

@@ -3,17 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Split out of agents-tab.test.tsx (#195): the post-save status refresh, the
-// not_applicable chip, and the agentCapabilityFor / harness.go catalog parity
-// gate — while the roster/default-provider/ETag describes stay in
+// Split out of agents-tab.test.tsx (#195): the post-save status refresh and
+// the agentCapabilityFor / harness.go catalog parity gate — while the roster/default-provider/ETag describes stay in
 // agents-tab.test.tsx.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
-import { AGENTS, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import type { SetupHarnessTool } from "../../../lib/types";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab, agentCapabilityFor } from "./agents-tab";
 
@@ -69,10 +68,10 @@ beforeEach(() => {
   statusRefreshMock.mockReset();
 });
 
-// Appendix A finding 4 (staleness root cause): modelAccess comes from the
-// PARENT's /setup/status and is never re-read after a successful Save on its
-// own — the admin's own door would otherwise go on showing the stale pre-save
-// state until an unrelated navigation happens to re-fetch it.
+// Appendix A finding 4 (staleness root cause): harnesses come from the
+// PARENT's /setup/status and are never re-read after a successful Save on
+// their own — the tab would otherwise go on showing the stale pre-save state
+// until an unrelated navigation happens to re-fetch it.
 //
 // A-01: the re-fire must be `onStatusRefresh` — /setup/status ONLY — never
 // `onRetryRoster`, which is the PARENT's whole load(): that also resets the
@@ -116,32 +115,11 @@ describe("AgentsTab — a successful Save re-fires ONLY the parent's status read
   });
 });
 
-// #158 (Appendix A finding 5, agents-tab half, rewritten): not_applicable now
-// carries a real, neutral chip label (MODEL_ACCESS_CHIP_LABEL.not_applicable)
-// — the whole claude-code block renders, chip + ADMIN_OWN_CHIP_NOTE, same as
-// any other state. It still offers NO sign-in CTA: there is no person here
-// to sign in as. Further not_applicable cases live in
-// agents-tab-model-access.test.tsx.
-describe("AgentsTab — not_applicable renders its own chip, never a sign-in CTA", () => {
-  it("chip + ADMIN_OWN_CHIP_NOTE render, no sign-in CTA", async () => {
-    getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
-      etag: '"na1"',
-    });
-    const modelAccess: SetupModelAccess = { state: "not_applicable" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
-    const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeInTheDocument();
-    expect(within(row).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
-    expect(within(row).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
-  });
-});
-
 // PARITY GATE (widget-registry.parity.test.ts's shape): agentCapabilityFor is a
 // hand-typed fold from harness id -> AiCapability, and the other half of it is
 // internal/api/harness.go's catalog. A third Gateway-bearing harness added
-// there with no entry here loses its impossible-pair check — a freshly enabled
-// row is then seeded (defaultMechanism) with a lane the agent cannot speak.
+// there with no entry here loses its impossible-pair check in the model
+// provider editor (model-provider-draft.ts).
 const GO_REL = "internal/api/harness.go";
 function goHarnessFile(): string {
   let dir = process.cwd();

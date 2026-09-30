@@ -4,9 +4,9 @@
  */
 
 // The pane behind a model provider's door (#544): it launches and stores
-// through /model-providers/{id}/sign-in, never /setup/harness-*, starts at once
+// through /model-providers/{id}/sign-in, starts at once
 // (packet E draws no consent step), and corroborates an AWS capture by THIS
-// run's audit row, since the provider's capture never shows in the harness rows.
+// run's audit row or the provider row's own source_run_id.
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
@@ -21,14 +21,6 @@ vi.mock("../../attach-terminal", () => ({
     React.useImperativeHandle(ref, () => ({ sendText: () => {} }), []);
     return <div data-testid="fake-terminal" />;
   }),
-}));
-const harnessLogin = vi.fn();
-const harnessCredentialPaste = vi.fn();
-vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: {
-    harnessLogin: (...a: unknown[]) => harnessLogin(...a),
-    harnessCredentialPaste: (...a: unknown[]) => harnessCredentialPaste(...a),
-  },
 }));
 const startSignIn = vi.fn();
 const captureSignIn = vi.fn();
@@ -56,7 +48,7 @@ const TOKEN = "sk-ant-oat01-" + "A".repeat(60);
 
 beforeEach(() => {
   lastAttachOutput = undefined;
-  for (const m of [harnessLogin, harnessCredentialPaste, startSignIn, captureSignIn]) m.mockReset();
+  for (const m of [startSignIn, captureSignIn]) m.mockReset();
   startSignIn.mockResolvedValue({ runId: RUN, state: "PENDING" });
   captureSignIn.mockResolvedValue(undefined);
   vi.mocked(runsApi.killRun).mockReset().mockResolvedValue(undefined);
@@ -66,16 +58,15 @@ beforeEach(() => {
 });
 
 describe("a provider door's pane", () => {
-  it("starts at once through the provider's own door, once, and never calls /setup/harness-login", async () => {
+  it("starts at once through the provider's own door, once", async () => {
     render(
       <React.StrictMode>
-        <HarnessLoginPane provider="aws" modelProvider="bedrock-prod" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />
+        <HarnessLoginPane provider="aws" modelProvider="bedrock-prod" onDone={vi.fn()} onCancel={vi.fn()} />
       </React.StrictMode>,
     );
     await screen.findByTestId("fake-terminal");
     expect(startSignIn).toHaveBeenCalledTimes(1);
     expect(startSignIn).toHaveBeenCalledWith("bedrock-prod");
-    expect(harnessLogin).not.toHaveBeenCalled();
     // No consent step and no pane title: the door frames it (packet E).
     expect(screen.queryByRole("button", { name: /start login/i })).toBeNull();
     expect(screen.queryByText(/via container login/)).toBeNull();
@@ -88,7 +79,6 @@ describe("a provider door's pane", () => {
     await act(async () => lastAttachOutput?.(`Your OAuth token: ${TOKEN}\r\n`));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(captureSignIn).toHaveBeenCalledWith("claude-sub", RUN, TOKEN);
-    expect(harnessCredentialPaste).not.toHaveBeenCalled();
   });
 });
 
@@ -101,7 +91,7 @@ describe("a provider AWS sign-in's capture, proven by the row's source_run_id (#
       providerStatus([{ provider: MODEL_PROVIDERS.bedrock, state: "live", sourceRunId: RUN }]),
     );
     const onDone = vi.fn();
-    render(<HarnessLoginPane provider="aws" modelProvider="bedrock-prod" startURLManaged onDone={onDone} onCancel={vi.fn()} />);
+    render(<HarnessLoginPane provider="aws" modelProvider="bedrock-prod" onDone={onDone} onCancel={vi.fn()} />);
     await screen.findByTestId("fake-terminal");
     await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
@@ -123,7 +113,7 @@ describe("serverConfirmsProviderCapture — this run's audit row, and the provid
   it("the round trip reads this run's audit row", async () => {
     vi.mocked(setupApi.getSetupStatus).mockResolvedValue(status("live"));
     vi.mocked(auditApi.listAudit).mockResolvedValue([{ id: 1 } as unknown as AuditEvent]);
-    await expect(confirmCaptureWithServer("aws", RUN, "bedrock-prod")).resolves.toEqual({
+    await expect(confirmCaptureWithServer(RUN, "bedrock-prod")).resolves.toEqual({
       confirmed: true,
       unreachable: false,
     });
@@ -134,7 +124,7 @@ describe("serverConfirmsProviderCapture — this run's audit row, and the provid
     vi.useFakeTimers();
     try {
       vi.mocked(setupApi.getSetupStatus).mockResolvedValue(status("live"));
-      const p = confirmCaptureWithServer("aws", RUN, "bedrock-prod");
+      const p = confirmCaptureWithServer(RUN, "bedrock-prod");
       await vi.runAllTimersAsync();
       await expect(p).resolves.toEqual({ confirmed: false, unreachable: false });
     } finally {

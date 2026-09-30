@@ -8,15 +8,17 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // This file validates the SINGLE composition site (dispatchRun in
 // runs.go) that a recent 4-lane merge assembled by hand: operator upstream
 // proxy (site-config), artifact-registry redirect (site-config), SCM host
-// union (site-config), and Bedrock auth (Server Config + secrets) must all
+// union (site-config), and Bedrock auth (the run's model provider) must all
 // land on the SAME runner.SandboxSpec for one real dispatch. Each lane already
 // has its own unit tests (site_config_test.go, bedrock_test.go,
 // artifact_redirect_test.go, upstream_proxy_test.go) — this file proves the
@@ -35,17 +37,13 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _ := pgHarnessWithRunner(t, fr)
 
-	// Bedrock: boot-time Config (region/model) + resident AWS secrets — the
-	// resolveBedrockAuth readiness gate. No subscription mount on this run, so
-	// Bedrock (not api-key) must win.
-	srv.cfg.BedrockRegion = "us-east-1"
-	srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	// Bedrock: the run's model provider, a captured AWS sign-in delivered
+	// resident, with the launcher's own session stored.
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
-		"corp-proxy-url":             []byte("http://proxy.corp:3128"),
-		"npm-artifactory-token":      []byte("s3cr3t-npm-token"),
-		bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
-		bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+		"corp-proxy-url":        []byte("http://proxy.corp:3128"),
+		"npm-artifactory-token": []byte("s3cr3t-npm-token"),
 	}}
+	providers := seedBedrockSSOProvider(t, srv, nil)
 
 	// Operator SiteConfig: upstream corp proxy, npm egress redirect (with a
 	// token so the MITM+injection half is exercised too), and a declared GHES
@@ -54,6 +52,7 @@ func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 	// into any other PG-backed test sharing WARDYN_TEST_PG.
 	ctx := context.Background()
 	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
+		ModelProviders:         providers,
 		UpstreamProxySecretRef: "corp-proxy-url",
 		EgressRedirects: []types.EgressRedirect{
 			{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", TokenSecretRef: "npm-artifactory-token", Ecosystem: "npm"},
@@ -82,14 +81,17 @@ func TestDispatch_SiteConfigComposition_LegacyArtifactOverridesFold(t *testing.T
 	fr := &fakeRunner{}
 	srv, _ := pgHarnessWithRunner(t, fr)
 
-	srv.cfg.BedrockRegion = "us-east-1"
-	srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
-		"corp-proxy-url":             []byte("http://proxy.corp:3128"),
-		"npm-artifactory-token":      []byte("s3cr3t-npm-token"),
-		bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
-		bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+		"corp-proxy-url":        []byte("http://proxy.corp:3128"),
+		"npm-artifactory-token": []byte("s3cr3t-npm-token"),
 	}}
+	// The provider block is stored first: the PUT below omits it, and the
+	// site-config door carries a stored block forward.
+	if _, err := srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{
+		ModelProviders: seedBedrockSSOProvider(t, srv, nil),
+	}); err != nil {
+		t.Fatalf("seed model provider: %v", err)
+	}
 
 	legacyBody := `{
 		"upstream_proxy_secret_ref": "corp-proxy-url",
@@ -148,21 +150,22 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 		t.Error("Env[WARDYN_ARTIFACT_CONFIG_B64] empty, want the npm redirect config materialized")
 	}
 	if spec.Env["CLAUDE_CODE_USE_BEDROCK"] != "1" {
-		t.Errorf("Env[CLAUDE_CODE_USE_BEDROCK] = %q, want \"1\" (no subscription mount + Bedrock ready => Bedrock wins)", spec.Env["CLAUDE_CODE_USE_BEDROCK"])
+		t.Errorf("Env[CLAUDE_CODE_USE_BEDROCK] = %q, want \"1\" (the run's Bedrock provider)", spec.Env["CLAUDE_CODE_USE_BEDROCK"])
 	}
 	if spec.Env["AWS_REGION"] != "us-east-1" {
 		t.Errorf("Env[AWS_REGION] = %q, want us-east-1", spec.Env["AWS_REGION"])
 	}
-	// The resident SigV4 keys are the CREDENTIAL half of the environment, so
-	// they ride SecretEnv, not Env: splitSecretEnv moves every key the Bedrock
-	// lane reports out of the map a k8s pod spec would carry inline. Asserting
-	// both sides here is the point — a change that put the key back in Env
-	// would be exactly the API-readable leak the split closes.
-	if spec.SecretEnv["AWS_ACCESS_KEY_ID"] != "AKIATESTTESTTESTTEST" {
-		t.Errorf("SecretEnv[AWS_ACCESS_KEY_ID] = %q, want the resident test key", spec.SecretEnv["AWS_ACCESS_KEY_ID"])
+	// The resident captured session is the CREDENTIAL half of the
+	// environment, so it rides SecretEnv, not Env: splitSecretEnv moves every
+	// key the Bedrock lane reports out of the map a k8s pod spec would carry
+	// inline. Asserting both sides here is the point — a change that put the
+	// session back in Env would be exactly the API-readable leak the split
+	// closes.
+	if spec.SecretEnv[awsSSOConfigEnvVar] == "" {
+		t.Errorf("SecretEnv[%s] is empty, want the resident session", awsSSOConfigEnvVar)
 	}
-	if _, inEnv := spec.Env["AWS_ACCESS_KEY_ID"]; inEnv {
-		t.Error("Env[AWS_ACCESS_KEY_ID] is set: a credential must leave Env for SecretEnv")
+	if _, inEnv := spec.Env[awsSSOConfigEnvVar]; inEnv {
+		t.Errorf("Env[%s] is set: a credential must leave Env for SecretEnv", awsSSOConfigEnvVar)
 	}
 
 	// 2 + 3 TOGETHER — the specific merge-conflict-resolution assertion: the
@@ -261,37 +264,6 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	}
 }
 
-// TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder is the
-// precedence negative case: Bedrock region+model are configured but the
-// resident AWS credential secrets are ABSENT (a real, non-fatal
-// misconfiguration per resolveBedrockAuth's doc comment). Dispatch must NOT
-// half-wire Bedrock — no CLAUDE_CODE_USE_BEDROCK — and must fall back to the
-// existing proxy-injected api-key placeholder.
-func TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder(t *testing.T) {
-	fr := &fakeRunner{}
-	srv, _ := pgHarnessWithRunner(t, fr)
-	srv.cfg.BedrockRegion = "us-east-1"
-	srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}} // no aws-* secrets stored
-
-	body := `{"agent":"claude-code","repo":"acme/widgets","task":"do the thing"}`
-	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
-	}
-	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
-	if fr.createCalls != 1 {
-		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
-	}
-	spec := fr.lastSpec
-	if _, ok := spec.Env["CLAUDE_CODE_USE_BEDROCK"]; ok {
-		t.Errorf("Env[CLAUDE_CODE_USE_BEDROCK] present with no AWS creds stored; want absent (fallback, not a half-wired Bedrock)")
-	}
-	if spec.Env["ANTHROPIC_API_KEY"] != "wardyn-proxy-injected" {
-		t.Errorf("Env[ANTHROPIC_API_KEY] = %q, want the proxy-injected sentinel (api-key fallback)", spec.Env["ANTHROPIC_API_KEY"])
-	}
-}
-
 // TestDispatch_BedrockPrivateEndpoint_Composed is the acceptance test an adopter
 // on a PrivateLink estate asked for, and it is the only place the four pieces are
 // proven to compose. Each has its own unit test — the bypass list
@@ -328,17 +300,17 @@ func TestDispatch_BedrockPrivateEndpoint_Composed(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _ := pgHarnessWithRunner(t, fr)
 
-	srv.cfg.BedrockRegion = "us-east-1"
-	srv.cfg.BedrockModel = modelARN
-	srv.cfg.BedrockBaseURL = vpceURL
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
-		"corp-proxy-url":             []byte("http://proxy.corp:3128"),
-		bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
-		bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+		"corp-proxy-url": []byte("http://proxy.corp:3128"),
 	}}
+	providers := seedBedrockSSOProvider(t, srv, func(p *types.ModelProvider) {
+		p.Bedrock.BaseURL = vpceURL
+		p.Harnesses[0].Model = modelARN
+	})
 
 	ctx := context.Background()
 	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
+		ModelProviders:         providers,
 		UpstreamProxySecretRef: "corp-proxy-url",
 		// Skip the corporate proxy for the VPC endpoint: it will not CONNECT to
 		// an internal address, so without this every private endpoint times out.
@@ -405,6 +377,23 @@ func TestDispatch_BedrockPrivateEndpoint_Composed(t *testing.T) {
 	if spec.ProxyConfig.UpstreamProxyURL != "http://proxy.corp:3128" {
 		t.Errorf("ProxyConfig.UpstreamProxyURL = %q, want the corp proxy still set for non-bypassed hosts", spec.ProxyConfig.UpstreamProxyURL)
 	}
+}
+
+// seedBedrockSSOProvider readies srv for a run on awsSSOTestProvider (adjusted
+// by adjust, when set): the admin token's own live session stored, a fixed
+// clock so it reads live, and resident delivery — the mode whose session
+// reaches the sandbox env. It returns the providers block to store.
+func seedBedrockSSOProvider(t *testing.T, srv *Server, adjust func(*types.ModelProvider)) *types.ModelProviders {
+	t.Helper()
+	srv.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
+	srv.cfg.MaskRegistry = secretmask.NewRegistry()
+	srv.cfg.AWSSSOProxyInject = false
+	storeSSOBlobFor(t, srv, adminTokenPrincipal, putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour)))
+	p := awsSSOTestProvider()
+	if adjust != nil {
+		adjust(&p)
+	}
+	return providerBlock(p)
 }
 
 // slicesContains is a local helper so this file needs no import churn.

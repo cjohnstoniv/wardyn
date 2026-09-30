@@ -5,17 +5,15 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -83,20 +81,6 @@ type SetupStatus struct {
 	// SCM is the presence-only git-credential posture (gh CLI login, helper,
 	// plaintext stores) the ScmProviderStep's ladder recommendations key off.
 	SCM setup.SCMPosture `json:"scm"`
-	// Bedrock is the AWS Bedrock Anthropic-transport readiness the "Connect a
-	// model" step renders alongside the API-key/subscription rows. Region/Model
-	// are boot-time operator config (non-secret, safe to echo); the AWS
-	// credentials themselves are never echoed — CredsPresent is a bool derived
-	// from secret-name presence, same as every other secret in this contract.
-	Bedrock SetupBedrock `json:"bedrock"`
-	// Deployment reports whether wardynd itself sees a resident Claude login
-	// (host mode) or is blind to it (compose/container).
-	Deployment SetupDeployment `json:"deployment"`
-	// Harness reports per-provider Wardyn-managed subscription credentials
-	// captured via container login (setup-token), so the wizard can show a
-	// "connected / expiring / reconnect" row that works in compose mode where
-	// there is no resident host login. Empty when no managed credential exists.
-	Harness []SetupHarness `json:"harness,omitempty"`
 	// Integrations is the effective integration set (stored ∪ legacy-derived,
 	// see effectiveIntegrations in integrations.go) with each row's live
 	// capability matrix — the same shape GET /api/v1/integrations returns,
@@ -106,31 +90,23 @@ type SetupStatus struct {
 	// Harnesses is the STATIC coding-agent harness catalog (harnessCatalog,
 	// harness.go) — which tools Wardyn knows how to run and whether it can
 	// wire each one a managed model credential or a container-login
-	// subscription. Distinct from Harness above (a CAPTURED credential's live
-	// readiness). ADDITIVE field; omitted when empty.
+	// subscription. ADDITIVE field; omitted when empty.
 	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
 	// LLMReady is the server-computed "does SOME run's LLM access path exist"
-	// verdict (HIGH-4 review fix) — the same winning-signal logic that already
-	// decides llmProvenance's detail (resident CLI login, a secret-name
-	// heuristic, Bedrock, a managed harness token) OR'd with an AI-provider
-	// Integration being configured. It exists
-	// because a MEMBER'S redacted response (redactSetupStatusForUser) drops
-	// the checks/providers/secret-name detail that would otherwise let the
-	// console derive this itself — LLMReady is computed BEFORE redaction and
-	// deliberately left untouched BY it, so the console's readiness chip / new-run
-	// banner / demo gating keep working for a member without any of that detail
-	// leaking. Kept in exact sync with ui/src/app/lib/types.ts's SetupStatus.
+	// verdict (HIGH-4 review fix): at least one enabled model provider serves an
+	// agent (llmPathExists). A DEPLOYMENT fact — whether THIS person can use one
+	// is ProviderAccess. It exists because a MEMBER'S redacted response
+	// (redactSetupStatusForUser) drops the checks detail that would otherwise
+	// let the console derive this itself — LLMReady is computed BEFORE redaction
+	// and deliberately left untouched BY it, so the console's readiness chip /
+	// new-run banner / demo gating keep working for a member. Kept in exact sync
+	// with ui/src/app/lib/types.ts's SetupStatus.
 	LLMReady bool `json:"llm_ready"`
 	// ChecksRedacted marks a body whose Checks/Providers/Secrets detail was
 	// stripped for this caller's tier — an empty list here is withheld, not a fact.
 	ChecksRedacted bool `json:"checks_redacted,omitempty"`
-	// ModelAccess is THIS PRINCIPAL's model-access state — the per-person answer
-	// LLMReady above structurally cannot give (it is a DEPLOYMENT fact, which is
-	// why a member whose own AWS session had lapsed read a green chip off it).
-	// Redaction-safe by construction and KEPT for a member: see SetupModelAccess.
-	ModelAccess SetupModelAccess `json:"model_access,omitzero"`
 	// SCMAccess is THIS PRINCIPAL's Azure DevOps access state — scmaccess.go's
-	// computeSCMAccess, ModelAccess's sibling for #386. Zero value (state "")
+	// computeSCMAccess, ProviderAccess's sibling for #386. Zero value (state "")
 	// when no Azure DevOps row is configured; safe for a member by
 	// construction (their own state, computed from their own OIDC subject).
 	SCMAccess SCMAccess `json:"scm_access,omitzero"`
@@ -155,59 +131,15 @@ type SetupStatus struct {
 	// drops both nil and an empty-but-present slice alike).
 	ModelProviders []SetupModelProvider `json:"model_providers,omitzero"`
 	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
-	// ModelProviders (MP-12) — one row per provider, generalising the single
-	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
-	// checklist read this instead of grading one hardcoded lane, so a person
-	// granted several providers sees all of them. Kept for members: a state
+	// ModelProviders (MP-12) — one row per provider. Getting started and the
+	// setup checklist read this, so a person granted several providers sees all
+	// of them. Kept for members: a state
 	// name, an already-composed action sentence, and a deadline instant — no
 	// secret names, no start URL. The pin-mismatch action is the one place the
 	// pinned account and role appear (SetupProviderAccess's doc). Absent with
 	// no provider block.
 	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
 }
-
-// SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
-// purely from the stored blob (presence + capture age) — PRESENCE only, honesty
-// law: no green badge implies the token was live-verified. setup-token tokens
-// live ~1yr with no machine-readable expiry, so Aging is a conservative
-// age-based "reconnect soon" flag, never a hard expiry claim.
-type SetupHarness struct {
-	Provider    string `json:"provider"`              // "anthropic" | "aws"
-	Captured    bool   `json:"captured"`              // a token blob is stored
-	CapturedAt  string `json:"captured_at,omitempty"` // RFC3339, when pasted
-	Aging       bool   `json:"aging,omitempty"`       // captured longer ago than harnessTokenAging
-	SourceRunID string `json:"source_run_id,omitempty"`
-	// ExpiresAt/Expired carry a REAL, machine-readable expiry and are populated
-	// only for providers whose credential exposes one (AWS SSO does; an Anthropic
-	// setup-token does not, which is the whole reason Aging exists as a
-	// conservative age heuristic). Empty here means "this provider can't tell you"
-	// — never "it doesn't expire".
-	ExpiresAt string `json:"expires_at,omitempty"`
-	Expired   bool   `json:"expired,omitempty"`
-	// Renewable: the stored credential can be renewed without a fresh
-	// interactive login — it carries a refresh token AND its OIDC client
-	// registration has not lapsed. The SAME predicate resolveBedrockAuth and
-	// setupBedrock apply (awsSSOBlob.renewable), deliberately: a row that read
-	// "renewable" off the refresh token alone would render "nothing to do" for a
-	// credential whose registration is gone, which dispatch gives up on. Legacy
-	// sso_start_url profiles carry no refresh token and must be re-logged-in.
-	Renewable bool `json:"renewable,omitempty"`
-}
-
-// SetupDeployment reports whether the wardynd process itself sees a resident
-// Claude login — true in host mode (run-host.sh: wardynd runs as the operator,
-// ~/.claude + the claude binary are on its own PATH/HOME), false in the compose
-// path (distroless container blind to the host). HONEST framing like detectKVM:
-// this is "does THIS process see a resident claude", not "is it literally
-// run-host.sh" — a compose container with ~/.claude bind-mounted would also read
-// host-like. The UI uses it to fork the getting-started guidance (laptop/local vs
-// team/server) and to explain why the LLM-access check is or isn't green.
-type SetupDeployment struct {
-	HostLike bool `json:"host_like"`
-}
-
-// SetupBedrock (the Bedrock readiness snapshot) and its predicates live in
-// runs_bedrock.go, next to the resolveBedrockAuth gate they must mirror.
 
 // SetupCheck is defined in setup_checks.go — setup.go is at its allowlisted
 // line-count cap (scripts/check-file-size.sh).
@@ -217,16 +149,6 @@ type SetupDeployment struct {
 type SetupAuth struct {
 	Mode          string `json:"mode"`
 	LocalLoopback bool   `json:"local_loopback"`
-	// SharedSubscriptionAllowed reports whether this deployment may inject ONE
-	// operator's Anthropic subscription into runs (single-user desktop only; see
-	// subscriptionInjectPosture in cmd/wardynd). The console reads it to decide
-	// whether to offer the "Connect Claude subscription" affordance at all —
-	// rendering a sign-in that cannot work is worse than not offering it.
-	SharedSubscriptionAllowed bool `json:"shared_subscription_allowed"`
-	// SharedSubscriptionReason says WHY it is unavailable, so the UI can explain
-	// rather than looking identical to "the operator never logged in". Empty when
-	// allowed.
-	SharedSubscriptionReason string `json:"shared_subscription_reason,omitempty"`
 }
 
 // SetupRunner echoes the runner name and the live confinement classes/substrates.
@@ -241,25 +163,23 @@ type SetupRunner struct {
 	// admin setting a number can see whether anything will hold it.
 	//
 	// Operator-only: redactSetupStatusForUser rebuilds this struct with
-	// ConfinementClasses alone, so the word never reaches a member. It is
-	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
-	// field by field.
+	// ConfinementClasses and Kubernetes alone, so the word never reaches a
+	// member. It is deliberately absent from the ANONYMOUS /healthz, which
+	// composes its own body field by field.
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
+	// Kubernetes is the ONE substrate bit a member may read: the runner is the
+	// Kubernetes driver. Driver itself stays operator-only, so without this a
+	// member's console cannot tell a Kubernetes install apart and would hand
+	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
+	// not the driver name or anything a substrate reports about itself.
+	Kubernetes bool `json:"kubernetes,omitempty"`
 }
 
-// SetupProvider is a resident coding-agent CLI (claude|codex) detected on PATH.
-// LoggedIn is ADVISORY (a home-dir credential-file heuristic, not a live check).
+// SetupProvider is a coding-agent CLI (claude|codex) detected on the wardynd
+// host's PATH.
 type SetupProvider struct {
-	Tool             string `json:"tool"`
-	Installed        bool   `json:"installed"`
-	LoggedIn         bool   `json:"logged_in"`
-	LoginDetectedVia string `json:"login_detected_via,omitempty"`
-	// AuthMode is how the CLI authenticates, when detectable: "subscription" (a
-	// resident Claude OAuth token is present — fresh OR expired; freshness lives in
-	// the llm_provider check Detail, not here) or "" (unknown; never guessed). The
-	// "api_key" value is reserved in the contract but not inferred for a CLI (no
-	// cheap honest signal); codex stays "" (no auth-file parse).
-	AuthMode string `json:"auth_mode,omitempty"`
+	Tool      string `json:"tool"`
+	Installed bool   `json:"installed"`
 }
 
 // SetupSecrets reports present secret NAMES (reserved names excluded) and a
@@ -284,127 +204,12 @@ type SetupPlatform struct {
 	KVM bool `json:"kvm"`
 }
 
-// deploymentHostLike reports whether the claude provider in providers is both
-// installed and logged in — the same signal llmProvenance treats as a resident
-// CLI login, reused here (no new host I/O) to answer "does wardynd itself see a
-// resident Claude login" for SetupDeployment.HostLike. Extracted pure so it is
-// unit-testable without host CLI detection.
-func deploymentHostLike(providers []SetupProvider) bool {
-	for _, p := range providers {
-		if p.Tool == "claude" {
-			return p.Installed && p.LoggedIn
-		}
-	}
-	return false
-}
-
-// llmProvenance is the single LLM-access predicate: it returns the human detail
-// for the WINNING signal (resident CLI login > api-key-ish secret) and "" when
-// none is present — readiness is simply "llmProvenance != \"\"", so the boolean
-// and the rendered detail can never drift.
-//
-// claudeDetail is the precomputed subscription-aware sentence for a resident
-// Claude CLI login (see subscriptionLLMDetail); it is used only when a logged-in
-// claude CLI is the winner, and falls back to a generic sentence when empty (the
-// subscription provider was unwired, so no peek was possible).
-func llmProvenance(providers []SetupProvider, secretNames []string, claudeDetail string) string {
-	for _, p := range providers {
-		// A logged-in CLI is real access; merely installed-but-not-logged-in is not.
-		if !p.LoggedIn {
-			continue
-		}
-		if p.Tool == "claude" && claudeDetail != "" {
-			return claudeDetail
-		}
-		return fmt.Sprintf("Resident %s CLI is logged in (advisory: a credential file is present).", p.Tool)
-	}
-	for _, n := range secretNames {
-		l := strings.ToLower(n)
-		if strings.Contains(l, "api") || strings.Contains(l, "anthropic") || strings.Contains(l, "openai") {
-			return fmt.Sprintf("An LLM API key secret (%q) is present.", n)
-		}
-	}
-	return ""
-}
-
-// subscriptionLLMDetail composes the LLM-access detail for a resident Claude Code
-// CLI login, distinguishing a live Claude SUBSCRIPTION (a peeked OAuth token) from
-// a fresh/expired token and folding in whether subscription runs inject the live
-// host token or fall back to the mounted copy. Pure: all host I/O (the read-only
-// Peek, the PATH lookup) is done by the caller and passed in. loginVia is the
-// credential path the login heuristic matched; binPath is the resolved `claude`
-// binary ("" when logged in but off PATH). It intentionally never embeds a
-// credentials-file path in copy (the honesty note's "derive from CredPath, never
-// hardcode" is met by not naming the file at all).
-func subscriptionLLMDetail(tok subscription.Token, peekErr error, injectEnabled bool, loginVia, binPath string, now time.Time) string {
-	// No readable subscription OAuth token: the login heuristic fired on some other
-	// credential (an API-key session, or a stale/absent creds file), not a
-	// subscription. The CLI login still counts as access — we just can't confirm a
-	// subscription token.
-	if peekErr != nil || tok.Value == "" {
-		via := ""
-		if loginVia != "" {
-			via = " (via " + loginVia + ")"
-		}
-		return "Claude Code CLI login detected" + via + "; no readable Claude subscription token."
-	}
-	var b strings.Builder
-	b.WriteString("Claude Code CLI signed in with a Claude subscription")
-	if tok.ExpiresAt.After(now) {
-		b.WriteString(" (subscription token valid)")
-	} else {
-		b.WriteString(" (subscription token EXPIRED — run `claude` on the host to refresh)")
-	}
-	if binPath == "" {
-		// Logged in, but the resident CLI is off PATH, so the provider cannot
-		// delegate a refresh here (Current would fail closed near expiry).
-		b.WriteString("; the `claude` CLI is not on PATH, so its token cannot be refreshed here")
-	}
-	if injectEnabled {
-		b.WriteString("; subscription runs inject a fresh host token proxy-side")
-	} else {
-		b.WriteString("; subscription injection is off — runs use the mounted credential copy")
-	}
-	b.WriteString(".")
-	return b.String()
-}
-
-// claudeSubscriptionStagingCheck is the "will a resident-host Claude
-// subscription integration actually work" readiness row. It fires ONLY when a
-// resident Claude login is detected (no login => the llm_provider check
-// already says "add one"). The gap it catches: the model-access badge reads
-// green from the HOST login, but a run only reaches it after staging generates
-// the subscription ceiling (~/.wardyn/composer-dev-subscription.json) and
-// wardynd restarts onto it — and `make setup` does not stage at all any more
-// (scripts/stage-claude-creds.sh is the explicit, separately-gated path), so a
-// logged-in host is unstaged by default. blessed mirrors run-host.sh's
-// policy pick: WARDYN_DEFAULT_POLICY blesses the /home/agent/.claude mount only
-// when staging produced the ceiling, so logged-in && !blessed == "not staged".
-// Pure (host I/O done by the caller) so it is unit-testable.
-func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string) (SetupCheck, bool) {
-	if !hasClaudeSub {
-		return SetupCheck{}, false
-	}
-	if blessed {
-		return SetupCheck{
-			ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "ok",
-			Detail: "Your Claude login is staged for sandbox use — a run picks it up once its resolved integration is " +
-				"a resident-host Claude subscription. Save the \"Claude subscription (resident host)\" connection under " +
-				"Settings → Model provider (saving it makes it the agent-runs default), or pin it on a workspace's Model access.",
-		}, true
-	}
-	fix := "Run `make stage-claude` on the host — it stages the login and restarts wardynd onto the subscription ceiling."
-	if strings.Contains(loginVia, "Keychain") {
-		fix = "Your Claude login lives in the macOS Keychain, which staging cannot read. Run `claude login` once over SSH " +
-			"(it writes ~/.claude/.credentials.json), then `make stage-claude`."
-	}
-	return SetupCheck{
-		ID: "claude_subscription_staging", Label: "Claude subscription staging", Status: "warn",
-		Detail: "A resident Claude login was detected — the model-access badge is green — but it is NOT staged for " +
-			"sandbox use, so a run whose resolved integration is a resident-host Claude subscription (the agent-runs " +
-			"default, or a workspace's Model access pin) can't reach it.",
-		Fix: fix,
-	}, true
+// llmPathExists is LLMReady: at least one enabled model provider serves an
+// agent. A deployment fact, never a person's.
+func llmPathExists(sc types.SiteConfig) bool {
+	return slices.ContainsFunc(modelProviderRows(sc), func(p types.ModelProvider) bool {
+		return !p.Disabled && len(p.Harnesses) > 0
+	})
 }
 
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind
@@ -434,7 +239,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 	rnr, k8sNetpolProven := setupRunnerInfo(ctx, s.cfg.Runner)
 
-	providers, claudeDetail := s.setupProviders()
+	providers := s.setupProviders()
 
 	// secrets: names only (reserved excluded); github_app iff both App secrets present.
 	secretNames, present, sec, err := s.setupSecretsSnapshot(ctx)
@@ -456,46 +261,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	scmPosture := setup.DetectSCMPosture()
 
-	// ONE site-config read for the whole handler. It is hoisted above the Bedrock
-	// and harness blocks because it is what says WHOSE model credential this
-	// caller has: an enabled per_user row scopes every AWS SSO read below to the
-	// caller's own namespace, so an admin sees their own capture and a member
-	// sees theirs — never each other's. A failed read fails CLOSED to this
-	// caller's own namespace — see setupStatusSSOScope.
+	// ONE site-config read for the whole handler.
 	siteCfg, siteCfgOK := s.siteConfigSnapshot(ctx)
-	ssoScope := setupStatusSSOScope(siteCfg, siteCfgOK, s.cfg.Store != nil, runIdentitySubject(ctx, principalFromRequest(r)))
 
-	// LLM access provenance: the detail of the WINNING signal (resident CLI
-	// login, or an api-key-ish secret), "" when none. The secret-name scan is a
-	// loose substring signal; the exact truth (a working model call) is only
-	// known at run time — this just decides whether to warn the operator up
-	// front.
-	llmDetail := llmProvenance(providers, secretNames, claudeDetail)
-
-	// Bedrock readiness: region/model are boot-time config (non-secret, safe to
-	// echo to the UI); CredsPresent mirrors resolveBedrockAuth's secret-name
-	// check (presence, not the value). Folded into llmDetail as an ADDITIONAL
-	// winning signal (not a change to llmProvenance's own priority order) so a
-	// Bedrock-only operator still sees "LLM access: ok" without touching the
-	// existing CLI/secret-name signals or their tests.
-	bedrock := s.setupBedrock(ctx, present, siteCfg, ssoScope)
-	if llmDetail == "" && bedrock.Ready {
-		llmDetail = fmt.Sprintf(
-			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",
-			bedrock.Region, bedrock.Model, bedrock.credSourceDesc())
-	}
-
-	harnessCreds, managedDetail, modelAccess := s.setupHarnessCreds(ctx, siteCfg, ssoScope)
-	if llmDetail == "" {
-		llmDetail = managedDetail
-	}
-
-	// llm_ready (HIGH-4 review fix): llmDetail's own winning signal (resident
-	// CLI login, a secret-name heuristic, Bedrock, or a managed harness token —
-	// everything folded in above). Computed BEFORE redaction and left untouched
-	// by it (see redactSetupStatusForUser) — a member's console needs the ANSWER
-	// even though it can no longer see the detail that produced it.
-	llmReady := llmDetail != ""
+	// llm_ready (HIGH-4 review fix): computed BEFORE redaction and left
+	// untouched by it (see redactSetupStatusForUser) — a member's console needs
+	// the ANSWER even though it can no longer see the detail that produced it.
+	llmReady := llmPathExists(siteCfg)
 	modelProviders, providerAccess, providerChecks := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
@@ -504,7 +276,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	checks := append([]SetupCheck{
 		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
 		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
-		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock, providerAccess),
+		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(providerAccess),
 	}, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
@@ -515,27 +287,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
 	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
 		checks = append(checks, chk)
-	}
-	if chk, ok := bedrockProviderCheck(bedrock, siteCfg, siteCfgOK); ok {
-		checks = append(checks, chk)
-	}
-
-	hasClaudeSub, claudeLoginVia := claudeLoginSignal(providers)
-
-	// claude_subscription_staging: the login is detected, but is it STAGED so a
-	// resident-host subscription integration can actually reach it? Catches the
-	// headless-`make setup` skip where the badge is green yet a run resolved to
-	// that integration gets nothing.
-	if chk, ok := claudeSubscriptionStagingCheck(hasClaudeSub, ceilingBlessesClaudeCreds(s.cfg.DefaultPolicy), claudeLoginVia); ok {
-		checks = append(checks, chk)
-	}
-
-	// harness_credential: the compose-mode analogue — a Wardyn-managed subscription
-	// token captured via container login, with an age-based "reconnect" warning.
-	for _, h := range harnessCreds {
-		if chk, ok := harnessCredentialCheck(h, modelAccess); ok {
-			checks = append(checks, chk)
-		}
 	}
 
 	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate)...)
@@ -556,9 +307,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// rather than hiding it.
 	onboardingComplete := false
 	// From the hoisted read above — one site-config read per status call, not
-	// two. It also feeds the agent roster below (setupHarnessTools) and the
-	// model-access scope; a failed read leaves the zero value, which reads as
-	// legacy open mode in all three.
+	// two. It also feeds the agent roster below (setupHarnessTools); a failed
+	// read leaves the zero value, which reads as legacy open mode.
 	if siteCfgOK {
 		checks = siteConfigStatusChecks(checks, siteCfg, present)
 		onboardingComplete = siteCfg.OnboardingCompletedAt != nil
@@ -591,13 +341,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	resp := SetupStatus{
-		Ready:  ready,
-		Checks: checks,
-		Auth: SetupAuth{
-			Mode: authMode, LocalLoopback: s.cfg.LocalLoopback,
-			SharedSubscriptionAllowed: s.cfg.SubscriptionPostureOK,
-			SharedSubscriptionReason:  s.cfg.SubscriptionPostureReason,
-		},
+		Ready:              ready,
+		Checks:             checks,
+		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
 		Runner:             rnr,
 		Providers:          providers,
 		Secrets:            sec,
@@ -608,17 +354,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
 		HostProxy:          hostProxy,
 		SCM:                scmPosture,
-		Bedrock:            bedrock,
-		Deployment:         SetupDeployment{HostLike: deploymentHostLike(providers)},
-		Harness:            harnessCreds,
 		// The harness and model-provider lists hold only what this caller may use
 		// (capVisible; model providers on the roster line, funlen ratchet);
 		// llmReady stays the deployment fact.
 		Integrations: s.integrationsWithCapabilities(ctx, present),
 		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages, modelProviders), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
-		LLMReady:    llmReady,
-		ModelAccess: modelAccess,
-		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
+		LLMReady:  llmReady,
+		SCMAccess: s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
@@ -630,7 +372,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForUser(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
+		resp = redactSetupStatusForUser(resp)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -697,18 +439,14 @@ func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
 // button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
 // for every member regardless of the real runner state. Only Driver and the
 // per-class ConfinementSubstrates map — genuine diagnostic detail — are
-// dropped — and so is EphemeralDiskEnforcement: which word binds a
-// run's disk_mib is an operator's sizing answer, actionable only on the
-// providers/setup surfaces a member has no route to. The strip is structural
-// (the SetupRunner below is rebuilt from ConfinementClasses alone, so a field
+// dropped. So is EphemeralDiskEnforcement: which word binds a run's disk_mib
+// is an operator's sizing answer, actionable only on the providers/setup
+// surfaces a member has no route to. Kubernetes survives as a bare boolean
+// (#1238) — the anonymous /healthz already names the runner, so it discloses
+// nothing new. The strip is structural
+// (the SetupRunner below is rebuilt from ConfinementClasses and the Kubernetes bit alone, so a field
 // added later is dropped by default rather than by a line somebody remembered
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
-// ownAWSRow says the aws harness row is the CALLER'S OWN capture (a per_user
-// row scoped the read to their namespace). It decides one field — see Harness.
-// ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
-// false under a per_user bedrock_sso row (which has no bearer lane of its
-// own to read). It decides one field too — see Bedrock.
-//
 // Secrets.Present keeps demoSecretNames' presence bits (#850): those are the
 // console demo catalog's own seed-secret names
 // (demo-catalog-secrets.ts's needsSecret values, e.g. "wardyn-demo-key"),
@@ -718,55 +456,22 @@ func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
 // (setup/steps.ts) never offer a demo whose secret an admin has in fact
 // stored, because their only signal is this same, otherwise fully redacted,
 // list.
-func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
+func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
-	// Rebuilt from an explicit field list, exactly like Runner two
-	// lines up — SetupBedrock passed through WHOLE, two fields after SCM/
-	// HostProxy are zeroed as "the operator's machine": Region/Model are boot-time
-	// config naming the AWS account's transport, and CredsPresent/AWSMount/
-	// BearerPresent/SSOPresent are which of four AWS credential LANES this
-	// deployment has wired — the same class of host-credential-posture detail
-	// SCM/HostProxy exist to withhold, just one struct over. Ready survives: it
-	// is the one bit the run-launch UI's readiness chip needs, mirrors
-	// ConfinementClasses' own "signal, not diagnostic detail" carve-out, and is
-	// already the member-safe form modelaccess.go computes SetupModelAccess
-	// from — nothing here is new information a member's own ModelAccess row
-	// (kept below) does not already imply.
-	// BearerPresent is the one exception (#337): kept under ownBearerRow only,
-	// it is already scoped to the CALLER's own namespace (bedrockBearerFor),
-	// so it carries no host-credential posture — only "does MY key exist".
-	bearerPresent := st.Bedrock.BearerPresent
-	st.Bedrock = SetupBedrock{Ready: st.Bedrock.Ready}
-	if ownBearerRow {
-		st.Bedrock.BearerPresent = bearerPresent
-	}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
 	// the wardynd host's disk (a gh session, ~/.git-credentials, ~/.netrc, a
 	// plaintext-ish "store"/"cache" helper); HostProxy carries the corporate
 	// proxy topology, host:port and a "the operator's proxy credentials live
-	// here" flag; Deployment.HostLike is derived from Providers, which is
-	// redacted two lines up — keeping it published the resident-login signal
-	// after dropping the detail that produced it.
+	// here" flag.
 	st.SCM = setup.SCMPosture{}
 	st.HostProxy = setup.HostProxyDetection{}
-	st.Deployment = SetupDeployment{}
-	// Harness is REDUCED, not dropped: ui/lib/api/integrations.ts reads
-	// provider/captured/expired to answer "is there a model path" for a
-	// member's own readiness. Capture time, aging and renewability are operator
-	// credential-lifecycle detail. Rebuilt into a new slice rather than edited
-	// in place — the input is the caller's value.
-	// source_run_id survives on ONE row, under ownAWSRow only: the caller's own
-	// per_user aws capture, where it is THEIR login run's id and the one fact
-	// separating "this sign-in captured something" from "a credential was
-	// already there" (S-13 / R-1, harness-login-pane.tsx). Any other row — a
-	// shared/legacy aws row, the unscoped anthropic blob — is the OPERATOR's.
 	// The same rows /integrations publishes, and the same projection. Dropping
 	// SetupSecrets.Present as "secret NAMES" while shipping
 	// integrations[].secrets[].secret_name in the SAME response body was the
@@ -774,27 +479,6 @@ func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) Setu
 	// it passed through, together with the internal egress hosts and the
 	// operator's connection config.
 	st.Integrations = userSafeIntegrations(st.Integrations)
-	// ModelAccess is KEPT, deliberately, and it is the reason a member's chip can
-	// stop reading llm_ready (a DEPLOYMENT fact that read green over their own
-	// lapsed session). It carries a state name, a wire mechanism value and one
-	// member-facing sentence — no secret names, no topology, no AWS access portal
-	// URL — so there is nothing here to drop, and dropping it would leave the
-	// member exactly where this field was added to stop leaving them.
-	// PROJECTED, not passed through: under `shared` the graded blob is the
-	// OPERATOR's, and the `expiring` arm's action line carried their lapse
-	// timestamp verbatim — a credential deadline put back into a body this
-	// function had just stripped it from. See userModelAccess (modelaccess.go).
-	st.ModelAccess = userModelAccess(st.ModelAccess)
-	if len(st.Harness) > 0 {
-		reduced := make([]SetupHarness, len(st.Harness))
-		for i, h := range st.Harness {
-			reduced[i] = SetupHarness{Provider: h.Provider, Captured: h.Captured, Expired: h.Expired}
-			if ownAWSRow && h.Provider == awsSSOProvider {
-				reduced[i].SourceRunID = h.SourceRunID
-			}
-		}
-		st.Harness = reduced
-	}
 	return st
 }
 
@@ -822,103 +506,14 @@ func demoSecretPresence(present []string) []string {
 	return out
 }
 
-// setupProviders detects the resident coding-agent CLIs and returns them plus
-// the subscription-aware detail for a logged-in claude CLI ("" when there is
-// none). It peeks the resident Claude subscription OAuth token (read-only; never
-// refreshes) so the claude row can carry auth_mode "subscription" — set whenever
-// a token is present, fresh OR expired, because freshness belongs in the detail,
-// not the mode. Skipped when no subscription provider is wired (tests /
-// unconfigured host).
-func (s *Server) setupProviders() ([]SetupProvider, string) {
-	var subTok subscription.Token
-	var subPeekErr error
-	subWired := s.cfg.SubscriptionToken != nil
-	if subWired {
-		subTok, subPeekErr = s.cfg.SubscriptionToken.Peek()
-	}
-	subOK := subWired && subPeekErr == nil && subTok.Value != ""
-
+// setupProviders detects the resident coding-agent CLIs on the wardynd host.
+func (s *Server) setupProviders() []SetupProvider {
 	provs := setup.DetectCLIProviders()
 	providers := make([]SetupProvider, 0, len(provs))
-	claudeDetail := ""
 	for _, p := range provs {
-		sp := SetupProvider{
-			Tool: p.Tool, Installed: p.Installed, LoggedIn: p.LoggedIn, LoginDetectedVia: p.LoginVia,
-		}
-		if p.Tool == "claude" && subWired {
-			if subOK {
-				sp.AuthMode = "subscription"
-			}
-			if p.LoggedIn {
-				claudeDetail = subscriptionLLMDetail(subTok, subPeekErr, s.subscriptionInjectEnabled(), p.LoginVia, p.BinPath, s.cfg.Now())
-			}
-		}
-		providers = append(providers, sp)
+		providers = append(providers, SetupProvider{Tool: p.Tool, Installed: p.Installed})
 	}
-	return providers, claudeDetail
-}
-
-// claudeLoginSignal reports whether a resident claude CLI is logged in (the
-// subscription-path signal) and how that login was detected.
-func claudeLoginSignal(providers []SetupProvider) (bool, string) {
-	for _, p := range providers {
-		if p.Tool == "claude" && p.LoggedIn {
-			return true, p.LoginDetectedVia
-		}
-	}
-	return false, ""
-}
-
-// setupHarnessCreds reports the credentials captured by a containerized login,
-// plus the llm-access detail the MANAGED subscription contributes ("" when there
-// is none) — a compose-mode LLM source with no resident host login, folded in by
-// the caller as an ADDITIONAL winning signal so a managed-only operator reads
-// "LLM access: ok" without changing llmProvenance's own priority order. The AWS
-// SSO entry is deliberately NOT folded in: it credentials Bedrock specifically,
-// and the bedrock_provider check already owns that story. It reports TRUE expiry
-// rather than the managed token's age heuristic.
-// It ALSO returns this caller's model-access state, because the AWS SSO read
-// below is the one that answers it: computing the probe anywhere else would mean
-// a second decrypt of the same blob and two surfaces that can disagree about one
-// credential.
-func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, scope awsSSOScope) ([]SetupHarness, string, SetupModelAccess) {
-	var out []SetupHarness
-	managedDetail := ""
-	if blob, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "anthropic"); err == nil && ok {
-		out = append(out, SetupHarness{
-			Provider: "anthropic", Captured: true,
-			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
-			Aging:       s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging,
-			SourceRunID: blob.SourceRunID,
-		})
-		managedDetail = "A Wardyn-managed Claude subscription token (captured via container login) is injected proxy-side into every run."
-	}
-	// Scoped: under a per_user row this is the CALLER's own captured session, not
-	// the operator's — the whole point of per_user, and the reason the probe
-	// below can speak for this person rather than for the deployment.
-	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
-	if err != nil {
-		// A wedged store is not a credential fact. readHarnessBlob propagates
-		// every non-ErrNotFound error precisely so a rotated age key or a PG blip
-		// is never mistaken for "not connected"; grading that into a state would
-		// undo it at the last step and tell a member "Sign in to AWS" (per_user)
-		// or "ask your admin to reconnect it" (shared) about a credential that is
-		// sitting there intact. Say NOTHING instead — the same zero value an
-		// install with nothing to report ships, which leaves the console on the
-		// chip it already renders.
-		return out, managedDetail, SetupModelAccess{}
-	}
-	if found {
-		out = append(out, SetupHarness{
-			Provider: awsSSOProvider, Captured: true,
-			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
-			ExpiresAt:   blob.ExpiresAt.Format(time.RFC3339),
-			Expired:     blob.expired(s.cfg.Now().UTC()),
-			Renewable:   blob.renewable(s.cfg.Now().UTC()) && !s.awsSSOTokenSpentFor(blob),
-			SourceRunID: blob.SourceRunID,
-		})
-	}
-	return out, managedDetail, setupModelAccess(sc, blob, found, s.awsSSOTokenSpentFor(blob), scope, s.cfg.OIDC != nil, s.cfg.Now().UTC())
+	return providers
 }
 
 // siteConfigSnapshot reads the one site-config document, reporting whether the
@@ -959,6 +554,7 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		return out, ""
 	}
 	out.Driver = rn.Name()
+	out.Kubernetes = out.Driver == "k8s"
 	c, err := rn.Capabilities(ctx)
 	if err != nil {
 		return out, ""

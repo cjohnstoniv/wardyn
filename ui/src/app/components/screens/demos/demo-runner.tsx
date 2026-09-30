@@ -162,7 +162,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // The keyless demos' cards promise "no allowed
         // destinations / no key" — without task_mode="exec" the server still
         // resolves the deployment's model credential lanes for a harness run
-        // (resolveLLMTransport skips them only for task_mode=exec; see
+        // (resolveLLMInjections skips them only for task_mode=exec; see
         // internal/api/runs_dispatch_llm.go), silently widening egress to
         // the model host and injecting a live credential proxy-side. Only the
         // harness demo (needsModel) actually wants a model call.

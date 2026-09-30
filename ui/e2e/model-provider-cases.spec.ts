@@ -112,7 +112,7 @@ test.describe("Model provider cases (design §5) — real backend, real per-pers
     // only a harness with >=2 candidates, so this is the mutation this test
     // pins: drop that filter and the chip appears here where design says it
     // must not.
-    await putAgentProviders(page, [{ id: "claude-code", mechanism: "bedrock_sso", default_provider: "bedrock-prod" }]);
+    await putAgentProviders(page, [{ id: "claude-code", default_provider: "bedrock-prod" }]);
 
     await gotoSettings(page);
     const bedrock = row(page, "bedrock-prod");
@@ -178,7 +178,7 @@ test.describe("Model provider cases (design §5) — real backend, real per-pers
       },
       { id: "anthropic-key", kind: "anthropic_api_key", harnesses: [{ harness: "claude-code" }] },
     ]);
-    await putAgentProviders(page, [{ id: "claude-code", mechanism: "bedrock_sso", default_provider: "bedrock-prod" }]);
+    await putAgentProviders(page, [{ id: "claude-code", default_provider: "bedrock-prod" }]);
 
     // One real person connects only the key row — the brief's rejected
     // "shared plus per-person" shape cannot occur (design §5, case d note);
@@ -274,7 +274,7 @@ test.describe("(b) Claude Code offers the subscription, the key and the gateway;
       route.request().method() === "GET"
         ? route.fulfill({
             contentType: "application/json",
-            body: JSON.stringify({ agents: [{ id: "claude-code", mechanism: "custom_endpoint", default_provider: "corp-gateway" }] }),
+            body: JSON.stringify({ agents: [{ id: "claude-code", default_provider: "corp-gateway" }] }),
           })
         : route.fallback(),
     );

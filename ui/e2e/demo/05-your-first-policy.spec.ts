@@ -250,7 +250,7 @@ test("A1 — the panel and its templates", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  const nameBox = dlg.getByLabel("Name");
+  const nameBox = dlg.getByLabel("Name", { exact: true });
   await spotlight(page, nameBox);
   await nameBox.fill(POLICY_NAME);
   await spotlight(page, null);

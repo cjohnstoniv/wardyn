@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,38 +15,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// llmTransport is the resolved LLM credential transport for one dispatch:
-// which of the mutually-exclusive Anthropic paths (host-staged subscription,
-// Wardyn-managed subscription, Bedrock, api-key gateway) credentials the run,
-// and which proxy-side injections/MITM that implies. Produced by
-// resolveLLMTransport, consumed by the CA / grant-authoring / SandboxSpec
-// phases of dispatchRun.
+// llmTransport is what the chosen model provider's arm resolved for one
+// dispatch (resolveProviderLane, every kind): which provider credentials the
+// run and which proxy-side injections/MITM that implies. Consumed by the CA /
+// grant-authoring / SandboxSpec phases of dispatchRun. The zero value is a run
+// no provider credentials.
 type llmTransport struct {
-	// modelRun: this dispatch actually invokes the model (see the doc comment
-	// on resolveLLMTransport's local modelRun below) — false for task-mode=exec
-	// and for a non-interactive scan run. buildRunMounts reads this to
-	// drop the resident ~/.claude mount (claudeCredTarget/claudeCredJSONTarget)
-	// from a non-model run's spec even when the resolved POLICY still carries
-	// it (e.g. an operator's subscription-blessed default/named policy reused
-	// for a plain exec task with no per-run integration consent) — every OTHER
-	// injection mode below already gates on this same signal; the mount was
-	// the one path that did not.
-	modelRun bool
-	// subscription: the policy bind-mounts the resident ~/.claude (claudeCredTarget).
-	subscription bool
-	// injectSub: subscription AND a live token provider is wired AND the
-	// WARDYN_SUBSCRIPTION_INJECT escape hatch is not off — the proxy swaps in the
-	// LIVE OAuth token (TLS-MITM of api.anthropic.com).
-	injectSub bool
-	// injectManaged: no resident mount / no Bedrock; the Wardyn-managed
-	// setup-token credentials the run proxy-side (the compose-mode path).
-	injectManaged bool
-	// harnessLogin: a `claude setup-token` login box — no credential at all.
-	harnessLogin bool
 	// bedrock is the resolved Bedrock auth posture; ready gates all Bedrock use.
 	bedrock      bedrockAuth
 	bedrockReady bool
@@ -63,34 +39,33 @@ type llmTransport struct {
 	// in (see internal/api/injection_awssso.go).
 	injectBedrockSSO bool
 	// provider is the model provider this run chose and whose owner's own
-	// credential its arm authors (resolveProviderLane, every kind); nil on the legacy
-	// lane chain, where every other field here decides instead. A Bedrock
-	// provider's arm also fills the bedrock* fields above, so every consumer of
-	// those (mounts, the ceiling, the grant authors) reads it unchanged.
+	// credential its arm authors; nil when no provider serves the run. A
+	// Bedrock provider's arm also fills the bedrock* fields above, so every
+	// consumer of those (mounts, the ceiling, the grant authors) reads it
+	// unchanged.
 	provider *chosenProvider
 	// secretEnvKeys are the sandboxEnv variables applyBedrockTransport filled
-	// with REAL credential material — the resident SigV4 keys, or the captured
-	// AWS SSO blob. Nil for every never-resident mode (bearer, ~/.aws mount) and
-	// for every non-Bedrock transport, whose env holds only placeholders. Read
-	// by dispatch's splitSecretEnv, which moves them onto SandboxSpec.SecretEnv
-	// so a substrate does not have to publish them in a readable pod spec.
+	// with REAL credential material — the captured AWS SSO blob. Nil for every
+	// never-resident mode (bearer) and for every non-Bedrock transport, whose
+	// env holds only placeholders. Read by dispatch's splitSecretEnv, which
+	// moves them onto SandboxSpec.SecretEnv so a substrate does not have to
+	// publish them in a readable pod spec.
 	secretEnvKeys []string
 	// bedrockAudit is the run.bedrock.configure row applyBedrockTransport computed but
 	// did NOT record — recording it is deferred to resolveLLMInjections, past
-	// every gate that can still refuse the run (enforceConfiguredLLMMechanism,
-	// bedrockCredGradeHolds, MITM CA provisioning, grant authoring,
-	// enforceInspectableLLM), so a run any of them refuses never gets a
-	// "success" injection row for a credential it was never handed (#518).
-	// Zero value unless bedrockReady.
+	// every gate that can still refuse the run (bedrockCredGradeHolds, MITM CA
+	// provisioning, grant authoring, enforceInspectableLLM), so a run any of
+	// them refuses never gets a "success" injection row for a credential it
+	// was never handed (#518). Zero value unless bedrockReady.
 	bedrockAudit bedrockTransportAudit
 }
 
 // bedrockTransportAudit is the detail applyBedrockTransport computes about
-// WHICH of the four Bedrock modes (bearer / sso-inject / aws-dir-mount /
-// resident) credentials a run, for the run.bedrock.configure audit row. Carried on
-// llmTransport rather than recorded immediately, so the caller can record it
-// only once the dispatch gates that follow (enforceConfiguredLLMMechanism,
-// bedrockCredGradeHolds) have actually let the run through.
+// WHICH Bedrock mode (bearer / sso-inject / sso-inject-proxy) credentials a
+// run, for the run.bedrock.configure audit row. Carried on llmTransport rather
+// than recorded immediately, so the caller can record it only once the dispatch
+// gates that follow (bedrockCredGradeHolds, grant authoring) have actually let
+// the run through.
 type bedrockTransportAudit struct {
 	region, model, endpoint, mode, detail string
 	hosts                                 []string
@@ -115,271 +90,39 @@ func (t llmTransport) providerSubscription() bool {
 // shell command that never asked for a model. An INTERACTIVE workspace-linked
 // run (Record Mode) is human-driven, not a scan, so it stays a model run.
 // Mirrors the WARDYN_SCAN_ONLY discriminator. Extracted as its own function
-// (rather than inlined in resolveLLMTransport) so it's independently unit
+// (rather than inlined in resolveLLMInjections) so it's independently unit
 // testable — this gate gets it wrong once and every non-model run leaks a
 // live model credential.
 func isModelRun(taskMode string, workspaceID, sourceID *uuid.UUID, interactive bool) bool {
 	return taskMode != "exec" && !((workspaceID != nil || sourceID != nil) && !interactive)
 }
 
-// resolveLLMTransport decides which LLM transport credentials this run and sets
-// the corresponding sandbox env (ANTHROPIC_BASE_URL / CLAUDE_CONFIG_DIR /
-// placeholders / Bedrock env / the codex-cli OpenAI gateway route). It may
-// append Bedrock egress hosts to policy.AllowedDomains and register resident
-// SigV4 creds with the mask registry. injections is read-only here (it gates
-// the managed fallback); the grant-authoring phases mutate it later. See the
-// inline comments for the full precedence rationale: host-staged mount >
-// managed > Bedrock > api-key.
+// applyBedrockTransport wires a Bedrock provider's READY posture onto the run:
+// it copies the resolved Bedrock env into the sandbox env, appends the Bedrock
+// egress hosts to the policy allow-list, and computes which of the modes
+// (bearer / sso-inject / sso-inject-proxy) credentials the run, as a
+// bedrockTransportAudit the caller records once dispatch's gates hold (see
+// bedrockTransportAudit's doc comment — recording here, unconditionally, would
+// audit a "success" injection for a run the gates go on to refuse).
 //
-// That order is unconditional — it knows nothing about what an admin declared —
-// so when an AgentProviders row names the mechanism for this run's agent, the
-// transport resolved here is COMPARED against that declaration and a mismatch
-// fails the run closed instead of being served by another provider's credential
-// (enforceConfiguredLLMMechanism).
-// sso is WHOSE captured AWS SSO session this run may use — resolved from the
-// roster by the caller, because the caller is the one holding the site config.
-// The zero value is the operator namespace, i.e. every deployment that never
-// declared a per_user credential source.
-func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, proxyURL string, bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope) llmTransport {
-	var t llmTransport
-
-	// modelRun gates EVERY proxy-side credential-injection mode below
-	// (subscription, managed, Bedrock) on a run that actually invokes the model.
-	// See isModelRun's doc comment for the full rationale.
-	modelRun := isModelRun(taskMode, run.WorkspaceID, run.SourceID, interactive)
-	t.modelRun = modelRun
-
-	// Anthropic auth mode — set on the SANDBOX ENV (not just in agent-run). An
-	// INTERACTIVE run never invokes agent-run (the human runs `claude` in the
-	// attach shell), so the auth env must live on the container itself or the
-	// manual claude session inherits the image's inject-gateway default and is
-	// denied. Detect SUBSCRIPTION by the resident ~/.claude bind mount: claude
-	// then talks DIRECTLY to api.anthropic.com with its own OAuth creds over the
-	// HTTPS_PROXY tunnel, bypassing /wardyn/llm/anthropic (which would deny a run
-	// that has no api_key grant to inject). Otherwise (API-key mode) keep the
-	// image's gateway default and seed a NON-SECRET placeholder so claude emits a
-	// request the proxy strips + re-injects (invariant 1: the real key is never
-	// resident; the placeholder is a sentinel, not a credential).
-	t.subscription = specHasMountTarget(policy, claudeCredTarget)
-	// Subscription runs: inject the operator's LIVE OAuth token PROXY-SIDE (the
-	// sandbox holds only an inert sentinel) instead of the resident copy, which
-	// goes stale — the access token expires (~hours) and the refresh token ROTATES
-	// as the operator's own host `claude` refreshes, locking the copy out. This
-	// REQUIRES TLS-MITM of api.anthropic.com so the proxy can swap the credential;
-	// it is the safe default whenever a token provider is wired. Escape hatch:
-	// WARDYN_SUBSCRIPTION_INJECT=off keeps the legacy resident-copy behavior.
-	// SubscriptionPostureOK first: on a multi-user deployment we do not author the
-	// grant at all, so the run degrades to reconcileLLMAccess's honest "no model
-	// access" note instead of dying at the proxy with "injection status 403" —
-	// buildInjector fails closed on any non-200, and an operator reads that as a
-	// Wardyn bug rather than a deliberate refusal. The sink still refuses; this
-	// layer exists so the refusal is legible.
-	t.injectSub = s.cfg.SubscriptionPostureOK && modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
-
-	// A harness login run has no credential yet — its whole purpose is for the
-	// operator to run `claude setup-token` in the attach shell and mint one. Point
-	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
-	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
-	// mis-signals api-key mode. No mount, no injection, no MITM — computed BEFORE
-	// the Bedrock block below so it can gate resolveBedrockAuth itself, not just
-	// the sandboxEnv branch: every consumer of llm.bedrock* —
-	// resident_env's ~/.aws mount (runs_dispatch.go), the bearer grant + MITM
-	// host (runs_dispatch.go, dispatch.go) — reads bedrockReady/injectBedrockBearer
-	// directly, so leaving t.bedrock resolved (even though sandboxEnv correctly
-	// skipped applyBedrockTransport for this run) still handed a login box the
-	// host's AWS credentials or a minted bearer token it never asked for and has
-	// no attach-shell affordance to use.
-	t.harnessLogin = run.Task == harnessLoginTask
-
-	// Bedrock: a third Anthropic transport, mutually exclusive with subscription
-	// (checked first) and api-key mode (the fallback). See resolveBedrockAuth for
-	// the readiness rule and the resident-AWS-cred rationale.
-	//
-	// Bedrock honors the same modelRun gate computed at the top: a scan or
-	// exec run signs no Bedrock request, so it gets no resident AWS SigV4 creds.
-	// bedrockRef is the picked workspace/container's per-run region/model
-	// override (nil => the global operator config).
-	if !t.harnessLogin {
-		// refresh=true: dispatch (like the real launch's create) may redeem a captured AWS SSO
-		// session's rotating refresh token and persist the rotated pair — the same
-		// sso-refresh purpose the create path (resolveLLMLanes) records for a
-		// refreshing read, not a plain dispatch read.
-		t.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, secretstore.PurposeSSORefresh), run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
-		t.bedrockReady = t.bedrock.ready
-		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
-		// (never-resident); consumed by the CA / injection / MITM-host wiring
-		// alongside the subscription path.
-		t.injectBedrockBearer = t.bedrockReady && t.bedrock.bearer
-		// injectBedrockSSO wires the run's own portal.sso host for proxy-side
-		// injection of the captured SSO access token (PHASE B). Same shape as
-		// the bearer flag above, and gated on the same resolved posture: it is
-		// true only when resolveBedrockAuth actually SELECTED the captured-SSO
-		// lane AND the kill switch was on when it did.
-		t.injectBedrockSSO = t.bedrockReady && t.bedrock.ssoInject && t.bedrock.ssoProxyInject
-	}
-
-	// MANAGED subscription: when there is no resident ~/.claude mount and no
-	// Bedrock, and the operator connected a Wardyn-managed setup-token, inject it
-	// PROXY-SIDE exactly like a resident subscription (the sandbox holds only an
-	// inert sentinel). This is the compose-mode subscription path. Precedence:
-	// host-staged mount > managed > Bedrock > api-key.
-	//
-	// OPT-OUT (do NOT override an explicit api-key choice): managed is the FALLBACK
-	// when nothing else credentials the run — NOT a silent replacement for an
-	// operator who chose api-key. An anthropic api-key grant already present in
-	// `injections` (a policy's own grant, or a direct api-key run) means the
-	// operator opted for api-key;
-	// letting managed fire would drop that grant below and silently bill the
-	// subscription instead, while the compose review said "api-key". So require
-	// no pre-existing anthropic injection.
-	// A zero-egress policy (no allow-all, empty allow-list — e.g. a sealed demo
-	// sandbox) suppresses the fallback entirely: managed injection APPENDS
-	// api.anthropic.com to the allow-list below, and a fallback must not silently
-	// widen a policy the operator authored as sealed. Operator-staged subscription
-	// mounts are policy-blessed and unaffected.
-	// Posture first, for the same reason as injectSub above — and it matters more
-	// here: this lane is a DEFAULT FALLBACK for every claude-code run, needing no
-	// policy, no integration id and no flag, so on a multi-user stack it silently
-	// serves the operator's subscription to every member.
-	managed := s.managedSubscriptionLane(run.Agent, modelRun, t.harnessLogin, t.subscription, t.bedrockReady,
-		s.hasAnthropicAPIKeyInjection(run.Agent, injections), policy)
-	t.injectManaged = managed
-
-	if t.harnessLogin {
-		// The harness-login (`claude setup-token`) flow mints the OAuth token
-		// itself and must never be redirected — always the public host, even
-		// when a gateway is configured for the two transports below.
-		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
-	} else if t.subscription {
-		// Vendor default, or the operator-configured gateway when one is set
-		// (s.anthropicBaseURL) — unset is byte-identical to today.
-		sandboxEnv["ANTHROPIC_BASE_URL"] = s.anthropicBaseURL()
-		// The subscription creds are bind-mounted READ-ONLY at ~/.claude, but
-		// claude-code needs a WRITABLE config dir (session-env/, history) — it fails
-		// EROFS trying to mkdir under a read-only ~/.claude. Point CLAUDE_CONFIG_DIR at
-		// a writable path that agent-run populates from the read-only mount (creds +
-		// ~/.claude.json). Set on the sandbox env so BOTH agent-run and an interactive
-		// `wardyn run attach` shell inherit it.
-		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
-	} else if managed {
-		// Managed subscription (compose, no host ~/.claude mount): same wire posture
-		// as resident subscription — talk direct to api.anthropic.com (or the
-		// configured gateway) over the tunnel with a writable config dir — but the
-		// sentinel creds are DELIVERED via env (WARDYN_CLAUDE_MANAGED_B64) instead
-		// of a mount, since there is nothing to mount. agent-run materializes them;
-		// the proxy injects the live token.
-		sandboxEnv["ANTHROPIC_BASE_URL"] = s.anthropicBaseURL()
-		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
-		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
-	} else if t.bedrockReady {
-		t.secretEnvKeys, t.bedrockAudit = s.applyBedrockTransport(run, t.bedrock, policy, sandboxEnv)
-	} else {
-		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
-	}
-	// Operator model pin: force a specific Anthropic model (e.g. "opus") so the
-	// agent doesn't fall back to the account/CLI default (a promo can push that to
-	// a cheaper model like Fable). Off unless configured; Claude agent only; never
-	// overrides the Bedrock model id (that IS the pin, in inference-profile form).
-	if s.cfg.AgentAnthropicModel != "" && run.Agent == "claude-code" && !t.bedrockReady {
-		sandboxEnv["ANTHROPIC_MODEL"] = s.cfg.AgentAnthropicModel
-	}
-
-	// Codex (OpenAI) reverse-proxy route: point the OpenAI SDK at the proxy's
-	// inspectable /wardyn/llm/openai gateway with a non-secret placeholder; the
-	// proxy strips it and injects the brokered OpenAI key (mirrors Anthropic
-	// api-key mode). A subscription Codex reaching api.openai.com directly is
-	// covered by TLS-MITM when intercept_tls is enabled.
-	if run.Agent == "codex-cli" && !t.subscription {
-		sandboxEnv["OPENAI_BASE_URL"] = proxyURL + "/wardyn/llm/openai"
-		sandboxEnv["OPENAI_API_KEY"] = "wardyn-proxy-injected"
-	}
-
-	return t
-}
-
-// managedSubscriptionLane reports whether the Wardyn-managed setup-token lane
-// credentials this run. It is a function rather than an expression inside
-// resolveLLMTransport because CREATE resolves the same lane (resolveRunLLMLanes)
-// to decide what a run WOULD dispatch on, and the two spellings drifted the
-// moment there were two: create's copy was missing the posture term and the
-// Bedrock term, so on any multi-user deployment — the only kind that has an
-// agent roster at all — create computed "managed" for a run dispatch would
-// credential some other way, and the declared-mechanism gate then refused at one
-// end or the other. One spelling, both callers, no drift.
-//
-// Each term, in the order it matters:
-//   - posture: a shared subscription is a single-user desktop setting; on a
-//     multi-user stack this lane would silently serve the operator's own
-//     subscription to every member.
-//   - modelRun / !harnessLogin: a run that makes no model call gets no
-//     credential, and the login box has none to be given yet.
-//   - !subscription / !bedrockReady: managed is the FALLBACK — the host-staged
-//     mount and a resolved Bedrock posture both outrank it.
-//   - !apiKey: an api_key grant already brokered for this agent's provider host
-//     is the operator's explicit choice; letting managed fire would drop it and
-//     bill the subscription instead.
-//   - managedInjectReady: a managed token is actually connected (claude-code only).
-//   - some egress: managed injection APPENDS api.anthropic.com to the allow-list,
-//     and a fallback must not widen a policy its author sealed.
-func (s *Server) managedSubscriptionLane(agent string, modelRun, harnessLogin, subscription, bedrockReady, apiKey bool,
-	policy *types.RunPolicySpec,
-) bool {
-	return s.cfg.SubscriptionPostureOK && modelRun && !harnessLogin && !subscription && !bedrockReady &&
-		!apiKey && s.managedInjectReady(agent) &&
-		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
-}
-
-// applyBedrockTransport wires a READY Bedrock posture onto the run: it copies
-// the resolved Bedrock env into the sandbox env, registers any resident SigV4
-// credentials with the mask registry, appends the Bedrock egress hosts to the
-// policy allow-list, and computes which of the four modes (bearer / sso-inject /
-// aws-dir-mount / resident) credentials the run, as a bedrockTransportAudit the
-// caller records once dispatch's gates hold (see bedrockTransportAudit's doc
-// comment — recording here, unconditionally, would audit a "success" injection
-// for a run the gates go on to refuse). Extracted verbatim from
-// resolveLLMTransport's t.bedrockReady branch.
-func (s *Server) applyBedrockTransport(run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) ([]string, bedrockTransportAudit) {
+// The returned keys are the sandboxEnv variables holding REAL credential
+// material: only the captured SSO blob, whose base64 payload IS the access and
+// refresh token. The bearer mode holds a placeholder.
+func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) ([]string, bedrockTransportAudit) {
 	for k, v := range b.env {
 		sandboxEnv[k] = v
 	}
-	// Resident SigV4 creds must stay out of PTY/recording streams and any
-	// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
-	// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
-	// neither has anything secret to mask here.
-	//
-	// secretEnvKeys names the SAME variables, decided by the SAME condition and
-	// in the same place, so the two answers to "which of these is a credential?"
-	// cannot drift: what is worth masking out of a recording is exactly what is
-	// worth keeping out of an API-readable pod spec (SandboxSpec.SecretEnv).
-	// AWS_SESSION_TOKEN is conditional because a long-lived key pair has none;
-	// the SSO blob is a separate mode whose env carries no SigV4 key at all, but
-	// whose base64 payload IS the captured access/refresh token.
 	var secretEnvKeys []string
-	if !b.bearer && !b.awsMount {
-		for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
-			if b.env[k] != "" {
-				secretEnvKeys = append(secretEnvKeys, k)
-			}
-		}
-	}
 	if b.ssoInject && b.env[awsSSOConfigEnvVar] != "" {
 		secretEnvKeys = append(secretEnvKeys, awsSSOConfigEnvVar)
 	}
-	if s.cfg.MaskRegistry != nil && !b.bearer && !b.awsMount {
-		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_ACCESS_KEY_ID"]))
-		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_SECRET_ACCESS_KEY"]))
-		if tok := b.env["AWS_SESSION_TOKEN"]; tok != "" {
-			s.cfg.MaskRegistry.Add(run.ID, []byte(tok))
-		}
-	}
 	unionAllowedDomains(policy, b.egressHosts)
-	detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
-	mode := "resident"
+	var mode, detail string
 	switch {
 	case b.bearer:
 		detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
 		mode = "bearer"
-	case b.ssoInject && b.ssoProxyInject:
+	case b.ssoProxyInject:
 		// Phase B. The synthetic ~/.aws still exists — the SDK needs the
 		// profile to know WHICH account/role to ask for — but its token cache
 		// holds an inert placeholder, and the session itself is set on the wire
@@ -387,19 +130,16 @@ func (s *Server) applyBedrockTransport(run types.AgentRun, b bedrockAuth, policy
 		// it are still resident; SigV4 signs in-process and always will.
 		detail = "captured AWS SSO session injected proxy-side as x-amz-sso_bearer_token on the run's own portal.sso host (TLS-MITM); the sandbox's token cache holds only a placeholder — the SSO access token is never resident. The short-lived role credentials the SDK mints from it still are (SigV4 signs client-side)"
 		mode = "sso-inject-proxy"
-	case b.ssoInject:
+	default:
 		detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident — Phase B (WARDYN_AWS_SSO_PROXY_INJECT) injects it proxy-side on portal.sso instead"
 		mode = "sso-inject"
-	case b.awsMount:
-		detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
-		mode = "aws-dir-mount"
 	}
 	return secretEnvKeys, bedrockTransportAudit{
 		region: b.region, model: b.model, hosts: b.egressHosts,
-		// The EFFECTIVE data-plane host — a WARDYN_BEDROCK_BASE_URL
-		// (PrivateLink) override's host, else the regional public one — so
-		// the record names where the call actually went rather than leaving
-		// an auditor to infer it from the region.
+		// The EFFECTIVE data-plane host — the provider's own base URL
+		// (PrivateLink) host, else the regional public one — so the record names
+		// where the call actually went rather than leaving an auditor to infer
+		// it from the region.
 		endpoint: b.runtimeHost,
 		mode:     mode, detail: detail,
 	}
@@ -529,60 +269,13 @@ func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 	setSandboxCATrustVars(sandboxEnv, true)
 }
 
-// authorSubscriptionInjection authors the subscription/managed proxy-side
-// credential: a re-mintable api_key grant whose SENTINEL secret name resolves
-// to a LIVE Anthropic OAuth token (resident host token, or the Wardyn-managed
-// captured setup-token) rather than a stored secret; appends its injection and
-// ensures the exact host is egress-allowed (the injector's hard requirement).
-// Non-approval api_key grants are re-mintable by design, so the proxy
-// re-resolves the token indefinitely — this is what makes the sandbox's
-// sentinel sufficient. injectSub and injectManaged are mutually exclusive by
-// construction (managed requires !subscription). Returns the updated
-// injections slice and, when an operator gateway is configured
-// (s.anthropicGatewayHostPort), that gateway as a "host:port" MITM entry for
-// the caller to fold into this run's per-run MITM host list (nil when unset —
-// the built-in api.anthropic.com/api.openai.com hosts need no such entry,
-// isMITMHost already recognizes them): without it the CONNECT to the gateway
-// stays an opaque tunnel and the sentinel is never swapped for the live token,
-// silently defeating the whole feature. ok=false means the grant write failed,
-// the run was marked FAILED (CAS from STARTING), and dispatch must stop.
-func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.AgentRun, t llmTransport, policy *types.RunPolicySpec, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
-	anthropicAPIHost := subscriptionInjectionHost
-	var mitmHosts []string
-	if h := s.anthropicGatewayHost(); h != "" {
-		anthropicAPIHost = h
-		mitmHosts = []string{s.anthropicGatewayHostPort()}
-	}
-	sentinelName := subscriptionOAuthSecret
-	injectSource := "subscription"
-	detail := "live subscription OAuth token injected proxy-side; sandbox's staged copy holds only inert sentinel tokens (access + refresh both replaced at staging)"
-	if t.injectManaged {
-		sentinelName = types.ManagedOAuthSecret
-		injectSource = "managed"
-		detail = "Wardyn-managed subscription (setup-token) injected proxy-side; sandbox holds only an inert sentinel delivered via env (no host ~/.claude mount)"
-	}
-	// Subscription/managed REPLACES any api-key injection for the same host. A
-	// ceiling that also lists an anthropic-api-key grant (e.g. the composer-dev
-	// ceiling) would otherwise leave TWO injections for the same host; the
-	// proxy resolves both at startup and the api-key mint fails closed when its
-	// secret is absent — crashing the sidecar. authorOAuthSentinelGrant drops it
-	// (the direct-run equivalent of reconcileLLMAccess's removeAPIKeyGrantForHost).
-	injections, ok := s.authorOAuthSentinelGrant(ctx, run, policy, injections, oauthSentinelGrant{
-		host: anthropicAPIHost, sentinel: sentinelName, source: injectSource, detail: detail,
-	})
-	if !ok {
-		return injections, nil, false
-	}
-	return injections, mitmHosts, true
-}
-
 // authorBedrockBearerInjection authors the Bedrock BEARER injection: an api_key
-// grant whose Authorization: Bearer header injects the operator's Bedrock API
-// key into bedrock-runtime, and marks that host TLS-MITM-eligible for THIS run.
-// This is the same operator-configured MITM-host + paired-injection pattern as
-// corp artifact hosts (isCorpMITMHost) — bedrock-runtime is not a wildcard, the
-// token is the operator's own, and the CA key stays in proxy memory. The
-// sandbox holds only the placeholder bearer. Returns the updated injections and
+// grant whose Authorization: Bearer header injects the run owner's own Bedrock
+// API key for the chosen provider into bedrock-runtime, and marks that host
+// TLS-MITM-eligible for THIS run. This is the same operator-configured
+// MITM-host + paired-injection pattern as corp artifact hosts (isCorpMITMHost)
+// — bedrock-runtime is not a wildcard, and the CA key stays in proxy memory.
+// The sandbox holds only the placeholder bearer. Returns the updated injections and
 // the MITM host list; ok=false means the grant write failed, the run was marked
 // FAILED (CAS from STARTING), and dispatch must stop. Extracted verbatim from
 // dispatchRun.
@@ -597,24 +290,19 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // The injection SCOPE below stays a bare host — buildInjector requires that —
 // only the MITM-eligibility set carries the port.
 //
-// The scope's snapshot records WHOSE key the resolve read (bedrockAuth's
-// bearerNamespace): the sink resolves the key from exactly that namespace and
-// refuses a grant without one — see resolveBedrockBearerInjection.
+// The scope's snapshot records WHOSE key it is and for which provider: the
+// sink resolves the key under the provider's UID from exactly that namespace
+// (resolveProviderKeyInjection). Only the provider arm sets injectBedrockBearer,
+// so t.provider is always set here.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
 	mitmHosts := []string{net.JoinHostPort(t.bedrock.runtimeHost, strconv.Itoa(t.bedrock.runtimePort))}
-	secret, snapshot := bedrockAPIKeySecret, any(bedrockBearerSnapshotOf(t.bedrock.bearerNamespace))
-	if c := t.provider; c != nil {
-		// A chosen provider's key: its owner's own, under the provider's UID,
-		// resolved by resolveProviderKeyInjection.
-		secret = providerSecretName(c.provider.UID, providerKeyPart)
-		snapshot = providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner}
-	}
+	c := t.provider
 	beScope, _ := json.Marshal(map[string]any{
 		"host":        t.bedrock.runtimeHost,
 		"header":      "Authorization",
 		"format":      "Bearer %s",
-		"secret_name": secret,
-		"snapshot":    snapshot,
+		"secret_name": providerSecretName(c.provider.UID, providerKeyPart),
+		"snapshot":    providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
 	})
 	beGrantID := uuid.New()
 	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
@@ -637,30 +325,6 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	return injections, mitmHosts, true
 }
 
-// dropUnauthoredBedrockBearerInjections removes every injection naming
-// bedrock-api-key, auditing each one.
-//
-// The key has ONE author: authorBedrockBearerInjection, whose grant records the
-// namespace the key was read from. Any other injection naming it — a stored
-// policy's, a recorded profile that captured an earlier run's grant — carries
-// no record of THIS run's choice, and the sink refuses it, which would fail the
-// proxy's startup. Every drop is audited, as filterUserGrants' and
-// persistRunGrants' are, so an operator whose policy named the key can see why
-// that injection is gone.
-func (s *Server) dropUnauthoredBedrockBearerInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
-	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		if ig.Rule.SecretName != bedrockAPIKeySecret {
-			return false
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.drop",
-			ig.GrantID.String(), "denied", mustJSON(map[string]any{
-				"grant_id": ig.GrantID, "secret_name": bedrockAPIKeySecret, "host": ig.Rule.Host,
-				"reason": "bedrock_bearer_not_dispatch_authored",
-			})))
-		return true
-	})
-}
-
 // llmInspectMITMEnabled reports whether the policy's intercept_tls content
 // inspection is active (mode set and not "off") — the content-inspection reason
 // to provision the per-run MITM CA and TLS-terminate the built-in LLM hosts.
@@ -669,40 +333,39 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 	return li != nil && li.InterceptTLS && li.Mode != "" && !strings.EqualFold(li.Mode, "off")
 }
 
-// inspectableLLMRefusal is require_inspectable_llm's refusal. It
-// enumerates BOTH Bedrock sub-modes: the gate below fails the bearer lane closed
-// too, and a sentence that named only SigV4 told an operator their bearer run
-// was refused for a reason that did not apply to it. It is a run failure hint
-// AND the quoted `error` value on the run.create failure row.
+// inspectableLLMRefusal is require_inspectable_llm's refusal. It enumerates
+// BOTH Bedrock sub-modes: the gate below fails the bearer lane closed too, and
+// a sentence that named only SigV4 told an operator their bearer run was
+// refused for a reason that did not apply to it. It is a run failure hint AND
+// the quoted `error` value on the run.create failure row.
 //
 // DRAFT (M2 canon pending)
-const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transport is opaque (subscription " +
-	"without MITM, or Bedrock — both SigV4 and bearer, which Wardyn can decrypt but has no extractor " +
-	"for); enable intercept_tls or use an inspectable transport"
+const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transport is opaque (Bedrock — both " +
+	"SigV4 and bearer, which Wardyn can decrypt but has no extractor for); choose an inspectable model provider"
 
 // enforceInspectableLLM fails CLOSED at schedule time when inspection is
-// REQUIRED but the resolved LLM transport is OPAQUE. Opaque transports:
-// (a) a subscription/OAuth transport that is NOT being MITM'd (injectSub /
-// intercept_tls auto-enable MITM, making it inspectable); (b) BEDROCK, BOTH
-// sub-modes — proxy-injected + MITM'd does NOT make Bedrock inspectable:
-// require_inspectable_llm is a
-// RUNTIME guarantee (policy.go), and MITM only makes a body READABLE — SCANNING
-// it needs an extractor and a prompt-bearing channel, and there is neither for
-// Bedrock. contentscan.Extract handles anthropic.messages / openai.chat /
-// generic / mcp.jsonrpc only, and channelForHost gives a bedrock-runtime host
-// ChannelGeneric, which classifyLLM treats as not prompt-bearing — so a bearer
-// Bedrock run admitted as "inspectable" would get ZERO scan coverage. Both sub-modes
-// therefore fail closed until a Bedrock extractor + channel exist; when they do,
-// re-exempt the bearer arm HERE (one predicate) and say so in THREAT-MODEL 5.1a.
-// The default (require_inspectable_llm=false) instead degrades visibly rather
-// than failing. Returns false when the run was marked FAILED (CAS from STARTING
-// so a concurrent kill's KILLED is not clobbered) and dispatch must stop.
+// REQUIRED but the resolved LLM transport is OPAQUE: BEDROCK, BOTH sub-modes —
+// proxy-injected + MITM'd does NOT make Bedrock inspectable:
+// require_inspectable_llm is a RUNTIME guarantee (policy.go), and MITM only
+// makes a body READABLE — SCANNING it needs an extractor and a prompt-bearing
+// channel, and there is neither for Bedrock. contentscan.Extract handles
+// anthropic.messages / openai.chat / generic / mcp.jsonrpc only, and
+// channelForHost gives a bedrock-runtime host ChannelGeneric, which classifyLLM
+// treats as not prompt-bearing — so a bearer Bedrock run admitted as
+// "inspectable" would get ZERO scan coverage. Both sub-modes therefore fail
+// closed until a Bedrock extractor + channel exist; when they do, re-exempt the
+// bearer arm HERE (one predicate) and say so in THREAT-MODEL 5.1a. Every other
+// provider kind is inspectable: the key and endpoint kinds ride the brokered
+// route, and a Claude subscription is always injected under MITM. The default
+// (require_inspectable_llm=false) instead degrades visibly rather than
+// failing. Returns false when the run was marked FAILED (CAS from STARTING so
+// a concurrent kill's KILLED is not clobbered) and dispatch must stop.
 func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, llm llmTransport) bool {
 	li := policy.LLMInspection
 	if li == nil || !li.RequireInspectableLLM || li.Mode == "" || strings.EqualFold(li.Mode, "off") {
 		return true
 	}
-	if (llm.subscription && !li.InterceptTLS && !llm.injectSub) || llm.bedrockReady {
+	if llm.bedrockReady {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, inspectableLLMRefusal)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": inspectableLLMRefusal})))
@@ -725,24 +388,23 @@ type dispatchLLMPlan struct {
 	// bedrockMITMHosts is this run's per-run MITM host list beyond the built-in
 	// api.anthropic.com/api.openai.com, if any, each as "host:port" (never a
 	// bare host): the Bedrock bearer's runtime host (authorBedrockBearerInjection),
-	// the captured-SSO portal host (authorBedrockSSOInjection), and the operator's
-	// configured Anthropic gateway when subscription/managed injection dials one
-	// instead of the vendor host (authorSubscriptionInjection) — all three are
-	// mutually exclusive per run, so one slice is safe.
+	// the captured-SSO portal host (authorBedrockSSOInjection), and a Claude
+	// subscription provider's route-through host
+	// (authorProviderSubscriptionInjection) — all three are mutually exclusive
+	// per run, so one slice is safe.
 	bedrockMITMHosts []string
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
-	// (see llmUnavailableDetail). Empty => the route's own generic detail.
+	// (mpNoProviderDetail). Empty => the route's own generic detail.
 	llmUnavailableDetail string
-	// llmUpstreams is ProxyConfig.LLMUpstreams: the boot gateways on the legacy
-	// path, and on the provider path only the chosen provider's own address
-	// (nil when requests go to the vendor host) — a gateway reaches only the
-	// runs that chose it.
+	// llmUpstreams is ProxyConfig.LLMUpstreams: only the chosen provider's own
+	// address (nil when requests go to the vendor host) — a gateway reaches
+	// only the runs that chose it.
 	llmUpstreams map[string]string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
-	// subscription/managed injection or intercept_tls inspection, never a CA
-	// minted purely for artifact tokens. Computed here because every input to it
-	// is decided here.
+	// subscription injection or intercept_tls inspection, never a CA minted
+	// purely for artifact tokens. Computed here because every input to it is
+	// decided here.
 	mitmLLM bool
 }
 
@@ -750,94 +412,51 @@ type dispatchLLMPlan struct {
 // injection that follows from it, as ONE phase.
 //
 // It is a phase and not a slice taken to satisfy a complexity counter: the
-// transport decision (host-staged subscription > managed > Bedrock > api-key
-// gateway) is what determines whether this run needs a MITM CA, a subscription
-// sentinel grant, a Bedrock bearer, or none of them — so the authoring steps are
-// consequences of one decision rather than neighbours that happen to be
-// adjacent. The corporate-CA install rides along because its placement is
-// load-bearing: before resolveEnvSecretGrants, so a user env_secret named
-// SSL_CERT_FILE cannot clobber the bundle it stages.
+// chosen model provider's kind is what determines whether this run needs a
+// MITM CA, a subscription sentinel grant, a Bedrock bearer, or none of them —
+// so the authoring steps are consequences of one decision rather than
+// neighbours that happen to be adjacent. The corporate-CA install rides along
+// because its placement is load-bearing: before resolveEnvSecretGrants, so a
+// user env_secret named SSL_CERT_FILE cannot clobber the bundle it stages.
 //
 // Fail closed, and the ok return is the whole contract: each authoring helper
 // has already marked the run FAILED before returning false, so a false here
-// means "stop dispatching, the run is already terminal" — exactly what the four
-// bare returns meant when this lived inline.
+// means "stop dispatching, the run is already terminal".
 //
 // policy and sandboxEnv are MUTATED (egress widening for Bedrock, the auth env,
-// the trust store); injections is returned rather than mutated because
-// authorSubscriptionInjection reslices it.
+// the trust store); injections is returned rather than mutated because the
+// strip and the grant authors reslice it.
 func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
 	adoInject bool, bedrockGrade bedrockCredGrade,
 ) (dispatchLLMPlan, bool) {
-	// A model-provider block, once set, owns this run's model credential: the
-	// provider it chose, from its owner's own credential, or none — never the
-	// legacy lane chain below, the roster's declared-mechanism gate or the
-	// managed fallback (resolveProviderLane, every kind). A block that could not
-	// be read may be set, so it refuses the model run there too.
-	var llm llmTransport
-	var sso awsSSOScope
-	var prov *providerDispatch
-	if providerGovernsDispatch(run, p, siteCfg, siteCfgOK) {
-		var pd providerDispatch
-		var ok bool
-		if llm, injections, pd, ok = s.resolveProviderLane(ctx, run, p, policy, sandboxEnv, injections, proxyURL, siteCfg, siteCfgOK); !ok {
-			return dispatchLLMPlan{}, false
-		}
-		prov = &pd
-		// A Bedrock provider's session grant, and its reauth hold, record this
-		// scope; zero on every other kind.
-		sso = llm.providerAWSScope()
-	} else {
-		// WHOSE credential, decided from a roster we could actually READ. A failed
-		// read yields a zero siteCfg — perUser=false, owner="" — which is the
-		// OPERATOR namespace, so a store blip credentialed a per_user member's run
-		// with the deployment-wide session.
-		if !s.enforceReadableRosterForCredential(ctx, run, p, policy, siteCfgOK) {
-			return dispatchLLMPlan{}, false
-		}
-		// WHOSE model credential this run may use, from the roster this phase was
-		// already handed. runIdentitySubject(run.CreatedBy) is the SUBJECT the run's
-		// identity was minted with — the same string every other credential-bearing
-		// path resolves a namespace against — and the request's context values
-		// survive dispatch's WithoutCancel, so a detached dispatch resolves the same
-		// namespace the create door did.
-		sso = awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
-		llm = s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef, sso)
-		if p.ResolvedManaged != nil {
-			*p.ResolvedManaged = llm.injectManaged
-		}
-
-		// No cross-mechanism fallback: refuse before a single credential is authored
-		// when the org declared how this agent reaches its model and the transport
-		// just resolved is not that one. Placed here, ahead of the MITM CA and every
-		// grant author, so a refused run mints nothing — see
-		// enforceConfiguredLLMMechanism. A zero-value siteCfg (the read failed) is
-		// legacy open mode: nothing is refused.
-		if !s.enforceConfiguredLLMMechanism(ctx, run, siteCfg, llm, injections) {
-			return dispatchLLMPlan{}, false
-		}
-		// Only the provider arm names a provider credential.
-		injections = s.dropUnauthoredProviderInjections(ctx, run, injections)
+	// The model provider the run chose owns its model credential: that
+	// provider, from its owner's own credential, or none (resolveProviderLane,
+	// every kind). Every other injection that would credential the model is
+	// stripped there, whoever authored it.
+	llm, injections, prov, ok := s.resolveProviderLane(ctx, run, p, policy, sandboxEnv, injections, proxyURL, siteCfg, siteCfgOK)
+	if !ok {
+		return dispatchLLMPlan{}, false
 	}
-	// And none the autonomy gate graded this run without (bedrockCredGradeHolds),
-	// in the same place for the same reason.
+	// A Bedrock provider's session grant, and its reauth hold, record this
+	// scope; zero on every other kind.
+	sso := llm.providerAWSScope()
+	// And none the autonomy gate graded this run without (bedrockCredGradeHolds).
 	if !s.bedrockCredGradeHolds(ctx, run, bedrockGrade, llm) {
 		return dispatchLLMPlan{}, false
 	}
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
-	// subscription/managed credential injection, artifact-token injection, or
-	// Bedrock bearer injection, or the per-person Azure DevOps credential
+	// subscription credential injection, artifact-token injection, Bedrock
+	// injection, or the per-person Azure DevOps credential
 	// (authorADOEntraInjection, which REFUSES a run that reaches it without
 	// one). The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
 	// the sandbox trusts the PUBLIC cert. See provisionDispatchMITMCA for the
 	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.injectSub || llm.injectManaged || llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
-		var ok bool
+	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -851,37 +470,21 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// SSL_CERT_FILE can never clobber the bundle this just staged.
 	installSandboxTrustedCA(s.cfg.TrustedCAPEM, sandboxEnv)
 
-	// Subscription / managed: author the proxy-side sentinel credential grant +
-	// its per-run MITM host when a gateway is configured (see
-	// authorSubscriptionInjection for the re-mint + api-key-replacement
-	// rationale). A failed grant write already marked the run FAILED — stop.
-	var bedrockMITMHosts []string
-	if llm.injectSub || llm.injectManaged {
-		var ok bool
-		if injections, bedrockMITMHosts, ok = s.authorSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
-			return dispatchLLMPlan{}, false
-		}
-	}
-
 	// The subscription arm's grant: its owner's own sign-in, recording whose it
-	// is. After resolveProviderLane's strip, like every arm's grant.
+	// is. After resolveProviderLane's strip, like every arm's grant. A failed
+	// grant write already marked the run FAILED — stop.
+	var bedrockMITMHosts []string
 	if llm.providerSubscription() {
-		var ok bool
 		if injections, bedrockMITMHosts, ok = s.authorProviderSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
 			return dispatchLLMPlan{}, false
 		}
 	}
-
-	// The run's own bearer, if it has one, is authored below — the only
-	// injection naming bedrock-api-key the proxy is handed.
-	injections = s.dropUnauthoredBedrockBearerInjections(ctx, run, injections)
 
 	// Bedrock BEARER injection + its per-run MITM host (see
 	// authorBedrockBearerInjection). Same stop-on-failure contract; appends to
 	// the SAME MITM host list as the subscription block above — the two are
 	// mutually exclusive per run.
 	if llm.injectBedrockBearer {
-		var ok bool
 		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -892,7 +495,6 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// block above, and it appends to the SAME MITM host list: a run is on one
 	// Bedrock lane or the other, never both, so the two never collide.
 	if llm.injectBedrockSSO {
-		var ok bool
 		var ssoMITMHosts []string
 		if injections, ssoMITMHosts, ok = s.authorBedrockSSOInjection(ctx, run, llm, sso, injections); !ok {
 			return dispatchLLMPlan{}, false
@@ -902,8 +504,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so
-	// the injector's exact-allowlist check passes). Appended AFTER the subscription
-	// block, which reslices `injections` in place.
+	// the injector's exact-allowlist check passes). Appended AFTER the grant
+	// authors above, which reslice `injections` in place.
 	injections = append(injections, artifactPlan.injections...)
 
 	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
@@ -916,23 +518,16 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// grant-authoring steps between here and bedrockCredGradeHolds, any one of
 	// which can still fail closed — is it true that this run actually gets the
 	// Bedrock credential applyBedrockTransport resolved. Recording the
-	// run.bedrock.configure row here, instead of right after bedrockCredGradeHolds
-	// (or inside applyBedrockTransport itself), is what keeps a run ANY later
-	// refusal takes from showing a "success" injection row for a credential it
-	// was never handed (#518).
+	// run.bedrock.configure row here is what keeps a run ANY later refusal
+	// takes from showing a "success" injection row for a credential it was
+	// never handed (#518).
 	s.recordBedrockTransport(ctx, run, llm)
 
-	plan := dispatchLLMPlan{
+	return dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
-		bedrockMITMHosts: bedrockMITMHosts,
-		mitmLLM:          llm.injectSub || llm.injectManaged || llm.providerSubscription() || mitmForInspect,
-	}
-	if prov != nil {
-		plan.llmUnavailableDetail, plan.llmUpstreams = prov.detail, prov.upstreams
-	} else {
-		plan.llmUnavailableDetail = s.llmUnavailableDetail(ctx, run, llm, injections, sso)
-		plan.llmUpstreams = s.cfg.LLMGateways
-	}
-	return plan, true
+		bedrockMITMHosts:     bedrockMITMHosts,
+		mitmLLM:              llm.providerSubscription() || mitmForInspect,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,
+	}, true
 }

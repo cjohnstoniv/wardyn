@@ -45,9 +45,10 @@ v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
 are shipped, and so is 0.7's governance and desktop work (above, through
 `v0.7.12`), so what is left below is the alpha RC and beyond.
 
-**v0.8 is in progress (from 2026-09-19).** The plan — every lane, decision and open
-question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the work is tracked on
-the `0.8.0` and `0.8.1` milestones, one issue per lane, and nothing starts before its issue
+**v0.8.0 shipped as a pre-release on 2026-09-29, and the 0.8.1 patch shipped the same day;
+0.8.2 is in progress.** The plan — every lane, decision and open
+question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the remaining work is tracked
+on the `0.8.2` milestone, one issue per lane, and nothing starts before its issue
 carries the `approved` label ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
@@ -121,15 +122,17 @@ shipped behavior; none is scheduled.
   `claude-code` would make an agentless run eligible for the operator's live
   subscription credential, and defaulting it to `byoa`/`none` resolves to an
   image that is not published.
-- **Azure DevOps and GitLab PATs are non-resident but not scoped.** **0.7 built
+- **GitLab PATs are non-resident but not scoped.** **0.7 built
   the never-resident half**: a `git_pat` for a non-GitHub forge is minted
   proxy-side and injected on the outbound leg, so the credential no longer enters
   the sandbox. What this entry now names is the half that remains and cannot be
-  built the same way: ADO has no token-minting API, so the operator PAT's scope
-  is the boundary. Per-repo, auto-expiring scoping is achievable on GitHub
-  because an installation token can be minted narrow; it is not achievable on a
-  PAT Wardyn merely holds. The `WARDYN_GIT_PAT_BROKER` broker is therefore a
-  residency control, never a least-privilege one.
+  built the same way: GitLab has no token-minting integration, so the operator
+  PAT's scope is the boundary. Per-repo, auto-expiring scoping is achievable on
+  GitHub because an installation token can be minted narrow; it is not achievable
+  on a PAT Wardyn merely holds. The `WARDYN_GIT_PAT_BROKER` broker is therefore a
+  residency control, never a least-privilege one. **Azure DevOps is no longer in
+  this entry (0.8.2):** it has no shared PAT, and Wardyn creates a short-lived,
+  run-scoped PAT for each run in the person's name (`docs/AZURE-DEVOPS.md`).
 - **Proxy-side injection of the Bedrock SSO bearer.** Would make the SSO token
   never-resident; the derived role credentials stay resident regardless, because
   SigV4 signs in-process.

@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // openSecretStore builds the configured external store client (if any) and
@@ -35,7 +36,20 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err != nil {
 		return nil, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+	st, err := buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+	if err != nil {
+		return nil, err
+	}
+	if err := sweepRetiredModelCredentials(ctx, st, rec); err != nil {
+		return nil, err
+	}
+	// The Azure DevOps sweep names its hosts from the provider rows, which
+	// migration 0103 has already rewritten (their addresses are kept).
+	sc, err := store.NewPG(pool).GetSiteConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: read the site config for the Azure DevOps credential sweep: %w", err)
+	}
+	return st, sweepRetiredADOSharedCredentials(ctx, pool, st, sc, rec)
 }
 
 // buildStoreClients builds the configured external store client and key
@@ -191,8 +205,10 @@ const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_
 // no age key (id nil) it refuses while any local row remains; with a key
 // service that wraps every write, it refuses an age key no row is sealed
 // under any more (refuseIdleAgeKey). An alternate
-// backend keeps its own format and is left alone. Each converted row was a
-// read of its value, recorded as a secret.read with purpose boot.
+// backend keeps its own format and is left alone. Each row the conversion
+// opened was a read of its value, recorded as a secret.read with purpose boot
+// (outcome failure for every row an aborted conversion opened, including the
+// failing row when it decrypted before its seal or update failed).
 func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool, rec audit.Recorder) error {
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
@@ -226,11 +242,13 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 		return nil
 	}
 	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), id)
+	// An aborted conversion still opened the rows it returns: each is a read
+	// with outcome failure, since nothing it did was committed.
+	for _, row := range converted {
+		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, err)
+	}
 	if err != nil {
 		return fmt.Errorf("refusing to start: %w", err)
-	}
-	for _, row := range converted {
-		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, nil)
 	}
 	if len(converted) > 0 {
 		slog.Info("wardynd: converted stored secrets to envelope v1; an older wardynd can no longer read them", slog.Int("secrets", len(converted)))

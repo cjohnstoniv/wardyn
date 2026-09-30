@@ -654,6 +654,7 @@ func TestAutonomyPostureIncludesGrantLanesAtBothDoors(t *testing.T) {
 				srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
 				srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{tc.grant}
 				st.siteConfig = types.SiteConfig{ScmHosts: tc.scmHosts}
+				ownGovCorpSecret(srv, "sub-autonomy") // an Azure DevOps git_pat reads the member's own row (#1429)
 				return srv, st, audit
 			}
 
@@ -1051,7 +1052,7 @@ func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 
 	// The same spec as dispatch leaves it: the grants the lane really writes.
 	dispatched := spec
-	dispatched.EligibleGrants = adoEntraPostureGrants("contoso")
+	dispatched.EligibleGrants = adoEntraPostureGrants("contoso", types.ADOTokenModeBearer)
 	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded()), types.CC2)
 	afterLevel, afterBound := composer.FoldAutonomy(rubric, after)
 
@@ -1182,4 +1183,12 @@ func TestAutonomyPostureIncludesTheADOEntraLaneAtBothDoors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ownGovCorpSecret gives sub a row of their own under govCorpSecret, which a
+// git_pat grant for an Azure DevOps host needs: it is read from the run owner's
+// own namespace only.
+func ownGovCorpSecret(srv *Server, sub string) {
+	ms := srv.cfg.Secrets.(*memSecrets)
+	ms.owned = map[string]map[string][]byte{sub: {govCorpSecret: []byte("v")}}
 }

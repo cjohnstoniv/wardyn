@@ -751,10 +751,11 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
   log "Optional: real Claude task scenario (ANTHROPIC_API_KEY is set)"
-  note "Requires the LLM-enabled policy (claude-llm.json) and the secret pre-loaded."
-  note "Restart wardynd with WARDYN_DEFAULT_POLICY=/examples/policies/claude-llm.json"
-  note "and run: echo \"\$ANTHROPIC_API_KEY\" | wardyn secret set anthropic-api-key"
-  note "Then re-run with ANTHROPIC_API_KEY set to trigger a real claude task."
+  note "Requires the LLM-enabled policy (claude-llm.json) and a model provider you have connected."
+  note "Restart wardynd with WARDYN_DEFAULT_POLICY=/examples/policies/claude-llm.json,"
+  note "then add an Anthropic API key provider under Settings -> Model providers and paste your"
+  note "key there (a stored secret named anthropic-api-key is no longer read)."
+  note "Then run a real claude task with --model-provider <id>."
   note "See docs/TRY-IT.md Level 2 for the full procedure."
   pass=$((pass+0))  # no assertions, just guidance
 else

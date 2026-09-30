@@ -37,6 +37,37 @@ func (p *WorkspaceProviders) Empty() bool {
 	return p.Storage == nil || (p.Storage.Ephemeral == nil && p.Storage.UserDrive == nil)
 }
 
+// CredentialSource says WHOSE credential a git provider's lanes use.
+type CredentialSource string
+
+const (
+	// CredentialSourceShared: one credential, captured by an admin, backs
+	// every run. The zero value, so an unset field keeps legacy behaviour.
+	CredentialSourceShared CredentialSource = "shared"
+	// CredentialSourcePerUser: one credential per principal, captured or
+	// stored under their own namespace.
+	CredentialSourcePerUser CredentialSource = "per_user"
+)
+
+// ClosedCredentialSources is the closed source set — the only values a write may name.
+var ClosedCredentialSources = map[CredentialSource]bool{
+	CredentialSourceShared: true, CredentialSourcePerUser: true,
+}
+
+// ClosedCredentialSourceList is ClosedCredentialSources in a stable order, for a
+// rejected write's "want one of: …".
+func ClosedCredentialSourceList() []string {
+	ss := slices.Sorted(maps.Keys(ClosedCredentialSources))
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = string(s)
+	}
+	return out
+}
+
+// Valid reports whether s is one of the two sources.
+func (s CredentialSource) Valid() bool { return ClosedCredentialSources[s] }
+
 // GitProviderKind is the closed set of git forges Wardyn has bespoke behaviour
 // for; a self-hosted forge is a github (GHES) or azure_devops (ADO Server) row, not a third kind.
 type GitProviderKind string
@@ -83,7 +114,10 @@ var ClosedGitLanes = map[GitLane]bool{
 // LegacyGitLanes are the lanes an empty GitProvider.Lanes list admits: not
 // "every lane in ClosedGitLanes" but the three from when this rule was
 // written, frozen forever so growing the closed set never silently opts a
-// stored row into a new lane.
+// stored row into a new lane. It never applies to an Azure DevOps row: an
+// empty list there is refused at the write boundary (the shared pat and ssh
+// lanes it would expand to are retired), and migration 0103 rewrote every
+// stored one.
 var LegacyGitLanes = []GitLane{GitLaneApp, GitLanePAT, GitLaneSSH}
 
 // Legacy reports whether l is admitted by an empty Lanes list; expanding one must ask this, never ClosedGitLanes.
@@ -102,23 +136,32 @@ func ClosedGitLaneList() []string {
 // Valid reports whether l is one of the closed lanes.
 func (l GitLane) Valid() bool { return ClosedGitLanes[l] }
 
-// ADOTokenMode is how an Entra-lane run presents itself to Azure DevOps: one
-// legal value today, kept as a named field so a refused mode says why rather
-// than an opaque "unknown field" 400.
+// ADOTokenMode is how a run presents itself to Azure DevOps on an Entra-lane
+// row: the Entra access token itself, a personal access token Wardyn creates
+// for the run, or one the person pasted. A named field, so a refused mode says
+// why rather than an opaque "unknown field" 400.
 type ADOTokenMode string
 
 const (
-	ADOTokenModeBearer ADOTokenMode = "bearer" // sends the Entra access token itself; zero value, only mode accepted
-	// ADOTokenModeMintedPAT would exchange the Entra token for a short-lived
-	// PAT per run. Refused and absent from ClosedADOTokenModes: Azure DevOps
-	// mints PATs only for Microsoft's own first-party clients (measured: 401
-	// TF400813). Stays named so the refusal can say why.
+	ADOTokenModeBearer ADOTokenMode = "bearer" // sends the Entra access token itself; the zero value
+	// ADOTokenModeMintedPAT creates a short-lived personal access token per
+	// run, in the person's name, through the sign-in app's own grant. Named
+	// and closed, but the write boundary still refuses it: it is not yet
+	// available.
 	ADOTokenModeMintedPAT ADOTokenMode = "minted_pat"
+	// ADOTokenModeOwnPAT is a personal access token the person pasted in
+	// themselves. It needs no tenant or client: nothing signs in. SO EVERY
+	// PICKER OF THE ONE SIGN-IN ROW MUST SKIP IT — the console-login capture
+	// (adoEntraRow in cmd/wardynd) and the dispatch row lookup take any
+	// enabled per_user entra-lane row today, and a row with no tenant or
+	// client would fail their validation on every login and could shadow the
+	// row that does sign in. Skipping own_pat there is L1's change (#1428).
+	ADOTokenModeOwnPAT ADOTokenMode = "own_pat"
 )
 
 // ClosedADOTokenModes is the closed token-mode set — see ClosedGitLanes.
 var ClosedADOTokenModes = map[ADOTokenMode]bool{
-	ADOTokenModeBearer: true,
+	ADOTokenModeBearer: true, ADOTokenModeMintedPAT: true, ADOTokenModeOwnPAT: true,
 }
 
 // ClosedADOTokenModeList is ClosedADOTokenModes in a stable order.
@@ -134,6 +177,14 @@ func ClosedADOTokenModeList() []string {
 // Valid reports whether m is an accepted mode.
 func (m ADOTokenMode) Valid() bool { return ClosedADOTokenModes[m] }
 
+// Bounds and defaults for the personal-access-token lifetimes on ADOEntraConfig.
+const (
+	ADOPATMaxHoursDefault = 8   // minted_pat: PATMaxHours 0 reads as this
+	ADOPATMaxHoursLimit   = 168 // minted_pat: the longest a token may live, in hours
+	ADOPATMaxDaysDefault  = 30  // own_pat: PATMaxDays 0 reads as this
+	ADOPATMaxDaysLimit    = 90  // own_pat: the longest a pasted token may live, in days
+)
+
 // ADOEntraConfig is the Entra lane's configuration on one Azure DevOps row:
 // tenant, app, widest ceiling, default profile, and token presentation. The
 // ceiling is not a default: CapabilityCeiling is the most a run could ever be
@@ -145,8 +196,15 @@ type ADOEntraConfig struct {
 	// CapabilityCeiling is the widest capability set a run on this row may
 	// ever hold; required and non-empty when the block is present.
 	CapabilityCeiling []adoscope.Capability `json:"capability_ceiling,omitempty"`
-	DefaultProfile    []adoscope.Capability `json:"default_profile,omitempty"` // what a run gets by default; empty reads as adoscope.ProfileRead
+	DefaultProfile    []adoscope.Capability `json:"default_profile,omitempty"` // what a run gets by default; empty reads as adoscope.ProfileDefault
 	TokenMode         ADOTokenMode          `json:"token_mode,omitempty"`      // empty reads as ADOTokenModeBearer
+	// PATMaxHours is the longest a minted_pat run's token lives (1-168). 0
+	// reads as 8; read via PATHours, never directly.
+	PATMaxHours int `json:"pat_max_hours,omitempty"`
+	// PATMaxDays is the furthest expiry an own_pat token may carry (1-90). 0
+	// reads as 30; read via PATDays, never directly. A Server row has no entra
+	// block, so it cannot set this and always reads the default, 30.
+	PATMaxDays int `json:"pat_max_days,omitempty"`
 	// RESTAPI: brokered REST calls, or only git traffic. Default true; read
 	// via RESTAPIEnabled, never directly.
 	RESTAPI *bool `json:"rest_api,omitempty"`
@@ -157,11 +215,27 @@ func (c *ADOEntraConfig) RESTAPIEnabled() bool {
 	return c == nil || c.RESTAPI == nil || *c.RESTAPI
 }
 
+// PATHours is PATMaxHours with the unset default applied.
+func (c *ADOEntraConfig) PATHours() int {
+	if c == nil || c.PATMaxHours == 0 {
+		return ADOPATMaxHoursDefault
+	}
+	return c.PATMaxHours
+}
+
+// PATDays is PATMaxDays with the unset default applied.
+func (c *ADOEntraConfig) PATDays() int {
+	if c == nil || c.PATMaxDays == 0 {
+		return ADOPATMaxDaysDefault
+	}
+	return c.PATMaxDays
+}
+
 // Profile is the capabilities a run gets when it asks for nothing:
-// DefaultProfile, or adoscope.ProfileRead when that is empty.
+// DefaultProfile, or adoscope.ProfileDefault when that is empty.
 func (c *ADOEntraConfig) Profile() []adoscope.Capability {
 	if c == nil || len(c.DefaultProfile) == 0 {
-		return adoscope.ProfileRead()
+		return adoscope.ProfileDefault()
 	}
 	return slices.Clone(c.DefaultProfile)
 }
@@ -182,7 +256,7 @@ type GitProvider struct {
 	// Lanes are the credential lanes usable for this provider; empty means
 	// every legacy lane (LegacyGitLanes) — the field narrows, never widens.
 	Lanes            []GitLane        `json:"lanes,omitempty"`
-	CredentialSource CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra
+	CredentialSource CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra, or GitLanePAT on an Azure DevOps row (a Server row, which has no Entra sign-in)
 	Entra            *ADOEntraConfig  `json:"entra,omitempty"`             // present only on, and required by, a row whose Lanes name GitLaneEntra
 }
 

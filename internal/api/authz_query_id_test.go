@@ -118,6 +118,8 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"org":                       "DELETE /me/scm/azure-devops/token: the address of a row the caller may use (adoOwnPATRowFor); it removes the caller's own token only",
+	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
@@ -134,6 +136,7 @@ var queryParamNotAnID = map[string]string{
 	"include":                   "response projection switch",
 	"preset":                    "response projection switch",
 	"rows":                      "terminal geometry",
+	"tail":                      "byte count of a run's output tail, read after the path's run is authorized",
 	"cols":                      "terminal geometry",
 	"type":                      "directory search kind (security tier route)",
 	"q":                         "free-text search over an already-scoped listing: directory search (security tier route) and #1197's run list (every tier)",
@@ -143,6 +146,7 @@ var queryParamNotAnID = map[string]string{
 	"error":                     "OAuth error echo",
 	"error_description":         "OAuth error echo",
 	"phase":                     "ADO sign-in phase marker",
+	"stale_jti":                 "internal injection resolve: an Azure DevOps token id the proxy saw refused, compared only against the calling run's own tokens",
 	"prompt":                    "ADO sign-in: Microsoft's own prompt hint (adoRequestedPrompt), a closed set (\"\"/select_account) never forwarded on trust",
 	"scopes":                    "ADO sign-in: requested scopes, clamped to the admin's ceiling",
 	"capabilities":              "ADO sign-in: requested capabilities, clamped to the admin's ceiling",

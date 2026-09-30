@@ -25,8 +25,9 @@
 #          docs carries an age-key source and, with k8s.enabled=true, a
 #          runs-namespace choice (X1a-F1/X1c-F1).
 #     R-02 every internal/runner/k8s `.List(` call has a matching "list" verb
-#          on the chart's Role — the one thing a fake-clientset k8s test can
-#          never catch.
+#          on the chart's Role, and every subresource call (pod logs, ephemeral
+#          containers, exec) has its verbs there too — the one thing a
+#          fake-clientset k8s test can never catch.
 #
 #   MOVED to scripts/test-up-probes.sh (they drive a scripts/up.sh function
 #   against a stub — behavioural tests that belong beside that file's other
@@ -106,21 +107,6 @@ pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy mat
 # ── C7: three doc claims, each checked against the thing it describes ──────
 COMPOSE_YAML="${ROOT}/deploy/compose/docker-compose.yaml"
 
-# F081 — ENV.md called WARDYN_IMPORT_AWS an import of "~/.aws selectors", using
-# a word ENV.md itself defines as explicitly NOT credentials, for a flag whose
-# headless mode writes long-lived static AWS keys into the secret store. The
-# secret NAMES are derived from setup.sh, so a new one must be documented too.
-env_row="$(grep -n 'WARDYN_IMPORT_AWS' "${ROOT}/docs/ENV.md" | head -1 || true)"
-[ -n "${env_row}" ] || fail "docs/ENV.md no longer documents WARDYN_IMPORT_AWS — it is the headless YES for writing static AWS keys into the secret store (F081)"
-aws_secrets="$(grep -oE 'wardyn secret set aws-[a-z-]+' "${ROOT}/scripts/setup.sh" | awk '{print $4}' | sort -u || true)"
-[ -n "${aws_secrets}" ] || fail "scripts/setup.sh no longer writes any aws-* secret — this guard would check nothing"
-for sec in ${aws_secrets}; do
-  printf '%s' "${env_row}" | grep -qF "${sec}" \
-    || fail "docs/ENV.md's WARDYN_IMPORT_AWS row does not name '${sec}', which scripts/setup.sh writes into the secret store when it is set — the row described it as importing '~/.aws selectors', a word ENV.md defines as explicitly NOT credentials (F081)"
-done
-printf '%s' "${env_row}" | grep -qi 'credential' \
-  || fail "docs/ENV.md's WARDYN_IMPORT_AWS row never uses the word 'credential' — the whole defect was that it read as a non-secret selector import (F081)"
-
 # F091 — "the images are pulled by `docker compose pull`" was true of three of
 # them: everything else sits behind the build-only profile. The service list is
 # derived from the compose file, so a profile change lands here.
@@ -192,7 +178,9 @@ for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
     [ -n "${tbl}" ] || continue
     printf '%s\n' "${old_tables}" | grep -qx "${tbl}" && hazard=yes
   done <<< "$(grep -ioE '^[[:space:]]*ALTER TABLE [a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
-  grep -qi 'CREATE OR REPLACE FUNCTION' "${f}" && hazard=yes
+  # A pg_temp.* helper lives only in the migrator's own session, so it never
+  # replaces a function an earlier release created — no ownership needed.
+  grep -i 'CREATE OR REPLACE FUNCTION' "${f}" | grep -viq 'FUNCTION pg_temp\.' && hazard=yes
   [ "${hazard}" = yes ] || continue
   printf '%s' "${ops_para}" | grep -qF "\`${num}\`" \
     || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"
@@ -289,5 +277,28 @@ while read -r kind; do
     || fail "internal/runner/k8s calls .${kind}(...).List(...) but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"list\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02)"
 done < "${WORK}/k8s-list-kinds"
 pass "R-02 every resource internal/runner/k8s lists has a 'list' verb on the chart's Role"
+
+# R-02b (#1426) — the same drift on subresources, which no `.List(` ever names:
+# dropping `pods/log get`, `pods/ephemeralcontainers update` or `pods/exec` from
+# the Role leaves every fake-clientset test green and 403s on a real cluster.
+# One row per call site: "<code pattern>@<resource>@<verbs the Role must carry>".
+# The exec row is the executor constructors, not a clientset accessor: the
+# websocket leg issues a GET (verb "get") and the SPDY leg a POST ("create").
+# Comment lines are skipped so a doc mention never satisfies a row.
+# shellcheck disable=SC2016
+sub_rows='\.GetLogs\(@pods/log@get
+\.UpdateEphemeralContainers\(@pods/ephemeralcontainers@update
+remotecommand\.New(SPDY|WebSocket)Executor\(@pods/exec@get create'
+while IFS='@' read -r pat res verbs; do
+  # shellcheck disable=SC2086
+  _calls="$(grep -hE "${pat}" ${k8s_files} | grep -vE '^[[:space:]]*//' || true)"
+  [ -n "${_calls}" ] || fail "no call matching '${pat}' in internal/runner/k8s — this guard would check nothing (R-02b)"
+  _rule_block="$(grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" || true)"
+  for verb in ${verbs}; do
+    grep -q "\"${verb}\"" <<<"${_rule_block}" \
+      || fail "internal/runner/k8s issues a call matching '${pat}' but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"${verb}\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02b)"
+  done
+done <<<"${sub_rows}"
+pass "R-02b every subresource call internal/runner/k8s makes has its verbs on the chart's Role"
 
 echo "test-claims-match-code: self-test PASS"

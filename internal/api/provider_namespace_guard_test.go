@@ -25,6 +25,7 @@ var strictProviderReaders = map[string]string{
 	"deleteSpentAWSSSOBlob":   "hands the view to deleteDeadCredential, a Delete, which never falls back",
 	"readADOEntraBlob":        "List-then-Get under a per-user scope, the Azure DevOps twin of ownSecret",
 	"noteADOEntraSignInEnded": "hands the view to deleteDeadCredential, a Delete, which never falls back",
+	"readADOOwnPAT":           "List-then-Get under a per-user scope, the own-token twin of readADOEntraBlob",
 	"handleListSecrets":       "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 	"presentSecretNamesFor":   "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 }

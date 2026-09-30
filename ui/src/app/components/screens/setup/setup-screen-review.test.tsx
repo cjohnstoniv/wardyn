@@ -387,7 +387,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({
         ready: true,
-        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+        providers: [{ tool: "claude", installed: true }],
       }),
     );
     renderScreen(<SetupScreen onDone={() => {}} />);

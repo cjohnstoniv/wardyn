@@ -162,7 +162,7 @@ beforeEach(() => {
 // bits to the card, and puts what the member ticked on the wire. A block that
 // renders perfectly from props it is never given is the failure a component
 // test cannot see.
-describe("NewRunScreen — the member's drive reaches the wire", () => {
+describe("NewRunScreen — the member's drive reaches the wire", { timeout: 20_000 }, () => {
   const withDrive = baseMe({ user_drive: baseMeDrive() });
 
   it("sends drive {enabled, read_only} for a ticked box and a narrowed mount", async () => {

@@ -83,10 +83,10 @@ func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
 // sinkReservedSecret is the reserved-name guard at the credential SINKS — the
 // api_key injection resolver (handleInternalInjection), the git_pat/ssh_key
 // broker mints, and the policy write-time checks that mirror them. It is
-// reservedSecret() PLUS the three RESIDENT AWS SigV4 credential names that
-// resolveBedrockAuth reads DIRECTLY from the store to sign Bedrock requests
+// reservedSecret() PLUS the three RESIDENT AWS SigV4 credential names the
+// retired static-key Bedrock lane read DIRECTLY from the store to sign requests
 // (aws-access-key-id / aws-secret-access-key / aws-session-token). Those never
-// flow through a grant on the legitimate Bedrock path, so an api_key/git_pat/
+// flow through a grant on any legitimate path, so an api_key/git_pat/
 // ssh_key grant naming one is only ever an attempt to exfiltrate the operator's
 // long-lived AWS secret key to an allowlisted host (as a Bearer header or git
 // password) — reject it at every sink. bedrock-api-key is deliberately EXCLUDED:
@@ -108,11 +108,17 @@ func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
 // loadOrCreateSecret names, wardyn-ssh-host-key among them): nobody authors
 // those, so neither guard has a reason to let one through — see
 // TestPlatformSecretsAreReservedEverywhere (cmd/wardynd).
+//
+// The two sentinels of the retired shared-subscription lanes
+// (types.SubscriptionOAuthSecret / ManagedOAuthSecret) are here too: nothing
+// resolves them any more, so a stored or recorded grant naming one is refused
+// outright rather than falling through to a stored-value read.
 func sinkReservedSecret(name string) bool {
 	return reservedSecret(name) ||
 		name == bedrockAccessKeyIDSecret ||
 		name == bedrockSecretAccessKeySecret ||
-		name == bedrockSessionTokenSecret
+		name == bedrockSessionTokenSecret ||
+		name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret
 }
 
 // nameSinkReservedSecret is sinkReservedSecret for the two lanes that resolve
@@ -130,18 +136,13 @@ func nameSinkReservedSecret(name string) bool {
 
 // secretsAPIReserved is the reserved-name guard for the GENERIC secrets API
 // (Put/Delete/List). It is reservedSecret() PLUS the two Anthropic OAuth
-// injection SENTINELS (types.SubscriptionOAuthSecret / types.ManagedOAuthSecret).
-// A sentinel is name-privileged — an api_key grant carrying it resolves at the
-// injection sink to a LIVE OAuth token via oauthProviderForSentinel, IGNORING any
-// stored value — so letting an operator Put a value under that name (silently
-// shadowed) or listing it is confusing at best and hides that the name is
-// credential-privileged at worst. Reserved from the generic API ONLY, never at
-// the sinks: a subscription/managed policy legitimately names the sentinel in an
-// api_key grant, which validateInlineSecretRefs and the injection sink allow via
-// the provider switch (oauthProviderForSentinel), which runs AFTER this guard.
+// injection SENTINELS of the retired shared-subscription lanes
+// (types.SubscriptionOAuthSecret / types.ManagedOAuthSecret). Nothing resolves
+// them any more; a value Put under either would only plant a row a stale
+// policy's grant could read through the generic path.
 //
-// types.AWSSSOAccessTokenSecret is the THIRD sentinel and is here for
-// the identical reason: resolveAWSSSOInjection resolves it from the captured
+// types.AWSSSOAccessTokenSecret is the THIRD sentinel and is here for a
+// related reason: resolveAWSSSOInjection resolves it from the captured
 // AWS SSO blob, so a value Put under that name would be silently shadowed. It
 // is likewise NOT in sinkReservedSecret — being resolved at that sink is the
 // whole point.
@@ -155,6 +156,24 @@ func secretsAPIReserved(name string) bool {
 		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
 		name == types.ADOEntraAccessTokenSecret
 }
+
+// retiredModelCredentialNames are the operator-lane model credentials 0.8.2
+// retires (multi-provider design §2.11): the fixed-name keys, the shared and
+// per-person blobs of the retired sign-in doors, and the static SigV4 keys. No
+// lane reads any of them. Boot deletes them from every namespace
+// (RetiredModelCredentialNames) and the secrets API refuses to store them again.
+var retiredModelCredentialNames = []string{
+	"anthropic-api-key", "openai-api-key", bedrockAPIKeySecret,
+	harnessCredSecretName("anthropic"), harnessCredSecretName(awsSSOProvider),
+	bedrockAccessKeyIDSecret, bedrockSecretAccessKeySecret, bedrockSessionTokenSecret,
+}
+
+// RetiredModelCredentialNames is the list cmd/wardynd's boot sweep deletes.
+func RetiredModelCredentialNames() []string { return slices.Clone(retiredModelCredentialNames) }
+
+// RetiredModelCredentialRefusal is the one sentence both the boot refusal of a
+// retired variable and a PUT of a retired credential name end with.
+const RetiredModelCredentialRefusal = "model access is configured under Settings → Model providers, and each person connects their own credential there"
 
 // secretPutOwnerRefusal answers a PUT naming ?owner=.
 const secretPutOwnerRefusal = "?owner= is not accepted when setting a secret: a credential is set only by the person it belongs to. " +
@@ -176,17 +195,16 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, "secret name is reserved for platform internals")
 		return false
 	}
-	// The three RESIDENT AWS SigV4 names are ALWAYS resolved from the operator
-	// namespace (resolveBedrockAuth signs with them off For("")) — a member row
-	// under one of them would read as "Bedrock is configured" in setup while
-	// dispatch never actually used it, a confusing dead end rather than a
-	// working BYOK path. sinkReservedSecret is exactly that three-name set on
+	// The three RESIDENT AWS SigV4 names were only ever read from the operator
+	// namespace, and since 0.8 no run reads them at all — a member row under
+	// one of them would be a confusing dead end rather than a working BYOK
+	// path. sinkReservedSecret is exactly that three-name set on
 	// top of the platform keys, so this arm is it.
 	//
-	// bedrock-api-key is NOT among them, and that is the one widening here: the
-	// BEARER is a static Authorization header the proxy injects per run from the
-	// RUN OWNER's own namespace, so a member's own bearer is a credential their
-	// runs really authenticate with (bedrockBearerFor, runs_bedrock.go). Widening
+	// bedrock-api-key is NOT among them, and that is the one widening here: a
+	// member's own row under it is inert since 0.8 (a Bedrock key is the run
+	// owner's own wardyn-provider-<uid>-key) and no sink serves it
+	// (resolveBedrockBearerInjection refuses every grant naming it). Widening
 	// this predicate any further hands a member the three SigV4 names too, which
 	// compiles and passes almost everything — see the per-name tests in
 	// secrets_test.go. Shared by Put and Delete so both paths carry it.
@@ -207,6 +225,9 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 // runs would use under their name. DELETE and the name list keep it — an admin
 // may still remove a person's credentials, never set them.
 func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
+	if s.refuseDelegated(w, r) {
+		return
+	}
 	name := chi.URLParam(r, "name")
 	if r.URL.Query().Has("owner") {
 		if !s.isOperator(r.Context()) {
@@ -220,6 +241,13 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := s.secretOwnerFromRequest(r)
 	if !s.writableSecretName(w, name, owner) {
+		return
+	}
+	if slices.Contains(retiredModelCredentialNames, name) {
+		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, name+" is a retired model credential: "+RetiredModelCredentialRefusal)
+		return
+	}
+	if s.refuseRetiredADOSharedName(w, r, name, owner) {
 		return
 	}
 	var body putSecretRequest

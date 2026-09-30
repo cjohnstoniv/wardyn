@@ -144,7 +144,7 @@ func TestAvailability_RestrictedWorkspaceRepoIsDropped(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := memberRequest(t)
 			req := createRunRequest{Agent: "claude-code", InlinePolicy: &authored}
-			_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+			_, _, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
 			if ok {
 				t.Fatalf("resolveRunPolicy: ok = true, want refused")
 			}
@@ -175,37 +175,6 @@ func TestAvailability_RestrictedProviderAtEveryDoor(t *testing.T) {
 					capProviderSite(), door.member(t))
 				assertNotRefused(t, w, "a person listed for the row may bring work from it")
 			})
-		})
-	}
-}
-
-// TestAvailability_RestrictedAgentRefusesHarnessLogin: the per-person model
-// sign-in is gated on capAgent for the roster row's agent.
-func TestAvailability_RestrictedAgentRefusesHarnessLogin(t *testing.T) {
-	row := perUserAWSRow()
-	for _, tc := range []struct {
-		name     string
-		listType string
-		wantOK   bool
-	}{
-		{"restricted to another type: refused", utDev, false},
-		{"restricted to this caller's type: allowed", utPM, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cs := &capStore{
-				grants:     []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, tc.listType, capAgent, row.ID, types.CapabilityAllow)},
-				restricted: restrictedOne(capAgent, row.ID),
-				userTypes:  utKnown,
-			}
-			srv := New(baseTestConfig(newHarness(t), &integStore{govEscapeStore: newGovEscapeStore(cs), site: agentRoster(row)}))
-			w := httptest.NewRecorder()
-			_, _, ok := srv.authorizeHarnessLogin(w, typeRequest(oidc.RoleUser, utPM), awsSSOProvider)
-			if ok != tc.wantOK {
-				t.Fatalf("ok = %v, want %v (status %d: %s)", ok, tc.wantOK, w.Code, w.Body.String())
-			}
-			if !tc.wantOK && w.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403", w.Code)
-			}
 		})
 	}
 }

@@ -22,10 +22,12 @@
 #  2. the daemon pointed at the fake: WARDYN_AWS_SSO_ENDPOINT_OVERRIDE (gated by
 #     WARDYN_ALLOW_TEST_ENDPOINTS) moves the login sandbox env, the ssoInject
 #     sandbox env, the SSO egress entries and the CreateToken URL together;
-#  3. a Bedrock lane to spend the minted credential on: WARDYN_BEDROCK_BASE_URL
-#     points the data plane at the same fake's bedrock-runtime stub, and
-#     WARDYN_BEDROCK_MODEL is an ARN naming the PINNED account, so the
-#     account-pin check has both halves. The fake serves HTTPS under a walk CA
+#  3. a Bedrock lane to spend the minted credential on: the seeded model
+#     provider's own bedrock.base_url / region / model (the walk's
+#     helpers.ts seeds it, and the daemon reads no boot Bedrock setting). Its
+#     base_url points the data plane at the same fake's bedrock-runtime stub,
+#     and its model is an ARN naming the PINNED account, so the account-pin
+#     check has both halves. The fake serves HTTPS under a walk CA
 #     installed as the chart's trustedCA (#703, scripts/lib/kind-sso-fake-tls.sh);
 #  4. site-config `internal_hosts` seeded with the fake's SERVICE host AND the
 #     Service CIDR, BEFORE the first sign-in.
@@ -53,7 +55,7 @@
 # call per file (#804 — so a failed spec's own ui/test-results survives to be
 # copied out before the next spec's Playwright process wipes it), in THAT
 # order: the recovery file inherits a member who is already `live` and a
-# roster pin that already contradicts nothing, the concurrency file makes its
+# provider pin that already contradicts nothing, the concurrency file makes its
 # own captures for both members, and the hold file goes last because its case K
 # spends ten minutes of wall clock and every case in it makes its own capture.
 #
@@ -476,10 +478,6 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   --set "auth.adminToken.value=${ADMIN_TOKEN}" \
   --set "env.WARDYN_ALLOW_TEST_ENDPOINTS=true" \
   --set "env.WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" \
-  --set "env.WARDYN_BEDROCK_REGION=${SSO_REGION}" \
-  --set "env.WARDYN_BEDROCK_AWS_SSO_REGION=${SSO_REGION}" \
-  --set "env.WARDYN_BEDROCK_BASE_URL=${FAKE_BEDROCK_URL}" \
-  --set "env.WARDYN_BEDROCK_MODEL=${BEDROCK_MODEL}" \
   --set "env.WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT}" \
   --set-file "trustedCA=${FAKE_CA}" \
   --set-json "env.WARDYN_AGENT_IMAGES=$(jq -Rn --arg v "${AGENT_IMAGES}" '$v')" \
@@ -781,6 +779,8 @@ export WARDYN_WALK_PIN_ACCOUNT="${PIN_ACCOUNT}"
 export WARDYN_WALK_PIN_ROLE="${PIN_ROLE}"
 export WARDYN_WALK_SSO_START_URL="${SSO_START_URL}"
 export WARDYN_WALK_SSO_REGION="${SSO_REGION}"
+export WARDYN_WALK_BEDROCK_MODEL="${BEDROCK_MODEL}"
+export WARDYN_WALK_BEDROCK_BASE_URL="${FAKE_BEDROCK_URL}"
 # The recovery spec's cold-start case manufactures a Pending run pod with a node
 # TAINT, and reads that pod's phase back to prove the hold was real. It needs
 # the cluster coordinates this script already holds — never its own guesses, or

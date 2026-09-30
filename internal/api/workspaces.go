@@ -32,9 +32,6 @@ import (
 // llm_cred, which strict decoding then made unsettable from the SDK).
 type workspaceRequest = client.WorkspaceRequest
 
-// llmCred400IntegrationRef refuses a workspace pin to an integration.
-const llmCred400IntegrationRef = "llm_cred.integration_ref no longer chooses a model credential: pin a model provider (llm_cred.provider_ref) instead"
-
 // validateWorkspaceLLMCred checks an operator-supplied cred binding: a
 // provider NAME only — whether the named provider admits a run is
 // enforceRunModelProvider's. nil, or empty refs (clears the binding), is
@@ -43,11 +40,8 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 	if c == nil {
 		return ""
 	}
-	// An integration no longer chooses a model credential, so a pin to one is
-	// refused rather than stored inert. One stored before 0.8 stays for the
-	// conversion to model providers to read.
-	if c.IntegrationRef != "" {
-		return llmCred400IntegrationRef
+	if c.ProviderUnavailable {
+		return "llm_cred.provider_unavailable is set by the server on a read, never written"
 	}
 	if c.ProviderRef != "" && !modelProviderIDPattern.MatchString(c.ProviderRef) {
 		return fmt.Sprintf("llm_cred.provider_ref: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters", c.ProviderRef)
@@ -58,7 +52,7 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 // llmCredBinds reports whether c binds anything — the shape a write stores
 // rather than clears.
 func llmCredBinds(c *types.WorkspaceLLMCred) bool {
-	return c != nil && (c.IntegrationRef != "" || c.ProviderRef != "")
+	return c != nil && c.ProviderRef != ""
 }
 
 // defaultEphemeralTarget is the composition floor's in-sandbox scratch path
@@ -339,6 +333,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// #1267: one availability stamper for the whole page — the same shared
 	// capBatch every row's call asks through, installed by withCapBatch above.
 	availStamp := s.availabilityStamper(r.Context())
+	pinStamp := s.pinStamper(r.Context())
 	redact := func(rows []types.Workspace, err error) ([]types.Workspace, error) {
 		if err != nil {
 			return nil, err
@@ -349,7 +344,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 			if stamp != nil {
 				ws = stamp(ws)
 			}
-			ws = availStamp(ws)
+			ws = pinStamp(availStamp(ws))
 			out = append(out, ws)
 		}
 		return out, nil
@@ -419,8 +414,30 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		out = stamp(out)
 	}
 	// #1267: the same per-row available_to_you the list carries.
-	out = s.availabilityStamper(r.Context())(out)
+	out = s.pinStamper(r.Context())(s.availabilityStamper(r.Context())(out))
 	writeJSON(w, http.StatusOK, out)
+}
+
+// pinStamper projects a workspace's model-provider pin for this caller: a pin
+// naming a provider "Available to" does not admit them to (capModelProvider,
+// the capVisible rule) reads as llm_cred.provider_unavailable, never the id,
+// so a workspace read is no way to learn a provider they may not see (D-6,
+// #1018). The console still knows the workspace is pinned to a provider they
+// cannot use (its unavailable marker, and the rail preselects nothing). An
+// operator is exempt as the resolver exempts them; a resolver error hides the
+// id, as capVisible fails closed. Every row goes through one capBatch (the
+// handlers install withCapBatch).
+func (s *Server) pinStamper(ctx context.Context) func(types.Workspace) types.Workspace {
+	return func(ws types.Workspace) types.Workspace {
+		if ws.LLMCred == nil || ws.LLMCred.ProviderRef == "" {
+			return ws
+		}
+		if ok, err := s.capSeamAllowed(ctx, capModelProvider, ws.LLMCred.ProviderRef); err == nil && ok {
+			return ws
+		}
+		ws.LLMCred = &types.WorkspaceLLMCred{ProviderUnavailable: true}
+		return ws
+	}
 }
 
 // sshWorkspaceSourcesReady returns a 400-worthy message when any repo source's
@@ -727,6 +744,8 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		})))
 	// Same door, same sentence: an edit is how a source MOVES onto a legacy host,
 	// so the warning belongs on this response too.
+	// A member's own workspace can carry a pin an admin set on it.
+	updated = s.pinStamper(r.Context())(updated)
 	writeJSON(w, http.StatusOK, workspaceResponse{Workspace: updated,
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
@@ -887,7 +906,7 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			if cred != nil {
 				c = *cred
 			}
-			return map[string]any{"integration_ref": c.IntegrationRef, "provider_ref": c.ProviderRef}
+			return map[string]any{"provider_ref": c.ProviderRef}
 		})
 }
 

@@ -197,7 +197,7 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 		Policy:            types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
 		Injection: []runner.InjectionGrant{
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.openai.com", Header: "Authorization", Format: "Bearer %s"}},
-			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}},
+			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "artifactory.corp.example", Header: "x-api-key", Format: "%s"}},
 		},
 		PATGrants:     map[string]proxy.PATGrant{"pat.example": {GrantID: uuid.New()}, "git.example": {GrantID: uuid.New()}},
 		MITMCACertPEM: "ca-cert",
@@ -486,6 +486,55 @@ func TestReviveRun_RestartsALiveRun(t *testing.T) {
 	}
 	if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || leaseAuditData(t, ev[0])["from"] != "live" {
 		t.Errorf("run.revive events = %+v, want one from live", ev)
+	}
+}
+
+// TestReviveRun_ALiveRunIsBounded is #1005 item 2: each revive of a live run
+// removes and recreates its proxy, so a second one inside reviveLiveEvery is
+// refused 429 revive_live_too_soon on both doors, while a lost run's revive is
+// never bounded.
+func TestReviveRun_ALiveRunIsBounded(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.run.LostAt, f.st.run.LostReason = nil, ""
+	if res := f.restart(t); !res.OK {
+		t.Fatalf("first restart of a live run: %+v, want OK", res)
+	}
+	if res := f.restart(t); res.OK || res.Reason != reasonReviveLiveTooSoon {
+		t.Fatalf("second restart inside the bound: %+v, want reason %s", res, reasonReviveLiveTooSoon)
+	}
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusTooManyRequests || errorReason(w) != reasonReviveLiveTooSoon {
+		t.Fatalf("revive inside the bound: %d %s, want 429 %s", w.Code, w.Body.String(), reasonReviveLiveTooSoon)
+	}
+	if n := len(f.rr.replaced); n != 1 {
+		t.Fatalf("ReplaceProxy calls = %d, want 1: a refused revive must not touch the proxy", n)
+	}
+
+	lostAt := f.now
+	f.st.run.LostAt, f.st.run.LostReason = &lostAt, types.LostOutage
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive of a lost run inside the bound: %d, want 200 — recovery is never bounded", code)
+	}
+
+	f.now = f.now.Add(reviveLiveEvery)
+	if res := f.restart(t); !res.OK {
+		t.Fatalf("restart once the bound lapsed: %+v, want OK", res)
+	}
+}
+
+// TestReviveRun_AnUntouchedProxyDoesNotArmTheLiveBound: a live-run revive
+// whose replace failed before the old proxy was touched (revive_proxy_kept_current)
+// replaced nothing, so the next one is not refused as too soon.
+func TestReviveRun_AnUntouchedProxyDoesNotArmTheLiveBound(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.run.LostAt, f.st.run.LostReason = nil, ""
+	f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
+	if res := f.restart(t); res.OK || res.Reason != reasonReviveProxyKeptCurrent {
+		t.Fatalf("restart with an untouched failed replace: %+v, want reason %s", res, reasonReviveProxyKeptCurrent)
+	}
+	f.rr.replaceErr = nil
+	if res := f.restart(t); !res.OK {
+		t.Fatalf("restart after an untouched failure: %+v, want OK — nothing was replaced to bound", res)
 	}
 }
 

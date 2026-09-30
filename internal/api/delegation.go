@@ -58,6 +58,7 @@ var delegationAllowed = map[string]bool{
 	"POST /api/v1/runs/preflight":          true,
 	"GET /api/v1/runs":                     true,
 	"GET /api/v1/runs/{id}":                true,
+	"GET /api/v1/runs/{id}/events":         true,
 	"PATCH /api/v1/runs/{id}":              true,
 	"POST /api/v1/runs/{id}/kill":          true,
 	"POST /api/v1/runs/{id}/attach-ticket": true,

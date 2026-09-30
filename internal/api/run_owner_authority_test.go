@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -135,6 +136,7 @@ func TestRevive_RechecksOwnerGrants(t *testing.T) {
 						value, named = ws.String(), ws.String()
 					case capModelProvider:
 						f.st.run.ModelProviderID = value
+						f.st.site.ModelProviders = providerBlock(keyProvider(value, "claude-code")) // the provider itself still exists
 					case capPolicy:
 						f.st.run.PolicyID = &policyID
 					}
@@ -344,8 +346,8 @@ func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T)
 	}
 }
 
-// modelCredFixture is newOwnerFixture whose surviving api.anthropic.com
-// injection is an api_key grant on anthropic-api-key, held by an enabled
+// modelCredFixture is newOwnerFixture whose surviving artifactory.corp.example
+// injection is an api_key grant on artifactory-token, held by an enabled
 // integration and present in the operator's namespace.
 func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	t.Helper()
@@ -354,18 +356,20 @@ func newModelCredFixture(t *testing.T) (*reviveFixture, *memSecrets) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := slices.IndexFunc(c.Injection, func(in proxy.InjectionConfig) bool { return in.Host == "api.anthropic.com" })
+	i := slices.IndexFunc(c.Injection, func(in proxy.InjectionConfig) bool { return in.Host == "artifactory.corp.example" })
 	f.st.credGrants = []types.CredentialGrant{{ID: c.Injection[i].GrantID, RunID: f.run.ID,
-		Spec: apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key")}}
-	f.st.site.Integrations = []types.Integration{{ID: "anthropic", Name: "Anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "anthropic-api-key"}}}}
-	sec := &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
+		Spec: apiKeyGrantSpec("artifactory.corp.example", "artifactory-token")}}
+	f.st.site.Integrations = []types.Integration{{ID: "artifactory", Name: "Artifactory", Kind: types.IntegrationKindGitHost,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "artifactory-token"}}}}
+	sec := &memSecrets{m: map[string][]byte{"artifactory-token": []byte("art-test")}}
 	f.srv.cfg.Secrets = sec
 	return f, sec
 }
 
-// TestRevive_RefusesChangedOrDeletedProvider: the model credential the revived
-// proxy would inject is re-checked up front. Its secret erased from every
+// TestRevive_RefusesChangedOrDeletedProvider: the api_key credential the
+// revived proxy would inject is re-checked up front. (One on a model host is
+// stripped before this check unless the run's provider authored it:
+// TestPG_ReviveStripsAModelCredentialNoProviderAuthored.) Its secret erased from every
 // namespace the injection sink reads, or the integration holding it disabled,
 // refuses the revive naming the host, instead of a proxy whose first model
 // call fails. Either namespace the sink reads (the owner's, then the
@@ -378,14 +382,14 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 		reason  string
 	}{
 		{"unchanged", func(*reviveFixture, *memSecrets) {}, ""},
-		{"credential erased", func(_ *reviveFixture, sec *memSecrets) { delete(sec.m, "anthropic-api-key") }, "model_credential_erased"},
+		{"credential erased", func(_ *reviveFixture, sec *memSecrets) { delete(sec.m, "artifactory-token") }, "model_credential_erased"},
 		{"integration disabled", func(f *reviveFixture, _ *memSecrets) { f.st.site.Integrations[0].Disabled = true }, "model_provider_disabled"},
 		{"integration deleted, secret kept", func(f *reviveFixture, _ *memSecrets) { f.st.site.Integrations = nil }, ""},
 		{"the owner's own key kept, the operator's erased", func(f *reviveFixture, sec *memSecrets) {
-			if err := sec.For(f.run.CreatedBy).Put(context.Background(), "anthropic-api-key", []byte("sk-ant-own")); err != nil {
+			if err := sec.For(f.run.CreatedBy).Put(context.Background(), "artifactory-token", []byte("art-own")); err != nil {
 				t.Fatal(err)
 			}
-			delete(sec.m, "anthropic-api-key")
+			delete(sec.m, "artifactory-token")
 		}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -398,10 +402,118 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 				}
 				return
 			}
-			if code != http.StatusConflict || !strings.Contains(body, "api.anthropic.com") {
+			if code != http.StatusConflict || !strings.Contains(body, "artifactory.corp.example") {
 				t.Fatalf("revive = %d %s; want 409 naming the host", code, body)
 			}
 			f.assertReviveRefused(t, tc.reason)
+		})
+	}
+}
+
+// TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider (#1081): a run
+// carrying a credential its model provider authored is refused up front when
+// that provider was deleted since launch (or deleted and re-created under the
+// same id, a new UID) or turned off, by a revive, an admin restart and an
+// extension alike, instead of a proxy whose first model call the injection
+// sink refuses. With the provider as it was, all three go ahead. A run
+// dispatched before 0.8.2 carries no provider-authored grant (its legacy key is
+// stripped on revive), yet its deleted or turned-off provider still refuses it
+// up front.
+func TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider(t *testing.T) {
+	const uid = "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70"
+	provider := func(edit func(*types.ModelProvider)) []types.ModelProvider {
+		p := keyProvider("anthropic", "claude-code")
+		p.UID = uid
+		edit(&p)
+		return []types.ModelProvider{p}
+	}
+	for _, tc := range []struct {
+		name      string
+		providers []types.ModelProvider
+		legacy    bool // the grant was authored before 0.8.2: no snapshot, the operator's key
+		reason    string
+	}{
+		{"present and on", provider(func(*types.ModelProvider) {}), false, ""},
+		{"deleted", nil, false, "model_provider_gone"},
+		{"re-created under the same id", provider(func(p *types.ModelProvider) { p.UID = "5d0c1f7a-2b9e-4e3d-8a6c-1f4b7e9d2c30" }), false, "model_provider_gone"},
+		{"turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), false, "model_provider_disabled"},
+		{"pre-0.8.2 run, present", provider(func(*types.ModelProvider) {}), true, ""},
+		{"pre-0.8.2 run, deleted", nil, true, "model_provider_gone"},
+		{"pre-0.8.2 run, turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), true, "model_provider_disabled"},
+	} {
+		arrange := func(st *leaseStore) {
+			st.run.ModelProviderID = "anthropic"
+			st.site.ModelProviders = &types.ModelProviders{Providers: tc.providers}
+			scope := map[string]any{"host": "api.anthropic.com", "secret_name": providerSecretName(uid, providerKeyPart),
+				"snapshot": providerGrantSnapshot{ProviderUID: uid, OwnerSubject: st.run.CreatedBy}}
+			if tc.legacy {
+				scope = map[string]any{"host": "api.anthropic.com", "secret_name": "anthropic-api-key"}
+			}
+			st.credGrants = []types.CredentialGrant{{ID: uuid.New(), RunID: st.run.ID,
+				Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(scope)}}}
+		}
+		// reviveArrange also has the stored proxy config inject that grant, from
+		// the owner's own key, as dispatch left it.
+		reviveArrange := func(t *testing.T, f *reviveFixture) {
+			arrange(f.st)
+			f.editConfig(t, func(c *proxy.Config) {
+				c.Injection = append(c.Injection, proxy.InjectionConfig{GrantID: f.st.credGrants[0].ID,
+					InjectionRule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}})
+			})
+			sec := &memSecrets{m: map[string][]byte{}}
+			if err := sec.For(f.run.CreatedBy).Put(context.Background(), providerSecretName(uid, providerKeyPart), []byte("sk-ant-own")); err != nil {
+				t.Fatal(err)
+			}
+			f.srv.cfg.Secrets = sec
+		}
+		t.Run("revive/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			reviveArrange(t, f)
+			code, body := f.reviveAs(t, true)
+			if tc.reason == "" {
+				if code != http.StatusOK {
+					t.Fatalf("revive = %d %s, want 200", code, body)
+				}
+				return
+			}
+			if code != http.StatusConflict || !strings.Contains(body, tc.reason) {
+				t.Fatalf("revive = %d %s; want 409 %s", code, body, tc.reason)
+			}
+			f.assertReviveRefused(t, tc.reason)
+			if drops := f.audit.eventsFor(f.run.ID, "run.injection.drop"); len(drops) != 0 {
+				t.Errorf("a refused revive audited %d injection drops, want none", len(drops))
+			}
+		})
+		t.Run("restart/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			reviveArrange(t, f)
+			f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			w := do(t, f.srv, http.MethodPost, "/api/v1/admin/runs/restart", adminToken, `{"run_ids":["`+f.run.ID.String()+`"]}`)
+			var out struct {
+				Results []adminRestartResult `json:"results"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK || len(out.Results) != 1 {
+				t.Fatalf("restart = %d %s (%v), want 200 with one result", w.Code, w.Body.String(), err)
+			}
+			if r := out.Results[0]; r.OK != (tc.reason == "") || r.Reason != tc.reason {
+				t.Fatalf("result = %+v; want ok=%v reason %q", r, tc.reason == "", tc.reason)
+			}
+		})
+		t.Run("extend/"+tc.name, func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+			arrange(f.st)
+			code, _ := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(7*24*time.Hour)))
+			want := map[bool]int{true: http.StatusOK, false: http.StatusConflict}[tc.reason == ""]
+			if code != want {
+				t.Fatalf("extend = %d, want %d", code, want)
+			}
+			if tc.reason == "" {
+				return
+			}
+			rows := f.rows(t, "run.end.set")
+			if len(rows) != 1 || rows[0].Outcome != "denied" || leaseAuditData(t, rows[0])["reason"] != tc.reason {
+				t.Errorf("run.end.set rows = %+v; want one denied with reason %s", rows, tc.reason)
+			}
 		})
 	}
 }
@@ -432,7 +544,6 @@ func TestRevive_DoesNotReuseAStaleRenderedConfig(t *testing.T) {
 		f.st.site.UpstreamProxyNoProxy = []string{"new.corp.example"}
 		f.st.site.InternalHosts = []types.InternalHost{kept, {HostSuffix: "new.corp.example"}}
 		f.srv.cfg.TrustedCAPEM = string(newCA)
-		f.srv.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://new-gw.corp.example"}
 		return f
 	}
 
@@ -442,8 +553,8 @@ func TestRevive_DoesNotReuseAStaleRenderedConfig(t *testing.T) {
 	}
 	c := f.newConfig(t)
 	if c.UpstreamProxyURL != "" || !slices.Equal(c.UpstreamProxyNoProxy, []string{"new.corp.example"}) ||
-		c.TrustedCAPEM != string(newCA) || !maps.Equal(c.LLMUpstreams, f.srv.cfg.LLMGateways) {
-		t.Errorf("revived config upstream %q no_proxy %v gateways %v (trusted CA current: %v); want the current deployment's",
+		c.TrustedCAPEM != string(newCA) || !maps.Equal(c.LLMUpstreams, map[string]string{"api.anthropic.com": "https://old-gw.corp.example"}) {
+		t.Errorf("revived config upstream %q no_proxy %v model upstreams %v (trusted CA current: %v); want the current deployment's, and the run's own provider upstreams unchanged",
 			c.UpstreamProxyURL, c.UpstreamProxyNoProxy, c.LLMUpstreams, c.TrustedCAPEM == string(newCA))
 	}
 	if len(c.InternalHosts) != 1 || c.InternalHosts[0].HostSuffix != kept.HostSuffix {

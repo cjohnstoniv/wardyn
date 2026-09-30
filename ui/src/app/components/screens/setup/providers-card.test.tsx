@@ -63,8 +63,6 @@ const agent = (id: string, enabled = true): SetupHarnessTool => ({
   has_gateway: true,
   has_login: true,
   enabled,
-  // a STORED row: the server stamps `mechanism` only when an agent row exists
-  mechanism: "anthropic_api_key",
 });
 
 beforeEach(() => {
@@ -138,7 +136,7 @@ describe("ProvidersCard", () => {
     // the card reads git providers alone (and CARD_EMPTY when those are zero
     // too: the providers e2e pins that on the funnel card). "3 agents" here
     // would claim a decision nobody made.
-    it("a roster with no stored rows (legacy open mode: enabled on every row, no mechanism) names git providers alone", async () => {
+    it("a roster with no stored rows (legacy open mode: enabled on every row) names git providers alone", async () => {
       getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme")]));
       renderCard(true, [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true }]);
       expect(await screen.findByText(PROVIDERS.CARD_PROVIDERS(1))).toBeInTheDocument();
@@ -169,7 +167,8 @@ describe("ProvidersCard", () => {
 
     it("zero git rows with agents offered says so, rather than claiming nothing is enabled", async () => {
       getWorkspaceProvidersMock.mockResolvedValue(snap([]));
-      renderCard(true, [agent("claude-code")]);
+      // A disabled row is what marks the roster as a stored policy.
+      renderCard(true, [agent("claude-code"), agent("codex", false)]);
       expect(
         await screen.findByText(PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(0), PROVIDERS.CARD_AGENTS(1))),
       ).toBeInTheDocument();

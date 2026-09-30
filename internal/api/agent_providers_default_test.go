@@ -15,7 +15,7 @@ import (
 )
 
 func defaultRow(agent, provider string) types.AgentProvider {
-	return types.AgentProvider{ID: agent, Mechanism: types.AgentMechanismAnthropicAPIKey, DefaultProvider: provider}
+	return types.AgentProvider{ID: agent, DefaultProvider: provider}
 }
 
 // TestValidateDefaultProviders is the cross-check table: a default names a
@@ -31,7 +31,7 @@ func TestValidateDefaultProviders(t *testing.T) {
 		want      string
 	}{
 		{name: "no roster", roster: nil, providers: providers},
-		{name: "a row with no default is today", roster: agentBlock(agentRow("claude-code", types.AgentMechanismBedrockSSO))},
+		{name: "a row with no default is today", roster: agentBlock(agentRow("claude-code"))},
 		{name: "a default enabled for its agent", roster: agentBlock(defaultRow("claude-code", "anthropic")), providers: providers},
 		{name: "a turned-off provider may stay the default", roster: agentBlock(defaultRow("claude-code", "off")), providers: providers},
 		{name: "a default naming no provider", roster: agentBlock(defaultRow("claude-code", "ghost")), providers: providers,
@@ -60,13 +60,13 @@ func TestAgentProvidersPutChecksDefaults(t *testing.T) {
 	srv, audit := newAgentProvidersHarness(t, fake)
 
 	w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
-		`{"agents":[{"id":"claude-code","mechanism":"anthropic_api_key","default_provider":"ghost"}]}`)
+		`{"agents":[{"id":"claude-code","default_provider":"ghost"}]}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "names no model provider") {
 		t.Fatalf("PUT = %d %s, want 400 naming the missing provider", w.Code, w.Body.String())
 	}
 
 	w = do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
-		`{"agents":[{"id":"claude-code","mechanism":"anthropic_api_key","default_provider":"anthropic"}]}`)
+		`{"agents":[{"id":"claude-code","default_provider":"anthropic"}]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d; body=%s", w.Code, w.Body.String())
 	}
@@ -79,17 +79,18 @@ func TestAgentProvidersPutChecksDefaults(t *testing.T) {
 	}
 }
 
-// TestAgentProviderAuditWithoutDefaultsIsToday is the golden: a roster naming no
-// default writes exactly the datum keys it wrote before the field existed.
-func TestAgentProviderAuditWithoutDefaultsIsToday(t *testing.T) {
+// TestAgentProviderAuditWithoutDefaultsIsNarrowed is the golden: a roster
+// naming no default writes exactly the narrowed datum keys (#548) — no
+// defaults key, and none of the retired credential fields.
+func TestAgentProviderAuditWithoutDefaultsIsNarrowed(t *testing.T) {
 	srv, audit := newAgentProvidersHarness(t, &fakeSiteConfigStore{})
 	if w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
-		`{"agents":[{"id":"claude-code","mechanism":"anthropic_api_key"}]}`); w.Code != http.StatusOK {
+		`{"agents":[{"id":"claude-code"}]}`); w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d; body=%s", w.Code, w.Body.String())
 	}
-	want := []string{"agent_count", "credential_sources", "disabled", "ids", "mechanisms", "pins"}
+	want := []string{"agent_count", "disabled", "ids"}
 	if got := slices.Sorted(maps.Keys(agentProviderWriteDatum(t, audit))); !slices.Equal(got, want) {
-		t.Errorf("agent_provider.write keys = %v, want exactly today's %v", got, want)
+		t.Errorf("agent_provider.write keys = %v, want exactly %v", got, want)
 	}
 }
 
@@ -105,7 +106,7 @@ func TestSiteConfigDoorChecksDefaults(t *testing.T) {
 		{"clearing the providers a default names", `{"model_providers":{}}`},
 		{"unticking the default's agent", `{"model_providers":{"providers":[{"id":"anthropic","kind":"anthropic_api_key"}]}}`},
 		{"a roster naming a provider the carried-forward block lacks",
-			`{"agent_providers":{"agents":[{"id":"claude-code","mechanism":"anthropic_api_key","default_provider":"ghost"}]}}`},
+			`{"agent_providers":{"agents":[{"id":"claude-code","default_provider":"ghost"}]}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, _ := newAgentProvidersHarness(t, &fakeSiteConfigStore{cfg: stored})

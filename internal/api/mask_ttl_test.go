@@ -167,8 +167,8 @@ func TestAWSSSOMintSites_LetTheAccessTokenGoAfterItsExpiry(t *testing.T) {
 				"refreshToken": "rotated-refresh-token-abcdefghij",
 			})
 		})
-		if ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{}); !ba.ready {
-			t.Fatal("the renewed SSO lane is not ready")
+		if _, msg := ssoDispatch(s); msg != "" {
+			t.Fatalf("the renewed SSO lane is not ready: %s", msg)
 		}
 		check(t, s.cfg.MaskRegistry, awsSSOTestFixedNow.Add(time.Hour), "fresh-access-token-abcdefghij",
 			"rotated-refresh-token-abcdefghij", blob.ClientSecret)
@@ -177,38 +177,37 @@ func TestAWSSSOMintSites_LetTheAccessTokenGoAfterItsExpiry(t *testing.T) {
 		s, _, _ := ssoRefreshServer(t)
 		expiry := awsSSOTestFixedNow.Add(30 * time.Minute)
 		blob := putAWSSSOBlob(t, s, expiry)
-		if ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false, nil, awsSSOScope{}); !ba.ready {
-			t.Fatal("the SSO lane with a valid token is not ready")
+		if _, msg := ssoDispatch(s); msg != "" {
+			t.Fatalf("the SSO lane with a valid token is not ready: %s", msg)
 		}
 		check(t, s.cfg.MaskRegistry, expiry, blob.AccessToken, blob.RefreshToken, blob.ClientSecret)
 	})
 }
 
-// TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberTheRosters pins 1b61b04ce: a
-// provider-scoped refresh must key its mask-set entry on scope.ssoSecret()
-// (wardyn-provider-<uid>-sso), not the roster's harnessCredSecretName. Keying
-// it on the roster's name would collide with the SAME person's roster
-// credential's own key (AddGlobalUntil replaces a key's whole current set) and
-// retire its live refresh token and client secret at once — SweepGlobals then
-// drops them, unmasking a roster credential still in use.
-func TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberTheRosters(t *testing.T) {
+// TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberAnotherProvider pins
+// 1b61b04ce: a provider-scoped refresh must key its mask-set entry on
+// scope.ssoSecret() (wardyn-provider-<uid>-sso), never on a name another
+// credential of the SAME person shares. A shared key would collide
+// (AddGlobalUntil replaces a key's whole current set) and retire the other
+// provider's live refresh token and client secret at once — SweepGlobals then
+// drops them, unmasking a credential still in use.
+func TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberAnotherProvider(t *testing.T) {
 	ctx := context.Background()
 	reg := secretmask.NewRegistry()
 	s := &Server{cfg: Config{
-		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets: &memSecrets{}, MaskRegistry: reg, Now: func() time.Time { return awsSSOTestFixedNow }, Audit: &memAudit{},
 	}}
 	const owner = "alice@example.com"
-	rosterScope := awsSSOScope{perUser: true, owner: owner}
+	otherScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
 	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
 
-	// The roster credential's OWN mask entries, as its own earlier capture
+	// The other provider's OWN mask entries, as its own earlier capture
 	// registered them: a live refresh token and client secret with no expiry of
 	// their own, and an access token expiring far in the future.
-	rosterAccess, rosterRefresh, rosterSecret := "roster-access-token-1234567890", "roster-refresh-token-1234567890", "roster-client-secret-1234567890"
-	rosterExpiry := awsSSOTestFixedNow.Add(24 * time.Hour)
-	reg.AddGlobalUntil(rosterScope.rowOwner(), rosterScope.ssoSecret(), awsSSOTestFixedNow, rosterExpiry,
-		[]byte(rosterAccess), []byte(rosterRefresh), []byte(rosterSecret))
+	otherAccess, otherRefresh, otherSecret := "other-access-token-12345678901", "other-refresh-token-12345678901", "other-client-secret-12345678901"
+	otherExpiry := awsSSOTestFixedNow.Add(24 * time.Hour)
+	reg.AddGlobalUntil(otherScope.rowOwner(), otherScope.ssoSecret(), awsSSOTestFixedNow, otherExpiry,
+		[]byte(otherAccess), []byte(otherRefresh), []byte(otherSecret))
 
 	// An expired provider-scoped blob due for renewal.
 	blob := awsSSOBlob{
@@ -238,12 +237,12 @@ func TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberTheRosters(t *testing.T) {
 		t.Fatal("the provider's refreshed values were not masked")
 	}
 
-	// A sweep shortly after the refresh, well before the roster access token's
-	// own (far-future) expiry, must not touch ANY of the roster's values —
-	// keying the provider's AddGlobalUntil on the roster's name would have
+	// A sweep shortly after the refresh, well before the other access token's
+	// own (far-future) expiry, must not touch ANY of the other provider's values —
+	// keying both AddGlobalUntil calls on one name would have
 	// retired them all at the refresh, and this sweep would drop them.
 	reg.SweepGlobals(awsSSOTestFixedNow.Add(time.Second))
-	if !masksValue(reg, rosterAccess) || !masksValue(reg, rosterRefresh) || !masksValue(reg, rosterSecret) {
-		t.Fatal("a provider-scoped refresh unmasked the roster credential's still-current values")
+	if !masksValue(reg, otherAccess) || !masksValue(reg, otherRefresh) || !masksValue(reg, otherSecret) {
+		t.Fatal("a provider-scoped refresh unmasked another provider's still-current values")
 	}
 }

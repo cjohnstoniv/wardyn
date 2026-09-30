@@ -280,33 +280,13 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 	// would get an immediate io.EOF and end the session on ITS OWN, letting
 	// this test pass even with the ctx-cancel wiring ripped out entirely (a
 	// mutation probe that deletes the wiring stays green on a plain os.Stdin).
-	// Swapping in a pipe whose write end this test holds open blocks that half
-	// indefinitely, so the cancel below is the only thing that can end the
-	// session.
-	// Half 2 (attach.go's "Half 2" goroutine, os.Stdin.Read) is a KNOWN,
-	// pre-existing leak: os.Stdin.Read is a plain blocking syscall, not
-	// ctx-aware, so it stays parked on this pipe even after runAttach
-	// returns (bounded only by process exit — see the review's own
-	// "Verified OK" note). That leaked goroutine keeps reading the package
-	// var os.Stdin, so reassigning `os.Stdin = oldStdin` afterwards races it
-	// under -race with no way to synchronize the two (there is no hook into
-	// when, or if, that goroutine ever notices the pipe closing). os.Stdin is
-	// therefore deliberately left pointing at this (closed) pipe for the
-	// rest of the test binary's process — no other test in this package
-	// reads the raw global (execCmd/cobra always route stdin through
-	// cmd.SetIn, never os.Stdin directly), so nothing downstream depends on
-	// restoring it.
-	stdinR, stdinW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdin = stdinR
-	t.Cleanup(func() {
-		// Close only the write end: the leaked half-2 read sees EOF and exits, and
-		// os.Stdin stays a VALID handle whose reads return EOF (the /dev/null
-		// contract), never "file already closed". One fd leaks for the process.
-		stdinW.Close()
-	})
+	// The shared never-closed pipe blocks that half indefinitely, so the
+	// cancel below is the only thing that can end the session. It is shared
+	// rather than a pipe of this test's own because os.Stdin must be written
+	// exactly once per test binary (see swapSharedAttachStdin): a per-test pipe
+	// closed in Cleanup stayed installed under -count=N, and every later
+	// TestAttach_* then read EOF and detached cleanly before its frames arrived.
+	swapSharedAttachStdin(t)
 
 	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
@@ -678,7 +658,9 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 			return
 		}
 		defer c.CloseNow()
-		<-r.Context().Done()
+		// End the session from the server: a normal close is a clean detach whatever
+		// os.Stdin is, so the outcome never depends on stdin's state (EOF or blocked).
+		_ = c.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer srv.Close()
 
@@ -715,7 +697,9 @@ func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
 			return
 		}
 		defer c.CloseNow()
-		<-r.Context().Done()
+		// End the session from the server: a normal close is a clean detach whatever
+		// os.Stdin is, so the outcome never depends on stdin's state (EOF or blocked).
+		_ = c.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer srv.Close()
 
@@ -785,7 +769,9 @@ func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
 			return
 		}
 		defer c.CloseNow()
-		<-r.Context().Done()
+		// End the session from the server: a normal close is a clean detach whatever
+		// os.Stdin is, so the outcome never depends on stdin's state (EOF or blocked).
+		_ = c.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer srv.Close()
 
@@ -824,7 +810,9 @@ func TestRunAttach_FallsBackToBareDialWhenMintUnavailable(t *testing.T) {
 			return
 		}
 		defer c.CloseNow()
-		<-r.Context().Done()
+		// End the session from the server: a normal close is a clean detach whatever
+		// os.Stdin is, so the outcome never depends on stdin's state (EOF or blocked).
+		_ = c.Close(websocket.StatusNormalClosure, "")
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -851,11 +839,12 @@ var (
 )
 
 // swapSharedAttachStdin points os.Stdin at a pipe this test binary never
-// closes, exactly ONCE for every test in this file that needs one — mirroring
-// the os.Stdin swap TestRunAttach_CtxCancelRestoresTerminal already relies on
-// (see its own comment on why: go test's real os.Stdin is not a blocking
-// source, so Half 2 would race a premature EOF-driven cancel in ahead of the
-// frames these tests need Half 1 to process first).
+// closes, exactly ONCE for every test in this file that needs one (go test's
+// real os.Stdin is not a blocking source, so Half 2 would race a premature
+// EOF-driven cancel in ahead of the frames these tests need Half 1 to process
+// first). Every test that needs it goes through here, none assigns os.Stdin
+// itself: a second writer stays installed across -count repeats and defeats
+// the Once.
 //
 // It is package-shared and NEVER reassigned again (sync.Once), on purpose:
 // os.Stdin.Read (attach.go's Half 2) is not ctx-aware, so a pump reading a

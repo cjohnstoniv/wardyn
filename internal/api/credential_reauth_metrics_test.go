@@ -307,7 +307,7 @@ func TestApprovalTallyKeyAgreesWithTheLanes(t *testing.T) {
 	}
 	// The AWS raise's own scope shape (holdOrRefuseCredentialReauth).
 	aws := mk(types.ApprovalCredentialReauth, awsSSOReauthScopeBody{
-		Mechanism: string(types.AgentMechanismBedrockSSO), CredentialSource: string(types.CredentialSourcePerUser), Owner: "alice",
+		Mechanism: string(types.ModelProviderBedrockSSO), CredentialSource: string(types.CredentialSourcePerUser), Owner: "alice",
 	}, nil)
 	if !reauthResolvableBy(types.ApprovalRequest{Kind: aws.Kind, State: types.ApprovalPending, RequestedScope: aws.RequestedScope},
 		awsSSOScope{perUser: true, owner: "alice"}, types.AgentRun{CreatedAt: time.Now().Add(time.Hour)}) {
@@ -388,7 +388,7 @@ func TestCredentialReauthMetrics_RequestedAndResolvedAtTheirOwnTransitions(t *te
 	f.st.loginRun = loginRun
 	fresh := liveSSOBlob()
 	f.putBlob(t, "alice@example.com", fresh)
-	f.srv.resolvePendingReauth(context.Background(), awsSSOScope{perUser: true, owner: "alice@example.com"}, "alice@example.com", loginRun)
+	f.srv.resolvePendingReauth(context.Background(), reauthScope("alice@example.com"), "alice@example.com", loginRun)
 	if got := reauthCount(t, f.srv, "resolved"); strings.TrimSpace(got) != "1" {
 		t.Errorf("resolved = %s after one sign-in, want 1", got)
 	}

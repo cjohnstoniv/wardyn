@@ -4,12 +4,12 @@
  */
 
 // The one-line read-only summary of a policy's azure_devops_capabilities —
-// "Azure DevOps: Read · Contribute" — shown under New Run's saved-policy picker
+// "Azure DevOps: Read (every area) · Repos" — shown under New Run's saved-policy picker
 // and beside each row on the Policies screen, so a person picks a policy
 // without opening it to find out what it grants.
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../lib/ado-capabilities";
-import { ADO_ACCESS, adoCapName } from "../../lib/ado-access-copy";
-import { ADO_ENTRA_EDITOR, ADO_GROUP_COPY } from "../../lib/workspace-providers-copy";
+import { ADO_ACCESS, adoCapName, adoGroupName } from "../../lib/ado-access-copy";
+import { ADO_ENTRA_EDITOR } from "../../lib/workspace-providers-copy";
 import { clsx } from "clsx";
 
 // Its own span, not a Chip: Chip merges classes through cn(), and
@@ -28,21 +28,27 @@ export function HighRiskBadge({ className }: { className?: string }) {
   );
 }
 
-// adoAccessSummary names each group in catalogue order: a group chosen whole is
-// its group name ("Contribute"); otherwise each chosen capability by name. A
-// high-risk capability is always named on its own, never folded into a group.
+// adoAccessSummary folds the chosen capabilities into one line, in catalogue
+// order (the approved per-area mock's State 4):
+//   1. all eleven reads chosen → "Read (every area)" first, and the reads are
+//      then left out of every area below;
+//   2. an area whose rows that are not High risk are all chosen → its name;
+//   3. otherwise each chosen row by name — and a High-risk row is always named
+//      on its own, never folded into its area.
 // A non-list value (a hand-typed spec) reads as nothing chosen.
 export function adoAccessSummary(caps: unknown): { parts: string[]; highRisk: boolean } {
   const chosen = new Set(Array.isArray(caps) ? caps : []);
-  const parts: string[] = [];
+  const everyRead = ADO_CAPABILITIES.filter((c) => c.read).every((c) => chosen.has(c.cap));
+  const parts: string[] = everyRead ? [ADO_ACCESS.SUMMARY_EVERY_READ] : [];
   let highRisk = false;
   for (const g of ADO_CAPABILITY_GROUPS) {
-    const inGroup = ADO_CAPABILITIES.filter((c) => c.group === g.id);
-    const picked = inGroup.filter((c) => chosen.has(c.cap));
-    if (picked.length === 0) continue;
-    if (g.id === "high_risk") highRisk = true;
-    if (g.id !== "high_risk" && picked.length === inGroup.length) parts.push(ADO_GROUP_COPY[g.id].name);
-    else parts.push(...picked.map((c) => adoCapName(c.cap)));
+    const rows = ADO_CAPABILITIES.filter((c) => c.group === g.id && !(everyRead && c.read));
+    const everyday = rows.filter((c) => !c.highRisk);
+    const risky = rows.filter((c) => c.highRisk && chosen.has(c.cap));
+    if (everyday.length > 0 && everyday.every((c) => chosen.has(c.cap))) parts.push(adoGroupName(g.id));
+    else parts.push(...everyday.filter((c) => chosen.has(c.cap)).map((c) => adoCapName(c.cap)));
+    parts.push(...risky.map((c) => adoCapName(c.cap)));
+    if (risky.length > 0) highRisk = true;
   }
   return { parts, highRisk };
 }

@@ -644,7 +644,7 @@ func TestHandlePutSiteConfig_RejectsIntegrations(t *testing.T) {
 // must carry the STORED integrations forward verbatim rather than wiping them.
 func TestHandlePutSiteConfig_CarriesStoredIntegrationsForward(t *testing.T) {
 	existing := types.Integration{
-		ID: "x", Name: "X", Kind: types.IntegrationKindAnthropicAPIKey,
+		ID: "x", Name: "X", Kind: types.IntegrationKindGitHost,
 	}
 	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Integrations: []types.Integration{existing}}}
 	srv, _ := newSiteConfigHarness(t, fake)

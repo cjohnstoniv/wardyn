@@ -6,19 +6,17 @@
 // Split from harness-login-pane.test.tsx (#195): that file was over the
 // 800-line test gate. The consent-gate describe (and the terminal/harness/
 // setup/audit mocks it shares with the sibling's starting-phase describe) live
-// here; isLikelyStartUrl, loginFlow and serverConfirmsCapture stay there.
+// here; loginFlow and serverConfirmsProviderCapture stay there.
 import * as React from "react";
 import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AGENTS } from "../../../lib/workspace-providers-copy";
 import {
   SANDBOX_REFUSAL_LEAD_IN,
   HarnessLoginPane,
   CAPTURE_NOT_CORROBORATED,
 } from "./harness-login-pane";
-import { SIGNIN_PROGRESS } from "./login-pane-copy";
 import { CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { SetupStatus } from "../../../lib/types";
@@ -27,13 +25,6 @@ import { makeRun } from "../../../../test/factories";
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
 
-
-// The consent gate.
-//
-// Owner report, verbatim: "you see a dialog then all of a sudden terminal then
-// all of a sudden a popup asking for auth. We should alert the user before
-// this happens what to expect and what's required from them." Nothing
-// launches the sandbox except Start login.
 
 // lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
 // on its most recent render, so a test can feed it PTY chunks directly — the
@@ -57,10 +48,13 @@ vi.mock("../../attach-terminal", () => ({
 }));
 const harnessLoginMock = vi.fn();
 const harnessPasteMock = vi.fn();
-vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: {
-    harnessLogin: (...a: unknown[]) => harnessLoginMock(...a),
-    harnessCredentialPaste: (...a: unknown[]) => harnessPasteMock(...a),
+// The pane launches and stores through the provider door (#548: the only
+// door), adapted to the mocks below: a launch resolves the run id, a
+// capture passes the token.
+vi.mock("../../../lib/api/model-provider-signin", () => ({
+  modelProviderSignIn: {
+    startSignIn: (...a: unknown[]) => Promise.resolve(harnessLoginMock(...a)).then((runId: unknown) => ({ runId, state: "PENDING" })),
+    captureSignIn: (_provider: unknown, _run: unknown, token: unknown) => harnessPasteMock(token),
   },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
@@ -71,7 +65,7 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 const listAuditMock = vi.fn();
 vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) } }));
 
-describe("HarnessLoginPane — the consent gate", () => {
+describe("HarnessLoginPane — the sign-in's own markers", () => {
   beforeEach(() => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     harnessPasteMock.mockReset().mockResolvedValue(undefined);
@@ -88,94 +82,9 @@ describe("HarnessLoginPane — the consent gate", () => {
     listAuditMock.mockReset().mockResolvedValue([]);
   });
 
-  it("launches NOTHING on mount: the intro says what to expect and what's required", () => {
-    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByTestId("login-intro")).toBeInTheDocument();
-    // The two things the jump never announced: a terminal, and a browser auth.
-    expect(screen.getByText(/a terminal appears here/i)).toBeInTheDocument();
-    expect(screen.getByText(/sign in and approve/i)).toBeInTheDocument();
-    // The requirement on the operator, stated up front.
-    expect(screen.getByText(/active Claude subscription/i)).toBeInTheDocument();
-    expect(harnessLoginMock).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
-  });
-
-  it("Start login is the ONLY thing that launches the sandbox", async () => {
-    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-    expect(harnessLoginMock).toHaveBeenCalledWith("anthropic", "");
-    expect(await screen.findByTestId("fake-terminal")).toBeInTheDocument();
-  });
-
-  it("Cancel on the intro backs out without ever launching", async () => {
-    const onCancel = vi.fn();
-    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={onCancel} />);
-    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
-    expect(onCancel).toHaveBeenCalled();
-    expect(harnessLoginMock).not.toHaveBeenCalled();
-  });
-
-  it("AWS keeps its start-URL gate and now states what happens next above it", () => {
-    render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
-    expect(screen.getByText(/verification page/i)).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("AWS")}” opens it`);
-    // The gate is the only thing on screen — nothing launches on mount.
-    expect(harnessLoginMock).not.toHaveBeenCalled();
-  });
-
-  // #628: nothing opens on Start any more, so the intro and blurb promise the
-  // Open button, never a tab that "opens" by itself.
-  it("the Claude intro and blurb name the Open button, never a tab that opens on its own", async () => {
-    harnessLoginMock.mockReturnValue(new Promise<string>(() => {}));
-    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
-    const intro = screen.getByTestId("login-intro");
-    expect(intro).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("Claude")}” opens it in a new tab`);
-    expect(intro).not.toHaveTextContent(/A new tab opens/);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-    const pane = screen.getByTestId("harness-login-pane");
-    expect(pane).toHaveTextContent(`open it with “${SIGNIN_PROGRESS.OPEN("Claude")}”`);
-    expect(pane).not.toHaveTextContent(/opens the Claude login page in a new tab/);
-  });
-
-  // Under a per_user agent row the server signs in against the ROW's stored
-  // sso_start_url and IGNORES whatever is typed here, so asking is a field
-  // that cannot take effect — and every member would have to hunt down a URL
-  // their admin already entered.
-  describe("startURLManaged — the org's portal is a fact, not a question", () => {
-    it("skips the start-URL gate for the note, and launches with an empty start URL", async () => {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      expect(screen.queryByLabelText(/aws access portal start url/i)).toBeNull();
-      expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
-      // Straight to the consent gate, with the same "what happens next" list.
-      expect(screen.getByTestId("login-intro")).toBeInTheDocument();
-      expect(screen.getByText(/verification page/i)).toBeInTheDocument();
-
-      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-      expect(harnessLoginMock).toHaveBeenCalledWith("aws", "");
-    });
-
-    it("the DEFAULT is unchanged — the ordinary Settings sign-in still asks", () => {
-      render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
-      expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
-      expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
-    });
-
-    it("means nothing to a flow that never asked (anthropic)", () => {
-      render(<HarnessLoginPane provider="anthropic" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      expect(screen.getByTestId("login-intro")).toBeInTheDocument();
-      expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
-    });
-  });
-
-  // Appendix A finding 1's fail-fast ask, pane half: wardyn-aws-sso prints a
-  // fail marker on a refused capture (a wrong-account pin, a portal error) and
-  // NEVER prints doneMarker in that case. Without this latch, the pane would
-  // sit on "waiting" forever with no explanation, the operator's only signal
-  // a terminal that stopped scrolling.
   describe("the helper's fail marker ends the wait with why", () => {
     async function attachAwsRun(onDone = vi.fn(), onCancel = vi.fn()) {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
-      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={onDone} onCancel={onCancel} />);
       await screen.findByTestId("fake-terminal");
       return { onDone, onCancel };
     }
@@ -242,8 +151,7 @@ describe("HarnessLoginPane — the consent gate", () => {
   it("a manual token paste keeps its paste row while saving — never the helper's verifying note", async () => {
     let settle: () => void = () => {};
     harnessPasteMock.mockImplementation(() => new Promise<void>((res) => (settle = () => res())));
-    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    render(<HarnessLoginPane modelProvider="claude-sub" provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
     await screen.findByTestId("fake-terminal");
 
     await userEvent.type(screen.getByLabelText("setup-token"), TOKEN);
@@ -265,17 +173,15 @@ describe("HarnessLoginPane — the consent gate", () => {
   // server's own /setup/status before it claims a capture or calls onDone.
   describe("the helper's success marker is corroborated against the server (S-13)", () => {
     async function attachAwsRun(onDone = vi.fn(), onCancel = vi.fn()) {
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
-      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={onDone} onCancel={onCancel} />);
       await screen.findByTestId("fake-terminal");
       return { onDone, onCancel };
     }
 
     // review-1 S1: fake-timer-aware click (`attachedOnFakeTimers`'s pattern).
     async function attachAwsRunUnderFakeTimers(onDone = vi.fn(), onCancel = vi.fn()) {
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
-      await user.click(screen.getByRole("button", { name: /start login/i }));
+      render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={onDone} onCancel={onCancel} />);
+      await act(async () => {}); // the pane launches on mount
       await screen.findByTestId("fake-terminal");
       return { onDone, onCancel };
     }
@@ -324,7 +230,7 @@ describe("HarnessLoginPane — the consent gate", () => {
     // fires and the pane reports done.
     it("a marker the server corroborates via a harness row stamped with THIS run calls onDone", async () => {
       getSetupStatusMock.mockResolvedValue({
-        harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }],
+        provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }],
       } as unknown as SetupStatus);
       const { onDone } = await attachAwsRun();
 
@@ -366,11 +272,13 @@ describe("HarnessLoginPane — the consent gate", () => {
 
     // The aws flow also corroborates via this caller's own model_access
     // (a per_user row's sign-in can land there before the harness row updates).
-    it("a marker the server corroborates via model_access.state=live also calls onDone", async () => {
+    it("a marker the server corroborates via THIS run's audit row also calls onDone", async () => {
+      // A row with no source_run_id (an older daemon): this run's capture
+      // audit row is the proof instead.
       getSetupStatusMock.mockResolvedValue({
-        harness: [],
-        model_access: { state: "live" },
+        provider_access: [{ provider: "bedrock-prod", state: "live" }],
       } as unknown as SetupStatus);
+      listAuditMock.mockResolvedValue([{ id: "a1" }]);
       const { onDone } = await attachAwsRun();
 
       await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
@@ -442,9 +350,9 @@ describe("HarnessLoginPane — the consent gate", () => {
     // worked to do it again.
     it("re-reads a status that answers but does not show this run's capture yet", async () => {
       getSetupStatusMock
-        .mockResolvedValueOnce({ harness: [], model_access: undefined } as unknown as SetupStatus)
+        .mockResolvedValueOnce({ provider_access: [] } as unknown as SetupStatus)
         .mockResolvedValue({
-          harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }],
+          provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }],
         } as unknown as SetupStatus);
       const { onDone } = await attachAwsRun();
 
@@ -452,7 +360,9 @@ describe("HarnessLoginPane — the consent gate", () => {
 
       await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1), { timeout: 3000 });
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
+      // The first read showed nothing yet; the pane read again before
+      // accusing the sandbox (the background watch may read once more).
+      expect(getSetupStatusMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
     // The retry is not decoration: a blip on the FIRST read must not cost an
@@ -461,7 +371,7 @@ describe("HarnessLoginPane — the consent gate", () => {
       getSetupStatusMock
         .mockResolvedValueOnce({ unreachable: true, ready: true } as unknown as SetupStatus)
         .mockResolvedValueOnce({
-          harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }],
+          provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }],
         } as unknown as SetupStatus);
       const { onDone } = await attachAwsRun();
 
@@ -490,7 +400,7 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.getByTestId("capture-verifying-note")).toHaveAttribute("role", "status");
 
       await act(async () => {
-        release({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] } as unknown as SetupStatus);
+        release({ provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }] } as unknown as SetupStatus);
       });
     });
   });

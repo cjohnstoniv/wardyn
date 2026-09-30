@@ -33,7 +33,6 @@ var (
 	_ client.WorkspaceStatus
 	_ client.WorkspaceAttachment
 	_ client.WorkspaceLLMCred
-	_ client.WorkspaceBedrockRef
 	_ client.BaseImageEntry
 	_ client.SiteConfig
 	_ map[string]client.ArtifactOverride
@@ -48,6 +47,8 @@ var (
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
 	_ client.RunFiles
+	_ client.RunOutput
+	_ client.RunPolicyView
 	_ []client.Device
 	_ client.DeviceEnrolmentToken
 	_ client.DrivesDocument
@@ -75,7 +76,7 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "GetRunPolicy"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
@@ -87,7 +88,7 @@ func routeFamilies() map[string][]string {
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance":  {"GetGovernance", "ApplyGovernance"},
-		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
+		"setup":       {"SetupStatus"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},

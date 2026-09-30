@@ -759,6 +759,27 @@ func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
 	}
 }
 
+// TestCapGrantedNeverGrantsADotSegmentImage (#1018): an image grant stored
+// before the dot-segment rule is marked inert, and it must not be honoured —
+// an exact allow or a wildcard, the run door refuses the ref either way.
+func TestCapGrantedNeverGrantsADotSegmentImage(t *testing.T) {
+	const ref = "ghcr.io/acme/../policy/x"
+	for name, value := range map[string]string{"an exact legacy allow": ref, "a wildcard allow": capWildcard} {
+		t.Run(name, func(t *testing.T) {
+			st := &capStore{
+				grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, value, types.CapabilityAllow)},
+				enf:    map[string]bool{capImage: true},
+			}
+			if ok, err := capServer(st).capGranted(memberCtx(nil), capImage, ref); ok || err != nil {
+				t.Fatalf("capGranted(%q) = %v, %v; want refused", ref, ok, err)
+			}
+			if ok, err := capServer(st).capGranted(memberCtx(nil), capImage, "ghcr.io/acme/tool:1"); ok != (value == capWildcard) || err != nil {
+				t.Fatalf("a clean ref = %v, %v; the guard must only bite on a dot segment", ok, err)
+			}
+		})
+	}
+}
+
 // TestCapDenyOverlapsWildcardWant pins the DENY-vs-ALLOW asymmetry
 // capValueOverlaps exists for: a deny only has to OVERLAP the requested value,
 // while an allow still has to COVER it. Before this, a member whose allowlist

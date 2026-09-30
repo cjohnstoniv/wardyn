@@ -31,7 +31,7 @@ var adoNamePairs = []struct{ project, repo, path string }{
 // agent-run rewrite, the real proxy, and a real git http-backend behind a fake
 // that looks the repository up by its literal names, as Azure DevOps does.
 func TestADONames_GitBrokerCloneFetchPush(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	for _, pr := range adoNamePairs {
 		bare := adofake.NewFixtureRepo(t)
 		h.fake.RegisterRepo("acme", pr.project, pr.repo, bare)
@@ -117,7 +117,7 @@ func TestADONames_ApprovalRepoKeyIsOneSpelling(t *testing.T) {
 // A held push on a spaced repository asks the control plane about the
 // repository by its name, and the query carries the space intact.
 func TestADONames_HeldPushAsksByName(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	pr := adoNamePairs[0]
 	h.fake.RegisterRepo("acme", pr.project, pr.repo, adofake.NewFixtureRepo(t))
 	cp := newCapControlPlane(t)
@@ -138,8 +138,8 @@ func TestADONames_HeldPushAsksByName(t *testing.T) {
 // encoding — rather than keyed there as a second repository whose sticky deny
 // the real one would not inherit.
 func TestADONames_EdgeSpellingsRefusedAtBothDoors(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
-	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
+	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}}
 	for _, repo := range []string{"Repo.", "%20Repo", "Repo%20", "a%2Fb", "a%252Fb"} {
 		rest := httptest.NewRequest(http.MethodGet, "https://dev.azure.com/acme/proj/_apis/git/repositories/"+repo+"/items", nil)
 		if msg, _ := adoCheck(rest, "dev.azure.com", grant, refuseEveryRef); msg == "" {

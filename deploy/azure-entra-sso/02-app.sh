@@ -9,6 +9,13 @@
 # the optional email ID-token claim, a service principal, "assignment
 # required" turned on, and a client secret. Nothing secret is ever printed —
 # the client secret goes straight into .env.local (chmod 600).
+#
+# The Azure DevOps permissions follow ADO_TOKEN_MODE (docs/AZURE-DEVOPS.md, "The
+# app registration"): minted_pat (the default) adds vso.pats and vso.pats_manage,
+# which a per-run-token row needs; bearer adds the capability scopes an Entra
+# sign-in row needs and never the two token permissions (a bearer row refuses an
+# app that holds them). Both need this same app to be a confidential client on
+# the Web platform, which the rest of this script already sets up.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +32,12 @@ command -v az >/dev/null 2>&1 || { echo "az (Azure CLI) not found on PATH" >&2; 
 command -v uuidgen >/dev/null 2>&1 || { echo "uuidgen not found on PATH" >&2; exit 1; }
 
 DISPLAY_NAME="wardyn-sso-validation"
+ADO_TOKEN_MODE_GIVEN="${ADO_TOKEN_MODE:+1}"
+ADO_TOKEN_MODE="${ADO_TOKEN_MODE:-minted_pat}"
+case "${ADO_TOKEN_MODE}" in
+  minted_pat | bearer) ;;
+  *) echo "ADO_TOKEN_MODE must be minted_pat or bearer (got '${ADO_TOKEN_MODE}')" >&2; exit 1 ;;
+esac
 HTTP_PORT="${HTTP_PORT:-8480}"
 REDIRECT_URI="http://localhost:${HTTP_PORT}/auth/callback"
 # The per-user Azure DevOps sign-in (docs/adoption/azure-devops-entra.md)
@@ -84,6 +97,13 @@ EOF
     --query appId -o tsv)"
 fi
 
+if [[ "${APP_REUSED}" == "1" && -z "${ADO_TOKEN_MODE_GIVEN}" ]]; then
+  echo "ADO_TOKEN_MODE is not recorded for the existing app '${DISPLAY_NAME}'. An app set up before 0.8.2 serves an" >&2
+  echo "Entra sign-in (bearer) row, which refuses a token that can create tokens. Re-run with ADO_TOKEN_MODE=bearer to" >&2
+  echo "keep that row working, or ADO_TOKEN_MODE=minted_pat once you switch the row to token_mode minted_pat." >&2
+  exit 1
+fi
+
 APP_OBJECT_ID="$(az ad app show --id "${CLIENT_ID}" --query id -o tsv)"
 
 echo "==> groupMembershipClaims=SecurityGroup + optional email ID-token claim"
@@ -101,15 +121,21 @@ az rest --method PATCH \
     }
   }'
 
-# Azure DevOps delegated permissions for an `entra` provider row whose ceiling
-# is read + code_write + pr (docs/adoption/azure-devops-entra.md, "The app
-# registration"). The Azure DevOps service principal exists in a tenant only
+# Azure DevOps delegated permissions for an `entra` provider row (see the header
+# for ADO_TOKEN_MODE). The Azure DevOps service principal exists in a tenant only
 # once an Azure DevOps organisation is connected to it; without one this step
 # is skipped and the Azure DevOps lane cannot be tested on this tenant.
 ADO_API="499b84ac-1321-427f-aa17-267ca6975798"
-ADO_SCOPES=(vso.analytics vso.build vso.code vso.graph vso.identity vso.memberentitlementmanagement
-  vso.packaging vso.profile vso.project vso.release vso.securefiles_read vso.serviceendpoint vso.test
-  vso.variablegroups_read vso.wiki vso.work vso.code_write)
+ADO_TOKEN_SCOPES=(vso.pats vso.pats_manage)
+if [[ "${ADO_TOKEN_MODE}" == "minted_pat" ]]; then
+  # A per-run-token row chooses its own PAT scopes; the app needs only these two.
+  ADO_SCOPES=("${ADO_TOKEN_SCOPES[@]}")
+else
+  # An Entra sign-in row whose ceiling is every per-area read + code_write + pr.
+  ADO_SCOPES=(vso.analytics vso.build vso.code vso.graph vso.identity vso.memberentitlementmanagement
+    vso.packaging vso.profile vso.project vso.release vso.securefiles_read vso.serviceendpoint vso.test
+    vso.variablegroups_read vso.wiki vso.work vso.code_write)
+fi
 if az ad sp show --id "${ADO_API}" >/dev/null 2>&1; then
   # `az ad app permission add` appends without de-duplicating, so a re-run on
   # a reused app adds only the scopes the app does not already hold.
@@ -122,13 +148,26 @@ if az ad sp show --id "${ADO_API}" >/dev/null 2>&1; then
     grep -qx "${id}" <<<"${HELD}" || ADO_PERMS+=("${id}=Scope")
   done
   if ((${#ADO_PERMS[@]})); then
-    echo "==> az ad app permission add (Azure DevOps: ${#ADO_PERMS[@]} of ${#ADO_SCOPES[@]} scopes not yet held)"
+    echo "==> az ad app permission add (Azure DevOps, ${ADO_TOKEN_MODE}: ${#ADO_PERMS[@]} of ${#ADO_SCOPES[@]} scopes not yet held)"
     az ad app permission add --id "${CLIENT_ID}" --api "${ADO_API}" --api-permissions "${ADO_PERMS[@]}"
   else
-    echo "==> the app already holds every Azure DevOps scope"
+    echo "==> the app already holds every Azure DevOps scope ${ADO_TOKEN_MODE} needs"
   fi
-  echo "    Grant admin consent once (or let each person consent at their first Azure DevOps sign-in):"
+  if [[ "${ADO_TOKEN_MODE}" == "minted_pat" ]]; then
+    echo "    Grant admin consent — required, so each person's connection is captured silently at sign-in:"
+  else
+    echo "    Grant admin consent once (or let each person consent at their first Azure DevOps sign-in):"
+  fi
   echo "    az ad app permission admin-consent --id ${CLIENT_ID}"
+  if [[ "${ADO_TOKEN_MODE}" == "bearer" ]]; then
+    for s in "${ADO_TOKEN_SCOPES[@]}"; do
+      id="$(az ad sp show --id "${ADO_API}" --query "oauth2PermissionScopes[?value=='${s}'].id | [0]" -o tsv)"
+      if [[ -n "${id}" && "${id}" != "None" ]] && grep -qx "${id}" <<<"${HELD}"; then
+        echo "    WARNING: the app holds ${s}; a bearer row refuses to inject a token that can create tokens." >&2
+        echo "    Remove it (az ad app permission delete --id ${CLIENT_ID} --api ${ADO_API} --api-permissions ${id}) or use ADO_TOKEN_MODE=minted_pat." >&2
+      fi
+    done
+  fi
 else
   echo "==> no Azure DevOps service principal in this tenant — connect an Azure DevOps organisation"
   echo "    to it (Organization settings -> Microsoft Entra) and re-run to add the Azure DevOps permissions"
@@ -165,5 +204,6 @@ set_var SP_OBJECT_ID "${SP_OBJECT_ID}"
 set_var ADMIN_ROLE_ID "${ADMIN_ROLE_ID}"
 set_var MEMBER_ROLE_ID "${MEMBER_ROLE_ID}"
 set_var HTTP_PORT "${HTTP_PORT}"
+set_var ADO_TOKEN_MODE "${ADO_TOKEN_MODE}"
 echo "==> wrote CLIENT_ID / CLIENT_SECRET / APP_OBJECT_ID / SP_OBJECT_ID /"
-echo "    ADMIN_ROLE_ID / MEMBER_ROLE_ID / HTTP_PORT to ${ENV_FILE}"
+echo "    ADMIN_ROLE_ID / MEMBER_ROLE_ID / HTTP_PORT / ADO_TOKEN_MODE to ${ENV_FILE}"

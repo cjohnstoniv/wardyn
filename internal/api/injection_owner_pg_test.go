@@ -109,17 +109,13 @@ func newRunOwnerPGHarness(t *testing.T) (*harness, *secretspg.Store) {
 	return h, sec
 }
 
-// TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning is the
-// plan's pg-backed end-to-end proof of invariant 1 (Verification item 12),
-// against a REAL secretstore/pg store: a member's PUT /secrets write lands
-// in her own namespace; a run she creates with a hand-authored inline
-// api_key grant naming that secret gets no false "no model access" warning
-// (the reviewer's #3 fix — handleCreateRun's model-access check now calls
-// presentSecretNamesFor, not the operator-only presentSecretNames); and the
-// run's injection resolves HER
-// row — never an operator row seeded under the SAME name with a DIFFERENT
-// value.
-func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T) {
+// TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator is the pg-backed
+// end-to-end proof of invariant 1 against a REAL secretstore/pg store: a
+// member's PUT /secrets write lands in her own namespace, and her run's
+// injection resolves HER row — never an operator row seeded under the SAME
+// name with a DIFFERENT value. (Model keys are a model provider's since
+// 0.8.2; this is an ordinary credential on an ordinary host.)
+func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator(t *testing.T) {
 	h, sec := newRunOwnerPGHarness(t)
 	ctx := context.Background()
 
@@ -128,19 +124,13 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 	// The member writes her OWN row through the real PUT /secrets handler
 	// (secretOwnerFromRequest stamps it under her own namespace, persisted to
 	// the real pg-backed secretstore).
-	w := doSSO(t, h.srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice,
-		`{"value":"sk-ant-alice-fake-00000000"}`)
+	w := doSSO(t, h.srv, http.MethodPut, "/api/v1/secrets/artifactory-token", alice,
+		`{"value":"artifactory-alice-fake-0000"}`)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("PUT /secrets: %d, want 204: %s", w.Code, w.Body.String())
 	}
-
-	// She creates a run with a hand-authored inline api_key grant naming her
-	// own secret — the filterUserGrants own-key lane (6c) — through the
-	// real POST /runs handler (real create, real grant persistence).
-	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
-		`"allowed_domains":["api.anthropic.com"],` +
-		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"anthropic-api-key"}}]}}`
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", alice, body)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", alice,
+		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: %d, want 201: %s", w.Code, w.Body.String())
 	}
@@ -148,19 +138,9 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create-run response: %v; body=%s", err, w.Body.String())
 	}
-	for _, warn := range created.Warnings {
-		if strings.Contains(warn, "no model credential resolves") {
-			t.Fatalf("alice's own key must satisfy model access with no warning, got: %v", created.Warnings)
-		}
-	}
 
-	// ONLY NOW does the operator gain a row of the SAME name with a
-	// DIFFERENT value — seeded after create, so it can never leak into the
-	// warning check above (which must fire on OWNERSHIP, not name presence)
-	// while still proving the resolution-time negative control below: even
-	// with an operator row of this exact name now in play, alice's run must
-	// resolve HER value, never fall through to the operator's.
-	if err := sec.Put(ctx, "anthropic-api-key", []byte("sk-ant-operator-fake-0000000000")); err != nil {
+	// The operator holds a row of the SAME name with a DIFFERENT value.
+	if err := sec.Put(ctx, "artifactory-token", []byte("artifactory-operator-fake-0000")); err != nil {
 		t.Fatalf("seed operator row: %v", err)
 	}
 
@@ -172,8 +152,8 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 		Kind: types.GrantAPIKey,
 		JTI:  "jti-invariant1-pg",
 		Injection: &egress.InjectionRule{
-			Host: "api.anthropic.com", Header: "x-api-key",
-			SecretName: "anthropic-api-key", Format: "%s",
+			Host: "artifactory.corp.example", Header: "Authorization",
+			SecretName: "artifactory-token", Format: "Bearer %s",
 		},
 	}
 	token := mintRunTokenAs(t, h, created.ID, "alice")
@@ -185,7 +165,7 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode injection response: %v", err)
 	}
-	if resp.Value != "sk-ant-alice-fake-00000000" {
+	if resp.Value != "Bearer artifactory-alice-fake-0000" {
 		t.Fatalf("resolved %q, want alice's own row (never the operator's differently-valued row)", resp.Value)
 	}
 }

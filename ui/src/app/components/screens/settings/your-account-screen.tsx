@@ -5,17 +5,13 @@
 
 // Your account (M-5, #636 — the settings split, §4.3): a person's OWN
 // connections and keys, reached at /account: Your model connections (#541,
-// User view only), the model connection (S-4 — ModelProviderCard, the same
-// shared component Admin Settings mounts for the org's shared credential),
-// Azure DevOps (a personal connection, #386) and Your SSH keys.
+// User view only), Azure DevOps (a personal connection, #386) and Your SSH
+// keys.
 //
 // Nothing here belongs to the deployment — Host, the admin's Model providers
 // list, Providers and User drives all stayed in Admin Settings
 // (admin-settings-screen.tsx), and with Host gone this page has no consumer
-// left for GET /site-config (operatorOnly, R1) — ModelProviderCard's own `ai`
-// derivation never reads it (only the SCM/git rows do, deriveIntegrations.ts),
-// so this screen simply never fetches it and passes `null`, same as a member
-// caller always read it before (integrations.ts's own comment).
+// left for GET /site-config (operatorOnly, R1), so this screen never fetches it.
 //
 // /ssh-keys is gone (deleted with no alias); SshKeysPane is mounted here
 // instead, exactly as it always rendered on this route.
@@ -23,14 +19,12 @@
 // #1200 compact cards (owner-approved mock): every card here collapses to a
 // one-line summary and expands on click, none
 // open by default — admin-settings-screen.tsx's own header comment has the
-// full reasoning. ModelProviderCard also renders in Getting started, which
-// must stay fully open, so it takes the collapse as an opt-in `compact` prop.
+// full reasoning.
 import * as React from "react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
-import { ModelProviderCard } from "./connection-cards";
 import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
@@ -64,11 +58,6 @@ export function YourAccountScreen() {
               credentials, User view only — an admin reaches it by switching
               to Member view. Renders nothing with no provider block. */}
           {!adminView && <ModelConnectionsCard status={status} onChanged={load} />}
-          {/* S-4 (#636): ModelProviderCard — the SAME component Admin
-              Settings mounts for the org's shared credential; the card's own
-              per-caller branches (operator vs. a per_user bearer/SSO row)
-              already tell the two apart. */}
-          <ModelProviderCard status={status} siteConfig={null} onChanged={load} compact />
           {/* #386, Q9: a personal connection. Renders nothing with no Azure
               DevOps row configured. */}
           <AdoConnectionCard status={status} onChanged={load} />

@@ -17,19 +17,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPreflight_HappyPath drives POST /runs/preflight through the HTTP path with
-// an inline policy that fully credentials a claude-code run: the response is 200,
-// carries the deterministic setup checklist, and reports the enforced confinement
-// class. The llm_access and secret rows are satisfied (anthropic api_key grant +
-// stored secret + matching egress) — proving the endpoint reuses the SAME
-// reconcileLLMAccess/deriveSetupItems verdict the compose Review panel shows.
+// TestPreflight_HappyPath drives POST /runs/preflight through the HTTP path for
+// a claude-code run whose caller holds their own key for the deployment's one
+// Anthropic key provider: the response is 200, carries the deterministic setup
+// checklist, and reports the enforced confinement class. The llm_access row is
+// satisfied — the same providerLLMAccess verdict the launch door warns from.
 func TestPreflight_HappyPath(t *testing.T) {
-	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"
-	body := `{"agent":"claude-code","repo":"ephemeral","inline_policy":{` +
-		`"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
-		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com",` +
-		`"header":"x-api-key","format":"%s","secret_name":"anthropic-api-key"}}]}}`
-	w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	const admin = "sub-preflight-admin"
+	p := keyProvider("anthropic", "claude-code")
+	p.UID = "u-preflight-anthropic"
+	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(p)}, &capStore{}, nil)
+	if err := srv.cfg.Secrets.For(admin).Put(context.Background(), providerSecretName(p.UID, providerKeyPart), []byte("sk-ant-own")); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"agent":"claude-code","repo":"ephemeral","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2"}}`
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", providerAdminToken(srv, admin), body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight happy path: code=%d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -45,9 +47,6 @@ func TestPreflight_HappyPath(t *testing.T) {
 	}
 	if it, ok := findItem(resp.SetupItems, "llm_access:claude-code"); !ok || it.Status != "satisfied" {
 		t.Errorf("llm_access row = %+v (ok=%v), want satisfied", it, ok)
-	}
-	if it, ok := findItem(resp.SetupItems, "secret:anthropic-api-key"); !ok || it.Status != "satisfied" {
-		t.Errorf("secret row = %+v (ok=%v), want satisfied", it, ok)
 	}
 }
 
@@ -269,21 +268,17 @@ func (preflightIntegrationStore) ListWorkspaces(context.Context) ([]types.Worksp
 
 // TestPreflight_IntegrationIDRefused pins the refusal launch applies
 // (decodeAndValidateCreateRun): no integration chooses a run's model credential
-// any more, so naming one — an AI-kind row or any other — is a 422 here too,
+// any more, so naming one — a stored row or an unknown id — is a 422 here too,
 // never a preview of model access the launch door would refuse.
 func TestPreflight_IntegrationIDRefused(t *testing.T) {
 	h := newHarness(t)
 	st := preflightIntegrationStore{cfg: types.SiteConfig{Integrations: []types.Integration{
-		{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
-			Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key",
-				Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}}},
 		{ID: "acme-scm", Kind: types.IntegrationKindGitHost},
 	}}}
 	cfg := baseTestConfig(h, st)
-	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-anthropic-key": []byte("sk-acme")}}
 	srv := New(cfg)
 
-	for _, id := range []string{"acme-anthropic", "acme-scm"} {
+	for _, id := range []string{"acme-scm", "retired-ai-row"} {
 		body := `{"agent":"claude-code","repo":"ephemeral","integration_id":"` + id + `","inline_policy":{"min_confinement_class":"CC2"}}`
 		w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), mpRunNoIntegration) {

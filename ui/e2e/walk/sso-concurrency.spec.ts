@@ -8,7 +8,7 @@
  *
  * Runs in the same invocation and against the same cluster as sso-member and
  * sso-member-recovery (scripts/kind-sso-walk.sh), after them. It inherits the
- * roster pin and the member's stored capture from wherever those files
+ * provider pin and the member's stored capture from wherever those files
  * stopped, which may be mid-flip (a case that moved the pin and never landed
  * its capture), so A puts the walk's own pin back and makes sure the member is
  * offered a sign-in under it (actionableUnderWalkPin), and B flips until they
@@ -60,13 +60,13 @@ import {
   OTHER_ACCOUNT,
   OTHER_ROLE,
   SANDBOX_UP,
-  SSO_START_URL,
+  WALK_PROVIDER,
   dexSignIn,
   makeMemberActionable,
   modelAccess,
   openLoginPane,
   ownAWSRow,
-  putRoster,
+  putProvider,
   seen,
   signInThroughPane,
 } from "./helpers";
@@ -117,18 +117,16 @@ async function launchRun(page: Page, title: string): Promise<string> {
   return new URL(page.url()).pathname.split("/").pop() ?? "";
 }
 
-/** POST /setup/harness-login from the page's own session, as the pane does. */
+/** POST /model-providers/{id}/sign-in from the page's own session, as the pane does. */
 async function launchSignIn(page: Page): Promise<{ status: number; run_id?: string }> {
-  return page.evaluate(async (startURL: string) => {
-    const r = await fetch("/api/v1/setup/harness-login", {
+  return page.evaluate(async (provider: string) => {
+    const r = await fetch(`/api/v1/model-providers/${encodeURIComponent(provider)}/sign-in`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: "aws", sso_start_url: startURL }),
     });
     const body = (await r.json().catch(() => ({}))) as { run_id?: string };
     return { status: r.status, run_id: body.run_id };
-  }, SSO_START_URL);
+  }, WALK_PROVIDER);
 }
 
 async function killRun(page: Page, id: string): Promise<void> {
@@ -166,7 +164,7 @@ async function runState(page: Page, id: string): Promise<string> {
   }, id);
 }
 
-/** The model-access states that offer "Sign in to AWS" (MODEL_ACCESS_ACTIONABLE). */
+/** The provider-access states that offer "Sign in to AWS" (MODEL_ACCESS_ACTIONABLE). */
 const ACTIONABLE = ["not_configured", "expired_signin", "expiring"];
 
 /** Make the member actionable, whatever pin the previous spec left. One flip
@@ -195,21 +193,21 @@ async function becomesActionable(page: Page): Promise<boolean> {
   return false;
 }
 
-/** Leave the roster on the walk's own pin with the member actionable, so A's
- *  captures are under the pair C's runs can spend: WARDYN_BEDROCK_MODEL is an
+/** Leave the provider on the walk's own pin with the member actionable, so A's
+ *  captures are under the pair C's runs can spend: the provider's model is an
  *  ARN in PIN_ACCOUNT (nightly 36428749715: A's flip landed on the other pair,
  *  and C's first run minted role credentials for it but never reached
  *  Bedrock). A member already live under the walk pin is signed in under the
  *  other pair first, so the walk pin contradicts their capture. */
 async function actionableUnderWalkPin(request: APIRequestContext, page: Page): Promise<void> {
-  await putRoster(request);
+  await putProvider(request);
   if (await becomesActionable(page)) return;
-  await putRoster(request, OTHER_ACCOUNT, OTHER_ROLE);
+  await putProvider(request, OTHER_ACCOUNT, OTHER_ROLE);
   if (!(await becomesActionable(page))) {
     throw new Error(`the member reads '${(await modelAccess(page)).state}' under both pairs: walk state, not this file's subject`);
   }
   await signInThroughPane(page, openLoginPane);
-  await putRoster(request);
+  await putProvider(request);
   if (!(await becomesActionable(page))) {
     throw new Error(`the member reads '${(await modelAccess(page)).state}' after re-pinning to the walk pair`);
   }
@@ -218,7 +216,7 @@ async function actionableUnderWalkPin(request: APIRequestContext, page: Page): P
 /** Put the walk pin back and make sure page's member holds a capture under it,
  *  signing them in again when theirs is under the other pair. */
 async function liveUnderWalkPin(request: APIRequestContext, page: Page): Promise<void> {
-  await putRoster(request);
+  await putProvider(request);
   if ((await modelAccess(page)).state === "live" && !(await becomesActionable(page))) return;
   await signInThroughPane(page, openLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");

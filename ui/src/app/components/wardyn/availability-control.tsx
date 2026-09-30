@@ -72,9 +72,12 @@ export function AvailabilityControl(props: AvailabilityControlProps) {
 
 // User types are named on their chips (packet A), but a grant carries the id.
 // A failed read falls back to the id rather than hiding the chip.
-function useUserTypeNames(): (id: string) => string {
+type TypeName = (id: string) => string;
+
+function useFetchedUserTypeNames(enabled: boolean): TypeName {
   const [names, setNames] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
+    if (!enabled) return;
     let live = true;
     api
       .listUserTypes()
@@ -83,8 +86,26 @@ function useUserTypeNames(): (id: string) => string {
     return () => {
       live = false;
     };
-  }, []);
-  return (id) => names[id] ?? id;
+  }, [enabled]);
+  return React.useCallback((id) => names[id] ?? id, [names]);
+}
+
+// A screen that draws many controls (an Images tab with a row each) wraps them
+// in AvailabilityUserTypes so they share ONE GET /user-types instead of one
+// each. A control outside it reads for itself, as it always did.
+const UserTypeNamesContext = React.createContext<TypeName | null>(null);
+
+export function AvailabilityUserTypes({ children }: { children: React.ReactNode }) {
+  // Only a security operator may read the list (GET /user-types is securityOps),
+  // and only a security operator is shown a control to name a type on.
+  const names = useFetchedUserTypeNames(useSecurityOperator());
+  return <UserTypeNamesContext.Provider value={names}>{children}</UserTypeNamesContext.Provider>;
+}
+
+function useUserTypeNames(): TypeName {
+  const shared = React.useContext(UserTypeNamesContext);
+  const own = useFetchedUserTypeNames(shared === null);
+  return shared ?? own;
 }
 
 function chipText(a: Audience, typeName: (id: string) => string): string {

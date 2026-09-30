@@ -8,8 +8,14 @@ package proxy
 // DevOps on this lane; it enforces the same four things the REST gate does, in git's terms: the
 // organisation pin (an Entra token carries no org claim), the capability check via adoscope.Permits (a
 // push is decided on the pack POST, since the receive-pack advertisement is served to a read-only
-// credential too), the content rules (before any capability ask), and the person's bearer credential via
-// the same injector the REST lane's MITM uses.
+// credential too), the content rules (before any capability ask), and the run's Azure DevOps credential
+// (an Entra bearer or a PAT sent as Basic, as the control plane resolved it) via the same injector the
+// REST lane's MITM uses.
+//
+// An Azure DevOps Server host (a grant host adoHostedHost does not name) takes the same door with the
+// person's own token: the organisation pin is the collection's path, and only the smart-HTTP shapes
+// adoServerGitPath names are forwarded. Its REST is never forwarded: adoscope classifies no Server host,
+// so the gate refuses every request there, and a CONNECT this proxy won't terminate is refused outright.
 //
 // SECURITY: a refusal never reaches git as a 401 — git reads a 401 as a credential challenge and prints
 // "could not read Username", which hides the reason.
@@ -55,7 +61,8 @@ type adoGitPush struct {
 // serveADOGit serves one validated smart-HTTP request (verb is info/refs,
 // git-upload-pack or git-receive-pack) for a host the Entra grant covers.
 func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, verb string, grant ADOGrant) {
-	if _, ok := adoGitKeys(r); !ok {
+	keys, ok := adoGitKeys(r)
+	if !ok {
 		p.refuseADOGit(w, r, host, nil, nil,
 			"Wardyn refused this git request: its path spells a project or repository name Azure DevOps would read as another.")
 		return
@@ -65,9 +72,16 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization))
 		return
 	}
+	// adoGitKeys drops empty segments but the forward sends rest as written, so an inner "//" is refused here.
+	if !adoHostedHost(host) && (strings.Contains(strings.Trim(rest, "/"), "//") || !adoServerGitPath(keys, grant.Organization)) {
+		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
+			"Wardyn refused this git request: on Azure DevOps Server this run reaches git only at %s/<project>/_git/<repository>.",
+			strings.Trim(grant.Organization, "/")))
+		return
+	}
 
 	var body io.Reader = r.Body
-	need := adoscope.CapRead
+	need := adoscope.CapCodeRead
 	var push *adoGitPush
 	if verb == "git-receive-pack" {
 		head, pp, msg := readADOGitPush(r)
@@ -114,17 +128,21 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		allowSrc = ruleSourceGitNSOff
 	}
 
-	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)
-	if err != nil && r.Context().Err() != nil {
-		return // the client is gone; the hold, if any, carries on without it
-	}
-	if err != nil {
+	// refuseCredential answers a failed credential resolve; a client that hung up was never refused.
+	refuseCredential := func(err error) {
+		if r.Context().Err() != nil {
+			return // the client is gone; the hold, if any, carries on without it
+		}
 		msg, src := adoCredentialRefusalFor(err, ruleSourceADOGitDenied)
 		p.emitPATDecision(r, host, egress.Deny, src)
 		if push != nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, adoGitDrainLimit))
 		}
 		writeADOGitRefusal(w, push, "Wardyn's git broker: "+msg)
+	}
+	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)
+	if err != nil {
+		refuseCredential(err)
 		return
 	}
 	if !ok {
@@ -139,17 +157,39 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	// (push_advert.go). Without it a shallow clone's push is thin and every
 	// one of them is refused as uninspectable.
 	noThin := p.noThinAdvert(r, verb)
-	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, allowSrc, ruleSourceADOGitDenied,
-		func(out *http.Request) {
-			if noThin {
-				out.Header.Set("Accept-Encoding", "identity")
-			}
-			out.Header.Set(hdr.name, hdr.value)
-		})
+	authorize := func(out *http.Request) {
+		if noThin {
+			out.Header.Set("Accept-Encoding", "identity")
+		}
+		out.Header.Set(hdr.name, hdr.value)
+	}
+	body, replay := adoGitReplayBody(r, verb, body)
+	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, allowSrc, ruleSourceADOGitDenied, authorize)
 	if !ok {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// Azure DevOps refused the injected header itself: heal once before answering git, as the REST
+	// door does (forwardInspectedLLM). A second refusal takes the ordinary path below.
+	if adoCredentialRefused(resp) {
+		fresh, retry, err := p.healADOHeader(r.Context(), host, hdr, replay != nil)
+		if err != nil {
+			drainClose(resp)
+			refuseCredential(err)
+			return
+		}
+		if retry {
+			drainClose(resp)
+			hdr = fresh
+			registerHeaderCredential(hdr.value)
+			p.emitPATDecision(r, host, egress.Allow, ruleSourceADOGitReresolved)
+			again, ok := p.forwardBrokeredGit(w, r, host, rest, replay(), allowSrc, ruleSourceADOGitDenied, authorize)
+			if !ok {
+				return
+			}
+			resp = again
+		}
+	}
 	switch {
 	case p.refuseADOGitUpstream(w, r, host, rest, push, resp):
 	case noThin:
@@ -157,6 +197,26 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	default:
 		relay(w, resp)
 	}
+}
+
+// adoGitReplayBody readies a git request's body to be sent a second time and returns what the first
+// attempt sends in body's place, with replay nil when it can't be: info/refs carries no body, an
+// upload-pack POST is buffered when its whole body fits adoscope.MaxBodyPeek, and a push
+// (receive-pack) is never sent twice.
+func adoGitReplayBody(r *http.Request, verb string, body io.Reader) (io.Reader, func() io.Reader) {
+	switch {
+	case verb == "git-receive-pack":
+		return body, nil
+	case r.Body == nil || r.Body == http.NoBody:
+		return body, func() io.Reader { return http.NoBody }
+	case verb != "git-upload-pack":
+		return body, nil
+	}
+	buf, err := io.ReadAll(io.LimitReader(r.Body, adoscope.MaxBodyPeek+1))
+	if err != nil || len(buf) > adoscope.MaxBodyPeek {
+		return io.MultiReader(bytes.NewReader(buf), r.Body), nil
+	}
+	return bytes.NewReader(buf), func() io.Reader { return bytes.NewReader(buf) }
 }
 
 // refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra lane, and its hold point. held
@@ -220,6 +280,26 @@ func adoGitKeys(r *http.Request) ([]string, bool) {
 		keys = append(keys, k)
 	}
 	return keys, true
+}
+
+// adoServerGitPath reports whether keys (adoGitKeys) spell an Azure DevOps Server smart-HTTP endpoint
+// under collection: <collection>/<project>/_git/<repository>/ or <collection>/_git/<repository>/ (the
+// project-named repository's short form), followed by exactly info/refs, git-upload-pack or
+// git-receive-pack. Anything else on a Server host — a path outside the collection, a deeper or shorter
+// one, one with no _git — is refused rather than forwarded under the person's token.
+func adoServerGitPath(keys []string, collection string) bool {
+	coll := strings.ToLower(strings.TrimSpace(collection))
+	if !adoServerCollection(keys, coll) {
+		return false
+	}
+	tail := keys[len(strings.Split(strings.Trim(coll, "/"), "/")):]
+	i := slices.Index(tail, "_git")
+	if (i != 0 && i != 1) || i+2 > len(tail) {
+		return false
+	}
+	verb := tail[i+2:]
+	return slices.Equal(verb, []string{"info", "refs"}) ||
+		slices.Equal(verb, []string{"git-upload-pack"}) || slices.Equal(verb, []string{"git-receive-pack"})
 }
 
 // adoGitRepoKeys is adoGitKeys truncated to the repository itself — org, project, "_git", and repo name,

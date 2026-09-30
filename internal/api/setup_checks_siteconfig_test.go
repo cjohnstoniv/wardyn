@@ -92,3 +92,42 @@ func TestSetupCheck_ADOEntraRows(t *testing.T) {
 		})
 	}
 }
+
+// #1429: an Azure DevOps row that is turned off — every row the retirement of
+// the shared credentials migrated — asks the admin to choose how people
+// connect. A GitHub row that is off, and enabled Azure DevOps rows, do not.
+func TestSetupCheck_ADORowsOff(t *testing.T) {
+	row := func(kind types.GitProviderKind, disabled bool) types.GitProvider {
+		return types.GitProvider{ID: "r", Kind: kind, Disabled: disabled, BaseURLs: []string{"https://dev.azure.com/acme"}}
+	}
+	for _, tc := range []struct {
+		name string
+		rows []types.GitProvider
+		want bool
+	}{
+		{"no rows", nil, false},
+		{"an enabled Azure DevOps row", []types.GitProvider{row(types.GitProviderAzureDevOps, false)}, false},
+		{"a disabled GitHub row", []types.GitProvider{row(types.GitProviderGitHub, true)}, false},
+		{"a disabled Azure DevOps row", []types.GitProvider{row(types.GitProviderAzureDevOps, true)}, true},
+		{"one enabled and one disabled", []types.GitProvider{row(types.GitProviderAzureDevOps, false), row(types.GitProviderAzureDevOps, true)}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := types.SiteConfig{}
+			if tc.rows != nil {
+				sc.WorkspaceProviders = &types.WorkspaceProviders{Git: tc.rows}
+			}
+			c, ok := statusCheck(sc, "ado_rows_off")
+			if ok != tc.want {
+				t.Fatalf("ado_rows_off row present = %v, want %v (%+v)", ok, tc.want, c)
+			}
+			if ok && (c.Status != "warn" || c.Blocking) {
+				t.Errorf("row = %+v, want a non-blocking warn", c)
+			}
+			// The approved mock's State 12a checklist line, verbatim.
+			const sentence = "Azure DevOps no longer uses one shared token. Choose how people connect."
+			if ok && c.Detail != sentence {
+				t.Errorf("detail = %q, want the approved mock's 12a sentence", c.Detail)
+			}
+		})
+	}
+}

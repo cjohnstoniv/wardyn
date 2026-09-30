@@ -5,12 +5,13 @@
 
 // RUN DETAIL — the addressable lifecycle hub at /runs/:id. Rendered inside the
 // AppShell outlet (main content only). Replaces the old slide-over Sheet. Tabs:
-// Overview / Approvals / Audit / Recording, all driven by REAL data (getRun,
+// Overview / Approvals / Policy / Audit / Recording, all driven by REAL data (getRun,
 // getGrants, getEgress, listApprovals, listAudit, getRecording).
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
+  FileText,
   LayoutDashboard,
   RotateCw,
   ScrollText,
@@ -76,6 +77,8 @@ import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeBanner } from "./run-detail/run-lifetime-banner";
 import { RunEndsRow } from "./run-detail/run-ends-row";
 import { TerminalPane } from "./run-detail/terminal-notice";
+import { PolicyTab } from "./run-detail/policy-tab";
+import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
@@ -83,7 +86,7 @@ import type { WidgetContext } from "./run-detail/widget-registry";
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
 
-type Tab = "overview" | "approvals" | "audit" | "recording";
+type Tab = "overview" | "approvals" | "policy" | "audit" | "recording";
 
 export function RunDetailScreen() {
   const { id = "" } = useParams();
@@ -456,6 +459,9 @@ export function RunDetailScreen() {
                     </span>
                   )}
                 </TabsTrigger>
+                <TabsTrigger value="policy" className="h-7 gap-1.5 text-xs">
+                  <FileText className="size-3.5" /> {POLICY_TAB.tab}
+                </TabsTrigger>
                 <TabsTrigger value="audit" className="h-7 gap-1.5 text-xs">
                   <ScrollText className="size-3.5" /> Audit
                 </TabsTrigger>
@@ -481,6 +487,7 @@ export function RunDetailScreen() {
               recState={recState}
               recordingDisabled={recordingDisabled}
               onGoAudit={() => setTab("audit")}
+              onGoPolicy={() => setTab("policy")}
               onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
@@ -493,6 +500,10 @@ export function RunDetailScreen() {
               onAdoDecide={decideAdoDirect}
               onPushDecide={decidePushDirect}
             />
+          </TabsContent>
+
+          <TabsContent value="policy" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+            <PolicyTab run={run} />
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -553,6 +564,7 @@ function Cockpit({
   recState,
   recordingDisabled,
   onGoAudit,
+  onGoPolicy,
   onGoRecording,
 }: {
   run: RunDetail;
@@ -569,6 +581,7 @@ function Cockpit({
   recState: "idle" | "loading" | "error" | "ready";
   recordingDisabled: boolean;
   onGoAudit: () => void;
+  onGoPolicy: () => void;
   onGoRecording: () => void;
 }) {
   const principal = usePrincipal();
@@ -626,7 +639,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} adminView={view === "admin"} />
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -671,6 +684,7 @@ function Cockpit({
     heldCount: pending.filter(isHeld).length,
     audit,
     onGoAudit,
+    onGoPolicy,
     terminalPane,
   };
 

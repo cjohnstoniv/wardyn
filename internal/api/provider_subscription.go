@@ -136,7 +136,7 @@ func (s *Server) providerSubscriptionTransport(run types.AgentRun,
 			sandboxEnv[envAnthropicModel] = h.Model
 		}
 	}
-	return llmTransport{modelRun: true, provider: &c}
+	return llmTransport{provider: &c}
 }
 
 // providerGrantSnapshot is what dispatch records on a provider grant it

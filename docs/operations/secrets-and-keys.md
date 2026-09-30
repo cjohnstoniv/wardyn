@@ -600,6 +600,15 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and
   platform policy can sit with fewer people.
 - The second role needs Kubernetes auth.
 
+**Policies that name paths instead of `platform/*`.** The platform role's
+policy must cover the whole of `<prefix>/platform/*`, not the boot keys it
+listed when you wrote it. A laptop enrolled into an organisation control
+plane (`WARDYN_ORG_URL`) keeps its device credential there too, as the row
+`wardyn-org-device-credential`. A policy that lists individual names refuses
+that write, the boot step that stores the credential fails, and wardynd
+refuses to start. It fails closed and names the path Vault denied; widen the
+policy to `<prefix>/platform/*`.
+
 **Authentication.** There is no Vault token in an environment variable, by
 design.
 
@@ -659,7 +668,10 @@ transaction, safe while a daemon serves; idempotent and resumable.
    above, while any local row remains.
 
 `-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value
-is removed from Vault once its row holds it locally.
+is removed from Vault once its row holds it locally and has committed. The
+removal runs under the row's lock and skips a value a concurrent save has
+just put back at the same path. If the removal fails, the old copy stays
+in Vault and the error names it; `wardynd -reconcile` lists it.
 
 - Each run writes one `secret.migrate` audit row and one `secret.read`
   per value it moved.

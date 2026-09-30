@@ -23,11 +23,13 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The sentences a sandbox reads when an escalation ends without an approval.
@@ -154,6 +156,7 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 		if !slices.Contains(out.Capabilities, string(v.Capability)) {
 			return false, fallback
 		}
+		inj.installResolved(host, out)
 		inj.reauth.widen(v.Capability)
 		return true, ""
 	}
@@ -181,11 +184,13 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	case herr != nil:
 		return false, adoHoldEndedRefusal
 	case slices.Contains(res.Capabilities, string(v.Capability)):
+		inj.installResolved(host, res)
 		inj.reauth.widen(v.Capability)
 		return true, ""
 	case !wf.onceTaken.CompareAndSwap(false, true):
 		return false, adoHoldOnceSpentRefusal
 	}
+	inj.installResolved(host, res)
 	return true, ""
 }
 
@@ -214,4 +219,23 @@ func (i *injector) grantIDFor(host string) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return e.grantID, true
+}
+
+// installResolved puts the credential a capability resolve answered onto host's entry: the control
+// plane minted a union PAT at that resolve, and both doors read the entry, so the approved request
+// must carry it, not the narrower one cached before the approval.
+func (i *injector) installResolved(host string, resolved types.ResolvedInjection) {
+	if resolved.Value == "" || resolved.Header == "" {
+		return
+	}
+	i.mu.Lock()
+	e, ok := i.byHost[strings.ToLower(strings.TrimSuffix(host, "."))]
+	i.mu.Unlock()
+	if !ok {
+		return
+	}
+	e.reMu.Lock()
+	e.install(resolved, time.Now())
+	e.reMu.Unlock()
+	registerHeaderCredential(resolved.Value)
 }

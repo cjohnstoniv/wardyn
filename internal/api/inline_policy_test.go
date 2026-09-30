@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -436,30 +436,10 @@ func TestValidateInlineSecretRefs_Matrix(t *testing.T) {
 		t.Fatalf("no store: code=%d err=%v, want (422,err)", code, err)
 	}
 
-	// Subscription OAuth sentinel: NOT a stored secret. Without a subscription
-	// token provider it is a clear 422 (not the misleading "unknown secret" hint);
-	// WITH a provider it validates without needing the name in the store (the
-	// saved-workspace-replay fix).
-	sentinel := apiKeyGrant(types.SubscriptionOAuthSecret)
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinel); err == nil || code != http.StatusUnprocessableEntity {
-		t.Fatalf("sentinel w/o provider: code=%d err=%v, want (422,err)", code, err)
+	// A retired shared-subscription sentinel is a reserved name now.
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", apiKeyGrant(types.SubscriptionOAuthSecret)); err == nil || code != http.StatusUnprocessableEntity {
+		t.Fatalf("retired sentinel: code=%d err=%v, want (422,err)", code, err)
 	}
-	h.srv.cfg.SubscriptionToken = fakeSubToken{}
-	defer func() { h.srv.cfg.SubscriptionToken = nil }()
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinel); err != nil || code != 0 {
-		t.Fatalf("sentinel w/ provider: code=%d err=%v, want (0,nil)", code, err)
-	}
-}
-
-// fakeSubToken is a minimal subscription.Provider for tests: it only needs to be
-// non-nil for validateInlineSecretRefs' sentinel special-case.
-type fakeSubToken struct{}
-
-func (fakeSubToken) Current(context.Context) (subscription.Token, error) {
-	return subscription.Token{Value: "live-oauth-token"}, nil
-}
-func (fakeSubToken) Peek() (subscription.Token, error) {
-	return subscription.Token{Value: "live-oauth-token"}, nil
 }
 
 // TestCreateRun_InlineMissingSecretRejected wires the secret check through the
@@ -540,7 +520,7 @@ func TestValidatePolicySpec_RejectsSplittingApiKeyHeader(t *testing.T) {
 }
 
 // TestPolicy_RejectsBedrockResidentSecretAtSinks asserts the three RESIDENT
-// AWS SigV4 credential names read directly by resolveBedrockAuth (aws-access-key-id
+// AWS SigV4 credential names (aws-access-key-id
 // / aws-secret-access-key / aws-session-token) are sink-reserved — an
 // api_key/git_pat/ssh_key grant naming one is rejected at policy-write time — so a
 // policy can never exfiltrate the operator's long-lived AWS secret key as an
@@ -902,7 +882,7 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 	w := httptest.NewRecorder()
 	// A plain request with no OIDC session reads as operator (isOperator).
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	spec, _, warnings, ok := h.srv.resolveRunPolicy(context.Background(), w, r, &req, false)
+	spec, _, warnings, _, ok := h.srv.resolveRunPolicy(context.Background(), w, r, &req, false)
 	if !ok {
 		t.Fatalf("resolveRunPolicy rejected: %s", w.Body.String())
 	}
@@ -917,15 +897,13 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 	}
 }
 
-// TestMemberOwnKeyGrant_NoWarning: a member's own anthropic-api-key secret,
-// named by an api_key grant the member hand-authored on their inline policy,
-// provisions model access with no "no model access" warning — proven at the
-// unit level AND through the real POST /api/v1/runs handler (handleCreateRun),
-// which must consult presentSecretNamesFor like preflight does, not the
-// operator-only presentSecretNames. The negative control (same request, member
-// owns nothing) proves the warning still fires — member presence widens what
-// counts, it does not silence the check.
-func TestMemberOwnKeyGrant_NoWarning(t *testing.T) {
+// TestMemberOwnKeyGrant_IsNotModelAccess: a member's own anthropic-api-key
+// secret, named by an api_key grant the member hand-authored on their inline
+// policy, is no longer model access — a model credential comes only from the
+// run's model provider (#547) — so the "no model access" warning fires through
+// the real POST /api/v1/runs handler whether or not the member owns the
+// secret. The request body is identical in both halves; only ownership changes.
+func TestMemberOwnKeyGrant_IsNotModelAccess(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}
 
@@ -933,24 +911,14 @@ func TestMemberOwnKeyGrant_NoWarning(t *testing.T) {
 	if !present["anthropic-api-key"] {
 		t.Fatal("presentSecretNamesFor must include the member's own secret")
 	}
-	spec := &types.RunPolicySpec{
-		AllowedDomains: []string{"api.anthropic.com"},
-		EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "anthropic-api-key")},
-	}
-	note, provisioned := h.srv.reconcileLLMAccess(spec, "claude-code", present, false, false)
-	if !provisioned {
-		t.Fatalf("expected model access provisioned with no operator row, got note=%q", note)
-	}
 
 	// Through the handler: a member's real create-run request, hand-authoring
 	// their own inline api_key grant naming their own secret (the
-	// filterUserGrants own-key lane) — the request body is IDENTICAL in the
-	// positive and negative cases below; only whether "bob" owns the secret
-	// changes.
+	// filterUserGrants own-key lane).
 	const body = `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
 		`"allowed_domains":["api.anthropic.com"],` +
 		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"anthropic-api-key"}}]}}`
-	const noModelAccessSubstr = "no model credential resolves"
+	noModelAccessSubstr := fmt.Sprintf(mpAccessNoProvider, "claude-code")
 
 	createRun := func(secrets *memSecrets) []string {
 		t.Helper()
@@ -980,12 +948,11 @@ func TestMemberOwnKeyGrant_NoWarning(t *testing.T) {
 		return got.Warnings
 	}
 
-	if warns := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}); slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
-		t.Fatalf("member's own key must satisfy model access with no warning, got: %v", warns)
+	if warns := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}); !slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
+		t.Fatalf("a member's own convention key read as model access; want the no-model-access warning, got: %v", warns)
 	}
-
-	// Negative control: the member owns nothing — the SAME grant is dropped
-	// (filterUserGrants: ownership unproven) and the warning must still fire.
+	// The member owns nothing: the SAME grant is dropped (filterUserGrants:
+	// ownership unproven) and the warning fires the same way.
 	if warns := createRun(&memSecrets{}); !slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
 		t.Fatalf("member owning nothing must still get the no-model-access warning, got: %v", warns)
 	}

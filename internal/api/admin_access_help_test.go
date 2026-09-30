@@ -91,7 +91,7 @@ func TestSetupStatus_SSORBACDefaultRoleAdmin(t *testing.T) {
 // whatever it says — unchanged by #484.
 func TestRedactSetupStatusForMember_DropsSSORBACWarn(t *testing.T) {
 	warn, _ := ssoRBACCheck(true, false, false, false, false)
-	got := redactSetupStatusForUser(SetupStatus{Checks: []SetupCheck{warn}}, false, false)
+	got := redactSetupStatusForUser(SetupStatus{Checks: []SetupCheck{warn}})
 	if len(got.Checks) != 0 || !got.ChecksRedacted {
 		t.Errorf("member checks = %+v (redacted=%v), want none", got.Checks, got.ChecksRedacted)
 	}

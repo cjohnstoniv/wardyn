@@ -60,15 +60,15 @@ func TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fullyConfiguredBedrockServer()
-			s.cfg.BedrockBaseURL = tc.baseURL
-			s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
 			s.cfg.Store = vetoGrantStore{}
-			ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
-			if !ba.ready || !ba.bearer {
-				t.Fatalf("ready=%v bearer=%v, want both true (bearer secret present)", ba.ready, ba.bearer)
-			}
+			// The runtime host and port exactly as the bearer provider's arm
+			// derives them (providerBedrockTransport).
+			p := types.ModelProvider{ID: "br", UID: "u-br", Kind: types.ModelProviderBedrockBearer,
+				Bedrock: &types.BedrockSettings{Region: "us-east-1", BaseURL: tc.baseURL}}
+			ba := bedrockAuth{ready: true, bearer: true,
+				runtimeHost: providerBedrockRuntimeHost(p), runtimePort: redirectPort(tc.baseURL)}
 			_, mitmHosts, ok := s.authorBedrockBearerInjection(context.Background(),
-				types.AgentRun{ID: uuid.New()}, llmTransport{bedrock: ba}, nil)
+				types.AgentRun{ID: uuid.New()}, llmTransport{bedrock: ba, provider: &chosenProvider{provider: p, owner: "ann@example.com"}}, nil)
 			if !ok {
 				t.Fatal("authorBedrockBearerInjection failed; want ok")
 			}
@@ -80,7 +80,7 @@ func TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped(t *testing.T) {
 				t.Fatalf("MITM entry %q carries NO port: a bare entry is any-port in the proxy "+
 					"(parseMITMHostPort -> 0, handleConnect's `cport == 0 || cport == port`), so a CONNECT to "+
 					"the Bedrock host on a port nobody configured would be TLS-terminated with the Wardyn leaf "+
-					"and the OPERATOR's Bearer injected onto whatever answered there: %v", mitmHosts[0], err)
+					"and the run owner's Bearer injected onto whatever answered there: %v", mitmHosts[0], err)
 			}
 			port, perr := strconv.Atoi(portStr)
 			if perr != nil || port <= 0 || port > 65535 {
@@ -96,7 +96,7 @@ func TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped(t *testing.T) {
 			// The injection SCOPE must stay a BARE host — buildInjector requires it.
 			// Only the MITM-eligibility set carries the port.
 			injections, _, _ := s.authorBedrockBearerInjection(context.Background(),
-				types.AgentRun{ID: uuid.New()}, llmTransport{bedrock: ba}, nil)
+				types.AgentRun{ID: uuid.New()}, llmTransport{bedrock: ba, provider: &chosenProvider{provider: p, owner: "ann@example.com"}}, nil)
 			if len(injections) != 1 {
 				t.Fatalf("injections = %d, want 1", len(injections))
 			}

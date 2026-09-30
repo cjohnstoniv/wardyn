@@ -60,11 +60,12 @@ var kernelDoors = map[string][]string{
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},
 	// Minting a personal credential.
-	"handleAddSSHKey":             {"capFeature"},
-	"handleCreateAPIToken":        {"capFeature"},
-	"handlePutProviderCredential": {"capModelProvider"},
-	"signInProvider":              {"capModelProvider"},
-	"authorizeHarnessLogin":       {"capAgent"},
+	"handleAddSSHKey":      {"capFeature"},
+	"handleCreateAPIToken": {"capFeature"},
+	// The key and sign-in doors, answered as an unknown provider (D-6).
+	"denyProviderAsMissing": {"capModelProvider"},
+	// A workspace read hides a pin to a provider the reader may not use.
+	"pinStamper": {"capModelProvider"},
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.
@@ -73,11 +74,15 @@ var kernelDoors = map[string][]string{
 	"setupModelProviders":            {"capAgent"},
 	"setupModelProviderState":        {"capModelProvider"},
 	"computeSCMAccessRowsFor":        {"capWorkspaceProvider"},
+	"adoOwnPATRowFor":                {"capWorkspaceProvider"}, // PUT/DELETE /me/scm/azure-devops/token (D-6)
 	"userVisibleOperatorSecretNames": {"capSecret"},
 	// #1267: GET /workspaces' and GET /workspaces/{id}'s per-row
 	// available_to_you, over the two values that apply to EVERY run type —
 	// the model-provider arm stays client-side, isAgent-gated (#1249).
 	"workspaceAvailableToCaller": {"capWorkspace", "capWorkspaceProvider"},
+	// A member's Azure DevOps disconnect: a row they may not use answers as
+	// no row (D-6).
+	"adoDisconnectRow": {"capWorkspaceProvider"},
 }
 
 // kernelDoorCalls walks internal/api's non-test sources and returns, per

@@ -73,7 +73,6 @@ func TestPG_ModelCredNeverFromOperatorNamespace(t *testing.T) {
 			st.Store = store.NewPG(pool) // anything the fake does not answer goes to real Postgres, never a nil Store
 			st.run.Agent = tc.agent
 			h.srv.cfg.Secrets = sec
-			h.srv.cfg.BedrockAWSConfigDir = t.TempDir()
 			h.srv.cfg.AWSSSOProxyInject = true
 			h.srv.router = h.srv.routes()
 			name := providerSecretName(tc.p.UID, tc.part)

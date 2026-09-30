@@ -130,7 +130,7 @@ func TestBuildOptionalFeatures_DefaultRoleBootRefusal(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := defaultRoleBootFlags(httpSrv.URL, tt.role)
-			of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false)
+			of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("buildOptionalFeatures: want a boot refusal for WARDYN_OIDC_DEFAULT_ROLE=%q, got nil error", tt.role)

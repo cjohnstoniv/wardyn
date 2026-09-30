@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
@@ -110,18 +109,12 @@ func TestAgentHarnessLoginCatalogRewire(t *testing.T) {
 		// and agent-base ships none, so the box would come up with `claude` not
 		// on PATH and the flow could never complete.
 		loginImageKey: "claude-code",
-		secretName:    harnessCredSecretName("anthropic"),
-		sentinel:      types.ManagedOAuthSecret,
-		injectHost:    subscriptionInjectionHost,
 		tokenPrefix:   "sk-ant-oat",
 		egress:        []string{"claude.com", "platform.claude.com", "console.anthropic.com", "api.anthropic.com"},
 	}
 	awsSSO := harnessLogin{
 		provider:          awsSSOProvider,
 		agent:             awsSSOAgent,
-		secretName:        harnessCredSecretName(awsSSOProvider),
-		sentinel:          "",
-		injectHost:        "",
 		tokenPrefix:       "",
 		egress:            []string{"*.awsapps.com"},
 		regionalSSOEgress: true,

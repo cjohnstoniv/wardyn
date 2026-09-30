@@ -701,6 +701,11 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 		if err := runner.ValidateAuthoredTarget(wm.Target); err != nil {
 			return fmt.Errorf("workspace_mounts[%d]: %w", i, err)
 		}
+		// The retired host ~/.claude subscription mount: dispatch strips it from
+		// every run, so a policy naming it is refused rather than silently inert.
+		if wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget {
+			return fmt.Errorf("workspace_mounts[%d]: %s was the retired host ~/.claude credential mount; %s", i, wm.Target, RetiredModelCredentialRefusal)
+		}
 		if seenTargets[wm.Target] {
 			return fmt.Errorf("workspace_mounts[%d]: target %q duplicates another workspace_mounts/workspace_repos entry", i, wm.Target)
 		}

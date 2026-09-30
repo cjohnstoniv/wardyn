@@ -44,6 +44,13 @@
 #      images-ui-sandbox, release-assets) all depend on preflight-green,
 #      directly or transitively, and preflight-green has no `|| true` /
 #      `continue-on-error` escape hatch (T-06, #666).
+#  14. no demo/live spec or demo-take verifier still names an audit action
+#      docs/AUDIT-ACTIONS.md's "Renamed in 0.8" table retires (#1020).
+#  15. no script that boots a wardynd (the e2e backend, the kind SSO walk,
+#      ci-run.sh, the Entra kind deploy, the survival walk and its compose
+#      override) sets a model variable 0.8.2 retired — wardynd refuses to boot
+#      on one (#549, #672). The compose files and Helm values are rendered by
+#      `make compose-config` / `make helm-lint` instead.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -80,8 +87,15 @@ ok()  { echo "ok: $*"; }
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
+# managed-settings-drift (#1279): new, never run on a hosted runner — a first run
+# that fails for an environment reason (npm registry, runner disk for the ~300 MB
+# CLI package) must not block a release. Add it to notify-new-lanes' needs (and
+# to release.yml's watched=) once it has gone green on a real nightly.
+# ci-mode-dogfood-model-fake (#681, T-21): new, never run on a hosted runner — a
+# kind cluster plus the fake's image and a model-provider seed, any of which can
+# fail for an environment reason on the first run. Same promotion rule as above.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk managed-settings-drift ci-mode-dogfood-model-fake"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -446,6 +460,42 @@ else
     fi
     if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
+
+# ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
+# The specs that film or walk a live console and the demo-take verifiers run
+# in no CI gate, so a stale action name there fails only when a take is shot
+# again (demo 07's search string, train 18). The old names come from the
+# table's own rows, plus each one's underscore-joined segment that its new name
+# and its "tells apart" value dropped — the fragment a search box is typed with
+# (demo 07 typed "subscription_inject"). Matched whole, so a new name that
+# extends an old one (session.recording.write) is not a hit.
+old_actions="$(awk -F'|' '/^## Renamed in 0.8/{f=1;next} f&&/^## /{exit} f&&$2~/^ `/{o=$2; gsub(/[` ]/,"",o); print o; rest=$3 $4; n=split(o,seg,"."); for(i=1;i<=n;i++) if (seg[i]~/_/ && index(rest,seg[i])==0) print seg[i]}' docs/AUDIT-ACTIONS.md | sort -u)"
+[ -n "$old_actions" ] || bad "docs/AUDIT-ACTIONS.md's 'Renamed in 0.8' table has no rows — guard 14 is pointing at nothing"
+stale_actions=0
+for name in $old_actions; do
+    # git grep: 0 = hits, 1 = none, anything else = the grep itself failed
+    # (no PCRE in this git, a bad pattern), which must never read as clean.
+    hits="$(git grep -nP "(?<![\\w.])${name//./\\.}(?!\\.?\\w)" -- 'ui/e2e/demo/**' 'ui/e2e/live*/**' 'scripts/lib/verify-demo-take-*')" && rc=0 || rc=$?
+    if [ "$rc" -gt 1 ]; then stale_actions=1; bad "guard 14: git grep failed (rc=$rc) for '$name'"; continue; fi
+    [ -z "$hits" ] || { stale_actions=1; bad "retired audit action name '$name' is still used by a demo/live spec or demo-take verifier (see docs/AUDIT-ACTIONS.md 'Renamed in 0.8'):
+$hits"; }
+done
+if [ -n "$old_actions" ] && [ "$stale_actions" = 0 ]; then ok "no demo/live spec or demo-take verifier names a retired 0.8 audit action"; fi
+# ── 15. no wardynd-booting script sets a retired model variable ─────────────
+retired_re='(WARDYN_(ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|WARDYN_AGENT_ANTHROPIC_MODEL|WARDYN_SUBSCRIPTION_INJECT|WARDYN_ALLOW_SHARED_SUBSCRIPTION)'
+retired_fail=0
+for f in scripts/e2e-backend.sh scripts/kind-sso-walk.sh scripts/ci-run.sh scripts/survival-walk.sh \
+         deploy/azure-entra-sso/05-kind-deploy.sh test/survival-walk/compose-override.yaml; do
+    # An assignment (VAR=value, export VAR=), a Helm --set env.VAR=value, or a
+    # YAML key (VAR: value) with a non-empty value other than false/off.
+    hits="$(grep -nE "(^|[[:space:]\"'.])${retired_re}(=|: +)[\"']?[^\"'[:space:]]" "$f" \
+        | grep -vE "${retired_re}(=|: +)[\"']?(false|off)[\"']?([[:space:]]|$)" || true)"
+    if [ -n "$hits" ]; then
+        bad "$f sets a retired model variable wardynd refuses to boot on (#549): $hits"
+        retired_fail=1
+    fi
+done
+[ "$retired_fail" = 0 ] && ok "no wardynd-booting script sets a retired model variable"
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

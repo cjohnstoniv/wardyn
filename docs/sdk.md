@@ -109,6 +109,8 @@ var (
     ev  client.AuditEvent      // AuditEvents
     sk  client.SSHPublicKey    // ListSSHKeys / AddSSHKey
     rf  client.RunFiles        // RunFiles
+    re  client.RunEvent        // RunEvents
+    rp  client.RunPolicyView   // GetRunPolicy
 )
 
 // Enums and their values are re-exported too:
@@ -129,6 +131,91 @@ spec := client.RunPolicySpec{
 created, _ := c.CreatePolicy(ctx, client.PolicyRequest{Name: "default", Spec: spec})
 _ = created
 ```
+
+## Reading the policy a run got
+
+`GetRunPolicy` returns `GET /api/v1/runs/{id}/policy`: the resolved policy, where
+it started, and what launch changed. It is readable by whoever may read the run
+(anyone else gets the same `404` as `GET /runs/{id}`); a portal's delegated token
+is refused `403` `delegation_scope`.
+
+```go
+v, err := c.GetRunPolicy(ctx, created.ID)
+if err != nil { /* ... */ }
+if v.State == client.RunPolicyViewRecorded {
+    for _, ch := range v.Changes {
+        fmt.Println(ch.Cause, ch.Field, ch.Added, ch.Removed)
+    }
+    _ = v.Spec // a client.RunPolicySpec, ready for PolicyRequest.Spec
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `state` | `recorded`, `not_yet` (the run has not reached sandbox setup) or `never` (it ended before that); `spec` and `recorded_at` are set for `recorded` only |
+| `source` | `kind` is `stored`, `inline`, `default`, `profile` or `unknown`; a saved policy carries `policy_id` and its `name` at launch, and `deleted` once it is gone; `preset` and `preset_version` when the run came from one |
+| `spec` | the policy the sandbox's proxy enforces, restart denies included; `llm_inspection` secret values are never present |
+| `redacted` | true when the reader is below the security admin tier and mount sources or secret names were hidden (`<redacted>`, or dropped); the spec then strict-decodes as a policy but does not validate |
+| `changes` | never `null`; each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`. Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value |
+| `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
+| `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
+
+The CLI is `wardyn run policy <run-id> [--json]`.
+
+## Following a run's lifecycle
+
+`GET /api/v1/runs/{id}/events` is a `text/event-stream` of the run's lifecycle,
+readable by whoever may read the run, including a portal's delegated token for
+the run's person (anyone else gets the same `404` as `GET /runs/{id}`). One
+principal holds at most 32 streams at once; the next is refused `422`
+`event_stream_cap` until one closes. `RunEvents` follows it and returns once the
+run has ended:
+
+```go
+err := c.RunEvents(ctx, created.ID, 0, func(ev client.RunEvent) error {
+    fmt.Println(ev.ID, ev.Type, ev.Reason, ev.State)
+    return nil
+})
+```
+
+The vocabulary is closed; each event carries a short machine field and never
+log or secret content:
+
+| `type` | When | Field |
+|---|---|---|
+| `provisioning` | the sandbox is being created (PENDING -> STARTING) | |
+| `pulling` | the substrate reported an image pull (at most once) | |
+| `ready` | the sandbox is up (STARTING -> RUNNING) | |
+| `idle_stopped` | the idle reaper stopped the run | |
+| `failed` | the run failed | `reason`: `not_started`, `start_failed` or `run_failed` (the phase it failed in) |
+| `ended` | always last; the stream then closes | `state`: the terminal run state |
+
+Each event's `id` is monotonic per run; reconnect with `Last-Event-ID` (the SDK
+does) to resume without gaps. The server sends a `: keepalive` comment every
+15s, ends the stream at the next keepalive once the caller's session is revoked,
+and closes a held stream after 5 minutes so the reconnect re-authenticates.
+The feed is kept in wardynd's memory: resume works within the daemon's
+lifetime. After a restart a live run's stream carries only what happens next,
+and a run that had already ended answers `ended` alone. The repository clone
+happens inside the sandbox after `ready`, so it is not a separate event.
+
+## Reading an exec run's output
+
+`GET /api/v1/runs/{id}/output?tail=<bytes>` returns the end of a
+`task_mode=exec` run's combined stdout/stderr — at most 8 KiB, kept in
+wardynd's memory whether or not recordings are on. `RunOutput` reads it; pass
+`0` for the whole tail:
+
+```go
+out, err := c.RunOutput(ctx, created.ID, 0)
+fmt.Println(out.Output, out.Truncated, out.Complete)
+```
+
+`truncated` says the output does not start at the run's first byte; `complete`
+says the run has finished; bytes it printed in its last moments can land a
+moment later, so read once more after `complete` if the end matters. The same `404` as
+`GET /runs/{id}` answers anyone who may not read the run; the other refusals
+carry a `run_output_*` reason (below).
 
 ## Error handling
 
@@ -195,16 +282,24 @@ silent gap:
 
 | Reason | Meaning |
 |---|---|
-| `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO, Bedrock bearer. |
+| `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
-| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO, Bedrock bearer; also `POST /runs`' model-provider mechanism resolve. |
-| `run_unreadable` | The run row itself could not be read. AWS SSO, Bedrock bearer; also `POST /approvals/{id}/{approve,deny}`'s second-human gate (`WARDYN_EGRESS_SECOND_HUMAN`). |
-| `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO, Bedrock bearer. |
+| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
+| `run_unreadable` | The run row itself could not be read. AWS SSO; also `POST /approvals/{id}/{approve,deny}`'s second-human gate (`WARDYN_EGRESS_SECOND_HUMAN`). |
+| `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO. |
 | `store_error` | The credential store operation failed. AWS SSO (a read); also the Azure DevOps sign-in callback's own captured-credential write (`ado_entra.go`) — the identical "a store errored" fact, not a second name for it. |
 | `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). Azure DevOps. |
+| `ado_pat_policy_blocked` | Azure DevOps refused to create a personal access token for the person: the organisation restricts who may create them. The organisation's allow list is the fix. |
+| `ado_pat_lifespan_policy` | Azure DevOps refused to create a personal access token because its life is above the organisation's maximum token lifespan. Lower the row's `pat_max_hours`. |
+| `ado_pat_consent_needed` | The person's Azure DevOps sign-in cannot create tokens: the app registration lacks the token permissions or consent for them. |
+| `ado_pat_mint_refused` | Azure DevOps refused to create a personal access token for another reason. |
+| `ado_pat_unavailable` / `ado_pat_run_inactive` | A `minted_pat` run's personal access token can't be created: this deployment has no way to create one, or the run is paused or has ended (resolved again when it resumes). Azure DevOps. |
+| `mint_scopes` / `scope_unknown` | S2: the Entra sign-in lane refuses to send a bearer whose granted scopes name a token permission (`vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration`, `user_impersonation`), or whose authority reported no granted scope at all (`resolveADOInjection`). Azure DevOps. |
+| `ado_pat_needs_console_app` | S1: a `minted_pat` row the console cannot redeem with its own client secret — it names another application or tenant, or `WARDYN_OIDC_CLIENT_SECRET` is unset — is unusable: the sign-in door and the organisation check refuse it, and `/me/scm-access` grades it `expired_signin` with this cause. |
+| `ado_org_check_unknown_row` / `ado_org_check_organisation` | `POST /workspace-providers/git/{id}/org-check` (`ado_pat_orgcheck.go`): no such row, or not the deployment's `minted_pat` sign-in row (answered identically, D-6); or the row's address names no organisation and `?organisation=` named none it serves. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
+| `ado_own_pat_not_added` / `ado_own_pat_expired` / `ado_own_pat_other_org` | A `token_mode: own_pat` row's resolve (`resolveADOOwnPATInjection`): the run's owner has added no token of their own, their token has reached the expiry they entered (mid-run this raises the Azure DevOps sign-in hold instead), or it is for a different organisation than the run's. Azure DevOps. |
 | `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
-| `per_user_bearer_absent` / `bearer_absent` | The roster names a per-user bearer this owner has none of, or no `bedrock-api-key` secret is in the store. Bedrock bearer. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |
 | `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. Azure DevOps; `approvals_unreadable` also AWS SSO's re-auth hold. |
 | `signin_closed` / `signin_holds_exhausted` | The hold chain has gone terminal (cancelled, expired, denied) or hit its per-run cap — see `injection_ado_signin.go`'s sign-in hold and `injection_awssso.go`'s re-auth hold, the same shape under two names. |
@@ -266,15 +361,18 @@ sending `error` alone — completing the sweep this issue tracks:
 | Reason | Meaning |
 |---|---|
 | `local_mode_not_owner` / `revive_unsupported_deployment` / `revive_unsupported_runner` / `revive_bulk_cannot_start_agent` / `revive_already_in_progress` / `revive_mint_identity_failed` / `revive_encode_config_failed` / `revive_pull_image_failed` / `revive_claim_failed` / `revive_run_changed` / `revive_proxy_kept_current` / `revive_proxy_replace_failed_lost` / `revive_agent_start_failed_lost` / `revive_substrate_unreadable` / `revive_config_not_stored` / `revive_config_unreadable` / `revive_config_does_not_load` / `revive_not_running` / `revive_ended_files_gone` / `revive_past_end` / `revive_ended_task_run` / `revive_reboot_agent_stopped` / `revive_ended_agent_stopped` / `revive_unknown_lost_reason` / `revive_agent_status_unreadable` / `revive_config_run_mismatch` / `revive_ceiling_denies_git_broker` / `revive_owner_authority_unreadable` / `revive_admin_restart_count_invalid` / `revive_proxy_window_store_unavailable` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`): one reason per distinct revive-refusal cause. `local_mode_not_owner` is the same literal the refusal's own audit row already carried; `revive_unsupported_runner` covers three arms that all answer the identical "this runner cannot replace a proxy" fact. |
-| `profile_unreadable` / `profile_gone` / `capability_agent` / `capability_workspace` / `capability_model_provider` / `capability_policy` / `capability_workspace_provider` / `capability_unknown` / `model_credential_erased` / `model_provider_disabled` / `owner_unverifiable` | `ownerRefusal`'s own reason values (`run_owner_authority.go`): the shared re-check a revive and a run-end-extension both run over the owner's launch-door capabilities, governance profile and model credential. The `capability_*` values name the SAME five capability kinds `capabilities.go` enumerates; `capability_unknown` is a defensive fallback outside that closed set. `owner_unverifiable` is `extendRefusal`'s own bucket for three arms that all answer "the owner's authority could not be confirmed right now". |
+| `revive_live_too_soon` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`), `429`: the run is live and this `wardynd` process started replacing its proxy less than a minute ago (a revive that left the proxy untouched, `revive_proxy_kept_current`, does not count). The bound is per process, so each replica allows one a minute. A revive of a lost run is never bounded. |
+| `profile_unreadable` / `profile_gone` / `capability_agent` / `capability_workspace` / `capability_model_provider` / `capability_policy` / `capability_workspace_provider` / `capability_unknown` / `model_credential_erased` / `model_provider_disabled` / `model_provider_gone` / `owner_unverifiable` | `ownerRefusal`'s own reason values (`run_owner_authority.go`): the shared re-check a revive and a run-end-extension both run over the owner's launch-door capabilities, governance profile, model provider and model credential. `model_provider_disabled` covers both an integration that supplies the run's credential and the run's own model provider being turned off; `model_provider_gone` is that provider deleted (or re-created under the same id). The `capability_*` values name the SAME five capability kinds `capabilities.go` enumerates; `capability_unknown` is a defensive fallback outside that closed set. `owner_unverifiable` is `extendRefusal`'s own bucket for three arms that all answer "the owner's authority could not be confirmed right now". |
 | `run_end_wait_neither_field` / `run_wait_budget_not_a_number` / `run_end_wait_already_finished` / `run_end_wait_files_gone` / `run_end_wait_store_unavailable` / `run_limits_gate_denied` / `run_end_no_end_not_allowed` / `run_end_must_be_future` / `run_wait_budget_too_small` / `run_end_wait_changed` | `PATCH /runs/{id}`'s end-time and wait-budget door (`run_end_wait.go`). `run_limits_gate_denied` is shared across all four fields the `user_changes_limits` gate can block — the same gate regardless of which field triggered it. |
 | `workspace_not_found` / `user_drive_not_found` / `user_drive_allocation_not_found` / `ssh_key_not_found` / `preset_not_found` / `policy_not_found` / `capability_grant_not_found` / `run_not_found` / `governance_assignment_not_found` / `governance_profile_not_found` / `enrolment_token_not_found` / `device_not_found` / `delegate_not_found` / `api_token_not_found` / `role_mapping_not_found` | `notFoundIf`'s (`helpers.go`) per-resource-kind 404s, one for each of its ~27 call sites across the package. `run_not_found` is the same literal `auditRenewDenied` already wrote for a renewal on a run that no longer exists; `preset_not_found` is the admin preset-management route's own 404, distinct from `preset_unknown` (a run naming an unknown preset at launch); `governance_profile_not_found` is `governance.go`'s own by-id GET/PUT/DELETE, distinct from `profile_gone` above (a run's already-captured profile going missing later). |
 | `invalid_id_param` / `missing_run_claims` / `run_id_mismatch` / `workspace_store_unavailable` / `scan_upload_run_not_found` / `scan_upload_not_governed` / `scan_upload_wrong_task` / `workspace_requirements_invalid` / `workspace_approved_egress_invalid` / `workspace_approved_egress_dead_host` / `workspace_denied_egress_invalid` / `workspace_llm_cred_invalid` / `request_body_too_large` / `request_body_unreadable` | `helpers.go`'s own shared foundational refusals, reused by dozens of call sites across the package since the cause is identical regardless of which handler hit it: a `{param}` path segment that fails to parse as a UUID, the internal run token's claims failing to read, a scan upload's own 3-arm refusal (`scanresult.go`'s sole caller), `scopedWorkspaceWrite`'s 4 validators (one cause bucket per route; `workspace_approved_egress_dead_host` is its own reason because the remedy differs — use the already-routed door, not fix a malformed domain), and `readCappedBody`'s too-large/unreadable split. |
 | `ado_capability_unknown` | `PUT/POST /api/v1/policies`, `POST /runs`' `inline_policy`, and a launch preset's `inline_policy` (`/api/v1/admin/presets`): the spec's `azure_devops_capabilities` names something the Azure DevOps capability catalogue cannot grant. Its own reason rather than the door's `policy_request_invalid` / `inline_policy_invalid` bucket. |
+| `ado_capabilities_none_permitted` | `POST /runs/preflight`: a member's `azure_devops_capabilities` leaves nothing standing on the per-person Azure DevOps lane (none of it is in the provider row's default profile or their governance profile's list). Review's mirror of the same-named refusal launch gives at dispatch. |
 | `policy_request_invalid` / `policy_secret_refs_invalid` / `policy_name_conflict` | `PUT/POST/DELETE /api/v1/policies`: the create/update body fails `decodePolicyRequest`, a secret reference in the spec fails shape validation, or a policy by that name already exists. |
 | `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`' model-provider choice (`run_model_provider.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
 | `run_title_store_unavailable` | `PATCH /runs/{id}/title` (`run_title.go`): this store cannot rename a run. |
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. |
+| `run_output_tail_invalid` / `run_output_interactive` / `run_output_off` / `run_output_not_kept` / `run_output_expired` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive, and only a `task_mode=exec` run keeps its output (`409`); this deployment keeps none (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no tail is held for the run — not an exec run, or started before wardynd last restarted (`409`); the tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL` (`410`). |
 | `run_resume_not_running` / `run_resume_failed` | `POST /runs/{id}/resume` (`run_pause.go`): the run is not in a resumable state, or thawing it for exec failed. |
 | `internal_decision_log_invalid` / `groundtruth_batch_invalid` / `groundtruth_batch_too_large` / `groundtruth_action_not_kernel` / `groundtruth_write_failed` / `internal_approval_request_invalid` / `unsupported_internal_approval_kind` / `missing_requested_scope` / `reserved_scope_key` / `internal_approval_count_unavailable` / `internal_approval_cap_reached` / `broker_not_configured` / `mint_grant_id_required` / `brokered_forge_single_lane` / `brokered_forge_single_lane_unverifiable` / `grant_run_mismatch` / `grant_not_found` / `grant_requires_spire` / `run_renew_store_unavailable` / `run_renew_read_failed` / `run_renew_stamp_failed` / `internal_liveness_read_failed` | `POST /internal/*` (`internal.go`, `internal_live_run.go`): the sidecar/proxy surface, not the member-facing API. Most values are already the exact strings each route's own audit row wrote before #656 slice 3 put them on the wire too; `internal_liveness_read_failed` is the shared `/internal/*` liveness gate every sidecar door runs through. |
 | `store_unavailable` / `not_found` / `refused` / `resolve_failed` / `store_refused` | The credential-injection sinks' own closed set (`injection.go`'s `storeReadRefusal` and its callers across `injection_provider_key.go`, `injection_awssso.go`, `provider_subscription.go`, `internal.go`): the credential store did not answer, the named secret is not in the store, the secret exists but the store refused to serve it, resolving a subscription/managed token failed for a reason other than an unreachable store, or (`store_refused`, a person's own model-provider credential specifically) the store refused it. |
@@ -286,17 +384,17 @@ sending `error` alone — completing the sweep this issue tracks:
 | `sso_token_no_secret_store` / `sso_token_wrong_run_kind` | `/internal/sso-token` (`ssotoken.go`): this deployment configures no secret store, or the run is not an AWS SSO container-login run. |
 | `provider_sign_in_no_block` / `model_provider_not_found` / `provider_sign_in_untyped` / `provider_sign_in_disabled` / `provider_sign_in_config_unreadable` / `provider_sign_in_preview_blocked` / `provider_sign_in_no_portal` / `provider_sign_in_account_ambiguous` / `provider_sign_in_no_image` / `provider_sign_in_capture_body_invalid` / `provider_sign_in_aws_by_helper` / `harness_paste_invalid` / `provider_sign_in_not_your_run` / `provider_sign_in_capture_changed` | `/api/v1/model-providers/{id}/sign-in` (`provider_signin.go`): the console's own sign-in door, distinct from run-create's model-provider choice. `model_provider_not_found` is reused by `model_provider_credentials.go` too (no such provider, or the caller may not see it); `harness_paste_invalid` is `harnessPasteRefusal`'s own bucket, shared with `harnesscred.go`'s identical paste door. |
 | `record_ceiling_limit` | `errRecordCeilingLimit`'s own wire reason (`workspace_run_launch.go`): a launch refused by the acting principal's governance profile limits (interactive not allowed, or the concurrent-run cap) — shared by `provider_signin.go`, `harnesscred_launch.go` and `record.go`, since it is the identical cause regardless of which launch door hit it. |
-| `injection_grant_not_api_key` / `reserved_secret_name` / `invalid_header_name` / `oauth_host_not_anthropic` / `shared_subscription_posture` / `no_oauth_provider` | `/internal/injection/{grantID}` (`injection.go`): the proxy's own `api_key` resolve door. Most values are already the exact strings each site's own `secret.read` audit row wrote. |
+| `injection_grant_not_api_key` / `reserved_secret_name` / `invalid_header_name` | `/internal/injection/{grantID}` (`injection.go`): the proxy's own `api_key` resolve door. Most values are already the exact strings each site's own `secret.read` audit row wrote. |
 | `record_session_name_required` / `record_label_collision` / `record_no_runner` / `record_import_step_busy` / `record_promote_no_recording` / `record_promote_rejected` / `record_promote_host_not_promotable` / `record_promote_cap_reached` / `record_promote_conflict` | Record Mode (`record.go`): per-task recording sandboxes and their promotion to durable requirement rows. `record_promote_rejected` is `promotableRecordHosts`' own bucket for several distinct pre-promotion checks that all refuse for the same reason — the entry is not durable-policy material yet. |
 | `user_type_request_invalid` / `user_type_conflict` / `user_type_not_found` / `user_type_id_immutable` / `user_type_built_in_no_priority` / `user_type_built_in_immutable` / `user_type_in_use` / `user_type_delete_conflict` | `/api/v1/admin/user-types` (`user_types.go`). |
 | `preset_request_invalid` | `/api/v1/admin/presets` (`presets.go`): `validatePresetRequest`'s whole check is one cause bucket, the same grain as `site_config_invalid` — deliberately not split per arm (two arms echo `POST /runs`' own `user_type_*`/`confinement_class_unknown` reasons): an operator-only authoring route, the field is already named in the 400's own message, and `workspace_request_invalid` (slice 1) is the same policy for the same kind of route. |
 | `model_provider_credential_no_store` / `model_provider_credential_no_person` / `model_provider_credential_is_sign_in` / `model_provider_credential_body_invalid` / `model_provider_credential_too_short` / `model_provider_credential_store_unavailable` | `/api/v1/model-providers/{id}/credential` (`model_provider_credentials.go`): the console's own key/token storage door, distinct from the sign-in door and run-create's model-provider choice. |
-| `harness_login_no_secret_store` / `harness_login_provider_unsupported` / `harness_login_preview_blocked` / `harness_login_no_start_url` / `harness_login_bad_start_url` / `harness_login_no_region` / `harness_login_roster_unavailable` / `harness_login_legacy_door_closed` / `harness_credential_no_secret_store` / `harness_credential_unknown_provider` | `POST /api/v1/setup/harness-login` and `PUT /api/v1/setup/harness-credential/{provider}` (`harnesscred_launch.go`): the managed container sign-in launch door and the operator-pasted setup-token door. `harness_login_roster_unavailable` is shared with `handleHarnessDisconnect`'s identical roster-read failure. |
 | `audit_invalid_run_id` / `audit_export_store_unavailable` / `audit_chain_verify_store_unavailable` / `audit_chain_verify_busy` / `audit_chain_sweep_failed` / `audit_invalid_timestamp_param` / `audit_invalid_actor_type` / `audit_invalid_origin` | `/api/v1/admin/audit` (`audit.go`): the security tier's audit-log query, export and chain-verification doors. |
 | `source_not_found` / `source_scan_already_running` / `source_scan_unsupported_kind` / `source_scan_failed` / `source_scan_no_runner` | `POST /api/v1/sources/{id}/scan` and the admin bulk scan (`source_scan.go`). `source_scan_failed` is `scanLocalDirSource`'s own bucket for whatever detail the scan itself failed on. |
 | `inline_policy_xor` / `policy_id_not_found` / `inline_policy_invalid` | `POST /runs` and `POST /runs/preflight`'s policy resolution (`inline_policy.go`): `policy_id` and `inline_policy` were both set, the named policy does not exist, or (`inline_policy_invalid`, the whole resolution chain's bucket — grant filtering, domain-count cap, spec/secret-ref validation) the policy fails validation. |
 | `ui_layout_invalid_preset` / `ui_layout_too_many_widgets` / `ui_layout_unknown_widget` / `ui_layout_invalid_geometry` / `ui_layout_persistence_unavailable` | `GET/PUT /api/v1/ui-layout` (`ui_layout.go`): the console's own saved-layout door. |
-| `ado_sign_in_unconfigured` / `ado_sign_in_foreign_app` / `ado_sign_in_no_session` / `ado_sign_in_scope_invalid` / `ado_sign_in_prompt_invalid` | `/scm/azure-devops/signin` and its callback (`ado_entra.go`): the console's own Azure DevOps per-person sign-in doors, distinct from `ADOEntraFailure`'s own enum above. `ado_sign_in_prompt_invalid` is `?prompt=` set to anything other than empty or `select_account`. |
+| `ado_sign_in_unconfigured` / `ado_sign_in_foreign_app` / `ado_sign_in_no_session` / `ado_sign_in_scope_invalid` / `ado_sign_in_prompt_invalid` | `/scm/azure-devops/signin` and its callback (`ado_entra.go`): the console's own Azure DevOps per-person sign-in doors, distinct from `ADOEntraFailure`'s own enum above. `DELETE /scm/azure-devops/connection` (`ado_pat_console.go`) answers `ado_sign_in_no_session` for a caller with no sign-in subject and `ado_sign_in_unconfigured` (404) when there is no per-person row the caller may use. `ado_sign_in_prompt_invalid` is `?prompt=` set to anything other than empty or `select_account`. |
+| `ado_own_pat_unknown_row` / `ado_own_pat_token_invalid` / `ado_own_pat_expiry_invalid` / `ado_own_pat_expiry_too_long` / `ado_own_pat_rejected` / `ado_own_pat_identity_mismatch` / `ado_own_pat_check_unavailable` | `PUT`/`DELETE /me/scm/azure-devops/token` (`ado_own_pat.go`): a person adding or removing their own Azure DevOps token. No own-token row the caller may use has that address (a row they may not use answers the same); the pasted value is empty, too long or has spaces; `expires_on` is not a date after today, or is past the row's `pat_max_days`; Azure DevOps did not accept the token for the organisation; the token belongs to another account (never named); or Azure DevOps could not be asked. |
 | `ado_callback_cookies_invalid` / `ado_callback_missing_code` / `identity_binding` / `unusable_grant` | The callback half of the same door (`consumeADOCookies`, `handleADOCallback`): browser-reachable, since the identity provider's own redirect lands here directly. `ado_callback_cookies_invalid` buckets all three single-use state/nonce/pkce cookie causes — the remedy is identical for all three (start the sign-in again). `identity_binding` and `unusable_grant` are the SAME strings this callback's own audit row already carried for those two causes. |
 | `user_view_no_human` / `user_view_invalid_field` / `user_view_type_invalid` / `user_view_no_session` | `POST /api/v1/me/view` (`user_view.go`): the admin/security-admin user-view toggle. |
 | `source_write_invalid` / `source_delete_conflict` / `source_in_use` | `/api/v1/sources` (`sources.go`): the shared source library. `source_write_invalid` is `validateSourceWrite`'s own bucket. |
@@ -333,9 +431,9 @@ above under a *different* refusal that deliberately shares the same string
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
+| `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
 | `grant_pairing_not_eligible` | The named capability grant is not eligible to pair with the request it was offered against. |
-| `harness_login_mechanism_principal` / `harness_login_not_per_user` | The managed container sign-in launch gate: the acting principal is a mechanism identity (not a human), or the provider's login is not per-user on this deployment. |
 | `model_provider_unavailable` | `POST /runs`' model-provider choice (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
 | `run_kept` | The run is kept (ended or lost); its agent is stopped and nothing may act on it as if it were live. |
 | `run_quota` | The acting principal's governance profile run-count or concurrency limit is at its cap. Not audited on its own (`Audit: false` in the registry): a caller who IS authorized and simply hit a limit should not look like an attacker in the audit trail. |
@@ -396,6 +494,21 @@ path. The chart key is a clean break, no alias — see
 | Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
 | Helm `userDrives.reclaim.enabled` | Helm `drives.reclaim.enabled` | Chart value, clean break (no alias); never released under the old name |
 
+### Azure DevOps capabilities (#1409)
+
+The Azure DevOps capability ids in `capability_ceiling`, `default_profile` and
+`azure_devops_capabilities` split per area in 0.8.2. It is a clean break with no alias: migration
+`0101_ado_capability_split` rewrites every stored list, and the server refuses the old `read` id
+with a `400` (`ado_capability_unknown` on the policy-shaped doors). The SDK and CLI carry no
+capability enum, so no client code changes.
+
+| Old | New | Kind |
+|---|---|---|
+| `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read` | Capability id, clean break |
+| `work_write` | `work_write`, `work_admin` | Capability id, split |
+| `build_execute` | `build_execute`, `release_execute` | Capability id, split |
+| `build_admin` | `build_admin`, `release_admin` | Capability id, split |
+
 ## Local dev: principal override
 
 `X-Wardyn-Principal` overrides the server-side principal attribution:
@@ -444,6 +557,10 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
 
 curl -s -H 'Authorization: Bearer demo-admin-token' \
   'http://localhost:8080/api/v1/audit?run_id=<id>'   # run.complete -> .data.exit_code
+
+# Or follow the run's lifecycle as it happens (see "Following a run's lifecycle").
+curl -sN -H 'Authorization: Bearer demo-admin-token' \
+  http://localhost:8080/api/v1/runs/<id>/events
 ```
 
 `GET /api/v1/runs` accepts an opt-in, server-side scoping/filtering surface beyond

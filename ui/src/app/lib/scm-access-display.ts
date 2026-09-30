@@ -8,6 +8,7 @@
 // connected panel lives in (Getting started, Settings), so they cannot
 // render the state differently. Pure: no React, no fetch.
 import { ADO } from "./ado-entra-copy";
+import { ADO_PAT } from "./ado-pat-copy";
 
 // scmAccessChip follows modelAccessChip's own "say nothing rather than
 // invent" rule (member-getting-started.tsx): a state this console does not
@@ -52,13 +53,26 @@ export function scmAccessCause(cause?: string): string {
       return ADO.CAUSE_ENDED;
     case "consent_needed":
       return ADO.CAUSE_CONSENT_NEEDED;
+    // The per-person token rows' causes (#1428, #1430), in the mock's words.
+    case "permissions_missing":
+      return ADO_PAT.SIGN_IN_AGAIN_BODY;
+    case "blocked":
+      return ADO_PAT.BLOCKED_BODY;
+    case "ado_pat_needs_console_app":
+      return ADO_PAT.MEMBER_NEEDS_ADMIN;
+    case "token_expired":
+      return ADO_PAT.OWN_EXPIRED_BODY;
     default:
       return "";
   }
 }
 
 // scmAccessNeedsConnect is whether the state is one a (re)connect fixes — the
-// states the cause line and CONNECT_ADO render for.
-export function scmAccessNeedsConnect(state?: string): boolean {
+// states the cause line and CONNECT_ADO render for. Three causes are not the
+// person's to fix by signing in: the organisation blocks token creation, the
+// app has no client secret (both the admin's), and an own token that has
+// expired is replaced, not reconnected.
+export function scmAccessNeedsConnect(state?: string, cause?: string): boolean {
+  if (cause === "blocked" || cause === "ado_pat_needs_console_app" || cause === "token_expired") return false;
   return state === "not_configured" || state === "expired_signin";
 }
