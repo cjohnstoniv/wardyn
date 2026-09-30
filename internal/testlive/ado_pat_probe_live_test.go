@@ -33,6 +33,10 @@ import (
 // It is a probe, not a regression test: it passes whichever way Azure DevOps
 // answers and logs the verdict. It fails only when it cannot get an answer. A
 // PAT that does get minted is revoked before the test returns.
+// envADOPATProbePATScope names the scopes the minted PAT is created with,
+// separated by a single space.
+const envADOPATProbePATScope = "WARDYN_LIVE_ADO_PAT_PROBE_PAT_SCOPE"
+
 func TestLiveADOPATMintProbe(t *testing.T) {
 	Require(t, EnvADOPATProbe, EnvADOPATProbeTenant, EnvADOPATProbeClient, EnvADOOrg)
 	tenant, clientID, org := os.Getenv(EnvADOPATProbeTenant), os.Getenv(EnvADOPATProbeClient), os.Getenv(EnvADOOrg)
@@ -46,8 +50,16 @@ func TestLiveADOPATMintProbe(t *testing.T) {
 	status, _, _ := probeCall(ctx, t, token, http.MethodGet, base, "")
 	Logf(t, "list PATs: HTTP %d", status)
 
-	body := fmt.Sprintf(`{"displayName":"wardyn-pat-probe","scope":"vso.code","validTo":%q,"allOrgs":false}`,
-		time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	patScope := cmp.Or(os.Getenv(envADOPATProbePATScope), "vso.code vso.project")
+	Logf(t, "PAT scope %q (separator: single space)", patScope)
+	bodyJSON, err := json.Marshal(map[string]any{
+		"displayName": "wardyn-pat-probe", "scope": patScope, "allOrgs": false,
+		"validTo": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		Fatalf(t, "marshal: %v", err)
+	}
+	body := string(bodyJSON)
 	status, hdr, raw := probeCall(ctx, t, token, http.MethodPost, base, body)
 	var created struct {
 		PatToken struct {
@@ -58,8 +70,22 @@ func TestLiveADOPATMintProbe(t *testing.T) {
 	}
 	_ = json.Unmarshal(raw, &created)
 	if status == http.StatusOK && created.PatToken.Token != "" {
+		useReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://dev.azure.com/"+url.PathEscape(org)+"/_apis/projects?api-version=7.1", nil)
+		if err != nil {
+			Fatalf(t, "use: %v", err)
+		}
+		useReq.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(":"+created.PatToken.Token)))
+		useResp, err := http.DefaultClient.Do(useReq)
+		if err != nil {
+			Fatalf(t, "use: %v", err)
+		}
+		useResp.Body.Close()
+		Logf(t, "use: HTTP %d", useResp.StatusCode)
 		st, _, _ := probeCall(ctx, t, token, http.MethodDelete, base+"&authorizationId="+url.QueryEscape(created.PatToken.AuthorizationID), "")
-		Logf(t, "VERDICT: MINT WORKS for this app with scope %q; the probe PAT was revoked (HTTP %d)", scope, st)
+		if st != http.StatusOK && st != http.StatusNoContent {
+			Fatalf(t, "VERDICT: MINT WORKS, REVOKE FAILED (HTTP %d) — revoke it by hand under Personal access tokens", st)
+		}
+		Logf(t, "VERDICT: MINT WORKS; use HTTP %d; revoked HTTP %d", useResp.StatusCode, st)
 		return
 	}
 	Logf(t, "VERDICT: MINT REFUSED with scope %q: HTTP %d, X-TFS-ServiceError %q, patTokenError %q, body %s",
