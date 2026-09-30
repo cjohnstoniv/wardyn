@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    # `release/**` is absent on purpose: a release branch only fast-forwards to a
-    # tree its own PR run tested, and release.yml accepts that run by tree
-    # (scripts/green-by-tree.sh).
-    branches: [main, master, 'feature/**']
+    # `release/**` stays until release.yml accepts a run by tree (#1461 R6): until
+    # then a release branch's merge commit needs its own push run for the
+    # preflight's exact-sha check. R6 removes it.
+    branches: [main, master, 'release/**', 'feature/**']
   # No branches filter: `branches:` matches the PR's BASE, and the 0.8
   # working-practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90),
   # not on main — a filtered trigger gave a stacked PR no checks at all
@@ -96,8 +96,8 @@ jobs:
           done <<< "$changed"
           echo "code=$code backend=$backend"
           printf 'code=%s\nbackend=%s\n' "$code" "$backend" >> "$GITHUB_OUTPUT"
-      # A run that runs everything records the tree it tested, so a release can
-      # accept this run by tree (scripts/green-by-tree.sh). On a pull_request HEAD
+      # A run that runs everything records the tree it tested, so a release will
+      # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). On a pull_request HEAD
       # is GitHub's merge commit, so this is the tree actually tested — the run
       # API's head_commit.tree_id is the PR head's tree, which differs whenever
       # the base has moved.
@@ -536,6 +536,7 @@ jobs:
       # One line per flaky test (scripts/run-ui-e2e.sh); notify-flaky reads it.
       - name: Upload the flaky-test list
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: e2e-flaky
@@ -1589,7 +1590,7 @@ jobs:
             title="${title//\"/}"
             existing="$(gh issue list --state open --search "\"$title\" in:title" --json number,title | jq -r --arg t "$title" 'map(select(.title == $t))[0].number // empty')"
             if [ -n "$existing" ]; then
-              gh issue comment "$existing" --body "Flaked again ($state): $RUN_URL"
+              gh issue comment "$existing" --body "Flaked again ($state): $RUN_URL" || echo "::warning::could not comment on #$existing"
             else
               body=$(printf '%s\n' \
                 "A Playwright test passed only on a retry." \
@@ -1599,7 +1600,11 @@ jobs:
                 "State: $state" \
                 "" \
                 "A flake that is not quarantined fails the e2e gate. Fix it, or quarantine it in ui/e2e/quarantine.txt with this issue, an owner and an expiry at most 14 days out.")
-              gh issue create --title "$title" --body "$body" --assignee "$ACTOR"
+              # One failed call (a bot actor as assignee, an API blip) must not
+              # cost every later flaky test its issue.
+              gh issue create --title "${title:0:250}" --body "$body" --assignee "$ACTOR" \
+                || gh issue create --title "${title:0:250}" --body "$body" \
+                || echo "::warning::could not open an issue for $spec"
             fi
           done < flaky/flaky.tsv
 
