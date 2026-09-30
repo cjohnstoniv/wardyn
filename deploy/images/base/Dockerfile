@@ -235,11 +235,14 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # write. Without this the volume's root would be root-owned and every managed drive
 # would be read-only in practice — and fixing that at run time would mean wardynd
 # chowning host/volume state, which it must never do.
+# chmod 0755: Debian 13 creates the home 0700 (Debian 12 gave 0755); a run under
+# another uid (the docker-tagged tests, platforms that assign one) must reach it.
 RUN usermod  -l agent node \
  && usermod  -d /home/agent -m agent \
  && groupmod -n agent node \
  && mkdir -p /home/agent/work /home/agent/drive \
- && chown -R agent:agent /home/agent
+ && chown -R agent:agent /home/agent \
+ && chmod 0755 /home/agent
 
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec

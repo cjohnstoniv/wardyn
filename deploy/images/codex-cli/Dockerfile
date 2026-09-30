@@ -183,11 +183,14 @@ RUN set -eu; \
 # states in full: a fresh managed volume inherits the uid/gid of the image directory
 # it is mounted over, so without it a docker_volume drive's root is root-owned and a
 # writable managed drive is read-only in practice for uid 1000.
+# chmod 0755: Debian 13 creates the home 0700 (Debian 12 gave 0755); a run under
+# another uid (the docker-tagged tests, platforms that assign one) must reach it.
 RUN usermod  -l agent node \
  && usermod  -d /home/agent -m agent \
  && groupmod -n agent node \
  && mkdir -p /home/agent/work /home/agent/drive \
- && chown -R agent:agent /home/agent
+ && chown -R agent:agent /home/agent \
+ && chmod 0755 /home/agent
 
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec
