@@ -1201,3 +1201,45 @@ func TestSiteConfigGetIsByteIdenticalWithoutProviders(t *testing.T) {
 			body)
 	}
 }
+
+// providersOnHostTwoKinds / providersOnHostOneKind are the two blocks #1450's
+// door tests PUT: one host on a GitHub Enterprise row and a (disabled) Azure
+// DevOps Server row, and the same host on rows of one kind.
+const (
+	providersOnHostTwoKinds = `{"git":[` +
+		`{"id":"ghes","kind":"github","base_urls":["https://git.corp.example/acme"]},` +
+		`{"id":"ados","kind":"azure_devops","lanes":["pat"],"credential_source":"per_user","disabled":true,` +
+		`"base_urls":["https://git.corp.example/acme"]}]}`
+	providersOnHostOneKind = `{"git":[` +
+		`{"id":"ghes","kind":"github","base_urls":["https://git.corp.example/acme"]},` +
+		`{"id":"ghes2","kind":"github","base_urls":["https://git.corp.example/other"]}]}`
+)
+
+// TestPutWorkspaceProviders_HostOnRowsOfOneKindOnly pins #1450 at the console
+// door: two kinds on one host is a 400 carrying the sentence (disabled rows
+// count); the same host on one kind only still saves.
+func TestPutWorkspaceProviders_HostOnRowsOfOneKindOnly(t *testing.T) {
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, _ := newProvidersHarness(t, fake)
+	want := fmt.Sprintf(providers400HostTwoKind, 1, "git.corp.example", "github")
+	w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnHostTwoKinds)
+	if w.Code != http.StatusBadRequest || !strings.Contains(decodedError(t, w), want) {
+		t.Fatalf("two kinds = %d %s, want 400 carrying %q", w.Code, w.Body.String(), want)
+	}
+	w = do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnHostOneKind)
+	if w.Code != http.StatusOK {
+		t.Fatalf("one kind = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// decodedError returns the JSON error field of a response, unescaped.
+func decodedError(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v; body=%s", err, w.Body.String())
+	}
+	return body.Error
+}
