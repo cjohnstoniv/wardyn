@@ -439,10 +439,11 @@ func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
 // button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
 // for every member regardless of the real runner state. Only Driver and the
 // per-class ConfinementSubstrates map — genuine diagnostic detail — are
-// dropped — and so is EphemeralDiskEnforcement: which word binds a
+// dropped. Kubernetes survives as a bare boolean (#1238) — the anonymous
+// /healthz already names the runner, so it discloses nothing new. So is EphemeralDiskEnforcement: which word binds a
 // run's disk_mib is an operator's sizing answer, actionable only on the
 // providers/setup surfaces a member has no route to. The strip is structural
-// (the SetupRunner below is rebuilt from ConfinementClasses alone, so a field
+// (the SetupRunner below is rebuilt from ConfinementClasses and the Kubernetes bit alone, so a field
 // added later is dropped by default rather than by a line somebody remembered
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
 // Secrets.Present keeps demoSecretNames' presence bits (#850): those are the

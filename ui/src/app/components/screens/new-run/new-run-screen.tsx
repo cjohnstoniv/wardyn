@@ -345,6 +345,17 @@ export function NewRunScreen() {
     pristineCc,
   });
 
+  // The up-clamp only ever RAISES the pick. While /me is unresolved the
+  // governance floor binds (fail closed), so an admin's untouched pick can be
+  // raised to a tier this host lacks; once the floor lifts, re-seed it to the
+  // strongest tier that now qualifies.
+  React.useEffect(() => {
+    if (ccTouched || !policy.qualifying?.length || policy.qualifying.includes(cc)) return;
+    const next = policy.qualifying[policy.qualifying.length - 1];
+    pristineCc.current = next;
+    patch({ confinementClass: next });
+  }, [ccTouched, policy.qualifying, cc, patch]);
+
   // #542 — this agent's own model-provider candidates (access-filtered
   // server-side, #1015). `undefined` modelProviders means "unknown" — no
   // picker, not a false "no provider serves this agent" (R9's shape).
@@ -602,7 +613,7 @@ export function NewRunScreen() {
               }}
               decidedLine={policy.governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
               pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
-              unprobed={!availableClasses}
+              readiness={!probeSettled ? "checking" : availableClasses ? "ready" : "unverified"}
               requirementNote={
                 // A host with no barrier at all (noBarrierOnHost) is not "the
                 // floor needs a tier this host lacks": every fresh form carries

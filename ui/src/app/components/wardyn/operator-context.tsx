@@ -314,7 +314,9 @@ export function useOperator(): boolean {
 // Whether useOperator()'s answer came from the server — see
 // MeIdentity.operatorResolved. Use it only where the fail-open default would
 // pick a WRONG LANE rather than merely offer a control the server will
-// refuse.
+// refuse — or where the offer itself is a claim the server contradicts: New
+// Run's barrier tiers (#1238), which the governance floor binds for every
+// non-operator.
 export function useOperatorResolved(): boolean {
   return React.useContext(MeIdentityContext).operatorResolved;
 }

@@ -318,6 +318,7 @@ export async function mockMemberSetupStatus(page: Page): Promise<void> {
       // bit is the one substrate fact a member's Vault remedy keys off.
       const runner = (body.runner ?? {}) as { confinement_classes?: string[]; kubernetes?: boolean };
       body.runner = {
+        driver: "",
         confinement_classes: runner.confinement_classes ?? [],
         ...(runner.kubernetes ? { kubernetes: true } : {}),
       };

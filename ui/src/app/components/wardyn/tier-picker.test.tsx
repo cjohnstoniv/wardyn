@@ -107,17 +107,27 @@ describe("TierPicker — a real choice (two or more visible tiers)", () => {
   });
 });
 
-// #1238 — a tier the host was never seen to build must not read "Ready".
-describe("TierPicker — unprobed rows", () => {
-  it("shows Unverified, never Ready, on every row when the caller says the host was not probed", () => {
-    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC1" onSelect={vi.fn()} unprobed />);
+// #1238 — a tier the host was not seen to build must not read "Ready".
+describe("TierPicker — readiness", () => {
+  it("shows Unverified, never Ready, on every row once the probe answered without a list", () => {
+    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC1" onSelect={vi.fn()} readiness="unverified" />);
     expect(screen.getAllByText("Unverified")).toHaveLength(3);
     expect(screen.queryByText("Ready")).toBeNull();
   });
 
-  it("the decided single row says Unverified too", () => {
-    render(<TierPicker tiers={["CC3"]} unprobed />);
+  // Pinned character for character: the ellipsis is the single U+2026.
+  it("shows Checking\u2026 on every row while the probe is pending", () => {
+    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC1" onSelect={vi.fn()} readiness="checking" />);
+    expect(screen.getAllByText("Checking\u2026")).toHaveLength(3);
+    expect(screen.queryByText("Unverified")).toBeNull();
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+
+  it("the decided single row follows the same word", () => {
+    const { rerender } = render(<TierPicker tiers={["CC3"]} readiness="unverified" />);
     expect(screen.getByText("Unverified")).toBeInTheDocument();
+    rerender(<TierPicker tiers={["CC3"]} readiness="checking" />);
+    expect(screen.getByText("Checking\u2026")).toBeInTheDocument();
     expect(screen.queryByText("Ready")).toBeNull();
   });
 

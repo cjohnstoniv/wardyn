@@ -177,6 +177,23 @@ describe("MemberGettingStarted — the barrier chip respects the governance floo
     expect(screen.queryByText(/Vault isn't installed on this host/)).not.toBeInTheDocument();
   });
 
+  // #1238 — a member's redacted driver is "", so the kubernetes bit is what
+  // stops the Docker host's /dev/kvm remedy reaching a member on Kubernetes.
+  it("a Vault floor on Kubernetes never names /dev/kvm or a RuntimeClass to a member", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      status({
+        runner: { driver: "", kubernetes: true, confinement_classes: ["CC1", "CC2"] },
+        platform: { os: "linux", wsl: false, kvm: false },
+      }),
+    );
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
+    renderPage();
+    expect(
+      await screen.findByText("Your admin requires Vault, and this host can't run it: Vault isn't installed on this host."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\/dev\/kvm|Vault needs|RuntimeClass/)).not.toBeInTheDocument();
+  });
+
   it("no floor at all shows the strongest installed tier, unrestricted", async () => {
     getSetupStatusMock.mockResolvedValue(
       status({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }),

@@ -599,6 +599,25 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     expect(await screen.findByText(RUN.BARRIER_UNKNOWN)).toBeInTheDocument();
   });
 
+  // The owner-approved pending word: Checking\u2026 (single-character ellipsis)
+  // until the probe lands, then the real answer.
+  it("reads Checking\u2026 while the barrier probe is pending, then Ready", async () => {
+    let release: (v: unknown) => void = () => {};
+    getSetupStatusMock.mockImplementation(
+      () => new Promise((r) => { release = r; }),
+    );
+    renderScreen();
+    expect((await screen.findAllByText("Checking\u2026")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.queryByText("Unverified")).toBeNull();
+    expect(screen.queryByText(RUN.BARRIER_UNKNOWN)).toBeNull();
+    await act(async () => {
+      release(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1", "CC2"] } }));
+    });
+    await waitFor(() => expect(screen.getAllByText("Ready").length).toBeGreaterThan(0));
+    expect(screen.queryByText("Checking\u2026")).toBeNull();
+  });
+
   it("a probed host says Ready and never the unknown line", async () => {
     mockConfinementClasses = ["CC1", "CC2"];
     renderScreen();
@@ -635,5 +654,25 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
     rerender(ui(true));
     expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
+  });
+
+  // Review F1 — the up-clamp only raises. While /me is unresolved the floor
+  // binds an admin too, so an untouched pick is raised to a tier the host
+  // lacks; once /me lifts the floor it must re-seed to what now qualifies.
+  it("re-seeds an untouched pick to the strongest installed tier once /me lifts a governance floor", async () => {
+    mockConfinementClasses = ["CC1", "CC2"];
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
+    const ui = (resolved: boolean) => (
+      <MemoryRouter>
+        <OperatorProvider operator operatorResolved={resolved}>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(ui(false));
+    expect(await screen.findByText(/Your admin requires Vault/)).toBeInTheDocument();
+    rerender(ui(true));
+    expect(await screen.findByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByText("Vault")).toBeNull();
   });
 });
