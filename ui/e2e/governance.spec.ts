@@ -529,22 +529,14 @@ test.describe("governance — the security admin's console (real per-person toke
   });
 
   test("real security admin receives a server refusal on secret writes", async ({ page }) => {
-    // Ordinary secrets are self-service; resident AWS credentials are operator-only.
+    // Ordinary secrets are self-service; the resident AWS credential names are
+    // retired (no run reads them since 0.8), so nobody stores one and a
+    // per-person write under one is refused as reserved.
     const path = "/api/v1/secrets/aws-access-key-id";
-    const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-    const accepted = await page.request.put(path, { headers, data: { value: "e2e-synthetic-resident-credential" } });
-    try {
-      expect(accepted.status()).toBe(204);
-      const before = sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'");
-      expect(before).not.toBe("");
-      const refused = await consoleAPI(page, "PUT", path, { value: "e2e-replacement-must-not-be-stored" });
-      expect(refused.status, refused.text).toBe(403);
-      expect(JSON.parse(refused.text)).toEqual({ error: "secret name is reserved for platform internals", reason: "secret_name_reserved" });
-      expect(sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'")).toBe(before);
-      expect(sql("SELECT count(*) FROM secrets WHERE name = 'aws-access-key-id'")).toBe("1");
-    } finally {
-      expect((await page.request.delete(path, { headers })).status()).toBe(204);
-    }
+    const refused = await consoleAPI(page, "PUT", path, { value: "e2e-replacement-must-not-be-stored" });
+    expect(refused.status, refused.text).toBe(403);
+    expect(JSON.parse(refused.text)).toEqual({ error: "secret name is reserved for platform internals", reason: "secret_name_reserved" });
+    expect(sql("SELECT count(*) FROM secrets WHERE name = 'aws-access-key-id'")).toBe("0");
   });
 
   test("nor reaching INTO a run they do not own: attach is not offered", async ({ page }) => {

@@ -193,11 +193,19 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
 
     // THE PAGE DOES NOT SCROLL (run-detail.tsx's own invariant) — a residual
     // overflow here would force <main>'s overflow-y:auto into overflow-x too.
-    const overflow = await page.evaluate(() => {
-      const main = document.querySelector("main");
-      return { scrollWidth: main?.scrollWidth ?? 0, clientWidth: main?.clientWidth ?? 0 };
-    });
-    expect(overflow.scrollWidth, "main scrollWidth at 420px").toBe(overflow.clientWidth);
+    // Polled: the viewport change re-lays the page out (and the header's
+    // responsive variants re-render) after setViewportSize returns, so a
+    // single read can catch the wide layout mid-transition.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const main = document.querySelector("main");
+            return (main?.scrollWidth ?? 0) - (main?.clientWidth ?? 0);
+          }),
+        { message: "main scrollWidth minus clientWidth at 420px" },
+      )
+      .toBe(0);
 
     const killBtn = page.getByRole("button", { name: "Kill", exact: true });
     await expect(killBtn).toBeVisible();
