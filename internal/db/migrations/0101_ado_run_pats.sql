@@ -2,8 +2,9 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- The personal access tokens Wardyn creates for `minted_pat` runs on Azure
--- DevOps, one row per token (#1428). A run holds one at a time; renewal and
--- widening create a new one and revoke the old, so a run can have several rows.
+-- DevOps, one row per token (#1428). A run can hold several live tokens:
+-- renewal and widening create a new one and leave the old to expire at
+-- valid_to; run end revokes every live one.
 --
 -- The row is written BEFORE the token is first used, so a crash between
 -- create and use still leaves a record for the sweep to revoke. It holds no
@@ -14,10 +15,13 @@
 -- token it makes stale. scope is the space-joined scope string the token was
 -- created with. valid_to is when Azure DevOps expires it on its own.
 --
--- revoked_at NULL is a token still live at Azure DevOps as far as Wardyn knows.
--- revoke_reason is a closed Go vocabulary validated at the write boundary, so
--- no CHECK backs it (the 0042 doctrine). last_error is the reason a revoke was
--- abandoned, '' otherwise. No FK to agent_runs: the row must outlive a pruned
+-- revoked_at NULL is a token still live at Azure DevOps as far as Wardyn knows;
+-- it is set when the token is revoked or its valid_to has passed.
+-- revoke_reason is a closed Go vocabulary (api/ado_pat_contract.go), so no
+-- CHECK backs it (the 0042 doctrine). last_error is the last failed revoke
+-- attempt, '' otherwise: a row with last_error and revoked_at NULL is a token
+-- Wardyn could not revoke, which the setup check lists while valid_to is
+-- ahead. No FK to agent_runs: the row must outlive a pruned
 -- run long enough to be revoked.
 CREATE TABLE IF NOT EXISTS ado_run_pats (
     run_id           UUID        NOT NULL,

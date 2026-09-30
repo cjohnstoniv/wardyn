@@ -15,7 +15,7 @@ import (
 // TestMigrate_AdoRunPATsTable (0101, #1428) pins the run-token table through
 // the catalog and the server: the columns and their nullability, the
 // (run_id, authorization_id) key refusing a second row, and that a run can
-// hold several tokens (renewal and widening keep the old row).
+// hold several tokens (renewal and widening leave the old one to its valid_to).
 func TestMigrate_AdoRunPATsTable(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
