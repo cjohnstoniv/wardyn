@@ -114,9 +114,13 @@ image="$(sed -nE 's/^FROM (node:[^ ]+)$/\1/p' "$DOCKERFILE")"
 command -v docker >/dev/null || die "docker is required for the behaviour check"
 mode_of() { # <settings dir> [claude args...] -> the init event's permissionMode
     local dir="$1"; shift
-    docker run --rm --network none -v "$amd_exe:/usr/local/bin/claude:ro" -v "$dir:/etc/claude-code:ro" \
+    # As the image's non-root user (the agent image never runs as root; the CLI refuses bypass as
+    # root, which would make the bypass assertion pass for the wrong reason). stderr is kept for the
+    # failure message.
+    docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
+        --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" -v "$dir:/etc/claude-code:ro" \
         -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$image" \
-        claude --print hi --output-format stream-json --verbose "$@" 2>/dev/null \
+        claude --print hi --output-format stream-json --verbose "$@" 2>"$tmp/stderr" \
         | sed -nE 's/.*"subtype":"init".*"permissionMode":"([^"]*)".*/\1/p' | head -1 || true
 }
 behaved=0
@@ -126,10 +130,10 @@ for doc in "$POLICY_DIR"/testdata/*-managed-settings.json; do
     dir="$tmp/settings-$(basename "$doc" -managed-settings.json)"
     mkdir -p "$dir"; cp "$doc" "$dir/$(basename "$path")"
     got="$(mode_of "$dir")"
-    [ "$got" = "$want" ] || die "$(basename "$doc"): Claude Code $pin reports permissionMode '${got:-none}', the managed defaultMode is '$want' — the CLI does not act on the file it reads"
+    [ "$got" = "$want" ] || die "$(basename "$doc"): Claude Code $pin reports permissionMode '${got:-none}', the managed defaultMode is '$want' — the CLI does not act on the file it reads; stderr: $(head -c 400 "$tmp/stderr")"
     if grep -q '"disableBypassPermissionsMode"' "$doc"; then
         got="$(mode_of "$dir" --permission-mode bypassPermissions)"
-        [ "$got" = "$want" ] || die "$(basename "$doc"): --permission-mode bypassPermissions yields '${got:-none}' although the file disables bypass (want '$want') — the bypass lock is not honoured"
+        [ "$got" = "$want" ] || die "$(basename "$doc"): --permission-mode bypassPermissions yields '${got:-none}' although the file disables bypass (want '$want') — the bypass lock is not honoured; stderr: $(head -c 400 "$tmp/stderr")"
     fi
     behaved=$((behaved + 1))
 done

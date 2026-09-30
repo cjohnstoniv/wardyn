@@ -190,7 +190,7 @@ jobs:
           # buildx-smoke is handled separately below: it is a matrix job whose
           # API job name is "multi-arch build (<matrix.name>)"
           # (nightly.yml:444), never the literal YAML key "buildx-smoke", so it
-          # cannot be matched by name the way the other thirteen are.
+          # cannot be matched by name the way the other watched jobs are.
           # daemon-proxy-secret-kind (T-59, #719) went green on its first real
           # nightly run (workflow_dispatch, 2026-09-28, run 36377937351) and
           # joined this list and nightly.yml's notify-new-lanes.needs together
@@ -199,8 +199,8 @@ jobs:
           # third real nightly run (workflow_dispatch, 2026-09-28, run
           # 36393687863 — its first two runs each caught a real environment
           # gap, see nightly.yml's own comment on the job) and joined the same
-          # way. managed-settings-drift (#1395) joined after two green hosted
-          # runs (36757751853, 36760492965).
+          # way. managed-settings-drift (#1395) joined after a green hosted
+          # run (run <PENDING>).
           watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
           # Exact commit match ONLY (R2-1) — no ancestor walk, no branch
           # filter. nightly.yml runs on schedule against whatever commit is

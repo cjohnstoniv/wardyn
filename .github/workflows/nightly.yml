@@ -1287,9 +1287,9 @@ jobs:
   # CLI, on amd64 and arm64 (the arm64 package is read, not run, and must be the
   # same release), then starts the amd64 CLI in the agent image's base container
   # with each frozen managed-settings document and asserts the permission mode it
-  # reports. It runs no model and needs no credential. Green on hosted runs
-  # 36757751853 and 36760492965, so it is in notify-new-lanes.needs and release.yml's
-  # watched= like the other lanes.
+  # reports. It runs no model and needs no credential. Green on hosted run
+  # <PENDING>, so it is in notify-new-lanes.needs and release.yml's watched= like the
+  # other lanes.
   managed-settings-drift:
     runs-on: ubuntu-latest
     timeout-minutes: 15
