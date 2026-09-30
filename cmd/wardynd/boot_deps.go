@@ -588,7 +588,8 @@ func warnRoleMapPosture(roleMap map[string]string, f *bootFlags, defaultRole str
 		// (~:270), fired independently since either var can be set without
 		// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
 		// email-keyed privilege source riding an unverified IdP claim —
-		// email_verified is enforced only when the domains list is set.
+		// email_verified is enforced only when the domains list is set or
+		// WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is on.
 		for k := range roleMap {
 			if strings.Contains(k, "@") {
 				slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but neither WARDYN_OIDC_EMAIL_DOMAINS nor WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list or the require flag too")

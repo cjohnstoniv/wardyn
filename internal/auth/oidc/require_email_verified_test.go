@@ -115,3 +115,36 @@ func TestRequireEmailVerifiedAbsentIsLogged(t *testing.T) {
 		t.Errorf("log = %q, want the absent-claim denial naming WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED", out)
 	}
 }
+
+// TestRequireEmailVerifiedFalseIsLogged: the email_verified=false refusal is
+// logged too, naming the setting that enforced the gate — with and without a
+// domain allowlist — so ENV.md's "logged server-side" holds for both denials.
+func TestRequireEmailVerifiedFalseIsLogged(t *testing.T) {
+	cases := []struct {
+		name    string
+		domains []string
+		wantEnv string
+	}{
+		{"knob only", nil, "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED"},
+		{"domains", []string{"corp.example"}, "WARDYN_OIDC_EMAIL_DOMAINS"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			env := newIdPEnv(t)
+			auth := env.newAuthRequireEmailVerified(t, true)
+			if c.domains != nil {
+				auth = env.newAuth(t, c.domains)
+			}
+			env.buildIDTokenRawClaim(t, "sub-false-log", "alice@corp.example", "email_verified", false)
+			doCallback(t, auth)
+			if out := buf.String(); !strings.Contains(out, "email_verified=false") || !strings.Contains(out, c.wantEnv) {
+				t.Errorf("log = %q, want the false-claim denial naming %s", out, c.wantEnv)
+			}
+		})
+	}
+}

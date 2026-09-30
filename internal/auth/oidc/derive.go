@@ -281,10 +281,11 @@ func (a *Authenticator) HasOperatorEmails() bool {
 	return len(a.cfg.LegacyAdminEmails) > 0
 }
 
-// HasEmailDomains reports whether Config.AllowedEmailDomains is non-empty — without a domains
-// list, email_verified is not enforced, a distinction the People page badge otherwise can't express.
-func (a *Authenticator) HasEmailDomains() bool {
-	return len(a.cfg.AllowedEmailDomains) > 0
+// EnforcesEmailVerified reports whether sign-in requires a verified email: a domains allowlist is
+// set or Config.RequireEmailVerified is on. Without either, email_verified is not enforced, a
+// distinction the People page badge otherwise can't express.
+func (a *Authenticator) EnforcesEmailVerified() bool {
+	return len(a.cfg.AllowedEmailDomains) > 0 || a.cfg.RequireEmailVerified
 }
 
 // Issuer returns the PUBLIC OIDC issuer URL, from which the People page derives a human-facing

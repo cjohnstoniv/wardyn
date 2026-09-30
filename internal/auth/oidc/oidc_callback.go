@@ -20,7 +20,8 @@ import (
 //  1. Verifies the state parameter against the state cookie (CSRF).
 //  2. Exchanges the code for tokens using PKCE.
 //  3. Verifies the ID token signature, issuer, audience, expiry, and nonce.
-//  4. Optionally checks email domain (fail closed when AllowedEmailDomains is set).
+//  4. Optionally checks email_verified and the email domain (fail closed when
+//     AllowedEmailDomains is set; email_verified alone when RequireEmailVerified is on).
 //  5. Derives the session's role from the roles/groups/email claims (see
 //     Config.RoleMap / deriveRole); denies the login if nothing matches and no
 //     DefaultRole is configured.
@@ -344,6 +345,8 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
 			return Session{}, authErrorEmailVerifiedAbsent
 		case !*cc.emailVerified:
+			slog.Warn("oidc: login denied — the id_token says email_verified=false",
+				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
 			return Session{}, authErrorEmailUnverified
 		}
 	}

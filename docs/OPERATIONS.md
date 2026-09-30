@@ -2942,8 +2942,9 @@ do for you:
 `WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
 **unset** value is not "deny all", it fails **open** — any account the IdP
 authenticates gets a session, and without the domains list the `email_verified`
-claim is not checked at all (both checks live inside the domains branch —
-`AllowedEmailDomains`, `internal/auth/oidc/oidc.go`). Compose already pins it
+claim is not checked at all unless `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is on
+(the domain check lives inside the domains branch — `AllowedEmailDomains`,
+`internal/auth/oidc/oidc.go`). Compose already pins it
 to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as
 shipped; re-point it when you swap Dex for a corporate IdP.
 

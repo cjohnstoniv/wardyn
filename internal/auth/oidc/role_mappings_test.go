@@ -612,21 +612,21 @@ func TestDefaultRoleAndHasOperatorEmailsAccessors(t *testing.T) {
 	}
 }
 
-// TestHasEmailDomainsAccessor: the console's EMAIL_KEY badge copy needs to
-// tell "no domains list configured" apart from "configured" (A-4) — pinned
-// against env.newAuth's own allowedDomains param, not newRoleAuth (which
-// deliberately omits domain restriction, see its doc comment).
-func TestHasEmailDomainsAccessor(t *testing.T) {
+// TestEnforcesEmailVerifiedAccessor: the console's EMAIL_KEY badge copy needs to
+// tell "email_verified not enforced" apart from "enforced" (A-4) — by a domains
+// list (env.newAuth's allowedDomains param, not newRoleAuth, which deliberately
+// omits domain restriction) or by RequireEmailVerified alone.
+func TestEnforcesEmailVerifiedAccessor(t *testing.T) {
 	env := newIdPEnv(t)
 
-	unset := env.newAuth(t, nil)
-	if unset.HasEmailDomains() {
-		t.Error("HasEmailDomains() = true, want false (no AllowedEmailDomains configured)")
+	if env.newAuth(t, nil).EnforcesEmailVerified() {
+		t.Error("EnforcesEmailVerified() = true, want false (neither domains nor the require knob)")
 	}
-
-	set := env.newAuth(t, []string{"corp.example"})
-	if !set.HasEmailDomains() {
-		t.Error("HasEmailDomains() = false, want true")
+	if !env.newAuth(t, []string{"corp.example"}).EnforcesEmailVerified() {
+		t.Error("EnforcesEmailVerified() = false, want true (domains set)")
+	}
+	if !env.newAuthRequireEmailVerified(t, true).EnforcesEmailVerified() {
+		t.Error("EnforcesEmailVerified() = false, want true (RequireEmailVerified on, no domains)")
 	}
 }
 
