@@ -48,8 +48,7 @@ test.describe("member Getting Started (real per-person token)", () => {
     expect(status).toMatchObject({ checks_redacted: true, checks: [], providers: [], secrets: { present: [] } });
     expect(status.runner.driver ?? "").toBe("");
     expect(status.runner.confinement_classes).toEqual(operatorStatus.runner.confinement_classes);
-    expect(status.bedrock.region ?? "").toBe("");
-    expect(status.bedrock.model ?? "").toBe("");
+    expect(status.bedrock).toBeUndefined();
     expect(response.text).not.toContain("e2e-test-secret");
 
     await page.goto("/setup");

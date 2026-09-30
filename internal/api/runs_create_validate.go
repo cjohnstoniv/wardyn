@@ -105,8 +105,8 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// POSTing task="harness login" used to reach every consumer that trusts
 	// run.Task == harnessLoginTask alone (handleUploadSSOToken lets the run
 	// write the reserved AWS-SSO credential; runIsUnrecordable drops attach
-	// recording), completely bypassing the operatorOnly gate on the real
-	// /setup/harness-login door. One guard at this single chokepoint — every
+	// recording), completely bypassing the gates on the real sign-in door
+	// (POST /model-providers/{id}/sign-in). One guard at this single chokepoint — every
 	// POST /runs caller passes through decodeAndValidateCreateRun — makes
 	// harnesscred.go's "set SERVER-SIDE, never from client input" doc true for
 	// every downstream consumer at once, rather than relying on each one to

@@ -35,7 +35,11 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err != nil {
 		return nil, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+	st, err := buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+	if err != nil {
+		return nil, err
+	}
+	return st, sweepRetiredModelCredentials(ctx, st, rec)
 }
 
 // buildStoreClients builds the configured external store client and key

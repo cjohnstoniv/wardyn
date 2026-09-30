@@ -44,9 +44,6 @@ func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicyS
 		out = append(out, ws)
 	}
 	for _, wm := range spec.WorkspaceMounts {
-		if systemMountTargets[wm.Target] {
-			continue
-		}
 		ws, ok := idx.localDir[wm.Source]
 		add(ws, ok)
 	}
@@ -662,7 +659,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 		RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
 		Status: recordStatusRecording, StartedAt: startedAt,
-		LLMMode: llmMode, Model: s.cfg.AgentAnthropicModel,
+		LLMMode: llmMode,
 		Caveats: repoDevcontainerImageCaveats(ws),
 	}, recordStatusRecording)
 

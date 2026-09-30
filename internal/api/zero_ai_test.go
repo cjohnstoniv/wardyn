@@ -97,7 +97,6 @@ func TestZeroAI_InteractiveRunWorks(t *testing.T) {
 // grades something with no connection to AI credentials at all).
 var zeroAIRelatedCheckIDs = map[string]bool{
 	"llm_provider":                true,
-	"bedrock_provider":            true,
 	"claude_subscription_staging": true,
 	"harness_credential":          true,
 	"harness_credential_aws":      true,

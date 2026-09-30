@@ -57,7 +57,6 @@ type harness struct {
 	sdk       *client.Client
 	http      *http.Client
 	tasksDir  string
-	credsDir  string // staged Claude subscription creds (subscription real-model lane)
 	workRoot  string // host dir where per-run workspaces are seeded + read back
 	realModel bool
 }
@@ -85,7 +84,6 @@ func newHarness(t *testing.T) *harness {
 		// 120s is a blanket backstop; every call site binds its own (shorter) ctx timeout.
 		http:      &http.Client{Timeout: 120 * time.Second},
 		tasksDir:  cliutil.EnvOr("WARDYN_E2E_TASKS_DIR", filepath.Join(repoRoot, "test", "e2e", "tasks")),
-		credsDir:  cliutil.EnvOr("WARDYN_E2E_CLAUDE_CREDS", filepath.Join(home, ".wardyn", "claude-creds")),
 		workRoot:  cliutil.EnvOr("WARDYN_E2E_WORK_ROOT", filepath.Join(home, ".wardyn", "e2e-work")),
 		realModel: os.Getenv("WARDYN_E2E_REAL_MODEL") == "1",
 	}
@@ -314,29 +312,35 @@ func copyFileExec(t *testing.T, src, dst string) {
 
 func boolPtr(b bool) *bool { return &b }
 
-// subscriptionMounts returns the read-only Claude credential mounts for the
-// subscription real-model lane, or nil if the operator hasn't staged creds
-// (scripts/stage-claude-creds.sh). The manual real-model lane needs these; the
-// oracle lane does not.
-func (h *harness) subscriptionMounts() []types.WorkspaceMount {
-	credDir := filepath.Join(h.credsDir, ".claude")
-	credJSON := filepath.Join(h.credsDir, ".claude.json")
-	if _, err := os.Stat(credDir); err != nil {
-		return nil
+// modelProviderLive reports whether this token's principal holds a live
+// credential for some model provider (GET /setup/status provider_access) —
+// the only way a run reaches a model since the host ~/.claude lane retired
+// in 0.8.2.
+func (h *harness) modelProviderLive(ctx context.Context) bool {
+	raw, err := h.sdk.SetupStatus(ctx)
+	if err != nil {
+		return false
 	}
-	if _, err := os.Stat(credJSON); err != nil {
-		return nil
+	var st struct {
+		ProviderAccess []struct {
+			State string `json:"state"`
+		} `json:"provider_access"`
 	}
-	return []types.WorkspaceMount{
-		{Source: credDir, Target: "/home/agent/.claude", ReadOnly: boolPtr(true)},
-		{Source: credJSON, Target: "/home/agent/.claude.json", ReadOnly: boolPtr(true)},
+	if json.Unmarshal(raw, &st) != nil {
+		return false
 	}
+	for _, p := range st.ProviderAccess {
+		if p.State == "live" {
+			return true
+		}
+	}
+	return false
 }
 
 // egressForTask returns the allowed_domains for a MANUAL run of a task. The
 // egress-boundary task deliberately allows ONLY github.com (so evil.example.com
 // and the metadata IP are denied — the allow/block proof); model tasks in the
-// subscription lane allow anthropic; oracle model-less tasks need no egress.
+// model lane allow anthropic; oracle model-less tasks need no egress.
 func egressForTask(task Task, wantModel bool) []string {
 	switch task.Name {
 	case "egress-boundary", "interactive-repl":
@@ -355,9 +359,6 @@ func egressForTask(task Task, wantModel bool) []string {
 func (h *harness) buildManualPolicy(task Task, class, wsDir string, wantModel, interactive bool) types.RunPolicySpec {
 	mounts := []types.WorkspaceMount{
 		{Source: wsDir, Target: workspaceTarget, ReadOnly: boolPtr(false)},
-	}
-	if wantModel {
-		mounts = append(mounts, h.subscriptionMounts()...)
 	}
 	// Default unattended posture: an unknown host HARD-denies (always_deny — never
 	// blocks on an approval nobody will answer). The egress-boundary task instead

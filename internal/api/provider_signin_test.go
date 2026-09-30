@@ -82,7 +82,6 @@ func signInFixture(t *testing.T, cs *capStore, site types.SiteConfig) (*Server, 
 	sec := &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	cfg.Secrets = sec
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion, cfg.BedrockAWSSSORegion = "eu-central-1", "eu-central-1"
 	cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg), st, audit, sec
@@ -296,8 +295,6 @@ func providerSSOUpload(t *testing.T, p types.ModelProvider, site types.SiteConfi
 	}}
 	srv, sec, tok := newSSOUploadSrvWith(t, events, site, runID)
 	sec.owned = map[string]map[string][]byte{}
-	// Boot config no provider names: a binding that read it would show.
-	srv.cfg.BedrockRegion = "eu-central-1"
 	return srv, sec, tok, runID
 }
 

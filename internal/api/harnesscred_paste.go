@@ -18,13 +18,11 @@ const maxHarnessPasteTokenLen = 8 << 10
 
 // DRAFT (M2 canon pending)
 const (
-	// harnessPasteViaHelperRefusal answers PUT /setup/harness-credential/{p} for
-	// a provider whose credential is captured by a helper inside a login sandbox
+	// harnessPasteViaHelperRefusal answers a paste for a provider whose
+	// credential is captured by a helper inside a login sandbox
 	// (harnessLogin.captureViaHelper), not pasted. aws is the live case: its
-	// reserved secret holds a structured SSO blob, and a pasted {"token":…} both
-	// destroys that blob — Bedrock then silently falls through to ~/.aws or
-	// static keys — and writes it to the unscoped operator-wide row while every
-	// other aws path reads the caller's own namespace.
+	// stored credential is a structured SSO blob, and a pasted {"token":…}
+	// would destroy it.
 	harnessPasteViaHelperRefusal = "%s credentials are captured by the containerized login, not pasted — " +
 		"start the login from Setup instead; pasting here would overwrite the captured session"
 	// harnessPasteEmptyRefusal / harnessPasteTooLongRefusal are the two shape
@@ -40,8 +38,7 @@ const (
 //
 // The first check is the point: a `captureViaHelper` row (aws) is uploaded by an
 // in-sandbox helper, never pasted, and has no tokenPrefix, so a paste would
-// overwrite the reserved, structured SSO blob in harness-credential-aws with
-// {"token":…} and add an arbitrary string to the process-global mask corpus —
+// overwrite the stored, structured SSO blob with {"token":…} and add an arbitrary string to the process-global mask corpus —
 // the abuse ssotoken.go's upload path already defends against.
 func harnessPasteRefusal(hl harnessLogin, token string) string {
 	if hl.captureViaHelper {

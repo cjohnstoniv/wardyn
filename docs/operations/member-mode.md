@@ -189,7 +189,7 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 > **Rolling upgrades, for the preview specifically.** The posture rides
 > the same session cookie as the mode, as a second `omitempty` bool with
 > no codec bump. A replica still running 0.7.4 ignores it: it shows you
-> your OWN credential AND does not refuse harness-login, so *"sign-in is
+> your OWN credential AND does not refuse the sign-in, so *"sign-in is
 > refused inside the preview"* does not hold mid-upgrade.
 >
 > In the other direction a 0.7.5 console POSTing `no_credential` to a

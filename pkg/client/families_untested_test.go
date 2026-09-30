@@ -37,28 +37,6 @@ func TestUntestedClientMethods_Table(t *testing.T) {
 		call func(t *testing.T, c *client.Client)
 	}{
 		{
-			name: "ConnectManagedSubscription",
-			handle: func(t *testing.T) http.HandlerFunc {
-				return func(w http.ResponseWriter, r *http.Request) {
-					if r.Method != http.MethodPut || r.URL.Path != "/api/v1/setup/harness-credential/anthropic" {
-						t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-					}
-					checkAuth(t, r)
-					var body map[string]string
-					_ = json.NewDecoder(r.Body).Decode(&body)
-					if body["token"] != "setup-token-xyz" {
-						t.Errorf("unexpected body: %v", body)
-					}
-					w.WriteHeader(http.StatusNoContent)
-				}
-			},
-			call: func(t *testing.T, c *client.Client) {
-				if err := c.ConnectManagedSubscription(context.Background(), "anthropic", "setup-token-xyz"); err != nil {
-					t.Fatalf("ConnectManagedSubscription: %v", err)
-				}
-			},
-		},
-		{
 			name: "GetDefaultPolicy",
 			handle: func(t *testing.T) http.HandlerFunc {
 				return func(w http.ResponseWriter, r *http.Request) {

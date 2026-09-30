@@ -93,8 +93,7 @@ Configuring an integration grants nothing by itself.
 - A header-delivering integration authors one `api_key` grant per host
   through the ordinary proxy-side injection path. **Except** on a host
   that serves a model (`modelServingHosts`, `internal/api/llmcred.go`): a
-  model vendor's API, a configured gateway, the boot Bedrock hosts, or
-  any model provider row's own host. That last case covers a custom
+  model vendor's API, or any model provider row's own host. That last case covers a custom
   endpoint, a route-through gateway, or a Bedrock row's regional hosts.
 - On a model-serving host the credential is skipped and audited
   (`run.requirement.skip`, reason `model_host`) instead: a model

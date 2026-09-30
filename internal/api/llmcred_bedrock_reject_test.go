@@ -8,43 +8,56 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDenyAlwaysReject_BedrockLaneIsGuarded: the "which host is this
-// run's model provider" question had TWO implementations, and denyAlwaysReject —
-// the guard whose whole job is to refuse a deny·always that permanently breaks a
-// workspace's model access — consulted the anthropic/openai-only one. The Bedrock
-// lane is not hypothetical: a Bedrock provider's bearer lane TLS-MITMs
-// bedrock-runtime and injects the Authorization header proxy-side, which is
-// exactly the "proxy-side credential injection refuses a denied host" failure the
-// guard's own message names.
+// siteOnlyStore answers the one read denyAlwaysReject makes: the site config.
+type siteOnlyStore struct {
+	store.Store
+	sc types.SiteConfig
+}
+
+func (s siteOnlyStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.sc, nil }
+
+// TestDenyAlwaysReject_BedrockLaneIsGuarded: denyAlwaysReject — the guard
+// whose whole job is to refuse a deny·always that permanently breaks a
+// workspace's model access — must count a Bedrock provider's hosts as model
+// hosts: its bearer lane TLS-MITMs bedrock-runtime and injects the
+// Authorization header proxy-side, which is exactly the "proxy-side credential
+// injection refuses a denied host" failure the guard's own message names. The
+// hosts come from the provider row only; the boot Bedrock region is retired.
 //
-// RED on the base tree: the bedrock rows return "" (deny accepted, workspace
-// bricked). The anthropic row is here so a fix that simply refused everything
-// could not pass, and the unrelated row so the guard still lets ordinary hosts
-// through.
+// The anthropic row is here so a fix that simply refused everything could not
+// pass, and the unrelated row so the guard still lets ordinary hosts through.
 func TestDenyAlwaysReject_BedrockLaneIsGuarded(t *testing.T) {
+	bedrock := func(baseURL string) types.SiteConfig {
+		return types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{{
+			ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
+			Bedrock:   &types.BedrockSettings{Region: "us-east-1", BaseURL: baseURL},
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-x"}},
+		}}}}
+	}
 	for _, tc := range []struct {
 		name    string
-		cfg     Config
+		sc      types.SiteConfig
 		host    string
 		refused bool
 	}{
-		{"anthropic (already guarded)", Config{BedrockRegion: "us-east-1"}, "api.anthropic.com", true},
-		{"bedrock data plane", Config{BedrockRegion: "us-east-1"}, "bedrock-runtime.us-east-1.amazonaws.com", true},
-		{"bedrock control plane", Config{BedrockRegion: "us-east-1"}, "bedrock.us-east-1.amazonaws.com", true},
-		{"bedrock data plane, trailing dot + case", Config{BedrockRegion: "us-east-1"}, "Bedrock-Runtime.US-East-1.amazonaws.com.", true},
+		{"anthropic (already guarded)", types.SiteConfig{}, "api.anthropic.com", true},
+		{"bedrock data plane", bedrock(""), "bedrock-runtime.us-east-1.amazonaws.com", true},
+		{"bedrock control plane", bedrock(""), "bedrock.us-east-1.amazonaws.com", true},
+		{"bedrock data plane, trailing dot + case", bedrock(""), "Bedrock-Runtime.US-East-1.amazonaws.com.", true},
 		{
-			"WARDYN_BEDROCK_BASE_URL override host",
-			Config{BedrockRegion: "us-east-1", BedrockBaseURL: "https://vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"},
+			"provider bedrock.base_url override host",
+			bedrock("https://vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com"),
 			"vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com", true,
 		},
-		{"an ordinary app host stays decidable", Config{BedrockRegion: "us-east-1"}, "api.example.com", false},
-		{"bedrock host with Bedrock disabled stays decidable", Config{}, "bedrock-runtime.us-east-1.amazonaws.com", false},
+		{"an ordinary app host stays decidable", bedrock(""), "api.example.com", false},
+		{"bedrock host with no Bedrock provider stays decidable", types.SiteConfig{}, "bedrock-runtime.us-east-1.amazonaws.com", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Server{cfg: tc.cfg}
+			s := &Server{cfg: Config{Store: siteOnlyStore{sc: tc.sc}}}
 			why := s.denyAlwaysReject(context.Background(), types.Workspace{}, tc.host)
 			if refused := why != ""; refused != tc.refused {
 				t.Fatalf("denyAlwaysReject(%q) = %q (refused=%v), want refused=%v", tc.host, why, refused, tc.refused)

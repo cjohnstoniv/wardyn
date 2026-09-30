@@ -115,40 +115,6 @@ func TestReadHarnessBlob_InputClasses(t *testing.T) {
 	}
 }
 
-func TestManagedCredProvider(t *testing.T) {
-	store := &memSecrets{m: map[string][]byte{}}
-	p := NewManagedCredProvider(store, "anthropic")
-
-	// Not connected: fails closed.
-	if _, err := p.Current(context.Background()); err == nil {
-		t.Fatal("expected error before a token is stored")
-	}
-
-	// Store a blob, then it resolves.
-	blob, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-real-token"})
-	_ = store.Put(context.Background(), harnessCredSecretName("anthropic"), blob)
-	tok, err := p.Current(context.Background())
-	if err != nil {
-		t.Fatalf("Current after store: %v", err)
-	}
-	if tok.Value != "sk-ant-oat01-real-token" {
-		t.Fatalf("wrong token: %q", tok.Value)
-	}
-	// Managed tokens carry no machine-readable expiry (zero): the sink gives
-	// them a stored key's expiry instead (storedKeyExpiry).
-	if !tok.ExpiresAt.IsZero() {
-		t.Fatalf("managed token must have zero expiry, got %v", tok.ExpiresAt)
-	}
-
-	// Empty token blob == not connected (a fresh provider: the first one's
-	// 60-second cache still holds the token read above).
-	empty, _ := json.Marshal(managedCredBlob{Token: ""})
-	_ = store.Put(context.Background(), harnessCredSecretName("anthropic"), empty)
-	if _, err := NewManagedCredProvider(store, "anthropic").Current(context.Background()); err == nil {
-		t.Fatal("empty token must fail closed")
-	}
-}
-
 func TestManagedSentinelCredsAreInert(t *testing.T) {
 	raw, err := base64.StdEncoding.DecodeString(managedSentinelCredsB64())
 	if err != nil {
@@ -176,22 +142,10 @@ func TestManagedSentinelCredsAreInert(t *testing.T) {
 }
 
 func TestHarnessSecretIsReserved(t *testing.T) {
-	// Every provider that supports container login must have its stored blob name
-	// reserved, so the generic secrets API cannot clobber/list it and the injection
-	// sink refuses to resolve it as a raw value. reservedSecret covers the
-	// wardyn-harness-*-oauth PATTERN, so a future provider row is sealed
-	// automatically — this test guards that the pattern actually matches every
-	// name harnessCredSecretName generates.
-	for _, agent := range []string{"claude-code"} {
-		hl, ok := agentHarnessLogin(agent)
-		if !ok {
-			continue
-		}
-		if !reservedSecret(hl.secretName) {
-			t.Fatalf("managed harness secret %q (provider %q) is NOT reserved — it would be listable/injectable as a raw value", hl.secretName, hl.provider)
-		}
-	}
-	// The pattern must also seal a hypothetical future provider's blob.
+	// reservedSecret covers the wardyn-harness-*-oauth PATTERN, so the retired
+	// sign-in blobs and the per-person Azure DevOps ones stay out of the
+	// generic secrets API and the injection sink, and so does any future name
+	// harnessCredSecretName generates.
 	if !reservedSecret(harnessCredSecretName("codex")) {
 		t.Fatal("reservedSecret must cover the wardyn-harness-<provider>-oauth pattern for future providers")
 	}
@@ -322,11 +276,8 @@ func TestAgentHarnessLogin(t *testing.T) {
 	if !ok {
 		t.Fatal("claude-code must support container login")
 	}
-	if hl.sentinel != types.ManagedOAuthSecret {
-		t.Fatalf("wrong sentinel: %q", hl.sentinel)
-	}
-	if hl.injectHost != "api.anthropic.com" {
-		t.Fatalf("wrong inject host pin: %q", hl.injectHost)
+	if hl.tokenPrefix != "sk-ant-oat" {
+		t.Fatalf("wrong token prefix: %q", hl.tokenPrefix)
 	}
 	// Codex has no container-login path in v1.
 	if _, ok := agentHarnessLogin("codex-cli"); ok {

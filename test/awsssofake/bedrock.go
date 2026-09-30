@@ -15,8 +15,8 @@ import (
 //
 // It exists to close the last gap in an end-to-end AWS SSO walk: without it a
 // green result proves a role credential was MINTED, never that anything spent
-// it. Pointed at by WARDYN_BEDROCK_BASE_URL (which already moves the egress
-// entry, the MITM target and the sandbox env together — no new seam), it
+// it. Pointed at by a Bedrock provider's bedrock.base_url (which already moves
+// the egress entry, the MITM target and the sandbox env together — no new seam), it
 // answers both shapes a claude-code run can emit and counts them, so
 // /_seen reports "the credential was minted for account X AND a model call was
 // made with it".

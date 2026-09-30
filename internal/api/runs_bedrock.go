@@ -175,8 +175,8 @@ type bedrockAuth struct {
 	// one). Audited by applyBedrockTransport in every mode; in bearer mode it is
 	// additionally the TLS-MITM and Authorization-injection target.
 	runtimeHost string
-	// runtimePort is the port runtimeHost is reached on: the
-	// WARDYN_BEDROCK_BASE_URL override's port when it names one, else 443. It
+	// runtimePort is the port runtimeHost is reached on: the provider's
+	// bedrock.base_url port when it names one, else 443. It
 	// exists so bearer mode can author its TLS-MITM entry as "host:port"
 	// (net.JoinHostPort) exactly as planArtifactRedirect does — a BARE MITM
 	// entry is any-port (proxy.parseMITMHostPort), so an agent that can reach
@@ -227,24 +227,11 @@ func bedrockControlHost(region string) string {
 	return fmt.Sprintf("bedrock.%s.amazonaws.com", region)
 }
 
-// bedrockDataPlaneHost is THE data-plane host every Bedrock consumer derives:
-// the operator's WARDYN_BEDROCK_BASE_URL override when set (a VPC/PrivateLink
-// endpoint), else the regional public host. It exists because four call sites
-// derive that host independently (the provider arm's egress + MITM host, the
-// workspace-integration egress union in llmcred.go, the record-mode skip list
-// in record.go) — deriving it in one place is what makes the egress allowlist,
-// the MITM host, the bearer-injection scope and the record-mode skip list all
-// follow the override for free instead of four times.
-//
-// The CONTROL plane (bedrockControlHost) is deliberately NOT overridden: a
-// PrivateLink endpoint is per-SERVICE, and bedrock-runtime and bedrock are two
-// services. See Config.BedrockBaseURL for the ceiling this implies.
-func (s *Server) bedrockDataPlaneHost(region string) string {
-	return bedrockDataPlaneHostFor(region, s.cfg.BedrockBaseURL)
-}
-
-// bedrockDataPlaneHostFor is bedrockDataPlaneHost over an explicit base URL: a
-// model provider's Bedrock.BaseURL rather than the boot config's.
+// bedrockDataPlaneHostFor is the data-plane host a Bedrock provider's runs
+// reach: its Bedrock.BaseURL override when set (a VPC/PrivateLink endpoint),
+// else the regional public host. The CONTROL plane (bedrockControlHost) is
+// deliberately NOT overridden: a PrivateLink endpoint is per-SERVICE, and
+// bedrock-runtime and bedrock are two services.
 func bedrockDataPlaneHostFor(region, baseURL string) string {
 	if h := gatewayHost(baseURL); h != "" {
 		return h

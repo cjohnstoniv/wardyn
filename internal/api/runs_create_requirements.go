@@ -249,7 +249,7 @@ func requirementSkip(target, reason string, data map[string]any) requirementAudi
 // any binding to), which is exactly the grant model providers replace. A
 // non-model agent had nothing to bind to and still has nothing to record.
 func (s *Server) skipRequiredSecret(agent, secretName string) (requirementAuditEntry, bool) {
-	p, ok := s.llmProviderFor(agent)
+	p, ok := agentLLMProvider(agent)
 	if !ok {
 		return requirementAuditEntry{}, false
 	}

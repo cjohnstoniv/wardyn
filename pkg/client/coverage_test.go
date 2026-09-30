@@ -86,7 +86,7 @@ func routeFamilies() map[string][]string {
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance":  {"GetGovernance", "ApplyGovernance"},
-		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
+		"setup":       {"SetupStatus"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},

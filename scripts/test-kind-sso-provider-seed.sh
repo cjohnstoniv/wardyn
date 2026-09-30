@@ -25,8 +25,9 @@
 #
 #   1. WRITES: PUT /model-providers + PUT /agent-providers wire a working
 #      roster default, read back correctly (server-minted UID and all).
-#   2. NEVER TOUCHES THE LEGACY ENV: none of WARDYN_BEDROCK_REGION/MODEL/
-#      BASE_URL reach the daemon's own environment — read back off
+#   2. NEVER TOUCHES THE RETIRED ENV: none of the retired boot Bedrock
+#      variables (region, model, base URL; wardynd now refuses them at boot)
+#      reach the daemon's own environment — read back off
 #      /proc/<pid>/environ, not asserted by absence-of-a-flag.
 #   3. CAPTURES UID-BACKED, NOT ID-BACKED: a person's own credential PUT
 #      against the provider id shows up as that provider's connected_people —
@@ -124,12 +125,12 @@ ADMIN_TOKEN="walk-673-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 # nothing).
 FAKE_BEDROCK_URL="http://wardyn-cl-673-fake.internal.test:8090"
 
-step "starting wardynd on ${BASE_URL} (WARDYN_RUNNER=none; NO WARDYN_BEDROCK_* set)"
+step "starting wardynd on ${BASE_URL} (WARDYN_RUNNER=none; no retired Bedrock env set)"
 # THE EXACT ENVIRONMENT wardynd is launched with, as an array rather than an
 # inline `env -i ... &` — so step 5 below can assert against the very list
 # that launched it, instead of reading /proc/<pid>/environ (permission-
 # dependent under some sandboxes/PID-namespace setups, and this script must
-# work under all of them). If a legacy WARDYN_BEDROCK_* var is ever added to
+# work under all of them). If a retired Bedrock var is ever added to
 # this array, the launch and the assertion see the identical change.
 WARDYND_ENV=(
   WARDYN_PG_DSN="postgres://wardyn:wardyn-dev@127.0.0.1:${PG_PORT}/wardyn?sslmode=disable"
@@ -187,10 +188,10 @@ else
   bad "GET /agent-providers default_provider = ${got_default@Q}, want walk-673-bedrock"
 fi
 
-# ── 5. no legacy Bedrock env reached the daemon's own environment ───────────
-step "asserting no WARDYN_BEDROCK_* var reached wardynd's environment"
+# ── 5. no retired Bedrock env reached the daemon's own environment ───────────
+step "asserting no retired Bedrock var reached wardynd's environment"
 # Against the exact array that launched it (WARDYND_ENV above) — dynamic (it
-# fails the moment a legacy var is added to that launch, not a source grep of
+# fails the moment a retired var is added to that launch, not a source grep of
 # this file) and portable: /proc/<pid>/environ is permission-gated under some
 # sandboxes even for the parent that spawned the child, which would make a
 # read failure there indistinguishable from "no such var" and pass vacuously.
@@ -209,9 +210,9 @@ else
   warn "could not read /proc/${WARDYND_PID}/environ (sandbox-dependent) — relying on the launch array alone"
 fi
 if [[ -z "${legacy_env}" ]]; then
-  ok "wardynd was launched (env -i) with no WARDYN_BEDROCK_* — the provider record is the only Bedrock config"
+  ok "wardynd was launched (env -i) with no retired Bedrock env — the provider record is the only Bedrock config"
 else
-  bad "wardynd's environment carries legacy Bedrock config this script never set: ${legacy_env}"
+  bad "wardynd's environment carries retired Bedrock config this script never set: ${legacy_env}"
 fi
 
 # ── 6. UID-backed capture: a person's own credential lands under the UID ────

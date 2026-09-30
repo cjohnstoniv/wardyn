@@ -457,27 +457,6 @@ func TestSetupStatus_ConfinementFloorRow(t *testing.T) {
 	})
 }
 
-// deploymentHostLike is true only for a claude provider that is BOTH installed
-// and logged in (host mode); anything less (not the claude tool, only one of
-// the two, or no providers at all) is false (compose/blind).
-func TestDeploymentHostLike(t *testing.T) {
-	if !deploymentHostLike([]SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}}) {
-		t.Error("installed+logged-in claude: got false, want true")
-	}
-	if deploymentHostLike([]SetupProvider{{Tool: "claude", Installed: true, LoggedIn: false}}) {
-		t.Error("installed but not logged in: got true, want false")
-	}
-	if deploymentHostLike([]SetupProvider{{Tool: "claude", Installed: false, LoggedIn: true}}) {
-		t.Error("logged in but not installed: got true, want false")
-	}
-	if deploymentHostLike([]SetupProvider{{Tool: "codex", Installed: true, LoggedIn: true}}) {
-		t.Error("codex, not claude: got true, want false")
-	}
-	if deploymentHostLike(nil) {
-		t.Error("no providers: got true, want false")
-	}
-}
-
 // agentImageCheck: NEVER a warn. Both arms are info, and the row's whole job is
 // carrying the RIGHT MESSAGE — the convention arm names the toolchain limit and
 // how to lift it; the override arm names the harness and probe images.
@@ -540,8 +519,6 @@ func TestAgentImageCheck(t *testing.T) {
 //     the plaintext-ish "store"/"cache". That is a target list.
 //   - HostProxy: the corporate proxy topology, host:port included, plus a
 //     has_credentials flag saying the operator's proxy creds are on that box.
-//   - Deployment.HostLike: derived from Providers, which IS redacted — so the
-//     resident-login signal survived the drop of the detail that produced it.
 //
 // Harness is reduced rather than dropped: deriveIntegrations (ui) reads
 // provider/captured/expired to answer "is there a model path", which a member's
@@ -551,8 +528,8 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	full := SetupStatus{
 		Ready: true, HasRuns: true, LLMReady: true, OnboardingComplete: true,
 		Checks:    []SetupCheck{{ID: "runner", Status: "ok"}},
-		Providers: []SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}},
-		Secrets:   SetupSecrets{Present: []string{"anthropic-api-key"}},
+		Providers: []SetupProvider{{Tool: "claude", Installed: true}},
+		Secrets:   SetupSecrets{Present: []string{"npm-token"}},
 		Runner: SetupRunner{
 			Driver: "docker", ConfinementClasses: []string{"CC2"},
 			EphemeralDiskEnforcement: types.StorageEnforcementFilesystem,
@@ -564,15 +541,6 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 			HTTPSProxy:     &setup.HostProxySetting{Value: "http://proxy.corp.example:3128", HasCredentials: true},
 			HasCredentials: true,
 		},
-		Deployment: SetupDeployment{HostLike: true},
-		// RIDER populated so this fixture can actually see the leak —
-		// TestRedactSetupStatusForMember_DropsHostCredentialPosture never did,
-		// which is exactly why the passthrough went unnoticed this long.
-		Bedrock: SetupBedrock{
-			Region: "us-east-1", Model: "anthropic.claude-3-5-sonnet-v2",
-			CredsPresent: true, AWSMount: true, BearerPresent: true,
-			Ready: true,
-		},
 		Integrations: []SetupIntegration{{}},
 	}
 	got := redactSetupStatusForUser(full)
@@ -583,29 +551,11 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	if got.HostProxy.HTTPSProxy != nil || got.HostProxy.HasCredentials {
 		t.Errorf("host_proxy = %+v, want zero — the corp proxy topology is operator posture", got.HostProxy)
 	}
-	if got.Deployment != (SetupDeployment{}) {
-		t.Errorf("deployment = %+v, want zero — it is derived from the redacted Providers", got.Deployment)
-	}
 	// X3-F1: the strip is now DECLARED. Without this the console reads an empty
 	// Checks list as "this deployment has no image builder / no sandbox runner"
 	// and renders operator-shaped fix advice at a member who cannot act on it.
 	if !got.ChecksRedacted {
 		t.Error("checks_redacted = false — a member's stripped body must say the detail was withheld, not merely be empty")
-	}
-	// RIDER SetupBedrock rebuilt from an explicit field list, exactly
-	// like Runner two lines up. Region/Model name the AWS transport this
-	// deployment reaches Anthropic through; CredsPresent/AWSMount/
-	// BearerPresent are which of the AWS credential LANES are wired — the operator's host posture, same class SCM/HostProxy exist to
-	// withhold. Only Ready survives.
-	if want := (SetupBedrock{Ready: true}); got.Bedrock != want {
-		t.Errorf("bedrock = %+v, want %+v (Ready only — the region/model/credential-lane detail is operator host posture)", got.Bedrock, want)
-	}
-	if raw, err := json.Marshal(got); err == nil {
-		if strings.Contains(string(raw), "us-east-1") || strings.Contains(string(raw), "anthropic.claude-3-5-sonnet-v2") {
-			t.Errorf("the member's serialized body still names the Bedrock region/model: %s", raw)
-		}
-	} else {
-		t.Fatal(err)
 	}
 	// The ephemeral-disk enforcement word is an operator sizing answer (which
 	// substrate binds a run's disk_mib), actionable only on surfaces a member
@@ -624,7 +574,6 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		"has_runs":                   got.HasRuns,
 		"runner.confinement_classes": len(got.Runner.ConfinementClasses) == 1,
 		"integrations":               len(got.Integrations) == 1,
-		"bedrock.ready":              got.Bedrock.Ready,
 	} {
 		if !ok {
 			t.Errorf("%s did not survive redaction", name)

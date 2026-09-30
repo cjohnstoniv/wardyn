@@ -1,0 +1,17 @@
+# A 0.7 Helm values file carrying the retired boot model lanes: Bedrock and an
+# internal Anthropic gateway configured through the chart's verbatim env and
+# extraEnv. 0.8.2 refuses it at render (helm-lint) and at boot
+# (TestBoot_RefusesRetiredModelEnv).
+auth:
+  adminToken:
+    secretRef:
+      name: wardyn-auth
+secrets:
+  ageKeyFromSecret: true
+env:
+  WARDYN_BEDROCK_REGION: us-east-1
+  WARDYN_BEDROCK_MODEL: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+  WARDYN_BEDROCK_AWS_SSO_REGION: us-east-1
+extraEnv:
+  - name: WARDYN_ANTHROPIC_BASE_URL
+    value: https://llm-gateway.corp.example

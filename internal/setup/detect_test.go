@@ -52,13 +52,9 @@ func TestDetectCLIProviders_EnumeratesClaudeAndCodex(t *testing.T) {
 	if provs[1].Tool != "codex" {
 		t.Errorf("provs[1].Tool = %q, want codex", provs[1].Tool)
 	}
-	// LoggedIn implies a LoginVia path was recorded (advisory heuristic). BinPath is
-	// set iff Installed — host-independent (we never assert whether a CLI is on
-	// PATH here, only that the two fields stay consistent with each other).
+	// BinPath is set iff Installed — host-independent (we never assert whether
+	// a CLI is on PATH here, only that the two fields stay consistent).
 	for _, p := range provs {
-		if p.LoggedIn && p.LoginVia == "" {
-			t.Errorf("%s LoggedIn=true but LoginVia empty", p.Tool)
-		}
 		if p.Installed && p.BinPath == "" {
 			t.Errorf("%s Installed=true but BinPath empty", p.Tool)
 		}

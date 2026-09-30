@@ -234,25 +234,6 @@ func (c *Client) SetupStatus(ctx context.Context) (json.RawMessage, error) {
 	return out, err
 }
 
-// harnessCredRequest mirrors the server wire shape for PUT
-// /api/v1/setup/harness-credential/{provider} (internal/api/harnesscred.go).
-type harnessCredRequest struct {
-	Token string `json:"token"`
-}
-
-// ConnectManagedSubscription stores a captured provider setup-token so the proxy
-// injects it into every eligible run (never resident in the sandbox). The value
-// is write-only. PUT /api/v1/setup/harness-credential/{provider}.
-func (c *Client) ConnectManagedSubscription(ctx context.Context, provider, token string) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/setup/harness-credential/"+provider, harnessCredRequest{Token: token}, nil)
-}
-
-// DisconnectManagedSubscription removes a provider's stored managed subscription
-// token. DELETE /api/v1/setup/harness-credential/{provider}.
-func (c *Client) DisconnectManagedSubscription(ctx context.Context, provider string) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/setup/harness-credential/"+provider, nil, nil)
-}
-
 // Me returns the caller's resolved identity/attribution as raw JSON. GET
 // /api/v1/me.
 func (c *Client) Me(ctx context.Context) (json.RawMessage, error) {

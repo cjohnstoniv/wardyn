@@ -174,7 +174,7 @@ export const WFETCH_TIMEOUT_MS = 60_000;
 // about to be handed. Five minutes covers the substrate's own ceiling with room
 // to spare; a longer deadline cannot break a call that already works today.
 //
-// The sign-in launch is NOT on this list: POST /setup/harness-login answers
+// The sign-in launch is NOT on this list: POST /model-providers/{id}/sign-in answers
 // before dispatch now (internal/api/harnesscred_launch.go), so it is a fast
 // call again and the default bound is the right one for it.
 export const LAUNCH_DEADLINE_MS = 300_000;

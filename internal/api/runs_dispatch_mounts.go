@@ -53,17 +53,13 @@ func driveTargetReserved(target string) bool {
 	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
 }
 
-func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMountPosture) []runner.Mount {
+func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
-		// The resident ~/.claude subscription mount is a MODEL-RUN-ONLY
-		// credential (THREAT-MODEL.md 5.1a) — a task-mode=exec or non-interactive
-		// scan run makes no model call and must get NO LLM credential, even when
-		// the resolved POLICY still carries the mount (e.g. a subscription-blessed
-		// default/named policy reused for a plain exec task with no per-run
-		// integration consent). Every other injection mode already gates on
-		// llm.modelRun; this is the one path that read the policy verbatim.
-		if !llm.modelRun && (wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget) {
+		// The retired host ~/.claude subscription mount never reaches a sandbox:
+		// validatePolicySpec refuses it on every write, and a policy row stored
+		// before that is dropped here as well as by the provider path's strip.
+		if wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget {
 			continue
 		}
 		// The reserved drive target, re-checked on the stored policy. Every

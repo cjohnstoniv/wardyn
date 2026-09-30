@@ -21,23 +21,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Managed harness credentials — "subscription token as a first-class secret".
-//
-// A COMPOSE/containerized deployment's distroless wardynd has no host ~/.claude
-// to read, so the resident-subscription path (stage-claude-creds.sh + the
-// internal/subscription resident provider) is host-mode-only; compose fell back
-// to a stale RESIDENT COPY of the token (WARDYN_SUBSCRIPTION_INJECT=off), which
-// contradicts the "secrets never resident" invariant and had no re-auth path.
-//
-// This module lets an operator CONNECT a Claude subscription from anywhere:
-// Wardyn launches an interactive login sandbox, the operator runs
-// `claude setup-token` in the embedded attach terminal (device-style OAuth,
-// remote callback — no localhost dependency), and pastes the printed long-lived
-// (~1yr) token into the setup UI. Wardyn stores it once, age-encrypted, under a
-// RESERVED name and thereafter injects it PROXY-SIDE into every run exactly like
-// the resident subscription token — the sandbox holds only the inert sentinel.
-// Refresh is deferred (setup-token is long-lived); expiry is surfaced honestly
-// and re-auth is re-running the flow.
+// Container sign-in: Wardyn launches an interactive login sandbox for a model
+// provider (POST /model-providers/{id}/sign-in), the person runs the vendor's
+// login in the embedded attach terminal, and the captured credential lands in
+// their own namespace (wardyn-provider-<uid>-oauth / -sso), injected proxy-side
+// into their own runs only.
 
 const (
 	// harnessLoginTask discriminates a managed-harness run from ordinary runs
@@ -64,9 +52,6 @@ type harnessLogin struct {
 	// login sandbox must carry the VENDOR CLI it is logging into, and
 	// agent-base ships none. Empty = follow the catalog.
 	loginImageKey string
-	secretName    string   // reserved store name holding the captured token blob
-	sentinel      string   // injection sentinel (types.ManagedOAuthSecret); "" = no injection
-	injectHost    string   // the ONLY host the sentinel may inject to
 	tokenPrefix   string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
 	egress        []string // region-free hosts the interactive login flow must reach
 	// regionalSSOEgress: the flow also dials region-scoped AWS SSO endpoints,
@@ -89,16 +74,8 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 	switch agent {
 	case awsSSOAgent:
 		return harnessLogin{
-			provider:   awsSSOProvider,
-			agent:      awsSSOAgent,
-			secretName: harnessCredSecretName(awsSSOProvider),
-			// Phase A delivers the captured token as a minimal synthetic ~/.aws in
-			// the sandbox, so there is nothing to inject yet. Phase B fills
-			// sentinel/injectHost in to proxy-inject x-amz-sso_bearer_token on
-			// portal.sso.<region> (that call is authtype:none, so a MITM can set the
-			// header without AWS signing keys) and the token stops being resident.
-			sentinel:   "",
-			injectHost: "",
+			provider: awsSSOProvider,
+			agent:    awsSSOAgent,
 			// No AWS analogue to `sk-ant-oat`: the SSO cache is structured JSON, so
 			// capture validates its SHAPE instead of a prefix.
 			tokenPrefix: "",
@@ -156,17 +133,15 @@ func harnessLoginByProvider(provider string) (harnessLogin, bool) {
 	return harnessLogin{}, false
 }
 
-// managedSentinelAccessToken mirrors the inert placeholder stage-claude-creds.sh
-// writes for the resident path: an obviously-not-live token in the sk-ant-oat
+// managedSentinelAccessToken is an obviously-not-live token in the sk-ant-oat
 // shape so `claude` accepts the field and starts, granting nothing (the proxy
-// overrides Authorization on the wire with the live managed token).
+// overrides Authorization on the wire with the run owner's live token).
 const managedSentinelAccessToken = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token"
 
 // managedSentinelCredsB64 builds the base64 sentinel .credentials.json delivered
-// to a managed run in WARDYN_CLAUDE_MANAGED_B64. All fields are inert by
-// construction (blank refresh, placeholder access, far-future expiry), so it is
-// safe as sandbox env — it carries no secret. Go port of the sentinelization in
-// scripts/stage-claude-creds.sh:117-138.
+// to a Claude subscription run in WARDYN_CLAUDE_MANAGED_B64. All fields are
+// inert by construction (blank refresh, placeholder access, far-future expiry),
+// so it is safe as sandbox env — it carries no secret.
 func managedSentinelCredsB64() string {
 	creds := map[string]any{
 		"claudeAiOauth": map[string]any{

@@ -284,9 +284,9 @@ observation) as you go.
    **launch a run** — the assertion here is that the run **launches** (`201`,
    pod scheduled), proving the member path works end to end, not just
    authenticates. It won't necessarily *complete*: an actual agent turn needs
-   a model credential this runbook doesn't provision (`wardyn secret set
-   anthropic-api-key` in the console's Secrets step, per-user, gives it one
-   if you want to watch a full run).
+   a model credential this runbook doesn't provision (an admin adds a model
+   provider under Settings → Model providers, and the member connects their
+   own credential for it, if you want to watch a full run).
 4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group
    and no App Role assignment (`03-people.sh`). Use a fresh browser profile /
    incognito window, or sign out of Entra first, for **both** sign-ins below

@@ -132,7 +132,7 @@ func TranscriptContainsReply(transcript []byte, want string) error {
 // class must be one of those two exact strings.
 //
 // Observable ONLY on a lane the proxy actually MITMs bedrock-runtime on — the
-// bearer (API-key) lane, or a plain-HTTP WARDYN_BEDROCK_BASE_URL test hatch.
+// bearer (API-key) lane, or a provider's plain-HTTP bedrock.base_url test hatch.
 // The per-user AWS SSO lane's bedrock-runtime traffic is an opaque, un-MITM'd
 // tunnel, so a denial on that lane never produces this hint at all — see the
 // live test's own mode check before it calls this.

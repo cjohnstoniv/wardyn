@@ -41,10 +41,10 @@ var envDocAllow = map[string]bool{
 	// internal/testfloor.Marker: the skip-floor probe sentinel scripts/test-report.sh
 	// greps from `go test -json` log output — never read via os.Getenv, so it is
 	// scaffolding, not operator configuration.
-	"WARDYN_FLOOR_PROBE":  true,
-	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
+	"WARDYN_FLOOR_PROBE":    true,
+	"WARDYN_E2E_BASE_URL":   true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
-	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
+	"WARDYN_E2E_WORK_ROOT": true,
 	// k8s conformance suite gating (test/conformance/conformance_k8s_test.go): a
 	// .go file under test/, which is outside BOTH envDocRoots (cmd/, internal/
 	// only — the forward ratchet never walks it) AND envDocE2EShellFiles below
@@ -156,8 +156,8 @@ var envDocShellOnly = map[string]bool{
 	// scripts") was false for it. The row is gone with it. If the knob is ever
 	// implemented in scripts/setup.sh's staging branch (the sibling of the
 	// WARDYN_IMPORT_AWS / WARDYN_IMPORT_SCM gates), document it and re-add it.
-	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true,
-	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
+	"WARDYN_SETUP_MODE": true,
+	"WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
 	"WARDYN_DEFAULT_POLICY_AUTO": true,
 	// The rest of the operator knobs install.sh + scripts/*.sh actually read.
 	// Real configuration, documented in ENV.md's "Setup / operator scripts
@@ -259,10 +259,10 @@ func readVars(t *testing.T, root string) map[string]bool {
 				return err
 			}
 			for _, m := range lit.FindAllStringSubmatch(string(b), -1) {
-				if m[1] != "" {
-					seen[m[1]] = true
-				} else {
-					seen[m[2]] = true
+				// A trailing "_" is a prefix (refuseRetiredModelEnv's
+				// "WARDYN_BEDROCK_"), not a variable to document.
+				if name := m[1] + m[2]; !strings.HasSuffix(name, "_") {
+					seen[name] = true
 				}
 			}
 			return nil
@@ -431,6 +431,13 @@ var envDocRetired = map[string]bool{
 	"WARDYN_ALLOW_PLAINTEXT":        true,
 	"WARDYN_ALLOW_PLAINTEXT_LISTEN": true,
 	"WARDYN_PROXY_URL_OVERRIDE":     true,
+	// #549: the retired model variables, documented as "boot refuses" in
+	// docs/ENV.md. refuseRetiredModelEnv reads them by prefix; the three it
+	// names in full are ordinary literals already.
+	"WARDYN_ANTHROPIC_BASE_URL": true, "WARDYN_ANTHROPIC_GATEWAY_HEADER": true, "WARDYN_ANTHROPIC_GATEWAY_FORMAT": true,
+	"WARDYN_OPENAI_BASE_URL": true, "WARDYN_OPENAI_GATEWAY_HEADER": true, "WARDYN_OPENAI_GATEWAY_FORMAT": true,
+	"WARDYN_BEDROCK_REGION": true, "WARDYN_BEDROCK_MODEL": true, "WARDYN_BEDROCK_BASE_URL": true,
+	"WARDYN_BEDROCK_AWS_PROFILE": true, "WARDYN_BEDROCK_AWS_SSO_REGION": true, "WARDYN_BEDROCK_AWS_DIR": true,
 }
 
 // TestEnvDoc_ReverseEveryRowHasReader ratchets the other direction: every

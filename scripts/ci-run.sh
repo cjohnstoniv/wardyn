@@ -93,16 +93,6 @@ REMOTE_URL="${WARDYN_URL:-}"
 [[ -n "${TASK}" ]] || die "WARDYN_CI_TASK is required (the task / command to run)"
 [[ -f "${POLICY_FILE}" ]] || die "policy file not found: ${POLICY_FILE}"
 
-# A subscription credential belongs to one human; CI runs on behalf of everyone
-# who can trigger the pipeline. Connecting one here makes that person's Claude
-# subscription serve other people's work, which the harness vendor's terms
-# prohibit — and it is the OPERATOR who ends up in breach, not Wardyn. The daemon
-# refuses it structurally now (single-user posture only), so fail here with the
-# reason rather than connecting something that will not resolve at run time.
-if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
-  die "WARDYN_SUBSCRIPTION_TOKEN is not supported in CI: a subscription credential belongs to one person, and a pipeline runs on behalf of everyone who can trigger it. Use an API-key or Bedrock model provider the CI principal holds its own credential for — see docs/CI.md."
-fi
-
 # The run's credential is its owner's (D8): CI no longer writes one into the
 # operator's namespace for every run to share.
 if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
