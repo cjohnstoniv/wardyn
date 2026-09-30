@@ -10,6 +10,10 @@
 # Keep WARDYN_AGE_KEY set until `wardynd -rewrap` reports no row left under it;
 # then unset it. Vault's CA, if private, comes in through the base file's
 # WARDYN_TRUSTED_CA_FILE.
+#
+# WARDYN_VAULT_TRANSIT_KEY_PLATFORM (a second key for the boot keys) is not
+# passed through here: it needs Kubernetes auth and WARDYN_VAULT_ROLE_PLATFORM,
+# and this overlay logs in with a token file.
 services:
   wardynd:
     environment:

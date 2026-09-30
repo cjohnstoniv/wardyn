@@ -255,6 +255,12 @@ secretStore:
     # everything else as role, whose policy then leaves platform/ out
     # (docs/operations/secrets-and-keys.md, "Two Vault roles"). Empty = one role for both.
     rolePlatform: ""
+    # Optional, needs rolePlatform and kek.provider transit: a second Transit key
+    # (same kek.transit.mount, type aes256-gcm96), reached as rolePlatform, that
+    # wraps wardynd's own signing, session and SSH host keys; kek.transit.key then
+    # wraps only the credentials. `wardynd -rewrap` moves the boot keys onto it.
+    # Empty = one key for both.
+    transitKeyPlatform: ""
     tokenAudience: vault
     tokenExpirationSeconds: 3600
     tokenFile: ""

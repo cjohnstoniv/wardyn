@@ -70,6 +70,12 @@ type Store struct {
 	// new data key, boot keys included.
 	service       kek.KEK
 	serviceWrites bool
+	// platformService is the second key service (Deps.PlatformKEK), or nil; it
+	// opens boot keys only. With platformWrites it also wraps every boot key,
+	// and a boot key under any other key is read only by `wardynd -rewrap`,
+	// which moves it here.
+	platformService kek.KEK
+	platformWrites  bool
 	// ext is the configured external store, or nil. Pointer rows are read
 	// through it in every mode; writeExt says whether Put writes there
 	// (store mode) or seals locally.
@@ -97,6 +103,9 @@ func New(pool *pgxpool.Pool, identity age.Identity) (*Store, error) {
 func (s *Store) withKEK(d secretstore.Deps) {
 	if d.KEK != nil {
 		s.service, s.serviceWrites = d.KEK, d.KEKWrites
+	}
+	if d.PlatformKEK != nil {
+		s.platformService, s.platformWrites = d.PlatformKEK, d.PlatformKEKWrites
 	}
 }
 
@@ -133,8 +142,12 @@ func x25519(identity age.Identity) (*age.X25519Identity, error) {
 }
 
 // writer is the KEK a new envelope for (owner, name) is wrapped under: the
-// key service when it writes, else the local KEK of the row's purpose.
+// platform key service for a boot key when there is one, else the key service
+// when it writes, else the local KEK of the row's purpose.
 func (s *Store) writer(owner, name string) kek.KEK {
+	if s.platformWrites && secretstore.Kind(owner, name) == "platform" {
+		return s.platformService
+	}
 	if s.serviceWrites {
 		return s.service
 	}
@@ -154,8 +167,18 @@ func (s *Store) localWriter(owner, name string) kek.KEK {
 // fallback: the key service for its own rows; for a local row, the local KEK
 // its purpose writes with, or the pre-split KEK — except a platform row once
 // the platform key is separate, which only the platform key opens (anything
-// the age key derives could otherwise forge a boot key).
+// the age key derives could otherwise forge a boot key). With a platform key
+// service the same holds for every other key, the credential key service
+// included: a boot key opens under the platform key service alone.
 func (s *Store) reader(e envelope) (kek.KEK, error) {
+	if s.platformService != nil && secretstore.Kind(e.ownedBy, e.name) == "platform" {
+		if e.kekID == s.platformService.ID() {
+			return s.platformService, nil
+		}
+		if s.platformWrites {
+			return nil, fmt.Errorf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q (a boot key still under another key moves with `wardynd -rewrap`)", e.kekID, s.platformService.ID())
+		}
+	}
 	if s.service != nil && e.kekID == s.service.ID() {
 		return s.service, nil
 	}
@@ -521,7 +544,7 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 		}
 		return to.writer(e.ownedBy, e.name)
 	}
-	return rewrapAll(ctx, pool, "rekey", from.reader, target, 0)
+	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil)
 }
 
 // RewrapResult is what RewrapKeys did.
@@ -535,6 +558,10 @@ type RewrapResult struct {
 	// (Transit) is now wrapped under, else 0: raising Transit's
 	// min_decryption_version to it retires every older version.
 	KeyVersion int
+	// PlatformKeyService and PlatformKeyVersion are the same for the platform
+	// key service (Deps.PlatformKEK), which wraps the boot keys alone.
+	PlatformKeyService string
+	PlatformKeyVersion int
 }
 
 // Rewrap is RewrapKeys over the local keys alone: identity, and the separate
@@ -556,6 +583,11 @@ func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Iden
 //     key service read-only every row under it moves back to the local keys;
 //   - onto a versioned key service's latest version, so older versions can be
 //     retired (Transit's min_decryption_version).
+//   - with d.PlatformKEK writing (d.PlatformKEKWrites), every boot key moves
+//     to the platform key service, at its latest version, from wherever it
+//     sits (the credential key service, the age key, the separate platform
+//     key); with it read-only, every boot key under it moves back to the key
+//     a write would use.
 //
 // The rewrap is CLIENT-SIDE: each data key is unwrapped under the row's own
 // KEK and wrapped again under the target, both bound to the row. Transit's
@@ -581,41 +613,76 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or WARDYN_KEK=transit")
 	}
 	source := s.reader
+	// A boot key may still sit under an earlier key of its own purpose: the
+	// age key's platform KEK, the credential key service, or, for the
+	// platform key service, the key it is being moved off. Those readers
+	// serve it only here, never at a serving boot.
+	var prior []*Store
+	if s.platformWrites {
+		p := *s
+		p.platformService, p.platformWrites = nil, false
+		prior = append(prior, &p)
+	}
 	if s.separate {
 		shared := &Store{}
 		if err := shared.setLocalKeys(d.AgeIdentity, nil); err != nil {
 			return res, fmt.Errorf("pg secretstore: rewrap: %w", err)
 		}
+		prior = append(prior, shared)
+	}
+	if len(prior) > 0 {
 		source = func(e envelope) (kek.KEK, error) {
 			k, err := s.reader(e)
-			if err != nil && secretstore.Kind(e.ownedBy, e.name) == "platform" {
-				return shared.reader(e)
+			if err == nil || secretstore.Kind(e.ownedBy, e.name) != "platform" {
+				return k, err
+			}
+			for _, p := range prior {
+				if k, err = p.reader(e); err == nil {
+					break
+				}
 			}
 			return k, err
 		}
 	}
+	latest := map[string]int{}
 	if s.serviceWrites {
 		res.KeyService = s.service.ID()
-		if v, ok := s.service.(kek.Versioned); ok {
-			n, err := v.LatestVersion(ctx)
-			if err != nil {
-				return res, fmt.Errorf("pg secretstore: rewrap: read the latest version of %s: %w", res.KeyService, err)
-			}
-			res.KeyVersion = n
+		n, err := latestVersion(ctx, s.service)
+		if err != nil {
+			return res, fmt.Errorf("pg secretstore: rewrap: read the latest version of %s: %w", res.KeyService, err)
 		}
+		res.KeyVersion, latest[res.KeyService] = n, n
+	}
+	if s.platformWrites {
+		res.PlatformKeyService = s.platformService.ID()
+		n, err := latestVersion(ctx, s.platformService)
+		if err != nil {
+			return res, fmt.Errorf("pg secretstore: rewrap: read the latest version of %s: %w", res.PlatformKeyService, err)
+		}
+		res.PlatformKeyVersion, latest[res.PlatformKeyService] = n, n
 	}
 	target := func(e envelope) kek.KEK { return s.writer(e.ownedBy, e.name) }
-	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, res.KeyVersion)
+	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest)
 	res.Rewrapped = n
 	return res, err
+}
+
+// latestVersion is the version a wrap under k would name, or 0 when k has no
+// versions.
+func latestVersion(ctx context.Context, k kek.KEK) (int, error) {
+	if v, ok := k.(kek.Versioned); ok {
+		return v.LatestVersion(ctx)
+	}
+	return 0, nil
 }
 
 // rewrapAll rewraps, in one transaction, every sealed row's data key from the
 // KEK source names for it to the one target names. target is nil for a row
 // the operation leaves alone; a row already under its target — and, when the
-// target is versioned and latest is set, at that version — is skipped. op
-// names the operation in its errors.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest int) (int, error) {
+// target is versioned and latest holds its kek_id, at that version — is
+// skipped. latest maps a versioned key service's kek_id to the version a wrap
+// made now would name (nil: none). op names the operation in its errors.
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]int) (int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
@@ -647,7 +714,7 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 			continue
 		}
 		if e.version == encVersion && e.kekID == to.ID() {
-			old, verr := behind(to, e.wrapped, latest)
+			old, verr := behind(to, e.wrapped, latest[to.ID()])
 			if verr != nil {
 				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
 			}

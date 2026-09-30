@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,6 +68,14 @@ func rewrapMode(f *bootFlags) error {
 	if err != nil {
 		return err
 	}
+	retire := *f.rewrapRetirePlatformKey
+	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" {
+		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM, the key to retire")
+	}
+	platformSvc, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, retire)
+	if err != nil {
+		return err
+	}
 	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancelConn()
 	pool, err := db.Connect(connCtx, *f.dsn)
@@ -92,16 +101,27 @@ func rewrapMode(f *bootFlags) error {
 		defer func() { _ = fan.Close() }()
 	}
 
-	return rewrapKeys(ctx, rec, secretstore.Deps{
+	d := secretstore.Deps{
 		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes,
-	})
+	}
+	d = withPlatformKEK(d, platformSvc, retire)
+	return rewrapKeys(ctx, rec, d)
+}
+
+// withPlatformKEK adds the platform key service to d. Retiring reads it and
+// writes nowhere under it: the boot keys move to the key a write uses today.
+func withPlatformKEK(d secretstore.Deps, k kek.KEK, retire bool) secretstore.Deps {
+	if k != nil {
+		d.PlatformKEK, d.PlatformKEKWrites = k, !retire
+	}
+	return d
 }
 
 // rewrapKeys is -rewrap's work once its inputs are checked and its lock held:
 // the rewrap under d's keys, its secret.rewrap event, and what to do next.
 func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) error {
 	res, err := secretstorepg.RewrapKeys(ctx, d)
-	separate := d.PlatformIdentity != nil
+	separate := d.PlatformIdentity != nil || d.PlatformKEKWrites
 	if err != nil {
 		// An abort is audited like secret.migrate's, even when ctx is what
 		// ended the run: under Transit it has already made decrypt calls that
@@ -116,7 +136,17 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion > 0 {
-		fmt.Fprintf(os.Stdout, "every sealed secret is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", res.KeyService, res.KeyVersion, res.KeyVersion)
+		what := "secret"
+		if d.PlatformKEKWrites {
+			what = "credential" // the boot keys are under the platform key, reported below
+		}
+		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", what, res.KeyService, res.KeyVersion, res.KeyVersion)
+	}
+	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
+		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM and restart every replica\n", d.PlatformKEK.ID())
+	}
+	if res.PlatformKeyVersion > 0 {
+		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %d; raising that Transit key's min_decryption_version to %d now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
 	}
 	return nil
 }
