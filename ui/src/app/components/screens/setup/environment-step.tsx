@@ -126,11 +126,21 @@ export function vaultIncompatibleReason(platform: SetupStatus["platform"]): stri
 // #1200 review R2-4 — the driver-aware reason for a caller outside this
 // picker, split the same way tierState is (`!k8s && !kvm`): on k8s the remedy
 // is a Kata RuntimeClass, as K8S_TIER_GUIDES.CC3 says; elsewhere the /dev/kvm
-// reason. A member's redacted driver ("") reads as not-k8s, as it does here.
+// reason. A member's redacted driver ("") reads as not-k8s, so `kubernetes`
+// (SetupStatus.runner.kubernetes, the one substrate bit a member keeps) is what
+// tells a member on Kubernetes apart: they get NO reason here, and the caller's
+// own substrate-neutral line ("{Tier} isn't installed on this host.") stands in
+// — never the Docker host's /dev/kvm remedy, and never a RuntimeClass step only
+// an admin can take.
 const K8S_VAULT_REASON =
   "Vault needs a Kata RuntimeClass — register one on a KVM-capable node pool, then pin it with k8s.runtimeClasses.CC3.";
-export function vaultRequirementReason(driver: string, platform: SetupStatus["platform"]): string {
-  return driver === "k8s" ? K8S_VAULT_REASON : vaultIncompatibleReason(platform);
+export function vaultRequirementReason(
+  driver: string,
+  platform: SetupStatus["platform"],
+  kubernetes?: boolean,
+): string {
+  if (driver === "k8s") return K8S_VAULT_REASON;
+  return kubernetes ? "" : vaultIncompatibleReason(platform);
 }
 
 // #213 — the strongest INSTALLED class, never inferred from the operating

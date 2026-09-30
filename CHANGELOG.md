@@ -151,6 +151,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The New Run barrier picker no longer claims what the server would contradict (#1238).** A member
+  on Kubernetes is no longer told to bind-mount `/dev/kvm` for Vault: `GET /setup/status` keeps one
+  substrate bit for members, `runner.kubernetes`, beside the confinement classes it already kept and no other runner detail, so the console can
+  tell a Kubernetes install apart. The "couldn't check which barriers this host has" line now appears
+  when the host probe fails or no runner is configured, and each row then reads Unverified instead of
+  Ready (and Checking… until the probe answers). A host with no barrier at all shows the no-runner card instead of a floor requirement naming
+  Fence. Until the console has heard who you are (or if that read fails) it offers the tiers a member
+  may use, not an admin's.
 - **`deny_interactive` now refuses a terminal attach and SSH into a run under the profile
   (#1392).** It refused an interactive run at create, but the owner of a task or exec run under the
   profile could still `wardyn run attach` (or open the console terminal) and, with the SSH gateway
