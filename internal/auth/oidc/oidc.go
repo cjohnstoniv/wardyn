@@ -61,6 +61,10 @@ type Config struct {
 	// one of the listed values case-insensitively, AND requires email_verified=true. Entra tokens
 	// typically omit email_verified, fail-closing every Entra login — prefer Entra App Roles instead.
 	AllowedEmailDomains []string
+	// RequireEmailVerified (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false) applies the same
+	// email_verified gate AllowedEmailDomains implies, without a domain list: an ID token with no
+	// email_verified claim counts as unverified and is refused, false is refused, true passes.
+	RequireEmailVerified bool
 	// ExtraScopes is WARDYN_OIDC_EXTRA_SCOPES (CSV), appended to the fixed "openid profile email"
 	// request. Validated at boot against discovery scopes_supported, so an unadvertised scope
 	// refuses boot by name instead of locking every human out at login with invalid_scope.

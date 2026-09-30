@@ -2947,6 +2947,11 @@ claim is not checked at all (both checks live inside the domains branch —
 to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as
 shipped; re-point it when you swap Dex for a corporate IdP.
 
+`WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED=true` applies the `email_verified` check
+without a domains list (default off): a missing claim counts as unverified and is
+refused, exactly as below, so on an IdP that never sends it (Entra) it denies every
+login.
+
 With the domains list set, `email_verified` **absent** from the id_token and
 `email_verified: false` are two different denials, logged and coded separately
 (`auth_error=email_verified_absent` vs `email_unverified`). Entra ID tokens
