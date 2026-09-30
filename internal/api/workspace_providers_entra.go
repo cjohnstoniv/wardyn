@@ -35,7 +35,9 @@ const (
 	providers400EntraRead = "git[%d].entra.capability_ceiling: name %q — every profile starts from reads, so a ceiling without it can serve nothing"
 	providers400EntraShar = "git[%d].credential_source: the %q lane needs per_user — there is no such thing as a shared Entra sign-in"
 	providers400EntraProf = "git[%d].entra.default_profile: %q is outside capability_ceiling"
-	providers400EntraMint = "git[%d].entra.token_mode: minted_pat is not available — Azure DevOps only lets Microsoft's own clients mint personal access tokens, so Wardyn cannot mint one per run; use bearer"
+	providers400EntraMint = "git[%d].entra.token_mode: minted_pat is not yet available; use one of: bearer, own_pat"
+	providers400EntraHrs  = "git[%d].entra.pat_max_hours: Enter 1 to %d hours."
+	providers400EntraDays = "git[%d].entra.pat_max_days: Enter 1 to %d days."
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
@@ -131,14 +133,20 @@ func entraLaneHosts(i int, row types.GitProvider) error {
 	return nil
 }
 
-// validateEntraBlock holds the block's own fields: two GUIDs, a non-empty
-// ceiling of grantable capabilities, a default profile inside that ceiling,
-// and a known token mode.
+// validateEntraBlock holds the block's own fields: two GUIDs (unless the mode
+// is own_pat, where nothing signs in), a non-empty ceiling of grantable
+// capabilities, a default profile inside that ceiling, a known token mode and
+// the two token lifetimes in range.
 func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
-	if !entraGUID.MatchString(cfg.TenantID) {
+	// own_pat pastes a token, so it names no tenant or client; one that does is
+	// still held to the GUID shape rather than stored as an alias. Such a row
+	// has no sign-in, so the login and dispatch row pickers must skip it (L1,
+	// #1428); until they do it is stored but not yet usable.
+	signsIn := cfg.TokenMode != types.ADOTokenModeOwnPAT
+	if (signsIn || cfg.TenantID != "") && !entraGUID.MatchString(cfg.TenantID) {
 		return fmt.Errorf(providers400EntraGUID, i, "tenant_id", cfg.TenantID)
 	}
-	if !entraGUID.MatchString(cfg.ClientID) {
+	if (signsIn || cfg.ClientID != "") && !entraGUID.MatchString(cfg.ClientID) {
 		return fmt.Errorf(providers400EntraGUID, i, "client_id", cfg.ClientID)
 	}
 	if len(cfg.CapabilityCeiling) == 0 {
@@ -167,13 +175,20 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 		}
 	}
 	// minted_pat is refused BY NAME, ahead of the generic closed-set check, so
-	// the admin reads why rather than "not a token mode".
+	// the admin reads that it is not yet available rather than "not a token
+	// mode". It stays in the closed set: the mode is named, just not writable.
 	if cfg.TokenMode == types.ADOTokenModeMintedPAT {
 		return fmt.Errorf(providers400EntraMint, i)
 	}
 	if cfg.TokenMode != "" && !cfg.TokenMode.Valid() {
 		return fmt.Errorf(providers400EntraMode, i, string(cfg.TokenMode),
 			strings.Join(types.ClosedADOTokenModeList(), ", "))
+	}
+	if cfg.PATMaxHours < 0 || cfg.PATMaxHours > types.ADOPATMaxHoursLimit {
+		return fmt.Errorf(providers400EntraHrs, i, types.ADOPATMaxHoursLimit)
+	}
+	if cfg.PATMaxDays < 0 || cfg.PATMaxDays > types.ADOPATMaxDaysLimit {
+		return fmt.Errorf(providers400EntraDays, i, types.ADOPATMaxDaysLimit)
 	}
 	return nil
 }
