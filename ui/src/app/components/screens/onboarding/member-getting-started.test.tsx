@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupStatus, AgentRun } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
@@ -22,6 +22,13 @@ const adoConnectMock = vi.fn();
 let adoBlockedUrl: string | null = null;
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: adoBlockedUrl }),
+}));
+
+// The add-token dialog Getting started shares with Settings (#1430).
+const storeOwnTokenMock = vi.fn();
+vi.mock("../../../lib/api/ado-pat", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/api/ado-pat")>()),
+  adoPat: { storeOwnToken: (...a: unknown[]) => storeOwnTokenMock(...a) },
 }));
 
 const listSecretsMineMock = vi.fn();
@@ -550,6 +557,96 @@ describe("MemberGettingStarted", () => {
       renderPage();
       expect(await screen.findByText(ADO_PAT.OWN_EXPIRED_BODY)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    // The approved own-token chip packet: a person's own token reads in Settings'
+    // words, in its own tone, and its line and button open the add-token dialog
+    // instead of a sign-in an own-token row does not have. Year-2000 dates are
+    // always past (the fixture-date gate), so the expiry-day count is asserted
+    // by the unit tests; here the chip only has to be the expiring one.
+    describe("a person's own token", () => {
+      const own = { token_mode: "own_pat", source: "own", org: "https://dev.azure.com/wardyn-live-test", max_days: 30, token_scopes: ["Code (Read)"] };
+      const toneOf = (label: string) => screen.getByText(label).closest("span")?.className;
+      const noConnect = () => expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+
+      it("live: Connected in success, no line and no button", async () => {
+        getSetupStatusMock.mockResolvedValue(status({ scm_access: { ...own, state: "live", expires_on: "2000-11-27" } }));
+        renderPage();
+        expect(await screen.findByText("Azure DevOps · Connected")).toBeInTheDocument();
+        expect(toneOf("Azure DevOps · Connected")).toMatch(/success/);
+        expect(screen.queryByText(ADO.ACCESS_SHARED_LIVE)).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: ADO_PAT.OWN_REPLACE })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).not.toBeInTheDocument();
+        noConnect();
+      });
+
+      it("expiring: a warning chip, the expiry line and Replace token, which opens the dialog", async () => {
+        getSetupStatusMock.mockResolvedValue(status({ scm_access: { ...own, state: "expiring", expires_on: "2000-10-27" } }));
+        renderPage();
+        const chip = await screen.findByText(/^Azure DevOps · Expires in \d+ days$/);
+        expect(chip.closest("span")?.className).toMatch(/warning/);
+        expect(screen.getByText(ADO_PAT.OWN_EXPIRING_LINE("wardyn-live-test", "27 October"))).toHaveClass("text-warning");
+        noConnect();
+        await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE }));
+        expect(await screen.findByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeInTheDocument();
+      });
+
+      it("refused over live: a danger chip and line, Replace token", async () => {
+        getSetupStatusMock.mockResolvedValue(
+          status({ scm_access: { ...own, state: "live", expires_on: "2000-10-27", refused_at: new Date(2000, 9, 2, 9, 30).toISOString() } }),
+        );
+        renderPage();
+        expect(await screen.findByText("Azure DevOps · Refused")).toBeInTheDocument();
+        expect(toneOf("Azure DevOps · Refused")).toMatch(/danger/);
+        expect(screen.getByText(ADO_PAT.OWN_REFUSED_LINE("2 October", "27 October"))).toHaveClass("text-danger");
+        expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
+        noConnect();
+      });
+
+      it("refused over expiring: still Refused", async () => {
+        getSetupStatusMock.mockResolvedValue(
+          status({ scm_access: { ...own, state: "expiring", expires_on: "2000-10-27", refused_at: new Date(2000, 9, 2, 9, 30).toISOString() } }),
+        );
+        renderPage();
+        expect(await screen.findByText("Azure DevOps · Refused")).toBeInTheDocument();
+        expect(screen.queryByText(/Expires in/)).not.toBeInTheDocument();
+      });
+
+      it("expired wins over refused: a danger chip, the expired line, Add your personal access token", async () => {
+        getSetupStatusMock.mockResolvedValue(
+          status({ scm_access: { ...own, state: "expired_signin", cause: "token_expired", refused_at: new Date(2000, 9, 2, 9, 30).toISOString() } }),
+        );
+        renderPage();
+        expect(await screen.findByText("Azure DevOps · Expired")).toBeInTheDocument();
+        expect(toneOf("Azure DevOps · Expired")).toMatch(/danger/);
+        expect(screen.getByText(ADO_PAT.OWN_EXPIRED_BODY)).toHaveClass("text-danger");
+        expect(screen.queryByText("Azure DevOps · Refused")).not.toBeInTheDocument();
+        noConnect();
+        await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+        expect(await screen.findByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeInTheDocument();
+      });
+
+      it("not added: the Not connected chip, no line, Add your personal access token instead of a sign-in", async () => {
+        getSetupStatusMock.mockResolvedValue(status({ scm_access: { token_mode: "own_pat", org: own.org, state: "not_configured" } }));
+        renderPage();
+        expect(await screen.findByText(ADO.ACCESS_NOT_CONNECTED)).toBeInTheDocument();
+        noConnect();
+        await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+        expect(await screen.findByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeInTheDocument();
+      });
+
+      it("storing a token reloads status", async () => {
+        storeOwnTokenMock.mockResolvedValueOnce(undefined);
+        getSetupStatusMock.mockResolvedValue(status({ scm_access: { token_mode: "own_pat", org: own.org, state: "not_configured", max_days: 30 } }));
+        renderPage();
+        await userEvent.click(await screen.findByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+        const dialog = await screen.findByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE });
+        await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-token");
+        fireEvent.change(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), { target: { value: "2000-11-27" } });
+        await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }));
+        expect(storeOwnTokenMock).toHaveBeenCalledWith({ org: own.org, token: "pasted-token", expires_on: "2000-11-27" });
+        await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+      });
     });
 
     it("missing token permissions ask to sign in again, and Connect stays", async () => {
