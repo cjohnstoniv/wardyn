@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -44,6 +45,10 @@ type AuditFilter struct {
 	ActorType    types.ActorType // human / agent / system
 	Outcome      string          // success / failure / warn
 	Origin       string          // AuditOriginDevice or AuditOriginOrganisation
+	// DataContains is a JSON object the row's data must contain (Postgres
+	// `data @> $n::jsonb`): every key present with an equal value, objects
+	// recursively. A string, not a map, so the filter stays comparable (IsZero).
+	DataContains string
 }
 
 // The two AuditFilter.Origin values: rows a device forwarded, and rows the
@@ -75,8 +80,56 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 		return false
 	case f.Origin != "" && (FederatedDeviceID(ev) != nil) != (f.Origin == AuditOriginDevice):
 		return false
+	case f.DataContains != "" && !dataContains(ev.Data, f.DataContains):
+		return false
 	}
 	return true
+}
+
+// dataContains is `data @> want` in Go: want and data are JSON; an unparseable
+// side contains nothing (Postgres would reject a malformed filter outright).
+func dataContains(data []byte, want string) bool {
+	var w, d any
+	if json.Unmarshal([]byte(want), &w) != nil || json.Unmarshal(data, &d) != nil {
+		return false
+	}
+	return jsonContains(d, w)
+}
+
+func jsonContains(have, want any) bool {
+	switch w := want.(type) {
+	case map[string]any:
+		h, ok := have.(map[string]any)
+		if !ok {
+			return false
+		}
+		for k, wv := range w {
+			if hv, ok := h[k]; !ok || !jsonContains(hv, wv) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		h, ok := have.([]any)
+		if !ok {
+			return false
+		}
+		for _, wv := range w {
+			found := false
+			for _, hv := range h {
+				if jsonContains(hv, wv) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	default:
+		return have == want
+	}
 }
 
 // Keep returns the events matching f, in order. A zero filter returns events
@@ -126,6 +179,9 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 	if f.Outcome != "" {
 		add("outcome = $%d", f.Outcome)
 	}
+	if f.DataContains != "" {
+		add("data @> $%d::jsonb", f.DataContains)
+	}
 	switch f.Origin {
 	case AuditOriginDevice:
 		clauses = append(clauses, federatedRowSQL)
@@ -143,6 +199,9 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 //
 // No new index: 0001 covers (time) and 0017 (action, seq DESC); a bounded LIMIT
 // query index-scans the pkey backward and filters, which is what the caps are for.
+// DataContains adds a per-row `data @>` test with no GIN index behind it; the
+// planner walks the pkey or the (time) index and filters, and the LIMIT plus a
+// Since window bound it (about 0.1 s over 2M rows in the #1449 review).
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
 	q := `
 		SELECT ` + auditCols + `

@@ -446,6 +446,9 @@ create checks again. When the administrator's own **Check organisation settings*
 policy, the row shows a banner naming them ("Azure DevOps refused to create a token for {person}: your
 organisation restricts who can create personal access tokens. Add the people who use Wardyn to that
 policy's allow list, or switch to Entra sign-in.") with a button that switches the row to Entra sign-in.
+The row shows the same banner, with no check run, naming the person whose launch the organisation refused
+in the last seven days: the administrator sees it when the row opens, after a member's mint is refused and
+not only after their own check.
 The simplest fix is the allow list: one Project Collection
 Administrator action, adding the people who use Wardyn or their group. Switching the row to `bearer` is
 the alternative, and it needs the Entra changes above (the app must drop the token permissions), which

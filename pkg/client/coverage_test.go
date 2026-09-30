@@ -84,7 +84,7 @@ func routeFamilies() map[string][]string {
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
 		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
-		"site-config": {"GetSiteConfig", "PutSiteConfig"},
+		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance":  {"GetGovernance", "ApplyGovernance"},

@@ -216,14 +216,30 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
+	res, err := c.PutSiteConfigResult(ctx, cfg)
+	return res.SiteConfig, res.DanglingSecretRefs, res.OnboardingCompletedAtIgnored, err
+}
+
+// SiteConfigPutResult is PUT /site-config's answer: the stored document plus
+// the write's advisory signals. A field is added here rather than a return
+// value to PutSiteConfig, whose signature is public.
+type SiteConfigPutResult struct {
+	types.SiteConfig
+	DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
+	OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
+	// BrandingLogoPending (#1215): branding.logo_path was valid but not attached,
+	// because the console has no branding record yet. Apply again after saving
+	// the Branding card.
+	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+}
+
+// PutSiteConfigResult is PutSiteConfig with every advisory signal, including
+// the ones added after its signature was fixed. PUT /api/v1/site-config.
+func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
 	cfg.Integrations = nil
-	var resp struct {
-		types.SiteConfig
-		DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
-		OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
-	}
-	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
-	return resp.SiteConfig, resp.DanglingSecretRefs, resp.OnboardingCompletedAtIgnored, err
+	var resp SiteConfigPutResult
+	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
+	return resp, err
 }
 
 // SetupStatus returns the first-run setup checklist as raw JSON (the response is

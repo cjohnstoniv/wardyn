@@ -78,11 +78,21 @@ type brandingPublic struct {
 }
 
 // brandingSettings adds what only a signed-in reader gets: the Support link,
-// and whether the dark pair was set rather than derived (the card's checkbox).
+// whether the dark pair was set rather than derived (the card's checkbox), and
+// whether the logo is the site config's file (#1215, read-only — the card offers
+// no Remove logo for one).
 type brandingSettings struct {
 	brandingPublic
-	SupportURL string `json:"support_url,omitempty"`
-	DarkCustom bool   `json:"dark_custom,omitempty"`
+	SupportURL   string `json:"support_url,omitempty"`
+	DarkCustom   bool   `json:"dark_custom,omitempty"`
+	LogoFromFile bool   `json:"logo_from_file,omitempty"`
+}
+
+func (s *Server) brandingSettingsView(b types.Branding) brandingSettings {
+	return brandingSettings{
+		brandingPublic: s.publicBranding(b), SupportURL: b.SupportURL, DarkCustom: b.DarkPrimary != "",
+		LogoFromFile: b.LogoFromFile && len(b.Logo) > 0,
+	}
 }
 
 func (s *Server) publicBranding(b types.Branding) brandingPublic {
@@ -171,9 +181,7 @@ func (s *Server) handleGetBrandingSettings(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, brandingSettings{})
 		return
 	}
-	writeJSON(w, http.StatusOK, brandingSettings{
-		brandingPublic: s.publicBranding(b), SupportURL: b.SupportURL, DarkCustom: b.DarkPrimary != "",
-	})
+	writeJSON(w, http.StatusOK, s.brandingSettingsView(b))
 }
 
 // handleGetBrandingLogo serves the stored logo (or the monogram tile, see
@@ -259,6 +267,21 @@ func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, refusal.reason, refusal.msg)
 		return
 	}
+	// A logo the site config delivers would be put back by its next apply, so a
+	// removal is refused rather than quietly undone (#1215). The console never
+	// offers it; this is the API's answer to a caller that tries.
+	if req.RemoveLogo {
+		cur, err := bs.GetBranding(r.Context())
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeServerError(w, r, "get branding", err)
+			return
+		}
+		if err == nil && cur.LogoFromFile && len(cur.Logo) > 0 {
+			writeErrorReason(w, http.StatusBadRequest, brandReasonLogoFromFile,
+				"remove_logo: this logo comes from the site configuration's branding.logo_path; take that key out of the site configuration instead")
+			return
+		}
+	}
 	b.UpdatedBy = principalFromRequest(r)
 	saved, err := bs.PutBranding(r.Context(), b, req.Logo == nil && !req.RemoveLogo)
 	if err != nil {
@@ -267,9 +290,7 @@ func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"branding.write", "branding", "success", mustJSON(brandingAuditData(saved))))
-	writeJSON(w, http.StatusOK, brandingSettings{
-		brandingPublic: s.publicBranding(saved), SupportURL: saved.SupportURL, DarkCustom: saved.DarkPrimary != "",
-	})
+	writeJSON(w, http.StatusOK, s.brandingSettingsView(saved))
 }
 
 // brandingAuditData is the whole record in the clear — every field is shown to

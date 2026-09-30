@@ -200,6 +200,27 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProviders"))).toEqual(new Set(goJSONTags(blockGo, "ModelProviders")));
   });
 
+  // #1215: the site config's branding block — one tag today (logo_path), so it
+  // cannot ride the it.each below, whose stale-regex guard wants two.
+  it("SiteBranding (`branding` in site config): full parity with the TS mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteBranding");
+    expect(goTags).toEqual(["logo_path"]);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteBranding");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
+  // #1215: GET /branding/settings is the public subset (brandingPublic, embedded)
+  // plus brandingSettings' own keys, which is everything the TS Branding mirror
+  // declares — logo_from_file, the read-only file-delivered mark, included.
+  it("brandingSettings (GET /branding/settings): full parity with the TS Branding mirror", () => {
+    const brandingGo = readFileSync(join(root, "internal/api/branding.go"), "utf8");
+    expect(brandingGo).toMatch(/type brandingSettings struct \{\n\tbrandingPublic\n/);
+    const goTags = [...goJSONTags(brandingGo, "brandingPublic"), ...goJSONTags(brandingGo, "brandingSettings")];
+    expect(goTags).toContain("logo_from_file");
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/branding.ts"), "utf8"), "Branding");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
   // #923's two reads: the Images tab's catalog row and the Available to view.
   it.each([
     ["BaseImageEntry", "internal/types/workspace_contract.go", "BaseImageEntry", "ui/src/app/lib/types/workspaces.ts"],
@@ -209,6 +230,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
     // #1428: the per-person token console's reads.
     ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
+    ["adoPATRefusal", "internal/api/ado_pat_refusal.go", "ADOPATRefusal", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoRunToken", "internal/api/ado_pat_console.go", "ADORunToken", "ui/src/app/lib/types/ado-pat.ts"],
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {

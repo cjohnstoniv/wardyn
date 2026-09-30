@@ -459,6 +459,7 @@ with its own reason:
 | `invalid_colour` / `low_contrast` | A colour field is not a valid `#rrggbb` hex value, or the chosen text/fill pair falls below the minimum contrast ratio. |
 | `link_not_https` / `invalid_link` | `support_url` does not use `https`, or is not a well-formed web address. |
 | `logo_too_large` / `invalid_logo` | The uploaded logo exceeds the size cap, or is not a PNG/SVG Wardyn can use. |
+| `logo_from_site_config` | `remove_logo` on a logo the site configuration's `branding.logo_path` delivers; its next apply would put the file back. |
 
 The CSRF guard (`csrf.go`, `http.go`'s local-mode arm, and `attach.go`)
 refuses a cross-origin state-changing request with the same reason its
