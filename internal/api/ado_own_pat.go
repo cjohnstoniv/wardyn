@@ -71,6 +71,9 @@ const (
 	adoOwnPATMismatchRefusal     = "This token belongs to a different Azure DevOps account than yours."
 	adoOwnPATUnavailableRefusal  = "Wardyn couldn't reach Azure DevOps to check this token. Try again in a moment."
 	adoOwnPATTokenInvalidRefusal = "Paste the token itself: one value, with no spaces"
+	// DRAFT (owner approval pending): nothing was compared, so the mismatch
+	// sentence would be untrue.
+	adoOwnPATNoEmailRefusal = "Your Wardyn sign-in has no email address, so Wardyn can't check that this token is yours."
 )
 
 // adoOwnPATSecretName is the sealed store name holding one person's own token
@@ -228,7 +231,11 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		// only that it is not the caller's.
 		audit["basis"] = basis
 		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnMismatch, row.ID, "failure", audit)
-		writeErrorReason(w, http.StatusForbidden, reasonADOOwnPATIdentityMismatch, adoOwnPATMismatchRefusal)
+		body := adoOwnPATMismatchRefusal
+		if basis == "no_email" {
+			body = adoOwnPATNoEmailRefusal
+		}
+		writeErrorReason(w, http.StatusForbidden, reasonADOOwnPATIdentityMismatch, body)
 		return
 	}
 	blob := adoOwnPATBlob{Token: token, Org: org, ExpiresOn: expiresOn, StoredAt: now}

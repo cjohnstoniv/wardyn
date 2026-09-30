@@ -185,8 +185,9 @@ func TestADOOwnPATPut_RefusesAnotherAccountsToken(t *testing.T) {
 func TestADOOwnPATPut_RefusesWhenTheCallerHasNoEmail(t *testing.T) {
 	d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
 	code, body := d.putAs(t, ssoSession(t, capSub, "", oidc.RoleUser), ownPATOrgKey, ownPATToken, days(10))
-	if code != http.StatusForbidden || !strings.Contains(body, reasonADOOwnPATIdentityMismatch) {
-		t.Fatalf("PUT with no email = %d %s, want 403 %s", code, body, reasonADOOwnPATIdentityMismatch)
+	if code != http.StatusForbidden || !strings.Contains(body, reasonADOOwnPATIdentityMismatch) ||
+		!strings.Contains(body, adoOwnPATNoEmailRefusal) {
+		t.Fatalf("PUT with no email = %d %s, want 403 %s saying there is no email to check", code, body, reasonADOOwnPATIdentityMismatch)
 	}
 	if _, found := d.stored(t); found {
 		t.Fatal("a token was stored for a caller nobody could match it to")
