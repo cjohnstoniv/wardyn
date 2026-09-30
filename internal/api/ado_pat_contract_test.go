@@ -5,8 +5,11 @@ package api
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestADOPATErrorReason pins how a refusal from the personal access token API
@@ -17,16 +20,18 @@ func TestADOPATErrorReason(t *testing.T) {
 		err  adoPATError
 		want string
 	}{
-		{"lifespan policy", adoPATError{Status: 400, PatTokenError: "patLifespanPolicyViolation"}, adoPATReasonLifespanPolicy},
-		{"global policy", adoPATError{Status: 400, PatTokenError: "globalPatPolicyViolation"}, adoPATReasonPolicyBlocked},
-		{"full-scope policy", adoPATError{Status: 400, PatTokenError: "fullScopePatPolicyViolation"}, adoPATReasonPolicyBlocked},
-		{"access denied", adoPATError{Status: 403, PatTokenError: "accessDenied"}, adoPATReasonPolicyBlocked},
-		{"a named error beats the status", adoPATError{Status: 401, PatTokenError: "patLifespanPolicyViolation"}, adoPATReasonLifespanPolicy},
-		{"401 with no named error", adoPATError{Status: 401, ServiceError: "TF400813"}, adoPATReasonConsentNeeded},
-		{"403 with no named error", adoPATError{Status: 403}, adoPATReasonConsentNeeded},
-		{"an invalid scope", adoPATError{Status: 400, PatTokenError: "invalidScope"}, adoPATReasonMintRefused},
-		{"an invalid expiry", adoPATError{Status: 400, PatTokenError: "invalidValidTo"}, adoPATReasonMintRefused},
-		{"a 500", adoPATError{Status: 500}, adoPATReasonMintRefused},
+		{"lifespan policy", adoPATError{Status: 400, PatTokenError: "patLifespanPolicyViolation"}, reasonADOPATLifespanPolicy},
+		{"global policy", adoPATError{Status: 400, PatTokenError: "globalPatPolicyViolation"}, reasonADOPATPolicyBlocked},
+		{"full-scope policy", adoPATError{Status: 400, PatTokenError: "fullScopePatPolicyViolation"}, reasonADOPATPolicyBlocked},
+		{"access denied", adoPATError{Status: 403, PatTokenError: "accessDenied"}, reasonADOPATPolicyBlocked},
+		{"a named error beats the status", adoPATError{Status: 401, PatTokenError: "patLifespanPolicyViolation"}, reasonADOPATLifespanPolicy},
+		{"401 with no named error", adoPATError{Status: 401, ServiceError: "TF400813"}, reasonADOPATConsentNeeded},
+		{"403 with no named error", adoPATError{Status: 403}, reasonADOPATConsentNeeded},
+		{"the success value with a 401", adoPATError{Status: 401, PatTokenError: "none"}, reasonADOPATConsentNeeded},
+		{"the success value with a 500", adoPATError{Status: 500, PatTokenError: "none"}, reasonADOPATMintRefused},
+		{"an invalid scope", adoPATError{Status: 400, PatTokenError: "invalidScope"}, reasonADOPATMintRefused},
+		{"an invalid expiry", adoPATError{Status: 400, PatTokenError: "invalidValidTo"}, reasonADOPATMintRefused},
+		{"a 500", adoPATError{Status: 500}, reasonADOPATMintRefused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.err.Reason(); got != tc.want {
@@ -60,7 +65,7 @@ func TestADOPATVocabulary(t *testing.T) {
 		"mint restart":   {adoPATMintRestart, "restart"},
 		"revoke run_end": {adoPATRevokeRunEnd, "run_end"}, "revoke kill": {adoPATRevokeKill, "kill"},
 		"revoke pause": {adoPATRevokePause, "pause"}, "revoke drift": {adoPATRevokeDrift, "drift"},
-		"revoke renewal": {adoPATRevokeRenewal, "renewal"}, "revoke widen": {adoPATRevokeWiden, "widen"},
+		"revoke expired":    {adoPATRevokeExpired, "expired"},
 		"revoke disconnect": {adoPATRevokeDisconnect, "disconnect"}, "revoke sweep": {adoPATRevokeSweep, "sweep"},
 		"audit mint": {adoPATAuditMint, "ado_pat.mint"}, "audit revoke": {adoPATAuditRevoke, "ado_pat.revoke"},
 		"audit mint denied":    {adoPATAuditMintDenied, "ado_pat.mint.denied"},
@@ -71,10 +76,10 @@ func TestADOPATVocabulary(t *testing.T) {
 		"audit own mismatch":   {adoPATAuditOwnMismatch, "ado_pat.own.identity_mismatch"},
 		"audit bearer refused": {adoBearerAuditRefusedMint, "ado_bearer.refused_mint_scopes"},
 		"audit retire":         {adoSharedCredentialRetire, "ado_shared_credential.retire"},
-		"reason policy":        {adoPATReasonPolicyBlocked, "ado_pat_policy_blocked"},
-		"reason lifespan":      {adoPATReasonLifespanPolicy, "ado_pat_lifespan_policy"},
-		"reason consent":       {adoPATReasonConsentNeeded, "ado_pat_consent_needed"},
-		"reason refused":       {adoPATReasonMintRefused, "ado_pat_mint_refused"},
+		"reason policy":        {reasonADOPATPolicyBlocked, "ado_pat_policy_blocked"},
+		"reason lifespan":      {reasonADOPATLifespanPolicy, "ado_pat_lifespan_policy"},
+		"reason consent":       {reasonADOPATConsentNeeded, "ado_pat_consent_needed"},
+		"reason refused":       {reasonADOPATMintRefused, "ado_pat_mint_refused"},
 	} {
 		if pair[0] != pair[1] {
 			t.Errorf("%s = %q, want %q", name, pair[0], pair[1])
@@ -83,6 +88,24 @@ func TestADOPATVocabulary(t *testing.T) {
 	var _ adoPATClient = fakeADOPATClient{}
 	_ = adoPAT{}
 	_ = adoPATRequest{}
+}
+
+// TestADOPATNeverPrintsTheToken: the secret does not survive %v, %+v, %#v-free
+// formatting or a structured log line.
+func TestADOPATNeverPrintsTheToken(t *testing.T) {
+	p := adoPAT{AuthorizationID: "a-1", Token: "s3cret", Scope: "vso.code", ValidTo: time.Now().Add(time.Hour).UTC()}
+	var buf strings.Builder
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("minted", "pat", p)
+	for name, got := range map[string]string{
+		"%v": fmt.Sprintf("%v", p), "%+v": fmt.Sprintf("%+v", p), "%s": fmt.Sprintf("%s", p), "slog": buf.String(),
+	} {
+		if strings.Contains(got, "s3cret") {
+			t.Errorf("%s printed the token: %q", name, got)
+		}
+		if !strings.Contains(got, "vso.code") {
+			t.Errorf("%s = %q, want the scope", name, got)
+		}
+	}
 }
 
 type fakeADOPATClient struct{ adoPATClient }

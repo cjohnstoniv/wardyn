@@ -10,7 +10,7 @@ import { SIGNIN_PROGRESS } from "../settings/login-pane-copy";
 import { PENDING_NO_DETAIL, RUN_STARTUP } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 
-const T0 = Date.parse("2026-09-29T12:00:00Z");
+const T0 = Date.UTC(2000, 0, 1, 12); // fixed reference instant for the mocked clock
 const iso = (ms: number) => new Date(ms).toISOString();
 
 function run(over: Partial<AgentRun>): AgentRun {

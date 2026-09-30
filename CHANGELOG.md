@@ -28,9 +28,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   collects it, about an hour after the restart; see OPERATIONS.md, "What a starting run is waiting on".
 - **Groundwork for per-person Azure DevOps personal access tokens (#1428).** A provider row's `entra`
   block now accepts `token_mode: own_pat`, which needs no `tenant_id` or `client_id`, and the lifetimes
-  `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); `minted_pat` is still refused as not yet
-  available, and runs do not use any of these yet. Migration `0101_ado_run_pats` adds the
-  `ado_run_pats` table that records each token a run holds, with no token value in it.
+  `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
+  Migration `0101_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
+  with no token value in it.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
