@@ -2,9 +2,9 @@
 #
 # Stage 1: build wardyn-rec and wardyn-git-helper from the repository root.
 # Both are pure-Go CGO_ENABLED=0 builds so the binaries are fully static and
-# run inside the node:24-bookworm-slim stage without any extra libc.
+# run inside the node:24-trixie-slim stage without any extra libc.
 #
-# Stage 2: node:24-bookworm-slim installs the Claude Code CLI plus the OS
+# Stage 2: node:24-trixie-slim installs the Claude Code CLI plus the OS
 # packages needed by wardyn-rec (asciinema) and the agent (git, curl, ca-certs).
 #
 # IMAGE CONTRACT (all agent images must satisfy these — see deploy/images/README.md):
@@ -67,7 +67,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
@@ -90,10 +90,10 @@ LABEL org.opencontainers.image.title="agent-claude-code" \
       org.opencontainers.image.documentation="https://github.com/cjohnstoniv/wardyn/blob/main/THIRD-PARTY-NOTICES.md"
 
 
-# asciinema (2.2.0-1 in bookworm) is available as an apt package.
+# asciinema (2.4.0-1 in trixie) is available as an apt package.
 # License hygiene: asciinema is GPL; wardyn-rec only ever *execs* it as a
 # subprocess — it is never linked into the binary — so Wardyn stays Apache-2.0.
-# If the apt package were ever removed from the bookworm repo, wardyn-rec
+# If the apt package were ever removed from the trixie repo, wardyn-rec
 # gracefully falls back to a plain .log capture (see cmd/wardyn-rec/main.go).
 #
 # openssh-sftp-server + socat: the SSH-gateway lane (see docs/SSH.md; wired by
@@ -103,7 +103,8 @@ LABEL org.opencontainers.image.title="agent-claude-code" \
 # deploy/images/README.md's "SSH relay binaries" note for the exact paths.
 # tmux + openssh-client already ship here (do not re-touch that pairing/
 # known_hosts baking).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade: take the current security updates for packages the pinned base already carries.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
@@ -230,7 +231,7 @@ RUN set -eu; \
         echo "installed claude $CLAUDE_CODE_VERSION via npm"; \
     fi
 
-# The node:24-bookworm-slim base image ships a `node` user at uid=1000.
+# The node:24-trixie-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory to /home/agent so the
 # sandbox contract (USER agent, uid 1000, home /home/agent, work /home/agent/work)
 # is satisfied without creating a second uid-1000 user (which useradd rejects).
@@ -243,7 +244,9 @@ RUN usermod  -l agent node \
  && usermod  -d /home/agent -m agent \
  && groupmod -n agent node \
  && mkdir -p /home/agent/work /home/agent/drive \
- && chown -R agent:agent /home/agent
+ && chown -R agent:agent /home/agent \
+ # Debian 13's home is 0700 (Debian 12: 0755); a run under another uid must reach it.
+ && chmod 0755 /home/agent
 
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec
@@ -336,7 +339,7 @@ WORKDIR /home/agent/work
 
 USER agent
 
-# The node:24-bookworm-slim base image sets ENTRYPOINT ["docker-entrypoint.sh"].
+# The node:24-trixie-slim base image sets ENTRYPOINT ["docker-entrypoint.sh"].
 # MUST be cleared: the Wardyn docker driver sets Cmd=["sleep","infinity"] at
 # container create and the agent process is launched later via Exec.  An
 # ENTRYPOINT would wrap the driver-supplied Cmd as arguments, causing the
