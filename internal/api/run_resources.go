@@ -132,6 +132,9 @@ eviction)
 		echo "$du_out" | awk -v want=$# '$1 ~ /^[0-9]+$/ {s+=$1; n++} END{if(n==want) print "disk_scratch_used_kb=" s}'
 	fi
 	;;
+skip)
+	# The handler holds a recent walk (or may not walk right now): no disk line.
+	;;
 *)
 	# No cap binds this run: the sandbox's root filesystem, the image's own
 	# files included. -x keeps the walk off /proc, /sys and every mounted
@@ -145,6 +148,11 @@ eviction)
 	;;
 esac
 `
+
+// diskArmSkip is the script's $1 for "measure no disk this time": the handler
+// already holds the root walk's result (see runDiskRootTTL), or an idle sample
+// owns the sandbox's CPU right now (pauseClocks.beginWalk).
+const diskArmSkip types.StorageEnforcement = "skip"
 
 // runResourcesResponse is the Sandbox widget's payload.
 //
@@ -220,7 +228,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	// run answers "gone", never a 500 (finalize clears the ref on clean
 	// teardown; kill/idle-stop leave a stale one).
 	if run.State.IsTerminal() {
-		writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+		writeRunInspectGone(w, run)
 		return
 	}
 	if run.SandboxRef == "" {
@@ -236,8 +244,34 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	enforced := enforcedDiskWord(ctx, s.cfg.Runner, run.DiskMiB)
-	kv, err := s.execRunResourcesScript(ctx, run, enforced)
+	arm, cachedKB := enforced, ""
+	if enforced != types.StorageEnforcementFilesystem { // the other two arms walk a tree
+		now := s.cfg.Now()
+		if enforced == "" {
+			if kb, fresh := s.pause.rootSample(id, now); fresh {
+				arm, cachedKB = diskArmSkip, kb
+			}
+		}
+		if arm != diskArmSkip {
+			if s.pause.beginWalk(id) {
+				defer s.pause.endWalk(id)
+			} else {
+				arm = diskArmSkip
+				if enforced == "" {
+					cachedKB, _ = s.pause.rootSample(id, now)
+				}
+			}
+		}
+	}
+	kv, err := s.execRunResourcesScript(ctx, run, arm)
 	if err != nil {
+		if errors.Is(err, runner.ErrSandboxGone) {
+			// The pod went between the run's last state write and this read
+			// (a finishing run's teardown): the same answer the flipped state
+			// gets a moment later, not a fault and not an audit row.
+			writeRunInspectGone(w, run)
+			return
+		}
 		// Audit on FAILURE only — the console polls this endpoint, so an audit
 		// row per tick (the success path) would flood the trail. A failure is
 		// the rare, interesting case an operator would want in the log.
@@ -262,9 +296,25 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	switch {
+	case arm == diskArmSkip:
+		if cachedKB != "" {
+			kv["disk_root_used_kb"] = cachedKB
+		}
+	case enforced == "":
+		// Kept even when the walk read nothing: a sandbox too big to walk in
+		// time would otherwise be walked again by every poll.
+		s.pause.setRootSample(id, kv["disk_root_used_kb"], s.cfg.Now())
+	}
 	resp := parseRunResourcesKV(kv)
 	resp.DiskUsedBytes, resp.DiskCapBytes = diskReading(kv, enforced, run.DiskMiB)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// writeRunInspectGone is the run page widgets' 409 for a run whose sandbox no
+// longer exists, whether its state says so yet or not.
+func writeRunInspectGone(w http.ResponseWriter, run types.AgentRun) {
+	writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "run has finished; its sandbox is gone (state="+string(run.State)+")")
 }
 
 // enforcedDiskWord is the word that binds this run's disk cap, `filesystem` or

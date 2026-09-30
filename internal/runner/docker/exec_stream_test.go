@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"slices"
@@ -246,5 +247,19 @@ func TestExecStream_WaitAndResize(t *testing.T) {
 	}
 	if code != 7 {
 		t.Errorf("Wait exit code = %d, want 7", code)
+	}
+}
+
+// TestExecStream_SandboxGone: an exec into a container the daemon no longer has
+// (a finished run's, removed a moment before its state flips) is
+// runner.ErrSandboxGone, so the run page can tell it from a fault.
+func TestExecStream_SandboxGone(t *testing.T) {
+	f := newFakeDocker()
+	d, ref := execStreamSandbox(t, f)
+	f.containers[ref].removed = true
+
+	_, err := d.ExecStream(context.Background(), ref, runner.ExecSpec{Argv: []string{"true"}})
+	if !errors.Is(err, runner.ErrSandboxGone) {
+		t.Fatalf("ExecStream on a removed container = %v, want runner.ErrSandboxGone", err)
 	}
 }

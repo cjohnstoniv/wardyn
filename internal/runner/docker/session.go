@@ -190,7 +190,13 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 
 	created, err := d.cli.ExecCreate(ctx, ref, execCfg)
 	if err != nil {
-		return nil, fmt.Errorf("docker: exec stream create: %w", err)
+		err = fmt.Errorf("docker: exec stream create: %w", err)
+		if isNotFound(err) {
+			// A finished run's container is removed a moment before its state
+			// flips; callers tell that from a real fault by this sentinel.
+			err = fmt.Errorf("%w: %w", runner.ErrSandboxGone, err)
+		}
+		return nil, err
 	}
 
 	attachRes, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{TTY: spec.TTY})
