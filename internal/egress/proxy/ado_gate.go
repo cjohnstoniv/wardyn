@@ -119,6 +119,21 @@ func (p *Proxy) refuseADOPlain(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// refuseADOTunnel refuses a CONNECT to a host the run's Azure DevOps grant
+// covers, and reports whether it did. The caller reaches it only for a CONNECT
+// it will not terminate: such a host is served only through gateADO on a
+// terminated connection or the git broker, and a blind tunnel would pass the
+// organisation pin and the capability check by. It is what keeps an Azure
+// DevOps Server host's REST, which the gate can't classify, refused when no
+// one authored its interception.
+func (p *Proxy) refuseADOTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	if !p.isADOLane(host) {
+		return false
+	}
+	p.refuseADO(w, r, host, port, "Wardyn refused this Azure DevOps connection: this run reaches this host only through Wardyn's checked Azure DevOps doors.", nil)
+	return true
+}
+
 // adoCheck returns "" when r may be forwarded, else the refusal sentence. held
 // is non-nil only for the ONE refusal a person may lift — a grantable
 // capability the run does not hold — and names what the request needs.
