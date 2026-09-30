@@ -43,8 +43,8 @@ func ownPATTestRow() types.GitProvider {
 		CredentialSource: types.CredentialSourcePerUser,
 		Entra: &types.ADOEntraConfig{
 			TokenMode:         types.ADOTokenModeOwnPAT,
-			CapabilityCeiling: []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR},
-			DefaultProfile:    []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite},
+			CapabilityCeiling: []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+			DefaultProfile:    []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapCodeWrite},
 			PATMaxDays:        30,
 		},
 	}

@@ -151,7 +151,7 @@ func TestResolveADOOwnPAT_InjectsTheOwnersTokenAsBasic(t *testing.T) {
 	}
 	wantValue := "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+ownPATToken))
 	if resp.Header != "Authorization" || resp.Value != wantValue || resp.Organisation != "contoso" ||
-		strings.Join(resp.Capabilities, ",") != "read,code_write" {
+		strings.Join(resp.Capabilities, ",") != "project_read,code_read,code_write" {
 		t.Errorf("response = %+v", resp)
 	}
 	if resp.ExpiresAt == 0 || resp.ExpiresAt > exp.UnixMilli() || resp.ExpiresAt > f.now.Add(storedKeyTTL).UnixMilli() {

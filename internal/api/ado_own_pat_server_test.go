@@ -239,7 +239,7 @@ func TestResolveADOOwnPAT_ServerInjectsBasicOnItsHostOnly(t *testing.T) {
 	var resp types.ResolvedInjection
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if w.Code != http.StatusOK || resp.Header != "Authorization" || resp.Value != adoOwnPATHeaderValue(adoServerToken) ||
-		resp.ExpiresAt == 0 || resp.ExpiresAt > exp.UnixMilli() || strings.Join(resp.Capabilities, ",") != "read,code_write" {
+		resp.ExpiresAt == 0 || resp.ExpiresAt > exp.UnixMilli() || strings.Join(resp.Capabilities, ",") != "code_read,code_write" {
 		t.Fatalf("resolve = %d %s", w.Code, w.Body)
 	}
 	for _, host := range []string{"dev.azure.com", "elsewhere.example"} {

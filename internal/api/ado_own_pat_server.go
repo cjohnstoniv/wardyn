@@ -33,7 +33,7 @@ import (
 // adoServerCapabilities is what a Server run holds. The row has no ceiling to
 // read (no entra block), and the lane is git only: read, and push — a push
 // still confined to the run's own branch unless its policy allows any branch.
-var adoServerCapabilities = []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
+var adoServerCapabilities = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
 
 // adoServerTokenScopes is what a person ticks for a Server token: git only.
 var adoServerTokenScopes = []string{"Code (Read & write)"}
