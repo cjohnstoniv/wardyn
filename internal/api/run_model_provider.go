@@ -23,7 +23,6 @@ const (
 	mpRunStateMissing    = "there is no model provider by that name"
 	mpRunStateOff        = "it is turned off"
 	mpRunStateNotServing = "it is not available to %s"
-	mpRunStateNotGranted = "you are not granted it"
 	mpRunNoneGranted     = "No model provider that serves %s is granted to you — ask your admin. Wardyn does not substitute a different model provider."
 	mpRunChoose          = "Choose a model provider for this run: more than one serves %s, and none is its default."
 	mpRunNoBlock         = "model_provider names %q, but this deployment has no model providers — launch without model_provider."
@@ -98,12 +97,15 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 		return runProviderChoice{refusal: fmt.Sprintf(mpRunChoose, agent)}, nil
 	case len(serving) == 0:
 		return runProviderChoice{}, nil
-	case len(serving) == 1:
-		c := providerRefusal(serving[0].ID, serving[0].Kind, mpRunStateNotGranted)
-		c.notGranted = true
-		return c, nil
 	}
-	return runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true}, nil
+	// However many serve the agent, the caller named none, so the refusal names
+	// none either: naming the one that serves would tell them a provider they
+	// are not granted exists (D-6, #1018). The audit row still names it.
+	c := runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true}
+	if len(serving) == 1 {
+		c.providerID = serving[0].ID
+	}
+	return c, nil
 }
 
 // judgeNamedProvider answers for a provider the request or the workspace pin
@@ -259,7 +261,11 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			choice.providerID, "", choice.refusal, false)
 		return runProviderChoice{}, false
 	case choice.notGranted:
-		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal))
+		d := authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal)
+		if choice.providerID != "" {
+			d = d.With("provider", choice.providerID)
+		}
+		s.refuse(w, r, d)
 		return runProviderChoice{}, false
 	case choice.refusal != "":
 		s.writeProviderRefusal(w, r, choice.providerID, choice.kind, choice.refusal, false)

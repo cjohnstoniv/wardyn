@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -75,8 +76,9 @@ func TestChooseModelProvider(t *testing.T) {
 		{name: "the single candidate", sc: site("", a, codexOnly), granted: all, wantID: "a"},
 		{name: "two candidates and no default", sc: site("", a, b), granted: all,
 			wantRefusal: fmt.Sprintf(mpRunChoose, "claude-code")},
+		// Named by nobody, so named in no refusal (D-6, #1018).
 		{name: "one provider serves the agent and the caller is not granted it", sc: site("", a), granted: only(),
-			wantRefusal: refusal("a", mpRunStateNotGranted), wantNotGranted: true},
+			wantRefusal: fmt.Sprintf(mpRunNoneGranted, "claude-code"), wantNotGranted: true},
 		{name: "several serve the agent and the caller is granted none", sc: site("", a, b), granted: only(),
 			wantRefusal: fmt.Sprintf(mpRunNoneGranted, "claude-code"), wantNotGranted: true},
 		{name: "no provider serves the agent: no choice, today's path", sc: site("", codexOnly, off(a)), granted: all},
@@ -120,6 +122,23 @@ func TestRunModelProviderNotGrantedReadsAsMissing(t *testing.T) {
 		}
 		if !slices.Contains(auditReasons(t, restricted, "authz.denied"), "capability_model_provider") {
 			t.Errorf("%s: the not-granted refusal wrote no capability_model_provider row", path)
+		}
+	}
+
+	// Named by nobody: the one provider serving the agent is not named in the
+	// refusal, which reads as it does when several serve and none is granted.
+	// The audit row names it.
+	const unnamed = `{"agent":"claude-code","task":"t"}`
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		one := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(keyProvider("corp", "claude-code"))}, cs(), nil)
+		w := doSSO(t, one, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		several := doSSO(t, providerRunFixture(t, withCorp, cs(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		if w.Code != http.StatusForbidden || w.Body.String() != several.Body.String() || strings.Contains(w.Body.String(), "corp") {
+			t.Errorf("%s: one serving = %d %s\nseveral serving = %d %s", path, w.Code, w.Body.String(), several.Code, several.Body.String())
+		}
+		rows := deniedRows(t, one)
+		if len(rows) != 1 || rows[0]["reason"] != "capability_model_provider" || rows[0]["provider"] != "corp" {
+			t.Errorf("%s: authz.denied rows = %v, want one capability_model_provider row naming corp", path, rows)
 		}
 	}
 }

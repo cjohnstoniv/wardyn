@@ -72,7 +72,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   signed in to rather than keyed, and a `DELETE` of a key you still hold is never refused. At
   `POST /runs` and `POST /runs/preflight`, a provider you name (or your workspace pins) and are not
   granted answers the `422` "there is no model provider by that name", whatever its state, instead
-  of the `403`. The `authz.denied` row still records `capability_model_provider`.
+  of the `403`; when you name none and the one provider serving the agent is not granted to you,
+  the `403` no longer names it. The `authz.denied` row still records `capability_model_provider`.
 - **The User view's forced exit is dual-emitted too (#1020).** When `GET /me` finds the viewed user
   type deleted and drops the session back to the Admin view, it writes `auth.member_mode` beside
   `auth.user_view.set`, with the same data, as the toggle does through 0.8.x.
