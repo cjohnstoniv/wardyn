@@ -104,6 +104,10 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5
+  # #1425: the run policy view fixture's created_at/updated_at and a restart
+  # change's `at` are display data rendered into the tab (S-21 prints the
+  # restart date); nothing compares them against the clock.
+  ["ui/src/app/components/screens/run-detail/policy-tab.test.tsx"]=3
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the

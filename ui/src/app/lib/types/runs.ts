@@ -8,6 +8,7 @@
 // one documented exception, in a different domain module).
 
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
+import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -352,6 +353,69 @@ export interface RunDetail extends AgentRun {
   user_type_name?: string;
   model_provider_name?: string;
   model_provider_deleted?: boolean;
+}
+
+// GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
+// Policy tab). Mirrors the server's runPolicyResponse (internal/api/
+// run_policy_view.go). `spec` strict-decodes as a RunPolicySpec, with values
+// the reader may not see already blanked ("<redacted>") server-side.
+export type RunPolicyState = "recorded" | "not_yet" | "never";
+export type RunPolicySourceKind = "stored" | "inline" | "default" | "profile" | "unknown";
+
+export interface RunPolicySource {
+  kind: RunPolicySourceKind | (string & {});
+  policy_id?: string;
+  name?: string;
+  deleted?: boolean;
+  preset?: string;
+  preset_version?: number;
+}
+
+// The closed set of reasons launch changed a policy; an unknown one reads as "launch".
+export type RunPolicyCause =
+  | "workspace"
+  | "source_control"
+  | "mirror"
+  | "model_access"
+  | "git_broker"
+  | "profile"
+  | "org_disk"
+  | "restart"
+  | "limits"
+  | "launch";
+
+export interface RunPolicyChange {
+  cause: RunPolicyCause | (string & {});
+  // The RunPolicySpec json name the entries belong to.
+  field: string;
+  added?: string[];
+  removed?: string[];
+  // clamp_warnings lines, verbatim (cause "limits" only).
+  detail?: string[];
+  profile?: string;
+  // Restart time (cause "restart" only).
+  at?: string;
+}
+
+export interface StoredPolicyNow {
+  state: "same" | "changed" | "updated" | "deleted";
+  name?: string;
+  updated_at?: string;
+}
+
+export interface RunPolicyView {
+  run_id: string;
+  state: RunPolicyState;
+  recorded_at?: string;
+  source: RunPolicySource;
+  spec?: RunPolicySpec;
+  // Some values are hidden from this reader.
+  redacted: boolean;
+  // Never null.
+  changes: RunPolicyChange[];
+  // False for a run that started before each change was recorded.
+  complete: boolean;
+  stored_policy_now?: StoredPolicyNow;
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror

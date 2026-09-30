@@ -201,6 +201,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/output", s.handleRunOutput) // same gate as GET /runs/{id}
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
+			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
 			r.Post("/runs/{id}/resume", s.handleResumeRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile

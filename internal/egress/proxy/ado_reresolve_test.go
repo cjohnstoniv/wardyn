@@ -327,7 +327,7 @@ const projectsGET = "/acme/_apis/projects?api-version=7.1"
 // newer PAT without minting, and the sandbox sees 200.
 func TestADOReresolve_StaleHostHealsAndRetries(t *testing.T) {
 	logs := captureSlog(t)
-	h := newReresolveHarness(t, adoscope.CapProjectRead)
+	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	h.front.setRefuse(refuseToken(h.old.value, http.StatusUnauthorized))
 
 	rec := h.do(t, http.MethodGet, projectsGET, "", sandboxADOHeaders())
@@ -366,7 +366,7 @@ func TestADOReresolve_StaleHostHealsAndRetries(t *testing.T) {
 
 // A 203 sign-in page heals the same way.
 func TestADOReresolve_SignInPageHeals(t *testing.T) {
-	h := newReresolveHarness(t, adoscope.CapProjectRead)
+	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	h.front.setRefuse(refuseToken(h.old.value, http.StatusNonAuthoritativeInfo))
 	if rec := h.do(t, http.MethodGet, projectsGET, "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 after the retry. body=%s", rec.Code, rec.Body.String())
@@ -382,7 +382,7 @@ func TestADOReresolve_SignInPageHeals(t *testing.T) {
 // A body the gate buffered whole (a ref update is classified on its body) is
 // retried byte for byte.
 func TestADOReresolve_BufferedBodyIsReplayedByteIdentical(t *testing.T) {
-	h := newReresolveHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapCodeWrite)
 	h.front.setRefuse(refuseToken(h.old.value, http.StatusUnauthorized))
 	body := `[{"name":"` + BranchNSPrefix(h.p.runID) + `work","oldObjectId":"` + zeroOID + `","newObjectId":"` + strings.Repeat("a", 40) + `"}]`
 	rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/refs?api-version=7.1", body, nil)
@@ -404,7 +404,7 @@ func TestADOReresolve_BufferedBodyIsReplayedByteIdentical(t *testing.T) {
 // without it) is not retried: the refusal is relayed, but the header is dropped
 // all the same, and the next request re-resolves and uses the fresh one.
 func TestADOReresolve_UnbufferedBodyIsNotRetriedButTheHeaderIsDropped(t *testing.T) {
-	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapWorkWrite)
+	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWorkWrite)
 	h.front.setRefuse(refuseToken(h.old.value, http.StatusUnauthorized))
 	big := `[{"op":"add","path":"/fields/System.Description","value":"` + strings.Repeat("x", adoscope.MaxBodyPeek+1) + `"}]`
 	rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1?api-version=7.1", big, nil)
@@ -435,7 +435,7 @@ func TestADOReresolve_UnbufferedBodyIsNotRetriedButTheHeaderIsDropped(t *testing
 // A refusal of the retry is relayed through the existing refusal, and there is
 // no second re-resolve or retry.
 func TestADOReresolve_SecondRefusalIsRelayed(t *testing.T) {
-	h := newReresolveHarness(t, adoscope.CapProjectRead)
+	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	h.front.setRefuse(func(_, _ string) int { return http.StatusUnauthorized }) // every PAT refused
 	rec := h.do(t, http.MethodGet, projectsGET, "", nil)
 	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get(egressHeaderDetail), adoMsgRefused) {
@@ -457,7 +457,7 @@ func TestADOReresolve_SecondRefusalIsRelayed(t *testing.T) {
 // refusal of the fresh header asks nothing; past it, a stale_jti naming the
 // current PAT makes the control plane mint a fresh one.
 func TestADOReresolve_ConcurrentRefusalsMakeOneReresolveAndArePaced(t *testing.T) {
-	h := newReresolveHarness(t, adoscope.CapProjectRead)
+	h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	h.front.setRefuse(refuseToken(h.old.value, http.StatusUnauthorized))
 	var wg sync.WaitGroup
 	codes := make([]int, 8)
@@ -521,7 +521,7 @@ func TestADOReresolve_423JoinsTheReauthHold(t *testing.T) {
 		{"Ended", &fakeApprovalReader{steps: steps(types.ApprovalCancelled)}, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newReresolveHarness(t, adoscope.CapProjectRead)
+			h := newReresolveHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 			h.front.setRefuse(refuseToken(h.old.value, http.StatusUnauthorized))
 			h.cp.lockNext(1)
 			h.p.inject.reauth, h.p.inject.approvals = newReauthCoordinator(), tc.reader
@@ -575,7 +575,7 @@ func newReresolveGitHarness(t *testing.T, oldValid bool, caps ...adoscope.Capabi
 func TestADOReresolve_GitAdvertisementHeals(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusNonAuthoritativeInfo} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			h, front, cp, old := newReresolveGitHarness(t, false, adoscope.CapCodeRead)
+			h, front, cp, old := newReresolveGitHarness(t, false, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 			front.setRefuse(refuseToken(old.value, status))
 			h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 			if got := tokensOf(front.requests("/info/refs")); len(got) != 2 || got[0] != old.value || got[1] != h.bearer {
@@ -596,7 +596,7 @@ func TestADOReresolve_GitAdvertisementHeals(t *testing.T) {
 // git: an upload-pack POST refused for the stale PAT is retried with the same
 // bytes.
 func TestADOReresolve_GitUploadPackIsReplayedByteIdentical(t *testing.T) {
-	h, front, _, old := newReresolveGitHarness(t, true, adoscope.CapCodeRead)
+	h, front, _, old := newReresolveGitHarness(t, true, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	front.setRefuse(func(path, tok string) int {
 		if tok == old.value && strings.HasSuffix(path, "/git-upload-pack") {
 			return http.StatusUnauthorized
@@ -617,7 +617,7 @@ func TestADOReresolve_GitUploadPackIsReplayedByteIdentical(t *testing.T) {
 // git: a push is NEVER retried. The refusal reaches git, the header is dropped
 // all the same, and the next request uses the fresh one.
 func TestADOReresolve_GitPushIsNeverRetried(t *testing.T) {
-	h, front, cp, old := newReresolveGitHarness(t, true, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+	h, front, cp, old := newReresolveGitHarness(t, true, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapCodeWrite)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	front.setRefuse(func(path, tok string) int {
 		if tok == old.value && strings.HasSuffix(path, "/git-receive-pack") {
@@ -651,7 +651,7 @@ func TestADOReresolve_GitPushIsNeverRetried(t *testing.T) {
 // git: an upload-pack body over adoscope.MaxBodyPeek is not buffered and not
 // retried.
 func TestADOReresolve_GitOversizeUploadPackIsNotRetried(t *testing.T) {
-	h, front, _, old := newReresolveGitHarness(t, true, adoscope.CapCodeRead)
+	h, front, _, old := newReresolveGitHarness(t, true, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	front.setRefuse(refuseToken(old.value, http.StatusUnauthorized))
 	body := bytes.Repeat([]byte("0032want 0000000000000000000000000000000000000000\n"), adoscope.MaxBodyPeek/50+1)
 	req, err := http.NewRequest(http.MethodPost, h.proxy+"/wardyn/git/dev.azure.com/acme/proj/_git/app/git-upload-pack", bytes.NewReader(body))

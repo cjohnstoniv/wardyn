@@ -13,9 +13,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 const getRunMock = vi.fn();
+const getPolicyMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
   runs: {
     getRun: (...a: unknown[]) => getRunMock(...a),
+    getPolicy: (...a: unknown[]) => getPolicyMock(...a),
     getGrants: vi.fn().mockResolvedValue([]),
     killRun: vi.fn(),
     // The cockpit's evidence widgets poll these. They reject here so the rail
@@ -93,6 +95,15 @@ beforeEach(() => {
   // vacuously.
   vi.clearAllMocks();
   getRunMock.mockReset();
+  getPolicyMock.mockReset();
+  getPolicyMock.mockResolvedValue({
+    run_id: "run-1",
+    state: "not_yet",
+    source: { kind: "inline" },
+    redacted: false,
+    changes: [],
+    complete: true,
+  });
   listApprovalsMock.mockReset();
   listApprovalsMock.mockResolvedValue([]);
   listAuditMock.mockReset();
@@ -488,5 +499,34 @@ describe("RunDetailScreen — a failed recording fetch is not a claim about the 
 
     const pane = await screen.findByTestId("run-terminal-pane");
     await waitFor(() => expect(pane).toHaveTextContent(RUN_COCKPIT.recordingMissing));
+  });
+});
+
+// The Policy tab (#1425): between Approvals and Audit, read only when opened,
+// and reachable from the identity rail's Policy row.
+describe("RunDetailScreen — the Policy tab", () => {
+  it("sits between Approvals and Audit", async () => {
+    renderRun(RUN);
+    await screen.findByRole("tab", { name: /audit/i });
+    const names = screen.getAllByRole("tab").map((t) => t.textContent?.trim());
+    expect(names.slice(1, 4)).toEqual(["Approvals", "Policy", "Audit"]);
+  });
+
+  it("requests nothing until it is opened", async () => {
+    renderRun(RUN);
+    await screen.findByRole("tab", { name: /policy/i });
+    expect(getPolicyMock).not.toHaveBeenCalled();
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(screen.getByRole("tab", { name: /policy/i }));
+    expect(await screen.findByText("Started from a policy written for this run.")).toBeInTheDocument();
+    expect(getPolicyMock).toHaveBeenCalledTimes(1);
+    expect(getPolicyMock).toHaveBeenCalledWith("run-1");
+  });
+
+  it("the identity rail's Policy row is a View link that opens the tab, for a run with no saved policy", async () => {
+    renderRun(RUN);
+    expect(RUN).not.toHaveProperty("policy_id");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("button", { name: "View" }));
+    expect(await screen.findByTestId("run-policy-tab")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /policy/i })).toHaveAttribute("data-state", "active");
   });
 });

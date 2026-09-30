@@ -151,7 +151,7 @@ func TestMemberBounding_InlineAndStoredBranchesAgree(t *testing.T) {
 
 	inlineReq := wide
 	r, ctx := boundMemberRequest(t)
-	inlineSpec, inlineID, inlineWarns, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
+	inlineSpec, inlineID, inlineWarns, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", InlinePolicy: &inlineReq}, false)
 	if !ok {
 		t.Fatalf("inline branch refused the request")
@@ -160,7 +160,7 @@ func TestMemberBounding_InlineAndStoredBranchesAgree(t *testing.T) {
 	h.audit.events = nil
 
 	r, ctx = boundMemberRequest(t)
-	storedSpec, storedID, storedWarns, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
+	storedSpec, storedID, storedWarns, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", PolicyID: &policyID}, false)
 	if !ok {
 		t.Fatalf("stored branch refused the request")
@@ -220,7 +220,7 @@ func TestMemberBounding_ErrorPrefixStaysPerBranch(t *testing.T) {
 	inlineReq := malformed
 	r, ctx := boundMemberRequest(t)
 	w := httptest.NewRecorder()
-	if _, _, _, ok := srv.resolveRunPolicy(ctx, w, r,
+	if _, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", InlinePolicy: &inlineReq}, false); ok {
 		t.Fatal("inline branch accepted a malformed grant scope")
 	}
@@ -230,7 +230,7 @@ func TestMemberBounding_ErrorPrefixStaysPerBranch(t *testing.T) {
 
 	r, ctx = boundMemberRequest(t)
 	w = httptest.NewRecorder()
-	if _, _, _, ok := srv.resolveRunPolicy(ctx, w, r,
+	if _, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", PolicyID: &policyID}, false); ok {
 		t.Fatal("stored branch accepted a malformed grant scope")
 	}

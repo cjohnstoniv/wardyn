@@ -71,7 +71,7 @@ func newADOBasicHarness(t *testing.T, caps ...adoscope.Capability) (*adoHarness,
 // REST DOOR: the PAT rides as Basic, and nothing the sandbox put on the request
 // reaches Azure DevOps.
 func TestADOGate_BasicPATIsInjectedAndSandboxHeadersAreStripped(t *testing.T) {
-	h, pat := newADOBasicHarness(t, adoscope.CapProjectRead)
+	h, pat := newADOBasicHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	rec := h.do(t, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "", sandboxADOHeaders())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200. body=%s", rec.Code, rec.Body.String())
@@ -99,13 +99,13 @@ func TestADOGate_BasicPATIsInjectedAndSandboxHeadersAreStripped(t *testing.T) {
 // the gate's, since the fake's PAT holds every scope.
 func TestADOGate_BasicPATGrantRunsTheSameGate(t *testing.T) {
 	t.Run("write beyond the grant", func(t *testing.T) {
-		h, _ := newADOBasicHarness(t, adoscope.CapCodeRead)
+		h, _ := newADOBasicHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 		rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1?api-version=7.1",
 			`[{"op":"add","path":"/fields/System.Title","value":"x"}]`, sandboxADOHeaders())
 		h.mustRefuse(t, rec, "this run was not granted it")
 	})
 	t.Run("granted write is forwarded", func(t *testing.T) {
-		h, pat := newADOBasicHarness(t, adoscope.CapCodeRead, adoscope.CapWorkWrite)
+		h, pat := newADOBasicHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWorkWrite)
 		rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1?api-version=7.1",
 			`[{"op":"add","path":"/fields/System.Title","value":"x"}]`, sandboxADOHeaders())
 		if rec.Code != http.StatusOK {
@@ -206,7 +206,7 @@ func (h *adoGitHarness) cloneWithSandboxBasic(t *testing.T, cloneURL string) str
 // on the request, and the broker mask-registers the PAT in both renderings
 // before anything can log it.
 func TestADOGitBroker_BasicPATCloneCarriesThePATAndStripsTheSandbox(t *testing.T) {
-	h := basicGitHarness(t, adoscope.CapCodeRead)
+	h := basicGitHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	wire := base64.StdEncoding.EncodeToString([]byte(":" + h.bearer))
 	if !strings.Contains(string(maskDecisionBytes([]byte("error "+wire+" "+h.bearer))), wire) {
 		t.Fatal("precondition: the PAT is masked before the broker ever used it")
@@ -237,7 +237,7 @@ func TestADOGitBroker_BasicPATCloneCarriesThePATAndStripsTheSandbox(t *testing.T
 // GIT DOOR: a Basic PAT is held to the run's capabilities on the pack POST,
 // refused in git's terms, and the refused pack never reaches Azure DevOps.
 func TestADOGitBroker_BasicPATPushBeyondTheGrantIsRefused(t *testing.T) {
-	h := basicGitHarness(t, adoscope.CapCodeRead)
+	h := basicGitHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	out, err := h.push(t, dir, h.runBranch())
 	mustBeGitRefusal(t, out, err, "this run was not granted it")
@@ -248,7 +248,7 @@ func TestADOGitBroker_BasicPATPushBeyondTheGrantIsRefused(t *testing.T) {
 
 	// The run's own-branch rule holds whatever the capabilities: main is refused
 	// before the pack reaches Azure DevOps.
-	off := basicGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+	off := basicGitHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapCodeWrite)
 	offDir := off.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	out, err = off.push(t, offDir, "main")
 	mustBeGitRefusal(t, out, err, "this run may push only to its own branch")
@@ -257,7 +257,7 @@ func TestADOGitBroker_BasicPATPushBeyondTheGrantIsRefused(t *testing.T) {
 	}
 	off.finish(t)
 
-	other := basicGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+	other := basicGitHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapCodeWrite)
 	if out, err := other.git(t, "clone", "https://dev.azure.com/evil/loot/_git/app", "loot"); err == nil ||
 		!strings.Contains(out, `granted the "acme" Azure DevOps organisation only`) {
 		t.Errorf("another organisation was not refused (err %v):\n%s", err, out)
@@ -270,7 +270,7 @@ func TestADOGitBroker_BasicPATPushBeyondTheGrantIsRefused(t *testing.T) {
 
 // GIT DOOR: a push held for approval goes out under the run's Basic PAT once approved.
 func TestADOGitBroker_BasicPATHeldPushForwardsUnderThePAT(t *testing.T) {
-	h := basicGitHarness(t, adoscope.CapCodeRead)
+	h := basicGitHarness(t, adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapWorkRead)
 	cp := newCapControlPlane(t)
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")

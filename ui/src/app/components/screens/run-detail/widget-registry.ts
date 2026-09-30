@@ -97,6 +97,8 @@ export type WidgetContext = {
   heldCount: number;
   audit: AuditEvent[];
   onGoAudit: () => void;
+  /** Opens the run page's Policy tab (the identity row's View link). */
+  onGoPolicy: () => void;
   /** The terminal hero, built by run-detail.tsx — it owns AttachTerminal, the
    *  replay fallback and the held-approval strip that sits under the output.
    *  The registry only PLACES it; teaching this table to build it would drag
@@ -196,7 +198,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   identity: {
     label: "Identity",
     Icon: Fingerprint,
-    component: (ctx) => React.createElement(IdentityWidget, { run: ctx.run }),
+    component: (ctx) => React.createElement(IdentityWidget, { run: ctx.run, onGoPolicy: ctx.onGoPolicy }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
       live: { x: 8, y: 16, w: 4, h: 4 },

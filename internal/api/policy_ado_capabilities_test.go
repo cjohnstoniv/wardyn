@@ -191,7 +191,7 @@ func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil).WithContext(ctx)
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: tc.inline}
 			w := httptest.NewRecorder()
-			got, _, _, ok := srv.resolveRunPolicy(ctx, w, req, &createRunRequest{Agent: "claude-code", InlinePolicy: &spec}, true)
+			got, _, _, _, ok := srv.resolveRunPolicy(ctx, w, req, &createRunRequest{Agent: "claude-code", InlinePolicy: &spec}, true)
 			if !ok {
 				t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 			}
@@ -229,7 +229,7 @@ func TestMemberADOCapabilities_CeilingListIsNeverInherited(t *testing.T) {
 			ctx := operatorCtx("sub-ado", "ado@corp.example", oidc.RoleUser)
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 			w := httptest.NewRecorder()
-			spec, _, _, ok := srv.resolveRunPolicy(ctx, w, r, tc.req, true)
+			spec, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r, tc.req, true)
 			if !ok {
 				t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 			}
