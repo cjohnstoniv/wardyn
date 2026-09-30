@@ -32,11 +32,13 @@
 # PUT /model-providers/{id}/credential does. Under OIDC the same token is
 # not_applicable and ci-run.sh refuses it by name.
 #
-# The assertion is the fake's own counter (/_seen bedrock_calls), never the run's
-# exit code alone: a run that exits 0 without calling the model proves nothing.
+# The assertions are the run's audit rows plus the fake's own counter (/_seen),
+# never the run's exit code alone: a run that exits 0 without calling the model
+# proves nothing (and against this fake the agent exits 1 anyway, see step 6).
 #
 # GUARD: self-skips unless WARDYN_TEST_K8S=1 (exit 77, common.sh's skip_lane).
-# It mutates the cluster it finds (helm upgrade, site-config, a provider row),
+# It mutates the cluster it finds (helm upgrade, site-config, and it REPLACES
+# the model-provider block and claude-code's default provider),
 # so a hand run must also set WARDYN_ACK_SHARED_QUICKSTART=1 to say that cluster
 # is disposable; nightly.yml sets it for the hosted run, which creates its own.
 set -uo pipefail
@@ -73,6 +75,7 @@ FAKE_SVC="wardyn-awsssofake"
 # Service names, never a pod IP: the proxy refuses to lift its own pod subnet.
 FAKE_BEDROCK_HOST="${FAKE_SVC}-bedrock.${NAMESPACE}.svc.cluster.local"
 PROVIDER_ID="ci-model-fake"
+MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 CURL_MAX_TIME=15
 EVIDENCE_DIR="${WARDYN_KIND_CI_MODEL_EVIDENCE:-${ROOT}/local/evidence/kind-ci-model-run}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -137,9 +140,9 @@ must 200 "PUT /site-config" PUT /site-config "${merged}"
 
 # ── 4. the provider, and the caller's own credential ────────────────────────
 step "seeding the model provider (${PROVIDER_ID}: bedrock_bearer -> the fake); no credential stored yet"
-must 200 "PUT /model-providers" PUT /model-providers "$(jq -cn --arg id "${PROVIDER_ID}" --arg u "http://${FAKE_BEDROCK_HOST}:8091" \
+must 200 "PUT /model-providers" PUT /model-providers "$(jq -cn --arg id "${PROVIDER_ID}" --arg u "http://${FAKE_BEDROCK_HOST}:8091" --arg m "${MODEL}" \
   '{providers:[{id:$id,name:"CI model fake",kind:"bedrock_bearer",bedrock:{region:"us-east-1",base_url:$u},
-    harnesses:[{harness:"claude-code",model:"us.anthropic.claude-sonnet-4-5-20250929-v1:0"}]}]}')"
+    harnesses:[{harness:"claude-code",model:$m}]}]}')"
 must 200 "PUT /agent-providers" PUT /agent-providers "$(jq -cn --arg id "${PROVIDER_ID}" '{agents:[{id:"claude-code",default_provider:$id}]}')"
 
 # ── 5. the CLI ci-run.sh drives, and the run itself ─────────────────────────
@@ -160,8 +163,13 @@ ci_run() { # LOG -> ci-run.sh's exit code
     ./scripts/ci-run.sh 2>&1 | tee "$1"
   return "${PIPESTATUS[0]}"
 }
-CI_OUT="${WARDYN_CI_OUT:-${EVIDENCE_DIR}/ci-artifacts}"
+# Never an ambient WARDYN_CI_OUT: this directory is deleted below.
+CI_OUT="${EVIDENCE_DIR}/ci-artifacts"
 rm -rf "${CI_OUT}"
+# A credential left by an earlier run on this cluster survives the provider PUT
+# (the UID is kept for the same id), so clear it: 5a needs "no credential".
+code="$(api DELETE "/model-providers/${PROVIDER_ID}/credential")"
+[[ "${code}" == "204" || "${code}" == "404" ]] || die "could not clear a stale credential for ${PROVIDER_ID} (DELETE answered ${code})"
 
 # ── 5a. no credential yet: ci-run.sh must refuse, naming the provider ────────
 # (#681 item 1, live: the script test pins the message against a stub; this is
@@ -213,9 +221,13 @@ for _ in $(seq 1 15); do
 done
 [[ -n "${seen}" ]] || die "the fake's /_seen never answered"
 printf '%s\n' "${seen}" >"${EVIDENCE_DIR}/fake-seen.json"
-# auth:Bearer is the shape of a call carrying only what the proxy injected.
-jq -e '.bedrock_calls >= 1 and (.bedrock_unattributed["auth:Bearer"] // 0) >= 1' <<<"${seen}" >/dev/null
-check "the fake received a model call carrying the proxy-injected bearer ($(jq -c '{bedrock_calls, bedrock_models}' <<<"${seen}"))" $?
+# auth:Bearer means only "an Authorization: Bearer header", which the sandbox's
+# own placeholder would also be; that the real key was injected is what the
+# secret.read row above proves. $? is captured BEFORE the label's command
+# substitution, which would otherwise overwrite it.
+jq -e --arg m "${MODEL}" '.bedrock_calls >= 1 and (.bedrock_unattributed["auth:Bearer"] // 0) >= 1 and any(.bedrock_models[]?; . == $m)' <<<"${seen}" >/dev/null
+seen_rc=$?
+check "the fake received a model call for ${MODEL} with a Bearer header ($(jq -c '{bedrock_calls, bedrock_models}' <<<"${seen}"))" "${seen_rc}"
 
 [[ "${fail}" -eq 0 ]] || die "the model-provider path was not proven — see the FAIL lines above and ${EVIDENCE_DIR}"
 echo "kind-ci-model-run: PASS"
