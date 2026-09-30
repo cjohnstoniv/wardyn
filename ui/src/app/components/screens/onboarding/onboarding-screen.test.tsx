@@ -30,7 +30,7 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
     ready: true,
     runner: { driver: "docker", confinement_classes: ["CC1"] },
-    providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+    providers: [{ tool: "claude", installed: true }],
     age_key: { durable: true },
     platform: { os: "linux", wsl: false },
     ...overrides,
