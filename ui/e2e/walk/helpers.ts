@@ -375,8 +375,19 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
   return next;
 }
 
+/** A person's model connection rows live on Your account (packet MP-D, #548):
+ *  Getting Started keeps only the summary chip. The card there is collapsed by
+ *  default, so it is opened before a row is read or its button pressed. */
+export async function openModelConnections(page: Page): Promise<void> {
+  await page.goto("/account");
+  const toggle = page.getByTestId("model-connections-card").locator("button[aria-expanded]").first();
+  await expect(toggle).toBeVisible({ timeout: 60_000 });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
 /**
- * Open the member's sign-in pane from Getting Started and wait for its terminal.
+ * Open the member's sign-in pane from Your account and wait for its terminal.
  *
  * The walk's provider is the member's one model connection, so Getting
  * Started renders one "Sign in to AWS" button for it; `.first()` keeps the
@@ -392,7 +403,7 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
  * no page — least of all an about:blank placeholder — opened on the click.
  */
 export async function openLoginPane(page: Page): Promise<void> {
-  await page.goto("/setup");
+  await openModelConnections(page);
   const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();

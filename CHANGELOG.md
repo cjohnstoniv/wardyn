@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-09-30
+
 ### Before you upgrade: Entra changes (Azure DevOps)
 
 Azure DevOps no longer uses one shared personal access token. For each run, Wardyn now creates a short-lived
