@@ -1,7 +1,7 @@
 # wardyn/agent-codex-cli: OpenAI Codex CLI coding-agent image.
 #
 # Stage 1: build wardyn-rec and wardyn-git-helper from the repository root.
-# Stage 2: node:24-bookworm-slim installs Codex CLI plus OS utilities.
+# Stage 2: node:24-trixie-slim installs Codex CLI plus OS utilities.
 #
 # IMAGE CONTRACT (all agent images must satisfy these — see deploy/images/README.md):
 #   - NO ENTRYPOINT: the Wardyn docker driver sets Cmd=["sleep","infinity"].
@@ -67,7 +67,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
@@ -101,7 +101,8 @@ LABEL org.opencontainers.image.title="agent-codex-cli" \
 # unused — but this image still does NOT wire it: no baked known_hosts, no
 # corkscrew (SSH-over-443 proxy tunnel), no GIT_SSH_COMMAND from agent-run.
 # This image's git-over-SSH clone story is unchanged (git-over-HTTPS only).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade: take the current security updates for packages the pinned base already carries.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
@@ -153,7 +154,7 @@ ARG CODEX_VERSION=0.149.1
 # npm (10.9.8) vendors node-tar 7.5.11. 11.19.1 vendors 7.5.22, which is also
 # the floor for CVE-2026-73566 (node-tar <= 7.5.20, patched 7.5.21) — 11.19.0
 # vendors 7.5.19 and so does 12.0.2, so a HIGHER npm is not automatically a
-# fixed one. No node:24-bookworm-slim digest ships a fixed one yet, and it is
+# fixed one. No node:24-trixie-slim digest ships a fixed one yet, and it is
 # npm's internal copy, so upgrading npm is the only reach. Keep in step with
 # that image.
 ARG NPM_VERSION=11.19.1
@@ -174,7 +175,7 @@ RUN set -eu; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi
 
-# The node:24-bookworm-slim base image ships a `node` user at uid=1000.
+# The node:24-trixie-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory so the sandbox contract
 # is satisfied without creating a conflicting second uid-1000 user.
 # /home/agent/drive is the RESERVED user-drive mount point (runner.DriveTarget),
@@ -182,11 +183,14 @@ RUN set -eu; \
 # states in full: a fresh managed volume inherits the uid/gid of the image directory
 # it is mounted over, so without it a docker_volume drive's root is root-owned and a
 # writable managed drive is read-only in practice for uid 1000.
+# chmod 0755: Debian 13 creates the home 0700 (Debian 12 gave 0755); a run under
+# another uid (the docker-tagged tests, platforms that assign one) must reach it.
 RUN usermod  -l agent node \
  && usermod  -d /home/agent -m agent \
  && groupmod -n agent node \
  && mkdir -p /home/agent/work /home/agent/drive \
- && chown -R agent:agent /home/agent
+ && chown -R agent:agent /home/agent \
+ && chmod 0755 /home/agent
 
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec
@@ -223,7 +227,7 @@ WORKDIR /home/agent/work
 
 USER agent
 
-# The node:24-bookworm-slim base image sets ENTRYPOINT ["docker-entrypoint.sh"].
+# The node:24-trixie-slim base image sets ENTRYPOINT ["docker-entrypoint.sh"].
 # MUST be cleared: the Wardyn docker driver sets Cmd=["sleep","infinity"] at
 # container create and launches the agent via Exec.  An ENTRYPOINT here would
 # wrap the driver-supplied Cmd, causing the sandbox to tear down immediately.

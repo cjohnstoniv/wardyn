@@ -194,10 +194,10 @@ fi
   echo "npm package bundled by the vendor tool that ships it, named per-entry where"
   echo "that applies. The corresponding source is the applicable one below:"
   echo
-  echo "- **Debian** (\`debian:bookworm-slim\`, \`node:24-bookworm-slim\`, and the"
+  echo "- **Debian** (\`debian:trixie-slim\`, \`node:24-trixie-slim\`, and the"
   echo "  \`gcr.io/distroless/static-debian12\` base): \`https://snapshot.debian.org\`"
   echo "  pinned to the package version below, or \`apt-get source <package>\` on a"
-  echo "  bookworm host. Per-package copyright and licence text also ships inside each"
+  echo "  trixie host. Per-package copyright and licence text also ships inside each"
   echo "  image at \`/usr/share/doc/<package>/copyright\`."
   echo "- **Alpine** (\`alpine:3.24\`): \`https://gitlab.alpinelinux.org/alpine/aports\`"
   echo "  at the matching aport version."

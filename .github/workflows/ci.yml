@@ -967,7 +967,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # Two image builds (one of them a bookworm + node + `npm install -g` layer)
+    # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
     # key-service leg.
     timeout-minutes: 55
@@ -1222,7 +1222,7 @@ jobs:
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
   # the agent image actually ships. agent-claude-code is the scan target
-  # because it is by far the fattest image we publish (bookworm + node + npm +
+  # because it is by far the fattest image we publish (trixie + node + npm +
   # git/ssh/tmux/socat); wardynd and wardyn-proxy are distroless-static, which
   # carries essentially no OS package surface to scan.
   #
@@ -1234,6 +1234,15 @@ jobs:
   # blocks every PR until Debian ships a patch. Accepted-with-a-reason CVEs go
   # in .trivyignore (trivy's own allowlist format — one id per line, each with
   # a comment saying who accepted it and why).
+  #
+  # A SECOND, STRICT step follows (severity CRITICAL, NO --ignore-unfixed). It
+  # exists because adopters mirror our images through scanners that count a
+  # CRITICAL fixed in ANY Debian release, not just the one we build on: three
+  # Perl CRITICALs that bookworm had not fixed (fixed only in trixie) passed the
+  # step above and got the published agent images refused. The first step still
+  # answers "can a rebuild clear this"; the strict one answers "will a scanner
+  # that ignores distro no-fix status accept this". .trivyignore stays the ONLY
+  # exception path for either step, under its reason-and-date rules.
   #
   # Native amd64 build (no QEMU, no platforms list): a CVE in a Debian package
   # is not arch-specific, so scanning one arch finds the same advisories.
@@ -1316,6 +1325,20 @@ jobs:
           trivyignores: .trivyignore
           exit-code: '1'
           cache: false
+      # Strict policy: any CRITICAL, fixed or not (see the job comment). Reuses the
+      # trivy the step above installed and the DB it already pulled into
+      # TRIVY_CACHE_DIR, so nothing is installed or downloaded twice.
+      - name: Trivy strict scan (CRITICAL, fixed or not)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: wardyn/${{ matrix.name }}:trivy-scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+          skip-setup-trivy: true
       - name: Save trivy DB cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
