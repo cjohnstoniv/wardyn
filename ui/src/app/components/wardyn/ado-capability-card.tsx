@@ -58,6 +58,7 @@ import {
 } from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
+import { ADO_CAP_COPY } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ADO_PAT } from "../../lib/ado-pat-copy";
@@ -65,30 +66,30 @@ import { Chip } from "./primitives";
 import { Mono } from "./code-block";
 import { cn } from "../ui/utils";
 
-// §7.4's card-facing capability labels — only the capabilities that are
-// Grantable() (adoscope.Capability), since only those can ever reach a
-// PENDING row. A capability outside this map (security_admin,
-// serviceendpoint_admin, build_admin, packaging_write, project_admin — all
-// grantable server-side, none yet given a §7.4 canon label) falls back to
+// The card's heading is the capability's name in the same vocabulary as the
+// provider editor, the policy editor, the summary and the launch refusals
+// (ADO_CAP_COPY, the approved per-area mock). An id outside the catalogue — a
+// decided approval or audit row from before the per-area split — falls back to
 // its raw wire name in mono, never a guessed label.
-const CAP_LABEL: Record<string, string> = {
-  read: ADO.CAP_READ,
-  code_write: ADO.CAP_CODE_WRITE,
-  pr: ADO.CAP_PR,
-  policy_admin: ADO.CAP_POLICY_ADMIN,
-  policy_bypass: ADO.CAP_POLICY_BYPASS,
-  repo_admin: ADO.CAP_REPO_ADMIN,
-  build_execute: ADO.CAP_BUILD_EXECUTE,
-  work_write: ADO.CAP_WORK_WRITE,
-  wiki_write: ADO.CAP_WIKI_WRITE,
-};
-
 // §10.1's per-capability noun for the consequence sentences' {thing} — the
 // mock (State 5) picks a different word per capability ("push"/"change"/
 // "action"), never the generic "request" round 1 used. A capability outside
-// this map falls back to "request", same reasoning as CAP_LABEL's fallback.
+// this map falls back to "request", same reasoning as the heading's fallback.
 const CAP_THING: Record<string, string> = {
   read: ADO.CAP_THING_READ,
+  code_read: ADO.CAP_THING_READ,
+  work_read: ADO.CAP_THING_READ,
+  wiki_read: ADO.CAP_THING_READ,
+  build_read: ADO.CAP_THING_READ,
+  release_read: ADO.CAP_THING_READ,
+  serviceendpoint_read: ADO.CAP_THING_READ,
+  library_read: ADO.CAP_THING_READ,
+  packaging_read: ADO.CAP_THING_READ,
+  test_read: ADO.CAP_THING_READ,
+  project_read: ADO.CAP_THING_READ,
+  identity_read: ADO.CAP_THING_READ,
+  analytics_read: ADO.CAP_THING_READ,
+  release_execute: ADO.CAP_THING_BUILD_EXECUTE,
   code_write: ADO.CAP_THING_CODE_WRITE,
   pr: ADO.CAP_THING_PR,
   policy_admin: ADO.CAP_THING_POLICY_ADMIN,
@@ -107,8 +108,7 @@ const CAP_THING: Record<string, string> = {
 const DESTRUCTIVE_CAPABILITIES = new Set(["policy_bypass", "policy_admin"]);
 
 function capabilityHeading(capability: string): React.ReactNode {
-  const label = CAP_LABEL[capability];
-  return label ?? <Mono>{capability}</Mono>;
+  return ADO_CAP_COPY[capability]?.name ?? <Mono>{capability}</Mono>;
 }
 
 function capabilityThing(capability: string): string {

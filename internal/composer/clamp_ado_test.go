@@ -16,7 +16,7 @@ import (
 // explicit list must not arrive at dispatch narrowed to nothing, which reads as
 // "use the default" — and the clamped spec owns its slice.
 func TestClamp_ADOCapabilitiesPassThrough(t *testing.T) {
-	r, pr, pa := adoscope.CapRead, adoscope.CapPR, adoscope.CapPolicyAdmin
+	r, pr, pa := adoscope.CapCodeRead, adoscope.CapPR, adoscope.CapPolicyAdmin
 	for name, ceilingCaps := range map[string][]adoscope.Capability{"silent": nil, "disjoint": {pr}, "wider": {r, pr, pa}} {
 		ceiling := operatorCeiling(t)
 		ceiling.AzureDevOpsCapabilities = ceilingCaps

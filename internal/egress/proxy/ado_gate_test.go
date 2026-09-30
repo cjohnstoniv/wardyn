@@ -99,7 +99,7 @@ func (h *adoHarness) mustRefuse(t *testing.T, rec *httptest.ResponseRecorder, wa
 }
 
 func TestADOGate_AllowedReadPassesWithTheInjectedBearer(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapProjectRead)
 	rec := h.do(t, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "", map[string]string{"Authorization": "Bearer sandbox-placeholder"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200. body=%s", rec.Code, rec.Body.String())
@@ -114,13 +114,13 @@ func TestADOGate_AllowedReadPassesWithTheInjectedBearer(t *testing.T) {
 }
 
 func TestADOGate_WriteBeyondTheGrantIsRefused(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapCodeRead)
 	rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1?api-version=7.1", `[{"op":"add","path":"/fields/System.Title","value":"x"}]`, nil)
 	h.mustRefuse(t, rec, "this run was not granted it")
 
 	// The same write under a grant that holds it is forwarded: the refusal
 	// above is the capability check, not the route.
-	ok := newADOHarness(t, adoscope.CapRead, adoscope.CapWorkWrite)
+	ok := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapWorkWrite)
 	if rec := ok.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1", `[{"op":"add","path":"/fields/System.Title","value":"x"}]`, nil); rec.Code != http.StatusOK {
 		t.Fatalf("granted write: status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -158,7 +158,7 @@ func TestADOGate_MethodOverrideCannotSmuggleAWrite(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := newADOHarness(t, adoscope.CapRead)
+			h := newADOHarness(t, adoscope.CapCodeRead)
 			h.mustRefuse(t, h.do(t, c.method, c.target, c.body, map[string]string{"x-http-method-override": c.override}), "")
 		})
 	}
@@ -219,7 +219,7 @@ func TestADOGate_BodyThePeekCannotSeeIsRefused(t *testing.T) {
 
 // The refusal body is pinned byte for byte: tools key on this shape.
 func TestADOGate_RefusalBodyGolden(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapCodeRead)
 	rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1", `[]`, nil)
 	const golden = `{"$id":"1","innerException":null,"message":"Wardyn refused this Azure DevOps request: it needs \"Create and update work items\" (work_write), and this run was not granted it.","typeName":"Wardyn.Egress.CapabilityNotGrantedException, Wardyn","typeKey":"CapabilityNotGrantedException","errorCode":0,"eventId":3000}` + "\n"
 	if got := rec.Body.String(); got != golden {
@@ -242,7 +242,7 @@ func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
 // namespace needs code_write, exactly as a git push through the broker does
 // (adoRunBranchRule).
 func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `work","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
 	rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil)
 	if rec.Code/100 != 2 {
@@ -284,13 +284,13 @@ func TestADORunBranchRule_AnyBranchSwitch(t *testing.T) {
 func TestADOGate_AnyBranchPushNeedsCodeWrite(t *testing.T) {
 	body := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
 	const target = "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1"
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
 	if rec := h.do(t, http.MethodPost, target, body, nil); rec.Code/100 != 2 {
 		t.Fatalf("any-branch push to main under code_write: status %d body %s, want it forwarded", rec.Code, rec.Body.String())
 	}
 
-	ro := newADOHarness(t, adoscope.CapRead)
+	ro := newADOHarness(t, adoscope.CapCodeRead)
 	ro.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
 	ro.mustRefuse(t, ro.do(t, http.MethodPost, target, body, nil), "("+string(adoscope.CapCodeWrite)+")")
 }
@@ -298,7 +298,7 @@ func TestADOGate_AnyBranchPushNeedsCodeWrite(t *testing.T) {
 // The switch widens where a push may land, never a real policy bypass: a pull
 // request completed with bypassPolicy still needs policy_bypass, spelled as one.
 func TestADOGate_AnyBranchLeavesPRBypassPolicyBypass(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR)
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR)
 	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
 	rec := h.do(t, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1?api-version=7.1",
 		`{"status":"completed","completionOptions":{"bypassPolicy":true}}`, nil)
@@ -321,7 +321,7 @@ func TestADOGate_RefPatchReadsTheFilter(t *testing.T) {
 	h = newADOHarness(t, adoscope.GrantableCapabilities()...)
 	h.mustRefuse(t, h.do(t, http.MethodPatch, refs+"?filter=heads/wardyn/x&filter=heads/main", body, nil), "names no ref Wardyn can check")
 
-	ok := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	ok := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	rec := ok.do(t, http.MethodPatch, refs+"?filter=heads/wardyn/"+ok.p.runID.String()+"/work&api-version=7.1", body, nil)
 	if log := ok.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
 		t.Fatalf("a lock on the run's own branch under code_write was not forwarded (status %d): %s", rec.Code, log)
@@ -342,13 +342,13 @@ func TestADOGate_TagsAndGeneratedBranchesFollowTheRunBranchRule(t *testing.T) {
 		h.mustRefuse(t, h.do(t, http.MethodPost, tc.path+"?api-version=7.1", tc.body, nil), "may push only to its own branch")
 	}
 
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	body := `{"generatedRefName":"` + BranchNSPrefix(h.p.runID) + `undo","ontoRefName":"refs/heads/main"}`
 	h.do(t, http.MethodPost, repo+"reverts?api-version=7.1", body, nil)
 	if log := h.log(); strings.Contains(log, ruleSourceADODenied) {
 		t.Fatalf("a revert onto the run's own branch under code_write was refused: %s", log)
 	}
-	ro := newADOHarness(t, adoscope.CapRead)
+	ro := newADOHarness(t, adoscope.CapCodeRead)
 	body = `{"generatedRefName":"` + BranchNSPrefix(ro.p.runID) + `undo","ontoRefName":"refs/heads/main"}`
 	ro.mustRefuse(t, ro.do(t, http.MethodPost, repo+"reverts", body, nil), "("+string(adoscope.CapCodeWrite)+")")
 }
@@ -370,5 +370,24 @@ func TestADOGate_PlainLaneRefusesACoveredHost(t *testing.T) {
 	}
 	if log := h.log(); !strings.Contains(log, `"`+ruleSourceADODenied+`"`) {
 		t.Fatalf("decision log lacks %s: %s", ruleSourceADODenied, log)
+	}
+}
+
+// DISCOVERY is free to a run holding any capability — here one that reads
+// wikis only — and refused to a run holding none.
+func TestADOGate_DiscoveryNeedsOnlyAGrant(t *testing.T) {
+	for _, target := range []string{"/acme/_apis/connectionData?api-version=7.1", "/acme/_apis/resourceAreas"} {
+		h := newADOHarness(t, adoscope.CapWikiRead)
+		h.do(t, http.MethodGet, target, "", nil)
+		if log := h.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+			t.Errorf("GET %s under wiki_read was not forwarded: %s", target, log)
+		}
+		none := newADOHarness(t)
+		none.mustRefuse(t, none.do(t, http.MethodGet, target, "", nil), "No run is granted this")
+	}
+	h := newADOHarness(t, adoscope.CapWikiRead)
+	h.do(t, http.MethodOptions, "/acme/_apis/wit", "", nil)
+	if log := h.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+		t.Errorf("OPTIONS location discovery under wiki_read was refused: %s", log)
 	}
 }

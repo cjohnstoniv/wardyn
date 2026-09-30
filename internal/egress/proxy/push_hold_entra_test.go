@@ -164,7 +164,7 @@ func TestPushRulesAdvertiseNoThinOnTheEntraLane(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			up := newAdvertUpstream(t, advert(realCaps))
-			p, _, _ := newEntraProxy(t, c.spec, upstreamAddr(up.srv), adoscope.CapRead, adoscope.CapCodeWrite)
+			p, _, _ := newEntraProxy(t, c.spec, upstreamAddr(up.srv), adoscope.CapCodeRead, adoscope.CapCodeWrite)
 			rec := httptest.NewRecorder()
 			req := mustLocalReq(t, http.MethodGet,
 				"/wardyn/git/dev.azure.com/acme/proj/_git/app/info/refs?service=git-receive-pack", nil)

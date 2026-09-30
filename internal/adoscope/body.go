@@ -351,37 +351,60 @@ func CheckRefName(ref string) error {
 	return nil
 }
 
-// batchOp is the one field of a $batch operation this catalogue reads.
+// batchOp is the fields of a $batch operation this catalogue reads.
 type batchOp struct {
-	URI string `json:"uri"`
+	Method  string            `json:"method"`
+	URI     string            `json:"uri"`
+	Headers map[string]string `json:"headers"`
 }
 
-// batchIsWorkItemsOnly refuses a work-item $batch carrying an operation aimed
-// anywhere but the work-item area — the batch door forwards each operation's
-// URI internally, so one foreign URI would make CapWorkWrite the capability
-// for a request landing in another area entirely.
-func batchIsWorkItemsOnly(req Request) error {
+// batchCapability is the capability a work-item $batch needs: the WIDEST of
+// its operations, so one DELETE among edits makes the batch CapWorkAdmin.
+//
+// It refuses a batch carrying an operation aimed anywhere but the work-item
+// area — the batch door forwards each operation's URI internally, so one
+// foreign URI would make a work-item capability the capability for a request
+// landing in another area entirely — and an operation whose method it cannot
+// read: none, one it does not know, or an X-HTTP-Method-Override header in
+// any spelling.
+func batchCapability(req Request) (Capability, error) {
 	body, err := peekBody(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var ops []batchOp
 	if err := decodeUnique(body, &ops); err != nil {
-		return err
+		return "", err
 	}
 	if len(ops) == 0 {
-		return fmt.Errorf("adoscope: a $batch naming no operation cannot be classified")
+		return "", fmt.Errorf("adoscope: a $batch naming no operation cannot be classified")
 	}
+	out := CapWorkWrite
 	for _, op := range ops {
-		if err := batchOpIsWorkItem(op.URI, req.Org); err != nil {
-			return fmt.Errorf("adoscope: $batch operation %q: %w", op.URI, err)
+		res, err := batchOpIsWorkItem(op.URI, req.Org)
+		if err != nil {
+			return "", fmt.Errorf("adoscope: $batch operation %q: %w", op.URI, err)
+		}
+		method := strings.ToUpper(strings.TrimSpace(op.Method))
+		if !knownMethod(method) {
+			return "", fmt.Errorf("adoscope: $batch operation %q: method %q is not one this catalogue classifies", op.URI, op.Method)
+		}
+		for k := range op.Headers {
+			if strings.EqualFold(strings.TrimSpace(k), "X-HTTP-Method-Override") {
+				return "", fmt.Errorf("adoscope: $batch operation %q carries a method override — which method the server acts on is not knowable", op.URI)
+			}
+		}
+		// An operation's DELETE is CapWorkAdmin whatever it names, a comment
+		// included: the batch door is not where a finer split is worth reading.
+		if method == http.MethodDelete || slices.Contains(witAdminResources, res) {
+			out = CapWorkAdmin
 		}
 	}
-	return nil
+	return out, nil
 }
 
 // batchOpIsWorkItem holds one $batch operation URI to the same two rules the
-// outer request is held to: under the work-item area, and on the organisation
+// outer request is held to, and returns the work-item resource it names: under the work-item area, and on the organisation
 // the row pinned. Accepted shapes, with _apis at a fixed depth:
 //
 //	/_apis/wit/…                 organisation-relative
@@ -394,24 +417,28 @@ func batchIsWorkItemsOnly(req Request) error {
 // organisation is unverified, so it stays refused until a live
 // two-organisation probe settles it. An absolute URI is refused outright,
 // since the batch door is not a place to re-run host admission.
-func batchOpIsWorkItem(uri, org string) error {
+func batchOpIsWorkItem(uri, org string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(uri))
 	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" {
-		return fmt.Errorf("an operation URI is relative to the organisation, never absolute")
+		return "", fmt.Errorf("an operation URI is relative to the organisation, never absolute")
 	}
 	segs, err := decodeSegments(u.Path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if len(segs) > 0 && segs[0] != "_apis" {
 		if !strings.EqualFold(segs[0], strings.TrimSpace(org)) {
-			return fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
+			return "", fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
 		}
 		segs = segs[1:]
 	}
 	i := slices.Index(segs, "_apis")
 	if i < 0 || i > 1 || i+1 >= len(segs) || segs[i+1] != "wit" {
-		return fmt.Errorf("is not a work-item URL")
+		return "", fmt.Errorf("is not a work-item URL")
 	}
-	return nil
+	// The resource is the segment after _apis/wit/, "" when there is none.
+	if i+2 < len(segs) {
+		return segs[i+2], nil
+	}
+	return "", nil
 }

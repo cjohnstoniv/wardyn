@@ -521,26 +521,31 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
 test.describe("providers — the Azure DevOps Entra section (real writes, real reload)", () => {
   test("setting the ceiling and the default persists across a reload", async ({ page }) => {
     await resetProviders(page);
-    const etag = (await page.request.get("/api/v1/workspace-providers", { headers: auth })).headers()["etag"];
-    const put = await page.request.put("/api/v1/workspace-providers", {
-      headers: etag ? { ...auth, "If-Match": etag } : auth,
-      data: {
-        git: [
-          {
-            id: "azure_devops",
-            kind: "azure_devops",
-            base_urls: ["https://dev.azure.com/wardyn-e2e"],
-            lanes: ["entra"],
-            credential_source: "per_user",
-            entra: {
-              tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
-              client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
-              capability_ceiling: ["read"],
-              default_profile: ["read"],
-            },
+    const seed = (caps: string[]) => ({
+      git: [
+        {
+          id: "azure_devops",
+          kind: "azure_devops",
+          base_urls: ["https://dev.azure.com/wardyn-e2e"],
+          lanes: ["entra"],
+          credential_source: "per_user",
+          entra: {
+            tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
+            client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
+            capability_ceiling: caps,
+            default_profile: caps,
           },
-        ],
-      },
+        },
+      ],
+    });
+    const etag = (await page.request.get("/api/v1/workspace-providers", { headers: auth })).headers()["etag"];
+    const ifMatch = etag ? { ...auth, "If-Match": etag } : auth;
+    // The pre-split "read" is a clean break: refused, never aliased.
+    const old = await page.request.put("/api/v1/workspace-providers", { headers: ifMatch, data: seed(["read"]) });
+    expect(old.status()).toBe(400);
+    const put = await page.request.put("/api/v1/workspace-providers", {
+      headers: ifMatch,
+      data: seed(["code_read", "project_read"]),
     });
     expect(put.status()).toBe(200);
 
@@ -570,8 +575,8 @@ test.describe("providers — the Azure DevOps Entra section (real writes, real r
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(snap.git[0].entra).toEqual(
       expect.objectContaining({
-        capability_ceiling: ["read", "code_write", "policy_admin"],
-        default_profile: ["read", "code_write"],
+        capability_ceiling: ["code_read", "code_write", "policy_admin", "project_read"],
+        default_profile: ["code_read", "code_write", "project_read"],
       }),
     );
 

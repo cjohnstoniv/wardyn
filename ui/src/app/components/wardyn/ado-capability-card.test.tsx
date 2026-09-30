@@ -70,7 +70,7 @@ describe("AdoCapabilityCard — the escalation states", () => {
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText("Push")).toBeInTheDocument();
+    expect(within(card).getByText("Push to the run's own branch")).toBeInTheDocument();
     expect(within(card).getByText("acme/payments-api")).toBeInTheDocument();
     expect(
       within(card).getByText("Push commits and create or move branches, inside this run's own branch unless its policy allows any branch (code_write) in acme/payments-api"),
@@ -132,16 +132,19 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText("Bypass branch policies")).toBeInTheDocument();
+    expect(within(card).getByText("Bypass policies when completing pull requests")).toBeInTheDocument();
     expect(within(card).getByText("Complete this pull request past its policies")).toBeInTheDocument();
     expect(within(card).queryByText(ADO.REQ_FIELD_REF_CLASS)).not.toBeInTheDocument();
   });
 
-  it("falls back to the raw wire capability, in mono, for a capability with no §7.4 label", async () => {
+  // One vocabulary (the approved per-area packet): the heading is the name the
+  // editors and the summary use — a mid-run read of another area asks for
+  // "View work items".
+  it("heads the card with the catalogue's name for the capability", async () => {
     renderCard(
       <AdoCapabilityCard
         item={escalation({
-          requested_scope: { ...escalation().requested_scope, capability: "project_admin" } as never,
+          requested_scope: { ...escalation().requested_scope, capability: "work_read" } as never,
         })}
         securityOperator
         run={OWNER}
@@ -151,7 +154,25 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText("project_admin")).toBeInTheDocument();
+    expect(within(card).getByText("View work items")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw wire capability, in mono, for an id outside the catalogue", async () => {
+    // A decided row from before the per-area split names the old "read".
+    renderCard(
+      <AdoCapabilityCard
+        item={escalation({
+          requested_scope: { ...escalation().requested_scope, capability: "read" } as never,
+        })}
+        securityOperator
+        run={OWNER}
+        busy={null}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText("read")).toBeInTheDocument();
   });
 
   it("defaults to 'This run', and Approve sends decision_scope run explicitly (never omitted)", async () => {
