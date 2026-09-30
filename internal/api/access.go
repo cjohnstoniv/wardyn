@@ -148,9 +148,11 @@ type accessResponse struct {
 	// (no new per-row field), and uses this alongside that to render the
 	// §7.2 warn badge / the opt-in state, matching what a write would accept.
 	AllowEmailMappings bool `json:"allow_email_mappings"`
-	// EmailDomainsConfigured reports whether WARDYN_OIDC_EMAIL_DOMAINS
-	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
-	// depends on this, and the response otherwise cannot express it.
+	// EmailDomainsConfigured reports whether sign-in enforces email_verified —
+	// WARDYN_OIDC_EMAIL_DOMAINS is set or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is
+	// on (oidc.Authenticator.EnforcesEmailVerified). The wire name predates the
+	// second setting. The EMAIL_KEY badge copy depends on this, and the response
+	// otherwise cannot express it.
 	EmailDomainsConfigured bool `json:"email_domains_configured"`
 	// Provider is a human-facing IdP name derived SERVER-SIDE from the OIDC
 	// issuer URL (e.g. "Microsoft Entra ID") so the console's SSO chip names
@@ -303,7 +305,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		OperatorEmailsPresent:  s.cfg.OIDC.HasOperatorEmails(),
 		OperatorEmails:         operatorEmails,
 		AllowEmailMappings:     s.cfg.AllowEmailMappings,
-		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
+		EmailDomainsConfigured: s.cfg.OIDC.EnforcesEmailVerified(),
 		Provider:               ssoProviderName(s.cfg.OIDC.Issuer()),
 		Posture: accessPosture{
 			// MapEmpty is the REAL merged-map emptiness (chart + rows,

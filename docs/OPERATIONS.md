@@ -2942,10 +2942,16 @@ do for you:
 `WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
 **unset** value is not "deny all", it fails **open** — any account the IdP
 authenticates gets a session, and without the domains list the `email_verified`
-claim is not checked at all (both checks live inside the domains branch —
-`AllowedEmailDomains`, `internal/auth/oidc/oidc.go`). Compose already pins it
+claim is not checked at all unless `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is on
+(the domain check lives inside the domains branch — `AllowedEmailDomains`,
+`internal/auth/oidc/oidc.go`). Compose already pins it
 to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as
 shipped; re-point it when you swap Dex for a corporate IdP.
+
+`WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED=true` applies the `email_verified` check
+without a domains list (default off): a missing claim counts as unverified and is
+refused, exactly as below, so on an IdP that never sends it (Entra) it denies every
+login.
 
 With the domains list set, `email_verified` **absent** from the id_token and
 `email_verified: false` are two different denials, logged and coded separately

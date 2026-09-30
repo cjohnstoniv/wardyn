@@ -20,7 +20,8 @@ import (
 //  1. Verifies the state parameter against the state cookie (CSRF).
 //  2. Exchanges the code for tokens using PKCE.
 //  3. Verifies the ID token signature, issuer, audience, expiry, and nonce.
-//  4. Optionally checks email domain (fail closed when AllowedEmailDomains is set).
+//  4. Optionally checks email_verified and the email domain (fail closed when
+//     AllowedEmailDomains is set; email_verified alone when RequireEmailVerified is on).
 //  5. Derives the session's role from the roles/groups/email claims (see
 //     Config.RoleMap / deriveRole); denies the login if nothing matches and no
 //     DefaultRole is configured.
@@ -296,6 +297,15 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
 
+// emailVerifiedEnv names the setting that put the email_verified gate in force,
+// for the refusal's log line.
+func (a *Authenticator) emailVerifiedEnv() string {
+	if len(a.cfg.AllowedEmailDomains) > 0 {
+		return "WARDYN_OIDC_EMAIL_DOMAINS"
+	}
+	return "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED"
+}
+
 // admit is the sign-in decision over a verified token's claims — reserved
 // subject, email-domain gate, role/user-type derivation, overage and
 // unreadable-claim refusals, and the group snapshot — shared by the callback
@@ -320,8 +330,9 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	if denied != "" {
 		return Session{}, denied
 	}
-	// (4) Domain check — fail closed.
-	if len(a.cfg.AllowedEmailDomains) > 0 {
+	// (4) email_verified and domain checks — fail closed. The verified gate
+	// applies under a domain allowlist or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED.
+	if len(a.cfg.AllowedEmailDomains) > 0 || a.cfg.RequireEmailVerified {
 		switch {
 		case cc.emailVerified == nil:
 			// Distinct from "false": the IdP said nothing about verification
@@ -331,14 +342,16 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 			// WARDYN_OIDC_ROLE_MAP (App Roles) is the better answer for an
 			// IdP that never sends this claim.
 			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
-				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", "WARDYN_OIDC_EMAIL_DOMAINS")
+				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
 			return Session{}, authErrorEmailVerifiedAbsent
 		case !*cc.emailVerified:
+			slog.Warn("oidc: login denied — the id_token says email_verified=false",
+				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
 			return Session{}, authErrorEmailUnverified
 		}
-		if !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
-			return Session{}, authErrorEmailDomain
-		}
+	}
+	if len(a.cfg.AllowedEmailDomains) > 0 && !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
+		return Session{}, authErrorEmailDomain
 	}
 
 	// (5) Role derivation — deriveLogin. A refusal names its auth_error code.
