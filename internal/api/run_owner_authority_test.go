@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -404,6 +405,103 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 				t.Fatalf("revive = %d %s; want 409 naming the host", code, body)
 			}
 			f.assertReviveRefused(t, tc.reason)
+		})
+	}
+}
+
+// TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider (#1081): a run
+// carrying a credential its model provider authored is refused up front when
+// that provider was deleted since launch (or deleted and re-created under the
+// same id, a new UID) or turned off, by a revive, an admin restart and an
+// extension alike, instead of a proxy whose first model call the injection
+// sink refuses. With the provider as it was, all three go ahead.
+func TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider(t *testing.T) {
+	const uid = "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70"
+	provider := func(edit func(*types.ModelProvider)) []types.ModelProvider {
+		p := keyProvider("anthropic", "claude-code")
+		p.UID = uid
+		edit(&p)
+		return []types.ModelProvider{p}
+	}
+	for _, tc := range []struct {
+		name      string
+		providers []types.ModelProvider
+		reason    string
+	}{
+		{"present and on", provider(func(*types.ModelProvider) {}), ""},
+		{"deleted", nil, "model_provider_gone"},
+		{"re-created under the same id", provider(func(p *types.ModelProvider) { p.UID = "5d0c1f7a-2b9e-4e3d-8a6c-1f4b7e9d2c30" }), "model_provider_gone"},
+		{"turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), "model_provider_disabled"},
+	} {
+		arrange := func(st *leaseStore) {
+			st.run.ModelProviderID = "anthropic"
+			st.site.ModelProviders = &types.ModelProviders{Providers: tc.providers}
+			st.credGrants = []types.CredentialGrant{{ID: uuid.New(), RunID: st.run.ID, Spec: types.GrantSpec{Kind: types.GrantAPIKey,
+				Scope: mustJSON(map[string]any{"host": "api.anthropic.com", "secret_name": providerSecretName(uid, providerKeyPart),
+					"snapshot": providerGrantSnapshot{ProviderUID: uid, OwnerSubject: st.run.CreatedBy}})}}}
+		}
+		// reviveArrange also has the stored proxy config inject that grant, from
+		// the owner's own key, as dispatch left it.
+		reviveArrange := func(t *testing.T, f *reviveFixture) {
+			arrange(f.st)
+			f.editConfig(t, func(c *proxy.Config) {
+				c.Injection = append(c.Injection, proxy.InjectionConfig{GrantID: f.st.credGrants[0].ID,
+					InjectionRule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}})
+			})
+			sec := &memSecrets{m: map[string][]byte{}}
+			if err := sec.For(f.run.CreatedBy).Put(context.Background(), providerSecretName(uid, providerKeyPart), []byte("sk-ant-own")); err != nil {
+				t.Fatal(err)
+			}
+			f.srv.cfg.Secrets = sec
+		}
+		t.Run("revive/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			reviveArrange(t, f)
+			code, body := f.reviveAs(t, true)
+			if tc.reason == "" {
+				if code != http.StatusOK {
+					t.Fatalf("revive = %d %s, want 200", code, body)
+				}
+				return
+			}
+			if code != http.StatusConflict || !strings.Contains(body, tc.reason) {
+				t.Fatalf("revive = %d %s; want 409 %s", code, body, tc.reason)
+			}
+			f.assertReviveRefused(t, tc.reason)
+			if drops := f.audit.eventsFor(f.run.ID, "run.injection.drop"); len(drops) != 0 {
+				t.Errorf("a refused revive audited %d injection drops, want none", len(drops))
+			}
+		})
+		t.Run("restart/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			reviveArrange(t, f)
+			f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			w := do(t, f.srv, http.MethodPost, "/api/v1/admin/runs/restart", adminToken, `{"run_ids":["`+f.run.ID.String()+`"]}`)
+			var out struct {
+				Results []adminRestartResult `json:"results"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK || len(out.Results) != 1 {
+				t.Fatalf("restart = %d %s (%v), want 200 with one result", w.Code, w.Body.String(), err)
+			}
+			if r := out.Results[0]; r.OK != (tc.reason == "") || r.Reason != tc.reason {
+				t.Fatalf("result = %+v; want ok=%v reason %q", r, tc.reason == "", tc.reason)
+			}
+		})
+		t.Run("extend/"+tc.name, func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+			arrange(f.st)
+			code, _ := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(7*24*time.Hour)))
+			want := map[bool]int{true: http.StatusOK, false: http.StatusConflict}[tc.reason == ""]
+			if code != want {
+				t.Fatalf("extend = %d, want %d", code, want)
+			}
+			if tc.reason == "" {
+				return
+			}
+			rows := f.rows(t, "run.end.set")
+			if len(rows) != 1 || rows[0].Outcome != "denied" || leaseAuditData(t, rows[0])["reason"] != tc.reason {
+				t.Errorf("run.end.set rows = %+v; want one denied with reason %s", rows, tc.reason)
+			}
 		})
 	}
 }
