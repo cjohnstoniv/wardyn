@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-09-30
+
 ### Security
 
 - **The agent images run on Debian 13 (trixie), which fixes three CRITICAL Perl vulnerabilities that
