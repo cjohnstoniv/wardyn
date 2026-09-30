@@ -563,60 +563,166 @@ jobs:
           path: test/reports/e2e/ui-sandbox-e2e.log
           if-no-files-found: error
 
-  # ── deploy: multi-arch buildx smoke (build only, never pushes) ────────────
+  # ── deploy: multi-arch build, and the staging images a release promotes ─────
   # W-DESK S1. The release lane (.github/workflows/release.yml) publishes every
   # image as a linux/amd64 + linux/arm64 index, and it only ever runs on a
   # `vX.Y.Z` tag — so without this job an arm64 build break is discovered
   # DURING a release, with the tag already pushed. This is the proof that the
   # two-platform build still resolves: nightly, and dispatched on the commit to
-  # tag (RELEASING.md "Prerequisites"). Not per pull request: its three emulated
-  # builds cost about nine runner-minutes on every CI run for a break that one
-  # day's latency still catches before a tag. `push: false`, no registry login,
-  # no `packages:` permission: it builds and throws the result away.
+  # tag (RELEASING.md "Prerequisites"). Not per pull request: its emulated
+  # builds cost many runner-minutes on every CI run for a break that one day's
+  # latency still catches before a tag.
   #
-  # WHY THESE THREE and not all five release images — each cell is a distinct
-  # BUILD SHAPE, and the two omitted images are strict duplicates of shapes
-  # already covered here:
-  #   wardynd          — a $BUILDPLATFORM node UI stage + a cross-compiled Go
-  #                      stage + a COPY-only distroless runtime (no emulation
-  #                      anywhere). wardyn-proxy is the same shape minus the UI.
-  #   agent-claude-code — a trixie runtime doing apt-get + `npm install -g`
-  #                      as the TARGET arch, i.e. the emulated path.
-  #                      agent-codex-cli is the same shape.
-  #   agent-aws-sso    — a trixie runtime that SELECTS its download by
-  #                      TARGETARCH (x86_64 vs aarch64 AWS CLI installer, GPG
-  #                      verified). Nothing else exercises that branch.
+  # STAGING CONTRACT. A `workflow_dispatch` run pushes every row with
+  # `stage: "true"` (and buildx-smoke-ui-sandbox's two rows) to
+  # ghcr.io/cjohnstoniv/staging/<image>:run-<run_id> and attests its build
+  # provenance; those digests are what release.yml promotes to the release
+  # tags. A scheduled run pushes nothing: no registry login, nothing attested,
+  # and the result is thrown away. The staging packages are public and unsigned.
   #
-  # QEMU is what makes the emulated cells possible; the Go compiles do not use
-  # it (every builder stage is `FROM --platform=$BUILDPLATFORM` + GOARCH).
-  # timeout-minutes is generous on purpose: emulated apt/npm is slow, and a
-  # timeout kill here would read as a build break.
+  # The rows are release.yml's publish set: guard 16 in
+  # scripts/test-repo-guards.sh pins the names, Dockerfiles and build-args to
+  # release.yml's, and fails if a local-only image gets staged.
+  #
+  # Build shapes, for when a row is ever dropped: wardynd is a $BUILDPLATFORM
+  # node UI stage + a cross-compiled Go stage + a COPY-only distroless runtime;
+  # the agent-* images do apt-get and npm as the TARGET arch (the emulated
+  # path; QEMU makes it possible, the Go compiles do not use it); agent-aws-sso
+  # SELECTS its AWS CLI installer by TARGETARCH. timeout-minutes is generous on
+  # purpose: emulated apt/npm is slow, and a timeout kill here would read as a
+  # build break.
   buildx-smoke:
     name: multi-arch build (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # attest-build-provenance's OIDC token
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: wardynd
             dockerfile: deploy/compose/Dockerfile.wardynd
-          - name: agent-claude-code
-            dockerfile: deploy/images/claude-code/Dockerfile
+            build-args: |
+              GO_BUILD_TAGS=docker,k8s
+              RELEASE_BUILD=true
+            stage: "true"
+          - name: wardyn-proxy
+            dockerfile: deploy/compose/Dockerfile.proxy
+            build-args: ""
+            stage: "true"
+          - name: agent-base
+            dockerfile: deploy/images/base/Dockerfile
+            build-args: ""
+            stage: "true"
+          - name: agent-codex-cli
+            dockerfile: deploy/images/codex-cli/Dockerfile
+            build-args: ""
+            stage: "true"
           - name: agent-aws-sso
             dockerfile: deploy/images/aws-sso/Dockerfile
+            build-args: ""
+            stage: "true"
+          # Never pushed, because it bundles the vendor CLI (release.yml's
+          # `images` matrix explains why that image is not published).
+          - name: agent-claude-code
+            dockerfile: deploy/images/claude-code/Dockerfile
+            build-args: ""
+            stage: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      - name: Build both platforms (no push, no load — the result is discarded)
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build both platforms (pushed to staging on a dispatch, discarded otherwise)
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: false
+          push: ${{ github.event_name == 'workflow_dispatch' && matrix.stage == 'true' }}
           platforms: linux/amd64,linux/arm64
           provenance: false
+          build-args: ${{ matrix.build-args }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          tags: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}:run-${{ github.run_id }}
+          # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
+      - name: Attest the staged digest's build provenance
+        if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # agent-vscode and agent-novnc build FROM the agent-base staged by
+  # buildx-smoke in this same run, by digest, so the tag a release promotes is
+  # built on the base it ships with. Dispatch only: there is nothing to build
+  # them on when a scheduled run pushes no agent-base.
+  buildx-smoke-ui-sandbox:
+    name: multi-arch build (${{ matrix.name }})
+    needs: buildx-smoke
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # attest-build-provenance's OIDC token
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-vscode
+            dockerfile: deploy/images/vscode/Dockerfile
+          - name: agent-novnc
+            dockerfile: deploy/images/novnc/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve the staged agent-base digest
+        id: base
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/staging/agent-base:run-${{ github.run_id }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          ref="ghcr.io/cjohnstoniv/staging/agent-base@${digest}"
+          printf '%s' "$ref" | grep -Eq '@sha256:[0-9a-f]{64}$' \
+            || { echo "not a digest ref: $ref" >&2; exit 1; }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: Build both platforms and push to staging
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          build-args: BASE_IMAGE=${{ steps.base.outputs.ref }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          tags: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}:run-${{ github.run_id }}
+          # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
+      - name: Attest the staged digest's build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   # ── Live Kubernetes AWS SSO walk (kind) ─────────────────────────────────────
   # scripts/kind-sso-walk.sh only ever ran by hand, so the "a member signs in
@@ -1398,7 +1504,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1420,7 +1526,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg or managed-settings-drift." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke and buildx-smoke-ui-sandbox (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg or managed-settings-drift." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
