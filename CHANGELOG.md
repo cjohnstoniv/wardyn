@@ -34,6 +34,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   monotonic per run and `Last-Event-ID` resumes without gaps within the daemon's lifetime; the feed
   is kept in memory, carries no log or secret content, and adds no migration. The Go SDK follows it
   with `RunEvents`; see `docs/sdk.md`.
+- **A governance profile can forbid UI apps: `deny_ui_apps` (#1391).** A run under a profile with
+  the limit has its `ui_apps` stripped at create, with a `clamp_warnings` sentence and an
+  `authz.denied` `governance_profile` drop at target `runs.ui_apps`, and the UI gateway refuses a
+  session into a run created under the profile. An empty `ui_apps` in a ceiling still means no
+  opinion, so existing profiles behave as before. A super admin is not bound. The console's profile
+  editor does not show the limit yet; set it through the API or `wardyn governance apply`.
 
 ### Changed
 
@@ -102,6 +108,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`deny_interactive` now refuses a terminal attach and SSH into a run under the profile
+  (#1392).** It refused an interactive run at create, but the owner of a task or exec run under the
+  profile could still `wardyn run attach` (or open the console terminal) and, with the SSH gateway
+  on, SSH into it. The attach is now refused `403` (`governance_profile`, target `runs.attach`) and
+  the SSH connection is refused and audited as an `ssh.authenticate` failure naming the profile. The
+  limit is read from the profile the run was created under, as it stands now, so setting it also
+  reaches runs already going. A super admin and the harness sign-in run are not bound, as at create.
 - **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
   it runs (#1082).** The migrator removed a row's old Vault copy after the row had committed and
   released its lock, so a store-mode save of the same credential in that window re-pointed the row

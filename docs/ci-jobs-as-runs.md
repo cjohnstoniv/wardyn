@@ -153,7 +153,7 @@ minted and fails closed when it is missing or truncated. `apply` is an upsert by
 | `allowed_domains` | Only the forge. A job's own policy can list fewer, never more. |
 | `first_use_approval: always_deny` | An unlisted host is refused at once. Nothing waits for a reviewer nobody is watching. |
 | `min_confinement_class` | The weakest sandbox a job may run in. A job asking for less is raised to it, and a launch the runner cannot satisfy is refused. Set it to the strongest class your substrate offers. |
-| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. |
+| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. It also refuses `wardyn run attach` and the SSH gateway into any run under the profile, the owner's exec runs included. |
 | `deny_user_drive` | Refuses a user drive mount, the one storage that outlives a run. |
 | `max_concurrent_runs` | A launch past the cap is refused. |
 
@@ -463,16 +463,12 @@ forge are `egress.allow`. The launcher exits `0`, since the job passed.
 
 ## What this recipe does not bound
 
-- **A terminal into the run.** `deny_interactive` refuses an interactive *run*. It
-  does not remove `wardyn run attach` for the run's owner, who is whoever holds the
-  CI token, and an attach works on an exec run (#1392). Every one is a
-  `session.attach` row. When the SSH gateway is enabled, the owner can also
-  `wardyn run ssh`, exec and sftp into the run; those are audited as `ssh.exec` and
-  `ssh.sftp.transfer`. Keep the token to the launcher.
-- **UI apps.** A ceiling cannot say "no UI apps": an empty `ui_apps` in a ceiling
-  is no opinion, and a job's own `ui_apps` survive the clamp (#1391). What holds is the run
-  policy you author declaring none, and the UI-sandbox gateway staying off, which
-  is its default ([UI-SANDBOXES.md](UI-SANDBOXES.md)).
+- **UI apps, unless you add `deny_ui_apps`.** The profile above does not set it,
+  and an empty `ui_apps` in a ceiling is no opinion, so a job's own `ui_apps`
+  survive the clamp. Add `"deny_ui_apps": true` to the limits to strip them from
+  every job and have the UI gateway refuse a session (#1391). Without it, what
+  holds is the run policy you author declaring none, and the UI-sandbox gateway
+  staying off, which is its default ([UI-SANDBOXES.md](UI-SANDBOXES.md)).
 - **The token is resident and readable.** An `env_secret` is in the sandbox's
   environment for the whole run and every step of the job can read it. `unset` does
   not change that, and no grant can take it back. A registration token can register

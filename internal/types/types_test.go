@@ -739,7 +739,7 @@ func TestGovernanceLimitsWireRoundTrip(t *testing.T) {
 	}
 
 	full := GovernanceLimits{
-		DenyTaskModeExec: true, DenyInteractive: true, DenyUserDrive: true,
+		DenyTaskModeExec: true, DenyInteractive: true, DenyUIApps: true, DenyUserDrive: true,
 		MaxConcurrentRuns: 3, MaxEphemeralDiskMiB: 2048, MaxDriveSizeMiB: 10240,
 	}
 	b, err := json.Marshal(full)
