@@ -30,7 +30,9 @@
 // host whose image was already warm, a pre-0.7.6 daemon — grades exactly as it
 // did in 0.7.5.
 import { LAUNCH_DEADLINE_MS } from "../../../lib/api/core";
-import { isTerminalStatusReason, parseStatusDetail } from "../run-status-detail";
+import { isTerminalStatusReason, parseStatusDetail, RUN_POLL_SLOW_START_MS } from "../run-status-detail";
+
+export { RUN_POLL_SLOW_START_MS };
 
 // The wall-clock budget before the pane says it cannot read the run. The SAME
 // number the console already spends on a call that brings a sandbox up
@@ -45,11 +47,6 @@ export const RUN_POLL_UNREADABLE_AFTER_MS = LAUNCH_DEADLINE_MS;
 // silent about a daemon that went away ten seconds ago, and must not shout
 // about one dropped request either.
 export const RUN_POLL_RETRYING_AFTER_MS = 10_000;
-
-// When a HEALTHY wait stops being ordinary. The measured cold pull was 131s, so
-// a minute is comfortably inside "this is normal" and comfortably before the
-// point where silence reads as a hang.
-export const RUN_POLL_SLOW_START_MS = 60_000;
 
 // The FLOOR under the clock, kept from the old tick budget. usePoll skips ticks
 // while `document.hidden` (use-poll.ts), so a tab left in the background for ten

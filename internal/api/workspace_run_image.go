@@ -133,6 +133,14 @@ func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
 	}
 }
 
+// orNop is f, or a no-op when f is nil.
+func orNop(f func()) func() {
+	if f == nil {
+		return func() {}
+	}
+	return f
+}
+
 // resolveWorkspaceImage returns the sandbox image for a run driven by its PRIMARY
 // onboarded workspace, or ok=false to fall through to the convention image.
 // Order (all fail-OPEN: any failure returns ok=false, never blocks the run):
@@ -145,7 +153,13 @@ func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
 // logSink, when non-nil, receives the build's output live (the wizard Build
 // step); nil falls back to the ImageBuilder's own default. It audits its own
 // build success/failure against runID.
-func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer) (string, bool) {
+//
+// announceBuild, when non-nil, is called immediately before each of the three
+// builder calls below and never on a cache hit, so a run's status line says
+// "building" only while a build is actually running. nil for a caller whose id
+// is not a run (the workspace Build step passes a build id).
+func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer, announceBuild func()) (string, bool) {
+	announce := orNop(announceBuild)
 	buildAudit := func(outcome string, extra map[string]any) {
 		extra["workspace_id"] = primary.ID.String()
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
@@ -192,6 +206,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		// "custom" Steps are not layered here (no builder method layers Dockerfile
 		// lines on a base yet) — same as the req.Image path's own verbatim wrap.
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
+		announce()
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink)
 		if berr != nil {
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
@@ -241,6 +256,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			return primary.ImageRef, true
 		}
 		tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer"
+		announce()
 		if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
 			// This lane's tag is FIXED (no hash suffix) — a rebuild reuses the
 			// same name, so primary.ImageRef == built here and removeStaleImage
@@ -280,6 +296,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		return "", false
 	}
 	tag := "wardyn-workspace/" + primary.ID.String() + ":" + hash[:12]
+	announce()
 	built, berr := s.cfg.ImageBuilder.BuildFromDevcontainerFiles(ctx, files, tag, logSink)
 	if berr != nil {
 		buildAudit("failure", map[string]any{"source": "generated-devcontainer", "error": berr.Error()})
@@ -327,7 +344,7 @@ func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws type
 	// (undispatchedGrace = 2*imageBuildTimeout).
 	buildCtx, cancel := context.WithTimeout(ctx, imageBuildTimeout)
 	defer cancel()
-	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil); ok {
+	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID)); ok {
 		return built
 	}
 	return agentImage("claude-code", s.cfg.AgentImages)

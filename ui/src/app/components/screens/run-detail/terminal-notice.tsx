@@ -22,6 +22,8 @@ import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON, RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
+import type { StartupLastStep } from "../run-status-detail";
+import { StartupProgress } from "./startup-progress";
 
 export function TerminalPane({
   run,
@@ -97,15 +99,40 @@ export function TerminalPane({
     );
   }
 
+  // Coming up (PENDING/STARTING): the startup step list replaces the notice,
+  // fed by the fields the page already polls. The last row names what comes
+  // next; an interactive run this caller can never attach to has none, and
+  // keeps the operator-only note beneath the list.
+  //
+  // F1-F1: OPERATOR_ONLY_REASON stays reserved for the caller who genuinely
+  // cannot attach, at any state.
+  if (run.state === "PENDING" || run.state === "STARTING") {
+    // Same precedence as the pane chip below: an exec run is also non-interactive.
+    const lastStep: StartupLastStep =
+      run.interactive && canAttach ? "terminal" : execMode ? "command" : !run.interactive ? "task" : null;
+    return (
+      <PaneFrame
+        title={run.interactive ? "Terminal" : "Output"}
+        chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
+      >
+        <StartupProgress run={run} lastStep={lastStep}>
+          {lastStep === null && (
+            <div className="flex flex-col items-center gap-2 pt-2 text-center">
+              <p className="text-sm text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
+              <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
+                Watch the captured session →
+              </button>
+            </div>
+          )}
+        </StartupProgress>
+      </PaneFrame>
+    );
+  }
+
   // Live but not drivable: an autonomous run execs the agent directly, so there
   // is no PTY to type into. (A live interactive run the caller may NOT attach to
   // lands here too — the honest thing, since the alternative is a terminal that
   // opens and immediately refuses.)
-  //
-  // F1-F1: an interactive run this caller CAN eventually attach to, just not
-  // yet (not RUNNING), gets the starting/queued notice — no link, since there
-  // is no recording to watch either. OPERATOR_ONLY_REASON is now reserved for
-  // the caller who genuinely cannot attach, at any state.
   return (
     // "Terminal" vs "Output" is not decoration — the board uses them for two
     // different situations. An interactive run HAS a PTY (you just may not
@@ -115,22 +142,21 @@ export function TerminalPane({
       title={run.interactive ? "Terminal" : "Output"}
       chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
     >
-      <PaneNotice
-        text={
-          run.interactive
-            ? canAttach
-              ? RUN_COCKPIT.starting
-              : OPERATOR_ONLY_REASON
-            : RUN_MODE.autonomous.blurb
-        }
-        action={
-          run.interactive && canAttach ? undefined : (
+      {run.interactive && canAttach ? (
+        // Not RUNNING and not coming up (e.g. waiting for confirmation): the
+        // owner can attach, so the refusal would be false, and there is no
+        // startup step to narrate. An empty frame keeps the hero's shape.
+        <div className="min-h-0 flex-1" />
+      ) : (
+        <PaneNotice
+          text={run.interactive ? OPERATOR_ONLY_REASON : RUN_MODE.autonomous.blurb}
+          action={
             <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
               Watch the captured session →
             </button>
-          )
-        }
-      />
+          }
+        />
+      )}
     </PaneFrame>
   );
 }
