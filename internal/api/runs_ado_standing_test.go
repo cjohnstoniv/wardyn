@@ -34,7 +34,7 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 			`"workspace_repos":[{"repo":` + quote(adoTestRepo) + `,"target":"/work/repo"}],"azure_devops_capabilities":` + caps + `}}`
 		return doSSO(t, srv, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body), st, audit
 	}
-	const dropped = "Open pull requests"
+	const sentence = "Not included: “Open pull requests”. Your administrator hasn't granted it to you, and it isn't in this provider's default access."
 	t.Run("narrowed: the 201 and the run.create row say so", func(t *testing.T) {
 		w, st, audit := post(t, "/api/v1/runs", `["read","pr"]`)
 		if w.Code != http.StatusCreated {
@@ -44,8 +44,8 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 			t.Fatal(err)
 		}
-		if n := countContaining(resp.Warnings, "“"+dropped+"”"); n != 1 {
-			t.Errorf("201 warnings = %q, want exactly one sentence naming %q", resp.Warnings, dropped)
+		if n := countEqual(resp.Warnings, sentence); n != 1 {
+			t.Errorf("201 warnings = %q, want exactly one %q", resp.Warnings, sentence)
 		}
 		st.mu.Lock()
 		var runID uuid.UUID
@@ -57,13 +57,22 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		var data struct {
 			Clamp []string `json:"clamp_warnings"`
 		}
-		if err := json.Unmarshal(ev.Data, &data); err != nil || countContaining(data.Clamp, "“"+dropped+"”") != 1 {
+		if err := json.Unmarshal(ev.Data, &data); err != nil || countEqual(data.Clamp, sentence) != 1 {
 			t.Errorf("run.create clamp_warnings = %q (err %v), want the same sentence", data.Clamp, err)
+		}
+	})
+	t.Run("several dropped: the plural sentence", func(t *testing.T) {
+		w, _, _ := post(t, "/api/v1/runs", `["read","pr","policy_admin"]`)
+		want := "Not included: “Open pull requests”, “" + adoscope.ShortLabel(adoscope.CapPolicyAdmin) +
+			"”. Your administrator hasn't granted them to you, and they aren't in this provider's default access."
+		var resp createRunResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusCreated || countEqual(resp.Warnings, want) != 1 {
+			t.Fatalf("create = %d warnings %q, want one %q", w.Code, resp.Warnings, want)
 		}
 	})
 	t.Run("a list the bound keeps whole says nothing", func(t *testing.T) {
 		w, _, _ := post(t, "/api/v1/runs", `["read"]`)
-		if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), "Azure DevOps capabilit") {
+		if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), "Not included") {
 			t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 		}
 	})
@@ -71,7 +80,7 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		w, _, _ := post(t, "/api/v1/runs/preflight", `["read","pr"]`)
 		var resp preflightResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
-			countContaining(resp.Warnings, "“"+dropped+"”") != 1 {
+			countEqual(resp.Warnings, sentence) != 1 {
 			t.Fatalf("preflight = %d %s", w.Code, w.Body.String())
 		}
 	})
@@ -88,10 +97,10 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 	})
 }
 
-func countContaining(ss []string, sub string) int {
+func countEqual(ss []string, want string) int {
 	n := 0
 	for _, s := range ss {
-		if strings.Contains(s, sub) {
+		if s == want {
 			n++
 		}
 	}

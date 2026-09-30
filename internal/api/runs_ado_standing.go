@@ -4,7 +4,6 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -53,6 +52,17 @@ func (s *Server) adoStandingAtDoor(r *http.Request, spec types.RunPolicySpec, sc
 	if len(dropped) == 0 {
 		return "", false
 	}
-	return fmt.Sprintf("dropped %d Azure DevOps capability(ies) not in this provider's default profile or the access "+
-		"your administrator granted you: %s", len(dropped), strings.Join(dropped, ", ")), false
+	return adoNotIncluded(dropped), false
+}
+
+// adoNotIncluded is the approved canon sentence (#1384.1) for one or more
+// capabilities the member bound dropped; labels are already in curly quotes.
+func adoNotIncluded(labels []string) string {
+	pronoun, verb := "it", "isn't"
+	granted := "hasn't granted it"
+	if len(labels) > 1 {
+		pronoun, verb, granted = "they", "aren't", "hasn't granted them"
+	}
+	return "Not included: " + strings.Join(labels, ", ") + ". Your administrator " + granted + " to you, and " +
+		pronoun + " " + verb + " in this provider's default access."
 }
