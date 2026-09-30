@@ -484,11 +484,11 @@ export function AgentBadge({ agent, withLabel = true }: { agent: Agent; withLabe
 }
 
 /* Section card shell. */
-// Shared by run-detail.tsx (Identity/Egress/Grants/etc.) and
-// run-detail-ssh.tsx's ConnectSSHCard — lives here, not in either screen
-// file, so the two don't import from each other (that WAS a cycle: nothing
-// gates import cycles in this build, so it silently worked, but it's not a
-// dependency shape worth keeping around).
+// Shared by run-detail.tsx (Identity/Egress/Grants/etc.) and the screens that
+// just want a titled box — lives here, not in a screen file, so screens don't
+// import from each other (that WAS a cycle: nothing gates import cycles in this
+// build, so it silently worked, but it's not a dependency shape worth keeping
+// around).
 export function SectionCard({
   title,
   Icon,
@@ -521,8 +521,7 @@ export function SectionCard({
 /* Widget card shell (run cockpit). */
 // The run-detail cockpit's widget shell. Deliberately a SIBLING of SectionCard
 // rather than more props on it: SectionCard is a padded, self-sizing document
-// card (run-detail-ssh.tsx's ConnectSSHCard uses it, and so does every screen
-// that just wants a titled box). A widget is a different thing — it lives in a
+// card (every screen that just wants a titled box uses it). A widget is a different thing — it lives in a
 // height-constrained pane, so its body must be `min-h-0` and own its own
 // overflow, its header carries a drag handle and an overflow menu, and its
 // padding belongs to the body, not the frame. Folding both into one component
@@ -535,8 +534,7 @@ export function SectionCard({
 // It deliberately has NO drag-handle or overflow-menu props. It shipped with
 // both, on the assumption the phase-2 canvas would want the handle inside each
 // widget header — the canvas instead renders its own handle strip above the
-// card (it has to, since it also drives the SectionCard-based SSH card, which
-// is not a WidgetCard at all). Two unreachable props on a shared primitive are
+// card. Two unreachable props on a shared primitive are
 // a trap for the next person, so they are gone; re-add them the day something
 // actually passes one.
 export function WidgetCard({
