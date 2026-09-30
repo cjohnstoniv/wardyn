@@ -239,9 +239,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		UserTypeName         string        `json:"user_type_name,omitempty"`
 		ModelProviderName    string        `json:"model_provider_name,omitempty"`
 		ModelProviderDeleted bool          `json:"model_provider_deleted,omitempty"`
+		CreatedViaName       string        `json:"created_via_name,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
+		CreatedViaName: s.runCreatedViaName(r.Context(), run),
 	})
 }
 
@@ -303,6 +305,35 @@ func (s *Server) runUserTypeName(r *http.Request, id string) string {
 		return ""
 	}
 	return t.Name
+}
+
+// runCreatedViaName is the display name of the portal that launched a run, for
+// the run page's "Launched via {portal}" (#1234). It rides the run read because
+// the portal registry's list route is security-operator only, so a member
+// reading their own run could not resolve created_via themselves. A revoked
+// portal is a soft delete, so its name still resolves. Empty for a run nobody
+// delegated, a portal the registry no longer holds, or a registry that cannot
+// be read; the page then says "Launched via a portal". Only the name leaves
+// the registry row.
+func (s *Server) runCreatedViaName(ctx context.Context, run types.AgentRun) string {
+	if run.CreatedVia == nil {
+		return ""
+	}
+	ds, ok := s.cfg.Store.(store.DelegateStore)
+	if !ok {
+		return ""
+	}
+	list, err := ds.ListDelegates(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "api: could not read the portal registry for the run's created_via", "run_id", run.ID, "error", err)
+		return ""
+	}
+	for _, d := range list {
+		if d.ID == *run.CreatedVia {
+			return d.Name
+		}
+	}
+	return ""
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
