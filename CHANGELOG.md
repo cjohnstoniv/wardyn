@@ -57,6 +57,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Kubernetes the tail is read from the agent container's log, so the chart's k8s-runner Role now
   grants `get` on `pods/log` (a Role you write yourself needs it too). The Go SDK reads it with
   `RunOutput`.
+- **A run whose image is being built says so while it is Pending (#1419).** A BYOI wrap, a
+  devcontainer or a workspace image can build for up to 30 minutes before the sandbox exists, and the
+  run read as a bare "Queued" throughout. `GET /api/v1/runs/{id}` now carries `status_detail`
+  `image: Building` (`status_reason` `Building`) while a build is actually running, written
+  immediately before each builder call and never on a cache hit. It shows on `PENDING` only and is
+  blanked once the run is `STARTING`; it carries no image or repo reference and is not counted in
+  `wardyn_run_start_wait_seconds`. No migration and no new route. After a daemon restart the last line
+  can stay on the row until the undispatched-run reaper collects it (up to 60 minutes); see
+  OPERATIONS.md, "What a starting run is waiting on".
 
 ### Changed
 
