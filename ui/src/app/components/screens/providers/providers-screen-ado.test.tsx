@@ -104,12 +104,12 @@ const adoRow = (over: Partial<GitProvider> = {}): GitProvider => ({
   base_urls: ["https://dev.azure.com/wardyn-live-test"],
   lanes: ["entra"],
   credential_source: "per_user",
-  entra: { tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f", client_id: "3b241101-e2bb-4255-8caf-4136c566a962", capability_ceiling: ["read"], default_profile: [], token_mode: "minted_pat" },
+  entra: { tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f", client_id: "3b241101-e2bb-4255-8caf-4136c566a962", capability_ceiling: ["project_read", "code_read"], default_profile: [], token_mode: "minted_pat" },
   ...over,
 });
 
 const converted = () =>
-  adoRow({ disabled: true, entra: { tenant_id: "", client_id: "", capability_ceiling: ["read"], default_profile: [], token_mode: "own_pat" } });
+  adoRow({ disabled: true, entra: { tenant_id: "", client_id: "", capability_ceiling: ["project_read", "code_read"], default_profile: [], token_mode: "own_pat" } });
 
 describe("ProvidersScreen: Azure DevOps token choices", () => {
   it("12b: a converted row shows why it is off, and Save and turn on saves the document with the row on", async () => {

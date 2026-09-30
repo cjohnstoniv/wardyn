@@ -625,7 +625,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
       base_urls: ["https://dev.azure.com/wardyn-e2e"],
       lanes: ["entra"],
       credential_source: "per_user",
-      entra: { token_mode: "own_pat", capability_ceiling: ["read"], default_profile: ["read"] },
+      entra: { token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
     });
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-azure_devops");
@@ -654,7 +654,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
       base_urls: ["https://dev.azure.com/wardyn-e2e"],
       lanes: ["entra"],
       credential_source: "per_user",
-      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["read"], default_profile: ["read"] },
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
     };
     await spliceProviders(page, minted, () => ({ status: 400, json: { error: ADO_PAT.NO_CLIENT_SECRET } }));
     const checkedAt = new Date(2026, 8, 29, 9, 12).toISOString();
@@ -709,7 +709,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
       disabled: true,
       lanes: ["entra"],
       credential_source: "per_user",
-      entra: { token_mode: "own_pat", capability_ceiling: ["read"], default_profile: [] },
+      entra: { token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"], default_profile: [] },
     };
     let sent: { git: Record<string, unknown>[] } | null = null;
     await spliceProviders(page, converted, (body) => {
@@ -736,7 +736,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
         base_urls: ["https://dev.azure.com/wardyn-e2e"],
         lanes: ["entra"],
         credential_source: "per_user",
-        entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["read"], default_profile: ["read"] },
+        entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
       },
       () => ({ status: 200, json: { git: [] } }),
     );

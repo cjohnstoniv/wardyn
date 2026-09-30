@@ -16,16 +16,16 @@ import { AdoLaunchNote, AdoRunTokenLine } from "./ado-run-token-line";
 
 describe("AdoRunTokenLine", () => {
   it("names the policy's capabilities in one sentence, and says the token is revoked when the run ends", () => {
-    render(<AdoRunTokenLine policyCaps={["read", "code_write", "pr"]} />);
+    render(<AdoRunTokenLine policyCaps={["code_read", "code_write", "pr"]} />);
     const line = screen.getByTestId("ado-run-token-line");
-    const names = ["read", "code_write", "pr"].map(adoCapName).join(", ");
+    const names = ["code_read", "code_write", "pr"].map(adoCapName).join(", ");
     expect(line).toHaveTextContent(`Azure DevOps: a token for this run with ${names}. It's revoked when the run ends.`);
     expect(line.querySelector("b")).toHaveTextContent(names);
   });
 
   it("falls back to the row's default profile when the policy names none", () => {
-    render(<AdoRunTokenLine policyCaps={undefined} defaults={["read"]} />);
-    expect(screen.getByTestId("ado-run-token-line")).toHaveTextContent(`with ${adoCapName("read")}.`);
+    render(<AdoRunTokenLine policyCaps={undefined} defaults={["code_read"]} />);
+    expect(screen.getByTestId("ado-run-token-line")).toHaveTextContent(`with ${adoCapName("code_read")}.`);
   });
 
   it("says nothing when neither names any access", () => {

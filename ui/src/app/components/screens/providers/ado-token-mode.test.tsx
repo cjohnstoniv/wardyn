@@ -36,7 +36,7 @@ function row(entra: Partial<NonNullable<GitProvider["entra"]>> = {}, over: Parti
     base_urls: ["https://dev.azure.com/wardyn-live-test"],
     lanes: ["entra"],
     credential_source: "per_user",
-    entra: { tenant_id: TENANT, client_id: CLIENT, capability_ceiling: ["read"], default_profile: ["read"], ...entra },
+    entra: { tenant_id: TENANT, client_id: CLIENT, capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"], ...entra },
     ...over,
   };
 }
@@ -259,7 +259,7 @@ describe("state 10a: each person adds their own token", () => {
 describe("state 12b: the row the upgrade switched off", () => {
   const converted = (): GitProvider =>
     row(
-      { token_mode: "own_pat", tenant_id: "", client_id: "", capability_ceiling: ["read"], default_profile: [] },
+      { token_mode: "own_pat", tenant_id: "", client_id: "", capability_ceiling: ["project_read", "code_read"], default_profile: [] },
       { disabled: true },
     );
 

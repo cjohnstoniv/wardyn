@@ -186,25 +186,25 @@ test.describe("New Run, a row that creates a token for each run", () => {
   }
 
   test("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
-    let access: Record<string, unknown> = { token_mode: "minted_pat", state: "not_configured", default_profile: ["read"] };
+    let access: Record<string, unknown> = { token_mode: "minted_pat", state: "not_configured", default_profile: ["code_read"] };
     await spliceAccess(page, () => access);
     await page.route("**/api/v1/me/scm-access", (route) =>
       route.fulfill({ json: access.state === "live" ? [{ state: "live", source: "org" }] : [] }),
     );
     await openNewRun(page);
     await expect(page.getByTestId("ado-run-token-line")).toHaveText(
-      `${ADO_PAT.NEWRUN_LINE_PREFIX}${adoCapName("read")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`,
+      `${ADO_PAT.NEWRUN_LINE_PREFIX}${adoCapName("code_read")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`,
     );
     const note = page.getByTestId("ado-launch-note");
     await expect(note.getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
     const [popup] = await Promise.all([context.waitForEvent("page"), note.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }).click()]);
     await expect(popup).toHaveURL(/\/api\/v1\/scm\/azure-devops\/signin/);
-    access = { token_mode: "minted_pat", state: "live", source: "org", default_profile: ["read"] };
+    access = { token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] };
     await popup.waitForEvent("close");
   });
 
   test("a launch the organisation refuses on its token policy raises the blocked note", async ({ page }) => {
-    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["read"] }));
+    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] }));
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: ADO_PAT.LAUNCH_POLICY_REFUSED, reason: "ado_pat_policy_blocked" } });
@@ -217,7 +217,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
   });
 
   test("a launch refused for want of a usable sign-in asks to connect again", async ({ page }) => {
-    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["read"] }));
+    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "live", source: "org", default_profile: ["code_read"] }));
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: "cannot create a token", reason: "ado_pat_consent_needed" } });
@@ -308,7 +308,7 @@ test.describe("no horizontal scroll at 390px", () => {
   test("the person's card, the token dialog, New Run and a run page", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
     let access: Record<string, unknown> = { token_mode: "own_pat", pat_max_days: 30, own_scopes: ["vso.code_write", "vso.project", "vso.work"], state: "expired" };
-    await spliceAccess(page, () => ({ default_profile: ["read"], ...access }));
+    await spliceAccess(page, () => ({ default_profile: ["code_read"], ...access }));
     await page.route(`**/api/v1/runs/${runId}/ado-tokens`, (route) =>
       route.fulfill({
         json: [{ created_at: new Date(2026, 8, 29, 9, 2).toISOString(), valid_to: new Date(2026, 8, 29, 17, 2).toISOString(), renewal_failed: true }],

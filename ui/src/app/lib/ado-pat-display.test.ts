@@ -158,8 +158,8 @@ describe("ownTokenScopeLabels: Azure DevOps' own wording, from the row's scopes 
 
 describe("newRunTokenCaps", () => {
   it("prefers the policy's capabilities, then the row's default, then nothing", () => {
-    expect(newRunTokenCaps(["read"], ["pr"])).toHaveLength(1);
-    expect(newRunTokenCaps([], ["read", "pr"])).toHaveLength(2);
+    expect(newRunTokenCaps(["code_read"], ["pr"])).toHaveLength(1);
+    expect(newRunTokenCaps([], ["code_read", "pr"])).toHaveLength(2);
     expect(newRunTokenCaps(undefined, undefined)).toEqual([]);
   });
 });
