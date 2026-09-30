@@ -217,6 +217,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An open run event stream ends when its portal is revoked or its delegated token expires (#1413).**
+  A portal's delegated token that opened `GET /runs/{id}/events` used to keep streaming after the
+  portal was revoked or the token's ten-minute lifetime passed, until the five-minute hold ended it.
+  The stream now re-checks the token at each keepalive and ends at the next one, failing closed if
+  the check cannot be answered.
 - **The Add workspace dialog no longer offers a member on Kubernetes a local directory (#1416).** The
   console decided "this install runs on Kubernetes" from `runner.driver`, which `GET /setup/status`
   blanks for a member; it now also reads the member-safe `runner.kubernetes` bit added for #1238.
