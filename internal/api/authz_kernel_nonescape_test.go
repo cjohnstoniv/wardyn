@@ -60,10 +60,10 @@ var kernelDoors = map[string][]string{
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},
 	// Minting a personal credential.
-	"handleAddSSHKey":             {"capFeature"},
-	"handleCreateAPIToken":        {"capFeature"},
-	"handlePutProviderCredential": {"capModelProvider"},
-	"signInProvider":              {"capModelProvider"},
+	"handleAddSSHKey":      {"capFeature"},
+	"handleCreateAPIToken": {"capFeature"},
+	// The key and sign-in doors, answered as an unknown provider (D-6).
+	"denyProviderAsMissing": {"capModelProvider"},
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.

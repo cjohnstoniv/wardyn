@@ -65,6 +65,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
   CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
 
+- **A model provider that isn't available to you answers like one that doesn't exist, at the key and
+  sign-in doors (#1018).** `PUT /model-providers/{id}/credential` and `/model-providers/{id}/sign-in`
+  now answer a provider its "Available to" list leaves you out of with the same `404`
+  (`model_provider_not_found`) and sentence an unknown id gets, instead of a `403` naming it,
+  because provider ids are guessable. The key door checks this before it says a provider is
+  signed in to rather than keyed. The `authz.denied` row still records `capability_model_provider`.
+- **The User view's forced exit is dual-emitted too (#1020).** When `GET /me` finds the viewed user
+  type deleted and drops the session back to the Admin view, it writes `auth.member_mode` beside
+  `auth.user_view.set`, with the same data, as the toggle does through 0.8.x.
+
 ### Fixed
 
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer
@@ -96,6 +106,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
   row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
   was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **A plain user's `POST /me/view` no longer tells them which user types exist (#997).** Their request
+  is ignored, with the same `200` no-op, before the type is looked up, so a known and an unknown
+  `user_type` answer alike. An admin still gets the `400` for an unknown type.
+- **`user_type_unknown` and `groups_snapshot_stale` denials record the request's `method` (#997)**,
+  like every other `authz.denied` row a request produces.
+- **An image grant with an empty, `.` or `..` path segment is no longer honoured (#1018).** Such rows,
+  stored before the grant write refused them, already show as inert; a run naming such an image is
+  now refused (`byoi_user`) even when that grant or a wildcard covers it.
 
 ## [0.8.0] — 2026-09-29
 

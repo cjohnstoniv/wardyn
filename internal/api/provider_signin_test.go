@@ -239,8 +239,9 @@ func TestProviderSignInRefusals(t *testing.T) {
 		{"a provider that is turned off", nil, nil, "claude-off", http.StatusUnprocessableEntity, fmt.Sprintf(mpsOff, "claude-off")},
 		{"a provider with no portal set", nil, nil, "bedrock-bare", http.StatusUnprocessableEntity, fmt.Sprintf(mpsNoPortal, "bedrock-bare")},
 		{"no Claude sign-in image", nil, func(s *Server) { s.cfg.AgentImages = nil }, "claude", http.StatusUnprocessableEntity, mpsNoImage},
+		// Answered as an unknown id (D-6, #1018): provider ids are guessable.
 		{"a provider the member is not granted", &capStore{enf: map[string]bool{capModelProvider: true}}, nil,
-			"bedrock-prod", http.StatusForbidden, fmt.Sprintf(mpsNotGranted, "bedrock-prod")},
+			"bedrock-prod", http.StatusNotFound, fmt.Sprintf(mpcNotFound, "bedrock-prod")},
 		{"a provider serving no agent the member may launch", &capStore{grants: []types.CapabilityGrant{{
 			SubjectType: types.CapabilitySubjectAll, Capability: capAgent, Value: "claude-code", Effect: types.CapabilityDeny,
 		}}}, nil, "bedrock-prod", http.StatusNotFound, fmt.Sprintf(mpcNotFound, "bedrock-prod")},
@@ -261,6 +262,22 @@ func TestProviderSignInRefusals(t *testing.T) {
 			}
 		})
 	}
+
+	// D-6 (#1018): a provider the member is not granted is byte-identical to
+	// one that does not exist, and the refusal is still audited.
+	t.Run("a provider the member is not granted reads as absent", func(t *testing.T) {
+		enforced := func() *capStore { return &capStore{enf: map[string]bool{capModelProvider: true}} }
+		srv, _, audit, _ := signInFixture(t, enforced(), site)
+		code, body := signIn(t, srv, member, "bedrock-prod")
+		absent, _, _, _ := signInFixture(t, enforced(), credentialSite(subProvider("claude")))
+		if wantCode, wantBody := signIn(t, absent, member, "bedrock-prod"); code != wantCode || body != wantBody {
+			t.Fatalf("refused = %d %s, want the absent id's %d %s", code, body, wantCode, wantBody)
+		}
+		rows := audit.find("authz.denied")
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"capability_model_provider"`) {
+			t.Fatalf("authz.denied rows = %v, want one capability_model_provider row", rows)
+		}
+	})
 
 	// Rule 5: the admin token under OIDC is a mechanism, not a person — it
 	// has no credential and cannot capture one.

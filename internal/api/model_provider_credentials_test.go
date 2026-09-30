@@ -230,7 +230,8 @@ func TestProviderCredentialRefusals(t *testing.T) {
 // TestProviderCredentialAvailableTo: the key door stores nothing for a person
 // the provider's "Available to" list does not admit — the launch door's own
 // capModelProvider check, its audited refusal, and its tiers (a security admin
-// is bounded, a super admin exempt). A resolver error refuses too.
+// is bounded, a super admin exempt). The refusal answers exactly as an unknown
+// id does (D-6, #1018). A resolver error refuses too.
 func TestProviderCredentialAvailableTo(t *testing.T) {
 	site := credentialSite(keyProvider("anthropic", "claude-code"))
 	const path, body = "/api/v1/model-providers/anthropic/credential", `{"value":"sk-ant-member-own-key-0001"}`
@@ -246,8 +247,8 @@ func TestProviderCredentialAvailableTo(t *testing.T) {
 		want                   int
 	}{
 		{"listed: stored", "sub-listed", "listed@corp.example", oidc.RoleUser, http.StatusNoContent},
-		{"unlisted: refused", "sub-member", "member@corp.example", oidc.RoleUser, http.StatusForbidden},
-		{"an unlisted security admin is bounded like the launch door", "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin, http.StatusForbidden},
+		{"unlisted: refused", "sub-member", "member@corp.example", oidc.RoleUser, http.StatusNotFound},
+		{"an unlisted security admin is bounded like the launch door", "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin, http.StatusNotFound},
 		{"a super admin is exempt", "sub-admin", "admin@corp.example", oidc.RoleAdmin, http.StatusNoContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,9 +268,10 @@ func TestProviderCredentialAvailableTo(t *testing.T) {
 			if stored {
 				t.Fatalf("a refused PUT wrote %v / %v", mem.m, mem.owned)
 			}
-			var got struct{ Error string }
-			if want := fmt.Sprintf(mpcNotGranted, "anthropic"); json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Error != want {
-				t.Errorf("body = %s, want %q", w.Body.String(), want)
+			unknown := doSSO(t, modelProvidersStatusSrv(t, credentialSite(openAIProvider()), restricted()), http.MethodPut, path,
+				ssoSession(t, tc.sub, tc.email, tc.role), body)
+			if unknown.Code != w.Code || unknown.Body.String() != w.Body.String() {
+				t.Errorf("refused = %d %s, want an unknown id's %d %s", w.Code, w.Body.String(), unknown.Code, unknown.Body.String())
 			}
 			if reasons := auditReasons(t, srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_model_provider"}) {
 				t.Errorf("authz.denied reasons = %v, want [capability_model_provider]", reasons)

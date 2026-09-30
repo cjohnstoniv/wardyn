@@ -34,7 +34,6 @@ const (
 	mpsNoBlock     = "this install has no model providers yet — ask your admin to add one under Settings → Model providers"
 	mpsTyped       = "%q is connected with your own key or token, not by signing in"
 	mpsOff         = "model provider %q is turned off, so there is nothing to sign in to"
-	mpsNotGranted  = "you are not granted model provider %q — ask an admin to grant it before signing in to it"
 	mpsNoPortal    = "model provider %q has no AWS access portal or region set — ask your admin to set them before you sign in"
 	mpsAccounts    = "model provider %q serves models in more than one AWS account and pins none — ask your admin to pin the account and role before you sign in"
 	mpsNoImage     = "signing in to Claude needs the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
@@ -146,7 +145,8 @@ func (s *Server) mountProviderSignInRoutes(r chi.Router) {
 // signInProvider reads the provider {id} names as this caller may sign in to
 // it, from sc: the block must exist; the provider must serve an agent the
 // caller may launch (capAgent — the /setup/status projection's own rule, so a
-// provider the caller cannot see is a 404) and be granted by capModelProvider;
+// provider the caller cannot see is a 404) and be granted by capModelProvider
+// (a 404 too, denyProviderAsMissing);
 // and it must be on and a sign-in kind. Returns its login convention and the
 // harnesses on it the caller may launch. ok=false: the refusal is written.
 func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types.SiteConfig) (types.ModelProvider, harnessLogin, []string, bool) {
@@ -168,7 +168,7 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 		writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, fmt.Sprintf(mpcNotFound, id))
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
-	if s.denyUserCapability(w, r, capModelProvider, p.ID, "model_provider.sign_in", fmt.Sprintf(mpsNotGranted, p.ID)) {
+	if s.denyProviderAsMissing(w, r, p.ID, "model_provider.sign_in") {
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	login := map[types.ModelProviderKind]string{
