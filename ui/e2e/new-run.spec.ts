@@ -568,6 +568,12 @@ async function bedrockProviderStatus(page: Page): Promise<void> {
 }
 
 test.describe("New run rail — credentials and recording are read, not asserted", () => {
+  test.afterEach(async ({ page }) => {
+    // The console polls setup/status; a poll in flight at teardown otherwise
+    // surfaces as an orphan "apiResponse.json: Response has been disposed" error.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("with NO Preflight click the rail states the provider's residency and what /healthz says", async ({
     page,
   }, testInfo) => {
