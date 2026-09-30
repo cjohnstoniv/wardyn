@@ -15,10 +15,15 @@ package api
 // Basic with the token as the password, the one shape a personal access token
 // has — and that it stops at the expiry the person entered: past it the run is
 // held on the existing sign-in request until the person adds a new token.
+//
+// An Azure DevOps Server run (ado_own_pat_server.go) resolves here too, held to
+// its row's Server shape and its one host instead of the Services checks, and
+// asks for no capability beyond the git lane's fixed set.
 
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 
@@ -106,11 +111,20 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, adoResolveRosterUnreadable, nil)
 	}
-	if drift := snapshot.driftFrom(siteCfg); drift != "" {
+	// An Azure DevOps Server row is held to its own shape and its one host
+	// (ado_own_pat_server.go); a Services row to the Entra arm's.
+	row, _ := gitProviderRowByID(siteCfg, snapshot.ProviderRowID)
+	server := isADOServerOwnPATRow(row)
+	drift, hosts := snapshot.driftFrom(siteCfg), adoEntraHosts(snapshot.Organisation)
+	if server {
+		host, _, _ := adoServerAddress(row)
+		drift, hosts = adoServerDrift(row, snapshot), []string{host}
+	}
+	if drift != "" {
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
-	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
+	if !slices.ContainsFunc(hosts, func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
 		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
@@ -122,6 +136,11 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 	// refuse; a grant, an approval or a spent `once` lets it through.
 	responseCaps := snapshot.Capabilities
 	var capAsk adoCapabilityGrant
+	if c := r.URL.Query().Get("capability"); c != "" && server {
+		// A Server run holds the git lane's fixed set and nothing widens it.
+		return fail(http.StatusForbidden, reasonCapabilityAboveCeiling, fmt.Sprintf(adoCapAboveCeilingRefusal, c),
+			map[string]any{"capability": c})
+	}
 	if r.URL.Query().Get("capability") != "" {
 		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, fail); !ok {
 			return true

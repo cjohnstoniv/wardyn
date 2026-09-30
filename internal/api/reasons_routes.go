@@ -566,6 +566,16 @@ const (
 	// after this branch was cut, caught by the merge's own guard re-run
 	// (#656 final review round).
 	reasonADOSignInPromptInvalid = "ado_sign_in_prompt_invalid"
+	// ReasonADOPATNeedsConsoleApp is S1 (ErrADOMintNeedsSecret): a minted_pat
+	// row the console cannot redeem with its own secret. Exported for the boot
+	// log in cmd/wardynd.
+	ReasonADOPATNeedsConsoleApp = "ado_pat_needs_console_app"
+)
+
+// POST /workspace-providers/git/{id}/org-check (ado_pat_orgcheck.go).
+const (
+	reasonADOOrgCheckUnknownRow   = "ado_org_check_unknown_row"  // no such row, or not the row that creates tokens (D-6)
+	reasonADOOrgCheckOrganisation = "ado_org_check_organisation" // the row names no organisation and the request named none it serves
 )
 
 // PUT/DELETE /me/scm/azure-devops/token (ado_own_pat.go): a person adding or

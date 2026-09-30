@@ -43,8 +43,8 @@ func ownPATTestRow() types.GitProvider {
 		CredentialSource: types.CredentialSourcePerUser,
 		Entra: &types.ADOEntraConfig{
 			TokenMode:         types.ADOTokenModeOwnPAT,
-			CapabilityCeiling: []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR},
-			DefaultProfile:    []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite},
+			CapabilityCeiling: []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+			DefaultProfile:    []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapCodeWrite},
 			PATMaxDays:        30,
 		},
 	}
@@ -169,9 +169,9 @@ func TestADOOwnPATPut_RefusesAnotherAccountsToken(t *testing.T) {
 	if _, found := d.stored(t); found {
 		t.Fatal("another account's token was stored")
 	}
-	rows := d.auditRows(adoPATAuditOwnMismatch)
-	if len(rows) != 1 || rows[0].Outcome != "failure" {
-		t.Fatalf("ado_pat.own.identity_mismatch rows = %+v, want one failure", rows)
+	rows := d.auditRows(adoPATAuditOwnStore)
+	if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), `"reason":"identity_mismatch"`) {
+		t.Fatalf("ado_pat.own.store rows = %+v, want one failure with reason identity_mismatch", rows)
 	}
 	for _, s := range []string{body, string(rows[0].Data)} {
 		if strings.Contains(strings.ToLower(s), "carol") {
@@ -185,8 +185,9 @@ func TestADOOwnPATPut_RefusesAnotherAccountsToken(t *testing.T) {
 func TestADOOwnPATPut_RefusesWhenTheCallerHasNoEmail(t *testing.T) {
 	d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
 	code, body := d.putAs(t, ssoSession(t, capSub, "", oidc.RoleUser), ownPATOrgKey, ownPATToken, days(10))
-	if code != http.StatusForbidden || !strings.Contains(body, reasonADOOwnPATIdentityMismatch) {
-		t.Fatalf("PUT with no email = %d %s, want 403 %s", code, body, reasonADOOwnPATIdentityMismatch)
+	if code != http.StatusForbidden || !strings.Contains(body, reasonADOOwnPATIdentityMismatch) ||
+		!strings.Contains(body, adoOwnPATNoEmailRefusal) {
+		t.Fatalf("PUT with no email = %d %s, want 403 %s saying there is no email to check", code, body, reasonADOOwnPATIdentityMismatch)
 	}
 	if _, found := d.stored(t); found {
 		t.Fatal("a token was stored for a caller nobody could match it to")

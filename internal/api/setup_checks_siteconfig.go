@@ -15,7 +15,7 @@ import (
 // the funlen gate as this list grows.
 func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
 	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck} {
+	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck, adoRowsOffCheck} {
 		if chk, ok := conditional(sc); ok {
 			checks = append(checks, chk)
 		}
@@ -57,4 +57,23 @@ func adoEntraRowsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		ID: "ado_entra_rows", Label: "Azure DevOps", Status: "warn",
 		Detail: "More than one Azure DevOps connection is enabled. Keep one enabled so runs sign in to a single organization.",
 	}, true
+}
+
+// adoRowsOffCheck asks for a choice when an Azure DevOps row is turned off
+// (#1429). Migration 0102 turns off every Azure DevOps row that used the shared
+// token or SSH key, and a disabled row still claims its hosts, so clones from
+// that organisation fail until an admin chooses how people connect and turns it
+// on. Not blocking: nothing else on the checklist depends on it. Unfrozen copy —
+// it awaits the owner's canon sitting like the rest of the retirement's strings.
+func adoRowsOffCheck(sc types.SiteConfig) (SetupCheck, bool) {
+	for _, row := range gitProviderRows(sc) {
+		if row.Kind == types.GitProviderAzureDevOps && row.Disabled {
+			return SetupCheck{
+				ID: "ado_rows_off", Label: "Azure DevOps", Status: "warn",
+				Detail: "An Azure DevOps connection is turned off, so runs can't clone from it. Azure DevOps no longer uses one shared token or SSH key: choose how people connect, then turn it on.",
+				Fix:    "Settings → Workspace providers → Azure DevOps",
+			}, true
+		}
+	}
+	return SetupCheck{}, false
 }

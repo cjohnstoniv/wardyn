@@ -41,7 +41,13 @@ type ownPATRun struct {
 
 func newOwnPATRun(t *testing.T) *ownPATRun {
 	t.Helper()
-	base := &adoTestStore{site: adoSite(ownPATTestRow())}
+	return newOwnPATRunOn(t, ownPATTestRow(), adoTestRepo)
+}
+
+// newOwnPATRunOn is newOwnPATRun on row, for a run of repo.
+func newOwnPATRunOn(t *testing.T, row types.GitProvider, repo string) *ownPATRun {
+	t.Helper()
+	base := &adoTestStore{site: adoSite(row)}
 	fa := newFakeApprovals()
 	f := &ownPATRun{audit: &memAudit{}, approvals: fa, runID: uuid.New(), env: map[string]string{}, now: time.Now().UTC()}
 	f.st = &adoSignInStore{adoCapStore: &adoCapStore{adoTestStore: base, approvals: fa},
@@ -50,7 +56,7 @@ func newOwnPATRun(t *testing.T) *ownPATRun {
 		Store: f.st, Secrets: &memSecrets{m: map[string][]byte{}}, MaskRegistry: secretmask.NewRegistry(),
 		Now: func() time.Time { return f.now }, Audit: f.audit, Approvals: fa,
 	}}
-	ado, ok := resolveADOEntraRun(base.site, []string{adoTestRepo}, capSub)
+	ado, ok := resolveADOEntraRun(base.site, []string{repo}, capSub)
 	if !ok {
 		t.Fatal("the own-token row resolved no lane")
 	}
@@ -145,7 +151,7 @@ func TestResolveADOOwnPAT_InjectsTheOwnersTokenAsBasic(t *testing.T) {
 	}
 	wantValue := "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+ownPATToken))
 	if resp.Header != "Authorization" || resp.Value != wantValue || resp.Organisation != "contoso" ||
-		strings.Join(resp.Capabilities, ",") != "read,code_write" {
+		strings.Join(resp.Capabilities, ",") != "project_read,code_read,code_write" {
 		t.Errorf("response = %+v", resp)
 	}
 	if resp.ExpiresAt == 0 || resp.ExpiresAt > exp.UnixMilli() || resp.ExpiresAt > f.now.Add(storedKeyTTL).UnixMilli() {
@@ -219,13 +225,30 @@ func TestResolveADOOwnPAT_Expired(t *testing.T) {
 		f := newOwnPATRun(t)
 		f.token(t, ownPATToken, "contoso", f.now.Add(-time.Minute))
 		id := pendingID(t, f.resolve(t, capSub, "dev.azure.com", ""), reauthPendingState)
+		// The hold says what answers it — a new token, not a sign-in — and is
+		// still the Azure DevOps sign-in request every matcher reads.
+		ap, _ := f.approvals.Get(context.Background(), id)
+		var body adoSignInScopeBody
+		if err := json.Unmarshal(ap.RequestedScope, &body); err != nil || body.Reason != reasonADOOwnPATExpired ||
+			body.Mechanism != adoSignInMechanism {
+			t.Fatalf("hold scope = %s, want reason %s on the sign-in mechanism", ap.RequestedScope, reasonADOOwnPATExpired)
+		}
+		if _, ok := adoSignInScope(ap); !ok {
+			t.Fatal("the own-token hold is not matched as an Azure DevOps sign-in request")
+		}
+		raised := f.audit.find("credential.reauth.request")
+		if len(raised) != 1 || !strings.Contains(string(raised[0].Data), "adds a new token") {
+			t.Fatalf("credential.reauth.request rows = %+v, want one whose detail says a new token answers it", raised)
+		}
 		// A second resolve waits on the same request.
 		if again := pendingID(t, f.resolve(t, capSub, "dev.azure.com", ""), reauthPendingState); again != id {
 			t.Fatalf("a second resolve raised %s, want the open %s", again, id)
 		}
-		f.now = time.Now().UTC().Add(time.Minute)
+		// Stored with a clock BEHIND the hold's raise, as when the hold lands
+		// while the identity check is still out: it is answered all the same.
+		f.now = time.Now().UTC().Add(-time.Minute)
 		f.token(t, "bobs-new-pat", "contoso", f.now.AddDate(0, 0, 10))
-		f.srv.resolvePendingADOOwnPATHolds(context.Background(), capSub, ownPATRowID, f.now)
+		f.srv.resolvePendingADOOwnPATHolds(context.Background(), capSub, ownPATRowID)
 		if ap, _ := f.approvals.Get(context.Background(), id); ap.State != types.ApprovalApproved {
 			t.Fatalf("the hold is %s after a new token, want APPROVED", ap.State)
 		}

@@ -55,8 +55,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expiring` (within 7 days) or `expired_signin` (`cause: token_expired`) with `expires_on`,
   `max_days` and the scopes to create in Azure DevOps' own wording. A launch with an expired token is
   refused, and a run whose token expires mid-run is held on the Azure DevOps sign-in request until a
-  new token is added. Audited as `ado_pat.own.store`, `ado_pat.own.identity_mismatch` and
-  `ado_pat.own.delete`. The console's dialog and Azure DevOps Server rows follow separately.
+  new token is added. Audited as `ado_pat.own.store` (a refused token of another account as its
+  failure, `reason: identity_mismatch`) and `ado_pat.own.delete`. On an Azure DevOps Server row (the
+  `pat` lane, `per_user`, an address naming its collection, `https://host/Collection`) the same
+  token is git only: its owner is matched by the `Mail` the server gives the token's account, it may
+  last up to 30 days, and the proxy's git broker carries it to that one host, pinned to the
+  collection; a Server row naming only its host is not served. The console's dialog follows
+  separately.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
@@ -107,6 +112,32 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Breaking: Azure DevOps stops using shared credentials (#1429).** A shared personal access token or
+  SSH key was one account's standing credential, used for every person's runs. From this release an
+  Azure DevOps provider row carries only per-person lanes, and both write doors (`PUT
+  /workspace-providers` and `PUT /site-config`) refuse the retired ones with a `400`: a `pat` lane
+  that is not `per_user` (and any `pat` lane on a row of `dev.azure.com` or `*.visualstudio.com`
+  addresses alone), any `ssh` lane, and a row with no lanes at all, which used to mean the shared
+  `pat` and `ssh` lanes. An Azure DevOps Server row, which has no Entra sign-in, is now `lanes:
+  ["pat"]` with `credential_source: per_user` and no `entra` block; a hosted row's own token is
+  `lanes: ["entra"]` with `token_mode: own_pat`. Migration `0102_retire_ado_shared_credentials` rewrites
+  every stored Azure DevOps row that named a shared lane or none: pat and ssh leave its lanes, and a
+  row left with no per-person lane is turned off (`disabled`) with those per-person shapes, keeping its
+  id and addresses; a hosted row that already has the `entra` lane keeps it and stays as it was. A
+  turned-off row still claims its hosts, so **clones from those organisations fail with a reason until
+  an admin chooses how people connect and turns the row on**, and `/setup/status` carries a
+  non-blocking `ado_rows_off` warning until they do. **Upgrading:** at the first start after the
+  upgrade Wardyn **deletes, irreversibly**, these stored secrets for every Azure DevOps host it can
+  name (`dev.azure.com`, `ssh.dev.azure.com`, `vs-ssh.visualstudio.com`, every host an Azure DevOps
+  provider row names, and every `*.visualstudio.com` entry in `scm_hosts`), in the operator's
+  namespace and in every person's namespace: `git-pat-<host>`, `ssh-key-<host>` and
+  `known-hosts-<host>`, where `<host>` is the host with each run of characters other than letters and
+  digits turned into one `-` (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`,
+  `known-hosts-ssh-dev-azure-com`, `git-pat-tfs-corp-example`). A stored secret is write-only and
+  cannot be exported, so **keep your own copy first if you might roll back.** Each namespace that held
+  any is audited once as `ado_shared_credential.retire`, listing names and no values. A known-hosts
+  secret you gave a different name is not deleted. Wardyn's own sealed Azure DevOps names and every
+  other forge's secrets are left alone. GitHub and GitLab rows are unchanged.
 - **Azure DevOps capabilities: one read per area, in Azure DevOps' own names (#1409).** The single
   `read` capability becomes twelve reads, one per Azure DevOps area, and each area's write and admin
   rows follow Azure DevOps' own read → write → manage ladder. The catalogue now has 29 grantable

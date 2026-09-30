@@ -144,6 +144,9 @@ type adoEntraRun struct {
 	// snapshot — the resolver reads the LIVE ceiling — but a profile already
 	// outside it is refused here rather than authored and refused on first use.
 	ceiling []adoscope.Capability
+	// serverHost is set on an Azure DevOps Server run (ado_own_pat_server.go):
+	// the one host its credential rides to, git only.
+	serverHost string
 }
 
 // snapshot renders the run's resolution as the immutable grant scope.
@@ -306,6 +309,9 @@ func resolveADOEntraRun(sc types.SiteConfig, repos []string, owner string) (adoE
 // adoEntraRunForRepo is resolveADOEntraRun's per-repository half.
 func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, bool) {
 	row, admitted := providerFor(sc, repo)
+	if admitted && !row.Disabled && isADOServerOwnPATRow(row) {
+		return adoServerRunForRepo(row, repo, owner)
+	}
 	switch {
 	case !admitted || row.ID == "" || row.Disabled:
 		return adoEntraRun{}, false
@@ -595,7 +601,7 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 		return adoEntraLane{injections: injections}, false
 	}
 	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: &proxy.ADOGrantConfig{
-		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: adoEntraHosts(ado.org),
+		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: ado.laneHosts(),
 	}}, true
 }
 
@@ -653,12 +659,21 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	}
 
 	snapshot := ado.snapshot()
-	hosts := adoEntraHosts(ado.org)
-	grants, ok := s.createADOEntraGrants(ctx, run, snapshot, hosts)
+	grants, ok := s.createADOEntraGrants(ctx, run, snapshot, ado.laneHosts())
 	if !ok {
 		return injections, nil, false
 	}
 	injections = append(injections, grants...)
+	// SERVER IS GIT ONLY: the broker is its one door, so no TLS interception
+	// and no placeholder for a REST tool. The host is allowlisted, port-exact,
+	// for the broker's upstream leg; the proxy refuses a tunnel to it.
+	if ado.serverHost != "" {
+		policy.AllowedDomains = append(policy.AllowedDomains, net.JoinHostPort(ado.serverHost, adoEntraHostPort))
+		if sandboxEnv != nil {
+			addGitBrokerHosts(sandboxEnv, ado.serverHost)
+		}
+		return injections, nil, true
+	}
 
 	// EGRESS, port-qualified and exact, appended to the run's own allowlist.
 	// Placed before the governance ceiling's re-assertion in dispatchRun so an
