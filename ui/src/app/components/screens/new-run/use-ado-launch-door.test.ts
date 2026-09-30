@@ -171,4 +171,22 @@ describe("useAdoLaunchDoor + useAdoConnect", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  // #1428: the wire reasons a refused token creation carries (reasons.go) pick
+  // the launch note; every other refusal picks none.
+  it("reads the token-creation reason off a refused launch, and clears it on the next refusal", () => {
+    const { result } = renderHook(() => useAdoLaunchDoor());
+    expect(result.current.refusal).toBeNull();
+    act(() => result.current.notifyLaunchError(new HttpError(403, "refused", "ado_pat_policy_blocked")));
+    expect(result.current.refusal).toBe("blocked");
+    expect(result.current.dialog.open).toBe(false);
+    act(() => result.current.notifyLaunchError(new HttpError(403, "refused", "ado_pat_consent_needed")));
+    expect(result.current.refusal).toBe("connect");
+    act(() => result.current.notifyLaunchError(new HttpError(403, "refused", "ado_pat_lifespan_policy")));
+    expect(result.current.refusal).toBeNull();
+    act(() => result.current.notifyLaunchError(new HttpError(403, "refused", "ado_pat_mint_refused")));
+    expect(result.current.refusal).toBeNull();
+    act(() => result.current.notifyLaunchError(new HttpError(500, "boom")));
+    expect(result.current.refusal).toBeNull();
+  });
 });

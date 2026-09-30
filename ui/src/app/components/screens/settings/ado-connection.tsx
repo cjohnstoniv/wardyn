@@ -52,6 +52,9 @@ import { ADO } from "../../../lib/ado-entra-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
+import { patCardView } from "../../../lib/ado-pat-display";
+import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
+import { AdoPatBody, patToneClass } from "./ado-pat-panel";
 import type { SetupStatus } from "../../../lib/types";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 
@@ -88,6 +91,34 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
     });
   };
   if (!access || access.state === "") return null;
+  // A row that creates tokens or takes a pasted one has its own card states
+  // (ado-pat-panel.tsx); the shell is this card's, so the deep link, the focus
+  // and the collapse behave the same.
+  const patView = patCardView(access as SCMAccessPAT, PROVIDERS.KIND_AZURE_DEVOPS);
+  if (patView) {
+    return (
+      <CollapsibleCard
+        title={patView.title}
+        summary={<span className={patToneClass[patView.chip.tone]}>{patView.chip.label}</span>}
+        id="azure-devops"
+        ref={sectionRef}
+        tabIndex={-1}
+        open={open}
+        onOpenChange={setOpen}
+        className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
+      >
+        <AdoPatBody
+          access={access as SCMAccessPAT}
+          view={patView}
+          connecting={connecting}
+          onConnect={() => void handleConnect()}
+          blockedUrl={blockedUrl}
+          onFallbackClick={handleFallbackClick}
+          onChanged={onChanged}
+        />
+      </CollapsibleCard>
+    );
+  }
   const chip = scmAccessChip(access.state, access.source, access.cause);
   // #1200 compact cards — reuses the exact same first line the body already
   // rendered (never a new sentence): the plain not_applicable line, or the

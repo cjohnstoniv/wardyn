@@ -25,10 +25,16 @@ import { ADO } from "../../../lib/ado-entra-copy";
 import { HttpError } from "../../../lib/api/core";
 import { isGitCredentialRefusal } from "../../../lib/api/runs";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
+import { adoPatRefusalReason } from "../../../lib/api/ado-pat";
+import { patRefusalNote, type PatRefusalNote } from "../../../lib/ado-pat-display";
 
 export function useAdoLaunchDoor(): {
   /** Call from Launch's catch block with the caught error. */
   notifyLaunchError: (e: unknown) => void;
+  /** What the last refused launch says about creating the run's Azure DevOps
+   *  token (#1428): the organisation blocks it, or the person must connect
+   *  again. null for every other refusal. */
+  refusal: PatRefusalNote | null;
   dialog: {
     open: boolean;
     connecting: boolean;
@@ -47,6 +53,7 @@ export function useAdoLaunchDoor(): {
 } {
   const [open, setOpen] = React.useState(false);
   const [org, setOrg] = React.useState("");
+  const [refusal, setRefusal] = React.useState<PatRefusalNote | null>(null);
   const { connecting, connect, connectFallback, cancel, blockedUrl } = useAdoConnect();
   // Never toast into an unmounted screen (review finding F9) — a person who
   // navigated away while the popup was open must not see a stray "Connected"
@@ -75,7 +82,9 @@ export function useAdoLaunchDoor(): {
   };
 
   return {
+    refusal,
     notifyLaunchError: (e) => {
+      setRefusal(patRefusalNote(adoPatRefusalReason(e)));
       if (!isGitCredentialRefusal(e)) return;
       setOrg(e instanceof HttpError ? e.org : "");
       setOpen(true);

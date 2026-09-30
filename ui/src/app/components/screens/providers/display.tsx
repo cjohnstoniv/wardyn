@@ -11,6 +11,7 @@ import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/pro
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { unescapeADOName } from "../../../lib/scm-provider";
 import { entraDefaultsOffCeiling } from "./entra-editor";
+import { patLifetimeInvalid } from "../../../lib/ado-pat-display";
 
 export const KIND_LABEL: Record<GitProviderKind, string> = {
   github: PROVIDERS.KIND_GITHUB,
@@ -115,6 +116,7 @@ export function baseURLError(raw: string, kind: GitProviderKind): string | null 
 export function gitRowInvalid(row: GitProvider): boolean {
   if (row.base_urls.length === 0) return true;
   if (entraDefaultsOffCeiling(row.entra).length > 0) return true;
+  if (patLifetimeInvalid(row.entra)) return true;
   return row.base_urls.some((u) => baseURLError(u, row.kind) !== null);
 }
 

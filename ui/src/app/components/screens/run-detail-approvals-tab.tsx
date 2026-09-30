@@ -29,6 +29,8 @@ import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-ca
 import { PUSH } from "../wardyn/copy/push";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
+import { isTerminalRunState } from "../../lib/types";
+import { useRunAdoTokens } from "../../lib/hooks/use-run-ado-tokens";
 
 export function ApprovalsTab({
   approvals,
@@ -57,6 +59,8 @@ export function ApprovalsTab({
   // boolean isn't enough. The push card follows the same rule.
   const [busy, setBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
   const busyFor = (id: string) => (busy?.id === id ? busy.action : null);
+  // A run that holds Azure DevOps tokens widens one when access is approved.
+  const adoTokens = useRunAdoTokens(run.id, !isTerminalRunState(run.state), approvals.some(isAdoCapabilityRequest));
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -94,6 +98,7 @@ export function ApprovalsTab({
               securityOperator={securityOperator}
               viewerPrincipal={principal}
               run={run}
+              tokenWidens={adoTokens.length > 0}
               busy={busyFor(a.id)}
               onApprove={async (opts) => {
                 setBusy({ id: a.id, action: "approve" });

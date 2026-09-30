@@ -38,6 +38,8 @@ import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { ADOAccessSummary } from "../../wardyn/ado-access-summary";
+import { AdoLaunchNote, AdoRunTokenLine } from "../../wardyn/ado-run-token-line";
+import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
@@ -158,6 +160,8 @@ export function NewRunScreen() {
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
   const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>(undefined);
+  // The caller's own Azure DevOps answer, for a row that creates a token per run.
+  const [adoAccess, setAdoAccess] = React.useState<SCMAccessPAT | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> — grouping is by
   // EXACT string, so a family needs a character-perfect retype without it.
   const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
@@ -229,6 +233,7 @@ export function NewRunScreen() {
         setModelProviders(resolvedModelProviders(st));
         setProviderAccess(st.unreachable ? undefined : st.provider_access);
         setAdoCeiling(st.unreachable ? undefined : st.scm_access?.capability_ceiling);
+        setAdoAccess(st.unreachable ? undefined : (st.scm_access as SCMAccessPAT | undefined));
         // Every path that leaves the class list unread still SETTLES the probe:
         // that is what draws the unknown-barrier line (probeSettled with no
         // availableClasses). Setting it only beside a real list made that
@@ -667,7 +672,16 @@ export function NewRunScreen() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <ADOAccessSummary caps={savedPolicies.find((p) => p.id === state.selectedPolicyId)?.spec.azure_devops_capabilities} />
+                      {adoAccess?.token_mode === "minted_pat" ? (
+                        <>
+                          <AdoRunTokenLine
+                            policyCaps={savedPolicies.find((p) => p.id === state.selectedPolicyId)?.spec.azure_devops_capabilities}
+                            defaults={adoAccess.default_profile}
+                          />
+                        </>
+                      ) : (
+                        <ADOAccessSummary caps={savedPolicies.find((p) => p.id === state.selectedPolicyId)?.spec.azure_devops_capabilities} />
+                      )}
                       {/* Rulebook §9: an empty picker carries the action that
                           fills it. M-1b: Policies is Admin view only, so the
                           door renders only for the tier that authors them. */}
@@ -688,6 +702,10 @@ export function NewRunScreen() {
                   ),
                 }}
               />
+
+              {/* A launch on a row that creates a token per run is refused until the
+                  person has connected (or while the organisation blocks it). */}
+              <AdoLaunchNote access={adoAccess} refusal={policy.adoDoor.refusal} connecting={policy.adoDoor.dialog.connecting} onConnect={policy.adoDoor.dialog.onConfirm} />
 
               {/* C5: named, not left to the barrier above silently winning. */}
               {!useSaved && policy.unparseableFloor && (

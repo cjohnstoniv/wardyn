@@ -40,6 +40,8 @@ import {
 } from "../../ui/alert-dialog";
 import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
 import { EntraEditor } from "./entra-editor";
+import { AdoConvertedRow } from "./ado-token-mode";
+import { adoRowNeedsChoice } from "../../../lib/ado-pat-display";
 
 const ALL_LANES: LegacyGitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
@@ -286,7 +288,13 @@ function Row({
 
       {row.disabled ? (
         <div className="p-3">
-          <p className="text-body text-muted-foreground">{PROVIDERS.ROW_DISABLED_HINT}</p>
+          {/* The row the upgrade switched off waits for a choice, and says so
+              instead of the plain off hint. */}
+          {adoRowNeedsChoice(row) ? (
+            <AdoConvertedRow row={row} operator={operator} onUpdate={onUpdate} />
+          ) : (
+            <p className="text-body text-muted-foreground">{PROVIDERS.ROW_DISABLED_HINT}</p>
+          )}
           {/* The server refuses a zero-address row whether it is on or off, so
               Save is withheld either way — the cause has to stay readable on a
               row whose textarea is collapsed. */}

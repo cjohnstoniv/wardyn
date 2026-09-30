@@ -186,7 +186,12 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   credentials: {
     label: "Credentials",
     Icon: KeyRound,
-    component: (ctx) => React.createElement(CredentialsWidget, { grants: ctx.grants, audit: ctx.audit }),
+    component: (ctx) =>
+      React.createElement(CredentialsWidget, {
+        grants: ctx.grants,
+        audit: ctx.audit,
+        ado: { runId: ctx.run.id, paused: !!ctx.run.paused_at, live: !ctx.finished },
+      }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
       live: { x: 8, y: 12, w: 4, h: 4 },

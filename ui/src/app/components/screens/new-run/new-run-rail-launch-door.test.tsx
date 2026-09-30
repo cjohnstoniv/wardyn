@@ -226,6 +226,15 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.getByText(ADO.PREFLIGHT_MISSING_SUB)).toBeInTheDocument();
   });
 
+  // #1428: a row that creates a token per run refuses the launch instead of
+  // prompting for a connection, so "you'll be asked to connect" would be wrong;
+  // the Policy section's own note (AdoLaunchNote) speaks for it.
+  it("says nothing for a not_configured connection on a row that creates a token per run", () => {
+    renderRail({ gitCredential: { state: "not_configured", token_mode: "minted_pat" } as SCMAccess });
+    expect(screen.queryByText(ADO.PREFLIGHT_MISSING)).toBeNull();
+    expect(screen.queryByText("Credentials")).toBeNull();
+  });
+
   it("says nothing for a live connection — no person name to compose PREFLIGHT_LIVE with", () => {
     renderRail({ gitCredential: { state: "live", source: "org" } });
     expect(screen.queryByText(ADO.PREFLIGHT_MISSING)).toBeNull();

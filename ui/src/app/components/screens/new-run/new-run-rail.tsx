@@ -35,6 +35,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
+import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
@@ -199,8 +200,15 @@ function gateSentence(modelProvider: RunRailProps["modelProvider"]): string | un
 // try to), `shared_*`/`not_applicable` are nothing a launch-time line can fix,
 // and `expiring` needs a deadline this deployment cannot compute yet
 // (scmaccess.go's doc comment) — only `not_configured` renders.
+//
+// A row that creates a token per run says its own piece on the Policy section
+// (AdoLaunchNote): its launch is refused rather than prompted, so "you'll be
+// asked to connect" would be wrong here.
+const gitCredentialSpeaks = (cred?: SCMAccess) =>
+  cred?.state === "not_configured" && (cred as SCMAccessPAT).token_mode !== "minted_pat";
+
 function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
-  if (cred?.state !== "not_configured") return null;
+  if (!gitCredentialSpeaks(cred)) return null;
   return (
     <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
       <span>{ADO.PREFLIGHT_MISSING}</span> <span>{ADO.PREFLIGHT_MISSING_SUB}</span>
@@ -314,7 +322,7 @@ export function RunRail({
   // gitCredential (nothing to say, see GitCredentialLine above) must not by
   // itself open an empty heading over a shell run with nothing else to show.
   const showCredentials =
-    hasProviderCandidates || showModelWarning || !!cred || !!agentRow || gitCredential?.state === "not_configured";
+    hasProviderCandidates || showModelWarning || !!cred || !!agentRow || gitCredentialSpeaks(gitCredential);
   // With no provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint must not sit directly under "No model provider is
   // connected. This run launches; its first model call fails." Nothing
