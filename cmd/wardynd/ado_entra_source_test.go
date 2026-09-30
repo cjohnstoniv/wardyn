@@ -136,7 +136,7 @@ func TestADOEntraSource_SkipsOwnPATRows(t *testing.T) {
 
 	own := entraSite(testLoginClient).WorkspaceProviders.Git[0]
 	own.ID, own.Entra = "own", &types.ADOEntraConfig{TokenMode: types.ADOTokenModeOwnPAT,
-		CapabilityCeiling: []adoscope.Capability{adoscope.CapRead}}
+		CapabilityCeiling: []adoscope.Capability{adoscope.CapCodeRead}}
 	if _, found, err := adoEntraSource(fakeSiteConfig{WorkspaceProviders: &types.WorkspaceProviders{
 		Git: []types.GitProvider{own}}}, testLogin)(context.Background()); found || err != nil {
 		t.Errorf("an own_pat row alone: found=%v err=%v, want not found", found, err)
@@ -172,7 +172,7 @@ func TestADOEntraSource_BearerAndMintedRowsMayNotShareAnApplication(t *testing.T
 		t.Fatalf("err = %v, want the shared-application refusal", err)
 	}
 	bearer.Entra = &types.ADOEntraConfig{TenantID: testTenant, ClientID: "99999999-0000-0000-0000-000000000000",
-		CapabilityCeiling: []adoscope.Capability{adoscope.CapRead}}
+		CapabilityCeiling: []adoscope.Capability{adoscope.CapCodeRead}}
 	sc.WorkspaceProviders.Git[1] = bearer
 	if _, found, err := adoEntraSource(sc, testLogin)(context.Background()); err != nil || !found {
 		t.Fatalf("different applications: found=%v err=%v", found, err)
