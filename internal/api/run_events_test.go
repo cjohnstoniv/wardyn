@@ -573,3 +573,65 @@ func TestRunEvents_RevokedPersonEndsTheDelegatedStream(t *testing.T) {
 		t.Fatal("delegated stream outlived the person's revoked sessions")
 	}
 }
+
+// TestRunEvents_DeadDelegatedTokenEndsTheStream (#1413): the portal is checked
+// once at open, so the keepalive re-asks the store — a portal revoked
+// mid-stream, or a delegated token past its ten-minute TTL, ends the stream at
+// the next beat instead of the hold, and a store that cannot answer ends it
+// too.
+func TestRunEvents_DeadDelegatedTokenEndsTheStream(t *testing.T) {
+	for name, kill := range map[string]func(ast *authzStore, via types.DelegationVia, clock *atomic.Int64){
+		"portal revoked": func(ast *authzStore, via types.DelegationVia, _ *atomic.Int64) {
+			if _, err := ast.RevokeDelegate(context.Background(), via.Delegate, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"token expired": func(_ *authzStore, _ types.DelegationVia, clock *atomic.Int64) {
+			clock.Store(int64(delegatedTokenTTL + time.Minute))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var skew atomic.Int64 // nanoseconds the server clock is ahead
+			srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+				c.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+			})
+			srv.runEvents.hold, srv.runEvents.beat = 0, 10*time.Millisecond
+			const person = "sub-person"
+			tok, via := seedDelegation(t, ast.fakeDelegateStore, person)
+			id := uuid.New()
+			ast.mu.Lock()
+			ast.runs[id] = types.AgentRun{ID: id, CreatedBy: person, State: types.RunRunning, Agent: "claude-code"}
+			ast.mu.Unlock()
+			ts := httptest.NewServer(panicFails(t, srv.Handler()))
+			t.Cleanup(ts.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			resp := openEventsAs(t, ctx, ts.URL, id, tok)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("open: status %d", resp.StatusCode)
+			}
+			lines := make(chan string)
+			go func() {
+				defer close(lines)
+				sc := bufio.NewScanner(resp.Body)
+				for sc.Scan() {
+					lines <- sc.Text()
+				}
+			}()
+			for beats := 0; beats < 3; {
+				if l, ok := <-lines; !ok {
+					t.Fatal("stream closed while the token was live")
+				} else if l == ": keepalive" {
+					beats++
+				}
+			}
+			kill(ast, via, &skew)
+			for range lines {
+				// drain until the server closes the stream
+			}
+			if ctx.Err() != nil {
+				t.Fatal("stream outlived its dead delegated token")
+			}
+		})
+	}
+}

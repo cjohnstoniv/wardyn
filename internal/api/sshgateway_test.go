@@ -46,6 +46,8 @@ type sshMemStore struct {
 	// profiles answers ListGovernanceProfiles: the limits of the profile a
 	// run was created under (governance_run_doors_test.go).
 	profiles []types.GovernanceProfile
+	// profilesErr, when set, is ListGovernanceProfiles' answer instead.
+	profilesErr error
 }
 
 func newSSHMemStore() *sshMemStore {
@@ -83,6 +85,9 @@ func (s *sshMemStore) putRun(r types.AgentRun) {
 func (s *sshMemStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.profilesErr != nil {
+		return nil, s.profilesErr
+	}
 	return slices.Clone(s.profiles), nil
 }
 

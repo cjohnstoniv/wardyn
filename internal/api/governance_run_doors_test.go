@@ -164,6 +164,16 @@ func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
 		}
 	})
 
+	t.Run("a security admin is bound", func(t *testing.T) {
+		h := setup(t, profile)
+		if rec := enter(h, h.owner, oidc.RoleSecurityAdmin); rec.Code != http.StatusForbidden {
+			t.Fatalf("security admin enter = %d, want 403: %s", rec.Code, rec.Body.String())
+		}
+		if !h.audit.hasDataValue("reason", string(authz.ReasonGovernanceProfile)) {
+			t.Errorf("no governance_profile refusal audited; reasons: %s", h.audit.dataReasons())
+		}
+	})
+
 	t.Run("a profile without the limit is not bound", func(t *testing.T) {
 		h := setup(t, types.GovernanceProfile{ID: uuid.New(), Name: "open"})
 		if rec := enter(h, h.owner, oidc.RoleUser); rec.Code != http.StatusFound {
@@ -232,6 +242,15 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		}
 	})
 
+	t.Run("a security admin who owns the run is bound", func(t *testing.T) {
+		run := execRun(&profile.ID, "make test")
+		st := &profileListStore{profiles: []types.GovernanceProfile{profile}}
+		srv, _ := setup(t, run, st)
+		if w := attach(t, srv, st, run, "alice", oidc.RoleSecurityAdmin); !refusedByProfile(w) {
+			t.Fatalf("attach = %d %s, want 403 governance_profile", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("a profile read failure refuses rather than attaches", func(t *testing.T) {
 		run := execRun(&profile.ID, "make test")
 		st := &profileListStore{err: errors.New("conn closed by peer")}
@@ -257,8 +276,14 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &profileListStore{profiles: tc.profiles}
 			srv, _ := setup(t, tc.run, st)
-			if w := attach(t, srv, st, tc.run, tc.principal, tc.role); refusedByProfile(w) {
+			// Past the profile door the plain GET (no WebSocket handshake) is
+			// answered 426, so a door that wrongly 500s fails here too.
+			w := attach(t, srv, st, tc.run, tc.principal, tc.role)
+			if refusedByProfile(w) {
 				t.Fatalf("attach refused by the profile: %s", w.Body.String())
+			}
+			if w.Code != http.StatusUpgradeRequired {
+				t.Fatalf("attach = %d %s, want 426 Upgrade Required", w.Code, w.Body.String())
 			}
 		})
 	}
@@ -282,6 +307,9 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 	adminPriv, adminPub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(adminPub), Principal: "root@example.com",
 		PublicKey: string(ssh.MarshalAuthorizedKey(adminPub)), Role: oidc.RoleAdmin, RoleCheckedAt: &now})
+	secPriv, secPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(secPub), Principal: "alice@example.com",
+		PublicKey: string(ssh.MarshalAuthorizedKey(secPub)), Role: oidc.RoleSecurityAdmin, RoleCheckedAt: &now})
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
 	t.Run("the owner is refused, with the profile named in the audit", func(t *testing.T) {
@@ -305,6 +333,12 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 		_ = client.Close()
 	})
 
+	t.Run("a security admin is bound", func(t *testing.T) {
+		if _, err := sshDial(t, h, deniedRun.String(), secPriv); err == nil {
+			t.Fatal("security admin ssh into a deny_interactive run succeeded, want refused")
+		}
+	})
+
 	t.Run("a profile without the limit is not bound", func(t *testing.T) {
 		client, err := sshDial(t, h, openRun.String(), alicePriv)
 		if err != nil {
@@ -312,4 +346,31 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 		}
 		_ = client.Close()
 	})
+}
+
+// TestDenyInteractiveSSHFailsClosedOnAProfileReadError: when the run's profile
+// cannot be read the dial is refused, not let through, and the audit row says
+// why.
+func TestDenyInteractiveSSHFailsClosedOnAProfileReadError(t *testing.T) {
+	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	st := newSSHMemStore()
+	st.profiles = []types.GovernanceProfile{profile}
+	st.profilesErr = errors.New("conn closed by peer")
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", GovernanceProfileID: &profile.ID})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com",
+		PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	if _, err := sshDial(t, h, runID.String(), priv); err == nil {
+		t.Fatal("ssh with an unreadable governance profile succeeded, want refused")
+	}
+	ev := waitForAudit(t, h.audit, runID, "ssh.authenticate", "failure")
+	if ev == nil {
+		t.Fatalf("no ssh.authenticate failure; events=%s", auditDump(h.audit.snapshot(), runID))
+	}
+	if !strings.Contains(string(ev.Data), "governance profile unreadable") {
+		t.Errorf("audit data = %s, want the unreadable profile named", ev.Data)
+	}
 }
