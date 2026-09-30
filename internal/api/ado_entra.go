@@ -383,6 +383,7 @@ func ValidateEntraAuthorityOverride(raw string, allowTestEndpoints bool) (string
 func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 	r.Get("/scm/azure-devops/signin", s.handleADOSignIn)
 	r.Get(adoSignInCallbackRoute, s.handleADOCallback)
+	r.Delete("/scm/azure-devops/connection", s.handleADODisconnect) // ado_pat_console.go
 }
 
 // resolveADOEntra resolves this deployment's Azure DevOps configuration and

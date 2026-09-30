@@ -758,6 +758,9 @@ type Server struct {
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
 	adoEntraTokens adoEntraAccessCache
+	// adoSignInEnds counts each person's disconnects and erases, so a run
+	// token created while one ran revokes itself (ado_pat_console.go).
+	adoSignInEnds adoSignInEnds
 	// adoPATs replaces the sign-in configuration's own vssps client
 	// (ADOEntraConfig.patClient) for a `minted_pat` run's creates and revokes;
 	// set by tests only. adoRunPATs holds each run's current token in memory

@@ -62,6 +62,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   last up to 30 days, and the proxy's git broker carries it to that one host, pinned to the
   collection; a Server row naming only its host is not served. The console's dialog follows
   separately.
+- **The console draws how people connect to Azure DevOps (#1428, #1430).** An Azure DevOps row
+  offers three choices under "How people connect to Azure DevOps": a short-lived token Wardyn creates
+  for each run (with its longest life and a "Check organisation settings" button), each person's
+  Entra sign-in, or a token each person adds themselves (with its longest expiry). The person's
+  Settings card shows the state that choice leaves them in: connect, disconnect, sign in again,
+  blocked by the organisation, or add, replace, expiring and expired. New Run says what the run's
+  token carries and asks to connect before launching. The run page lists each token the run held,
+  oldest first, and an approval says it adds the access to the run's token. A row the upgrade
+  switched off says why and turns on with "Save and turn on". An Azure DevOps row no longer shows
+  lane checkboxes or a place to store a shared token or key: "Add provider" writes the entra lane
+  with a token choice, and an Azure DevOps Server address makes the row a git-only per-person token
+  row with no Entra block.
+- **Azure DevOps per-run tokens: disconnect and a run's token list (#1428).**
+  `DELETE /api/v1/scm/azure-devops/connection` disconnects the caller's own Azure DevOps sign-in: it
+  revokes every live per-run token created in their name (`ado_pat.revoke` reason `disconnect`),
+  deletes the stored sign-in, writes `ado_pat.disconnect` and answers `204`, also when nothing was
+  stored. With no per-person Azure DevOps row the caller may use it answers `404`. A sign-in
+  captured at console login is captured again at the next login. `GET /api/v1/runs/{id}/ado-tokens`
+  lists every token a run held, oldest first: `created_at`, `valid_to`, and once closed
+  `revoked_at`, `revoke_reason` and `revoke_failed`, never a token value or authorization id. The
+  run's owner or an admin reads it; anyone else gets the same `404` as `GET /runs/{id}`.
+  `/me/scm-access` and `/setup/status`'s `scm_access` add `token_mode: minted_pat` on a row that
+  creates tokens, `last_token` and `default_profile`, and the organisation check adds
+  `lifespan_error` when the lifespan policy is unknown. Migration `0104_ado_run_pats_owner_idx` adds
+  an index on `ado_run_pats`.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

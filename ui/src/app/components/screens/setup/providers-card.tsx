@@ -33,7 +33,10 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
-import { providers as api } from "../../../lib/api/providers";
+import { providers as api, type GitProvider } from "../../../lib/api/providers";
+import { ADO_PAT } from "../../../lib/ado-pat-copy";
+import { adoRowNeedsChoice } from "../../../lib/ado-pat-display";
+import { Button } from "../../ui/button";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
@@ -56,6 +59,9 @@ export function ProvidersCard({
   const operator = useOperator();
   const navigate = useNavigate();
   const [count, setCount] = React.useState<number | null>(null);
+  // The rows, for the Azure DevOps line that needs attention (#1428): a row the
+  // upgrade switched off waits for the admin to choose how people connect.
+  const [rows, setRows] = React.useState<GitProvider[]>([]);
 
   React.useEffect(() => {
     if (!operator) return;
@@ -65,6 +71,7 @@ export function ProvidersCard({
       .then(({ providers }) => {
         if (!live) return;
         setCount((providers.git ?? []).filter((row) => !row.disabled).length);
+        setRows(providers.git ?? []);
       })
       // A failed read leaves the summary ABSENT rather than claiming
       // "No providers enabled." — a confident empty state over an unloaded
@@ -137,6 +144,30 @@ export function ProvidersCard({
   // collapsed header, so the open-button's own copy of it would duplicate
   // the same text node twice once expanded — suppressed there, unchanged
   // (still the two-line button) in Getting started.
+  // A warning, never a blocker: the row itself already refuses what it must,
+  // with its reason. The organisation check's findings are the row's own, not
+  // this card's: the server keeps no last answer to draw them from here.
+  const attention = [
+    ...(rows.some(adoRowNeedsChoice) ? [{ text: ADO_PAT.CONVERTED_CHECKLIST, choose: true }] : []),
+  ];
+  const attentionLines = attention.length > 0 && (
+    <div className="mt-3 space-y-2" data-testid="ado-pat-checks">
+      {attention.map((a) => (
+        <div key={a.text} className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-body">
+          <span aria-hidden="true" className="w-4 shrink-0 text-center font-bold text-warning">
+            !
+          </span>
+          <span className="min-w-0 flex-1">{a.text}</span>
+          {a.choose && (
+            <Button size="sm" variant="outline" onClick={() => navigate("/admin/providers")}>
+              {ADO_PAT.CONVERTED_CHOOSE}
+            </Button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
   const openButton = (
     <button
       type="button"
@@ -155,6 +186,7 @@ export function ProvidersCard({
     return (
       <CollapsibleCard title={PROVIDERS.TITLE} summary={summary || undefined} testId="providers-card">
         <p className="text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
+        {attentionLines}
         {openButton}
       </CollapsibleCard>
     );
@@ -163,6 +195,7 @@ export function ProvidersCard({
     <section className="rounded-xl border border-border bg-card p-4" data-testid="providers-card">
       <h3 className="text-sm font-medium text-foreground">{PROVIDERS.TITLE}</h3>
       <p className="mt-0.5 text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
+      {attentionLines}
       {openButton}
     </section>
   );

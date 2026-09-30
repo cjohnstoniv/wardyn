@@ -140,6 +140,9 @@ type SCMAccess struct {
 	// GitOnly is set on an Azure DevOps Server row: its token carries git and
 	// nothing else (ado_own_pat_server.go).
 	GitOnly bool `json:"git_only,omitempty"`
+
+	// ADOPATAccess adds the token console's facts (ado_pat_console.go).
+	ADOPATAccess
 }
 
 // adoAccessState grades one PER-USER row's captured sign-in into the
@@ -292,6 +295,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	if row.Entra != nil {
 		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
 	}
+	s.adoPATAccessFor(ctx, pr, subject, minted, &out)
 	switch {
 	case unusable:
 		out.State, out.Cause = modelAccessExpiredSignin, ReasonADOPATNeedsConsoleApp

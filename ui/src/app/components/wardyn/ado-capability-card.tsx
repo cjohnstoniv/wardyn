@@ -61,6 +61,7 @@ import { ADO } from "../../lib/ado-entra-copy";
 import { ADO_CAP_COPY } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { ADO_PAT } from "../../lib/ado-pat-copy";
 import { Chip } from "./primitives";
 import { Mono } from "./code-block";
 import { cn } from "../ui/utils";
@@ -161,6 +162,7 @@ export function AdoCapabilityCard({
   viewerPrincipal,
   run,
   ownershipScopedList = false,
+  tokenWidens = false,
   busy,
   onApprove,
   onDeny,
@@ -192,6 +194,9 @@ export function AdoCapabilityCard({
   // being visible there does NOT by itself prove ownership — those callers
   // keep the real loading/error/ownership gates.
   ownershipScopedList?: boolean;
+  // The run holds an Azure DevOps token Wardyn creates: approving replaces it
+  // with one carrying the added access, even on "Once" (#1428).
+  tokenWidens?: boolean;
   // "approve" | "deny" while THAT decision is in flight, else null (#458):
   // the old single boolean correctly disabled BOTH buttons but ALSO spun
   // BOTH of them, so a reader couldn't tell which action their click had
@@ -345,6 +350,7 @@ export function AdoCapabilityCard({
             {boldFirstWord(scope === "once" ? ADO.REQ_APPROVING_ONCE(thing) : ADO.REQ_APPROVING_RUN(thing))}
           </p>
           <p className="mt-0.5 text-meta text-muted-foreground">{boldFirstWord(ADO.REQ_DENYING(thing))}</p>
+          {tokenWidens && <p className="mt-2.5 text-meta text-info">{ADO_PAT.APPROVAL_WIDENS}</p>}
           <p className="mt-2.5 text-meta text-muted-foreground">
             {held ? ADO.REQ_HELD(thing) : ADO.REQ_HELD_EXPIRED(thing)}
           </p>

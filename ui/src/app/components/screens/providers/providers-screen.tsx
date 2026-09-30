@@ -50,6 +50,8 @@ import { Segmented } from "../permissions";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
+import { AdoRowsContext } from "./ado-token-mode";
+import { reshapeADORow } from "./ado-row-shape";
 import { ImagesTab } from "./images-tab";
 import { StorageTab } from "./storage-tab";
 
@@ -126,12 +128,15 @@ export function ProvidersScreen() {
       .catch(() => setupApi.getSetupStatus().then(setSetupStatus).catch(() => {}));
   }, []);
 
-  const save = async () => {
+  // `next` is the document to send: the draft, unless a caller has just built a
+  // newer one it could not wait for React to commit ("Save and turn on").
+  const save = async (next: WorkspaceProviders = draft) => {
     setSaving(true);
     setSaveError(null);
     clearWriteDropped();
     try {
-      const result = await api.putWorkspaceProviders(draft, etag);
+      // An Azure DevOps row is sent in the lane its addresses call for.
+      const result = await api.putWorkspaceProviders({ ...next, git: next.git?.map((r) => reshapeADORow(r)) }, etag);
       setDraft(result.providers);
       // The PUT response is the new BASELINE too — a save with nothing left
       // unsaved must not still read as dirty to the guard above or to a
@@ -173,6 +178,14 @@ export function ProvidersScreen() {
   // to send. The row itself carries the reason (BASE_URLS_REQUIRED under its
   // textarea), so this is a withheld button with a visible cause, not a dead end.
   const invalidGitRow = (draft.git ?? []).some(gitRowInvalid);
+
+  // A converted Azure DevOps row's "Save and turn on": the same one save, with
+  // that row switched on in the document it sends.
+  const saveAndEnable = (rowId: string) => {
+    const next = { ...draft, git: (draft.git ?? []).map((r) => (r.id === rowId ? { ...r, disabled: false } : r)) };
+    setDraft(next);
+    void save(next);
+  };
 
   // #217 — the changed fields, as readable text, shown beside Save and
   // driving every dirty chip on this screen (§460). #460's SavedElsewhereBanner
@@ -280,16 +293,18 @@ export function ProvidersScreen() {
           )}
 
           {tab === "git" && (
-            <GitTab
-              git={draft.git ?? []}
-              onChange={(git) => setDraft((d) => ({ ...d, git }))}
-              present={secretsPresent}
-              githubApp={githubApp}
-              operator={operator}
-              loadedEmpty={loadedEmpty}
-              patBrokerEnabled={draft.git_pat_broker_enabled ?? true}
-              onStatusRefresh={refreshSetupStatus}
-            />
+            <AdoRowsContext.Provider value={{ refusal: saveError, saveAndEnable, saveBlocked: saving || invalidGitRow }}>
+              <GitTab
+                git={draft.git ?? []}
+                onChange={(git) => setDraft((d) => ({ ...d, git }))}
+                present={secretsPresent}
+                githubApp={githubApp}
+                operator={operator}
+                loadedEmpty={loadedEmpty}
+                patBrokerEnabled={draft.git_pat_broker_enabled ?? true}
+                onStatusRefresh={refreshSetupStatus}
+              />
+            </AdoRowsContext.Provider>
           )}
           {tab === "storage" && (
             <StorageTab
@@ -351,7 +366,7 @@ export function ProvidersScreen() {
                   {REAUTH_DIALOG.WRITE_DROPPED}
                 </span>
               )}
-              <Button disabled={!operator || saving || invalidGitRow} onClick={save}>
+              <Button disabled={!operator || saving || invalidGitRow} onClick={() => void save()}>
                 {PROVIDERS.SAVE_CTA}
               </Button>
             </div>

@@ -19,6 +19,9 @@ import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../li
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
+import { adoTokenMode } from "../../../lib/ado-pat-display";
+import { useAdoOrgCheck } from "../../../lib/hooks/use-ado-org-check";
+import { AdoTokenMode } from "./ado-token-mode";
 // clsx, not cn: tailwind-merge doesn't know the text-meta/text-body size
 // tokens, so cn() drops them whenever a text colour class is merged in.
 import { clsx } from "clsx";
@@ -189,6 +192,8 @@ export function EntraEditor({
 }) {
   const uid = useId();
   const cfg: ADOEntraConfig = row.entra ?? { tenant_id: "", client_id: "" };
+  const tokenMode = adoTokenMode(row);
+  const { result: orgCheck, checking, check } = useAdoOrgCheck(row.id);
   const set = (patch: Partial<ADOEntraConfig>) => onUpdate({ ...row, entra: { ...cfg, ...patch } });
   const ceiling = cfg.capability_ceiling ?? [];
   const defaults = effectiveDefault(cfg);
@@ -197,29 +202,38 @@ export function EntraEditor({
 
   return (
     <div className="space-y-5 border-t border-border pt-4" data-testid="entra-editor">
+      <AdoTokenMode row={row} operator={operator} onUpdate={onUpdate} check={orgCheck} checking={checking} onCheck={check} />
+
       <div>
-        <h4 className="text-sm font-medium text-foreground">{E.SECTION_TITLE}</h4>
-        <p className="mt-0.5 text-body text-muted-foreground">{E.SECTION_LEAD}</p>
-        <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <Field label={E.FIELD_TENANT} hint={operator ? E.FIELD_TENANT_HINT : undefined} htmlFor={`${uid}entra-tenant`}>
-            <Input
-              id={`${uid}entra-tenant`}
-              className="font-mono"
-              disabled={!operator}
-              value={cfg.tenant_id}
-              onChange={(e) => set({ tenant_id: e.target.value.trim() })}
-            />
-          </Field>
-          <Field label={E.FIELD_CLIENT} hint={operator ? E.FIELD_CLIENT_HINT : undefined} htmlFor={`${uid}entra-client`}>
-            <Input
-              id={`${uid}entra-client`}
-              className="font-mono"
-              disabled={!operator}
-              value={cfg.client_id}
-              onChange={(e) => set({ client_id: e.target.value.trim() })}
-            />
-          </Field>
-        </div>
+        {/* A token the person pastes in involves no sign-in: no tenant, no client. */}
+        {tokenMode !== "own_pat" && (
+          <>
+            <h4 className="text-sm font-medium text-foreground">{E.SECTION_TITLE}</h4>
+            <p className="mt-0.5 text-body text-muted-foreground">{E.SECTION_LEAD}</p>
+          </>
+        )}
+        {tokenMode !== "own_pat" && (
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <Field label={E.FIELD_TENANT} hint={operator ? E.FIELD_TENANT_HINT : undefined} htmlFor={`${uid}entra-tenant`}>
+              <Input
+                id={`${uid}entra-tenant`}
+                className="font-mono"
+                disabled={!operator}
+                value={cfg.tenant_id}
+                onChange={(e) => set({ tenant_id: e.target.value.trim() })}
+              />
+            </Field>
+            <Field label={E.FIELD_CLIENT} hint={operator ? E.FIELD_CLIENT_HINT : undefined} htmlFor={`${uid}entra-client`}>
+              <Input
+                id={`${uid}entra-client`}
+                className="font-mono"
+                disabled={!operator}
+                value={cfg.client_id}
+                onChange={(e) => set({ client_id: e.target.value.trim() })}
+              />
+            </Field>
+          </div>
+        )}
         <div className="mt-4 flex items-start gap-2.5">
           {/* Absent means on (ADOEntraConfig.rest_api). */}
           <Switch checked={cfg.rest_api !== false} disabled={!operator} label={E.REST_TOGGLE} onChange={(on) => set({ rest_api: on })} />

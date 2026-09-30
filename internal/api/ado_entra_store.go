@@ -388,19 +388,28 @@ func (f *adoEntraFlight) lock(owner, rowID string) func() {
 // find the stored token dead and say so honestly, which is strictly better than
 // pretending this one failed.
 func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string) (ADOEntraAccess, error) {
-	if err := cfg.validate(); err != nil {
+	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
 		return ADOEntraAccess{}, err
 	}
-	if owner == "" {
-		return ADOEntraAccess{}, fmt.Errorf("%w: no principal to redeem it for", ErrADOEntraNotCaptured)
-	}
-	if err := adoEntraCheckRequestedScopes(scopes); err != nil {
-		return ADOEntraAccess{}, err
-	}
-
 	unlock := s.adoEntra.lock(owner, cfg.RowID)
 	defer unlock()
+	return s.redeemADOEntraAccessLocked(ctx, cfg, owner, scopes)
+}
 
+// adoEntraRedeemable is what a redemption checks before it takes the lock.
+func adoEntraRedeemable(cfg ADOEntraConfig, owner string, scopes []string) error {
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+	if owner == "" {
+		return fmt.Errorf("%w: no principal to redeem it for", ErrADOEntraNotCaptured)
+	}
+	return adoEntraCheckRequestedScopes(scopes)
+}
+
+// redeemADOEntraAccessLocked is RedeemADOEntraAccess's body. The caller holds
+// s.adoEntra.lock(owner, cfg.RowID) and has checked adoEntraRedeemable.
+func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string) (ADOEntraAccess, error) {
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, cfg.RowID)
 	switch {
 	case errors.Is(err, secretstore.ErrUnavailable):

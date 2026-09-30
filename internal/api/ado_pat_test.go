@@ -424,8 +424,8 @@ func TestGitCredentialRefusal_MintedCauses(t *testing.T) {
 			"administrator to add you to the allow list, then start the run again",
 		gitCredentialPermissionsRefusal: "your Azure DevOps sign-in can't create tokens yet — an administrator must grant " +
 			"the token permissions; then connect and start the run again",
-		adoPATNeedsConsoleAppRefusal: "Per-run tokens need your Wardyn app registration to have a client secret. " +
-			"Set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
+		adoPATNeedsConsoleAppRefusal: "Per-run tokens need this row to use Wardyn's own sign-in app, and that app to have " +
+			"a client secret. Name Wardyn's app here and set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
 	}
 	for got, want := range pins {
 		if got != want {

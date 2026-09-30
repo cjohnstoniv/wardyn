@@ -555,7 +555,8 @@ const (
 // /scm/azure-devops/signin and its callback (ado_entra.go): the console's own
 // Azure DevOps per-person sign-in doors, distinct from the ADOEntraFailure
 // enum a REDEMPTION classifies as (ado_entra_store.go, its own documented
-// guard exception).
+// guard exception). DELETE /scm/azure-devops/connection (ado_pat_console.go)
+// reuses the no-session and unconfigured values.
 const (
 	reasonADOSignInUnconfigured = "ado_sign_in_unconfigured"
 	reasonADOSignInForeignApp   = "ado_sign_in_foreign_app"

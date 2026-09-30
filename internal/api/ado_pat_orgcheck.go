@@ -26,6 +26,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -68,6 +69,10 @@ type adoOrgCheckResult struct {
 	// Lifespan: on | off | unknown — the organisation's maximum token lifespan
 	// policy, from canary 2.
 	Lifespan string `json:"lifespan,omitempty"`
+	// LifespanError is what Azure DevOps answered canary 2 with when that
+	// left Lifespan unknown: its patTokenError, or the HTTP status when it
+	// named none. Never a token.
+	LifespanError string `json:"lifespan_error,omitempty"`
 	// Unrevoked names canaries Wardyn created and could not revoke: the admin
 	// revokes them under Personal access tokens.
 	Unrevoked []string `json:"unrevoked,omitempty"`
@@ -191,8 +196,21 @@ func (s *Server) runADOOrgCheck(ctx context.Context, cfg ADOEntraConfig, owner, 
 		res.Lifespan = adoOrgCheckOn
 	default:
 		res.Lifespan = adoOrgCheckUnknown
+		if refusal != nil {
+			res.LifespanError = adoOrgCheckAnswer(refusal)
+		}
 	}
 	return res, nil
+}
+
+// adoOrgCheckAnswer is how a refused canary is named to the admin: Azure
+// DevOps' own patTokenError, else its HTTP status. The service-error text is
+// left out: it is free text that can name people.
+func adoOrgCheckAnswer(e *adoPATError) string {
+	if e.PatTokenError != "" && e.PatTokenError != "none" {
+		return e.PatTokenError
+	}
+	return fmt.Sprintf("HTTP %d", e.Status)
 }
 
 // adoOrgCheckCanary creates one vso.profile token valid to validTo and revokes
