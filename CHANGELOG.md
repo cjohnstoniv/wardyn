@@ -40,6 +40,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   session into a run created under the profile. An empty `ui_apps` in a ceiling still means no
   opinion, so existing profiles behave as before. A super admin is not bound. The console's profile
   editor does not show the limit yet; set it through the API or `wardyn governance apply`.
+- **A portal can follow its person's runs live (#1407).** A delegated token now reaches
+  `GET /api/v1/runs/{id}/events` for its person's runs, with the same `404` as `GET /runs/{id}` for
+  anyone else's. One principal holds at most 32 open event streams; the next is refused `422` with
+  reason `event_stream_cap` (not audited) until one closes. Revoking the person's sessions still ends
+  a portal's open stream at the next keepalive.
 
 ### Changed
 
