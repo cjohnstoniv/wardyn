@@ -553,9 +553,11 @@ describe("MemberGettingStarted", () => {
     });
 
     it("an expired own token says runs cannot reach Azure DevOps and offers no Connect", async () => {
-      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "expired_signin", cause: "token_expired" } }));
+      // The server sets token_mode own_pat on every own-token row (scmaccess.go).
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "expired_signin", cause: "token_expired", token_mode: "own_pat", source: "own" } }));
       renderPage();
       expect(await screen.findByText(ADO_PAT.OWN_EXPIRED_BODY)).toBeInTheDocument();
+      expect(screen.getByText("Azure DevOps · Expired")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
     });
 
