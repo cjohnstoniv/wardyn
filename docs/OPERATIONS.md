@@ -2393,8 +2393,10 @@ ticket it minted — has the person as actor and `data.via =
 their next request. `POST /api/v1/sessions/revoke` for the person ends theirs
 the same way and refuses new exchanges of tokens issued before it. A disable
 done only at the identity provider takes effect at the next exchange, so at
-most ten minutes. Runs a portal launched keep running after it is revoked:
-they are the person's runs.
+most ten minutes. An open `GET /runs/{id}/events` stream re-checks its token at
+each keepalive (about every 15 seconds) and ends when the portal has been revoked
+or the token has expired, rather than at its five-minute hold. Runs a portal
+launched keep running after it is revoked: they are the person's runs.
 
 ### Three roles, and who sets the walls
 
@@ -2497,8 +2499,11 @@ as it is at create. `deny_ui_apps` strips `ui_apps` from a run at create, with a
 `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI
 gateway refuses a session into a run created under the profile. An empty ceiling
 `ui_apps` is still no opinion, so a profile without the limit behaves as before.
-A super admin is exempt from both at every door, as at create. `deny_ui_apps`
-does not close an SSH port forward to the app; `deny_interactive` does.
+A super admin is exempt from both at every door, as at create; a security admin
+is bound. A limit set later reaches new sessions but does not sever ones already
+open: a terminal, SSH session or UI-app session opened before the limit was set
+runs until it ends. `deny_ui_apps` does not close an SSH port forward to the app;
+`deny_interactive` does.
 
 **The autonomy rubric (0.8, #77).** A profile may also carry `limits.autonomy_rubric`,
 nine closed fields — three egress postures (`egress_open`, `egress_reviewed`,

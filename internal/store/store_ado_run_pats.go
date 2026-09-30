@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The Azure DevOps personal access tokens Wardyn creates for `minted_pat` runs
-// (migration 0101, #1428): the record that makes a token revocable after a
+// (migration 0102, #1428): the record that makes a token revocable after a
 // crash. A row holds no secret; the token value lives in daemon memory only.
 package store
 
