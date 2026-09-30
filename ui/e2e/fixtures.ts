@@ -310,13 +310,17 @@ export async function mockMemberSetupStatus(page: Page): Promise<void> {
       body.checks_redacted = true;
       body.providers = [];
       body.secrets = { present: [] };
-      // Rebuilt from confinement_classes ALONE, exactly as the server rebuilds
-      // SetupRunner — so driver, confinement_substrates and
-      // ephemeral_disk_enforcement are dropped by construction rather than by a
-      // line somebody remembered to write. The classes survive redaction: they
-      // are the barrier signal deriveReadiness reads for every role.
-      const runner = (body.runner ?? {}) as { confinement_classes?: string[] };
-      body.runner = { confinement_classes: runner.confinement_classes ?? [] };
+      // Rebuilt from confinement_classes and the kubernetes bit ALONE, exactly
+      // as the server rebuilds SetupRunner — so driver, confinement_substrates
+      // and ephemeral_disk_enforcement are dropped by construction rather than
+      // by a line somebody remembered to write. The classes survive redaction:
+      // they are the barrier signal deriveReadiness reads for every role; the
+      // bit is the one substrate fact a member's Vault remedy keys off.
+      const runner = (body.runner ?? {}) as { confinement_classes?: string[]; kubernetes?: boolean };
+      body.runner = {
+        confinement_classes: runner.confinement_classes ?? [],
+        ...(runner.kubernetes ? { kubernetes: true } : {}),
+      };
       body.bedrock = { ready: !!(body.bedrock as { ready?: boolean } | undefined)?.ready };
       body.scm = {};
       body.host_proxy = {};

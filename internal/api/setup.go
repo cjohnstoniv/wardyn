@@ -163,10 +163,16 @@ type SetupRunner struct {
 	// admin setting a number can see whether anything will hold it.
 	//
 	// Operator-only: redactSetupStatusForUser rebuilds this struct with
-	// ConfinementClasses alone, so the word never reaches a member. It is
-	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
-	// field by field.
+	// ConfinementClasses and Kubernetes alone, so the word never reaches a
+	// member. It is deliberately absent from the ANONYMOUS /healthz, which
+	// composes its own body field by field.
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
+	// Kubernetes is the ONE substrate bit a member may read: the runner is the
+	// Kubernetes driver. Driver itself stays operator-only, so without this a
+	// member's console cannot tell a Kubernetes install apart and would hand
+	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
+	// not the driver name or anything a substrate reports about itself.
+	Kubernetes bool `json:"kubernetes,omitempty"`
 }
 
 // SetupProvider is a coding-agent CLI (claude|codex) detected on the wardynd
@@ -454,7 +460,7 @@ func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
@@ -546,6 +552,7 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		return out, ""
 	}
 	out.Driver = rn.Name()
+	out.Kubernetes = out.Driver == "k8s"
 	c, err := rn.Capabilities(ctx)
 	if err != nil {
 		return out, ""

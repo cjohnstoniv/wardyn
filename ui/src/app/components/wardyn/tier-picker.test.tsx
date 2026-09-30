@@ -107,6 +107,27 @@ describe("TierPicker — a real choice (two or more visible tiers)", () => {
   });
 });
 
+// #1238 — a tier the host was never seen to build must not read "Ready".
+describe("TierPicker — unprobed rows", () => {
+  it("shows Unverified, never Ready, on every row when the caller says the host was not probed", () => {
+    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC1" onSelect={vi.fn()} unprobed />);
+    expect(screen.getAllByText("Unverified")).toHaveLength(3);
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+
+  it("the decided single row says Unverified too", () => {
+    render(<TierPicker tiers={["CC3"]} unprobed />);
+    expect(screen.getByText("Unverified")).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+
+  it("a probed host keeps Ready", () => {
+    render(<TierPicker tiers={["CC1", "CC2"]} selected="CC1" onSelect={vi.fn()} />);
+    expect(screen.getAllByText("Ready")).toHaveLength(2);
+    expect(screen.queryByText("Unverified")).toBeNull();
+  });
+});
+
 describe("TierPicker — the info popover", () => {
   it("opens on the row's info button and shows the tier's mechanism and residual risk", async () => {
     render(<TierPicker tiers={["CC1", "CC2"]} selected="CC1" onSelect={vi.fn()} />);

@@ -60,6 +60,7 @@ import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { NO_BARRIER, RUN } from "../../wardyn/copy";
+import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -521,5 +522,118 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     await user.type(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+  });
+});
+
+// #1238 — the picker's follow-ups: the states the console must not draw as
+// something the server contradicts.
+describe("NewRunScreen — #1238 tier picker states", () => {
+  // The member view of /setup/status blanks runner.driver, so the only way the
+  // console can tell a Kubernetes install from a Docker host is the
+  // runner.kubernetes bit. Before it, a member on Kubernetes was told to
+  // bind-mount /dev/kvm — a Docker-host remedy that is wrong there.
+  it("a member on Kubernetes is never handed the /dev/kvm remedy for Vault", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        runner: { driver: "", kubernetes: true, confinement_classes: ["CC1", "CC2"] },
+        platform: { os: "linux", wsl: false, kvm: false },
+      }),
+    );
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC3",
+      governance_profile_name: "vault-required",
+    });
+    renderAsMember();
+    expect(
+      await screen.findByText("Your admin requires Vault, and this host can't run it: Vault isn't installed on this host."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Vault needs|\/dev\/kvm|RuntimeClass/)).toBeNull();
+  });
+
+  it("a member on a Docker host with no /dev/kvm still gets the KVM reason", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        runner: { driver: "", confinement_classes: ["CC1", "CC2"] },
+        platform: { os: "linux", wsl: false, kvm: false },
+      }),
+    );
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC3",
+      governance_profile_name: "vault-required",
+    });
+    renderAsMember();
+    expect(await screen.findByText(/Vault needs KVM virtualization/)).toBeInTheDocument();
+  });
+
+  it("an admin on Kubernetes still gets the RuntimeClass remedy", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "k8s", kubernetes: true, confinement_classes: ["CC1", "CC2"] } }),
+    );
+    renderScreen();
+    fireEvent.change(await screen.findByLabelText(/Spec \(JSON\)/), {
+      target: {
+        value: JSON.stringify({ allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC3" }),
+      },
+    });
+    expect(await screen.findByText(/Vault needs a Kata RuntimeClass/)).toBeInTheDocument();
+  });
+
+  // The unknown-barrier line was gated on a state no path could reach: the
+  // probe only settled beside a real class list.
+  it.each([
+    ["an unreachable /setup/status", () => baseStatus({ unreachable: true, runner: { driver: "none", confinement_classes: [] } })],
+    ["no runner configured", () => baseStatus({ runner: { driver: "none", confinement_classes: [] } })],
+  ])("%s draws the unknown-barrier line and marks the rows Unverified", async (_name, status) => {
+    getSetupStatusMock.mockResolvedValue(status());
+    renderScreen();
+    expect(await screen.findByText(RUN.BARRIER_UNKNOWN)).toBeInTheDocument();
+    expect(screen.getAllByText("Unverified").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Ready")).toBeNull();
+    // Unknown never blocks launch.
+    expect(screen.getByRole("button", { name: /Launch run/ })).not.toBeDisabled();
+  });
+
+  it("a rejected /setup/status read draws the unknown-barrier line too", async () => {
+    getSetupStatusMock.mockRejectedValue(new Error("network"));
+    renderScreen();
+    expect(await screen.findByText(RUN.BARRIER_UNKNOWN)).toBeInTheDocument();
+  });
+
+  it("a probed host says Ready and never the unknown line", async () => {
+    mockConfinementClasses = ["CC1", "CC2"];
+    renderScreen();
+    await waitFor(() => expect(screen.getAllByText("Ready").length).toBeGreaterThan(0));
+    expect(screen.queryByText("Unverified")).toBeNull();
+    expect(screen.queryByText(RUN.BARRIER_UNKNOWN)).toBeNull();
+  });
+
+  // The U2 review, round 2: with no barrier on the host, the fresh form's
+  // default CC1 floor made the card name Fence as the missing piece.
+  it("a host with no barrier shows the no-runner title, not 'this run's floor requires Fence'", async () => {
+    mockConfinementClasses = [];
+    renderScreen();
+    expect(await screen.findByText(TIER_PICKER.REQUIREMENT_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(/floor requires/)).toBeNull();
+    expect(screen.queryByText(/isn't installed on this host/)).toBeNull();
+  });
+
+  // OperatorProvider's fail-open `operator` is TRUE until /me answers; the
+  // governance floor binds every non-operator, so a caller whose role is not
+  // yet known must be drawn as a member — the server still refuses the run.
+  it("draws the governance floor until /me has answered, then lifts it for an operator", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2", governance_profile_name: "wall-required" });
+    const ui = (resolved: boolean) => (
+      <MemoryRouter>
+        <OperatorProvider operator operatorResolved={resolved}>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(ui(false));
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument());
+    expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
+    rerender(ui(true));
+    expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
   });
 });

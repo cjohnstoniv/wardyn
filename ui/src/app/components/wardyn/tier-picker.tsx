@@ -123,6 +123,11 @@ export interface TierPickerProps {
    *  (default-confinement.ts), so a caller must pass an override; New Run
    *  passes PICK_ONE_PER_RUN (#1200 review P2-3). */
   pickOneNote?: React.ReactNode;
+  /** The host probe did not answer (#1238): the rows are the caller's
+   *  fallback set, not tiers this host was seen to build, so each carries the
+   *  neutral "Unverified" chip instead of "Ready". Default false — every other
+   *  caller hands over tiers it already knows are installed. */
+  unprobed?: boolean;
   className?: string;
 }
 
@@ -136,6 +141,7 @@ export function TierPicker({
   requirementNote,
   decidedLine,
   pickOneNote,
+  unprobed,
   className,
 }: TierPickerProps) {
   const [ref, measuredWidth] = useElementWidth<HTMLDivElement>();
@@ -196,6 +202,7 @@ export function TierPicker({
               decided={mode === "picker" ? (decidedLine ?? TIER_PICKER.DECIDED)(CC_META[cc].label) : undefined}
               last={i === tiers.length - 1}
               recommended={mode === "display" && recommended === cc}
+              unprobed={unprobed}
             />
           ))}
         </div>
@@ -221,6 +228,7 @@ export function TierPicker({
               onSelect={() => onSelect?.(cc)}
               last={i === tiers.length - 1}
               recommended={recommended === cc}
+              unprobed={unprobed}
             />
           ))}
         </div>
@@ -264,8 +272,8 @@ function DropdownPicker({
   );
 }
 
-// One row: a readiness dot (every visible tier is installed, so always
-// "ready"), the tier's own ConfinementChip, its one-line strength, an
+// One row: a readiness dot (every visible tier is installed, so "ready" —
+// unless the caller says the host was never probed, then "unverified"), the tier's own ConfinementChip, its one-line strength, an
 // optional Recommended chip, and the info popover. `decided` renders the
 // frozen "{Tier} · set by your admin" line instead of the tagline, and drops
 // the radio semantics entirely — there is nothing to pick.
@@ -276,6 +284,7 @@ function TierRow({
   decided,
   recommended,
   last,
+  unprobed,
   onSelect,
 }: {
   cc: ConfinementClass;
@@ -284,12 +293,13 @@ function TierRow({
   decided?: string;
   recommended?: boolean;
   last?: boolean;
+  unprobed?: boolean;
   onSelect?: () => void;
 }) {
   const meta = CC_META[cc];
   const content = (
     <>
-      <StatusChip status="ready" />
+      <StatusChip status={unprobed ? "unverified" : "ready"} />
       <ConfinementChip value={cc} />
       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
         {decided ?? meta.tagline}

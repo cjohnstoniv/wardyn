@@ -102,6 +102,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The New Run barrier picker no longer claims what the server would contradict (#1238).** A member
+  on Kubernetes is no longer told to bind-mount `/dev/kvm` for Vault: `GET /setup/status` keeps one
+  substrate bit for members, `runner.kubernetes`, and nothing else of the runner, so the console can
+  tell a Kubernetes install apart. The "couldn't check which barriers this host has" line now appears
+  when the host probe fails or no runner is configured, and each row then reads Unverified instead of
+  Ready. A host with no barrier at all shows the no-runner card instead of a floor requirement naming
+  Fence. Until the console has heard who you are (or if that read fails) it offers the tiers a member
+  may use, not an admin's.
 - **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
   it runs (#1082).** The migrator removed a row's old Vault copy after the row had committed and
   released its lock, so a store-mode save of the same credential in that window re-pointed the row
