@@ -19,7 +19,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   no fix in Debian 12, and container scanners that count a fix in any Debian release refused the
   images. Perl can't be left out: `perl-base` is essential to Debian and `git` depends on `perl`.
   Every agent image build now also runs `apt-get upgrade`, so packages the pinned base already
-  carries take their security updates (for example `libpcre2-8-0`, CVE-2026-89161). Two CRITICALs
+  carries take their security updates (today, OpenSSL's `libssl3t64`). Two CRITICALs
   that no stable Debian release fixes yet, and that Debian rates minor, stay in the images and are
   accepted with reasons in `.trivyignore`: `openssh-client` CVE-2026-60002 (every agent image) and
   `libxml2` CVE-2026-6653 (`agent-novnc`). Both were in the 0.8.2 images too. `wardynd` and

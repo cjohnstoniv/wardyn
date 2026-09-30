@@ -22,10 +22,12 @@
 # ssh when a server changes its host key during a key re-exchange. No release
 # of our base fixes it yet: Debian 13 carries 1:10.0p1-7+deb13u4, vulnerable,
 # "minor issue, no DSA"; trixie-backports 10.3p1 is vulnerable too; the fix is
-# 10.4p1+, in forky/sid only. Why it does not reach us: the sandbox's ssh talks
-# only to GitHub and Azure DevOps through the proxy, with StrictHostKeyChecking
-# and the pinned /etc/ssh/ssh_known_hosts, so a server that swaps its host key
-# mid-session needs that host's private key. It was in every bookworm image too.
+# 10.4p1+, in forky/sid only. Why it does not reach us: the bug is in the ssh
+# client, and the only ssh client runs inside the sandbox as its unprivileged
+# user (uid 1000), with egress only through the proxy; no control-plane code
+# runs ssh (the SSH gateway uses sftp-server as a subsystem, not the client).
+# At worst a malicious server crashes or subverts a client the run itself
+# started. It was in every bookworm image too.
 # Accepted 2026-09-30 by the owner for 0.8.3; delete when Debian 13 ships a fix.
 CVE-2026-60002
 
