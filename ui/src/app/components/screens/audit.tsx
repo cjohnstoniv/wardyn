@@ -78,7 +78,7 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
 //   approval.decide / approval.expire
 //   run.kill
 //   everything else — run.create/build/dispatch/complete/..., session.*,
-//   policy.*, recording.upload, run.compose* — is run/session/policy lifecycle.
+//   policy.*, recording.upload — is run/session/policy lifecycle.
 // Bucketing is prefix-based so an action the table below doesn't know about yet
 // degrades into "lifecycle" (the catch-all) instead of vanishing from a facet.
 type EventKind = "egress" | "tool" | "credentials" | "approvals" | "lifecycle" | "enforcement";
@@ -146,9 +146,6 @@ const ACTION_VERB: Record<string, string> = {
   "run.requirement.grant": "granted a workspace's required secret to the run",
   "run.requirement.inject": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
-  "run.compose": "produced a run proposal",
-  "run.compose.clarify": "asked a clarifying question",
-  "run.compose.assist": "answered a composer question",
   "credential.mint": "minted a credential",
   "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
@@ -191,7 +188,6 @@ const ACTION_VERB: Record<string, string> = {
   "base_image.delete": "removed a base image",
   "integration.write": "stored an integration",
   "integration.delete": "deleted an integration",
-  "integration.adopt": "adopted an integration",
   "workspace.requirement.write": "added a workspace requirement",
 };
 

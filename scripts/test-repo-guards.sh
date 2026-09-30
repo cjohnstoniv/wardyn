@@ -44,6 +44,8 @@
 #      images-ui-sandbox, release-assets) all depend on preflight-green,
 #      directly or transitively, and preflight-green has no `|| true` /
 #      `continue-on-error` escape hatch (T-06, #666).
+#  14. no demo/live spec or demo-take verifier still names an audit action
+#      docs/AUDIT-ACTIONS.md's "Renamed in 0.8" table retires (#1020).
 #  15. no script that boots a wardynd (the e2e backend, the kind SSO walk,
 #      ci-run.sh, the Entra kind deploy, the survival walk and its compose
 #      override) sets a model variable 0.8.2 retired — wardynd refuses to boot
@@ -459,6 +461,26 @@ else
     if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
+# ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
+# The specs that film or walk a live console and the demo-take verifiers run
+# in no CI gate, so a stale action name there fails only when a take is shot
+# again (demo 07's search string, train 18). The old names come from the
+# table's own rows, plus each one's underscore-joined segment that its new name
+# and its "tells apart" value dropped — the fragment a search box is typed with
+# (demo 07 typed "subscription_inject"). Matched whole, so a new name that
+# extends an old one (session.recording.write) is not a hit.
+old_actions="$(awk -F'|' '/^## Renamed in 0.8/{f=1;next} f&&/^## /{exit} f&&$2~/^ `/{o=$2; gsub(/[` ]/,"",o); print o; rest=$3 $4; n=split(o,seg,"."); for(i=1;i<=n;i++) if (seg[i]~/_/ && index(rest,seg[i])==0) print seg[i]}' docs/AUDIT-ACTIONS.md | sort -u)"
+[ -n "$old_actions" ] || bad "docs/AUDIT-ACTIONS.md's 'Renamed in 0.8' table has no rows — guard 14 is pointing at nothing"
+stale_actions=0
+for name in $old_actions; do
+    # git grep: 0 = hits, 1 = none, anything else = the grep itself failed
+    # (no PCRE in this git, a bad pattern), which must never read as clean.
+    hits="$(git grep -nP "(?<![\\w.])${name//./\\.}(?!\\.?\\w)" -- 'ui/e2e/demo/**' 'ui/e2e/live*/**' 'scripts/lib/verify-demo-take-*')" && rc=0 || rc=$?
+    if [ "$rc" -gt 1 ]; then stale_actions=1; bad "guard 14: git grep failed (rc=$rc) for '$name'"; continue; fi
+    [ -z "$hits" ] || { stale_actions=1; bad "retired audit action name '$name' is still used by a demo/live spec or demo-take verifier (see docs/AUDIT-ACTIONS.md 'Renamed in 0.8'):
+$hits"; }
+done
+if [ -n "$old_actions" ] && [ "$stale_actions" = 0 ]; then ok "no demo/live spec or demo-take verifier names a retired 0.8 audit action"; fi
 # ── 15. no wardynd-booting script sets a retired model variable ─────────────
 retired_re='(WARDYN_(ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|WARDYN_AGENT_ANTHROPIC_MODEL|WARDYN_SUBSCRIPTION_INJECT|WARDYN_ALLOW_SHARED_SUBSCRIPTION)'
 retired_fail=0

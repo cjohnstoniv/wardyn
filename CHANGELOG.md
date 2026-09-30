@@ -40,9 +40,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   session into a run created under the profile. An empty `ui_apps` in a ceiling still means no
   opinion, so existing profiles behave as before. A super admin is not bound. The console's profile
   editor does not show the limit yet; set it through the API or `wardyn governance apply`.
+- **A portal can follow its person's runs live (#1407).** A delegated token now reaches
+  `GET /api/v1/runs/{id}/events` for its person's runs, with the same `404` as `GET /runs/{id}` for
+  anyone else's. One principal holds at most 32 open event streams; the next is refused `422` with
+  reason `event_stream_cap` (not audited) until one closes. Revoking the person's sessions still ends
+  a portal's open stream at the next keepalive.
 
 ### Changed
 
+- **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
+  to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
+  (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
+  warning; the Compose demo is exempt. With secure cookies, a UI gateway advertised on the console's
+  own hostname logs a warning that names the fix, a hostname of its own. Neither refuses boot. A
+  managed laptop's device credential now records a hash of `WARDYN_ORG_URL`: a different URL (case, a
+  default port and trailing slashes do not count) re-enrols with a fresh `WARDYN_ORG_ENROLMENT_TOKEN`
+  minted for that URL, since the spent one is refused there, or refuses to start without one, instead
+  of sending the old bearer to the new host. A credential stored earlier is kept and bound to the URL set at its first boot after
+  the upgrade. `docs/operations/secrets-and-keys.md` notes that a Vault platform policy must cover
+  `<prefix>/platform/*`.
 - **A run's model credential comes only from its model provider; the 0.8.2 upgrade converts 0.7.x
   and 0.8.0 model configuration and there is no alias window (#548).** Migration `0100_model_provider_conversion`
   runs once, in one transaction: the AI integration rows (`anthropic_api_key`,
@@ -76,6 +92,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   operator's model key. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
   and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
   row.
+- **A model provider that isn't available to you answers like one that doesn't exist (#1018).** The
+  key door (`PUT` and `DELETE /model-providers/{id}/credential`) and `/model-providers/{id}/sign-in`
+  now answer a provider its "Available to" list leaves you out of with the same `404`
+  (`model_provider_not_found`) and sentence an unknown id gets, instead of a `403` naming it,
+  because provider ids are guessable. The key door checks this before it says a provider is
+  signed in to rather than keyed, and a `DELETE` of a key you still hold is never refused. At
+  `POST /runs` and `POST /runs/preflight`, a provider you name and are not granted answers the
+  `422` "there is no model provider by that name", whatever its state, instead of the `403`; one
+  your workspace pins, or the one provider serving the agent when you name none, is refused without
+  naming it. A workspace pinned to a provider you are not granted reads as
+  `llm_cred: {"provider_unavailable": true}` instead of the provider's id, and the console still
+  marks it unavailable and preselects no provider for it. The `authz.denied` row still records
+  `capability_model_provider`.
+- **The User view's forced exit is dual-emitted too (#1020).** When `GET /me` finds the viewed user
+  type deleted and drops the session back to the Admin view, it writes `auth.member_mode` beside
+  `auth.user_view.set`, with the same data, as the toggle does through 0.8.x.
 - **The operator-held model credential lanes are retired (#549).** Model access is configured only
   under Settings → Model providers, and each person connects their own credential there. Boot
   refuses every `WARDYN_ANTHROPIC_*`, `WARDYN_OPENAI_*` and `WARDYN_BEDROCK_*` variable,
@@ -157,6 +189,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for a minute (a sandbox too big to walk in time is not walked again on every poll), and the idle
   reading waits out a walk in progress and holds off a new one while it samples, so it reads the
   agent alone.
+- **A plain user's `POST /me/view` no longer tells them which user types exist (#997).** Their request
+  is ignored, with the same `200` no-op, before the type is looked up, so a known and an unknown
+  `user_type` answer alike. An admin still gets the `400` for an unknown type.
+- **`user_type_unknown` and `groups_snapshot_stale` denials record the request's `method` (#997)**,
+  like every other `authz.denied` row a request produces.
+- **An image grant with an empty, `.` or `..` path segment is no longer honoured (#1018).** Such rows,
+  stored before the grant write refused them, already show as inert; a run naming such an image is
+  now refused (`byoi_user`) even when that grant or a wildcard covers it.
 - **Every row of a portal's attach and UI-gateway session names the portal (#1234).** A session
   entered with an attach ticket minted through a portal wrote `data.via` on its entry rows only;
   `session.promote` and the UI gateway's `ui.start`, `ui.open`, `ui.close` and re-check refusal rows
@@ -178,6 +218,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   model-access problem, that line is its failure hint, quoted as the agent's output, with a pointer
   to the recording. Only a reader who can open the recording (the run's owner or a super admin)
   sees the quoted line; a security admin sees the hint without it.
+- **The "Attach from your terminal" card on the run page scrolls.** Its lanes were taller than the
+  card's tile and the bottom was cut off with no way to reach it; the card body now scrolls inside
+  the tile.
 
 ## [0.8.1] — 2026-09-29
 

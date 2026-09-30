@@ -190,6 +190,13 @@ type hybridOrg struct {
 	mu      sync.Mutex
 	enrols  []string
 	devices []uuid.UUID
+	down    bool // drop every connection: the organisation is unreachable
+}
+
+func (o *hybridOrg) setDown(down bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.down = down
 }
 
 // seen returns the tokens redeemed and the devices issued so far.
@@ -203,6 +210,9 @@ func (o *hybridOrg) serve(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		o.mu.Lock()
 		defer o.mu.Unlock()
+		if o.down {
+			panic(http.ErrAbortHandler)
+		}
 		if r.URL.Path != "/api/v1/devices/enrol" {
 			_ = json.NewEncoder(w).Encode(types.DeviceAck{})
 			return
@@ -378,9 +388,8 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	st.mu.Lock()
 	st.revoked = true // what Forwarder.revoke leaves behind
 	st.mu.Unlock()
-	down := httptest.NewServer(http.NotFoundHandler())
-	down.Close()
-	status, err := bootHybrid(context.Background(), ctx, down.URL, "wde_first", unlocked(secrets), st, rec)
+	org.setDown(true)
+	status, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", unlocked(secrets), st, rec)
 	hj.add(status)
 	if err != nil {
 		t.Fatal(err)
@@ -388,6 +397,7 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	if !status.Status().Revoked {
 		t.Fatal("a revoked laptop came back up enrolled")
 	}
+	org.setDown(false)
 	status, err = bootHybrid(context.Background(), ctx, srv.URL, "wde_second", unlocked(secrets), st, rec)
 	hj.add(status)
 	if err != nil {

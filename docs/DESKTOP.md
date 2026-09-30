@@ -304,6 +304,7 @@ unexpired: the organisation spends a token when it accepts it, so an enrolment
 whose answer never reached the laptop, or that failed on the organisation's side
 after that, leaves every later retry refused `401` until an admin mints a new
 token. See `bootHybrid` (`cmd/wardynd/boot_hybrid.go`).
+The stored credential is bound to `WARDYN_ORG_URL`; changing the URL needs a fresh enrolment token, or the boot refuses.
 
 **Forwarding.** Once enrolled, `wardynd` pushes this laptop's own audit rows to
 the organisation's table, 500 at a time, on a 15s tick, from a durable cursor —

@@ -244,7 +244,7 @@ func TestEveryWriteErrorCallCarriesAReasonOrIsReviewed(t *testing.T) {
 // reason: a second Reason-less literal beside the reviewed one is a new,
 // unreviewed site.
 var bareErrorBodyAllowlist = map[string]bareWriteErrorEntry{
-	"run_model_provider.go:Server.writeProviderRefusal": {1, "constructs body without Reason, then sets body.Reason on both branches below (credential vs generic bucket) before its one writeJSON call"},
+	"run_model_provider.go:Server.writeProviderRefusalAs": {1, "constructs body without Reason, then sets body.Reason on both branches below (credential vs generic bucket) before its one writeJSON call"},
 }
 
 // reasonConstOutsideReasonFilesAllowlist is the string consts declared outside
