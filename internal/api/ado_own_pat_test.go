@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
@@ -425,7 +427,133 @@ func TestADOOwnPATTokenScopes_EveryScopeHasAzureDevOpsWording(t *testing.T) {
 		}
 	}
 	got := adoOwnPATTokenScopes([]adoscope.Capability{adoscope.CapCodeWrite, adoscope.CapWorkWrite})
-	if want := []string{"Code (Read & write)", "Work Items (Read & write)"}; !slices.Equal(got, want) {
+	if want := []string{"Code (Read & write)", "Graph (Read)", "Work Items (Read & write)"}; !slices.Equal(got, want) {
 		t.Errorf("scopes = %q, want %q", got, want)
+	}
+}
+
+// ownPATPeople gives the door's store the person rows the bind by object id
+// reads: capSub is a person set up by object id.
+type ownPATPeople struct {
+	store.Store
+	oid string
+}
+
+func (p ownPATPeople) CreatePerson(context.Context, types.Person) (types.Person, bool, error) {
+	return types.Person{}, false, store.ErrNotFound
+}
+func (p ownPATPeople) GetPerson(_ context.Context, principal string) (types.Person, error) {
+	if principal != capSub {
+		return types.Person{}, store.ErrNotFound
+	}
+	return types.Person{Principal: capSub, ObjectID: p.oid}, nil
+}
+func (p ownPATPeople) ListPeople(context.Context) ([]types.Person, error) { return nil, nil }
+func (p ownPATPeople) MarkPersonSignedIn(context.Context, string, time.Time) error {
+	return nil
+}
+
+// The bind by Entra object id: a token whose Graph originId is the caller's
+// object id binds whatever its Account and Mail say; any other answer — no
+// match, or Graph refusing a token without vso.graph — falls back to the
+// Account and Mail compare, and a token neither way the caller's is refused.
+func TestADOOwnPATPut_BindsByObjectIDThenByName(t *testing.T) {
+	const oid = "0a1b2c3d-1111-2222-3333-444455556666"
+	for _, tc := range []struct {
+		name       string
+		account    string
+		originID   string
+		graphCode  int
+		wantCode   int
+		wantGraphs int
+	}{
+		{"originId matches, account differs", "someone.else@corp.example", strings.ToUpper(oid), http.StatusOK, http.StatusOK, 1},
+		{"originId differs, account is the email", capEmail, "ffffffff-0000-0000-0000-000000000000", http.StatusOK, http.StatusOK, 1},
+		{"both differ", "someone.else@corp.example", "ffffffff-0000-0000-0000-000000000000", http.StatusOK, http.StatusForbidden, 1},
+		{"graph refuses, account is the email", capEmail, oid, http.StatusForbidden, http.StatusOK, 1},
+		{"graph refuses, account differs", "someone.else@corp.example", oid, http.StatusForbidden, http.StatusForbidden, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var graphs int
+			fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, pass, _ := r.BasicAuth(); pass != ownPATToken {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				switch r.URL.Path {
+				case "/contoso/_apis/connectionData":
+					_, _ = w.Write([]byte(`{"authenticatedUser":{"subjectDescriptor":"aad.abc","properties":{"Account":{"$value":"` + tc.account + `"}}}}`))
+				case "/contoso/_apis/graph/users/aad.abc":
+					graphs++
+					if r.URL.Query().Get("api-version") != "7.1-preview.1" {
+						t.Errorf("graph api-version = %q", r.URL.Query().Get("api-version"))
+					}
+					w.WriteHeader(tc.graphCode)
+					if tc.graphCode == http.StatusOK {
+						_, _ = w.Write([]byte(`{"originId":"` + tc.originID + `"}`))
+					}
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(fake.Close)
+			d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+			d.srv.cfg.Store = ownPATPeople{Store: d.srv.cfg.Store, oid: oid}
+			prevAPI, prevGraph := adoOwnPATAPIBase, adoOwnPATGraphBase
+			adoOwnPATAPIBase, adoOwnPATGraphBase = fake.URL, fake.URL
+			t.Cleanup(func() { adoOwnPATAPIBase, adoOwnPATGraphBase = prevAPI, prevGraph })
+
+			code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10))
+			if code != tc.wantCode {
+				t.Fatalf("PUT = %d %s, want %d", code, body, tc.wantCode)
+			}
+			if _, found := d.stored(t); found != (tc.wantCode == http.StatusOK) {
+				t.Errorf("stored = %v after PUT %d", found, code)
+			}
+			if graphs != tc.wantGraphs {
+				t.Errorf("graph asked %d times, want %d", graphs, tc.wantGraphs)
+			}
+		})
+	}
+}
+
+// A caller with no person row holding an object id never reaches Graph: the
+// token is judged by name alone, as before.
+func TestADOOwnPATPut_NoObjectIDSkipsGraph(t *testing.T) {
+	var graphs int
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/graph/") {
+			graphs++
+		}
+		_, _ = w.Write([]byte(`{"authenticatedUser":{"subjectDescriptor":"aad.abc","properties":{"Account":{"$value":"` + capEmail + `"}}}}`))
+	}))
+	t.Cleanup(fake.Close)
+	d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+	prev := adoOwnPATAPIBase
+	adoOwnPATAPIBase = fake.URL
+	t.Cleanup(func() { adoOwnPATAPIBase = prev })
+	if code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10)); code != http.StatusOK || graphs != 0 {
+		t.Fatalf("PUT = %d %s with %d graph calls, want 200 and none", code, body, graphs)
+	}
+}
+
+// A re-paste is a new token record: the refusal stamp of the one before does
+// not carry over to /me/scm-access.
+func TestADOOwnPATPut_RepasteClearsTheRefusalStamp(t *testing.T) {
+	d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+	stamped := ownPATNow.Add(-time.Hour)
+	raw, _ := json.Marshal(adoOwnPATBlob{Token: ownPATToken, Org: "contoso", ExpiresOn: ownPATNow.AddDate(0, 0, 5), RefusedAt: &stamped})
+	if err := d.srv.cfg.Secrets.For(capSub).Put(context.Background(), adoOwnPATSecretName(ownPATRowID), raw); err != nil {
+		t.Fatal(err)
+	}
+	if blob, _ := d.stored(t); blob.RefusedAt == nil {
+		t.Fatal("setup: the stamp was not stored")
+	}
+	code, body := d.put(t, ownPATOrgKey, ownPATToken, days(30))
+	if code != http.StatusOK || strings.Contains(body, "refused_at") {
+		t.Fatalf("PUT = %d %s, want 200 carrying no refused_at", code, body)
+	}
+	if blob, _ := d.stored(t); blob.RefusedAt != nil {
+		t.Errorf("the re-paste kept the stamp: %+v", blob)
 	}
 }

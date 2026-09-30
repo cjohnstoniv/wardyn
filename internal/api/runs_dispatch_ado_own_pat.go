@@ -179,6 +179,13 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// The proxy re-resolves with stale_jti only after Azure DevOps refused the
+	// credential it held (egress/proxy/ado_refusal.go): with the expiry still
+	// ahead, stamp it once. The run is not stopped: injection carries on.
+	if r.URL.Query().Get("stale_jti") != "" && blob.RefusedAt == nil {
+		s.stampADOOwnPATRefused(ctx, claims, snapshot, blob)
+	}
+
 	value := adoOwnPATHeaderValue(blob.Token)
 	if s.cfg.MaskRegistry != nil {
 		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.Token))

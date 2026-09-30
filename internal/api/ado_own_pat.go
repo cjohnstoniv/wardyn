@@ -29,14 +29,18 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -56,6 +60,10 @@ const adoOwnPATMaxTokenLen = 512
 // adoOwnPATAPIBase is where the identity check calls Azure DevOps Services.
 // A variable only so the tests can point it at the fake.
 var adoOwnPATAPIBase = "https://dev.azure.com"
+
+// adoOwnPATGraphBase is where the object-id check calls the Azure DevOps
+// Services Graph API. A variable only so the tests can point it at the fake.
+var adoOwnPATGraphBase = "https://vssps.dev.azure.com"
 
 // adoOwnPATTransport carries the identity check. A variable only so the tests
 // can reach a fake Azure DevOps Server by its host name.
@@ -94,6 +102,10 @@ type adoOwnPATBlob struct {
 	Org       string    `json:"org"`
 	ExpiresOn time.Time `json:"expires_on"`
 	StoredAt  time.Time `json:"stored_at"`
+	// RefusedAt is when Azure DevOps first answered this token with a refusal
+	// before its expiry (stampADOOwnPATRefused). Set once; a re-paste is a new
+	// blob and clears it. Informational: injection carries on until ExpiresOn.
+	RefusedAt *time.Time `json:"refused_at,omitempty"`
 }
 
 func (b adoOwnPATBlob) valid() bool {
@@ -214,7 +226,7 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit := map[string]any{"provider_row": row.ID, "organisation": org, "expires_on": expiresOn.Format(time.DateOnly)}
-	names, err := s.adoOwnPATOwner(ctx, identityURL, token)
+	owner, err := s.adoOwnPATOwner(ctx, identityURL, token)
 	switch {
 	case errors.Is(err, errADOOwnPATRejected):
 		audit["reason"] = reasonADOOwnPATRejected
@@ -226,7 +238,10 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonADOOwnPATCheckUnavailable, adoOwnPATUnavailableRefusal)
 		return
 	}
-	if basis := adoOwnPATMismatch(names, oidcEmailFromContext(ctx)); basis != "" {
+	// Bound by object id first, where the caller's is known and the token may
+	// read Graph (Services only: a Server row has no Graph door); else by name.
+	bound := row.Entra != nil && s.adoOwnPATBoundByObjectID(ctx, subject, org, owner.descriptor, token)
+	if basis := adoOwnPATMismatch(owner.names, oidcEmailFromContext(ctx)); !bound && basis != "" {
 		// Never the account the token named: the refusal and the audit row say
 		// only that it is not the caller's.
 		audit["reason"], audit["basis"] = "identity_mismatch", basis
@@ -240,7 +255,10 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	}
 	blob := adoOwnPATBlob{Token: token, Org: org, ExpiresOn: expiresOn, StoredAt: now}
 	raw, _ := json.Marshal(blob)
-	if err := s.cfg.Secrets.For(subject).Put(ctx, adoOwnPATSecretName(row.ID), raw); err != nil {
+	adoOwnPATWriteMu.Lock()
+	err = s.cfg.Secrets.For(subject).Put(ctx, adoOwnPATSecretName(row.ID), raw)
+	adoOwnPATWriteMu.Unlock()
+	if err != nil {
 		s.auditRowNotWritten(ctx, err, types.ActorHuman, subject, subject, adoOwnPATSecretName(row.ID))
 		writeServerError(w, r, "store the Azure DevOps token", err)
 		return
@@ -340,58 +358,108 @@ var (
 // authenticates as, at identityURL (adoOwnPATTarget): connectionData's
 // authenticatedUser, whose properties name the owner — Account, the sign-in
 // name (an email on Services, DOMAIN\user on Server), and Mail, the account's
-// email where the directory has one. It returns the ones present. Any answer
-// but a 200 naming at least one is a refusal, except a 429 or a 5xx, which say
-// nothing about the token.
-func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, identityURL, nil)
+// email where the directory has one. It returns the ones present, and the
+// owner's subjectDescriptor when Azure DevOps gave one. Any answer but a 200
+// naming at least one is a refusal, except a 429 or a 5xx, which say nothing
+// about the token.
+func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) (adoOwnPATOwnerInfo, error) {
+	resp, err := adoOwnPATGet(ctx, identityURL, token)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
-	}
-	req.Header.Set("Authorization", adoOwnPATHeaderValue(token))
-	req.Header.Set("Accept", "application/json")
-	// No redirect is followed: the request carries the token, and Azure DevOps
-	// answers a token it does not accept with a redirect to its sign-in page.
-	client := &http.Client{
-		Transport:     adoOwnPATTransport,
-		Timeout:       adoEntraRedeemTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		return nil, fmt.Errorf("%w: HTTP %d", errADOOwnPATUnavailable, resp.StatusCode)
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: HTTP %d", errADOOwnPATUnavailable, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: HTTP %d", errADOOwnPATRejected, resp.StatusCode)
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: HTTP %d", errADOOwnPATRejected, resp.StatusCode)
 	}
 	var body struct {
 		AuthenticatedUser struct {
-			Properties map[string]struct {
+			SubjectDescriptor string `json:"subjectDescriptor"`
+			Properties        map[string]struct {
 				Value string `json:"$value"`
 			} `json:"properties"`
 		} `json:"authenticatedUser"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<18))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, fmt.Errorf("%w: unparseable connectionData", errADOOwnPATRejected)
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: unparseable connectionData", errADOOwnPATRejected)
 	}
-	var names []string
+	info := adoOwnPATOwnerInfo{descriptor: strings.TrimSpace(body.AuthenticatedUser.SubjectDescriptor)}
 	for _, key := range []string{"Account", "Mail"} {
 		if v := strings.TrimSpace(body.AuthenticatedUser.Properties[key].Value); v != "" {
-			names = append(names, v)
+			info.names = append(info.names, v)
 		}
 	}
-	if len(names) == 0 {
-		return nil, fmt.Errorf("%w: connectionData named no account", errADOOwnPATRejected)
+	if len(info.names) == 0 {
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: connectionData named no account", errADOOwnPATRejected)
 	}
-	return names, nil
+	return info, nil
+}
+
+// adoOwnPATOwnerInfo is what connectionData says about a token's owner: the
+// names it gave, and the subjectDescriptor the Graph lookup takes.
+type adoOwnPATOwnerInfo struct {
+	names      []string
+	descriptor string
+}
+
+// adoOwnPATGet sends one GET carrying the token. No redirect is followed: the
+// request carries the token, and Azure DevOps answers a token it does not
+// accept with a redirect to its sign-in page.
+func adoOwnPATGet(ctx context.Context, target, token string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", adoOwnPATHeaderValue(token))
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{
+		Transport:     adoOwnPATTransport,
+		Timeout:       adoEntraRedeemTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return client.Do(req)
+}
+
+// adoOwnPATBoundByObjectID reports whether the token's owner is the caller by
+// Entra object id, the identity an email change or a UPN that differs from
+// mail cannot move. The caller's object id is the one their person row holds
+// (a person set up by object id, #1195); with none it answers false without
+// calling Azure DevOps. Azure DevOps' Graph API, asked with the token itself,
+// gives the owner's originId. Any failure — no descriptor, a 401 or 403 (the
+// token lacks vso.graph), a bad body — answers false, and the caller falls
+// back to the Account and Mail compare.
+func (s *Server) adoOwnPATBoundByObjectID(ctx context.Context, subject, org, descriptor, token string) bool {
+	ps, ok := s.cfg.Store.(store.PersonStore)
+	if !ok || descriptor == "" {
+		return false
+	}
+	person, err := ps.GetPerson(ctx, subject)
+	if err != nil || person.ObjectID == "" {
+		return false
+	}
+	resp, err := adoOwnPATGet(ctx, adoOwnPATGraphBase+"/"+url.PathEscape(org)+"/_apis/graph/users/"+url.PathEscape(descriptor)+"?api-version=7.1-preview.1", token)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var body struct {
+		OriginID string `json:"originId"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<18))
+	if err != nil || json.Unmarshal(raw, &body) != nil {
+		return false
+	}
+	origin := strings.TrimSpace(body.OriginID)
+	return origin != "" && strings.EqualFold(origin, person.ObjectID)
 }
 
 // adoOwnPATMismatch reports why a token's owner is not the caller, or "" when
@@ -420,6 +488,46 @@ func adoOwnPATHeaderValue(token string) string {
 func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outcome string, data map[string]any) {
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, actor, action, adoOwnPATSecretName(rowID), outcome, mustJSON(data)))
 }
+
+// adoOwnPATWriteMu orders the two writers of a stored own token in this
+// process — a paste (handlePutADOOwnPAT) and the refusal stamp — so a stamp
+// never writes an old token back over a fresh paste. The secret store has no
+// compare-and-set, so a second replica can still interleave the two; the cost
+// is one stale informational stamp, cleared by the next paste.
+var adoOwnPATWriteMu sync.Mutex
+
+// stampADOOwnPATRefused records, once, that Azure DevOps refused owner's own
+// token before its expiry: the proxy re-resolves it with stale_jti only after
+// Azure DevOps answered the credential it held with a 401 class
+// (egress/proxy/ado_refusal.go). The token is NOT marked dead — a missing
+// scope answers the same 401 — so injection carries on until the expiry; the
+// stamp and one audit row on the own-token store action (reason
+// upstream_refused) are all that changes. A token already stamped, removed,
+// replaced or expired since blob was read is left alone.
+func (s *Server) stampADOOwnPATRefused(ctx context.Context, claims *identity.Claims, sn adoEntraScopeSnapshot, blob adoOwnPATBlob) {
+	adoOwnPATWriteMu.Lock()
+	defer adoOwnPATWriteMu.Unlock()
+	now := s.cfg.Now().UTC()
+	cur, found, err := s.readADOOwnPAT(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sn.OwnerSubject, sn.ProviderRowID)
+	if err != nil || !found || cur.Token != blob.Token || cur.RefusedAt != nil || cur.expired(now) {
+		return
+	}
+	cur.RefusedAt = &now
+	raw, _ := json.Marshal(cur)
+	if err := s.cfg.Secrets.For(sn.OwnerSubject).Put(ctx, adoOwnPATSecretName(sn.ProviderRowID), raw); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not record that Azure DevOps refused an own token", slog.String("row", sn.ProviderRowID), slog.Any("err", err))
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, adoPATAuditOwnStore,
+		adoOwnPATSecretName(sn.ProviderRowID), "failure", mustJSON(map[string]any{
+			"provider_row": sn.ProviderRowID, "organisation": sn.Organisation, "owner": sn.OwnerSubject,
+			"expires_on": cur.ExpiresOn.Format(time.DateOnly), "reason": adoOwnPATAuditUpstreamRefused,
+		})))
+}
+
+// adoOwnPATAuditUpstreamRefused is the own-token store row's reason when Azure
+// DevOps refused the token before its expiry.
+const adoOwnPATAuditUpstreamRefused = "upstream_refused"
 
 // resolvePendingADOOwnPATHolds answers every PENDING Azure DevOps sign-in
 // request of owner's for this row once a token is stored: a run held because
@@ -507,6 +615,9 @@ func adoOwnPATTokenScopes(ceiling []adoscope.Capability) []string {
 	if err != nil {
 		return nil
 	}
+	// vso.graph is asked for whatever the ceiling: the bind by object id reads
+	// Graph with the token itself. Without it the bind falls back to the name.
+	scopes = append(slices.Clone(scopes), adoscope.ResourceID+"/vso.graph")
 	widest := map[string]adoTokenPageScope{}
 	var out []string
 	for _, q := range scopes {

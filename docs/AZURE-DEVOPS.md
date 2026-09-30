@@ -476,15 +476,27 @@ removes Wardyn's copy. Before storing it, in this order, Wardyn:
   longer expiry would promise what Azure DevOps will not keep;
 - asks Azure DevOps (`connectionData`, with the token itself) whether it accepts the token for this
   organisation, and refuses one it does not accept: "Azure DevOps didn't accept this token.";
-- checks whose it is: the account Azure DevOps names for the token must match the email of the
+- checks whose it is. Where Wardyn holds the person's Entra object id (a person set up by object id)
+  and the token carries `vso.graph`, Wardyn asks Azure DevOps' Graph API who owns the token and binds it
+  when the owner's `originId` is that object id, whatever email the account shows. Otherwise, or when
+  Graph refuses the token, the account Azure DevOps names for the token must match the email of the
   person's own sign-in. Another account's token is refused, and the other account is never named:
   "This token belongs to a different Azure DevOps account than yours." A sign-in with no email address
   cannot be matched and is refused too.
+
+The scopes the dialog asks the person to tick include **Graph (Read)** (`vso.graph`), which the bind by
+object id uses; a token without it is still accepted, and is matched by name.
 
 The token is stored sealed in the person's own namespace, readable only by them, with no fallback to an
 administrator's or another person's copy. Wardyn cannot read a pasted token's scopes or its expiry, so
 it trusts the date the person entered, and stops using the token from the start of that day (UTC). The
 run's capabilities are held by the proxy's request check exactly as in every other mode.
+
+**A token Azure DevOps refuses before its expiry** is noted, not stopped. When the proxy has to ask for the
+token again because Azure DevOps answered it with a 401 and the date the person entered is still ahead,
+Wardyn stamps the stored token once (`refused_at` on `GET /api/v1/me/scm-access`, which still reads
+`live`) and audits it once. A 401 answers a revoked token, an expired one and a missing scope alike, so
+Wardyn keeps using the token until its date; adding a new token clears the stamp.
 
 **Wardyn cannot revoke a pasted PAT.** `DELETE` removes only Wardyn's copy; only the person can revoke
 it, in Azure DevOps. The Settings card reads *Expires in N days* for the last seven days, and *Expired*
@@ -500,7 +512,8 @@ credential.
 - A token stored for one organisation is not used for another.
 - Storing and removing are audited as `ado_pat.own.store` and `ado_pat.own.delete`; a refusal of
   another account's token is `ado_pat.own.store` with outcome `failure` and `reason:
-  identity_mismatch`. None carries the token, and none names the other account.
+  identity_mismatch`, and Azure DevOps refusing a stored token before its expiry is the same action
+  with `reason: upstream_refused`. None carries the token, and none names the other account.
 
 ## Upgrading
 
