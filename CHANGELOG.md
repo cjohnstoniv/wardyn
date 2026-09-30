@@ -29,7 +29,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Groundwork for per-person Azure DevOps personal access tokens (#1428).** A provider row's `entra`
   block now accepts `token_mode: own_pat`, which needs no `tenant_id` or `client_id`, and the lifetimes
   `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
-  Migration `0101_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
+  Migration `0102_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
   with no token value in it.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
@@ -217,6 +217,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An open run event stream ends when its portal is revoked or its delegated token expires (#1413).**
+  A portal's delegated token that opened `GET /runs/{id}/events` used to keep streaming after the
+  portal was revoked or the token's ten-minute lifetime passed, until the five-minute hold ended it.
+  The stream now re-checks the token at each keepalive and ends at the next one, failing closed if
+  the check cannot be answered.
 - **The Add workspace dialog no longer offers a member on Kubernetes a local directory (#1416).** The
   console decided "this install runs on Kubernetes" from `runner.driver`, which `GET /setup/status`
   blanks for a member; it now also reads the member-safe `runner.kubernetes` bit added for #1238.

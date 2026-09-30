@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// TestMigrate_AdoRunPATsTable (0101, #1428) pins the run-token table through
+// TestMigrate_AdoRunPATsTable (0102, #1428) pins the run-token table through
 // the catalog and the server: the columns and their nullability, the
 // (run_id, authorization_id) key refusing a second row, and that a run can
 // hold several tokens (renewal and widening leave the old one to its valid_to).
