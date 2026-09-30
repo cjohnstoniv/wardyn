@@ -139,7 +139,9 @@ func entraLaneHosts(i int, row types.GitProvider) error {
 // the two token lifetimes in range.
 func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	// own_pat pastes a token, so it names no tenant or client; one that does is
-	// still held to the GUID shape rather than stored as an alias.
+	// still held to the GUID shape rather than stored as an alias. Such a row
+	// has no sign-in, so the login and dispatch row pickers must skip it (L1,
+	// #1428); until they do it is stored but not yet usable.
 	signsIn := cfg.TokenMode != types.ADOTokenModeOwnPAT
 	if (signsIn || cfg.TenantID != "") && !entraGUID.MatchString(cfg.TenantID) {
 		return fmt.Errorf(providers400EntraGUID, i, "tenant_id", cfg.TenantID)

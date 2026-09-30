@@ -147,7 +147,12 @@ const (
 	// available.
 	ADOTokenModeMintedPAT ADOTokenMode = "minted_pat"
 	// ADOTokenModeOwnPAT is a personal access token the person pasted in
-	// themselves. It needs no tenant or client: nothing signs in.
+	// themselves. It needs no tenant or client: nothing signs in. SO EVERY
+	// PICKER OF THE ONE SIGN-IN ROW MUST SKIP IT — the console-login capture
+	// (adoEntraRow in cmd/wardynd) and the dispatch row lookup take any
+	// enabled per_user entra-lane row today, and a row with no tenant or
+	// client would fail their validation on every login and could shadow the
+	// row that does sign in. Skipping own_pat there is L1's change (#1428).
 	ADOTokenModeOwnPAT ADOTokenMode = "own_pat"
 )
 
