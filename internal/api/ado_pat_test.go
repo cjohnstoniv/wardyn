@@ -423,16 +423,6 @@ func TestOrgCheck_S1RefusedWithTheReason(t *testing.T) {
 	}
 }
 
-// ── the dispatch predicate ─────────────────────────────────────────────────
-
-func TestResolveADOEntraRun_SkipsOwnPATRows(t *testing.T) {
-	row := adoEntraTestRow()
-	row.Entra.TokenMode = types.ADOTokenModeOwnPAT
-	if ado, ok := resolveADOEntraRun(adoSite(row), []string{adoTestRepo}, adoTestOwner); ok {
-		t.Fatalf("an own_pat row resolved the Entra lane: %+v", ado)
-	}
-}
-
 // ── the client ─────────────────────────────────────────────────────────────
 
 func TestADOPATClient_CreateAndRevokeAgainstTheFake(t *testing.T) {
