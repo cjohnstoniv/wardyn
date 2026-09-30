@@ -622,7 +622,9 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	caCertPEM, caKeyPEM string, policy *types.RunPolicySpec, sandboxEnv map[string]string,
 	injections []runner.InjectionGrant,
 ) ([]runner.InjectionGrant, []string, bool) {
-	if ado.tokenMode != types.ADOTokenModeBearer {
+	// own_pat authors the same lane; its grants resolve from the person's own
+	// token (resolveADOOwnPATInjection).
+	if ado.tokenMode != types.ADOTokenModeBearer && ado.tokenMode != types.ADOTokenModeOwnPAT {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "token_mode",
 			fmt.Sprintf("This run's Azure DevOps provider row asks for token_mode %q, which Wardyn cannot issue: "+
 				"minting a personal access token is refused for every delegated token by Azure DevOps itself. "+
