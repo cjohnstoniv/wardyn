@@ -1,6 +1,9 @@
 # trivy allowlist — CVEs accepted for the images CI scans.
 #
-# Consumed by ci.yml's `trivy` job (severity CRITICAL, --ignore-unfixed), which
+# Consumed by ci.yml's `trivy` job, which fails on a CRITICAL twice over: with
+# --ignore-unfixed (a fix in the image's own Debian release), and without it (a
+# fix in ANY release, the bar adopters' mirror scanners hold us to), and by
+# nightly.yml's `published-image-scan` of the images already published. It
 # scans every image release.yml publishes — wardynd, wardyn-proxy, agent-base,
 # agent-codex-cli, agent-aws-sso, agent-vscode and agent-novnc (#141), not just
 # one of them. One CVE id per line; `#` starts a comment. Trivy applies this
@@ -11,7 +14,8 @@
 # button): every id needs a comment naming (1) the package, (2) WHY it does not
 # reach us in this image, and (3) the date + who accepted it. An entry with no
 # reason is a finding someone hid. Delete an entry the moment the base image
-# ships a fix — --ignore-unfixed already suppresses the no-fix-available case,
-# so anything listed here is a CVE we could have patched and chose not to.
+# ships a fix. The strict pass does not skip a no-fix-available CRITICAL, so an
+# entry here is either one we could have patched and chose not to, or one no
+# release of our base fixes yet — say which.
 #
 # Empty on purpose: no image in the scan matrix has an accepted CRITICAL.
