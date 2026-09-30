@@ -23,13 +23,22 @@ func TestScopesForGolden(t *testing.T) {
 		want []string
 	}{
 		{"nothing", nil, []string{}},
-		{"read carries every area's read scope", []Capability{CapRead}, []string{
-			res + "vso.analytics", res + "vso.build", res + "vso.code",
-			res + "vso.graph", res + "vso.identity", res + "vso.memberentitlementmanagement",
-			res + "vso.packaging", res + "vso.profile", res + "vso.project",
-			res + "vso.release", res + "vso.securefiles_read", res + "vso.serviceendpoint",
-			res + "vso.test", res + "vso.variablegroups_read", res + "vso.wiki", res + "vso.work",
+		{"code_read", []Capability{CapCodeRead}, []string{res + "vso.code"}},
+		{"work_read", []Capability{CapWorkRead}, []string{res + "vso.work"}},
+		{"wiki_read", []Capability{CapWikiRead}, []string{res + "vso.wiki"}},
+		{"build_read", []Capability{CapBuildRead}, []string{res + "vso.build"}},
+		{"release_read", []Capability{CapReleaseRead}, []string{res + "vso.release"}},
+		{"serviceendpoint_read", []Capability{CapServiceEndpointRead}, []string{res + "vso.serviceendpoint"}},
+		{"library_read reaches both library scopes", []Capability{CapLibraryRead}, []string{
+			res + "vso.securefiles_read", res + "vso.variablegroups_read",
 		}},
+		{"packaging_read", []Capability{CapPackagingRead}, []string{res + "vso.packaging"}},
+		{"test_read", []Capability{CapTestRead}, []string{res + "vso.test"}},
+		{"project_read carries the profile too", []Capability{CapProjectRead}, []string{res + "vso.profile", res + "vso.project"}},
+		{"identity_read", []Capability{CapIdentityRead}, []string{
+			res + "vso.graph", res + "vso.identity", res + "vso.memberentitlementmanagement",
+		}},
+		{"analytics_read", []Capability{CapAnalyticsRead}, []string{res + "vso.analytics"}},
 		{"code_write", []Capability{CapCodeWrite}, []string{res + "vso.code_write"}},
 		{"pr", []Capability{CapPR}, []string{res + "vso.code_write"}},
 		{"policy_admin", []Capability{CapPolicyAdmin}, []string{res + "vso.code_write"}},
@@ -39,15 +48,15 @@ func TestScopesForGolden(t *testing.T) {
 			res + "vso.graph_manage", res + "vso.identity_manage", res + "vso.security_manage",
 		}},
 		{"serviceendpoint_admin", []Capability{CapServiceEndpointAdmin}, []string{res + "vso.serviceendpoint_manage"}},
-		{"build_execute covers the classic release area as well", []Capability{CapBuildExecute}, []string{
-			res + "vso.build_execute", res + "vso.release_execute",
-		}},
-		{"build_admin is a WRITE, never the vso.build read scope", []Capability{CapBuildAdmin}, []string{
-			res + "vso.build_execute", res + "vso.release_manage",
-		}},
+		{"build_execute", []Capability{CapBuildExecute}, []string{res + "vso.build_execute"}},
+		{"build_admin is a WRITE, never the vso.build read scope", []Capability{CapBuildAdmin}, []string{res + "vso.build_execute"}},
+		{"release_execute", []Capability{CapReleaseExecute}, []string{res + "vso.release_execute"}},
+		{"release_admin", []Capability{CapReleaseAdmin}, []string{res + "vso.release_manage"}},
 		{"work_write", []Capability{CapWorkWrite}, []string{res + "vso.work_write"}},
+		{"work_admin shares work_write's scope", []Capability{CapWorkAdmin}, []string{res + "vso.work_write"}},
 		{"wiki_write", []Capability{CapWikiWrite}, []string{res + "vso.wiki_write"}},
 		{"packaging_write", []Capability{CapPackagingWrite}, []string{res + "vso.packaging_write"}},
+		{"packaging_manage", []Capability{CapPackagingManage}, []string{res + "vso.packaging_manage"}},
 		{"project_admin", []Capability{CapProjectAdmin}, []string{res + "vso.project_manage"}},
 
 		{"the four policy-and-code capabilities collapse to ONE scope",
@@ -56,16 +65,9 @@ func TestScopesForGolden(t *testing.T) {
 		{"a repeated capability is not a repeated scope",
 			[]Capability{CapWorkWrite, CapWorkWrite},
 			[]string{res + "vso.work_write"}},
-		{"the contribute profile",
-			ProfileContribute(),
-			[]string{
-				res + "vso.analytics", res + "vso.build", res + "vso.code",
-				res + "vso.code_write", res + "vso.graph", res + "vso.identity",
-				res + "vso.memberentitlementmanagement", res + "vso.packaging",
-				res + "vso.profile", res + "vso.project", res + "vso.release", res + "vso.securefiles_read",
-				res + "vso.serviceendpoint", res + "vso.test", res + "vso.variablegroups_read",
-				res + "vso.wiki", res + "vso.wiki_write", res + "vso.work", res + "vso.work_write",
-			}},
+		{"the default profile",
+			ProfileDefault(),
+			[]string{res + "vso.code", res + "vso.profile", res + "vso.project"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := ScopesFor(tc.caps)
@@ -109,14 +111,15 @@ func TestScopesForRefusesWhatIsNotGrantable(t *testing.T) {
 
 // TestPermitsIsTheGate pins the one spelling of "allowed".
 func TestPermitsIsTheGate(t *testing.T) {
-	granted := ProfileContribute()
+	granted := []Capability{CapCodeRead, CapCodeWrite, CapPR, CapWorkRead, CapWorkWrite}
 	for _, tc := range []struct {
 		name string
 		cap  Capability
 		want bool
 	}{
 		{"a granted capability", CapCodeWrite, true},
-		{"the read floor", CapRead, true},
+		{"a granted read", CapCodeRead, true},
+		{"a read of another area", CapWikiRead, false},
 		{"a capability outside the profile", CapPolicyBypass, false},
 		{"an unclassified write", CapUnclassifiedWrite, false},
 		{"an unclassified read", CapUnclassifiedRead, false},
@@ -126,7 +129,7 @@ func TestPermitsIsTheGate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Permits(granted, Verdict{Capability: tc.cap}); got != tc.want {
-				t.Fatalf("Permits(contribute, %q) = %v, want %v", tc.cap, got, tc.want)
+				t.Fatalf("Permits(%v, %q) = %v, want %v", granted, tc.cap, got, tc.want)
 			}
 		})
 	}
@@ -136,8 +139,8 @@ func TestPermitsIsTheGate(t *testing.T) {
 			t.Errorf("Permits(every capability, %q) = true", c)
 		}
 	}
-	if Permits(nil, Verdict{Capability: CapRead}) {
-		t.Error("Permits(nothing granted, read) = true")
+	if Permits(nil, Verdict{Capability: CapCodeRead}) {
+		t.Error("Permits(nothing granted, code_read) = true")
 	}
 }
 
@@ -292,7 +295,7 @@ func TestEveryCapabilityIsLabelledAndClassified(t *testing.T) {
 	var all []Capability
 	all = append(all, GrantableCapabilities()...)
 	all = append(all, CapDeniedTokens, CapDeniedServiceHooks, CapDeniedExtensions,
-		CapDeniedInternal, CapUnclassifiedWrite, CapUnclassifiedRead)
+		CapDeniedInternal, CapUnclassifiedWrite, CapUnclassifiedRead, CapDiscovery)
 	for _, c := range all {
 		if !c.Valid() {
 			t.Errorf("%q is not Valid", c)
@@ -304,7 +307,7 @@ func TestEveryCapabilityIsLabelledAndClassified(t *testing.T) {
 			t.Errorf("%q is both grantable and denied", c)
 		}
 	}
-	if len(GrantableCapabilities()) != 14 {
+	if len(GrantableCapabilities()) != 29 {
 		t.Fatalf("GrantableCapabilities() has %d entries — the catalogue's grantable set changed; update the profiles and the scope golden with it",
 			len(GrantableCapabilities()))
 	}
@@ -313,57 +316,56 @@ func TestEveryCapabilityIsLabelledAndClassified(t *testing.T) {
 	}
 }
 
-// TestProfilesAreInsideTheCatalogue keeps the two shipped profiles honest: a
-// profile naming a capability that is not grantable could never be minted, and
-// the read profile is the DEFAULT, so it has to be exactly reads.
+// TestProfilesAreInsideTheCatalogue keeps the shipped default profile honest:
+// a profile naming a capability that is not grantable could never be granted,
+// and the default is read the code and see the projects, nothing more.
 func TestProfilesAreInsideTheCatalogue(t *testing.T) {
-	for _, p := range [][]Capability{ProfileRead(), ProfileContribute()} {
-		for _, c := range p {
-			if !c.Grantable() {
-				t.Errorf("profile %v names %q, which is not grantable", p, c)
-			}
+	for _, c := range ProfileDefault() {
+		if !c.Grantable() {
+			t.Errorf("ProfileDefault() names %q, which is not grantable", c)
 		}
 	}
-	if !slices.Equal(ProfileRead(), []Capability{CapRead}) {
-		t.Fatalf("ProfileRead() = %v, want exactly the read capability", ProfileRead())
-	}
-	if slices.Contains(ProfileContribute(), CapBuildExecute) {
-		t.Error("ProfileContribute() queues pipelines — running YAML under the pipeline's own identity is an opt-in, not part of contributing")
-	}
-	if !slices.Contains(ProfileContribute(), CapRead) {
-		t.Error("ProfileContribute() cannot read")
+	if !slices.Equal(ProfileDefault(), []Capability{CapProjectRead, CapCodeRead}) {
+		t.Fatalf("ProfileDefault() = %v, want [project_read code_read]", ProfileDefault())
 	}
 }
 
 // TestReadScopesCoverEveryAreaThatReads ENUMERATES readAreas — every area the
-// classifier can answer CapRead for — rather than a hand list, which is what
-// let three areas classify as reads whose token could not perform them. For
-// each: a GET classifies as CapRead, and its scope is in the read scope set.
+// classifier answers a read for — rather than a hand list, which is what let
+// three areas classify as reads whose token could not perform them. For each:
+// a GET classifies as the area's read, and its scope is in that read's scopes.
 func TestReadScopesCoverEveryAreaThatReads(t *testing.T) {
-	scopes, err := ScopesFor([]Capability{CapRead})
-	if err != nil {
-		t.Fatalf("ScopesFor(read) error = %v", err)
-	}
 	if len(readAreas) == 0 {
 		t.Fatal("readAreas is empty")
 	}
-	for key, scope := range readAreas {
+	for key, a := range readAreas {
 		t.Run(key, func(t *testing.T) {
 			path := "/acme/proj/_apis/" + key + "/x"
 			v, err := Classify(Request{Method: "GET", Host: "dev.azure.com", Path: path, Org: "acme"})
-			if err != nil || v.Capability != CapRead {
-				t.Fatalf("Classify(GET %s) = %q, %v — want the read floor", path, v.Capability, err)
+			if err != nil || v.Capability != a.cap {
+				t.Fatalf("Classify(GET %s) = %q, %v — want %q", path, v.Capability, err, a.cap)
 			}
-			if scope != "" && !slices.Contains(scopes, ResourceID+"/"+scope) {
-				t.Fatalf("%s reads as CapRead but %q is not in the read scope set", key, scope)
+			if a.scope == "" {
+				if a.cap != CapDiscovery {
+					t.Fatalf("%s reads as %q with no scope — only discovery is unscoped", key, a.cap)
+				}
+				return
+			}
+			scopes, err := ScopesFor([]Capability{a.cap})
+			if err != nil || !slices.Contains(scopes, ResourceID+"/"+a.scope) {
+				t.Fatalf("%s reads as %q but %q is not in its scopes %v (%v)", key, a.cap, a.scope, scopes, err)
 			}
 		})
 	}
-	// And the reverse: nothing in the read set that no area needs.
-	for _, s := range scopes {
-		short := strings.TrimPrefix(s, ResourceID+"/")
-		if !slices.ContainsFunc(slices.Collect(maps.Values(readAreas)), func(v string) bool { return v == short }) {
-			t.Errorf("the read scope set carries %q, which no read area needs", short)
+	// And the reverse: no read capability carries a scope no area needs.
+	for c, scopes := range capabilityScopes {
+		if !strings.HasSuffix(string(c), "_read") {
+			continue
+		}
+		for _, s := range scopes {
+			if !slices.ContainsFunc(slices.Collect(maps.Values(readAreas)), func(a readArea) bool { return a.cap == c && a.scope == s }) {
+				t.Errorf("%q carries %q, which no read area of it needs", c, s)
+			}
 		}
 	}
 }

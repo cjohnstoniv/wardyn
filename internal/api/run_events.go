@@ -21,7 +21,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -307,7 +309,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-wake:
 		case <-beat.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || s.sessionRevokedSince(r, principal, openedAt) {
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || s.sessionRevokedSince(r, principal, openedAt) || s.delegationEndedSince(r) {
 				return
 			}
 			if cur, err := s.cfg.Store.GetRun(r.Context(), id); err == nil {
@@ -341,4 +343,27 @@ func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt
 	}
 	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
 	return err != nil || revoked
+}
+
+// delegationEndedSince reports whether a delegated stream's token is no longer
+// live: its ten-minute TTL passed or its portal was revoked since the stream
+// opened. It asks the store the question delegatedTokenAuth asked at open
+// (GetDelegatedTokenByRaw: unexpired and portal not revoked), and anything but
+// a live answer ends the stream — a lookup failure and a store without the
+// portal capability included — so the reconnect re-authenticates. A request
+// that is not delegated has nothing to check.
+func (s *Server) delegationEndedSince(r *http.Request) bool {
+	if _, delegated := audit.DelegationFrom(r.Context()); !delegated {
+		return false
+	}
+	ds, ok := s.cfg.Store.(store.DelegateStore)
+	if !ok {
+		return true
+	}
+	tok, ok := bearerToken(r)
+	if !ok {
+		return true
+	}
+	_, err := ds.GetDelegatedTokenByRaw(r.Context(), tok, s.cfg.Now().UTC())
+	return err != nil
 }

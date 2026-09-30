@@ -18,7 +18,7 @@ only.
 |---|---|---|---|
 | LL1 roles | Each identity signs in by redirect through Entra. The admin sees the admin nav, a member does not, and an identity with no Wardyn role is refused | Playwright | `WARDYN_LIVE_ENTRA=1` |
 | LL2 Azure DevOps | A member who signed in once, with the credential captured, launches a run that does an Azure DevOps REST read and `git ls-remote` | Go | `WARDYN_LIVE_ADO=1` |
-| LL2b Azure DevOps, bounded | A run that starts with `read` reads, has its push refused and raised for approval, pushes once the harness approves `code_write` for the run, and gets 403 with no request raised for `repo_admin`, which is above the ceiling | Go | `WARDYN_LIVE_ADO_WRITE=1` |
+| LL2b Azure DevOps, bounded | A run that starts with `code_read` reads, has its push refused and raised for approval, pushes once the harness approves `code_write` for the run, and gets 403 with no request raised for `repo_admin`, which is above the ceiling | Go | `WARDYN_LIVE_ADO_WRITE=1` |
 | LL2c personal access token probe | Whether a third-party app registration can mint a personal access token through the token lifecycle API. It logs a verdict either way and revokes anything it mints | Go | `WARDYN_LIVE_ADO_PAT_PROBE=1` |
 | LL3 Bedrock | One Claude Haiku 4.5 call on Identity Center role credentials in the capped member account, and the reply is checked | Go | `WARDYN_LIVE_BEDROCK=1` |
 | LL3w Bedrock through Wardyn | A governed claude-code run whose model credential is Wardyn's own per-user AWS SSO capture (not the test process's own credentials) completes on the per-user SSO lane, on an allow-listed model, with a minted credential, attributed to the member, reply in the transcript; a second run on the bearer lane pointed at a denied model surfaces an `AccessDeniedException` sentence on `failure_hint` | Go | `WARDYN_LIVE_BEDROCK_WARDYN=1` |
@@ -161,9 +161,9 @@ Contribute on the repository. The branch sits in the run's own namespace on
 purpose: a push to any other ref is outside the run's own branch and is
 refused outright unless the run's policy sets `git_push_any_branch`. The deployment needs:
 
-- an `entra` provider row for the organisation with `default_profile`
-  `["read"]` and a `capability_ceiling` that holds `code_write` but not
-  `repo_admin`, for example `["read", "code_write", "pr"]`;
+- an `entra` provider row for the organisation whose `default_profile`
+  holds `code_read` and whose `capability_ceiling` holds `code_write` but not
+  `repo_admin`, for example `["code_read", "project_read", "code_write", "pr"]`;
 - `first_use_approval: deny_with_review` in the policy the member's runs get
   (`deploy/kind/sso/default-policy.json` sets it).
 

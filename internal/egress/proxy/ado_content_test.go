@@ -42,7 +42,7 @@ func (h *adoHarness) branch() string { return BranchNSPrefix(h.p.runID) + "work"
 // rules at all (the review probe: deny_paths [".github/**"] and a REST push
 // adding a workflow answered 201).
 func TestADORESTPushRules(t *testing.T) {
-	caps := []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
+	caps := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
 	review := reviewSpec(1, []string{".github/workflows/**"})
 
 	t.Run("deny refuses", func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestADORESTPushRules(t *testing.T) {
 		}
 	})
 	t.Run("content rules before the capability check", func(t *testing.T) {
-		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, adoscope.CapRead)
+		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, adoscope.CapCodeRead)
 		rec := h.do(t, http.MethodPost, restPushTarget, restPush(h.branch(), "/.github/workflows/exfil.yml"), nil)
 		log := h.log()
 		if rec.Code != http.StatusForbidden || !strings.Contains(log, ruleSourceGitRules) || strings.Contains(log, ruleSourceADODenied) {

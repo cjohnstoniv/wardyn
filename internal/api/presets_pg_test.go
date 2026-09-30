@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -383,6 +384,8 @@ func TestPG_PresetWriteValidation(t *testing.T) {
 	f := newPresetFixture(t)
 	withTask := presetBundle()
 	withTask.Task = "baked in"
+	preSplit := presetBundle()
+	preSplit.InlinePolicy.AzureDevOpsCapabilities = []adoscope.Capability{"read"}
 	for _, tc := range []struct {
 		name, preset string
 		req          client.PresetRequest
@@ -391,6 +394,7 @@ func TestPG_PresetWriteValidation(t *testing.T) {
 		{"unknown user type", "ok", client.PresetRequest{UserTypes: []string{"ghost"}, Request: presetBundle()}},
 		{"bad name", "Not_A_Slug", client.PresetRequest{Request: presetBundle()}},
 		{"no agent", "ok", client.PresetRequest{Request: client.CreateRunRequest{Repo: "acme/widgets"}}},
+		{"the pre-split read id", "ok", client.PresetRequest{Request: preSplit}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if w := f.putPreset(t, tc.preset, tc.req); w.Code != http.StatusBadRequest {

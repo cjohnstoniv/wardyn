@@ -59,7 +59,7 @@ func TestADORefusal_REST(t *testing.T) {
 	for _, tc := range adoRefusalCases {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureSlog(t)
-			h := newADOHarness(t, adoscope.CapRead)
+			h := newADOHarness(t, adoscope.CapProjectRead)
 			h.fake.SetFault(adofake.EndpointProjectsGet, tc.fault)
 			rec := h.do(t, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "", nil)
 			body := rec.Body.String()
@@ -128,7 +128,7 @@ func TestADORefusal_RESTUnclassifiedPassesThrough(t *testing.T) {
 		status int
 	}{{"JSON203", http.StatusNonAuthoritativeInfo}, {"Anonymous404", http.StatusNotFound}, {"Anonymous403", http.StatusForbidden}} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newADOHarness(t, adoscope.CapRead)
+			h := newADOHarness(t, adoscope.CapProjectRead)
 			h.fake.SetOverride(adofake.EndpointProjectsGet, tc.status, []byte(`{"value":[]}`))
 			rec := h.do(t, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "", nil)
 			if rec.Code != tc.status || rec.Body.String() != `{"value":[]}` || rec.Header().Get(egressHeaderDetail) != "" {
@@ -148,7 +148,7 @@ func TestADORefusal_RESTUnclassifiedPassesThrough(t *testing.T) {
 func TestADORefusal_GitUploadPack(t *testing.T) {
 	for _, tc := range adoRefusalCases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newADOGitHarness(t, adoscope.CapRead)
+			h := newADOGitHarness(t, adoscope.CapCodeRead)
 			h.fake.SetFault(adofake.EndpointGitAdvertise, tc.fault)
 			out, err := h.git(t, "clone", "https://dev.azure.com/acme/proj/_git/app", "app")
 			mustBeGitRefusal(t, out, err, tc.msg)
@@ -170,7 +170,7 @@ func TestADORefusal_GitUploadPack(t *testing.T) {
 func TestADORefusal_GitReceivePack(t *testing.T) {
 	for _, tc := range adoRefusalCases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+			h := newADOGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 			dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 			h.fake.SetFault(adofake.EndpointGitReceivePack, tc.fault)
 			out, err := h.push(t, dir, h.runBranch())

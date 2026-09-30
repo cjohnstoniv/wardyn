@@ -33,7 +33,7 @@ func entraSite(clientID string) fakeSiteConfig {
 		ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/contoso"},
 		Lanes: []types.GitLane{types.GitLaneEntra}, CredentialSource: types.CredentialSourcePerUser,
 		Entra: &types.ADOEntraConfig{TenantID: testTenant, ClientID: clientID,
-			CapabilityCeiling: []adoscope.Capability{adoscope.CapRead}},
+			CapabilityCeiling: []adoscope.Capability{adoscope.CapCodeRead}},
 	}}}}
 }
 

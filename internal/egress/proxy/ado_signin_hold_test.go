@@ -72,7 +72,7 @@ func lapse(t *testing.T, inj *injector, host string, cp *signInControlPlane, rea
 // the person signs in, and the held request goes through with the new bearer.
 func TestADOSignInHold_HeldRequestGoesThroughAfterTheSignIn(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapProjectRead)
 	cp := newSignInControlPlane(t, adoToken)
 	lapse(t, h.p.inject, adoHost, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
 	rec := h.do(t, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "", nil)
@@ -88,7 +88,7 @@ func TestADOSignInHold_HeldRequestGoesThroughAfterTheSignIn(t *testing.T) {
 // own error shape — never the AWS SDK's.
 func TestADOSignInHold_EndedHoldIsAnAzureDevOpsShaped403(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapProjectRead)
 	cp := newSignInControlPlane(t, adoToken)
 	lapse(t, h.p.inject, adoHost, cp, &fakeApprovalReader{steps: steps(types.ApprovalCancelled)})
 	rec := h.do(t, http.MethodGet, "/acme/_apis/projects?api-version=7.1", "", nil)
@@ -107,7 +107,7 @@ func TestADOSignInHold_GitGetsPlainText(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
 	h := newADOGitHarnessWith(t, func(p *Proxy, token string) {
 		lapse(t, p.inject, "dev.azure.com", newSignInControlPlane(t, token), &fakeApprovalReader{steps: steps(types.ApprovalCancelled)})
-	}, adoscope.CapRead)
+	}, adoscope.CapCodeRead)
 	out, err := h.git(t, "clone", "https://dev.azure.com/acme/proj/_git/app", t.TempDir()+"/c")
 	mustBeGitRefusal(t, out, err, "the request ended before a sign-in arrived")
 }

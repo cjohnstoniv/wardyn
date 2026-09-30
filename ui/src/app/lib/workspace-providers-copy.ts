@@ -369,11 +369,14 @@ export const ADO_ENTRA_EDITOR = {
   CEILING_TITLE: "What runs may ever do",
   CEILING_LEAD:
     "The ceiling. Unchecking one here removes it everywhere — from the default profile below, from a member's own saved policy, and from what a person can ever approve mid-run.",
+  CEILING_LEAD_ADO:
+    "Each row is one Azure DevOps permission; the grey line under it is Azure DevOps' own name for it — the scope Wardyn asks Entra for, then the permission as Project settings shows it. People are asked to consent only to the scopes of the rows on this ceiling.",
   DEFAULT_TITLE: "What a run gets by default",
   DEFAULT_LEAD:
-    "The profile every run on this row starts with, before any saved policy narrows it. Bound to the ceiling above — a capability off the ceiling can't be a default, so its box is disabled here, not just unchecked. Contribute-only is the obvious default; nothing High risk ever defaults on.",
+    "The profile every run on this row starts with, before any saved policy narrows it. Bound to the ceiling above — a capability off the ceiling can't be a default, so its box is disabled here, not just unchecked. Read-and-contribute is the obvious default; nothing High risk ever defaults on.",
+  DEFAULT_EMPTY_HINT: "Nothing checked means Read code and View projects & teams.",
   HIGH_RISK_WARN:
-    "Every capability below can affect repositories, people or runs beyond this one. Grant it deliberately, not as part of a default.",
+    "Rows marked High risk can affect repositories, people or runs beyond this one. Grant them deliberately, not as part of a default.",
   HIGH_RISK_BADGE: "High risk",
   DEFAULT_OFF_CEILING_TIP: "Off the ceiling — check it above first",
   DEFAULT_HIGH_RISK_TIP: "On the ceiling, but never defaulted — grant per run instead",
@@ -385,58 +388,173 @@ export const ADO_ENTRA_EDITOR = {
     `“${name}” is a default but isn't on the ceiling — uncheck it as a default, or put it back on the ceiling.`,
 } as const;
 
-// The five groups of lib/ado-capabilities.ts, as the mock names them. The
-// ceiling draws `name`; the default section and the read-only view draw the
-// short High-risk name (HIGH_RISK_BADGE), as the mock does.
+// The seven groups of lib/ado-capabilities.ts — Azure DevOps' own services —
+// as the approved per-area mock names them. The ceiling draws `name` and
+// `lead`; the default section and the member's editor draw `name` alone.
 export const ADO_GROUP_COPY: Record<string, { name: string; lead: string }> = {
-  read: { name: "Read", lead: "Look, never change." },
-  contribute: { name: "Contribute", lead: "The everyday group — push to the run's own branch, open a pull request." },
-  work: { name: "Work tracking", lead: "Work items and the wiki." },
-  pipelines: { name: "Pipelines & packages", lead: "Run existing pipelines, publish packages." },
-  high_risk: {
-    name: "High risk — admin-level changes",
-    lead: "Reaches past this one run: the organisation's rules, identities and credentials.",
-  },
+  repos: { name: "Repos", lead: "Code, branches and pull requests." },
+  boards: { name: "Boards", lead: "Work items, queries and boards." },
+  wiki: { name: "Wiki", lead: "Project and code wikis." },
+  pipelines: { name: "Pipelines", lead: "Builds, releases, service connections and the library." },
+  artifacts: { name: "Artifacts", lead: "Feeds and packages." },
+  test_plans: { name: "Test Plans", lead: "Test plans, runs and results." },
+  organization: { name: "Organization", lead: "Projects, people, and reporting across every area." },
 };
 
-// Every grantable capability's name and consequence line. The keys mirror
-// adoscope's grantable set; workspace-providers-copy.test.ts reads
-// internal/adoscope/capability.go and fails when the two diverge.
-export const ADO_CAP_COPY: Record<string, { name: string; consequence: string }> = {
-  read: { name: "Read", consequence: "See code, work items, pipelines, wikis, feeds and settings — never change anything." },
+// Every grantable capability's name, consequence line and grey Azure DevOps
+// line (the scope Wardyn asks Entra for, then the permission as Azure DevOps'
+// Project settings shows it), verbatim from the approved mock's strings table.
+// The keys mirror adoscope's grantable set; workspace-providers-copy.test.ts
+// reads internal/adoscope/capability.go and fails when the two diverge.
+export const ADO_CAP_COPY: Record<string, { name: string; consequence: string; ado: string }> = {
+  code_read: {
+    name: "Read code",
+    consequence: "Clone, fetch and browse repositories, commits, branches, pull requests and branch policies; search code.",
+    ado: "ADO: vso.code — Git repositories: Read",
+  },
   code_write: {
     name: "Push to the run's own branch",
     consequence: "Push commits and move branches — nothing outside this run's own branch unless its policy allows any branch.",
+    ado: "ADO: vso.code_write — Contribute, Create branch",
   },
-  pr: { name: "Open pull requests", consequence: "Open, review and complete pull requests without bypassing a branch policy." },
-  work_write: { name: "Work items", consequence: "Create and update work items." },
-  wiki_write: { name: "Wiki", consequence: "Write wiki pages." },
-  build_execute: {
-    name: "Run pipelines & releases",
-    consequence: "Queue a pipeline run, or create, deploy and delete a release.",
+  pr: {
+    name: "Contribute to pull requests",
+    consequence: "Open, update, comment on, vote on and complete pull requests — without bypassing a branch policy.",
+    ado: "ADO: vso.code_write — Contribute to pull requests",
   },
-  packaging_write: { name: "Publish packages", consequence: "Publish a package to a feed." },
   policy_admin: {
-    name: "Change branch policies",
+    name: "Edit branch policies",
     consequence:
-      "Change repository policies (branch rules, required reviewers) — affects every future push and PR, not just this run's.",
+      "Create, change or delete branch policies (required reviewers, build validation) — affects every future push and pull request, not just this run's.",
+    ado: "ADO: vso.code_write — Edit policies",
   },
   policy_bypass: {
-    name: "Bypass branch policies",
+    name: "Bypass policies when completing pull requests",
     consequence: "Complete a pull request without its required reviewers or checks.",
+    ado: "ADO: vso.code_write — Bypass policies when completing pull requests",
   },
-  repo_admin: { name: "Manage repositories", consequence: "Create, rename or delete a repository — other people's work included." },
-  security_admin: {
-    name: "Change permissions & identities",
-    consequence: "Change who can do what across the whole organisation — permissions, groups, directory identities.",
+  repo_admin: {
+    name: "Create, rename and delete repositories",
+    consequence: "Create, rename, import into or delete a repository — other people's work included.",
+    ado: "ADO: vso.code_manage — Create repository, Rename repository, Delete repository",
+  },
+  work_read: {
+    name: "View work items",
+    consequence: "Read work items, queries, boards, backlogs, areas and iterations; run queries and search work items.",
+    ado: "ADO: vso.work — View work items in this node",
+  },
+  work_write: {
+    name: "Edit work items",
+    consequence: "Create and update work items — their fields, comments, links and attachments — and saved queries.",
+    ado: "ADO: vso.work_write — Edit work items in this node",
+  },
+  work_admin: {
+    name: "Delete work items & manage work tracking",
+    consequence:
+      "Delete, restore or permanently destroy work items, and change area and iteration paths, fields and tags for everyone.",
+    ado: "ADO: vso.work_write — Delete and restore work items, Permanently delete work items, Delete this node, Delete field from organization",
+  },
+  wiki_read: {
+    name: "Read wikis",
+    consequence: "Read wiki pages, their history and attachments; search wikis.",
+    ado: "ADO: vso.wiki — Read (on the wiki's repository)",
+  },
+  wiki_write: {
+    name: "Edit wikis",
+    consequence: "Create, edit and delete wiki pages.",
+    ado: "ADO: vso.wiki_write — Contribute (on the wiki's repository)",
+  },
+  build_read: {
+    name: "View builds & pipelines",
+    consequence: "Read pipelines, runs, builds, logs and artifacts.",
+    ado: "ADO: vso.build — View builds, View build pipeline",
+  },
+  build_execute: {
+    name: "Queue builds",
+    consequence:
+      "Queue a pipeline run, cancel it, or update a build's properties — the pipeline itself runs as its own identity.",
+    ado: "ADO: vso.build_execute — Queue builds, Stop builds, Update build information",
+  },
+  build_admin: {
+    name: "Edit build pipelines",
+    consequence: "Create, change or delete a pipeline definition — what every future run executes.",
+    ado: "ADO: vso.build_execute — Edit build pipeline, Delete build pipeline",
+  },
+  release_read: {
+    name: "View releases",
+    consequence: "Read classic release pipelines, releases and their stages.",
+    ado: "ADO: vso.release — View releases, View release pipeline",
+  },
+  release_execute: {
+    name: "Create releases & deploy",
+    consequence: "Create a release, deploy it to a stage, or delete a release.",
+    ado: "ADO: vso.release_execute — Create releases, Manage deployments, Delete releases",
+  },
+  release_admin: {
+    name: "Edit release pipelines",
+    consequence:
+      "Create, change or delete a release pipeline, and answer release approvals — what every future release deploys.",
+    ado: "ADO: vso.release_manage — Edit release pipeline, Delete release pipeline, Manage release approvers",
+  },
+  serviceendpoint_read: {
+    name: "View service connections",
+    consequence: "Read service connection names, types and settings.",
+    ado: "ADO: vso.serviceendpoint — Service connections: Reader",
   },
   serviceendpoint_admin: {
     name: "Manage service connections",
-    consequence: "Change a service connection, including the cloud credential it holds.",
+    consequence: "Create or change a service connection, including the cloud credential it holds.",
+    ado: "ADO: vso.serviceendpoint_manage — Service connections: Administrator",
   },
-  build_admin: {
-    name: "Change pipeline definitions",
-    consequence: "Change what a pipeline or release runs for every future run, not just this one.",
+  library_read: {
+    name: "View variable groups & secure files",
+    consequence: "Read variable groups and secure-file details.",
+    ado: "ADO: vso.variablegroups_read, vso.securefiles_read — Library: Reader",
   },
-  project_admin: { name: "Manage projects", consequence: "Create, change or delete a project." },
+  packaging_read: {
+    name: "Read feeds & packages",
+    consequence: "List feeds, and download or restore packages.",
+    ado: "ADO: vso.packaging — Feed Reader",
+  },
+  packaging_write: {
+    name: "Publish packages",
+    consequence: "Publish, promote, deprecate or unlist a package version.",
+    ado: "ADO: vso.packaging_write — Feed Publisher (Contributor)",
+  },
+  packaging_manage: {
+    name: "Delete packages & manage feeds",
+    consequence: "Delete or unpublish package versions, and create, change or delete feeds, views and their permissions.",
+    ado: "ADO: vso.packaging_manage — Feed Owner",
+  },
+  test_read: {
+    name: "View test plans & results",
+    consequence: "Read test plans, suites, cases, runs and results.",
+    ado: "ADO: vso.test — View test runs",
+  },
+  project_read: {
+    name: "View projects & teams",
+    consequence: "Read projects, teams and your own profile.",
+    ado: "ADO: vso.project, vso.profile — View project-level information",
+  },
+  identity_read: {
+    name: "Read users & groups",
+    consequence: "Read the organisation's users, groups, memberships and licences, and directory identities.",
+    ado: "ADO: vso.graph, vso.identity, vso.memberentitlementmanagement — Identity: Read",
+  },
+  analytics_read: {
+    name: "View analytics",
+    consequence:
+      "Query Analytics — reports on work items, pipelines and tests across every project, so it reaches what the Boards, Pipelines and Test Plans reads cover.",
+    ado: "ADO: vso.analytics — View analytics",
+  },
+  project_admin: {
+    name: "Manage projects & teams",
+    consequence: "Create, rename, change or delete a project or a team.",
+    ado: "ADO: vso.project_manage — Create new projects, Rename team project, Delete team project",
+  },
+  security_admin: {
+    name: "Manage permissions & identities",
+    consequence: "Change who can do what across the whole organisation — permissions, groups, directory identities.",
+    ado: "ADO: vso.security_manage, vso.graph_manage, vso.identity_manage — Manage permissions",
+  },
 };

@@ -30,7 +30,9 @@ import (
 // now. nil when the run captured none (an unassigned or super-admin owner) or
 // the profile has since been deleted, which leaves nothing to bind — the
 // run-limits reclamp reads a deleted profile the same way. A store error is
-// returned, never read as "no profile".
+// returned, never read as "no profile". ownerProfile (revive) refuses a
+// deleted profile instead, since a revive re-issues authority while a door only
+// narrows a session; the two are left apart on purpose.
 func (s *Server) runProfile(ctx context.Context, run types.AgentRun) (*types.GovernanceProfile, error) {
 	if run.GovernanceProfileID == nil {
 		return nil, nil
