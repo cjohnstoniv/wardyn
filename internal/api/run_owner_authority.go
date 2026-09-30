@@ -300,12 +300,13 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 }
 
 // modelProviderRefusal refuses a run whose model provider has since been
-// deleted, and a run that carries a credential its provider authored (a grant
-// whose snapshot names the provider's UID) when that provider was re-created
-// under the same id (a new UID) or turned off. The injection sink would refuse
-// the run's first model call (provider_changed), or a run dispatched before
-// 0.8.2 would come back with no model credential at all; this answers before a
-// revive replaces the proxy or an extension keeps the run alive.
+// deleted or turned off, and a run that carries a credential its provider
+// authored (a grant whose snapshot names the provider's UID) when that
+// provider was re-created under the same id (a new UID). The injection sink
+// would refuse the run's first model call (provider_changed), or a run
+// dispatched before 0.8.2 would come back with no model credential at all;
+// this answers before a revive replaces the proxy or an extension keeps the
+// run alive.
 func (s *Server) modelProviderRefusal(ctx context.Context, run types.AgentRun) (*ownerRefusal, error) {
 	if run.ModelProviderID == "" {
 		return nil, nil
@@ -332,7 +333,7 @@ func (s *Server) modelProviderRefusal(ctx context.Context, run types.AgentRun) (
 	case !found || (len(uids) > 0 && !slices.Contains(uids, p.UID)):
 		return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderGone, msg: fmt.Sprintf(
 			"the model provider %s this run was launched with no longer exists; start a new run", run.ModelProviderID)}, nil
-	case len(uids) > 0 && p.Disabled:
+	case p.Disabled:
 		return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderDisabled, msg: fmt.Sprintf(
 			"the model provider %s this run was launched with is turned off; start a new run", run.ModelProviderID)}, nil
 	}

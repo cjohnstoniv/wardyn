@@ -285,8 +285,9 @@ func TestModelAccessFailureHint_StripsControlsAndKeepsItsQuote(t *testing.T) {
 	}
 }
 
-// readFaultStore is faultHintStore with the reads GET /runs and GET /runs/{id}
-// make: the run listed, for its owner or for everyone, and no audit trail.
+// readFaultStore is faultHintStore with the reads GET /runs (plain and
+// filtered) and GET /runs/{id} make: the run listed, for its owner or for
+// everyone, and no audit trail.
 type readFaultStore struct{ faultHintStore }
 
 func (s readFaultStore) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
@@ -297,6 +298,17 @@ func (s readFaultStore) ListRuns(ctx context.Context) ([]types.AgentRun, error) 
 func (s readFaultStore) ListRunsPageByCreator(ctx context.Context, by string, _ store.Page) ([]types.AgentRun, error) {
 	runs, err := s.ListRuns(ctx)
 	return slices.DeleteFunc(runs, func(r types.AgentRun) bool { return r.CreatedBy != by }), err
+}
+
+func (s readFaultStore) ListRunsFiltered(ctx context.Context, f store.RunFilter, p store.Page) ([]types.AgentRun, error) {
+	if f.Owner == "" {
+		return s.ListRuns(ctx)
+	}
+	return s.ListRunsPageByCreator(ctx, f.Owner, p)
+}
+
+func (readFaultStore) CountHiddenRuns(context.Context, store.RunFilter) (int, int, error) {
+	return 0, 0, nil
 }
 
 func (readFaultStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
@@ -324,7 +336,7 @@ func TestModelAccessFailureHint_QuoteOnlyForRecordingReaders(t *testing.T) {
 		{"security admin", ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, path := range []string{"/api/v1/runs/" + f.id.String(), "/api/v1/runs"} {
+			for _, path := range []string{"/api/v1/runs/" + f.id.String(), "/api/v1/runs", "/api/v1/runs?owner=all"} {
 				w := doSSO(t, f.srv, http.MethodGet, path, tc.cookie, "")
 				if w.Code != http.StatusOK {
 					t.Fatalf("GET %s = %d %s", path, w.Code, w.Body.String())
@@ -333,7 +345,8 @@ func TestModelAccessFailureHint_QuoteOnlyForRecordingReaders(t *testing.T) {
 				if got := strings.Contains(body, quote); got != tc.quoted {
 					t.Errorf("GET %s quotes the recording: %v, want %v; body=%s", path, got, tc.quoted, body)
 				}
-				if !tc.quoted && !strings.Contains(body, modelAccessHintUnquoted) {
+				if !tc.quoted && !strings.Contains(body, "The agent's last output before it exited reported a model-access problem. "+
+					"Wardyn did not see the model's answer itself; the run's owner can open its recording for the full output.") {
 					t.Errorf("GET %s: want the unquoted hint; body=%s", path, body)
 				}
 			}

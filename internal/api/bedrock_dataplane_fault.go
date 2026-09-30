@@ -113,9 +113,10 @@ var modelAccessPhrases = []string{"may not have access to it", "don't have acces
 // single ones, so it cannot close the quote early).
 const modelAccessHintFormat = modelAccessHintLead + ": \"%s\". " + modelAccessHintTail
 
-// DRAFT (M2 canon pending) — the same hint for a reader who cannot open the
+// modelAccessHintUnquoted is the same hint for a reader who cannot open the
 // recording (projectModelAccessQuote): no recording text.
-const modelAccessHintUnquoted = modelAccessHintLead + ". " + modelAccessHintTail
+const modelAccessHintUnquoted = modelAccessHintLead + ". Wardyn did not see the model's answer itself; " +
+	"the run's owner can open its recording for the full output."
 
 const (
 	modelAccessHintLead = "The agent's last output before it exited reported a model-access problem"
@@ -192,17 +193,12 @@ func lastModelAccessLine(cast []byte) string {
 }
 
 // projectModelAccessQuote keeps the recording's quoted line in a failure hint
-// only for a reader who could open that recording, as recordingAuthorizer
-// decides it: the run's owner or an operator. A security admin reads every
-// run but not its recording (a privacy surface), so they are served the hint
-// without the quote.
+// only for a reader who could open that recording (recordingReader). A
+// security admin reads every run but not its recording (a privacy surface),
+// so they are served the hint without the quote.
 func (s *Server) projectModelAccessQuote(r *http.Request, runs []types.AgentRun) {
-	if s.isOperator(r.Context()) {
-		return
-	}
-	reader := principalFromRequest(r)
 	for i := range runs {
-		if runs[i].CreatedBy != reader && strings.HasPrefix(runs[i].FailureHint, modelAccessHintLead+": ") {
+		if strings.HasPrefix(runs[i].FailureHint, modelAccessHintLead+": ") && !s.recordingReader(r, runs[i]) {
 			runs[i].FailureHint = modelAccessHintUnquoted
 		}
 	}

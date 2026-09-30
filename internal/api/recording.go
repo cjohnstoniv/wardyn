@@ -36,11 +36,7 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	if err != nil {
 		return false
 	}
-	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
-	// RoleSecurityAdmin): a recording is a PRIVACY surface — a replay of
-	// someone's terminal with their agent's injected credentials on screen.
-	// Governing policy does not include watching people work, and this is the
-	// one place ownsRunOrAdmin's incident-response widening must NOT reach.
+	// An operator reads every recording (recordingReader) without a store read.
 	if s.isOperator(r.Context()) {
 		return true
 	}
@@ -48,7 +44,7 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	if err != nil {
 		return false
 	}
-	if run.CreatedBy == principalFromRequest(r) {
+	if s.recordingReader(r, run) {
 		return true
 	}
 	// Audited only once the run is confirmed to genuinely exist — a
@@ -57,6 +53,17 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	// recording.Handler writes on a false return is unaffected either way.
 	s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
 	return false
+}
+
+// recordingReader is the one rule for who may read a run's recording, and
+// anything quoted from it (projectModelAccessQuote): the run's owner or an
+// operator. DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
+// RoleSecurityAdmin): a recording is a PRIVACY surface — a replay of
+// someone's terminal with their agent's injected credentials on screen.
+// Governing policy does not include watching people work, and this is the
+// one place ownsRunOrAdmin's incident-response widening must NOT reach.
+func (s *Server) recordingReader(r *http.Request, run types.AgentRun) bool {
+	return s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
 }
 
 // maxRecordingUploadBytes caps a single recording PUT. An authenticated

@@ -417,7 +417,8 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 // extension alike, instead of a proxy whose first model call the injection
 // sink refuses. With the provider as it was, all three go ahead. A run
 // dispatched before 0.8.2 carries no provider-authored grant (its legacy key is
-// stripped on revive), yet its deleted provider still refuses it up front.
+// stripped on revive), yet its deleted or turned-off provider still refuses it
+// up front.
 func TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider(t *testing.T) {
 	const uid = "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70"
 	provider := func(edit func(*types.ModelProvider)) []types.ModelProvider {
@@ -438,6 +439,7 @@ func TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider(t *testing.T) {
 		{"turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), false, "model_provider_disabled"},
 		{"pre-0.8.2 run, present", provider(func(*types.ModelProvider) {}), true, ""},
 		{"pre-0.8.2 run, deleted", nil, true, "model_provider_gone"},
+		{"pre-0.8.2 run, turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), true, "model_provider_disabled"},
 	} {
 		arrange := func(st *leaseStore) {
 			st.run.ModelProviderID = "anthropic"

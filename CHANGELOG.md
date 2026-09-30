@@ -95,9 +95,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused up front (#1081).** The revive used to replace the proxy and answer `200`, and the run's
   first model call was then refused, or a run from before 0.8.2 came back with no model credential.
   Such a run is now refused `409` with `model_provider_gone` (the provider was deleted, or
-  re-created under the same id) or `model_provider_disabled` (a provider that authored the run's
-  credential was turned off), audited as `run.revive` or `run.end.set` denied, before anything
-  changes.
+  re-created under the same id) or `model_provider_disabled` (the provider was turned off),
+  audited as `run.revive` or `run.end.set` denied, before anything changes.
 - **Purging a model provider stops masking its people's sign-in secrets (#1001).** An AWS sign-in's
   refresh token and client secret stayed in the process-wide output mask until `wardynd` restarted
   after their provider was deleted or moved; they are now let go one sweep grace later, as for any
