@@ -8,7 +8,7 @@
 // sentence in ado-pat-copy.ts fails here instead of shipping. MINTED_SETUP_REDIRECT
 // is the one line that is not in the mock (the plan review's finding F5).
 import { describe, it, expect } from "vitest";
-import { ADO_PAT } from "./ado-pat-copy";
+import { ADO_PAT, gettingStartedOwnChip } from "./ado-pat-copy";
 
 describe("ADO_PAT copy canon", () => {
   it("plain strings, character for character", () => {
@@ -118,5 +118,16 @@ describe("ADO_PAT copy canon", () => {
 
   it("superseded and expired tokens are never called revoked", () => {
     expect(ADO_PAT.RUN_TOKEN_NOTE).toEqual({ renewed: "renewed", access_added: "access added", expired: "expired" });
+  });
+});
+
+// The approved Getting started own-token chip packet: Settings' chip words after
+// the row's "Azure DevOps ·" prefix.
+describe("Getting started's own-token chip labels", () => {
+  it("the four labels, character for character", () => {
+    expect(gettingStartedOwnChip("connected")).toBe("Azure DevOps · Connected");
+    expect(gettingStartedOwnChip("expiring", 6)).toBe("Azure DevOps · Expires in 6 days");
+    expect(gettingStartedOwnChip("refused")).toBe("Azure DevOps · Refused");
+    expect(gettingStartedOwnChip("expired")).toBe("Azure DevOps · Expired");
   });
 });
