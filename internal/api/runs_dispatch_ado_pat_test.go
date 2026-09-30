@@ -455,6 +455,18 @@ func TestMintedPAT_RenewFailureKeepsTheCurrentToken(t *testing.T) {
 	}
 }
 
+// Past its validTo a token whose renewal keeps failing is never handed out.
+func TestMintedPAT_RenewFailureNeverServesAnExpiredToken(t *testing.T) {
+	fx := newADOPATFixture(t)
+	first := fx.ok(t, "dev.azure.com", nil)
+	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(time.Minute))
+	fx.pats.createErr = &adoPATError{Status: http.StatusServiceUnavailable}
+	rec, got := fx.resolve(t, "dev.azure.com", nil)
+	if rec.Code == http.StatusOK && got.JTI == first.JTI {
+		t.Fatalf("resolve served the expired token %s past its validTo", got.JTI)
+	}
+}
+
 // An approval installs a union token; another host naming the old one as
 // stale gets the union token without a create; the narrower one lives on.
 func TestMintedPAT_WideningInstallsAUnionToken(t *testing.T) {

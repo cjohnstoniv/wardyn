@@ -48,8 +48,8 @@ const (
 	adoPATRevokeOffboarding = "offboarding"
 )
 
-// The launch and resolve refusals. The first four are the approved mock's
-// sentences; the rest are DRAFT (M2 canon pending).
+// The launch and resolve refusals: the approved mock's sentences and the
+// owner-approved additions (2026-09-30).
 const (
 	adoRunPATNotConnected  = "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection."
 	adoRunPATPolicyBlocked = "Azure DevOps refused to create a token for this run: your organisation restricts who can create personal access tokens. Ask an Azure DevOps administrator to add you to the allow list."
@@ -362,9 +362,9 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 	}
 	pat, err := s.mintRunPAT(ctx, runID, sn, cfg, caps, validTo, reason)
 	if err != nil {
-		if reason == adoPATMintRenewal {
+		if reason == adoPATMintRenewal && e.cur.ValidTo.After(now) {
 			// The current token still works until its validTo; the next resolve
-			// tries again.
+			// tries again. Past it, the failure is the answer.
 			return e.cur, nil
 		}
 		return adoPAT{}, err
