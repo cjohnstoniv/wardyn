@@ -298,6 +298,9 @@ func invalidatedProviderUIDs(before, after *types.ModelProviders) []string {
 // siteConfigMu: a purge that fails refuses the write, so a credential given
 // for one destination never follows the provider to a new one. A failed save
 // after it leaves people to add their credential again — the closed side.
+// Each deleted row's process-wide mask copies are retired as well, keyed by
+// the holders read first: a sign-in's refresh token and client secret carry
+// no expiry, so nothing else would let them go before a restart.
 func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *types.ModelProviders) (int, error) {
 	uids := invalidatedProviderUIDs(before, after)
 	if len(uids) == 0 || s.cfg.Secrets == nil {
@@ -309,9 +312,18 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 			names = append(names, providerSecretName(uid, part))
 		}
 	}
+	holders, err := s.cfg.Secrets.Holders(ctx, names)
+	if err != nil {
+		return 0, fmt.Errorf("purge model provider credentials: %w", err)
+	}
 	n, err := s.cfg.Secrets.DeleteEverywhere(ctx, names)
 	if err != nil {
 		return 0, fmt.Errorf("purge model provider credentials: %w", err)
+	}
+	for name, owners := range holders {
+		for _, owner := range owners {
+			s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
+		}
 	}
 	return n, nil
 }

@@ -165,6 +165,11 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// abandoned container is never silent), and settle the workspace/record run.
 		// The boot reconciler runs the IDENTICAL sequence via finalizeRunTail, so a
 		// new terminal concern is added in one place, not hand-copied across paths.
+		// A non-zero exit carries no reason of its own; the agent's recording may
+		// (noteModelAccessFromRecording).
+		if terminal == types.RunFailed {
+			s.noteModelAccessFromRecording(base, runID)
+		}
 		s.finalizeRunTail(base, runID, ref, "run.complete", outcome, map[string]any{
 			"exit_code": exitCode, "state": terminal,
 		})
@@ -189,6 +194,9 @@ func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to type
 	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
 	if applied && to.IsTerminal() && !from.IsTerminal() {
 		s.metrics.runTerminal(to)
+	}
+	if applied {
+		s.runEvents.moved(runID, from, to)
 	}
 	return applied, err
 }
@@ -304,7 +312,11 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 // allowlist for a sandbox that is gone). One helper, three callers; the reason
 // is still read back from the run row, so the reaper passes nothing it could
 // get wrong.
+//
+// It is also the reaper's one call into this package after it wins
+// RUNNING->STOPPED, so the idle stop reaches the run's event feed here.
 func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
+	s.runEvents.idleStopped(runID)
 	s.cancelRunApprovals(ctx, runID)
 }
 

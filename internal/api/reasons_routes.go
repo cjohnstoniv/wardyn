@@ -28,6 +28,7 @@ const (
 	reasonReviveUnsupportedRunner           = "revive_unsupported_runner"
 	reasonReviveBulkCannotStartAgent        = "revive_bulk_cannot_start_agent"        // a bulk restart cannot start a stopped agent; only the run's own page can
 	reasonReviveAlreadyInProgress           = "revive_already_in_progress"            // another revive of this run is already running
+	reasonReviveLiveTooSoon                 = "revive_live_too_soon"                  // a live run's proxy was replaced less than reviveLiveEvery ago
 	reasonReviveMintIdentityFailed          = "revive_mint_identity_failed"           // minting the fresh run token failed
 	reasonReviveEncodeConfigFailed          = "revive_encode_config_failed"           // the rewritten proxy config would not marshal to JSON
 	reasonRevivePullImageFailed             = "revive_pull_image_failed"              // the proxy image could not be pulled
@@ -77,7 +78,8 @@ const (
 	// above, which persistedLaunchDoors cannot produce today.
 	reasonOwnerCapabilityUnknown     = "capability_unknown"
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
-	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential was disabled
+	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential, or the run's model provider, was turned off
+	reasonOwnerModelProviderGone     = "model_provider_gone"     // the model provider that authored this run's credential was deleted (or re-created under a new UID)
 	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
 	// three arms (proxy config unreadable, config does not load, capability
 	// re-check itself failed) that all answer the identical client-facing fact —

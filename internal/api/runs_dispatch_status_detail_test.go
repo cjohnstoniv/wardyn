@@ -172,9 +172,9 @@ func TestDispatch_StatusDetailWriteNeverOutlivesItsDeadline(t *testing.T) {
 }
 
 // TestDispatch_StatusDetailIsOptional: a store that does not implement the
-// setter (every test double, and any future backend) leaves OnWaiting nil, so a
-// driver sees exactly the spec it saw before 0.7.6. A lost status line never
-// fails a dispatch.
+// setter (every test double, and any future backend) gets no status-detail
+// writer — OnWaiting then feeds only the run's event feed. A lost status line
+// never fails a dispatch.
 func TestDispatch_StatusDetailIsOptional(t *testing.T) {
 	rn := &waitingRunner{fakeRunner: &fakeRunner{}, details: []string{"agent: ContainerCreating"}}
 	h := newHarness(t)

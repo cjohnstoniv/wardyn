@@ -197,6 +197,7 @@ func (s *Server) routes() chi.Router {
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
+			r.Get("/runs/{id}/events", s.handleRunEvents) // same gate as GET /runs/{id}
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.

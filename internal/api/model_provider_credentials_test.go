@@ -14,9 +14,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -486,4 +488,52 @@ func TestModelProviderWritesPurgeCredentials(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestModelProviderPurgeForgetsMaskedSignIns (#1001): a purge lets go of the
+// process-wide mask copies of every holder's credential for the purged
+// provider, as erasing any credential does. A captured AWS sign-in's refresh
+// token and client secret carry no expiry of their own, so without that they
+// stayed masked until the daemon restarted; now they leave the global set one
+// sweep grace after the purge. Another provider's are kept.
+func TestModelProviderPurgeForgetsMaskedSignIns(t *testing.T) {
+	site := credentialSite(ssoProvider(), keyProvider("anthropic", "claude-code"))
+	srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{cfg: site})
+	mem := &memSecrets{m: map[string][]byte{}}
+	srv.cfg.Secrets = mem
+	reg := secretmask.NewRegistry()
+	srv.cfg.MaskRegistry = reg
+	now := time.Now().UTC()
+	srv.cfg.Now = func() time.Time { return now }
+	ctx := context.Background()
+	sso := providerSecretName(site.ModelProviders.Providers[0].UID, providerSSOPart)
+	key := providerSecretName(site.ModelProviders.Providers[1].UID, providerKeyPart)
+	var purged []string
+	for _, owner := range []string{"alice", "bob"} {
+		if err := mem.For(owner).Put(ctx, sso, []byte("{}")); err != nil {
+			t.Fatal(err)
+		}
+		values := []string{owner + "-sso-access-token-0001", owner + "-sso-refresh-token-0001", owner + "-sso-client-secret-0001"}
+		reg.MergeGlobalUntil(owner, sso, now.Add(time.Hour), []byte(values[0]), []byte(values[1]), []byte(values[2]))
+		purged = append(purged, values...)
+	}
+	if err := mem.For("alice").Put(ctx, key, []byte("sk-ant-alice-kept-0001")); err != nil {
+		t.Fatal(err)
+	}
+	reg.AddGlobal("alice", key, now, []byte("sk-ant-alice-kept-0001"))
+
+	raw, _ := json.Marshal(normalizeModelProviders(providerBlock(keyProvider("anthropic", "claude-code"))))
+	if w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, string(raw)); w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body=%s", w.Code, w.Body.String())
+	}
+	now = now.Add(time.Hour + RunSecretGrace + time.Minute)
+	srv.SweepRunSecrets(ctx)
+	for _, v := range purged {
+		if masksValue(reg, v) {
+			t.Errorf("%s is still masked process-wide after its provider was purged", v)
+		}
+	}
+	if !masksValue(reg, "sk-ant-alice-kept-0001") {
+		t.Error("a purge let go of another provider's credential")
+	}
 }
