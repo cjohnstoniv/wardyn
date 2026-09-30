@@ -27,6 +27,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   exit code, and what the audit trail records. It ends with a worked example of a self-hosted
   Forgejo runner that registers, takes one job and exits, inside a confined run. Every command in it
   was run against a compose install.
+- **A run's lifecycle as a live event stream (#1144).** `GET /api/v1/runs/{id}/events` is a
+  `text/event-stream` of a closed vocabulary — `provisioning`, `pulling`, `ready`, `idle_stopped`,
+  `failed` (with a machine `reason`) and a final `ended` carrying the terminal state — readable by
+  whoever may read the run (anyone else gets the same `404` as `GET /runs/{id}`). Event ids are
+  monotonic per run and `Last-Event-ID` resumes without gaps within the daemon's lifetime; the feed
+  is kept in memory, carries no log or secret content, and adds no migration. The Go SDK follows it
+  with `RunEvents`; see `docs/sdk.md`.
 
 ### Changed
 

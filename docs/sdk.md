@@ -109,6 +109,7 @@ var (
     ev  client.AuditEvent      // AuditEvents
     sk  client.SSHPublicKey    // ListSSHKeys / AddSSHKey
     rf  client.RunFiles        // RunFiles
+    re  client.RunEvent        // RunEvents
 )
 
 // Enums and their values are re-exported too:
@@ -129,6 +130,40 @@ spec := client.RunPolicySpec{
 created, _ := c.CreatePolicy(ctx, client.PolicyRequest{Name: "default", Spec: spec})
 _ = created
 ```
+
+## Following a run's lifecycle
+
+`GET /api/v1/runs/{id}/events` is a `text/event-stream` of the run's lifecycle,
+readable by whoever may read the run (anyone else gets the same `404` as
+`GET /runs/{id}`). `RunEvents` follows it and returns once the run has ended:
+
+```go
+err := c.RunEvents(ctx, created.ID, 0, func(ev client.RunEvent) error {
+    fmt.Println(ev.ID, ev.Type, ev.Reason, ev.State)
+    return nil
+})
+```
+
+The vocabulary is closed; each event carries a short machine field and never
+log or secret content:
+
+| `type` | When | Field |
+|---|---|---|
+| `provisioning` | the sandbox is being created (PENDING -> STARTING) | |
+| `pulling` | the substrate reported an image pull (at most once) | |
+| `ready` | the sandbox is up (STARTING -> RUNNING) | |
+| `idle_stopped` | the idle reaper stopped the run | |
+| `failed` | the run failed | `reason`: `not_started`, `start_failed` or `run_failed` (the phase it failed in) |
+| `ended` | always last; the stream then closes | `state`: the terminal run state |
+
+Each event's `id` is monotonic per run; reconnect with `Last-Event-ID` (the SDK
+does) to resume without gaps. The server sends a `: keepalive` comment every
+15s, ends the stream at the next keepalive once the caller's session is revoked,
+and closes a held stream after 5 minutes so the reconnect re-authenticates.
+The feed is kept in wardynd's memory: resume works within the daemon's
+lifetime. After a restart a live run's stream carries only what happens next,
+and a run that had already ended answers `ended` alone. The repository clone
+happens inside the sandbox after `ready`, so it is not a separate event.
 
 ## Error handling
 
@@ -442,6 +477,10 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
 
 curl -s -H 'Authorization: Bearer demo-admin-token' \
   'http://localhost:8080/api/v1/audit?run_id=<id>'   # run.complete -> .data.exit_code
+
+# Or follow the run's lifecycle as it happens (see "Following a run's lifecycle").
+curl -sN -H 'Authorization: Bearer demo-admin-token' \
+  http://localhost:8080/api/v1/runs/<id>/events
 ```
 
 `GET /api/v1/runs` accepts an opt-in, server-side scoping/filtering surface beyond
