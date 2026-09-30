@@ -67,6 +67,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     heldCount: 0,
     audit: [],
     onGoAudit: () => {},
+    onGoPolicy: () => {},
     terminalPane: <div>the session</div>,
     ...overrides,
   };

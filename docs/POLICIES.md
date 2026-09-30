@@ -14,6 +14,25 @@ Source of truth: `types.RunPolicySpec` (`internal/types/policy.go`); the legal
 values below are what `validatePolicySpec` (`internal/api/policy.go`) enforces at
 write time. A guard test fails if a field here drifts from the struct.
 
+## See the policy a run got
+
+The policy a run *started from* and the one it *got* differ: launch adds
+workspace and source-control hosts, routes GitHub through the git-broker, applies
+the governance profile's walls and the org's disk size, and clamps a member's
+policy to their limits. `GET /api/v1/runs/{id}/policy` and
+`wardyn run policy <run-id>` return the resolved policy as a `RunPolicySpec`
+document, where it started from, what changed and why, and whether a saved policy
+has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got)
+and [sdk.md](sdk.md)).
+
+The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml`
+is a policy file. Reuse is scoped: the document always strict-decodes as a policy,
+and it passes `validatePolicySpec` for a security or super admin, so for them
+`wardyn run --policy-file p.yaml` runs it again as is, as long as the run's
+allowlist, with what launch added, still fits the per-policy domain cap. For anyone else, mount
+sources read `<redacted>` and grant secret names are dropped: it is a starting
+point, with those values to fill in.
+
 ## Authoring surfaces
 
 The console has three places a policy gets written, and all three resolve to

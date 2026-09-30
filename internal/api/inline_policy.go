@@ -143,7 +143,7 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 // launch, and handleCreateRun on the 201, because the console launches without
 // preflighting and a silent narrowing is a run that quietly is not the run the
 // member asked for.
-func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
+func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, bool) {
 	// The caller's OWN secret names, resolved at most once for this whole
 	// resolution rather than once per eligible_grant at each of the three sites
 	// that ask (filterUserGrants' 6c arm, narrowUserInlinePolicy's ownership
@@ -157,7 +157,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyXOR, "specify either policy_id or inline_policy, not both")
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
 
 	// This principal's ceiling — resolved BEFORE either branch, because both
@@ -167,7 +167,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	ceiling, ceilErr := s.effectiveCeiling(ctx)
 	if ceilErr != nil {
 		writeCeilingError(w, r, ceilErr)
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
 
 	// Inline path: validate structurally (same validator as a stored policy) then
@@ -188,8 +188,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// afterwards bounds the stored policy and not the request.
 		if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
+		// The policy as authored, recorded BEFORE the env-secret posture and the
+		// member clamp change it (policySourceRecord stamps it redacted).
+		source := newPolicySourceRecord(policyKindInline, nil, "", nil, !ceiling.Operator, spec)
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must
@@ -214,17 +217,17 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			var bounded bool
 			spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid inline_policy: ", dryRun)
 			if !bounded {
-				return types.RunPolicySpec{}, nil, nil, false
+				return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 			}
 			clampWarnings = append(clampWarnings, warns...)
 		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 			writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		// The size half for the inline arm, the same helper the stored arm calls
 		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
@@ -245,22 +248,25 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 					"eligible_grants":       len(spec.EligibleGrants),
 				})))
 		}
-		return spec, nil, clampWarnings, true
+		return spec, nil, clampWarnings, source, true
 	}
 
 	// Stored/default path: resolve, then validate secret references the SAME way
 	// the inline branch does (one call, no duplicated logic). The no-policy
 	// default is now the CALLER's ceiling rather than the deployment's
 	// (resolvePolicy), and a member-SELECTED stored row is bounded below.
-	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
+	spec, policyID, origin, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErrorReason(w, http.StatusBadRequest, reasonPolicyIDNotFound, "policy_id not found")
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		writeServerError(w, r, "resolve policy", err)
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
+	// The starting policy, before the env-secret posture and the member clamp
+	// below change it: a stored row, or the caller's own ceiling.
+	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)
 	storedWarns := append([]string(nil), ceiling.Warnings...)
 	// Same unconditional env_secret posture the inline branch applies, in the
 	// same position, and it is the half the scoped clamp below CANNOT carry: the
@@ -312,7 +318,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		var bounded bool
 		spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)
 		if !bounded {
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		storedWarns = append(storedWarns, warns...)
 	}
@@ -327,9 +333,9 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
-	return spec, policyID, storedWarns, true
+	return spec, policyID, storedWarns, source, true
 }
 
 // capEphemeralDiskPreview bounds spec's disk_mib by the profile's
