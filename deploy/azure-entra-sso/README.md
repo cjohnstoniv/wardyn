@@ -88,7 +88,7 @@ continuing on a tenant device-code sign-in will still fail against. Writes
 ## Step 2 — app, people, values
 
 ```sh
-deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret, Azure DevOps permissions
+deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret, Azure DevOps permissions (ADO_TOKEN_MODE)
 deploy/azure-entra-sso/03-people.sh  # 3 users, 2 groups, role assignments
 deploy/azure-entra-sso/04-values.sh  # renders values-entra.yaml from .env.local
 ```
@@ -101,6 +101,47 @@ generated output is ever committed:
 `deploy/azure-entra-sso/.gitignore` (this directory's **own** file — the repo
 root `.gitignore` is untouched) excludes `.env.local`, `values-entra.yaml`,
 and `*.secret`. No script ever echoes a secret to stdout.
+
+### Azure DevOps permissions on the app (`ADO_TOKEN_MODE`)
+
+`02-app.sh` puts the Azure DevOps permissions on this same app registration,
+and which ones depends on how the Azure DevOps provider row connects people
+(`docs/AZURE-DEVOPS.md`, "Choosing how people connect"):
+
+| `ADO_TOKEN_MODE` | Adds (delegated, Azure DevOps) | For a row with |
+|---|---|---|
+| `minted_pat` (the default) | `vso.pats`, `vso.pats_manage` | `token_mode: minted_pat`: Wardyn creates a short-lived token for each run |
+| `bearer` | the per-area capability scopes, never the two above | `token_mode: bearer`: the person's Entra token is sent as it is |
+
+Run `ADO_TOKEN_MODE=bearer deploy/azure-entra-sso/02-app.sh` for the second.
+The choice is recorded in `.env.local`, so a re-run keeps it, and a re-run adds
+only the permissions the app does not already hold. The script warns when a
+`bearer` app holds the two token permissions, because a `bearer` row refuses
+to inject a token that can create tokens.
+
+For `minted_pat` the app must also be, and the script already makes it:
+
+- **a confidential client**: it creates a client secret, and `04-values.sh`
+  renders it as `WARDYN_OIDC_CLIENT_SECRET`. A row that creates tokens is
+  refused when saved, and left unusable at boot, if the console has no secret;
+- **on the Web platform**: the redirect URIs are registered with
+  `--web-redirect-uris`, not as a single-page or mobile app. A secret sent for
+  a public-client redirect fails with `AADSTS700025`;
+- **the app the row names**: the row's `tenant_id` and `client_id` must be this
+  tenant and `CLIENT_ID` (the console's own sign-in app), or the row is
+  refused.
+
+**Admin consent is required for `minted_pat`.** The script prints the command
+(`az ad app permission admin-consent --id <CLIENT_ID>`); run it as a Cloud
+Application Administrator, Application Administrator, AI Administrator,
+Privileged Role Administrator, or a role that can grant permissions to
+applications. Then enable the row, sign in to Wardyn, and run **Check
+organisation settings** on it, in that order: the check uses your own
+connection, which is captured at sign-in and only for a row that is on. The
+Azure DevOps side (an allow list if "Restrict personal access token (PAT)
+creation" is on, and the maximum token lifespan policy) is in
+`docs/AZURE-DEVOPS.md`. If the tenant has no Azure DevOps organisation
+connected yet, the script skips this step and says so.
 
 `02-app.sh` also writes `.env.local`'s `HTTP_PORT` (default `8480`) — the
 port baked into the app registration's redirect URI. It must equal the
