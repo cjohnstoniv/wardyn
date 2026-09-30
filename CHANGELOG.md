@@ -93,9 +93,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   agent alone.
 - **Reviving, restarting or extending a run whose model provider was deleted or turned off is
   refused up front (#1081).** The revive used to replace the proxy and answer `200`, and the run's
-  first model call was then refused. A run carrying a credential its provider authored is now
-  refused `409` with `model_provider_gone` (the provider was deleted, or re-created under the same
-  id) or `model_provider_disabled`, audited as `run.revive` or `run.end.set` denied, before anything
+  first model call was then refused, or a run from before 0.8.2 came back with no model credential.
+  Such a run is now refused `409` with `model_provider_gone` (the provider was deleted, or
+  re-created under the same id) or `model_provider_disabled` (a provider that authored the run's
+  credential was turned off), audited as `run.revive` or `run.end.set` denied, before anything
   changes.
 - **Purging a model provider stops masking its people's sign-in secrets (#1001).** An AWS sign-in's
   refresh token and client secret stayed in the process-wide output mask until `wardynd` restarted
@@ -105,7 +106,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   AWS SSO Bedrock lane the proxy cannot see the model's refusal, so such a run ended `FAILED` with no
   reason. When a run exits non-zero with no reason of its own and its recording's last lines name a
   model-access problem, that line is its failure hint, quoted as the agent's output, with a pointer
-  to the recording.
+  to the recording. Only a reader who can open the recording (the run's owner or a super admin)
+  sees the quoted line; a security admin sees the hint without it.
 
 ## [0.8.1] — 2026-09-29
 
