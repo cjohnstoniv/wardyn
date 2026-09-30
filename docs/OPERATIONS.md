@@ -2960,7 +2960,12 @@ setting) instead of the domains list.
 regardless, so a **public client** registration (a SPA/native-app client type
 with no secret — some IdPs refuse to issue one for a confidential client) works
 the same as a confidential one. Leave it unset for that shape; nothing else in
-the OIDC config changes.
+the OIDC config changes. **Exception (0.8.2):** an Azure DevOps row with
+`token_mode: minted_pat` needs a confidential app. The row must name Wardyn's own
+sign-in app and this secret must be set, or saving the row is a 400 and the row
+is unusable (`ado_pat_needs_console_app`). On a public-client registration, move
+the console redirect URI to the **Web** platform, add a client secret and set this
+variable; `AADSTS700025` means the redirect is still on a public-client platform.
 
 ## Launch presets
 
