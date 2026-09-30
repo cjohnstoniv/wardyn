@@ -112,8 +112,8 @@ or the console) — see "Provisioning the CI principal" below. Its audit trail
 then says "CI", and it can be scoped with `capModelProvider`/`capAgent` like any
 other person, rather than one human's token paying for and being blamed for
 every pipeline run. The deployment's admin token is no substitute: under OIDC
-it holds no model credential, and `ci-run.sh` says so if it is handed one. The
-Claude subscription kind stays unavailable to CI either way (below).
+it holds no model credential, and `ci-run.sh` says so if it is handed one. Do
+not use the Claude subscription kind for CI (below).
 
 ### Exit codes
 
@@ -192,10 +192,9 @@ runs `exec` mode only.
   prohibit intermediating usage on their behalf, which would put **you**, the
   operator, in breach rather than Wardyn.
 
-  Wardyn now refuses it structurally: shared subscription injection is limited to a
-  single-user desktop posture (see `WARDYN_ALLOW_SHARED_SUBSCRIPTION` in
-  [`ENV.md`](ENV.md)), and CI is not one. Give the CI principal an **API-key** or
-  **Bedrock** provider instead, with its own credential.
+  The shared-subscription switches are retired ([`ENV.md`](ENV.md) lists them).
+  Give the CI principal an **API-key** or **Bedrock** provider instead, with its
+  own credential.
 
 ### Least-privilege, derived not guessed
 
@@ -312,10 +311,6 @@ its entry says so:
   job (which boots the compose stack first, the way `ci.yml`'s
   `helm-install-test` job does in its desktop-envelope half) rather than in
   `ci.yml`, and remains runnable by hand. See RELEASING.md when re-validating BYOI.
-- **`scripts/run-e2e-subscription.sh`** (`make test-e2e-subscription`) — live
-  subscription proxy-injection proof. It needs a real operator
-  `claude setup-token`; no repository secret carries one. Run by hand before a
-  release that touches the credential path.
 - **`scripts/run-e2e-ui-sandbox.sh`** (`make test-e2e-ui-sandbox`) — live
   UI-sandbox relay proof: the ticket → enter → cookie → code-server handoff on
   the second origin, the `ui.*` audit rows (and the `session.attach` row that

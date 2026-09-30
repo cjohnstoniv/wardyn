@@ -98,7 +98,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 		before[k] = v
 	}
 	keysBefore := slices.Clone(llm.secretEnvKeys)
-	mountsBefore := buildRunMounts(*policy, llm, userMountPosture{})
+	mountsBefore := buildRunMounts(*policy, userMountPosture{})
 
 	var injections []runner.InjectionGrant
 	p := dispatchParams{}
@@ -120,7 +120,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 	if !llm.bedrockReady || len(mitm) != 1 {
 		t.Errorf("bedrockReady=%v mitm=%v; an unassigned principal's run must be untouched", llm.bedrockReady, mitm)
 	}
-	if len(buildRunMounts(*policy, llm, userMountPosture{})) != len(mountsBefore) {
+	if len(buildRunMounts(*policy, userMountPosture{})) != len(mountsBefore) {
 		t.Error("the mount set changed for a run with no assigned profile")
 	}
 }

@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -119,51 +117,5 @@ func TestProviderKeySink_ReadsTheRecordByUID(t *testing.T) {
 				t.Errorf("expires_at = %v, want now+%v so the proxy re-checks the record every 10 minutes", exp, lease)
 			}
 		})
-	}
-}
-
-// TestLegacySubscriptionSentinel_RefusedUnderAProviderBlock: the operator's
-// shared subscription sentinels name no provider record, so once a block is
-// set — or cannot be read — the sink refuses them before the token is resolved
-// (Current rotates the operator's own credential). With no block they resolve
-// as before.
-func TestLegacySubscriptionSentinel_RefusedUnderAProviderBlock(t *testing.T) {
-	const live = "oauth-live-token-value"
-	p := mpKeyProvider("anthropic", "uid-a", types.ModelProviderAnthropicAPIKey, types.ProviderHarness{Harness: "claude-code"})
-	for _, tc := range []struct {
-		name   string
-		st     store.Store
-		want   int
-		reason string
-	}{
-		{"no block", &bearerGuardStore{}, http.StatusOK, ""},
-		{"no store", nil, http.StatusServiceUnavailable, "providers_unreadable"},
-		{"a provider block", &bearerGuardStore{site: types.SiteConfig{ModelProviders: providerBlock(p)}}, http.StatusForbidden, "model_providers_configured"},
-		{"an empty provider block", &bearerGuardStore{site: types.SiteConfig{ModelProviders: providerBlock()}}, http.StatusForbidden, "model_providers_configured"},
-		{"an unreadable block", &bearerGuardStore{siteErr: errors.New("db down")}, http.StatusServiceUnavailable, "providers_unreadable"},
-	} {
-		for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
-			t.Run(tc.name+"/"+sentinel, func(t *testing.T) {
-				h := sentinelHarness(t, liveOAuthProvider{value: live})
-				h.srv.cfg.Store = tc.st
-				h.srv.router = h.srv.routes()
-				runID := uuid.New()
-				h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: "j1", Injection: &egress.InjectionRule{
-					Host: "api.anthropic.com", Header: "Authorization", Format: "Bearer %s", SecretName: sentinel}}
-				rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), h.mintRunToken(t, runID), "")
-				if rr.Code != tc.want {
-					t.Fatalf("sink = %d %s, want %d", rr.Code, rr.Body.String(), tc.want)
-				}
-				if tc.want == http.StatusOK {
-					return
-				}
-				if strings.Contains(rr.Body.String(), live) || len(h.srv.cfg.MaskRegistry.Snapshot(runID)) != 0 {
-					t.Fatalf("the operator's token was resolved despite the refusal: %s", rr.Body.String())
-				}
-				if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), tc.reason) {
-					t.Errorf("audit data = %s, want %s", ev.Data, tc.reason)
-				}
-			})
-		}
 	}
 }

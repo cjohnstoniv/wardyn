@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -281,10 +280,6 @@ func TestEffectiveIntegrations_NoAIRows(t *testing.T) {
 	cfg := integrationsTestConfig(t, types.SiteConfig{}, map[string][]byte{
 		"anthropic-api-key": []byte("sk-ant-x"), "openai-api-key": []byte("sk-oai-x"),
 	})
-	cfg.SubscriptionToken = fakeSubProvider{tok: subscription.Token{Value: "live-token"}}
-	cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}
-	cfg.BedrockRegion = "us-east-1"
-	cfg.BedrockModel = "us.anthropic.claude-x"
 	srv := New(cfg)
 	ctx := context.Background()
 

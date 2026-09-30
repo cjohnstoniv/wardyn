@@ -30,8 +30,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			// Stdin is the ONLY input: piped, redirected from a file, or a
 			// prompted line. There is deliberately no --value flag — argv is
 			// world-readable in `ps` / /proc/<pid>/cmdline, and this is the write
-			// path for every platform secret (SSH private keys, git PATs, LLM API
-			// keys, Bedrock credentials). Same call `subscription connect` makes.
+			// path for every platform secret (SSH private keys, git PATs).
 			if isTerminal(os.Stdin) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
 			}

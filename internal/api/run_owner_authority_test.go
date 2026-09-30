@@ -434,7 +434,6 @@ func TestRevive_DoesNotReuseAStaleRenderedConfig(t *testing.T) {
 		f.st.site.UpstreamProxyNoProxy = []string{"new.corp.example"}
 		f.st.site.InternalHosts = []types.InternalHost{kept, {HostSuffix: "new.corp.example"}}
 		f.srv.cfg.TrustedCAPEM = string(newCA)
-		f.srv.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://new-gw.corp.example"}
 		return f
 	}
 
@@ -444,8 +443,8 @@ func TestRevive_DoesNotReuseAStaleRenderedConfig(t *testing.T) {
 	}
 	c := f.newConfig(t)
 	if c.UpstreamProxyURL != "" || !slices.Equal(c.UpstreamProxyNoProxy, []string{"new.corp.example"}) ||
-		c.TrustedCAPEM != string(newCA) || !maps.Equal(c.LLMUpstreams, f.srv.cfg.LLMGateways) {
-		t.Errorf("revived config upstream %q no_proxy %v gateways %v (trusted CA current: %v); want the current deployment's",
+		c.TrustedCAPEM != string(newCA) || !maps.Equal(c.LLMUpstreams, map[string]string{"api.anthropic.com": "https://old-gw.corp.example"}) {
+		t.Errorf("revived config upstream %q no_proxy %v model upstreams %v (trusted CA current: %v); want the current deployment's, and the run's own provider upstreams unchanged",
 			c.UpstreamProxyURL, c.UpstreamProxyNoProxy, c.LLMUpstreams, c.TrustedCAPEM == string(newCA))
 	}
 	if len(c.InternalHosts) != 1 || c.InternalHosts[0].HostSuffix != kept.HostSuffix {

@@ -532,7 +532,7 @@ breaks the driver loudly, and this table is where you look to fix it.
 |---|---|
 | Clean slate | `WARDYN_FORCE_RESET=1 ./scripts/up.sh reset-all --purge-env` — **without** `--purge-images`; rebuilding agent images is minutes of dead air |
 | Bring it up | `WARDYN_SETUP_MODE=container WARDYN_DEMO_ROOT=/srv/wardyn-demo WARDYN_WORKSPACES_ROOT=/srv/wardyn-demo WARDYN_UP_NO_BROWSER=1 make setup` |
-| Model | `wardyn subscription connect --token-stdin < ~/.wardyn-demo-token` — visible command, invisible token |
+| Model | an admin adds the Claude provider (Settings → Model providers) and the demo person connects their own credential from Getting started — visible steps, invisible token |
 
 The workspace is rebuilt from the fixture every take (a previous recording left
 the agent's `slugify()` in it) and `git init`ed, so the run's Files surface has a
@@ -564,7 +564,7 @@ A fresh install lands here on its own: no runs and no dismissed tour means
 | 1 | **Pick your barrier** | Fence / Wall / Vault, gated on what the host really has |
 | 2 | **People** | An explainer, not a task — done on arrival (there is nothing to configure yet on a fresh install) |
 | 3 | **Network** | Mandatory gate. **Test connectivity** must pass before Next unlocks — a blocked step *replaces* Next with its own action button, which `advance()` handles generically |
-| 4 | **Secrets** | Shows the subscription connected in Act 0 |
+| 4 | **Secrets** | Shows the model credential connected in Act 0 |
 
 Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
@@ -611,10 +611,9 @@ it for approval**, **Save hosts**. Then **Launch run**.
 > interactive run has no Task field at all (the server ignores task for one), so
 > the textarea does not exist until the mode changes.
 
-> **Load-bearing:** `applyLLMCredMount` (`internal/api/llmcred.go`) refuses to
-> inject the subscription credential unless the resolved policy allows
-> `api.anthropic.com`. Ticking that chip is not decoration — drop it and the run
-> has no model at all.
+> **Load-bearing:** a model provider's credential is injected only toward hosts
+> the resolved policy allows, so the policy must allow `api.anthropic.com`.
+> Ticking that chip is not decoration — drop it and the run has no model at all.
 
 Mid-run the held `example.com` request surfaces in `LiveApprovals` under the
 output that caused it; the driver approves it **with Always**, not a plain

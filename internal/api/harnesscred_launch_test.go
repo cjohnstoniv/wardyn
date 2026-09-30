@@ -204,7 +204,6 @@ func TestFinishHarnessLoginLaunch_CeilingErrorAfterCreateFailsTheRun(t *testing.
 	cfg.Runner = rnr
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion = "us-east-1"
 	cfg.DefaultPolicy = govDeployment()
 	srv := New(cfg)
 
@@ -294,7 +293,6 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	cfg.Runner = &panicRunner{fakeRunner: &fakeRunner{}}
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion = "us-east-1"
 	cfg.DefaultPolicy = govDeployment()
 	srv := New(cfg)
 

@@ -155,7 +155,7 @@ the run's own cockpit, and the sign-in they were going to do anyway is what resu
 
 **What the report asked for and 0.7.6 does not claim:** the agent is not *paused* — its tool call is
 slow, and a client that gives up first still loses the turn. **What it does not do at all:** the other
-Bedrock lanes (the host `~/.aws` mount, static keys, the bearer token) have nothing Wardyn can hold on,
+Bedrock lane (the bearer token) has nothing Wardyn can hold on,
 and create-time refusals are still refusals — Finding 3 gives those a door instead. See
 `docs/OPERATIONS.md` "A run is holding for a sign-in" and `threatmodel/THREAT-MODEL.md` residual #46.
 

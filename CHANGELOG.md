@@ -62,8 +62,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run's stored proxy config, so a run dispatched before the upgrade comes back without the
   operator's model key. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
   and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
-  row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
-  CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
+  row.
+- **The operator-held model credential lanes are retired (#549).** Model access is configured only
+  under Settings → Model providers, and each person connects their own credential there. Boot
+  refuses every `WARDYN_ANTHROPIC_*`, `WARDYN_OPENAI_*` and `WARDYN_BEDROCK_*` variable,
+  `WARDYN_AGENT_ANTHROPIC_MODEL`, `WARDYN_SUBSCRIPTION_INJECT` and
+  `WARDYN_ALLOW_SHARED_SUBSCRIPTION` set to anything but empty, `false` or `off`, naming each;
+  `WARDYN_SUBSCRIPTION_TOKEN` is no longer read. `wardyn subscription` is removed. `PUT
+  /secrets/{name}` (`wardyn secret set`) refuses `anthropic-api-key`, `openai-api-key`,
+  `bedrock-api-key`, `aws-access-key-id`, `aws-secret-access-key` and `aws-session-token` with `403
+  secret_name_reserved`, and every boot deletes those names and the two harness sign-in names
+  (`wardyn-harness-anthropic-oauth`, `wardyn-harness-aws-oauth`) from every namespace, audited once
+  as `model_credential.retire`. The two legacy sentinels `anthropic-subscription-oauth` and
+  `anthropic-managed-oauth` are refused as reserved names, at the injection sink and at policy
+  write. The host `~/.claude` and `~/.aws` mounts, the static SigV4 lane and
+  `scripts/stage-claude-creds.sh` are gone: a policy whose `workspace_mounts` targets
+  `/home/agent/.claude` or `/home/agent/.claude.json` is refused at every policy write and at boot,
+  and dispatch drops such a mount from a stored policy. `GET /setup/status` no longer carries
+  `bedrock`, `auth.shared_subscription_allowed`, `auth.shared_subscription_reason`, `deployment`
+  or `providers[].auth_mode`/`logged_in`/`login_detected_via` (a host CLI sign-in credentials no
+  run), and the `bedrock_provider` check is gone. The Helm chart refuses to render a retired
+  variable set in `env` or `extraEnv`. **Upgrade note:** unset the
+  retired variables before upgrading, then set up Settings → Model providers and have each person
+  connect their own credential (a key, or a Claude or AWS sign-in).
 
 ### Fixed
 

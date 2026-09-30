@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -154,18 +153,6 @@ func compareOrUpdateGolden(t *testing.T, path string, got any) {
 	}
 }
 
-// fakeSubProvider is a minimal subscription.Provider fake: Current and Peek
-// both return the same fixed (token, err) pair — enough to model a wired
-// resident/managed subscription for resolveLLMTransport, which only asks
-// whether the provider is non-nil (injectSub) or Peek()s it (managedInjectReady).
-type fakeSubProvider struct {
-	tok subscription.Token
-	err error
-}
-
-func (f fakeSubProvider) Current(context.Context) (subscription.Token, error) { return f.tok, f.err }
-func (f fakeSubProvider) Peek() (subscription.Token, error)                   { return f.tok, f.err }
-
 // wedgedSecrets is a store that is UP but cannot answer — a rotated age key, a
 // Postgres blip. Every read errors; nothing is ErrNotFound.
 type wedgedSecrets struct{ err error }
@@ -185,13 +172,11 @@ func (w wedgedSecrets) Holders(context.Context, []string) (map[string][]string, 
 	return nil, w.err
 }
 
-// fullyConfiguredBedrockServer returns a Server with the boot Bedrock region
-// and model set — the fixture the grant-author tests hand a built transport to.
+// fullyConfiguredBedrockServer returns a Server with a secret store — the
+// fixture the grant-author tests hand a built transport to.
 func fullyConfiguredBedrockServer() *Server {
 	return &Server{cfg: Config{
-		BedrockRegion: "us-east-1",
-		BedrockModel:  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-		Secrets:       &memSecrets{m: map[string][]byte{}},
+		Secrets: &memSecrets{m: map[string][]byte{}},
 	}}
 }
 

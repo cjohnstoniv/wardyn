@@ -548,12 +548,6 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			keptGrants = append(keptGrants, g) // github_token, cloud_sts name no stored secret
 			continue
 		}
-		if g.Kind == types.GrantAPIKey {
-			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
-				keptGrants = append(keptGrants, g) // a live OAuth token, not a stored secret
-				continue
-			}
-		}
 		// Both refs, because an ssh_key grant's known_hosts_secret_ref resolves
 		// a stored secret whose raw value the broker hands back (see
 		// storedSecretPairingInCeiling) — gating only the key would leave the
@@ -725,10 +719,6 @@ func (s *Server) filterUserGrants(ctx context.Context, owner string, allowedDoma
 			continue
 		}
 		if g.Kind == types.GrantAPIKey {
-			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
-				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs
-				continue
-			}
 			// 6c own-key arm: a member's OWN api_key secret, paired with a
 			// model-provider host (isModelProviderHost — the gateway counts
 			// too) that the run's own already-clamped egress allows, is
@@ -891,24 +881,6 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			}
 			if sinkReservedSecret(rule.SecretName) {
 				return nil, fmt.Errorf("api_key grant references reserved secret name %q", rule.SecretName)
-			}
-			// The subscription/managed OAuth sentinels are NOT stored secrets — they
-			// resolve live at inject time (resident ~/.claude, or the Wardyn-managed
-			// captured setup-token). Don't require them in the secret store (that's the
-			// "references unknown secret" bug for a subscription/managed-recorded
-			// profile); just require the matching provider to be wired.
-			if provider, source, isSentinel := s.oauthProviderForSentinel(rule.SecretName); isSentinel {
-				if provider == nil {
-					return nil, fmt.Errorf("policy uses %s LLM auth, but no %s token provider is configured", source, source)
-				}
-				// Host pin (write-time defense): the sentinel resolves to a LIVE
-				// OAuth token and may only ever target Anthropic (or the operator's
-				// own configured gateway). Reject an authored grant that points it
-				// elsewhere (the inject sink also enforces this, fail-closed).
-				if !s.subscriptionInjectionHostAllowed(rule.Host) {
-					return nil, fmt.Errorf("%s LLM auth may only target %s, not %q", source, s.subscriptionInjectionHostDesc(), rule.Host)
-				}
-				continue
 			}
 			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly})
 		case types.GrantGitPAT:

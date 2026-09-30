@@ -997,17 +997,13 @@ migration `0050`)** are the second and third owned nouns after runs.
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
   member). A member's `DELETE` of another principal's row is structurally
   unreachable (`secretstore.Store.For(owner)` never resolves it) and answers the
-  byte-identical 204 a never-set name gets. The three AWS SigV4 names
-  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`) stay
-  refused (403) for every non-operator PUT: SigV4 is always signed out of the
-  operator namespace, so a member row under one of those names would read as
-  configured in setup while dispatch never uses it. `bedrock-api-key` is NOT one
-  of them, so a member may store their own: under a `per_user` agent row the
-  bearer is injected from the run owner's own namespace, under `shared` from the
-  operator's. Dispatch records that choice on the grant it authors, and the
-  injection sink resolves the key from exactly that record
-  (`resolveBedrockBearerInjection`) — a member's own key never stands in for
-  the operator's, nor the operator's for a member's.
+  byte-identical 204 a never-set name gets. The six model-credential
+  names (`anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three
+  AWS SigV4 names `aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`)
+  are refused (403 `secret_name_reserved`) for every caller, the operator
+  included: a model credential is stored on a model provider, by the person it
+  belongs to, and wardynd deletes any left from before 0.8.2 at boot
+  (`model_credential.retire` in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 - **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
   namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
   meaning for an admin — the operator namespace, or one member's own rows with
@@ -1116,13 +1112,8 @@ migration `0050`)** are the second and third owned nouns after runs.
   ordinary write included) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - **Member model access.** A member's model access is their own credential on a
   model provider; no integration row is derived from anyone's convention-named
-  secret (`anthropic-api-key`/`openai-api-key`) any more. `filterUserGrants` admits the matching hand-authored inline `api_key`
-  grant with no operator eligible-grant pairing when ALL hold: the host is a
-  model-provider host (the anthropic.com/openai.com convention, or a configured
-  internal gateway) that the run's own already-clamped egress allows, and the
-  member OWNS a secret by that exact name (a names-only
-  `Store.For(<member>).List`, never a value read). Every other grant kind, and
-  any pairing failing one of those, stays ceiling-paired exactly as before. See
+  secret, and no inline `api_key` grant naming a model vendor's host is admitted
+  from a member's own secrets. See
   [USERS.md § Your model connections](USERS.md#your-model-connections).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
@@ -3624,11 +3615,12 @@ such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
 Two topologies, told apart by which hostname the endpoint's TLS certificate
 names. Get it wrong and the handshake fails on an SNI/cert mismatch — the SNI
 presented to the endpoint is the hostname the sandbox dialled (its own
-end-to-end TLS on a resident-credential run, or the proxy's re-dial on a
+end-to-end TLS on a `bedrock_sso` run, or the proxy's re-dial on a
 bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
 
 - **Private DNS enabled — a cert for the *public* host (the common shape).**
-  Leave `WARDYN_BEDROCK_BASE_URL` **unset**. The sandbox keeps dialling
+  Leave the Bedrock provider's `bedrock.base_url` **unset** (Settings → Model
+  providers). The sandbox keeps dialling
   `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the
   cert names; the estate's private resolver answers that name into 100.64.
   Reach it by listing the public host in `upstream_proxy_no_proxy` (skip the
@@ -3638,10 +3630,10 @@ bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
   private address enters the TLS layer.
 - **A cert for the endpoint's own name.** Only when the endpoint's cert
   actually covers its `…vpce.amazonaws.com` name (private DNS disabled, or a
-  cert issued for it) set `WARDYN_BEDROCK_BASE_URL` to that hostname — then SNI
-  and cert agree.
+  cert issued for it) set the provider's `bedrock.base_url` to that hostname — then
+  SNI and cert agree.
 
-Pointing `WARDYN_BEDROCK_BASE_URL` at the `vpce` hostname against a public-host
+Pointing `bedrock.base_url` at the `vpce` hostname against a public-host
 cert is the trap: the sandbox presents the `vpce` name, the endpoint answers
 with the public-host cert, the handshake fails. The composed dispatch test
 proves the env vars propagate, not that TLS validates.
@@ -3655,48 +3647,17 @@ control-plane network below and the per-run network it shares with that run's
 agent. A PrivateLink endpoint that happens to resolve onto either would have
 every model call on the affected run(s) denied there instead, with the SDK
 misreading the proxy's denial page as a malformed Bedrock response — one
-dispatch at a time, never a clean failure. `wardynd` resolves
-`WARDYN_BEDROCK_BASE_URL`'s host ONCE, at **boot**, and checks it against
-whatever it can know this early:
-
-- **docker, the control-plane network**: refuses to start when the resolved
-  address falls inside the control-plane network's subnet
-  (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default — looked up via the
-  Docker API), naming the variable, the resolved address and the subnet. This
-  is the ONE subnet fixed and knowable ahead of any run, which is why it is a
-  refusal and not a WARN.
-- **docker, the per-run network**: each sandbox's own per-run network is a
-  REAL instance of the same failure — it is not exempt just because it is
-  `Internal=true` (gatewayless); the proxy's clamp above covers it exactly
-  like the control-plane network — but its subnet is allocated fresh by the
-  daemon at `CreateSandbox` time, from Docker's default (or
-  operator-configured) address pools, so no boot-time check can predict which
-  run will draw a colliding range. Rather than guess, boot instead WARNs, by
-  name, when the resolved address falls inside Docker's own BUILT-IN default
-  pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16` — the
-  ranges an unconfigured daemon draws from) — the remedy is to set
-  `default-address-pools` in that daemon's `daemon.json` away from the
-  endpoint's range, or to use an endpoint outside those pools. The WARN checks
-  the built-in ranges only, so it keeps printing after the remedy is applied;
-  once `default-address-pools` no longer covers the endpoint, it can be
-  ignored.
-- **Kubernetes**: the per-run proxy pod's CIDR is not reliably known from
-  `wardynd`'s own boot-time view (it depends on the cluster's CNI and is not
-  surfaced to a workload without extra node/API access this daemon is not
-  guaranteed to hold). This is a documented gap, not a guess: boot logs a WARN
-  instead of refusing, and instead of silently passing. If your PrivateLink
-  endpoint's address could fall inside the cluster's pod CIDR, verify that by
-  hand before relying on this variable.
-- A DNS name that does not resolve at boot WARNs and proceeds (never refuses
-  boot over a transient resolution failure). The name is resolved exactly
-  ONCE, at that boot: a later DNS change for the same name is NOT re-checked
-  until `wardynd` next restarts (a PrivateLink ENI's address is stable for the
-  endpoint's life, which is why this is an accepted gap rather than a
-  request-time re-check).
+dispatch at a time, never a clean failure. Nothing checks this at boot: verify
+by hand that a PrivateLink endpoint's address falls inside neither the
+control-plane network's subnet (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by
+default), nor Docker's default address pools (`172.17.0.0/16` through
+`172.31.0.0/16`, and `192.168.0.0/16` — set `default-address-pools` in that
+daemon's `daemon.json` away from the endpoint's range, or use an endpoint
+outside them), nor a Kubernetes cluster's pod CIDR.
 
 **The control plane is a second service.** Profile-id and
 application-inference-profile models call `bedrock.<region>.amazonaws.com`
-(`ListInferenceProfiles`/`GetInferenceProfile`), which `WARDYN_BEDROCK_BASE_URL`
+(`ListInferenceProfiles`/`GetInferenceProfile`), which the provider's `bedrock.base_url`
 deliberately does **not** re-point (a PrivateLink endpoint is per-service). On a
 fully-private estate that host also resolves into 100.64 and needs its **own**
 endpoint plus the same bypass + lift — list `bedrock.<region>.amazonaws.com`
@@ -3709,15 +3670,15 @@ admits a bare IP (an exact `allowed_domains` entry does, per the redirect
 literal-IP note above). Prefer the hostname shape.
 
 **`wardynd`'s own egress is a separate channel.** `upstream_proxy_no_proxy`,
-`internal_hosts` and `WARDYN_BEDROCK_BASE_URL` govern the **sandbox** proxy;
+`internal_hosts` and a provider's `bedrock.base_url` govern the **sandbox** proxy;
 `wardynd`'s own control-plane calls — OIDC discovery, JWKS, the Entra directory
-connector, STS for a SigV4 Bedrock run, and `oidc.<region>.amazonaws.com` to renew
+connector, and `oidc.<region>.amazonaws.com` to renew
 a captured AWS SSO session at dispatch — go out over its process HTTP client,
 which carries no SSRF guard, so a private (100.64) issuer or Graph host is
 dialled directly and boots fine. What that client *does* honour is the
 process's own `HTTPS_PROXY`/`NO_PROXY` (the published images do not set them at
 runtime): if you run `wardynd` behind the corporate proxy, add the private
-issuer/Graph/STS ranges to the process `NO_PROXY`, or the corp proxy — which
+issuer/Graph ranges to the process `NO_PROXY`, or the corp proxy — which
 cannot reach an internal address — fails discovery at boot, and none of the
 site-config fields above can fix it. For a split-horizon issuer (public URL,
 internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
@@ -4113,7 +4074,7 @@ same pair, the SSO egress allow-list entries, the login flow's own
 `device.sso.<region>` entry, and the dispatch-time `CreateToken` URL. It is
 **refused unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`** is also set, and every
 boot carrying it logs a warning opening `TEST HATCH ACTIVE`. Unset — every real
-deployment — nothing changes. It is not `WARDYN_BEDROCK_BASE_URL` (a different
+deployment — nothing changes. It is not a Bedrock provider's `bedrock.base_url` (a different
 service, and a supported production posture), and it is not the global
 `AWS_ENDPOINT_URL`. Read [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md)
 residual #45 before setting either var anywhere that holds a real credential:
@@ -4121,13 +4082,14 @@ an operator who sets both has pointed a real sign-in at a server that can hand
 back credentials of its choosing, and Wardyn cannot tell that server from AWS.
 
 The same acknowledgement unlocks one more thing: a plain `http://`
-`WARDYN_BEDROCK_BASE_URL`. This is the SigV4 lane — no per-run TLS-MITM
-terminates for it — so without the acknowledgement wardynd refuses a plain one
-on rule 1 (`must be https://`) before the SSO hatch is even reached. That
-relaxation is rule 1 and nothing else: an embedded credential, an empty host, a
-metadata literal, the public host itself, a query or a fragment all still refuse
-boot exactly as they do in production. The walk itself no longer needs it: it
-serves the fake over HTTPS under a throwaway CA it mints each run and installs
+`bedrock.base_url` on a model provider. This is the SigV4 passthrough
+lane of a `bedrock_sso` provider — no per-run TLS-MITM terminates for it — so
+without the acknowledgement the provider save is refused on rule 1 (`must be
+https://`) before the SSO hatch is even reached. That relaxation is rule 1 and nothing else: an embedded
+credential, an empty host, a metadata literal, the public host itself, a query
+or a fragment all still refuse the save exactly as they do in production. The
+walk itself no longer needs it: it serves the fake over HTTPS under a throwaway
+CA it mints each run and installs
 as the chart's `trustedCA`, so wardynd, every run's proxy and every sandbox
 trust the fake the way they would trust a corporate CA.
 
@@ -4410,17 +4372,14 @@ browser bundle or an old CLI, so:
 
 ### Internal model gateway
 
-Point every run's model calls at an internal endpoint instead of
-`api.anthropic.com`/`api.openai.com`. `WARDYN_ANTHROPIC_BASE_URL` /
-`WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point the proxy's own brokered
-`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway for the
-api-key lane, and — for Anthropic — also the subscription and Wardyn-managed
-lanes' `ANTHROPIC_BASE_URL` (dispatch sets it via `(*Server).anthropicBaseURL`,
-`runs_dispatch_llm.go`, and the subscription-injection sink's host allowlist
-widens to match, `injection.go`) — validated once at boot (`https://` only,
-RFC1918/CGNAT literal allowed, loopback/link-local/metadata/multicast/NAT64
-refused, must not equal the public host) and forwarded to the proxy sidecar per
-run. No
+Point a provider's model calls at an internal endpoint instead of
+`api.anthropic.com`/`api.openai.com`: an Anthropic or OpenAI provider's
+`base_url` (Settings → Model providers) re-points the proxy's own brokered
+`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a
+`custom_endpoint` provider is addressed by its `base_url` alone. The address is
+validated when the provider is saved (`https://` only, RFC1918/CGNAT literal
+allowed, loopback/link-local/metadata/multicast/NAT64 refused, must not equal
+the public host) and forwarded to the proxy sidecar per run. No
 `SiteConfig.InternalHosts` declaration is needed for the gateway itself **on that
 brokered route**: only the proxy's own `/wardyn/llm/*` handler resolves and dials
 it, per request, with its own refusal for the same disallowed address kinds
@@ -4438,33 +4397,14 @@ injection happens only on the brokered route).
 
 The operator MUST add the gateway host (exact) to the policy's `allowed_domains`
 — the credential grant the proxy injects still needs an exact egress-allowlist
-entry, exactly as the public host does; wardynd warns at boot when the default
-policy's `allowed_domains` omits a configured gateway's host. **Behind a corporate
+entry, exactly as the public host does. **Behind a corporate
 upstream proxy, the gateway must be reachable FROM that upstream** — with
 `upstream_proxy_url`/`upstream_proxy_secret_ref` also configured, every forward
 dial (the gateway included) is CONNECTed through the corp proxy by the transport,
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address. wardynd also warns at boot when an upstream proxy is
-configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
-host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
-afterwards and either setting can change without a restart.
-
-**A subscription or Wardyn-managed-token run honors a configured Anthropic
-gateway too** — the published `agent-claude-code` image's `agent-run` only
-`unset`s `ANTHROPIC_BASE_URL` when it is still the vendor default, so an
-operator-configured gateway survives the in-image launcher. **This is a trust
-decision**: turning it on sends the operator's live subscription/managed OAuth
-token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
-`api.anthropic.com` today) instead of only ever the public host — see
-[CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
-is exempt and always stays on the public host: that flow mints the OAuth token
-itself and must not be redirected. With a gateway configured, a resident
-subscription credential is mounted only when the run's own policy reaches the
-**gateway** (its host, or a `*.` wildcard covering it, judged as the proxy will
-judge the CONNECT); an `api.anthropic.com` or `*.anthropic.com` entry no longer
-counts, because the run never dials the vendor host.
+other internal address.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`

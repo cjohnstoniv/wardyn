@@ -412,7 +412,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
-	mounts := buildRunMounts(policy, llm, p.UserMounts)
+	mounts := buildRunMounts(policy, p.UserMounts)
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.

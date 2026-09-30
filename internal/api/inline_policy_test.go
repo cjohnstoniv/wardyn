@@ -18,7 +18,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -437,30 +436,10 @@ func TestValidateInlineSecretRefs_Matrix(t *testing.T) {
 		t.Fatalf("no store: code=%d err=%v, want (422,err)", code, err)
 	}
 
-	// Subscription OAuth sentinel: NOT a stored secret. Without a subscription
-	// token provider it is a clear 422 (not the misleading "unknown secret" hint);
-	// WITH a provider it validates without needing the name in the store (the
-	// saved-workspace-replay fix).
-	sentinel := apiKeyGrant(types.SubscriptionOAuthSecret)
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinel); err == nil || code != http.StatusUnprocessableEntity {
-		t.Fatalf("sentinel w/o provider: code=%d err=%v, want (422,err)", code, err)
+	// A retired shared-subscription sentinel is a reserved name now.
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", apiKeyGrant(types.SubscriptionOAuthSecret)); err == nil || code != http.StatusUnprocessableEntity {
+		t.Fatalf("retired sentinel: code=%d err=%v, want (422,err)", code, err)
 	}
-	h.srv.cfg.SubscriptionToken = fakeSubToken{}
-	defer func() { h.srv.cfg.SubscriptionToken = nil }()
-	if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinel); err != nil || code != 0 {
-		t.Fatalf("sentinel w/ provider: code=%d err=%v, want (0,nil)", code, err)
-	}
-}
-
-// fakeSubToken is a minimal subscription.Provider for tests: it only needs to be
-// non-nil for validateInlineSecretRefs' sentinel special-case.
-type fakeSubToken struct{}
-
-func (fakeSubToken) Current(context.Context) (subscription.Token, error) {
-	return subscription.Token{Value: "live-oauth-token"}, nil
-}
-func (fakeSubToken) Peek() (subscription.Token, error) {
-	return subscription.Token{Value: "live-oauth-token"}, nil
 }
 
 // TestCreateRun_InlineMissingSecretRejected wires the secret check through the

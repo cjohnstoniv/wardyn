@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 
 // E2E coverage for Settings' Host card and Model provider card
 // (src/app/components/screens/settings/{admin-settings-screen,connection-cards}.tsx)
@@ -31,12 +31,9 @@ import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, nav
 // a card's BODY (a row, a field, a button beyond the header itself) expands
 // it first via fixtures.ts's `expandCard`.
 
-const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-
-// Serial: the model-provider test writes and deletes a real secret, and the
-// corp-proxy test writes a real site-config redirect — one backend, no
-// mutating test may race a read about the same rows (policies.spec.ts's own
-// rule, for the same reason).
+// Serial: the corp-proxy test writes a real site-config redirect — one
+// backend, no mutating test may race a read about the same rows
+// (policies.spec.ts's own rule, for the same reason).
 test.describe.configure({ mode: "serial" });
 
 test.describe("Settings — Host card", () => {
@@ -136,63 +133,6 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict", () =
     await expect(row).toBeVisible();
     await row.getByRole("button", { name: /^test$/i }).click();
     await expect(row.getByText("Redirect not enforced")).toBeVisible();
-  });
-});
-
-test.describe("Settings — Model provider Connect / Replace / Disconnect", () => {
-  // ticket: X2-F3
-  test("an API-key connect, a replace, and a disconnect all round-trip against GET /secrets", async ({
-    page,
-  }) => {
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-
-    await page.getByRole("radio", { name: "API key" }).click();
-    const field = page.getByLabel("Anthropic API key");
-    await expect(field).toBeVisible();
-
-    // Connect. Two lanes render an unstored "Save" button at once (Anthropic
-    // and OpenAI, api_key's two SecretLanes) — Anthropic's is first in the
-    // DOM (also the only one enabled, since only it carries a value).
-    await field.fill("sk-ant-e2e-connect");
-    await page.getByRole("button", { name: "Save", exact: true }).first().click();
-    await expect(page.getByText(/Stored as\s*anthropic-api-key/)).toBeVisible();
-    await expect(page.getByRole("radio", { name: "API key" }).getByText("Connected")).toBeVisible();
-
-    let secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });
-    let names: string[] = (await secretsRes.json()).names ?? [];
-    expect(names).toContain("anthropic-api-key");
-
-    // Replace. Fix pass (review F2): the secret NAME doesn't change on a
-    // replace, so "Stored as anthropic-api-key" and `names.toContain(...)`
-    // are the SAME claim already proven above — a no-op or a 500 from "Save
-    // replacement" leaves both green. Gate the click on the real write
-    // instead: wait for the actual non-GET /secrets response and assert it
-    // succeeded.
-    await page.getByRole("button", { name: "Replace" }).click();
-    const replaceField = page.getByLabel("Anthropic API key");
-    await expect(replaceField).toBeVisible();
-    await replaceField.fill("sk-ant-e2e-replaced");
-    const replacePut = page.waitForResponse(
-      (r) => r.url().includes("/api/v1/secrets") && r.request().method() !== "GET",
-    );
-    await page.getByRole("button", { name: "Save replacement", exact: true }).click();
-    expect((await replacePut).ok()).toBe(true);
-    await expect(page.getByText(/Stored as\s*anthropic-api-key/)).toBeVisible();
-
-    secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });
-    names = (await secretsRes.json()).names ?? [];
-    expect(names).toContain("anthropic-api-key");
-
-    // Disconnect.
-    await page.getByRole("button", { name: "Disconnect" }).click();
-    await expect(page.getByLabel("Anthropic API key")).toBeVisible();
-    await expect(page.getByRole("radio", { name: "API key" }).getByText("Connected")).toHaveCount(0);
-
-    secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });
-    names = (await secretsRes.json()).names ?? [];
-    expect(names).not.toContain("anthropic-api-key");
   });
 });
 

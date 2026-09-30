@@ -108,11 +108,17 @@ func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
 // loadOrCreateSecret names, wardyn-ssh-host-key among them): nobody authors
 // those, so neither guard has a reason to let one through — see
 // TestPlatformSecretsAreReservedEverywhere (cmd/wardynd).
+//
+// The two sentinels of the retired shared-subscription lanes
+// (types.SubscriptionOAuthSecret / ManagedOAuthSecret) are here too: nothing
+// resolves them any more, so a stored or recorded grant naming one is refused
+// outright rather than falling through to a stored-value read.
 func sinkReservedSecret(name string) bool {
 	return reservedSecret(name) ||
 		name == bedrockAccessKeyIDSecret ||
 		name == bedrockSecretAccessKeySecret ||
-		name == bedrockSessionTokenSecret
+		name == bedrockSessionTokenSecret ||
+		name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret
 }
 
 // nameSinkReservedSecret is sinkReservedSecret for the two lanes that resolve
@@ -130,18 +136,13 @@ func nameSinkReservedSecret(name string) bool {
 
 // secretsAPIReserved is the reserved-name guard for the GENERIC secrets API
 // (Put/Delete/List). It is reservedSecret() PLUS the two Anthropic OAuth
-// injection SENTINELS (types.SubscriptionOAuthSecret / types.ManagedOAuthSecret).
-// A sentinel is name-privileged — an api_key grant carrying it resolves at the
-// injection sink to a LIVE OAuth token via oauthProviderForSentinel, IGNORING any
-// stored value — so letting an operator Put a value under that name (silently
-// shadowed) or listing it is confusing at best and hides that the name is
-// credential-privileged at worst. Reserved from the generic API ONLY, never at
-// the sinks: a subscription/managed policy legitimately names the sentinel in an
-// api_key grant, which validateInlineSecretRefs and the injection sink allow via
-// the provider switch (oauthProviderForSentinel), which runs AFTER this guard.
+// injection SENTINELS of the retired shared-subscription lanes
+// (types.SubscriptionOAuthSecret / types.ManagedOAuthSecret). Nothing resolves
+// them any more; a value Put under either would only plant a row a stale
+// policy's grant could read through the generic path.
 //
-// types.AWSSSOAccessTokenSecret is the THIRD sentinel and is here for
-// the identical reason: resolveAWSSSOInjection resolves it from the captured
+// types.AWSSSOAccessTokenSecret is the THIRD sentinel and is here for a
+// related reason: resolveAWSSSOInjection resolves it from the captured
 // AWS SSO blob, so a value Put under that name would be silently shadowed. It
 // is likewise NOT in sinkReservedSecret — being resolved at that sink is the
 // whole point.
@@ -155,6 +156,24 @@ func secretsAPIReserved(name string) bool {
 		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
 		name == types.ADOEntraAccessTokenSecret
 }
+
+// retiredModelCredentialNames are the operator-lane model credentials 0.8.2
+// retires (multi-provider design §2.11): the fixed-name keys, the shared and
+// per-person blobs of the retired sign-in doors, and the static SigV4 keys. No
+// lane reads any of them. Boot deletes them from every namespace
+// (RetiredModelCredentialNames) and the secrets API refuses to store them again.
+var retiredModelCredentialNames = []string{
+	"anthropic-api-key", "openai-api-key", bedrockAPIKeySecret,
+	harnessCredSecretName("anthropic"), harnessCredSecretName(awsSSOProvider),
+	bedrockAccessKeyIDSecret, bedrockSecretAccessKeySecret, bedrockSessionTokenSecret,
+}
+
+// RetiredModelCredentialNames is the list cmd/wardynd's boot sweep deletes.
+func RetiredModelCredentialNames() []string { return slices.Clone(retiredModelCredentialNames) }
+
+// RetiredModelCredentialRefusal is the one sentence both the boot refusal of a
+// retired variable and a PUT of a retired credential name end with.
+const RetiredModelCredentialRefusal = "model access is configured under Settings → Model providers, and each person connects their own credential there"
 
 // secretPutOwnerRefusal answers a PUT naming ?owner=.
 const secretPutOwnerRefusal = "?owner= is not accepted when setting a secret: a credential is set only by the person it belongs to. " +
@@ -219,6 +238,10 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := s.secretOwnerFromRequest(r)
 	if !s.writableSecretName(w, name, owner) {
+		return
+	}
+	if slices.Contains(retiredModelCredentialNames, name) {
+		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, name+" is a retired model credential: "+RetiredModelCredentialRefusal)
 		return
 	}
 	var body putSecretRequest

@@ -398,10 +398,8 @@ jobs:
   #                             maintainer's box (subnet collision) and not
   #                             stood up here; its own §6/§7 arms have never
   #                             been run live.
-  #   make test-e2e-subscription  needs a real vendor subscription credential,
-  #                             which no CI runner has or should have.
   #
-  # A regression in any of those still ships silently.
+  # A regression there still ships silently.
   #
   # `make test-e2e-concurrent` (#697, T-37) is wired below as its own job —
   # it needed no blocker to clear, only a job. It is NOT the ui/e2e/walk

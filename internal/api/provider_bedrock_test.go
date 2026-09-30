@@ -62,13 +62,10 @@ func brBlob(tok, account, role string, expires time.Time) []byte {
 }
 
 // brHarness is subHarness for a Bedrock provider p, with every credential the
-// legacy chain could reach seeded, and alice's own credential for p stored.
+// retired operator lanes read seeded, and alice's own credential for p stored.
 func brHarness(t *testing.T, p types.ModelProvider) (*harness, *subStore, *memSecrets) {
 	t.Helper()
 	h, st, sec := subHarness(t, p)
-	h.srv.cfg.BedrockRegion, h.srv.cfg.BedrockModel = "eu-central-1", "boot-model-must-not-win"
-	h.srv.cfg.BedrockBaseURL = "https://boot.example"
-	h.srv.cfg.BedrockAWSConfigDir = t.TempDir()
 	h.srv.cfg.AWSSSOProxyInject = true
 	ctx := context.Background()
 	later := time.Now().Add(8 * time.Hour)
@@ -565,12 +562,12 @@ func TestProviderBedrockSandboxSpecCarriesNoHostAWSCredential(t *testing.T) {
 				t.Fatalf("dispatch refused: %q", st.failed)
 			}
 			spec := runner.SandboxSpec{
-				Mounts:    buildRunMounts(policy, plan.llm, userMountPosture{}),
+				Mounts:    buildRunMounts(policy, userMountPosture{}),
 				SecretEnv: splitSecretEnv(env, plan.llm.secretEnvKeys),
 				Env:       env,
 			}
 			for _, m := range spec.Mounts {
-				if m.Source == h.srv.cfg.BedrockAWSConfigDir || strings.Contains(m.Target, ".aws") {
+				if strings.Contains(m.Target, ".aws") {
 					t.Errorf("mount %+v: a Bedrock provider run must not bind a host ~/.aws", m)
 				}
 			}

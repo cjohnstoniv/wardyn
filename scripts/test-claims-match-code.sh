@@ -106,21 +106,6 @@ pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy mat
 # ── C7: three doc claims, each checked against the thing it describes ──────
 COMPOSE_YAML="${ROOT}/deploy/compose/docker-compose.yaml"
 
-# F081 — ENV.md called WARDYN_IMPORT_AWS an import of "~/.aws selectors", using
-# a word ENV.md itself defines as explicitly NOT credentials, for a flag whose
-# headless mode writes long-lived static AWS keys into the secret store. The
-# secret NAMES are derived from setup.sh, so a new one must be documented too.
-env_row="$(grep -n 'WARDYN_IMPORT_AWS' "${ROOT}/docs/ENV.md" | head -1 || true)"
-[ -n "${env_row}" ] || fail "docs/ENV.md no longer documents WARDYN_IMPORT_AWS — it is the headless YES for writing static AWS keys into the secret store (F081)"
-aws_secrets="$(grep -oE 'wardyn secret set aws-[a-z-]+' "${ROOT}/scripts/setup.sh" | awk '{print $4}' | sort -u || true)"
-[ -n "${aws_secrets}" ] || fail "scripts/setup.sh no longer writes any aws-* secret — this guard would check nothing"
-for sec in ${aws_secrets}; do
-  printf '%s' "${env_row}" | grep -qF "${sec}" \
-    || fail "docs/ENV.md's WARDYN_IMPORT_AWS row does not name '${sec}', which scripts/setup.sh writes into the secret store when it is set — the row described it as importing '~/.aws selectors', a word ENV.md defines as explicitly NOT credentials (F081)"
-done
-printf '%s' "${env_row}" | grep -qi 'credential' \
-  || fail "docs/ENV.md's WARDYN_IMPORT_AWS row never uses the word 'credential' — the whole defect was that it read as a non-secret selector import (F081)"
-
 # F091 — "the images are pulled by `docker compose pull`" was true of three of
 # them: everything else sits behind the build-only profile. The service list is
 # derived from the compose file, so a profile change lands here.

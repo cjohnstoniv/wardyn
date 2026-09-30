@@ -195,7 +195,6 @@ func TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberAnotherProvider(t *testing.T
 	ctx := context.Background()
 	reg := secretmask.NewRegistry()
 	s := &Server{cfg: Config{
-		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets: &memSecrets{}, MaskRegistry: reg, Now: func() time.Time { return awsSSOTestFixedNow }, Audit: &memAudit{},
 	}}
 	const owner = "alice@example.com"

@@ -18,6 +18,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/spf13/cobra"
+
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // setup.go turns "enable a stronger confinement tier" into the ONE right thing
@@ -72,6 +74,34 @@ func setupCmd(client clientFn) *cobra.Command {
 		setupTierCmd("vault"),
 	)
 	return subcommandGroup(cmd)
+}
+
+// setupCheckLite / setupStatusLite mirror the subset of GET /api/v1/setup/status
+// this CLI renders. The full struct (internal/api.SetupStatus) is not exported
+// through internal/types, so the SDK returns raw JSON and we decode the frozen
+// snake_case wire contract (SetupCheck{id,label,status,detail,fix}) here.
+type setupCheckLite struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+	Fix    string `json:"fix"`
+}
+type setupStatusLite struct {
+	Ready  bool             `json:"ready"`
+	Checks []setupCheckLite `json:"checks"`
+}
+
+func fetchSetupStatus(ctx context.Context, c *sdk.Client) (setupStatusLite, error) {
+	raw, err := c.SetupStatus(ctx)
+	if err != nil {
+		return setupStatusLite{}, err
+	}
+	var st setupStatusLite
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return setupStatusLite{}, fmt.Errorf("parse setup status: %w", err)
+	}
+	return st, nil
 }
 
 // setupStatusCmd prints the terminal-parity readiness checklist — the same

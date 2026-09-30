@@ -189,7 +189,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	auth.ready, auth.region, auth.model = true, b.Region, model
 	auth.runtimeHost, auth.runtimePort = providerBedrockRuntimeHost(mp), redirectPort(b.BaseURL)
 	t := llmTransport{
-		modelRun: true, provider: &c, bedrock: auth, bedrockReady: true,
+		provider: &c, bedrock: auth, bedrockReady: true,
 		injectBedrockBearer: auth.bearer, injectBedrockSSO: auth.ssoInject && auth.ssoProxyInject,
 	}
 	t.secretEnvKeys, t.bedrockAudit = s.applyBedrockTransport(auth, policy, sandboxEnv)
