@@ -339,7 +339,7 @@ func (f *adoSignInFixture) row0() types.GitProvider { return f.st.site.Workspace
 // outgrows the sign-in.
 func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	f := newADOSignInFixture(t)
-	old := []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR}
+	old := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR}
 	oldScopes, _ := adoscope.ScopesFor(old)
 	f.fake.SetConsentedScopes(oldScopes...)
 	f.cfg.Scopes = oldScopes
@@ -372,7 +372,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	}
 
 	// The baseline outgrows the sign-in: re-consent state, and the gate says so.
-	row.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapBuildExecute}
+	row.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapBuildExecute}
 	f.st.site = adoSite(row)
 	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
 	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseConsentNeeded {
