@@ -19,7 +19,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   substrate's own words. Past the longest a healthy start takes (4 min 30 s in Starting, 30 min in
   Pending) the list stops claiming a step is in progress and says to kill and relaunch, which also
   covers a run left mid-start by a daemon restart. The header chip stays; it and the Runs row
-  also read "Building the image" for an `image: Building` line.
+  also read "Building the image" for an `image: Building` line. The server writes that line
+  (`status_detail` `image: Building`, `status_reason` `Building`) immediately before each image build
+  (a BYOI wrap, a devcontainer or a workspace image) and never on a cache hit, so a build no longer
+  reads as a bare "Queued" for up to 30 minutes. It shows on `PENDING` runs only, carries no image or
+  repo reference, and is not counted in `wardyn_run_start_wait_seconds`. No migration and no new
+  route. After a daemon restart the last line can stay on the row until the undispatched-run reaper
+  collects it, about an hour after the restart; see OPERATIONS.md, "What a starting run is waiting on".
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
@@ -67,15 +73,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Kubernetes the tail is read from the agent container's log, so the chart's k8s-runner Role now
   grants `get` on `pods/log` (a Role you write yourself needs it too). The Go SDK reads it with
   `RunOutput`.
-- **A run whose image is being built says so while it is Pending (#1419).** A BYOI wrap, a
-  devcontainer or a workspace image can build for up to 30 minutes before the sandbox exists, and the
-  run read as a bare "Queued" throughout. `GET /api/v1/runs/{id}` now carries `status_detail`
-  `image: Building` (`status_reason` `Building`) while a build is actually running, written
-  immediately before each builder call and never on a cache hit. It shows on `PENDING` only and is
-  blanked once the run is `STARTING`; it carries no image or repo reference and is not counted in
-  `wardyn_run_start_wait_seconds`. No migration and no new route. After a daemon restart the last line
-  can stay on the row until the undispatched-run reaper collects it (up to 60 minutes); see
-  OPERATIONS.md, "What a starting run is waiting on".
 
 ### Changed
 

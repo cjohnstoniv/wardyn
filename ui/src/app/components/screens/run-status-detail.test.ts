@@ -416,13 +416,13 @@ describe("runStartupView: mirrors of the Go sources", () => {
     expect(RUN_PENDING_OVERDUE_MS).toBe(Number(m![1]) * MIN);
   });
 
-  // The Go constant lands with the server lane (#1419 lane A); until then there
-  // is nothing to compare against, and this test says so instead of passing on
-  // an empty match. Once the constant exists it must equal the TS token.
+  // The Go constant is the server's own token; a rename on either side fails
+  // here rather than silently dropping the "Building the image" step.
   const goBuilding = /statusReasonBuilding\s*=\s*"([^"]+)"/.exec(
     go("internal/api/runs_status_detail.go"),
   );
-  it.skipIf(!goBuilding)("STATUS_REASON_BUILDING equals Go's statusReasonBuilding", () => {
+  it("STATUS_REASON_BUILDING equals Go's statusReasonBuilding", () => {
+    expect(goBuilding).not.toBeNull();
     expect(STATUS_REASON_BUILDING).toBe(goBuilding![1]);
   });
 });

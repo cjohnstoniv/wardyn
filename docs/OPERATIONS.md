@@ -4017,13 +4017,14 @@ a long build never appears in `wardyn_run_start_wait_seconds`.
 
 After a daemon restart the last stored line stays on the row. A run that was `PENDING` or `STARTING`
 has no `sandbox_ref` yet, and `finalizeUndispatchedRuns` reaps such a run only after
-`undispatchedGrace` (twice the 30-minute image-build bound, so up to 60 minutes). Until then a run
+`undispatchedGrace` (twice the 30-minute image-build bound, so about an hour after the restart). Until then a run
 whose build or start died with the daemon can still read `image: Building` (or the last substrate wait)
 as if it were current. It is not: kill the run and launch it again.
 
 `status_detail` is display-only, never interpreted, and never cleared by a write: the API blanks it
-at READ for any run that is not `STARTING` (or, for `image: Building`, `PENDING`) — except a run that
-FAILED on one of the terminal reasons, where the reason IS the failure. The last reason therefore survives on the row for a `SELECT`
+at READ for any run that is not `STARTING` (for `image: Building`, any run that is not
+`PENDING`) — except a run that FAILED on one of the terminal reasons, where the reason IS the
+failure. The last reason therefore survives on the row for a `SELECT`
 postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
 daemon, or a run that started before this upgrade, simply carries no reason.
 

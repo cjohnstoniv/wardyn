@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"io"
+	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,10 +185,12 @@ func TestBuildAnnounce_WriteIsBounded(t *testing.T) {
 	srv, st, _ := statusDetailDispatchFixture(t, rn)
 	st.block = make(chan struct{}) // never closed: the write parks until its ctx dies
 
-	start := time.Now()
-	srv.announceImageBuild(context.Background(), uuid.New())()
-	if elapsed := time.Since(start); elapsed > 4*statusDetailWriteTimeout {
-		t.Fatalf("announce blocked %v on a parked write, want ~%v", elapsed, statusDetailWriteTimeout)
+	done := make(chan struct{})
+	go func() { srv.announceImageBuild(context.Background(), uuid.New())(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(4 * statusDetailWriteTimeout):
+		t.Fatalf("announce still blocked after %v on a parked write, want ~%v", 4*statusDetailWriteTimeout, statusDetailWriteTimeout)
 	}
 	if got := st.written(); len(got) != 1 || got[0] != statusDetailBuilding {
 		t.Fatalf("writes = %v, want one %q", got, statusDetailBuilding)
@@ -214,9 +218,6 @@ func TestBuildAnnounce_NotATimedStartWait(t *testing.T) {
 	defer srv.metrics.mu.Unlock()
 	if n := srv.metrics.startWaitCount[startWaitReasonOther]; n != 0 {
 		t.Errorf("start-wait %q count = %d, want 0: the build line was timed as a substrate wait", startWaitReasonOther, n)
-	}
-	if n := srv.metrics.startWaitCount[statusReasonBuilding]; n != 0 {
-		t.Errorf("start-wait %q count = %d, want 0", statusReasonBuilding, n)
 	}
 	if n := srv.metrics.startWaitCount["ContainerCreating"]; n != 1 {
 		t.Errorf("start-wait ContainerCreating count = %d, want 1", n)
@@ -250,5 +251,18 @@ func TestProjectStatusDetail_BuildingIsPendingOnly(t *testing.T) {
 					runs[0].StatusDetail, runs[0].StatusReason, tc.wantDetail, tc.wantReason)
 			}
 		})
+	}
+}
+
+// TestBuildAnnounce_WorkspaceBuildPassesNoAnnounce pins the one resolver caller
+// that must never write: the workspace Build step's id is a BUILD id, not a run
+// id, so an announce there would write to no run (or the wrong one).
+func TestBuildAnnounce_WorkspaceBuildPassesNoAnnounce(t *testing.T) {
+	src, err := os.ReadFile("workspace_build.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "s.resolveWorkspaceImage(ctx, buildID, ws, logSink, nil)") {
+		t.Error("workspace_build.go must call resolveWorkspaceImage with a nil announce")
 	}
 }

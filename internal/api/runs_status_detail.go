@@ -52,7 +52,7 @@ const startWaitReasonOther = "other"
 
 // statusReasonBuilding is the reason token of the one stage line the CONTROL
 // PLANE writes to status_detail itself, rather than a substrate reporting it: the
-// sandbox image is being built (BYOI wrap, devcontainer, workspace base image;
+// sandbox image is being built (BYOI wrap, devcontainer, workspace base image or generated toolchain image;
 // bounded by imageBuildTimeout). The console mirrors this token by name and
 // value, so it is pinned by a parity test there.
 const (
