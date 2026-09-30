@@ -165,6 +165,9 @@ func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
 	})
 
 	t.Run("a security admin is bound", func(t *testing.T) {
+		// The mint stamps a security admin as a plain user (attach_ticket.go), so
+		// seeding security_admin pins the door's own super-admin test against a
+		// widened predicate rather than tracing the real mint.
 		h := setup(t, profile)
 		if rec := enter(h, h.owner, oidc.RoleSecurityAdmin); rec.Code != http.StatusForbidden {
 			t.Fatalf("security admin enter = %d, want 403: %s", rec.Code, rec.Body.String())
@@ -243,6 +246,9 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 	})
 
 	t.Run("a security admin who owns the run is bound", func(t *testing.T) {
+		// The mint stamps a security admin as a plain user (attach_ticket.go), so
+		// seeding security_admin pins the door's own super-admin test against a
+		// widened predicate rather than tracing the real mint.
 		run := execRun(&profile.ID, "make test")
 		st := &profileListStore{profiles: []types.GovernanceProfile{profile}}
 		srv, _ := setup(t, run, st)
@@ -308,7 +314,9 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(adminPub), Principal: "root@example.com",
 		PublicKey: string(ssh.MarshalAuthorizedKey(adminPub)), Role: oidc.RoleAdmin, RoleCheckedAt: &now})
 	secPriv, secPub := mustSSHKeypair(t)
-	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(secPub), Principal: "alice@example.com",
+	secRun := uuid.New() // its own run, so the audit row below can only be this key's
+	st.putRun(types.AgentRun{ID: secRun, CreatedBy: "sec@example.com", State: types.RunRunning, SandboxRef: "sbx-3", GovernanceProfileID: &profile.ID})
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(secPub), Principal: "sec@example.com",
 		PublicKey: string(ssh.MarshalAuthorizedKey(secPub)), Role: oidc.RoleSecurityAdmin, RoleCheckedAt: &now})
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
@@ -334,8 +342,15 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 	})
 
 	t.Run("a security admin is bound", func(t *testing.T) {
-		if _, err := sshDial(t, h, deniedRun.String(), secPriv); err == nil {
+		// A real key is stamped as a plain user (TestSSHKeyNeverStampsSecurityAdmin),
+		// so seeding security_admin pins the door's own super-admin test against a
+		// widened predicate rather than tracing the real registration.
+		if _, err := sshDial(t, h, secRun.String(), secPriv); err == nil {
 			t.Fatal("security admin ssh into a deny_interactive run succeeded, want refused")
+		}
+		ev := waitForAudit(t, h.audit, secRun, "ssh.authenticate", "failure")
+		if ev == nil || !strings.Contains(string(ev.Data), `governance profile \"ci\" denies interactive sessions`) {
+			t.Fatalf("audit = %v, want the profile named; events=%s", ev, auditDump(h.audit.snapshot(), secRun))
 		}
 	})
 

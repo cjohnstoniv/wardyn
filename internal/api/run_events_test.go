@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -580,13 +581,13 @@ func TestRunEvents_RevokedPersonEndsTheDelegatedStream(t *testing.T) {
 // the next beat instead of the hold, and a store that cannot answer ends it
 // too.
 func TestRunEvents_DeadDelegatedTokenEndsTheStream(t *testing.T) {
-	for name, kill := range map[string]func(ast *authzStore, via types.DelegationVia, clock *atomic.Int64){
-		"portal revoked": func(ast *authzStore, via types.DelegationVia, _ *atomic.Int64) {
+	for name, kill := range map[string]func(t *testing.T, ast *authzStore, via types.DelegationVia, clock *atomic.Int64){
+		"portal revoked": func(t *testing.T, ast *authzStore, via types.DelegationVia, _ *atomic.Int64) {
 			if _, err := ast.RevokeDelegate(context.Background(), via.Delegate, time.Now().UTC()); err != nil {
 				t.Fatal(err)
 			}
 		},
-		"token expired": func(_ *authzStore, _ types.DelegationVia, clock *atomic.Int64) {
+		"token expired": func(_ *testing.T, _ *authzStore, _ types.DelegationVia, clock *atomic.Int64) {
 			clock.Store(int64(delegatedTokenTTL + time.Minute))
 		},
 	} {
@@ -625,7 +626,7 @@ func TestRunEvents_DeadDelegatedTokenEndsTheStream(t *testing.T) {
 					beats++
 				}
 			}
-			kill(ast, via, &skew)
+			kill(t, ast, via, &skew)
 			for range lines {
 				// drain until the server closes the stream
 			}
@@ -633,5 +634,67 @@ func TestRunEvents_DeadDelegatedTokenEndsTheStream(t *testing.T) {
 				t.Fatal("stream outlived its dead delegated token")
 			}
 		})
+	}
+}
+
+// delegateLookupFailStore fails the delegated-token lookup once fail is set,
+// so a stream can open on a good lookup and then lose the store.
+type delegateLookupFailStore struct {
+	*authzStore
+	fail atomic.Bool
+}
+
+func (s *delegateLookupFailStore) GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error) {
+	if s.fail.Load() {
+		return types.DelegatedToken{}, errors.New("conn closed by peer")
+	}
+	return s.authzStore.GetDelegatedTokenByRaw(ctx, raw, now)
+}
+
+// TestRunEvents_DelegatedLookupFailureEndsTheStream (#1413): a keepalive whose
+// delegated-token re-check cannot be answered ends the stream (fail closed),
+// rather than reading a store error as a live token.
+func TestRunEvents_DelegatedLookupFailureEndsTheStream(t *testing.T) {
+	var fs *delegateLookupFailStore
+	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+		fs = &delegateLookupFailStore{authzStore: c.Store.(*authzStore)}
+		c.Store = fs
+	})
+	srv.runEvents.hold, srv.runEvents.beat = 0, 10*time.Millisecond
+	const person = "sub-person"
+	tok, _ := seedDelegation(t, ast.fakeDelegateStore, person)
+	id := uuid.New()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: person, State: types.RunRunning, Agent: "claude-code"}
+	ast.mu.Unlock()
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp := openEventsAs(t, ctx, ts.URL, id, tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open: status %d", resp.StatusCode)
+	}
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	for beats := 0; beats < 3; {
+		if l, ok := <-lines; !ok {
+			t.Fatal("stream closed while the lookup answered")
+		} else if l == ": keepalive" {
+			beats++
+		}
+	}
+	fs.fail.Store(true)
+	for range lines {
+		// drain until the server closes the stream
+	}
+	if ctx.Err() != nil {
+		t.Fatal("stream outlived a delegated-token lookup that could not be answered")
 	}
 }
