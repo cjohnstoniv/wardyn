@@ -501,7 +501,7 @@ export function SummaryHeader({
         what it was. The server names the portal (a revoked one keeps its name);
         when it cannot, the line still says a portal did it. */}
     {run.created_via && (
-      <p data-testid="run-launched-via" className="border-b border-border bg-card px-4 py-1 text-xs text-muted-foreground">
+      <p data-testid="run-launched-via" className="break-words border-b border-border bg-card px-4 py-1 text-xs text-muted-foreground">
         {run.created_via_name ? RUN_FACTS.LAUNCHED_VIA(run.created_via_name) : RUN_FACTS.LAUNCHED_VIA_FALLBACK}
       </p>
     )}
