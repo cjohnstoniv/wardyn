@@ -1221,10 +1221,12 @@ jobs:
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
-  # the agent image actually ships. agent-claude-code is the scan target
-  # because it is by far the fattest image we publish (trixie + node + npm +
-  # git/ssh/tmux/socat); wardynd and wardyn-proxy are distroless-static, which
-  # carries essentially no OS package surface to scan.
+  # the agent images actually ship. The scan targets are the seven images the
+  # release publishes (the matrix below): wardynd and wardyn-proxy, plus the five
+  # agent images (agent-base, agent-codex-cli, agent-aws-sso, agent-vscode,
+  # agent-novnc). wardynd and wardyn-proxy are distroless-static, which carries
+  # essentially no OS package surface; the agent images (trixie + node/python +
+  # git/ssh/tmux/socat) are where the OS findings land.
   #
   # --severity CRITICAL --exit-code 1: only CRITICAL fails the build. Anything
   # broader on a Debian base is a gate that is red every week for findings
