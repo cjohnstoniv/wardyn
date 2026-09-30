@@ -8,6 +8,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade: Entra changes (Azure DevOps)
+
+Azure DevOps no longer uses one shared personal access token. For each run, Wardyn now creates a short-lived
+token in the name of the person who started it, with only that run's access, and revokes it when the run
+ends. **No new app registration is needed.** In Microsoft Entra, on the app registration Wardyn already
+signs in with:
+
+1. **API permissions → Add a permission → Azure DevOps → Delegated permissions:** add `vso.pats` and
+   `vso.pats_manage`. (Keep `openid` and `offline_access`.)
+2. **Grant admin consent** for those permissions. This needs a Cloud Application Administrator, an
+   Application Administrator or a Privileged Role Administrator.
+3. **If you did not use Azure DevOps sign-in before:** under Authentication, add the Web redirect URI
+   `https://<your-wardyn-address>/api/v1/scm/azure-devops/callback`.
+4. **If Wardyn runs without `WARDYN_OIDC_CLIENT_SECRET`:** add a client secret to the app and set it. Per-run
+   tokens require a confidential app.
+
+In Azure DevOps (**Organization settings**):
+
+5. If **Policies → Restrict personal access token (PAT) creation** is on, add the people who use Wardyn (or
+   their group) to its allow list.
+6. Recommended: **Microsoft Entra → Enforce maximum personal access token lifespan: On.**
+
+After upgrading, open **Settings → Workspace providers → Azure DevOps**, choose how people connect, run
+**Check organisation settings**, and turn the row on.
+
+**This upgrade deletes the stored shared Azure DevOps tokens and SSH keys** (see Upgrading in `docs/AZURE-DEVOPS.md`). It can't be
+undone. If you might roll back, keep your own copy of the token first.
+
 ### Added
 
 - **See the policy a run got (#1425).** `GET /api/v1/runs/{id}/policy`, `wardyn run policy
