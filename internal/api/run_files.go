@@ -202,7 +202,7 @@ type runFilesResponse struct {
 //	      {"path":"docs/logo.png","status":"A","binary":true},
 //	      {"path":"scratch.txt","status":"??"}]}
 //	200 {"vcs":"none","files":[],"truncated":false}   — not a git work tree
-//	409  the run never got a sandbox (nothing to read)
+//	409  the run never got a sandbox, or its sandbox is already gone (nothing to read)
 //	501  the runner has no ExecStream primitive
 //	500  the exec launched but the read failed
 //
@@ -228,7 +228,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	// ref check so both shapes get the same honest answer instead of a 500 +
 	// an audit failure row per widget mount.
 	if run.State.IsTerminal() {
-		writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+		writeRunInspectGone(w, run)
 		return
 	}
 	// A run that never dispatched (or whose sandbox was never recorded) has no
@@ -254,6 +254,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		Env: []string{"W=" + composerWorkspaceTarget, "R=" + repoCloneLeaf(run.Repo)},
 	})
 	if err != nil {
+		if errors.Is(err, runner.ErrSandboxGone) {
+			writeRunInspectGone(w, run)
+			return
+		}
 		s.auditRunFilesFailure(r, id, err)
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
 			writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, loggedMsg(ctx, runFilesUnsupportedMsg, err))
@@ -292,6 +296,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	// still blocked on an unbuffered pipe nobody is draining, so Wait cannot
 	// return and the deferred Close above is the only thing that frees it.
 	out, capped, readErr := readExecStdout(sess.Stdout, runFilesMaxOutput)
+	if errors.Is(readErr, runner.ErrSandboxGone) {
+		writeRunInspectGone(w, run)
+		return
+	}
 	inspectedPath, files, truncated := parseRunFiles(bytes.NewReader(out))
 	if capped {
 		// An ordinary outcome, not a failure of the read: git ran, produced more
@@ -314,6 +322,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	if sess.Wait != nil {
 		code, werr := sess.Wait()
 		if werr != nil {
+			if errors.Is(werr, runner.ErrSandboxGone) {
+				writeRunInspectGone(w, run)
+				return
+			}
 			// The exec itself broke (deadline, connection loss) — distinct from
 			// "git said no", and a genuine failure of the read.
 			s.auditRunFilesFailure(r, id, werr)
