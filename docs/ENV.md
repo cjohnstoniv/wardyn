@@ -725,7 +725,6 @@ repository.
 | `WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID` | string | (none) | Entra tenant of the LL2c probe app |
 | `WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID` | string | (none) | The LL2c probe's own throwaway public-client app registration, never Wardyn's app |
 | `WARDYN_LIVE_ADO_PAT_PROBE_SCOPE` | string | `499b84ac-1321-427f-aa17-267ca6975798/vso.pats` | Scopes LL2c signs in for, space-separated; run it with `…/vso.pats …/vso.pats_manage`, the two permissions per-run tokens use. `…/user_impersonation` is the control |
-| `WARDYN_LIVE_ADO_PAT_PROBE_PAT_SCOPE` | string | `vso.code vso.project` | Scopes of the PAT LL2c creates, separated by a single space |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
 | `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in fails the suite once `WARDYN_LIVE_BEDROCK=1` |
