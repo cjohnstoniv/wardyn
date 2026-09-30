@@ -171,6 +171,9 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 		"GET /api/v1/runs/{id}/attach":            false,
 		"GET /api/v1/runs/{id}/recording/{runID}": false,
 		"GET /api/v1/runs/{id}/policy":            false,
+		"GET /api/v1/runs/{id}/ado-tokens":        false,
+		// A member's own Azure DevOps disconnect revokes their run tokens.
+		"DELETE /api/v1/scm/azure-devops/connection": false,
 	}
 	var refused, admitted int
 	for key, rc := range routeMatrix {

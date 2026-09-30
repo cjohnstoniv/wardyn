@@ -202,6 +202,8 @@ func (s *Server) routes() chi.Router {
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list
+			// The run's Azure DevOps tokens: owner or admin; not on the delegation list.
+			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
 			r.Post("/runs/{id}/resume", s.handleResumeRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
