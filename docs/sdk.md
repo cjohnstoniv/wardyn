@@ -262,6 +262,7 @@ silent gap:
 | `ado_pat_lifespan_policy` | Azure DevOps refused to create a personal access token because its life is above the organisation's maximum token lifespan. Lower the row's `pat_max_hours`. |
 | `ado_pat_consent_needed` | The person's Azure DevOps sign-in cannot create tokens: the app registration lacks the token permissions or consent for them. |
 | `ado_pat_mint_refused` | Azure DevOps refused to create a personal access token for another reason. |
+| `ado_pat_unavailable` / `ado_pat_run_inactive` | A `minted_pat` run's personal access token can't be created: this deployment has no way to create one, or the run is paused or has ended (resolved again when it resumes). Azure DevOps. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
 | `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |

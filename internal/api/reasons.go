@@ -46,6 +46,8 @@ const (
 	reasonADOPATLifespanPolicy = "ado_pat_lifespan_policy" // the requested life is above the organisation's maximum
 	reasonADOPATConsentNeeded  = "ado_pat_consent_needed"  // the sign-in's grant cannot create tokens: consent or scope is missing
 	reasonADOPATMintRefused    = "ado_pat_mint_refused"    // any other refusal from the token API
+	reasonADOPATUnavailable    = "ado_pat_unavailable"     // this deployment cannot create a run's personal access token
+	reasonADOPATRunInactive    = "ado_pat_run_inactive"    // the run is paused or has ended, so no token is created for it
 
 	// AWS SSO resolve only.
 	reasonSSOHostNotPortal = "sso_host_not_portal" // the requested host is outside the credential's own SSO portal

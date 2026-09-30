@@ -66,6 +66,9 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
+	// Revoke the person's live Azure DevOps tokens first: the erase takes the
+	// sign-in that revoking them needs.
+	s.revokeOwnerRunPATs(r.Context(), owner, adoPATRevokeOffboarding)
 	rep, err := secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)
 	// Even on a partial erase, which may have removed the sign-in.
 	s.adoEntraTokens.forget(owner)

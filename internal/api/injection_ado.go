@@ -177,7 +177,9 @@ func (s *Server) adoRequestScopes(ctx context.Context, cfg ADOEntraConfig, owner
 //  4. the host pinned to the snapshot's own organisation's host set;
 //  5. the app registration the redemption would use required to be the one the
 //     snapshot names;
-//  6. redeem, classify any failure, and record the GRANTED scope string.
+//  6. redeem, classify any failure, and record the GRANTED scope string — or,
+//     for a minted_pat run, hand out its personal access token
+//     (resolveADORunPAT).
 func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
 ) bool {
@@ -219,6 +221,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, adoResolveRosterUnreadable, nil)
 	}
 	if drift := snapshot.driftFrom(siteCfg); drift != "" {
+		// A minted_pat run's tokens were created for the configuration that
+		// moved: revoke every one, whichever host holds it.
+		s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
@@ -228,6 +233,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	cfg, status, reason, body := s.adoEntraConfigFor(ctx, snapshot)
 	if status != 0 {
+		if reason == reasonScopeChanged {
+			s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
+		}
 		return fail(status, reason, body, nil)
 	}
 	if _, serr := adoscope.ScopesFor(snapshot.Capabilities); serr != nil {
@@ -249,6 +257,11 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		// Cannot fail: answerADOCapability admits grantable capabilities only.
 		need, _ = adoscope.ScopesFor([]adoscope.Capability{capAsk.capability})
 		responseCaps = capAsk.standing
+	}
+	if types.ADOTokenMode(snapshot.TokenMode) == types.ADOTokenModeMintedPAT {
+		// The person's own personal access token: no Entra consent per
+		// capability, since the token's scope is Wardyn's to choose.
+		return s.resolveADORunPAT(w, r, claims, minted, grantID, snapshot, cfg, siteCfg, capAsk, responseCaps, fail)
 	}
 
 	// REQUEST WHAT THE PERSON CONSENTED TO, inside the row's ceiling
@@ -354,7 +367,7 @@ func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 // holds it to the snapshot. status==0 means cfg is usable; otherwise the three
 // strings are the refusal.
 func (s *Server) adoEntraConfigFor(ctx context.Context, sn adoEntraScopeSnapshot) (ADOEntraConfig, int, string, string) {
-	if types.ADOTokenMode(sn.TokenMode) != types.ADOTokenModeBearer {
+	if m := types.ADOTokenMode(sn.TokenMode); m != types.ADOTokenModeBearer && m != types.ADOTokenModeMintedPAT {
 		return ADOEntraConfig{}, http.StatusForbidden, reasonTokenMode, adoResolveTokenModeRefusal
 	}
 	if s.cfg.ADOEntra == nil {
