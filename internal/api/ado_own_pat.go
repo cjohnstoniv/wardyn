@@ -459,6 +459,7 @@ var adoTokenPageScopes = map[string]adoTokenPageScope{
 	"vso.memberentitlementmanagement": {"Member Entitlement Management", "Read", 1},
 	"vso.packaging":                   {"Packaging", "Read", 1},
 	"vso.packaging_write":             {"Packaging", "Read & write", 2},
+	"vso.packaging_manage":            {"Packaging", "Read, write, & manage", 3},
 	"vso.profile":                     {"User Profile", "Read", 1},
 	"vso.project":                     {"Project and Team", "Read", 1},
 	"vso.project_manage":              {"Project and Team", "Read, write, & manage", 3},
