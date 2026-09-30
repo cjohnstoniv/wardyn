@@ -45,8 +45,6 @@ export const BRANDING = {
   FIXED_TITLE: "Fixed, never brandable",
   SAVED: "Branding saved.",
   SAVE_FAILED: "Branding wasn't saved.",
-  REMOVE_LOGO_FAILED: "Logo wasn't removed.",
-  REMOVE_BRANDING_FAILED: "Branding wasn't removed.",
   // Remove controls (#1215, packet approved 2026-09-30). Cancel is the console's own word.
   REMOVE_LOGO: "Remove logo",
   REMOVE_BRANDING: "Remove branding",
@@ -63,4 +61,9 @@ export const BRANDING = {
   FILE_LOGO_NOTE:
     "This logo comes from your site configuration. To remove it, take branding.logo_path out of that file.",
   FILE_LOGO_DIALOG_LINE: "The logo from your site configuration comes back the next time it is applied.",
+  // Owner rulings, 2026-09-30: the failure toasts, and the Remove branding dialog's own line (after
+  // Remove branding there is no record, so the file's logo returns at the first apply after one exists).
+  REMOVE_LOGO_FAILED: "Logo wasn't removed.",
+  REMOVE_BRANDING_FAILED: "Branding wasn't removed.",
+  FILE_LOGO_DIALOG_LINE_BRANDING: "The logo from your site configuration comes back once branding is set up again.",
 } as const;

@@ -48,8 +48,9 @@ Denied hosts card and `ApprovalStateBadge`. The initial loading screen keeps the
 ## Frozen strings — remove controls (#1215)
 
 The Remove logo and Remove branding packet, approved by the owner on 2026-09-30 as drawn, byte for
-byte (the apostrophes are U+2019, as in the packet). "Cancel" on both dialogs is the console's own
-word.
+byte (the apostrophes are U+2019, as in the packet), with the three owner rulings of 2026-09-30
+(the two failure toasts and the Remove branding dialog's own line) added at the end of the table.
+"Cancel" on both dialogs is the console's own word.
 
 | Key | Renders at | Frozen string |
 |---|---|---|
@@ -64,12 +65,15 @@ word.
 | `BRANDING.REMOVE_BRANDING_CONFIRM` | Remove branding dialog, confirm button | Remove branding |
 | `BRANDING.REMOVE_BRANDING_TOAST` | toast after all branding is removed | Branding removed. |
 | `BRANDING.FILE_LOGO_NOTE` | Branding card, under a logo the site configuration delivers (no Remove logo there) | This logo comes from your site configuration. To remove it, take branding.logo_path out of that file. |
-| `BRANDING.FILE_LOGO_DIALOG_LINE` | Remove branding dialog, second paragraph, only for that logo | The logo from your site configuration comes back the next time it is applied. |
+| `BRANDING.FILE_LOGO_DIALOG_LINE` | as approved in the packet; no dialog shows it now (a file logo has no Remove logo, and the Remove branding dialog uses the line below) | The logo from your site configuration comes back the next time it is applied. |
+| `BRANDING.REMOVE_LOGO_FAILED` | toast when the server refuses Remove logo (owner ruling, 2026-09-30) | Logo wasn't removed. |
+| `BRANDING.REMOVE_BRANDING_FAILED` | toast when the server refuses Remove branding (owner ruling, 2026-09-30) | Branding wasn't removed. |
+| `BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING` | Remove branding dialog, second paragraph, only for a logo the site configuration delivers (owner ruling, 2026-09-30) | The logo from your site configuration comes back once branding is set up again. |
 
 ## Implementation strings
 
 Drawn in the packet's prototype but not rowed in its Strings table; taken from the prototype as
-drawn. The last four are the card's own save and removal feedback, which the prototypes do not draw.
+drawn. The last two are the card's own save feedback, which the prototype does not draw.
 
 | Key | Renders at | Frozen string |
 |---|---|---|
@@ -82,8 +86,6 @@ drawn. The last four are the card's own save and removal feedback, which the pro
 | `BRANDING.FIXED_TITLE` | Branding card, preview column | Fixed, never brandable |
 | `BRANDING.SAVED` | toast after a save | Branding saved. |
 | `BRANDING.SAVE_FAILED` | toast when the server refuses a save | Branding wasn't saved. |
-| `BRANDING.REMOVE_LOGO_FAILED` | toast when the server refuses Remove logo | Logo wasn't removed. |
-| `BRANDING.REMOVE_BRANDING_FAILED` | toast when the server refuses Remove branding | Branding wasn't removed. |
 
 ## Where the brand applies, and where it never does
 

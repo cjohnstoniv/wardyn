@@ -91,15 +91,18 @@ directory does not. The file must be a regular file.
 - **No branding yet is reported, not refused.** The name and colours must exist
   before a logo has anything to attach to. An apply that names `logo_path`
   first succeeds with `"branding_logo_pending": true` in the response and logs a
-  warning; apply again after saving the card and the logo is attached. (An MDM
-  file re-applied at every boot does this on its own.)
+  warning, and `wardyn site-config set` prints a `warning:` line for it. Apply
+  again after saving the card and the logo is attached. (An MDM file re-applied
+  at every boot does this on its own.)
 - While the file owns the logo the card shows where it comes from and offers no
   Remove logo: the next apply would put it back. **Remove branding** stays, and
-  its dialog says the logo returns at the next apply. Uploading a different logo
-  in the console replaces it until then.
-- Taking `branding` (or `logo_path`) out of the document and applying removes a
-  logo the file delivered; a logo someone uploaded is never touched. A body that
-  does not name `branding` leaves both the path and the logo as they are.
+  its dialog says the logo returns once branding is set up again. Uploading a
+  different logo in the console replaces it until then.
+- Taking `logo_path` out of the block, leaving `"branding": {}`, and applying
+  removes a logo the file delivered; a logo someone uploaded is never touched.
+  Deleting the whole `branding` key changes nothing: a document that does not
+  name `branding` leaves both the path and the logo as they are, as it does for
+  the provider blocks.
 - Every apply that names `branding` records `branding_logo_path` (and
   `branding_logo_sha256` of the stored bytes) on `site_config.write`.
 

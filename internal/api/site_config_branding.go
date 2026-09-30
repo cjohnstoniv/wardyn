@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -92,7 +93,7 @@ type siteBrandingLogo struct {
 // written in (itself resolved): a Kubernetes ConfigMap or Secret mount is a
 // symlink chain inside its own directory and passes; a link that leaves the
 // directory (to /etc/shadow, say) is refused. Only a regular file is opened, so
-// a FIFO or a device can never stall the apply.
+// a FIFO or a device can never stall the apply (checked on the opened descriptor).
 func loadSiteBrandingLogo(path string) (*siteBrandingLogo, error) {
 	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
 	if err != nil {
@@ -105,7 +106,16 @@ func loadSiteBrandingLogo(path string) (*siteBrandingLogo, error) {
 	if rel, rerr := filepath.Rel(dir, real); rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("branding.logo_path: %q is a link that leaves its own directory", path)
 	}
-	fi, err := os.Stat(real)
+	// Opened first and judged on the descriptor, never on the path: a path
+	// swapped for a FIFO between a stat and the open would otherwise block the
+	// open forever, and O_NONBLOCK makes that open return at once. O_NOFOLLOW
+	// refuses a last component that became a link after it was resolved above.
+	f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("branding.logo_path: cannot read %q: %w", path, err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("branding.logo_path: cannot read %q: %w", path, err)
 	}
@@ -115,11 +125,6 @@ func loadSiteBrandingLogo(path string) (*siteBrandingLogo, error) {
 	if fi.Size() > brandLogoMax {
 		return nil, fmt.Errorf("branding.logo_path: %q is %s, over the 512 KB limit", path, logoSizeText(int(fi.Size())))
 	}
-	f, err := os.Open(real)
-	if err != nil {
-		return nil, fmt.Errorf("branding.logo_path: cannot read %q: %w", path, err)
-	}
-	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, brandLogoMax+1))
 	if err != nil {
 		return nil, fmt.Errorf("branding.logo_path: cannot read %q: %w", path, err)

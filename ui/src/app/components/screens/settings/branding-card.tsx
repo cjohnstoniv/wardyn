@@ -359,7 +359,7 @@ export function BrandingCard() {
               {confirm === "logo" ? BRANDING.REMOVE_LOGO_BODY(brand?.org_name ?? "") : BRANDING.REMOVE_BRANDING_BODY}
             </AlertDialogDescription>
             {confirm === "all" && brand?.logo_from_file && (
-              <p className="text-sm text-muted-foreground">{BRANDING.FILE_LOGO_DIALOG_LINE}</p>
+              <p className="text-sm text-muted-foreground">{BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING}</p>
             )}
           </AlertDialogHeader>
           <AlertDialogFooter>

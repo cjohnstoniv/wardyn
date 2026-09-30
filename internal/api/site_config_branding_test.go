@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -135,6 +137,9 @@ func TestSiteConfigBrandingLogoBadFileRefused(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "dir.png"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "fifo.png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct{ name, path, want string }{
 		{"not a PNG", writeFile(t, filepath.Join(dir, "fake.png"), []byte("<svg/>")), "not a PNG Wardyn can use"},
 		{"script in an SVG", writeFile(t, filepath.Join(dir, "evil.svg"), []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>`)), "contains <script>"},
@@ -142,6 +147,7 @@ func TestSiteConfigBrandingLogoBadFileRefused(t *testing.T) {
 		{"missing", filepath.Join(dir, "missing.png"), "cannot read"},
 		{"a link out of its directory", filepath.Join(dir, "escape.png"), "leaves its own directory"},
 		{"a directory", filepath.Join(dir, "dir.png"), "not a regular file"},
+		{"a FIFO", filepath.Join(dir, "fifo.png"), "not a regular file"},
 		{"relative", "logo.png", "absolute path"},
 		{"dot-dot", dir + "/../x/logo.png", "absolute path"},
 		{"a gif", filepath.Join(dir, "logo.gif"), "must name a .svg or .png file"},
@@ -149,7 +155,24 @@ func TestSiteConfigBrandingLogoBadFileRefused(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, audit := siteBrandingServer(t, true)
-			code, body := putSiteLogoPath(t, srv, tc.path)
+			// A FIFO with no writer must be refused, not waited on: bound every case.
+			type answer struct {
+				code int
+				body string
+			}
+			done := make(chan answer, 1)
+			go func() {
+				c, b := putSiteLogoPath(t, srv, tc.path)
+				done <- answer{c, b}
+			}()
+			var code int
+			var body string
+			select {
+			case a := <-done:
+				code, body = a.code, a.body
+			case <-time.After(10 * time.Second):
+				t.Fatal("the apply hung on the file")
+			}
 			if code != http.StatusBadRequest {
 				t.Fatalf("PUT = %d %s, want 400", code, body)
 			}

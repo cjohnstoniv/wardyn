@@ -215,7 +215,7 @@ describe("Branding card (#1125)", () => {
     expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_TITLE)).toBeInTheDocument();
     expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_BODY)).toBeInTheDocument();
     // A logo a person uploaded has no site-configuration line.
-    expect(within(dialog).queryByText(BRANDING.FILE_LOGO_DIALOG_LINE)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: BRANDING.REMOVE_BRANDING_CONFIRM }));
     await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(BRANDING.REMOVE_BRANDING_TOAST));
@@ -243,6 +243,7 @@ describe("Branding card (#1125)", () => {
     await userEvent.click(screen.getByRole("button", { name: BRANDING.REMOVE_BRANDING }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_BODY)).toBeInTheDocument();
-    expect(within(dialog).getByText(BRANDING.FILE_LOGO_DIALOG_LINE)).toBeInTheDocument();
+    expect(within(dialog).getByText(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING)).toBeInTheDocument();
+    expect(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING).toBe("The logo from your site configuration comes back once branding is set up again.");
   });
 });
