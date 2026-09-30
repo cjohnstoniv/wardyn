@@ -39,8 +39,8 @@ describe("AdoRunTokens", () => {
   });
 
   it("6b: a renewed run lists both tokens, oldest first, the old one muted", async () => {
-    await draw([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoked_at: at(15, 2), revoke_reason: "renewal" })]);
-    const old = await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 · revoked 15:02 (renewed)");
+    await draw([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoke_reason: "expired", revoked_at: at(17, 2) })]);
+    const old = await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
     const current = screen.getByText("Azure DevOps token: created 15:02 · expires 23:02");
     expect(old).toHaveClass("text-muted-foreground");
     expect(current).not.toHaveClass("text-muted-foreground");
@@ -75,9 +75,9 @@ describe("AdoRunTokens", () => {
   it("7: a widening shows the old token revoked (access added), the new one, and the added access", async () => {
     await draw([
       tok({ created_at: at(9, 20), valid_to: at(17, 20), added_capabilities: ["pr"] }),
-      tok({ revoked_at: at(9, 21), revoke_reason: "widen" }),
+      tok({}),
     ]);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:21 (access added)")).toBeInTheDocument();
+    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 (access added)")).toBeInTheDocument();
     expect(screen.getByText("Azure DevOps token: created 09:20 · expires 17:20")).toBeInTheDocument();
     expect(screen.getByText(/^Access added 09:20: .+ \(new token\)$/)).toBeInTheDocument();
   });

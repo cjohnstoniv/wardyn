@@ -14,7 +14,7 @@
 // (providers-screen.tsx) holds; every edit calls `onChange` with the next
 // array, and the parent's single Save button PUTs the whole document.
 import * as React from "react";
-import type { GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
+import type { ADOEntraConfig, GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { PERM } from "../../../lib/permissions-copy";
@@ -167,6 +167,8 @@ function Row({
   // Prefixes this row's DOM ids: a kind can hold several rows, and two must
   // never share a label target.
   const uid = React.useId();
+  // The Entra block an Azure DevOps row loses on its way to Server (ado-row-shape.ts).
+  const stashedEntra = React.useRef<ADOEntraConfig | undefined>(undefined);
   // The textarea's raw text, held here rather than derived from
   // row.base_urls.join("\n") every render: splitting on every keystroke fed the
   // filtered array straight back into `value`, so a newline could never survive
@@ -317,7 +319,12 @@ function Row({
                 // are settled: every prefix of "https://dev.azure.com/acme" is a valid
                 // Server host, so reshaping per keystroke would flip the row and lose
                 // what was entered. The screen's Save reshapes as well.
-                onBlur={() => onUpdate(reshapeADORow(row))}
+                onBlur={() => {
+                  const next = reshapeADORow(row, stashedEntra.current);
+                  // A block the row is about to lose is kept for the way back.
+                  if (row.entra && !next.entra) stashedEntra.current = row.entra;
+                  onUpdate(next);
+                }}
                 onChange={(e) => {
                   setBaseURLText(e.target.value);
                   onUpdate({ ...row, base_urls: normalizeBaseURLText(e.target.value) });

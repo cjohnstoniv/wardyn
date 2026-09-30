@@ -34,7 +34,8 @@ describe("scm-access display — per-person token causes", () => {
   it("each cause reads its own line", () => {
     expect(scmAccessCause("permissions_missing")).toBe(ADO_PAT.SIGN_IN_AGAIN_BODY);
     expect(scmAccessCause("blocked")).toBe(ADO_PAT.BLOCKED_BODY);
-    expect(scmAccessCause("ado_pat_needs_console_app")).toBe(ADO_PAT.NO_CLIENT_SECRET);
+    expect(scmAccessCause("ado_pat_needs_console_app")).toBe(ADO_PAT.MEMBER_NEEDS_ADMIN);
+    expect(scmAccessCause("ado_pat_needs_console_app")).not.toContain("WARDYN_OIDC_CLIENT_SECRET");
     expect(scmAccessCause("token_expired")).toBe(ADO_PAT.OWN_EXPIRED_BODY);
   });
 

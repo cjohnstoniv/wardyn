@@ -19,7 +19,6 @@ import { adoCapName } from "../../../lib/ado-access-copy";
 import { adoTokenMode, formatClock, orgCheckView, patDaysOk, patHoursOk } from "../../../lib/ado-pat-display";
 import { useAdoOrgCheck } from "../../../lib/hooks/use-ado-org-check";
 import type { ADOOrgCheck } from "../../../lib/types/ado-pat";
-import { usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -97,13 +96,16 @@ function LifetimeField({
   );
 }
 
-function CheckLine({ tone, children }: { tone: "ok" | "bad" | "warn"; children: React.ReactNode }) {
-  const mark = tone === "ok" ? "✓" : tone === "bad" ? "✕" : "!";
+function CheckLine({ tone, children }: { tone: "ok" | "bad" | "warn" | "unknown"; children: React.ReactNode }) {
+  const mark = tone === "ok" ? "✓" : tone === "bad" ? "✕" : tone === "unknown" ? "?" : "!";
   return (
     <li className="flex items-start gap-2 text-body">
       <span
         aria-hidden="true"
-        className={clsx("mt-px w-4 shrink-0 text-center font-bold", tone === "ok" ? "text-success" : tone === "bad" ? "text-danger" : "text-warning")}
+        className={clsx(
+          "mt-px w-4 shrink-0 text-center font-bold",
+          tone === "ok" ? "text-success" : tone === "bad" ? "text-danger" : tone === "unknown" ? "text-muted-foreground" : "text-warning",
+        )}
       >
         {mark}
       </span>
@@ -113,35 +115,34 @@ function CheckLine({ tone, children }: { tone: "ok" | "bad" | "warn"; children: 
 }
 
 // The organisation check's answer as the mock's card. A lifespan the check saw
-// refused, and a refusal on the create policy, are the row's own alerts (below),
-// not lines here.
+// refused is the row's own alert (below), not a line here.
 function OrgCheckCard({ result }: { result: ADOOrgCheck }) {
   const v = orgCheckView(result);
   const clean = v.permissions === "granted" && v.lifespan?.state === "on";
+  // "Couldn't tell" is not a warning: nothing is wrong that Wardyn knows of.
+  const unsure = v.permissions === "granted" && v.lifespan?.state === "unknown";
   return (
     <div className="mt-3 rounded-lg border border-border p-3" data-testid="ado-org-check">
       <div className="flex items-center justify-between gap-2">
         <h5 className="text-sm font-medium text-foreground">{ADO_PAT.CHECK_TITLE}</h5>
-        <Chip tone={clean ? "success" : "warning"}>{ADO_PAT.CHECK_CHIP(formatClock(result.checked_at))}</Chip>
+        <Chip tone={clean ? "success" : unsure ? "neutral" : "warning"}>{ADO_PAT.CHECK_CHIP(formatClock(result.checked_at))}</Chip>
       </div>
       <ul className="mt-2 space-y-1.5">
         {v.permissions === "granted" && <CheckLine tone="ok">{ADO_PAT.CHECK_PERMS_OK}</CheckLine>}
         {v.permissions === "missing" && <CheckLine tone="bad">{ADO_PAT.CHECK_PERMS_MISSING}</CheckLine>}
         {v.lifespan?.state === "on" && <CheckLine tone="ok">{ADO_PAT.CHECK_LIFESPAN_ON(v.lifespan.hours)}</CheckLine>}
         {v.lifespan?.state === "off" && <CheckLine tone="warn">{ADO_PAT.CHECK_LIFESPAN_OFF}</CheckLine>}
+        {v.lifespan?.state === "unknown" && <CheckLine tone="unknown">{ADO_PAT.CHECK_LIFESPAN_UNKNOWN(v.lifespan.error)}</CheckLine>}
       </ul>
     </div>
   );
 }
 
-function Alert({ children, tone = "warning" }: { children: React.ReactNode; tone?: "warning" | "danger" }) {
+function Alert({ children }: { children: React.ReactNode }) {
   return (
     <div
       role="alert"
-      className={clsx(
-        "mt-3 rounded-lg border px-3 py-2 text-body",
-        tone === "warning" ? "border-warning/30 bg-warning-subtle text-foreground" : "border-danger/30 bg-danger-subtle text-danger",
-      )}
+      className="mt-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-body text-foreground"
     >
       {children}
     </div>
@@ -164,7 +165,6 @@ export function AdoTokenMode({
   checking: boolean;
   onCheck: () => void;
 }) {
-  const person = usePrincipal();
   const uid = React.useId();
   const { refusal } = React.useContext(AdoRowsContext);
   const cfg: ADOEntraConfig = row.entra ?? { tenant_id: "", client_id: "" };
@@ -176,24 +176,12 @@ export function AdoTokenMode({
   const view = check ? orgCheckView(check) : null;
   // Entra sign-in while the app still holds the token permissions: known from
   // the last check, or from the server refusing this very Save.
-  const bearerBlocked = mode === "bearer" && (view?.permissions === "granted" || refusal === ADO_PAT.BEARER_WITH_TOKEN_PERMS);
-  const noSecret = mode === "minted_pat" && refusal === ADO_PAT.NO_CLIENT_SECRET;
+  const bearerBlocked = mode === "bearer" && (view?.permissions === "granted" || refusal?.endsWith(ADO_PAT.BEARER_WITH_TOKEN_PERMS));
+  const noSecret = mode === "minted_pat" && refusal?.endsWith(ADO_PAT.NO_CLIENT_SECRET);
 
   return (
     <div data-testid="ado-token-mode">
       <h4 className="text-sm font-medium text-foreground">{ADO_PAT.SECTION_TITLE}</h4>
-      {view?.blocked && (
-        <Alert>
-          <span>{ADO_PAT.POLICY_BANNER(person)}</span>
-          {operator && mode !== "bearer" && (
-            <div className="mt-2">
-              <Button size="sm" variant="outline" onClick={() => pick("bearer")}>
-                {ADO_PAT.POLICY_BANNER_BUTTON}
-              </Button>
-            </div>
-          )}
-        </Alert>
-      )}
       <RadioGroup
         className="mt-2 gap-2"
         value={mode}

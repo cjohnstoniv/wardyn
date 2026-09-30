@@ -105,11 +105,10 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     ]);
     expect(v.action).toBeNull();
   });
-  it("a row the console cannot redeem is the admin's to fix: their own sentence, nothing to press", () => {
+  it("a row the console cannot redeem is the admin's to fix: the chip and a member sentence, never the admin's", () => {
     const v = patCardView(access({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app" }), "Azure DevOps")!;
-    expect(v.body).toEqual([
-      "Per-run tokens need your Wardyn app registration to have a client secret. Set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
-    ]);
+    expect(v.chip).toEqual({ label: "Not connected", tone: "neutral" });
+    expect(v.body).toEqual(["Your administrator needs to finish setting up Azure DevOps before runs can use it."]);
     expect(v.action).toBeNull();
     expect(v.disconnect).toBe(false);
   });
@@ -173,28 +172,30 @@ describe("orgCheckView: the check's answer as the mock's lines and alerts", () =
       permissions: "granted",
       lifespan: { state: "on", hours: 8 },
       tooLong: false,
-      blocked: false,
     });
   });
   it("permissions missing stops at that line", () => {
-    expect(orgCheckView({ ...base, permissions: "missing" })).toEqual({ permissions: "missing", lifespan: null, tooLong: false, blocked: false });
+    expect(orgCheckView({ ...base, permissions: "missing" })).toEqual({ permissions: "missing", lifespan: null, tooLong: false });
   });
   it("the lifespan limit off is its own line", () => {
     expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "off" }).lifespan).toEqual({ state: "off" });
   });
-  it("an unknown lifespan draws nothing", () => {
+  it("an unknown lifespan names what Azure DevOps answered (round 2), and draws nothing when it says none", () => {
+    expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "unknown", lifespan_error: "invalidValidTo" }).lifespan).toEqual({
+      state: "unknown",
+      error: "invalidValidTo",
+    });
     expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "unknown" }).lifespan).toBeNull();
   });
   it("the row's life refused for the lifespan policy is the too-long alert, not a good line", () => {
     const v = orgCheckView({ ...base, token_life: "refused", refusal: "ado_pat_lifespan_policy", lifespan: "on" });
     expect(v.tooLong).toBe(true);
     expect(v.lifespan).toBeNull();
-    expect(v.blocked).toBe(false);
   });
-  it("a create refused on the organisation's policy is the blocked banner", () => {
+  it("a create refused on the organisation's policy draws no admin banner (8c is descoped to 0.8.3)", () => {
     const v = orgCheckView({ ...base, token_life: "refused", refusal: "ado_pat_policy_blocked", lifespan: "unknown" });
-    expect(v.blocked).toBe(true);
     expect(v.tooLong).toBe(false);
+    expect("blocked" in v).toBe(false);
   });
 });
 
@@ -214,36 +215,45 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
     expect(v.added).toEqual([]);
     expect(v.paused).toBe(false);
   });
-  it("6b: a renewed token lists the old one first, muted, with its reason", () => {
-    const v = runTokenView(
-      [tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoked_at: at(15, 2), revoke_reason: "renewal" })],
-      false,
-    );
+  it("6b: a renewed token is never revoked early: the older one reads (renewed), from its position", () => {
+    const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoke_reason: "expired", revoked_at: at(17, 2) })], false);
     expect(v.lines).toEqual([
-      { text: "Azure DevOps token: created 09:02 · expires 17:02 · revoked 15:02 (renewed)", old: true },
+      { text: "Azure DevOps token: created 09:02 · expires 17:02 (renewed)", old: true },
       { text: "Azure DevOps token: created 15:02 · expires 23:02", old: false },
     ]);
+    // Position alone decides it: the same with no reason at all, and no "revoked" word.
+    const bare = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({})], false);
+    expect(bare.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
+    expect(bare.lines[0].text).not.toMatch(/revoked/);
+  });
+  it("an expired token that nothing replaced reads (expired), never revoked", () => {
+    const v = runTokenView([tok({ revoke_reason: "expired", revoked_at: at(17, 2) })], false);
+    expect(v.lines).toEqual([{ text: "Azure DevOps token: created 09:02 · expires 17:02 (expired)", old: true }]);
   });
   it("6c: a paused run says its token was revoked", () => {
     const v = runTokenView([tok({ revoked_at: at(11, 30), revoke_reason: "pause" })], true);
     expect(v.lines[0]).toEqual({ text: "Azure DevOps token: created 09:02 · expires 17:02 · revoked 11:30 (paused)", old: true });
     expect(v.paused).toBe(true);
   });
-  it("6d: the last token of a finished run stays plain, each reason reads as its words", () => {
+  it("6d: the last token of a finished run stays plain, each reason the server writes reads as its words", () => {
     const reasons: Record<string, string> = {
       run_end: "run ended",
       kill: "run stopped",
       pause: "paused",
-      renewal: "renewed",
-      widen: "access added",
       drift: "access changed",
       disconnect: "disconnected",
       sweep: "cleaned up after a restart",
+      upstream_401: "rejected by Azure DevOps",
+      offboarding: "person removed",
     };
     for (const [wire, words] of Object.entries(reasons)) {
       const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: wire })], false);
       expect(v.lines[0]).toEqual({ text: `Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41 (${words})`, old: false });
     }
+  });
+  it("a reason this console has no words for adds no uncopied text", () => {
+    const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: "mystery" })], false);
+    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02");
   });
   it("6e: a failed renewal names when the live token stops working", () => {
     expect(runTokenView([tok({ renewal_failed: true })], false).renewalFailedAt).toBe("17:02");
@@ -256,19 +266,19 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
     const v = runTokenView(
       [
         tok({ created_at: at(9, 20), valid_to: at(17, 20), added_capabilities: ["pr"] }),
-        tok({ revoked_at: at(9, 21), revoke_reason: "widen" }),
+        tok({}),
       ],
       false,
     );
     expect(v.lines.map((l) => l.text)).toEqual([
-      "Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:21 (access added)",
+      "Azure DevOps token: created 09:02 · expires 17:02 (access added)",
       "Azure DevOps token: created 09:20 · expires 17:20",
     ]);
     expect(v.added).toHaveLength(1);
     expect(v.added[0]).toMatch(/^Access added 09:20: .+ \(new token\)$/);
   });
   it("lists oldest first whatever order the wire sends", () => {
-    const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({ revoked_at: at(15, 2), revoke_reason: "renewal" })], false);
+    const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({})], false);
     expect(v.lines[0].text).toContain("created 09:02");
   });
 });

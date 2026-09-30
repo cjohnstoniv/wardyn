@@ -250,7 +250,7 @@ test.describe("the run page", () => {
       route.fulfill({
         json: [
           { created_at: t(15, 2).toISOString(), valid_to: t(23, 2).toISOString(), renewal_failed: true },
-          { created_at: t(9, 2).toISOString(), valid_to: t(17, 2).toISOString(), revoked_at: t(15, 2).toISOString(), revoke_reason: "renewal" },
+          { created_at: t(9, 2).toISOString(), valid_to: t(17, 2).toISOString(), revoked_at: t(17, 2).toISOString(), revoke_reason: "expired" },
         ],
       }),
     );
@@ -259,7 +259,7 @@ test.describe("the run page", () => {
     const tokens = page.getByTestId("ado-run-tokens");
     await expect(tokens.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeVisible();
     const lines = tokens.locator("p:not([role=alert])");
-    await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created 09:02 · expires 17:02 · revoked 15:02 (renewed)`);
+    await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created 09:02 · expires 17:02 (renewed)`);
     await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created 15:02 · expires 23:02`);
     await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_RENEWAL_FAILED(clock(t(23, 2))));
   });

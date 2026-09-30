@@ -166,7 +166,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
           </>
         )}
         {access.state === "live" && !access.source && <p className="text-muted-foreground">{ADO.ACCESS_SHARED_NOTE}</p>}
-        {scmAccessNeedsConnect(access.state) && (
+        {scmAccessNeedsConnect(access.state, access.cause) && (
           <>
             <p className="text-warning">{scmAccessCause(access.cause)}</p>
             <Button size="sm" variant="outline" disabled={connecting} onClick={() => void handleConnect()}>

@@ -138,13 +138,13 @@ describe("ProvidersScreen: Azure DevOps token choices", () => {
 
   it("3: a Save the server refused for want of a client secret says so under the token choice", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git: [adoRow()] }, etag: '"e1"' });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(400, ADO_PAT.NO_CLIENT_SECRET));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(400, `git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}`));
     renderScreen();
     await screen.findByRole("radiogroup", { name: ADO_PAT.SECTION_TITLE });
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
-    const inline = await screen.findAllByText(ADO_PAT.NO_CLIENT_SECRET);
-    // The screen's own refusal banner and the choice's inline line both carry it.
-    expect(inline.length).toBe(2);
+    // The server prefixes its own refusal with the field; the choice says the sentence itself.
+    expect(await screen.findByText(ADO_PAT.NO_CLIENT_SECRET)).toBeInTheDocument();
+    expect(screen.getByText(`git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}`)).toBeInTheDocument();
   });
 
   it("Save sends an Azure DevOps row in the lane its addresses call for, even if the address never lost focus", async () => {

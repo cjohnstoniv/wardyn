@@ -134,7 +134,14 @@ export function AdoOwnTokenDialog({
           {expiresError && <p className="text-meta text-danger">{expiresError}</p>}
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              reset();
+              onOpenChange(false);
+            }}
+          >
             {ADO_PAT.OWN_DIALOG_CANCEL}
           </Button>
           <Button type="button" disabled={busy || !token.trim() || !expires} onClick={() => void submit()}>

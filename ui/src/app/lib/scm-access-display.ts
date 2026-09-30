@@ -59,7 +59,7 @@ export function scmAccessCause(cause?: string): string {
     case "blocked":
       return ADO_PAT.BLOCKED_BODY;
     case "ado_pat_needs_console_app":
-      return ADO_PAT.NO_CLIENT_SECRET;
+      return ADO_PAT.MEMBER_NEEDS_ADMIN;
     case "token_expired":
       return ADO_PAT.OWN_EXPIRED_BODY;
     default:

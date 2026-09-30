@@ -49,11 +49,14 @@ export function isADOServerRow(row: GitProvider): boolean {
   return row.kind === "azure_devops" && row.base_urls.some(adoIsServer);
 }
 
-/** The row with the lane its addresses call for. Only complete, valid addresses
+/** The row with the lane its addresses call for. `stashed` is the Entra block the
+ *  row lost on its way to Server, restored when the addresses are Services again
+ *  (a mistyped but valid host reshapes the row, and correcting it must not cost
+ *  the tenant, client and ceiling already entered). Only complete, valid addresses
  *  reshape it: a half-typed one is left alone, so typing "https://dev.azure.com/"
  *  letter by letter never flips the row to Server and back, discarding what was
  *  entered on the way. */
-export function reshapeADORow(row: GitProvider): GitProvider {
+export function reshapeADORow(row: GitProvider, stashed?: ADOEntraConfig): GitProvider {
   if (row.kind !== "azure_devops" || row.base_urls.length === 0) return row;
   if (row.base_urls.some((u) => baseURLError(u, row.kind) !== null)) return row;
   const hasEntra = !!row.entra && !!row.lanes?.includes("entra");
@@ -64,5 +67,6 @@ export function reshapeADORow(row: GitProvider): GitProvider {
     return { ...rest, lanes: ["pat"], credential_source: "per_user" };
   }
   if (hasEntra) return row;
-  return { ...row, lanes: ["entra"], credential_source: "per_user", entra: newEntra() };
+  // Back to Services: what the admin entered before the row went to Server comes back.
+  return { ...row, lanes: ["entra"], credential_source: "per_user", entra: stashed ?? newEntra() };
 }

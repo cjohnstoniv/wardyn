@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { HttpError } from "../../../lib/api/core";
+import { ADO } from "../../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { expandCard } from "../../../lib/test-dom";
 
@@ -122,11 +123,23 @@ describe("a row that creates a token for each run", () => {
     expect(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeInTheDocument();
   });
 
-  it("a row the console cannot redeem names the client secret and offers no Connect", async () => {
+  it("a row the console cannot redeem gives a member the chip and a member sentence, never the admin's, and no Connect", async () => {
     renderCard({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app" });
+    expect(screen.getByText(ADO_PAT.CHIP_NOT_CONNECTED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
-    expect(screen.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeInTheDocument();
+    expect(screen.getByText(ADO_PAT.MEMBER_NEEDS_ADMIN)).toBeInTheDocument();
+    expect(screen.queryByText(ADO_PAT.NO_CLIENT_SECRET)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
+  });
+
+  it("Disconnect that the daemon fails to do says so and leaves the card connected (a missing route is an error, not success)", async () => {
+    disconnectMock.mockRejectedValue(new HttpError(404, "not found"));
+    const onChanged = renderCard({ ...minted, state: "live", source: "org" });
+    await expandCard("Azure DevOps");
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }));
+    await waitFor(() => expect(disconnectMock).toHaveBeenCalledTimes(1));
+    expect(onChanged).not.toHaveBeenCalled();
   });
 
   it("8b: blocked by the organisation (the blocked cause) names the fix and offers no button", async () => {
@@ -210,6 +223,21 @@ describe("a row where each person adds their own token", () => {
     expect(await within(dialog).findByText(ADO_PAT.OWN_REJECTED)).toBeInTheDocument();
   });
 
+  it("Cancel clears the pasted token: reopening the dialog starts empty", async () => {
+    renderCard({ ...own, state: "not_configured" });
+    await expandCard("Azure DevOps");
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+    let dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-secret");
+    await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2026-10-27");
+    await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_DIALOG_CANCEL }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveValue("");
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveValue("");
+  });
+
   it("10: expiring counts the days and offers Replace token", async () => {
     const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
     const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
@@ -234,6 +262,12 @@ describe("a row where each person adds their own token", () => {
     expect(screen.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
   });
+});
+
+it("the legacy card offers no Connect for a cause signing in cannot fix (no token_mode on the wire)", async () => {
+  renderCard({ state: "expired_signin", cause: "blocked" });
+  await expandCard("Azure DevOps");
+  expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
 });
 
 it("a row on the Entra sign-in lane keeps its own card", async () => {

@@ -107,8 +107,8 @@ export function patCardView(access: SCMAccessPAT, title: string, now: number = D
 
 // A minted row's states. The blocked and permissions-missing answers are causes
 // of expired_signin on the wire, not states of their own; a row the console
-// cannot redeem (no client secret) is the admin's to fix, so it names that
-// with the admin's own sentence and offers nothing to press.
+// cannot redeem (no client secret) is the admin's to fix, so a member gets the
+// chip and a member sentence, never the admin's, and nothing to press.
 function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
   switch (access.state) {
     case "not_configured":
@@ -125,7 +125,7 @@ function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
         return { title, chip: { label: ADO_PAT.CHIP_BLOCKED, tone: "danger" }, body: [ADO_PAT.BLOCKED_BODY], action: null, disconnect: false };
       }
       if (access.cause === "ado_pat_needs_console_app") {
-        return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.NO_CLIENT_SECRET], action: null, disconnect: false };
+        return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NEEDS_ADMIN], action: null, disconnect: false };
       }
       // ended, consent_needed, permissions_missing and an unnamed cause: the
       // person signs in again (Microsoft asks for consent there if it is due).
@@ -167,23 +167,23 @@ function ownCard(access: SCMAccessPAT, title: string, now: number): PatCardView 
 
 export interface OrgCheckView {
   permissions: "granted" | "missing";
-  /** The lifespan line to draw: on (with the hours allowed), off, or nothing. */
-  lifespan: { state: "on"; hours: number } | { state: "off" } | null;
+  /** The lifespan line to draw: on (with the hours allowed), off, or unknown
+   *  (with what Azure DevOps answered), or nothing. */
+  lifespan: { state: "on"; hours: number } | { state: "off" } | { state: "unknown"; error: string } | null;
   /** The row's longest life is above the organisation's maximum. */
   tooLong: boolean;
-  /** Azure DevOps refused the check's own token on the create policy. */
-  blocked: boolean;
 }
 
-/** What the check's answer says, in the mock's three lines and two alerts. An
- *  "unknown" lifespan draws nothing: Azure DevOps said nothing that tells. */
+/** What the check's answer says, in the mock's lines and the too-long alert. An
+ *  "unknown" lifespan draws the "couldn't tell" line, but only once the server
+ *  names what Azure DevOps answered: the line has no honest form without it. */
 export function orgCheckView(r: ADOOrgCheck): OrgCheckView {
   const tooLong = r.token_life === "refused" && r.refusal === ADO_PAT_REASON.LIFESPAN_POLICY;
-  const blocked = r.token_life === "refused" && r.refusal === ADO_PAT_REASON.POLICY_BLOCKED;
   let lifespan: OrgCheckView["lifespan"] = null;
   if (r.lifespan === "off") lifespan = { state: "off" };
   else if (r.lifespan === "on" && r.token_life === "accepted") lifespan = { state: "on", hours: r.pat_max_hours };
-  return { permissions: r.permissions, lifespan, tooLong, blocked };
+  else if (r.lifespan === "unknown" && r.lifespan_error) lifespan = { state: "unknown", error: r.lifespan_error };
+  return { permissions: r.permissions, lifespan, tooLong };
 }
 
 // ---- New Run ----
@@ -233,20 +233,31 @@ export interface RunTokenView {
 }
 
 /** A run's tokens as the page draws them, oldest first. `paused` is the run's own
- *  state; the token list alone cannot say a run is paused. */
+ *  state; the token list alone cannot say a run is paused.
+ *
+ *  A token is never revoked early: one a renewal or a widening replaced is still
+ *  live at Azure DevOps until its own expiry. So a token followed by another
+ *  reads "(renewed)", or "(access added)" when the next one added access, from
+ *  its position, not from a revoke reason. One closed at its own expiry reads
+ *  "(expired)". Only a token the server actually revoked (a pause, the run's end,
+ *  a disconnect, and the like) names a revoke time and reason. */
 export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenView {
   const sorted = [...tokens].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const lines = sorted.map((t, i) => {
     const created = formatClock(t.created_at);
     const expires = formatClock(t.valid_to);
-    if (!t.revoked_at) return { text: ADO_PAT.RUN_TOKEN_LINE(created, expires), old: false };
+    const next = sorted[i + 1];
+    const revoked = !!t.revoked_at && t.revoke_reason !== "expired";
     const reason = (t.revoke_reason && ADO_PAT.REVOKE_REASON[t.revoke_reason]) || "";
-    // A revoked token that a later one replaced is history; the last line of a
-    // finished run stays plain, as the mock draws it.
-    const text = reason
-      ? ADO_PAT.RUN_TOKEN_LINE_REVOKED(created, expires, formatClock(t.revoked_at), reason)
-      : `${ADO_PAT.RUN_TOKEN_LINE(created, expires)} · revoked ${formatClock(t.revoked_at)}`;
-    return { text, old: i < sorted.length - 1 || paused };
+    if (revoked && reason) {
+      return { text: ADO_PAT.RUN_TOKEN_LINE_REVOKED(created, expires, formatClock(t.revoked_at!), reason), old: !!next || paused };
+    }
+    if (next && !revoked) {
+      const note = (next.added_capabilities?.length ?? 0) > 0 ? ADO_PAT.RUN_TOKEN_NOTE.access_added : ADO_PAT.RUN_TOKEN_NOTE.renewed;
+      return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, note), old: true };
+    }
+    if (t.revoke_reason === "expired") return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.expired), old: true };
+    return { text: ADO_PAT.RUN_TOKEN_LINE(created, expires), old: !!next };
   });
   return {
     lines,

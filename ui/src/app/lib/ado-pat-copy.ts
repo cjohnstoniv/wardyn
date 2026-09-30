@@ -44,7 +44,6 @@ export const ADO_PAT = {
   OWN_EXPIRY_RANGE: "Enter 1 to 90 days.",
   RECOMMENDED_SETTINGS:
     "Recommended in Azure DevOps (Organization settings → Microsoft Entra): Restrict full-scoped personal access token creation — On. Enforce maximum personal access token lifespan — On.",
-  SIGNIN_SECTION_TITLE: "Azure DevOps sign-in (Entra)",
 
   // ---- Admin: check organisation settings ----
   CHECK_BUTTON: "Check organisation settings",
@@ -58,18 +57,19 @@ export const ADO_PAT = {
   CHECK_LIFESPAN_OFF:
     "Maximum token lifespan is off in Azure DevOps. A stolen connection could create tokens that last up to a year. Turn it on under Organization settings → Microsoft Entra.",
 
+  // Round 2: the lifespan probe got an answer that is neither "on" nor "off".
+  CHECK_LIFESPAN_UNKNOWN: (error: string) =>
+    `Wardyn couldn't tell whether your organisation's maximum token lifespan is on. Azure DevOps answered: ${error}.`,
+
   // ---- Admin: refusals ----
   NO_CLIENT_SECRET:
-    "Per-run tokens need your Wardyn app registration to have a client secret. Set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
+    "Per-run tokens need this row to use Wardyn's own sign-in app, and that app to have a client secret. Name Wardyn's app here and set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
   // {n} is the longest life the organisation check saw accepted; unknown reads
   // "Lower it."
   LIFESPAN_REFUSAL: (hours?: number) =>
     `Longest token life is above your organisation's maximum token lifespan. ${
       hours ? `Lower it to ${hours} hours or less.` : "Lower it."
     }`,
-  POLICY_BANNER: (person: string) =>
-    `Azure DevOps refused to create a token for ${person}: your organisation restricts who can create personal access tokens. Add the people who use Wardyn to that policy's allow list, or switch to Entra sign-in.`,
-  POLICY_BANNER_BUTTON: "Switch to Entra sign-in",
   BEARER_WITH_TOKEN_PERMS:
     "Your app registration holds the Azure DevOps token permissions, so Entra sign-in can't be used for runs: its tokens would let a run create tokens. Remove vso.pats and vso.pats_manage from the app first, or keep Wardyn creating a token for each run.",
 
@@ -88,6 +88,9 @@ export const ADO_PAT = {
   CHIP_CONNECTED: "Connected",
   CHIP_SIGN_IN_AGAIN: "Sign in again",
   CHIP_BLOCKED: "Blocked by your organisation",
+  // Owner-approved (after the mock): what a member reads when the row cannot
+  // create tokens for want of the admin's setup.
+  MEMBER_NEEDS_ADMIN: "Your administrator needs to finish setting up Azure DevOps before runs can use it.",
   SIGN_IN_AGAIN_BODY: "Your organisation asked you to sign in again before Wardyn can create tokens.",
   BLOCKED_BODY:
     "Your organisation doesn't let you create personal access tokens. Ask an Azure DevOps administrator to add you to the allow list.",
@@ -105,16 +108,25 @@ export const ADO_PAT = {
   RUN_TOKEN_LINE: (created: string, expires: string) => `Azure DevOps token: created ${created} · expires ${expires}`,
   RUN_TOKEN_LINE_REVOKED: (created: string, expires: string, revoked: string, reason: string) =>
     `Azure DevOps token: created ${created} · expires ${expires} · revoked ${revoked} (${reason})`,
-  // The wire reasons (ado_run_pats.revoke_reason) and how each reads.
+  // DRAFT, not in the approved mock (owner approval pending): a token is never
+  // revoked early, so one replaced by a renewal or a widening, or closed at its
+  // own expiry, has no revoke time to name. It reads its expiry and why it ended.
+  RUN_TOKEN_LINE_NOTE: (created: string, expires: string, note: string) =>
+    `Azure DevOps token: created ${created} · expires ${expires} (${note})`,
+  RUN_TOKEN_NOTE: { renewed: "renewed", access_added: "access added", expired: "expired" },
+  // The reasons the server writes (ado_run_pats.revoke_reason). "run ended", "run
+  // stopped", "paused", "access changed", "disconnected" and "cleaned up after a
+  // restart" are the mock's; "rejected by Azure DevOps" and "person removed" are
+  // DRAFT (owner approval pending). "expired" is not one: see RUN_TOKEN_NOTE.
   REVOKE_REASON: {
     run_end: "run ended",
     kill: "run stopped",
     pause: "paused",
-    renewal: "renewed",
-    widen: "access added",
     drift: "access changed",
     disconnect: "disconnected",
     sweep: "cleaned up after a restart",
+    upstream_401: "rejected by Azure DevOps",
+    offboarding: "person removed",
   } as Record<string, string>,
   RUN_PAUSED: "Paused: this run's token was revoked. A new one is created when the run resumes.",
   RUN_RENEWAL_FAILED: (expires: string) =>

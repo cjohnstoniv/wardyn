@@ -151,6 +151,21 @@ describe("state 2: check organisation settings", () => {
     expect(within(card).queryByText(ADO_PAT.CHECK_PERMS_OK)).not.toBeInTheDocument();
   });
 
+  it("round 2: a lifespan Wardyn could not tell draws the ? line naming what Azure DevOps answered", async () => {
+    orgCheckMock.mockResolvedValue({ ...ok, lifespan: "unknown", lifespan_error: "invalidValidTo" });
+    render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
+    const card = await screen.findByTestId("ado-org-check");
+    expect(within(card).getByText(ADO_PAT.CHECK_LIFESPAN_UNKNOWN("invalidValidTo"))).toBeInTheDocument();
+    expect(within(card).getByText("?")).toBeInTheDocument();
+    expect(within(card).getByText(ADO_PAT.CHECK_PERMS_OK)).toBeInTheDocument();
+    // Not "on", not "off": neither of those lines.
+    expect(within(card).queryByText(ADO_PAT.CHECK_LIFESPAN_OFF)).not.toBeInTheDocument();
+    expect(within(card).queryByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).not.toBeInTheDocument();
+    // The card's chip is neutral, not the warning tone.
+    expect(within(card).getByText(ADO_PAT.CHECK_CHIP("09:12")).className).not.toMatch(/warning/);
+  });
+
   it("says nothing before any check has run (the server keeps no last answer to read)", () => {
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
     expect(screen.queryByTestId("ado-org-check")).not.toBeInTheDocument();
@@ -177,7 +192,7 @@ describe("state 3: setup errors", () => {
   });
 
   it("a Save refused for want of a client secret says so under the token option", () => {
-    render(<Harness initial={row({ token_mode: "minted_pat" })} refusal={ADO_PAT.NO_CLIENT_SECRET} />);
+    render(<Harness initial={row({ token_mode: "minted_pat" })} refusal={`git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}`} />);
     expect(screen.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeInTheDocument();
   });
 
@@ -203,7 +218,7 @@ describe("state 3: setup errors", () => {
   });
 });
 
-describe("state 8: the organisation blocks token creation", () => {
+describe("state 8: the organisation blocks token creation (8d; 8c is descoped)", () => {
   const blocked: ADOOrgCheck = {
     checked_at: at(9, 12),
     organisation: "o",
@@ -214,18 +229,13 @@ describe("state 8: the organisation blocks token creation", () => {
     lifespan: "unknown",
   };
 
-  it("8c: a check the policy refused raises the banner naming the person, and Switch to Entra sign-in", async () => {
+  it("a check the policy refused draws no admin banner: 8c is descoped to 0.8.3", async () => {
     orgCheckMock.mockResolvedValue(blocked);
-    let latest: GitProvider | undefined;
-    render(<Harness initial={row({ token_mode: "minted_pat" })} onLatest={(r) => (latest = r)} />);
+    render(<Harness initial={row({ token_mode: "minted_pat" })} />);
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
-    // The admin ran the check, so the person is the signed-in principal.
-    expect(await screen.findByText(ADO_PAT.POLICY_BANNER("wardyn-admin"))).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }));
-    expect(latest?.entra?.token_mode).toBeUndefined();
-    expect(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
-    // Already on the Entra sign-in: nothing left to switch to.
-    expect(screen.queryByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON })).not.toBeInTheDocument();
+    await screen.findByTestId("ado-org-check");
+    expect(screen.queryByText(/refused to create a token for/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Switch to Entra sign-in/ })).not.toBeInTheDocument();
   });
 
   it("8d: choosing the Entra sign-in while the app holds the token permissions is refused inline", async () => {
@@ -239,7 +249,7 @@ describe("state 8: the organisation blocks token creation", () => {
   });
 
   it("8d: and so is a Save the server refused for the same reason", () => {
-    render(<Harness initial={row({ token_mode: "bearer" })} refusal={ADO_PAT.BEARER_WITH_TOKEN_PERMS} />);
+    render(<Harness initial={row({ token_mode: "bearer" })} refusal={`git[0].entra.token_mode: ${ADO_PAT.BEARER_WITH_TOKEN_PERMS}`} />);
     expect(screen.getByText(ADO_PAT.BEARER_WITH_TOKEN_PERMS)).toBeInTheDocument();
   });
 });

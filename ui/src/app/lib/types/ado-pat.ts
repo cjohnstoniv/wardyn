@@ -71,6 +71,9 @@ export interface ADOOrgCheck {
   /** The reason (ado_pat_*) canary 1 was refused with. */
   refusal?: string;
   lifespan?: "on" | "off" | "unknown";
+  /** lifespan "unknown": what Azure DevOps answered to the year-long probe
+   *  (its patTokenError or error key), for the "couldn't tell" line. */
+  lifespan_error?: string;
   /** Canaries Wardyn created and could not revoke. */
   unrevoked?: string[];
 }

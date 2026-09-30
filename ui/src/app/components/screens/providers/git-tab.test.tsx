@@ -404,6 +404,24 @@ describe("GitTab", () => {
       expect(latest[0].entra).toBeDefined();
     });
 
+    it("a mistyped host that reshapes the row to Server and back keeps what was entered in the Entra block", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[adoServices]} onLatest={(g) => (latest = g)} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+      // "dev.azure.co" is a valid address on a non-Services host, so leaving the field reshapes to Server.
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://dev.azure.co/acme");
+      await userEvent.tab();
+      expect(latest[0].lanes).toEqual(["pat"]);
+      expect(latest[0].entra).toBeUndefined();
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://dev.azure.com/acme");
+      await userEvent.tab();
+      expect(latest[0].lanes).toEqual(["entra"]);
+      expect(latest[0].entra).toEqual(adoServices.entra);
+    });
+
     it("half-typing an address never flips the lane and loses what was entered", async () => {
       let latest: GitProvider[] = [];
       render(<Harness initial={[adoServices]} onLatest={(g) => (latest = g)} />);

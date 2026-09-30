@@ -53,7 +53,7 @@ export const adoPat = {
   // progress. 204.
   async disconnect(): Promise<void> {
     const res = await wfetch("/scm/azure-devops/connection", { method: "DELETE" });
-    if (!res.ok && res.status !== 404) throw new HttpError(res.status, await errText(res));
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 
   // GET /api/v1/runs/{id}/ado-tokens (no server route yet): every token the run
