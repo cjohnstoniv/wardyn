@@ -12,6 +12,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -26,6 +27,21 @@ type adoPAT struct {
 	ValidTo         time.Time
 }
 
+// String and LogValue print an adoPAT without its Token, so %v, %+v and slog
+// cannot leak the secret.
+func (p adoPAT) String() string {
+	return fmt.Sprintf("adoPAT{%s %q until %s}", p.AuthorizationID, p.Scope, p.ValidTo.Format(time.RFC3339))
+}
+
+// LogValue implements slog.LogValuer: the same fields as String, never Token.
+func (p adoPAT) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("authorization_id", p.AuthorizationID),
+		slog.String("scope", p.Scope),
+		slog.Time("valid_to", p.ValidTo),
+	)
+}
+
 // adoPATRequest is what a create asks for. The token is always organisation
 // scoped (`allOrgs:false`), so that is not a field: no caller may ask for a
 // token that reaches every organisation the person belongs to.
@@ -37,8 +53,8 @@ type adoPATRequest struct {
 
 // adoPATClient creates and revokes a person's personal access tokens with that
 // person's delegated Entra access token. There is deliberately no Update: whether
-// an update keeps the token value is undocumented, so a widened token is a new
-// create and a revoke of the old, and nothing relies on the difference.
+// an update keeps the token value is undocumented, so a widened or renewed token
+// is a new create, and the old one is left to its valid_to, never revoked early.
 //
 // Every failure is an *adoPATError when Azure DevOps answered, so a caller can
 // read its Reason; any other error means the call did not complete.
@@ -55,15 +71,6 @@ const (
 	adoPATErrAccessDenied    = "accessDenied"
 )
 
-// The reasons an adoPATError maps to. Machine-readable, and the fix each one
-// names is the admin's, not the person's.
-const (
-	adoPATReasonPolicyBlocked  = "ado_pat_policy_blocked"  // the organisation restricts who may create tokens
-	adoPATReasonLifespanPolicy = "ado_pat_lifespan_policy" // the requested life is above the organisation's maximum
-	adoPATReasonConsentNeeded  = "ado_pat_consent_needed"  // the sign-in's grant cannot create tokens: consent or scope is missing
-	adoPATReasonMintRefused    = "ado_pat_mint_refused"    // any other refusal
-)
-
 // adoPATError is Azure DevOps refusing a create or a revoke: the HTTP status,
 // the X-TFS-ServiceError header text if any, and the response body's
 // patTokenError if any. It never holds a token.
@@ -78,7 +85,7 @@ func (e *adoPATError) Error() string {
 		e.Status, e.PatTokenError, e.ServiceError)
 }
 
-// Reason maps the refusal to one of the adoPATReason* values.
+// Reason maps the refusal to one of the reasonADOPAT* values.
 //
 // The named patTokenError decides first. With none, a 401 or 403 is a token
 // that could not create at all — the missing-scope cause — and anything else
@@ -89,15 +96,15 @@ func (e *adoPATError) Error() string {
 func (e *adoPATError) Reason() string {
 	switch e.PatTokenError {
 	case adoPATErrLifespan:
-		return adoPATReasonLifespanPolicy
+		return reasonADOPATLifespanPolicy
 	case adoPATErrGlobalPolicy, adoPATErrFullScopePolicy, adoPATErrAccessDenied:
-		return adoPATReasonPolicyBlocked
-	case "":
+		return reasonADOPATPolicyBlocked
+	case "", "none": // "none" is the API's own success value
 		if e.Status == 401 || e.Status == 403 {
-			return adoPATReasonConsentNeeded
+			return reasonADOPATConsentNeeded
 		}
 	}
-	return adoPATReasonMintRefused
+	return reasonADOPATMintRefused
 }
 
 // Why a token was created, and why it was revoked: the `reason` field of the
@@ -113,10 +120,9 @@ const (
 	adoPATRevokeKill       = "kill"
 	adoPATRevokePause      = "pause"
 	adoPATRevokeDrift      = "drift"
-	adoPATRevokeRenewal    = "renewal"
-	adoPATRevokeWiden      = "widen"
 	adoPATRevokeDisconnect = "disconnect"
 	adoPATRevokeSweep      = "sweep"
+	adoPATRevokeExpired    = "expired" // valid_to passed; the record is closed without a revoke call
 )
 
 // The audit actions the personal-access-token lanes write. None carries the

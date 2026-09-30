@@ -91,8 +91,30 @@ func runPATContract(t *testing.T, st store.RunPATStore) {
 	if ok, err := st.MarkRunPATRevoked(ctx, runB, a2.AuthorizationID, "sweep", ""); err != nil || ok {
 		t.Errorf("MarkRunPATRevoked with another run's key = %v, %v; want false", ok, err)
 	}
-	if ok, err := st.MarkRunPATRevoked(ctx, runB, b1.AuthorizationID, "sweep", "dead refresh token"); err != nil || !ok {
-		t.Fatalf("MarkRunPATRevoked with a last error = %v, %v; want true", ok, err)
+	if ok, err := st.MarkRunPATRevoked(ctx, runA, a2.AuthorizationID, "", ""); err == nil || ok {
+		t.Errorf("MarkRunPATRevoked with no reason = %v, %v; want a refusal", ok, err)
+	}
+
+	// A failed revoke is noted and the row stays listed, with the error.
+	if err := st.NoteRunPATRevokeFailed(ctx, runB, b1.AuthorizationID, "dead refresh token"); err != nil {
+		t.Fatalf("NoteRunPATRevokeFailed: %v", err)
+	}
+	failed, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runB})
+	if err != nil || len(failed) != 1 || failed[0].AuthorizationID != b1.AuthorizationID || failed[0].LastError != "dead refresh token" {
+		t.Fatalf("after NoteRunPATRevokeFailed = %+v, %v; want b1 still listed with its last error", failed, err)
+	}
+	// Noting a closed or unknown row is harmless and does not reopen or create it.
+	if err := st.NoteRunPATRevokeFailed(ctx, runA, a1.AuthorizationID, "late"); err != nil {
+		t.Errorf("NoteRunPATRevokeFailed on a closed row: %v", err)
+	}
+	if err := st.NoteRunPATRevokeFailed(ctx, uuid.New(), uuid.New(), "nobody"); err != nil {
+		t.Errorf("NoteRunPATRevokeFailed on an unknown row: %v", err)
+	}
+	same("after the notes", ids(store.RunPATFilter{}), a2, b1)
+
+	// Closing keeps the last error beside the reason.
+	if ok, err := st.MarkRunPATRevoked(ctx, runB, b1.AuthorizationID, "expired", "dead refresh token"); err != nil || !ok {
+		t.Fatalf("MarkRunPATRevoked after a failed attempt = %v, %v; want true", ok, err)
 	}
 	same("after revokes", ids(store.RunPATFilter{}), a2)
 }

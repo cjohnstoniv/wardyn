@@ -43,6 +43,12 @@ const (
 	reasonBearerMintScopes    = "mint_scopes"           // S2: the Entra bearer could create personal access tokens
 	reasonBearerScopeUnknown  = "scope_unknown"         // S2: the authority reported no granted scope for the bearer
 
+	// Azure DevOps personal access token creation (ado_pat_contract.go).
+	reasonADOPATPolicyBlocked  = "ado_pat_policy_blocked"  // the organisation restricts who may create tokens
+	reasonADOPATLifespanPolicy = "ado_pat_lifespan_policy" // the requested life is above the organisation's maximum
+	reasonADOPATConsentNeeded  = "ado_pat_consent_needed"  // the sign-in's grant cannot create tokens: consent or scope is missing
+	reasonADOPATMintRefused    = "ado_pat_mint_refused"    // any other refusal from the token API
+
 	// AWS SSO resolve only.
 	reasonSSOHostNotPortal = "sso_host_not_portal" // the requested host is outside the credential's own SSO portal
 

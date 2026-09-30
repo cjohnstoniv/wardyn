@@ -30,7 +30,7 @@ type RunPAT struct {
 	CreatedAt       time.Time  // stamped by the store on insert; ignored on the way in
 	RevokedAt       *time.Time // nil while Wardyn believes the token is live
 	RevokeReason    string
-	LastError       string // why a revoke was abandoned; "" otherwise
+	LastError       string // why the last revoke attempt failed; "" otherwise
 }
 
 // RunPATFilter narrows ListUnrevokedRunPATs; a zero field matches everything.
@@ -49,16 +49,23 @@ func (f RunPATFilter) matches(p RunPAT) bool {
 // RunPATStore is the run-token record. Optional like RunPauser: it is not part
 // of Store because the test doubles that embed Store would route these to a nil
 // interface; the api layer type-asserts. Production is always PG; MemRunPATs is
-// the same contract without a database.
+// the same contract without a database. Unlike RunPauser, a caller that finds no
+// RunPATStore must REFUSE TO MINT: a token is never created unrecorded.
 type RunPATStore interface {
 	// InsertRunPAT records a token BEFORE its first use. ErrConflict when that
 	// (run, authorization id) is already recorded. CreatedAt is the store's.
 	InsertRunPAT(ctx context.Context, p RunPAT) error
-	// MarkRunPATRevoked closes a token's record with reason, and reports
-	// whether it did: false when the row is unknown or already closed, so two
-	// revokers race harmlessly. lastError is non-empty only when the revoke was
-	// abandoned (the token then expires on its own at ValidTo).
+	// MarkRunPATRevoked closes a token's record: it was revoked, or its valid_to
+	// has passed. reason is required (one of api's adoPATRevoke* values). It
+	// reports whether it closed the row: false when the row is unknown or
+	// already closed, so two revokers race harmlessly. lastError, if non-empty,
+	// keeps why the last revoke attempt failed.
 	MarkRunPATRevoked(ctx context.Context, runID, authorizationID uuid.UUID, reason, lastError string) (bool, error)
+	// NoteRunPATRevokeFailed records why a revoke attempt failed and leaves the
+	// row OPEN, so the sweep retries and the setup check can list a token Wardyn
+	// could not revoke while its valid_to is ahead. A closed or unknown row is
+	// left as it is.
+	NoteRunPATRevokeFailed(ctx context.Context, runID, authorizationID uuid.UUID, lastError string) error
 	// ListUnrevokedRunPATs returns the tokens still recorded live that match f,
 	// oldest first.
 	ListUnrevokedRunPATs(ctx context.Context, f RunPATFilter) ([]RunPAT, error)
@@ -68,6 +75,8 @@ var (
 	_ RunPATStore = PG{}
 	_ RunPATStore = (*MemRunPATs)(nil)
 )
+
+var errRunPATNoReason = errors.New("store: MarkRunPATRevoked: a revoke reason is required")
 
 func (p RunPAT) validate() error {
 	switch {
@@ -104,6 +113,9 @@ func (s PG) InsertRunPAT(ctx context.Context, p RunPAT) error {
 
 // MarkRunPATRevoked — see RunPATStore.
 func (s PG) MarkRunPATRevoked(ctx context.Context, runID, authorizationID uuid.UUID, reason, lastError string) (bool, error) {
+	if reason == "" {
+		return false, errRunPATNoReason
+	}
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE ado_run_pats SET revoked_at = now(), revoke_reason = $3, last_error = $4
 		WHERE run_id = $1 AND authorization_id = $2 AND revoked_at IS NULL`,
@@ -112,6 +124,17 @@ func (s PG) MarkRunPATRevoked(ctx context.Context, runID, authorizationID uuid.U
 		return false, fmt.Errorf("store: mark run pat revoked: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// NoteRunPATRevokeFailed — see RunPATStore.
+func (s PG) NoteRunPATRevokeFailed(ctx context.Context, runID, authorizationID uuid.UUID, lastError string) error {
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE ado_run_pats SET last_error = $3
+		WHERE run_id = $1 AND authorization_id = $2 AND revoked_at IS NULL`,
+		runID, authorizationID, lastError); err != nil {
+		return fmt.Errorf("store: note run pat revoke failure: %w", err)
+	}
+	return nil
 }
 
 // ListUnrevokedRunPATs — see RunPATStore.
@@ -173,6 +196,9 @@ func (m *MemRunPATs) InsertRunPAT(_ context.Context, p RunPAT) error {
 }
 
 func (m *MemRunPATs) MarkRunPATRevoked(_ context.Context, runID, authorizationID uuid.UUID, reason, lastError string) (bool, error) {
+	if reason == "" {
+		return false, errRunPATNoReason
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range m.rows {
@@ -184,6 +210,17 @@ func (m *MemRunPATs) MarkRunPATRevoked(_ context.Context, runID, authorizationID
 		}
 	}
 	return false, nil
+}
+
+func (m *MemRunPATs) NoteRunPATRevokeFailed(_ context.Context, runID, authorizationID uuid.UUID, lastError string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.rows {
+		if r := &m.rows[i]; r.RunID == runID && r.AuthorizationID == authorizationID && r.RevokedAt == nil {
+			r.LastError = lastError
+		}
+	}
+	return nil
 }
 
 func (m *MemRunPATs) ListUnrevokedRunPATs(_ context.Context, f RunPATFilter) ([]RunPAT, error) {
