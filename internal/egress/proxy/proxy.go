@@ -833,6 +833,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A host the run's Azure DevOps grant covers is reached only through the gate on a terminated
+	// connection (above) or the git broker. A tunnel this proxy doesn't terminate would pass the
+	// organisation pin and the capability check by, so it is refused — the only way an Azure DevOps
+	// Server host's REST, which the gate can't classify, stays refused when no one terminated it.
+	if p.isADOLane(host) {
+		p.refuseADO(w, r, host, port, "Wardyn refused this Azure DevOps connection: this run reaches this host only through Wardyn's checked Azure DevOps doors.", nil)
+		return
+	}
 
 	if p.isLLMHost(host) {
 		// TLS-MITM-eligible host (Anthropic/OpenAI). Terminate TLS only when MITM of

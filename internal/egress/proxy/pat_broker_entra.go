@@ -12,6 +12,11 @@ package proxy
 // (an Entra bearer or a PAT sent as Basic, as the control plane resolved it) via the same injector the
 // REST lane's MITM uses.
 //
+// An Azure DevOps Server host (a grant host adoHostedHost does not name) takes the same door with the
+// person's own token: the organisation pin is the collection's path, and only the smart-HTTP shapes
+// adoServerGitPath names are forwarded. Its REST is never forwarded: adoscope classifies no Server host,
+// so the gate refuses every request there, and a CONNECT this proxy won't terminate is refused outright.
+//
 // SECURITY: a refusal never reaches git as a 401 — git reads a 401 as a credential challenge and prints
 // "could not read Username", which hides the reason.
 
@@ -56,7 +61,8 @@ type adoGitPush struct {
 // serveADOGit serves one validated smart-HTTP request (verb is info/refs,
 // git-upload-pack or git-receive-pack) for a host the Entra grant covers.
 func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, verb string, grant ADOGrant) {
-	if _, ok := adoGitKeys(r); !ok {
+	keys, ok := adoGitKeys(r)
+	if !ok {
 		p.refuseADOGit(w, r, host, nil, nil,
 			"Wardyn refused this git request: its path spells a project or repository name Azure DevOps would read as another.")
 		return
@@ -64,6 +70,12 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	if !adoOrgMatches(host, rest, grant.Organization) {
 		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
 			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization))
+		return
+	}
+	if !adoHostedHost(host) && !adoServerGitPath(keys, grant.Organization) {
+		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
+			"Wardyn refused this git request: on Azure DevOps Server this run reaches git only at %s/<project>/_git/<repository>.",
+			strings.Trim(grant.Organization, "/")))
 		return
 	}
 
@@ -267,6 +279,26 @@ func adoGitKeys(r *http.Request) ([]string, bool) {
 		keys = append(keys, k)
 	}
 	return keys, true
+}
+
+// adoServerGitPath reports whether keys (adoGitKeys) spell an Azure DevOps Server smart-HTTP endpoint
+// under collection: <collection>/<project>/_git/<repository>/ or <collection>/_git/<repository>/ (the
+// project-named repository's short form), followed by exactly info/refs, git-upload-pack or
+// git-receive-pack. Anything else on a Server host — a path outside the collection, a deeper or shorter
+// one, one with no _git — is refused rather than forwarded under the person's token.
+func adoServerGitPath(keys []string, collection string) bool {
+	coll := strings.ToLower(strings.TrimSpace(collection))
+	if !adoServerCollection(keys, coll) {
+		return false
+	}
+	tail := keys[len(strings.Split(strings.Trim(coll, "/"), "/")):]
+	i := slices.Index(tail, "_git")
+	if (i != 0 && i != 1) || i+2 > len(tail) {
+		return false
+	}
+	verb := tail[i+2:]
+	return slices.Equal(verb, []string{"info", "refs"}) ||
+		slices.Equal(verb, []string{"git-upload-pack"}) || slices.Equal(verb, []string{"git-receive-pack"})
 }
 
 // adoGitRepoKeys is adoGitKeys truncated to the repository itself — org, project, "_git", and repo name,
