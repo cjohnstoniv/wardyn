@@ -199,9 +199,9 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 //
 // No new index: 0001 covers (time) and 0017 (action, seq DESC); a bounded LIMIT
 // query index-scans the pkey backward and filters, which is what the caps are for.
-// DataContains adds a per-row `data @>` test with no GIN index behind it: with an
-// Action set, 0017 bounds the scan to that action's rows (and Since to the
-// window) before the test runs.
+// DataContains adds a per-row `data @>` test with no GIN index behind it; the
+// planner walks the pkey or the (time) index and filters, and the LIMIT plus a
+// Since window bound it (about 0.1 s over 2M rows in the #1449 review).
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
 	q := `
 		SELECT ` + auditCols + `
