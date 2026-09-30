@@ -263,6 +263,9 @@ silent gap:
 | `ado_pat_consent_needed` | The person's Azure DevOps sign-in cannot create tokens: the app registration lacks the token permissions or consent for them. |
 | `ado_pat_mint_refused` | Azure DevOps refused to create a personal access token for another reason. |
 | `ado_pat_unavailable` / `ado_pat_run_inactive` | A `minted_pat` run's personal access token can't be created: this deployment has no way to create one, or the run is paused or has ended (resolved again when it resumes). Azure DevOps. |
+| `mint_scopes` / `scope_unknown` | S2: the Entra sign-in lane refuses to send a bearer whose granted scopes name a token permission (`vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration`, `user_impersonation`), or whose authority reported no granted scope at all (`resolveADOInjection`). Azure DevOps. |
+| `ado_pat_needs_console_app` | S1: a `minted_pat` row the console cannot redeem with its own client secret — it names another application or tenant, or `WARDYN_OIDC_CLIENT_SECRET` is unset — is unusable: the sign-in door and the organisation check refuse it, and `/me/scm-access` grades it `expired_signin` with this cause. |
+| `ado_org_check_unknown_row` / `ado_org_check_organisation` | `POST /workspace-providers/git/{id}/org-check` (`ado_pat_orgcheck.go`): no such row, or not the deployment's `minted_pat` sign-in row (answered identically, D-6); or the row's address names no organisation and `?organisation=` named none it serves. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
 | `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |

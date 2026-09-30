@@ -40,6 +40,8 @@ const (
 	reasonTokenMode           = "token_mode"            // dispatch chose the bearer-key lane, not per-user Entra
 	reasonSigninUnconfigured  = "signin_unconfigured"   // no Entra app registration for this organisation
 	reasonSigninUnreadable    = "signin_unreadable"     // the Entra roster row could not be read
+	reasonBearerMintScopes    = "mint_scopes"           // S2: the Entra bearer could create personal access tokens
+	reasonBearerScopeUnknown  = "scope_unknown"         // S2: the authority reported no granted scope for the bearer
 
 	// Azure DevOps personal access token creation (ado_pat_contract.go).
 	reasonADOPATPolicyBlocked  = "ado_pat_policy_blocked"  // the organisation restricts who may create tokens

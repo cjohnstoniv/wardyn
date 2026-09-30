@@ -57,6 +57,8 @@ import (
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // adoSignInCapturedAction is the one audit action the sign-in owns. Both outcomes
@@ -142,8 +144,8 @@ type ADOEntraConfig struct {
 	// organisations keeps two credentials that cannot overwrite each other.
 	RowID string
 	// TenantID / ClientID / ClientSecret are the app registration. ClientSecret
-	// is optional: a public client authenticates with the code challenge alone,
-	// which is the posture a browser-delivered redirect wants.
+	// is optional for a bearer row: a public client authenticates with the code
+	// challenge alone. A minted_pat row requires it (ErrADOMintNeedsSecret).
 	TenantID     string
 	ClientID     string
 	ClientSecret string
@@ -152,8 +154,12 @@ type ADOEntraConfig struct {
 	RedirectURL string
 	// Scopes is the row's CEILING: the vso.* scopes this deployment may ever
 	// ask for. A sign-in requests these (plus offline access and openid); a
-	// later redemption may ask for any subset.
+	// later redemption may ask for any subset. For a minted_pat row it is
+	// exactly adoscope.MintScopes: the sign-in only ever creates tokens.
 	Scopes []string
+	// TokenMode is the row's token mode; empty reads as bearer. own_pat has
+	// no sign-in and is never a source's answer.
+	TokenMode types.ADOTokenMode
 	// LoginClientID / LoginTenantID are the application and tenant THIS CONSOLE
 	// signs people in with. They are the other half of the 0.7.10 boundary: the
 	// subject comparison is only sound when the two tokens come from one app
@@ -165,6 +171,9 @@ type ADOEntraConfig struct {
 	// is TEST ONLY and honoured only under AllowTestEndpoints — see
 	// ValidateEntraAuthorityOverride.
 	AuthorityOverride string
+	// PATAPIOverride re-points the token lifecycle API (vssps) at another base
+	// URL. TEST ONLY, and refused without AllowTestEndpoints (patClient).
+	PATAPIOverride string
 	// AllowTestEndpoints is WARDYN_ALLOW_TEST_ENDPOINTS, the repo's existing
 	// acknowledgement that this deployment is a test deployment. Without it an
 	// AuthorityOverride is refused rather than ignored.
@@ -200,7 +209,7 @@ func (c ADOEntraConfig) validate() error {
 	if err := adoEntraCheckRequestedScopes(c.Scopes); err != nil {
 		return fmt.Errorf("azure devops sign-in: %w", err)
 	}
-	return nil
+	return c.validateTokenMode()
 }
 
 // entraIDSafe is a HOST-AND-PATH-SHAPE check: the tenant id is concatenated
@@ -394,7 +403,10 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
 		return ADOEntraConfig{}, false
 	}
-	if err := cfg.validate(); err != nil {
+	if err := cfg.validate(); errors.Is(err, ErrADOMintNeedsSecret) {
+		writeErrorReason(w, http.StatusConflict, ReasonADOPATNeedsConsoleApp, adoPATNeedsConsoleAppRefusal)
+		return ADOEntraConfig{}, false
+	} else if err != nil {
 		writeServerError(w, r, "the Azure DevOps sign-in configuration is unusable", err)
 		return ADOEntraConfig{}, false
 	}
@@ -696,6 +708,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		"scopes": granted, "source": adoEntraSourceSignIn,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
+	s.auditADOPATConnect(ctx, subject, cfg, granted, adoEntraSourceSignIn)
 	// After the capture row, never before: captured -> resolved -> retry.
 	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
 	http.Redirect(w, r, s.cfg.BasePath+adoSignInDonePath, http.StatusFound)

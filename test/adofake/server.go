@@ -38,6 +38,13 @@ const (
 	ScopeWorkWrite   = "vso.work_write"
 	ScopeProjectRead = "vso.project"
 	ScopeTokens      = "vso.tokens"
+	// ScopePats and ScopePatsManage are the two delegated permissions the
+	// token lifecycle routes require of an ENTRA bearer, measured together
+	// against a real tenant (a token holding only these two created and
+	// revoked a PAT). Which one alone would do is unmeasured, so the fake
+	// asks for both.
+	ScopePats       = "vso.pats"
+	ScopePatsManage = "vso.pats_manage"
 )
 
 // Endpoint names one handler's counter/override slot and its entry in a
@@ -77,7 +84,7 @@ type RecordedRequest struct {
 	Query         string
 	Headers       http.Header
 	Endpoint      Endpoint
-	RequiredScope string // "" when the endpoint needs no scope
+	RequiredScope string // "" when the endpoint needs no scope; space-separated when it needs several
 	Token         string // the bearer/PAT presented, "" if none
 	Authorized    bool   // true when no scope was required, or the token carried it
 	// APIVersion is the request's ?api-version= value, "" if absent. Real
@@ -150,6 +157,7 @@ type Server struct {
 
 	pats           map[string]*pat // authorizationId -> pat
 	patCreateError PatTokenError
+	patLimit       patLimit
 
 	workItemRev map[int]int // work item id -> current revision
 }
@@ -268,7 +276,8 @@ func tokenFromRequest(r *http.Request) string {
 
 // checkScope reports whether the request's token carries scope AND, for a
 // token with a validTo (a minted PAT), has not expired. An empty scope means
-// the endpoint needs none, and is always granted regardless of the token.
+// the endpoint needs none, and is always granted regardless of the token; a
+// space-separated scope needs every one of them.
 func (s *Server) checkScope(r *http.Request, scope string) (token string, granted bool) {
 	token = tokenFromRequest(r)
 	if scope == "" {
@@ -283,7 +292,12 @@ func (s *Server) checkScope(r *http.Request, scope string) (token string, grante
 	if !g.validTo.IsZero() && time.Now().After(g.validTo) {
 		return token, false
 	}
-	return token, g.scopes[scope]
+	for _, sc := range strings.Fields(scope) {
+		if !g.scopes[sc] {
+			return token, false
+		}
+	}
+	return token, true
 }
 
 // record appends a RecordedRequest and bumps endpoint's counter. Headers are
@@ -346,6 +360,21 @@ func (s *Server) requireScope(endpoint Endpoint, scope string, next http.Handler
 			return
 		}
 		next(w, r)
+	}
+}
+
+// entraOnly is requireScope for a route that takes only an Entra bearer: a
+// token presented any other way (a PAT over Basic) is recorded and refused
+// before its scopes are looked at.
+func (s *Server) entraOnly(endpoint Endpoint, scope string, next http.HandlerFunc) http.HandlerFunc {
+	guarded := s.requireScope(endpoint, scope, next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			s.record(endpoint, scope, r, tokenFromRequest(r), false)
+			writeADOUnauthorized(w)
+			return
+		}
+		guarded(w, r)
 	}
 }
 
@@ -428,22 +457,19 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /{org}/{project}/_apis/git/repositories",
 		s.requireScope(EndpointRepositoriesGet, ScopeCodeRead, s.handleRepositoriesGet))
 
-	// Token lifecycle — see pats.go.
-	//
-	// PENDING LIVE VERIFICATION: Microsoft documents these four routes as
-	// requiring an ENTRA token carrying vso.pats, on vssps.dev.azure.com, and
-	// refusing a PAT presented over Basic auth entirely. This fake currently
-	// accepts a PAT via Basic on the same dev.azure.com host as everything
-	// else. Do not change this until the owner's live-tenant check comes
-	// back.
+	// Token lifecycle — see pats.go. The real routes live on
+	// vssps.dev.azure.com/{org}; this fake serves the same path on its one
+	// host. Microsoft documents them as taking only a user-delegated Entra
+	// token, so a PAT over Basic is refused (entraOnly) whatever it carries.
+	const patScopes = ScopePats + " " + ScopePatsManage
 	mux.HandleFunc("GET /{org}/_apis/tokens/pats",
-		s.requireScope(EndpointPatsList, ScopeTokens, s.handlePatsList))
+		s.entraOnly(EndpointPatsList, patScopes, s.handlePatsList))
 	mux.HandleFunc("POST /{org}/_apis/tokens/pats",
-		s.requireScope(EndpointPatsCreate, ScopeTokens, s.handlePatsCreate))
+		s.entraOnly(EndpointPatsCreate, patScopes, s.handlePatsCreate))
 	mux.HandleFunc("PUT /{org}/_apis/tokens/pats",
-		s.requireScope(EndpointPatsUpdate, ScopeTokens, s.handlePatsUpdate))
+		s.entraOnly(EndpointPatsUpdate, patScopes, s.handlePatsUpdate))
 	mux.HandleFunc("DELETE /{org}/_apis/tokens/pats",
-		s.requireScope(EndpointPatsRevoke, ScopeTokens, s.handlePatsRevoke))
+		s.entraOnly(EndpointPatsRevoke, patScopes, s.handlePatsRevoke))
 
 	return normalizeRouting(mux)
 }
