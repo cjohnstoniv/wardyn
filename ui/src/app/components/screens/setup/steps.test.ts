@@ -268,7 +268,7 @@ describe("stepOrder — the admin funnel's walk (no demos, since M-6/D5)", () =>
 
   it("never contains a demo id, met or not", () => {
     const order = stepOrder(
-      baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
+      baseStatus({ providers: [{ tool: "claude", installed: true }] }),
     );
     for (const id of DEMO_STEP_IDS) expect(order).not.toContain(id);
   });
@@ -320,9 +320,9 @@ describe("walkableDemos — conditional demos are offered only once their precon
     expect(ids(baseStatus({ checks_redacted: true, providers: [], llm_ready: true }))).toContain("agent-in-the-box");
   });
 
-  it("a host CLI login with no model provider does not restore the harness demo", () => {
+  it("a detected host CLI with no model provider does not restore the harness demo", () => {
     const order = ids(
-      baseStatus({ llm_ready: false, providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
+      baseStatus({ llm_ready: false, providers: [{ tool: "claude", installed: true }] }),
     );
     expect(order).not.toContain("agent-in-the-box");
   });

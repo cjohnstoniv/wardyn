@@ -108,7 +108,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   const root = repoRoot();
   const setupGo = readFileSync(join(root, "internal/api/setup.go"), "utf8");
   const setupChecksGo = readFileSync(join(root, "internal/api/setup_checks.go"), "utf8");
-  const bedrockGo = readFileSync(join(root, "internal/api/runs_bedrock_probe.go"), "utf8");
   const harnessToolGo = readFileSync(join(root, "internal/api/setup_integrations.go"), "utf8");
   const attachGo = readFileSync(join(root, "internal/api/attach_holder.go"), "utf8");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
@@ -137,7 +136,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   it.each([
     ["SetupCheck", setupChecksGo],
     ["SetupProvider", setupGo],
-    ["SetupBedrock", bedrockGo],
     ["SetupHarnessTool", harnessToolGo],
   ])("%s: full parity with the TS mirror of the same name", (name, goSrc) => {
     const goTags = goJSONTags(goSrc, name);
@@ -151,7 +149,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["SetupSecrets", "secrets"],
     ["SetupAgeKey", "age_key"],
     ["SetupPlatform", "platform"],
-    ["SetupDeployment", "deployment"],
   ])("%s: full parity with SetupStatus.%s's inline TS type", (goName, member) => {
     const goTags = goJSONTags(setupGo, goName);
     expect(goTags.length).toBeGreaterThan(0);
