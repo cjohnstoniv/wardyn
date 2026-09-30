@@ -1059,7 +1059,7 @@ member re-typing the ceiling's own entry in different case adds a second
 entry rather than silently dropping the operator's. A ceiling that sets none
 leaves a proposal's own `push_rules` untouched — this field only narrows, so
 there is nothing here for a silent ceiling to protect against. When both set
-`max_inspect_pack_mib` or `hold_seconds`, the smaller one applies.
+`max_inspect_pack_mib`, `max_file_size_mib` or `hold_seconds`, the smaller one applies; for `max_file_size_mib` that is the smaller **non-zero** value, so a proposal can neither raise a ceiling's limit nor turn it off with `0`, and a ceiling's `deny_new_executables: true` cannot be switched off.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|

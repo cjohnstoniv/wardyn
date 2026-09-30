@@ -164,6 +164,9 @@ func TestPushRulesIsSetCountsFileSize(t *testing.T) {
 	if !(&PushRulesSpec{MaxFileSizeMiB: 10}).IsSet() {
 		t.Error("max_file_size_mib alone reads as no rule")
 	}
+	if (&PushRulesSpec{DenyNewExecutables: true}).IsSet() {
+		t.Error("deny_new_executables alone reads as a rule, but nothing enforces it yet")
+	}
 	orig := RunPolicySpec{PushRules: &PushRulesSpec{MaxFileSizeMiB: 10}}
 	if got := orig.Clone().PushRules.MaxFileSizeMiB; got != 10 {
 		t.Errorf("Clone dropped max_file_size_mib: got %d, want 10", got)
