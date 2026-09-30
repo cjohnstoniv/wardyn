@@ -195,7 +195,7 @@ func (s *Server) mintADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, org 
 	pat, err := client.Create(ctx, org, access.AccessToken, req)
 	var perr *adoPATError
 	switch {
-	case errors.As(err, &perr) && perr.Reason() == adoPATReasonPolicyBlocked:
+	case errors.As(err, &perr) && perr.Reason() == reasonADOPATPolicyBlocked:
 		s.noteADOMintBlocked(ctx, cfg.RowID, owner, true)
 	case err == nil:
 		// Masked process-wide under its own name until it expires: one name per

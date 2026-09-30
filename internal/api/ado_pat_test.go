@@ -173,7 +173,7 @@ func TestMintAccess_RowNamingAnotherAppNeverMintsAsAPublicClient(t *testing.T) {
 	mf.fake.OnIssue(func(entrafake.IssuedToken) { issued++ })
 	cfg := mf.cfg
 	cfg.LoginClientID = "ffffffff-0000-1111-2222-333333333333" // the console signs in with another app
-	cfg.ClientSecret = ""                                       // so the source sends this row no secret
+	cfg.ClientSecret = ""                                      // so the source sends this row no secret
 	_, err := mf.srv.mintAccess(context.Background(), cfg, mf.subject)
 	if !errors.Is(err, ErrADOMintNeedsSecret) {
 		t.Fatalf("mintAccess err = %v, want ErrADOMintNeedsSecret", err)
@@ -331,7 +331,7 @@ func TestOrgCheck_Canary1Refused(t *testing.T) {
 		mf.connect(t)
 		mf.ado.SetPatLifespanLimit(time.Hour, adofake.PatTokenErrorLifespanPolicyViolation)
 		res := mf.orgCheckResult(t)
-		if res.TokenLife != adoOrgCheckRefused || res.Refusal != adoPATReasonLifespanPolicy || res.Lifespan != adoOrgCheckOn {
+		if res.TokenLife != adoOrgCheckRefused || res.Refusal != reasonADOPATLifespanPolicy || res.Lifespan != adoOrgCheckOn {
 			t.Fatalf("result = %+v, want refused / lifespan policy / on", res)
 		}
 	})
@@ -340,7 +340,7 @@ func TestOrgCheck_Canary1Refused(t *testing.T) {
 		mf.connect(t)
 		mf.ado.SetPatCreateError(adofake.PatTokenErrorAccessDenied)
 		res := mf.orgCheckResult(t)
-		if res.TokenLife != adoOrgCheckRefused || res.Refusal != adoPATReasonPolicyBlocked || res.Lifespan != adoOrgCheckUnknown {
+		if res.TokenLife != adoOrgCheckRefused || res.Refusal != reasonADOPATPolicyBlocked || res.Lifespan != adoOrgCheckUnknown {
 			t.Fatalf("result = %+v, want refused / policy blocked / unknown", res)
 		}
 		got := mf.srv.scmAccessValue(context.Background(), mf.site, mf.subject)
@@ -459,7 +459,7 @@ func TestADOPATClient_CreateAndRevokeAgainstTheFake(t *testing.T) {
 	ado.SetPatCreateError(adofake.PatTokenErrorGlobalPolicyViolation)
 	_, err = c.Create(ctx, "contoso", "entra", adoPATRequest{DisplayName: "x", Scope: "vso.code", ValidTo: validTo})
 	var perr *adoPATError
-	if !errors.As(err, &perr) || perr.Reason() != adoPATReasonPolicyBlocked {
+	if !errors.As(err, &perr) || perr.Reason() != reasonADOPATPolicyBlocked {
 		t.Fatalf("policy refusal = %v, want an adoPATError reading policy blocked", err)
 	}
 	if _, err := c.Create(ctx, "contoso/../x", "entra", adoPATRequest{}); err == nil {

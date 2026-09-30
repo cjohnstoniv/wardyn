@@ -63,7 +63,7 @@ type adoOrgCheckResult struct {
 	Permissions string `json:"permissions"`
 	// TokenLife: accepted | refused — canary 1, a token of PATMaxHours.
 	TokenLife string `json:"token_life,omitempty"`
-	// Refusal is canary 1's adoPATReason* when it was refused.
+	// Refusal is canary 1's reasonADOPAT* when it was refused.
 	Refusal string `json:"refusal,omitempty"`
 	// Lifespan: on | off | unknown — the organisation's maximum token lifespan
 	// policy, from canary 2.
