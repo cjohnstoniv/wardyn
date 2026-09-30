@@ -1051,7 +1051,7 @@ func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 
 	// The same spec as dispatch leaves it: the grants the lane really writes.
 	dispatched := spec
-	dispatched.EligibleGrants = adoEntraPostureGrants("contoso")
+	dispatched.EligibleGrants = adoEntraPostureGrants("contoso", types.ADOTokenModeBearer)
 	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded()), types.CC2)
 	afterLevel, afterBound := composer.FoldAutonomy(rubric, after)
 

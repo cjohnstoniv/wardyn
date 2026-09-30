@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // pat is one minted personal access token.
@@ -139,7 +141,7 @@ func (s *Server) handlePatsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := &pat{
-		authorizationID: randHex(16),
+		authorizationID: uuid.NewString(), // the real service answers a GUID
 		displayName:     displayName,
 		scope:           scope,
 		validTo:         validTo,

@@ -34,7 +34,8 @@ const (
 	providers400EntraCeil = "git[%d].entra.capability_ceiling: name at least one capability — an empty ceiling has no reading that is not a guess"
 	providers400EntraShar = "git[%d].credential_source: the %q lane needs per_user — there is no such thing as a shared Entra sign-in"
 	providers400EntraProf = "git[%d].entra.default_profile: %q is outside capability_ceiling"
-	providers400EntraMint = "git[%d].entra.token_mode: minted_pat is not yet available; use one of: bearer, own_pat"
+	providers400EntraS1   = "git[%d].entra.token_mode: Per-run tokens need this row to use Wardyn's own sign-in app, and that app to have a client secret. Name Wardyn's app here and set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect."
+	providers400EntraApp  = "git[%d].entra.client_id: git[%d] creates per-run tokens with this app registration, so Entra sign-in can't use it: its tokens would let a run create tokens. Name another app, or keep Wardyn creating a token for each run."
 	providers400EntraHrs  = "git[%d].entra.pat_max_hours: Enter 1 to %d hours."
 	providers400EntraDays = "git[%d].entra.pat_max_days: Enter 1 to %d days."
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
@@ -166,12 +167,6 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 			return fmt.Errorf(providers400EntraProf, i, string(c))
 		}
 	}
-	// minted_pat is refused BY NAME, ahead of the generic closed-set check, so
-	// the admin reads that it is not yet available rather than "not a token
-	// mode". It stays in the closed set: the mode is named, just not writable.
-	if cfg.TokenMode == types.ADOTokenModeMintedPAT {
-		return fmt.Errorf(providers400EntraMint, i)
-	}
 	if cfg.TokenMode != "" && !cfg.TokenMode.Valid() {
 		return fmt.Errorf(providers400EntraMode, i, string(cfg.TokenMode),
 			strings.Join(types.ClosedADOTokenModeList(), ", "))
@@ -193,6 +188,49 @@ func grantableCapabilities(i int, field string, caps []adoscope.Capability) erro
 		if !c.Grantable() {
 			return fmt.Errorf(providers400EntraCap, i, field, j, string(c),
 				adoscope.GrantableCapabilityList())
+		}
+	}
+	return nil
+}
+
+// validateADOTokenModes holds a block's Azure DevOps token modes to the two
+// rules that need more than the rows. Both doors run it beside
+// validateWorkspaceProviders, whose rules are pure.
+//
+//   - S1: a minted_pat row creates tokens with the stored sign-in of the
+//     console's own app, and that app must hold a secret, so a stolen store
+//     alone cannot create tokens. The console's secret is sent to no other app,
+//     so the row must name the console's tenant and client. With no OIDC
+//     sign-in there is no such app, and minted_pat is refused.
+//   - A bearer row may not name the app a minted_pat row creates tokens with:
+//     that app holds the token permissions, and Entra hands every bearer it
+//     issues all of them.
+func (s *Server) validateADOTokenModes(p *types.WorkspaceProviders) error {
+	if p == nil {
+		return nil
+	}
+	var loginClient, loginTenant string
+	var hasSecret bool
+	if s.cfg.ADOLoginFacts != nil {
+		loginClient, loginTenant, hasSecret = s.cfg.ADOLoginFacts()
+	}
+	minted := map[string]int{}
+	for i, row := range p.Git {
+		if row.Entra == nil || row.Entra.TokenMode != types.ADOTokenModeMintedPAT {
+			continue
+		}
+		if !hasSecret || loginClient == "" || !strings.EqualFold(row.Entra.ClientID, loginClient) ||
+			!strings.EqualFold(row.Entra.TenantID, loginTenant) {
+			return fmt.Errorf(providers400EntraS1, i)
+		}
+		minted[strings.ToLower(row.Entra.ClientID)] = i
+	}
+	for i, row := range p.Git {
+		if row.Entra == nil || cmpTokenMode(row.Entra.TokenMode) != types.ADOTokenModeBearer {
+			continue
+		}
+		if j, ok := minted[strings.ToLower(row.Entra.ClientID)]; ok {
+			return fmt.Errorf(providers400EntraApp, i, j)
 		}
 	}
 	return nil

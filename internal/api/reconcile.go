@@ -571,6 +571,10 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				if err := s.sweepLapsedRunTokens(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: lapsed run token sweep", slog.Any("err", err))
 				}
+				// Azure DevOps personal access tokens, on their own slower clock.
+				if err := s.sweepRunPATs(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run personal access token sweep", slog.Any("err", err))
+				}
 			}()
 		}
 	}
