@@ -280,8 +280,15 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 // unanswerable check ends the stream too — the reconnect re-authenticates.
 // The admin token is not a session, so nothing revokes it here.
 func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt time.Time) bool {
-	if s.cfg.SessionRevocations == nil || principal == adminTokenPrincipal {
+	if s.cfg.SessionRevocations == nil {
 		return false
+	}
+	// The admin token authenticated as the system with no device behind it; a
+	// device keeps the check (a revoke-all still ends its stream).
+	if actorType, _ := actorFromRequest(r); actorType == types.ActorSystem {
+		if _, isDevice := deviceFromContext(r.Context()); !isDevice {
+			return false
+		}
 	}
 	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
 	return err != nil || revoked
