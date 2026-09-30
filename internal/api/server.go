@@ -808,7 +808,8 @@ type Server struct {
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates inflightCreates
+	creates   inflightCreates
+	runEvents runEventHub // each run's lifecycle event ring (run_events.go)
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
 	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is

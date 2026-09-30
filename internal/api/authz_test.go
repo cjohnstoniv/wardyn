@@ -586,6 +586,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
@@ -764,7 +765,16 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	for _, f := range shape {
 		f(&cfg)
 	}
-	return New(cfg), ast, aap, rs
+	return matrixServer(cfg), ast, aap, rs
+}
+
+// matrixServer is New with the run event stream's hold cut to nothing: that
+// route holds its connection open, and a matrix probe needs the answer, not
+// the stream.
+func matrixServer(cfg Config) *Server {
+	srv := New(cfg)
+	srv.runEvents.hold = time.Nanosecond
+	return srv
 }
 
 // newAuthzMatrixServerWithUI is newAuthzMatrixServer built THE WAY THE SHIPPED
@@ -794,7 +804,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	ast.siteCfg = authzMatrixSiteConfig()
 	cfg.UIDir = dir
-	return New(cfg)
+	return matrixServer(cfg)
 }
 
 func TestAuthzMatrix(t *testing.T) {
@@ -1282,9 +1292,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// they replace — both registrations are still classOwner, so the probe
 		// count grows by exactly the three new patterns (20 -> 23); 24 since
 		// #1197 L2 added PATCH /runs/{id}/title; 25 since #572 added POST
-		// /runs/{id}/resume.
-		if probed != 25 {
-			t.Errorf("probed %d classOwner routes, want 25 — a route that left classOwner takes its tier "+
+		// /runs/{id}/resume; 26 since #1144 added GET /runs/{id}/events.
+		if probed != 26 {
+			t.Errorf("probed %d classOwner routes, want 26 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

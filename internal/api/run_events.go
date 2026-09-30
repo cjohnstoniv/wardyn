@@ -1,0 +1,246 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Per-run lifecycle events (#1144): GET /api/v1/runs/{id}/events, a
+// text/event-stream of the closed client.RunEvent vocabulary, fed by the state
+// moves dispatch and the terminal paths already make (casRunState, the
+// dispatcher's OnWaiting, the idle reaper's call into this package). The feed
+// is an in-memory ring per run — resumable with Last-Event-ID within the
+// daemon's lifetime, no table behind it — which is correct for the same reason
+// attachHolders is: replicas>1 is refused by construction (deployment.yaml).
+package api
+
+import (
+	"cmp"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
+)
+
+const (
+	// runEventsBeat spaces the keepalive comment, which also keeps a proxy's
+	// inter-read timeout (nginx proxy_read_timeout) from cutting an idle stream,
+	// and the store re-read that ends a stream whose run ended on a path that
+	// does not emit (a lease end, or a run that ended before a restart).
+	runEventsBeat = 15 * time.Second
+	// runEventsHold bounds one connection. Authentication runs once per
+	// request, so a stream held forever would keep serving a session revoked
+	// after it opened; closing it makes the client reconnect (Last-Event-ID)
+	// through the middleware again.
+	runEventsHold = 5 * time.Minute
+	// runEventsRetention keeps an ended run's ring for a reconnecting reader.
+	// After it, a reader gets the synthesized ended event alone.
+	runEventsRetention = 10 * time.Minute
+)
+
+// runEventHub holds every run's ring. Zero value is ready to use.
+// ponytail: a run whose end reaches no emitter and no reader keeps its ring
+// (a few small events) for the daemon's lifetime.
+type runEventHub struct {
+	mu    sync.Mutex
+	rings map[uuid.UUID]*runEventRing
+	// beat and hold override runEventsBeat and runEventsHold for one server,
+	// so a test need not wait real seconds; zero means the constant.
+	beat, hold time.Duration
+}
+
+type runEventRing struct {
+	events []client.RunEvent
+	wake   chan struct{} // closed and replaced on every append
+}
+
+func (r *runEventRing) ended() bool {
+	return len(r.events) > 0 && r.events[len(r.events)-1].Type == client.RunEventEnded
+}
+
+// ringLocked returns runID's ring, creating it. Caller holds h.mu.
+func (h *runEventHub) ringLocked(runID uuid.UUID) *runEventRing {
+	if h.rings == nil {
+		h.rings = map[uuid.UUID]*runEventRing{}
+	}
+	r := h.rings[runID]
+	if r == nil {
+		r = &runEventRing{wake: make(chan struct{})}
+		h.rings[runID] = r
+	}
+	return r
+}
+
+// append adds evs to runID's ring unless the ring has ended: once ended, a
+// ring is closed, which is also what makes a KILLED->KILLED re-kill silent.
+func (h *runEventHub) append(runID uuid.UUID, evs ...client.RunEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.appendLocked(runID, h.ringLocked(runID), evs...)
+}
+
+func (h *runEventHub) appendLocked(runID uuid.UUID, r *runEventRing, evs ...client.RunEvent) {
+	if r.ended() {
+		return
+	}
+	now := time.Now().UTC()
+	for _, ev := range evs {
+		ev.ID = uint64(len(r.events)) + 1
+		ev.At = now
+		r.events = append(r.events, ev)
+	}
+	close(r.wake)
+	r.wake = make(chan struct{})
+	if r.ended() {
+		time.AfterFunc(runEventsRetention, func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.rings[runID] == r {
+				delete(h.rings, runID)
+			}
+		})
+	}
+}
+
+// moved maps one won state CAS onto the vocabulary. casRunState is the one
+// place every CAS is issued, so this is the one hook for all of them.
+func (h *runEventHub) moved(runID uuid.UUID, from, to types.RunState) {
+	switch {
+	case from.IsTerminal():
+		return
+	case to == types.RunStarting:
+		h.append(runID, client.RunEvent{Type: client.RunEventProvisioning})
+	case to == types.RunRunning && from == types.RunStarting:
+		h.append(runID, client.RunEvent{Type: client.RunEventReady})
+	case to == types.RunFailed:
+		h.append(runID, client.RunEvent{Type: client.RunEventFailed, Reason: failedPhase(from)},
+			client.RunEvent{Type: client.RunEventEnded, State: to})
+	case to.IsTerminal():
+		h.append(runID, client.RunEvent{Type: client.RunEventEnded, State: to})
+	}
+}
+
+// failedPhase is a FAILED event's machine reason: the state it failed from.
+// The free-text failure hint is deliberately not it — it can carry a
+// substrate's error text, and this feed carries no log content.
+func failedPhase(from types.RunState) string {
+	switch from {
+	case types.RunPending:
+		return client.RunFailedNotStarted
+	case types.RunStarting:
+		return client.RunFailedStartFailed
+	default:
+		return client.RunFailedRunFailed
+	}
+}
+
+// idleStopped records the idle reaper's RUNNING->STOPPED win.
+func (h *runEventHub) idleStopped(runID uuid.UUID) {
+	h.append(runID, client.RunEvent{Type: client.RunEventIdleStopped},
+		client.RunEvent{Type: client.RunEventEnded, State: types.RunStopped})
+}
+
+// onWaiting wraps dispatch's OnWaiting so the first image pull the substrate
+// reports becomes one pulling event; every other waiting reason is detail the
+// status line already carries, not a lifecycle step.
+func (h *runEventHub) onWaiting(runID uuid.UUID, next func(string)) func(string) {
+	return func(detail string) {
+		if statusDetailReason(detail) == "Pulling" {
+			h.mu.Lock()
+			r := h.ringLocked(runID)
+			if len(r.events) > 0 && r.events[len(r.events)-1].Type == client.RunEventProvisioning {
+				h.appendLocked(runID, r, client.RunEvent{Type: client.RunEventPulling})
+			}
+			h.mu.Unlock()
+		}
+		if next != nil {
+			next(detail)
+		}
+	}
+}
+
+// settle ends a ring whose run the store already reports terminal. A reader
+// landing between a FAILED write and its emit sees ended without the failed
+// event before it.
+func (h *runEventHub) settle(runID uuid.UUID, state types.RunState) {
+	if state.IsTerminal() {
+		h.append(runID, client.RunEvent{Type: client.RunEventEnded, State: state})
+	}
+}
+
+// since returns runID's events after id `after`, the channel the next append
+// closes, and whether the ring has ended. An `after` beyond the ring came from
+// a previous daemon (or a pruned ring): ids only grow within one, so the whole
+// ring is new to that reader.
+func (h *runEventHub) since(runID uuid.UUID, after uint64) ([]client.RunEvent, <-chan struct{}, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r := h.ringLocked(runID)
+	if after > uint64(len(r.events)) {
+		after = 0
+	}
+	return append([]client.RunEvent(nil), r.events[after:]...), r.wake, r.ended()
+}
+
+// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner-or-admin
+// (getRunAuthorized): a caller who cannot read the run gets the same 404
+// GET /runs/{id} answers. The stream ends after the ended event, after
+// runEventsHold, or when the client or the daemon goes away.
+func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "run")
+	if !ok {
+		return
+	}
+	run, ok := s.getRunAuthorized(w, r, id)
+	if !ok {
+		return
+	}
+	// A malformed Last-Event-ID replays from the start rather than refusing:
+	// it is a resume hint, and a full replay is never wrong.
+	after, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-Accel-Buffering", "no")
+	rc := http.NewResponseController(w)
+	daemon := r.Context()
+	if s.cfg.BaseCtx != nil {
+		daemon = s.cfg.BaseCtx
+	}
+	hold := time.NewTimer(cmp.Or(s.runEvents.hold, runEventsHold))
+	defer hold.Stop()
+	beat := time.NewTicker(cmp.Or(s.runEvents.beat, runEventsBeat))
+	defer beat.Stop()
+
+	s.runEvents.settle(id, run.State)
+	for {
+		evs, wake, ended := s.runEvents.since(id, after)
+		for _, ev := range evs {
+			data, _ := json.Marshal(ev)
+			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data); err != nil {
+				return
+			}
+			after = ev.ID
+		}
+		if err := rc.Flush(); err != nil || ended {
+			return
+		}
+		select {
+		case <-wake:
+		case <-beat.C:
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if cur, err := s.cfg.Store.GetRun(r.Context(), id); err == nil {
+				s.runEvents.settle(id, cur.State)
+			}
+		case <-hold.C:
+			return
+		case <-r.Context().Done():
+			return
+		case <-daemon.Done():
+			return
+		}
+	}
+}
