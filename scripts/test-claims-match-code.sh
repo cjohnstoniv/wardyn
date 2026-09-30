@@ -25,8 +25,9 @@
 #          docs carries an age-key source and, with k8s.enabled=true, a
 #          runs-namespace choice (X1a-F1/X1c-F1).
 #     R-02 every internal/runner/k8s `.List(` call has a matching "list" verb
-#          on the chart's Role — the one thing a fake-clientset k8s test can
-#          never catch.
+#          on the chart's Role, and every subresource call (pod logs, ephemeral
+#          containers, exec) has its verbs there too — the one thing a
+#          fake-clientset k8s test can never catch.
 #
 #   MOVED to scripts/test-up-probes.sh (they drive a scripts/up.sh function
 #   against a stub — behavioural tests that belong beside that file's other
@@ -274,5 +275,28 @@ while read -r kind; do
     || fail "internal/runner/k8s calls .${kind}(...).List(...) but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"list\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02)"
 done < "${WORK}/k8s-list-kinds"
 pass "R-02 every resource internal/runner/k8s lists has a 'list' verb on the chart's Role"
+
+# R-02b (#1426) — the same drift on subresources, which no `.List(` ever names:
+# dropping `pods/log get`, `pods/ephemeralcontainers update` or `pods/exec` from
+# the Role leaves every fake-clientset test green and 403s on a real cluster.
+# One row per call site: "<code pattern>@<resource>@<verbs the Role must carry>".
+# The exec row is the executor constructors, not a clientset accessor: the
+# websocket leg issues a GET (verb "get") and the SPDY leg a POST ("create").
+# Comment lines are skipped so a doc mention never satisfies a row.
+# shellcheck disable=SC2016
+sub_rows='\.GetLogs\(@pods/log@get
+\.UpdateEphemeralContainers\(@pods/ephemeralcontainers@update
+remotecommand\.New(SPDY|WebSocket)Executor\(@pods/exec@get create'
+while IFS='@' read -r pat res verbs; do
+  # shellcheck disable=SC2086
+  _calls="$(grep -hE "${pat}" ${k8s_files} | grep -vE '^[[:space:]]*//' || true)"
+  [ -n "${_calls}" ] || fail "no call matching '${pat}' in internal/runner/k8s — this guard would check nothing (R-02b)"
+  _rule_block="$(grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" || true)"
+  for verb in ${verbs}; do
+    grep -q "\"${verb}\"" <<<"${_rule_block}" \
+      || fail "internal/runner/k8s issues a call matching '${pat}' but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"${verb}\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02b)"
+  done
+done <<<"${sub_rows}"
+pass "R-02b every subresource call internal/runner/k8s makes has its verbs on the chart's Role"
 
 echo "test-claims-match-code: self-test PASS"
