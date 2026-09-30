@@ -10,7 +10,7 @@
 # Stage 1: build wardyn-rec and wardyn-git-helper from
 # the repository root — pure-Go CGO_ENABLED=0 builds, fully static, so the
 # runtime stage needs no extra libc for them.
-# Stage 2: debian:bookworm-slim (no Node.js — this image never runs npm/node,
+# Stage 2: debian:trixie-slim (no Node.js — this image never runs npm/node,
 # unlike claude-code/codex-cli) installs AWS CLI v2 from the official zip
 # installer, GPG-signature-verified against AWS's published public key, plus
 # the small toolset the login flow needs.
@@ -78,7 +78,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec   
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-aws-sso    ./cmd/wardyn-aws-sso
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
@@ -116,7 +116,8 @@ LABEL org.opencontainers.image.title="agent-aws-sso" \
 #   wardyn bash`, so every attach path joins the sign-in already running instead
 #   of getting a bare prompt. Without tmux each attach falls through to `bash -i`
 #   and the box is the bare shell finding 4 reported.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade: take the current security updates for packages the pinned base already carries.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         unzip \
@@ -249,17 +250,20 @@ RUN set -eu; \
 ENV AWS_PAGER=""
 
 # Create user `agent` (uid 1000, home /home/agent, work /home/agent/work) —
-# debian's useradd, unlike the node:24-bookworm-slim base the sibling images
+# debian's useradd, unlike the node:24-trixie-slim base the sibling images
 # use, has no pre-existing uid-1000 user to rename.
 # /home/agent/drive is the RESERVED user-drive mount point (runner.DriveTarget),
 # created here owned by agent for the copy-up reason deploy/images/base/Dockerfile
 # states in full: a fresh managed volume inherits the uid/gid of the image directory
 # it is mounted over, so without it a docker_volume drive's root is root-owned and a
 # writable managed drive is read-only in practice for uid 1000.
+# chmod 0755: Debian 13 creates the home 0700 (Debian 12 gave 0755); a run under
+# another uid (the docker-tagged tests, platforms that assign one) must reach it.
 RUN groupadd -g 1000 agent \
  && useradd -m -u 1000 -g agent -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/work /home/agent/drive \
- && chown -R agent:agent /home/agent
+ && chown -R agent:agent /home/agent \
+ && chmod 0755 /home/agent
 
 # Copy the statically-linked binaries from the build stage.
 COPY --from=builder /out/wardyn-rec        /usr/local/bin/wardyn-rec

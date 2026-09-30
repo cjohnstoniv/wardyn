@@ -580,10 +580,10 @@ jobs:
   #   wardynd          — a $BUILDPLATFORM node UI stage + a cross-compiled Go
   #                      stage + a COPY-only distroless runtime (no emulation
   #                      anywhere). wardyn-proxy is the same shape minus the UI.
-  #   agent-claude-code — a bookworm runtime doing apt-get + `npm install -g`
+  #   agent-claude-code — a trixie runtime doing apt-get + `npm install -g`
   #                      as the TARGET arch, i.e. the emulated path.
   #                      agent-codex-cli is the same shape.
-  #   agent-aws-sso    — a bookworm runtime that SELECTS its download by
+  #   agent-aws-sso    — a trixie runtime that SELECTS its download by
   #                      TARGETARCH (x86_64 vs aarch64 AWS CLI installer, GPG
   #                      verified). Nothing else exercises that branch.
   #
@@ -1298,6 +1298,87 @@ jobs:
           node-version: '24' # the agent image's base is node:24
       - name: Probe the pinned Claude Code CLI for managed-settings drift
         run: ./scripts/check-managed-settings-drift.sh
+
+  # Drift in what is ALREADY published. The ci.yml trivy job scans what a PR
+  # builds; this scans what adopters actually pull, because a CVE disclosed after
+  # a release lands in the images we shipped a week ago and no PR touches them.
+  # It resolves the latest published release (prereleases included, drafts
+  # excluded) and scans its five agent images from ghcr with ci.yml's STRICT
+  # policy: any CRITICAL, fixed or not, minus .trivyignore. Adopters mirror
+  # through scanners that count a CRITICAL fixed in any Debian release, so a red
+  # here means a patch release is due before one of them hits it.
+  #
+  # DELIBERATELY NOT in release.yml's watched= list (and so not in
+  # notify-new-lanes.needs, which guard 13 pins to it): it scans images that are
+  # already out, so it must never block the NEXT release, and the next release is
+  # how a red here gets fixed. It notifies through its own job below instead; both
+  # are in scripts/test-repo-guards.sh's NOTIFY_EXEMPT for that reason.
+  # Nothing here retags, rebuilds or otherwise touches a published image.
+  published-image-scan:
+    name: published-image-scan (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout (.trivyignore) and `gh release list`; the images are public
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [agent-base, agent-codex-cli, agent-aws-sso, agent-vscode, agent-novnc]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve the latest published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')"
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::no usable published release tag (got '${tag}')"; exit 1; }
+          echo "Scanning ${{ matrix.name }} from release ${tag}"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Trivy strict scan of the published image (CRITICAL, fixed or not)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/cjohnstoniv/${{ matrix.name }}:${{ steps.release.outputs.version }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+
+  notify-published-image-scan:
+    needs: [published-image-scan]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the published-image issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="nightly: a published agent image has a CRITICAL vulnerability"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+          else
+            body=$(printf '%s\n' \
+              "The strict trivy scan (any CRITICAL, fixed or not, minus .trivyignore) of the latest published release's agent images failed: agent-base, agent-codex-cli, agent-aws-sso, agent-vscode or agent-novnc." \
+              "" \
+              "These images are already out, so a patch release is due. The run log names the image, the package and the CVE." \
+              "" \
+              "Run: $RUN_URL")
+            gh issue create --title "$title" --body "$body"
+          fi
 
   notify-new-lanes:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg]

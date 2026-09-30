@@ -1,6 +1,9 @@
 # trivy allowlist — CVEs accepted for the images CI scans.
 #
-# Consumed by ci.yml's `trivy` job (severity CRITICAL, --ignore-unfixed), which
+# Consumed by ci.yml's `trivy` job, which fails on a CRITICAL twice over: with
+# --ignore-unfixed (a fix in the image's own Debian release), and without it (a
+# fix in ANY release, the bar adopters' mirror scanners hold us to), and by
+# nightly.yml's `published-image-scan` of the images already published. It
 # scans every image release.yml publishes — wardynd, wardyn-proxy, agent-base,
 # agent-codex-cli, agent-aws-sso, agent-vscode and agent-novnc (#141), not just
 # one of them. One CVE id per line; `#` starts a comment. Trivy applies this
@@ -11,7 +14,29 @@
 # button): every id needs a comment naming (1) the package, (2) WHY it does not
 # reach us in this image, and (3) the date + who accepted it. An entry with no
 # reason is a finding someone hid. Delete an entry the moment the base image
-# ships a fix — --ignore-unfixed already suppresses the no-fix-available case,
-# so anything listed here is a CVE we could have patched and chose not to.
-#
-# Empty on purpose: no image in the scan matrix has an accepted CRITICAL.
+# ships a fix. The strict pass does not skip a no-fix-available CRITICAL, so an
+# entry here is either one we could have patched and chose not to, or one no
+# release of our base fixes yet — say which.
+
+# openssh-client / openssh-sftp-server (every agent image). Use-after-free in
+# ssh when a server changes its host key during a key re-exchange. No release
+# of our base fixes it yet: Debian 13 carries 1:10.0p1-7+deb13u4, vulnerable,
+# "minor issue, no DSA"; trixie-backports 10.3p1 is vulnerable too; the fix is
+# 10.4p1+, in forky/sid only. Why it does not reach us: the bug is in the ssh
+# client, and the only ssh client runs inside the sandbox as its unprivileged
+# user (uid 1000), with egress only through the proxy; no control-plane code
+# runs ssh (the SSH gateway uses sftp-server as a subsystem, not the client).
+# At worst a malicious server crashes or subverts a client the run itself
+# started. It was in every bookworm image too.
+# Accepted 2026-09-30 by the owner for 0.8.3; delete when Debian 13 ships a fix.
+CVE-2026-60002
+
+# libxml2 (agent-novnc only). Use-after-free in xmlParseInternalSubset: a
+# crafted XML document can crash the parsing process (denial of service). No
+# release of our base fixes it yet: Debian 13 carries
+# 2.12.7+dfsg+really2.9.14-2.1+deb13u3, vulnerable, "no DSA"; fixed in
+# forky/sid only. Why it does not reach us: the worst case is the novnc
+# sandbox's own process crashing on a document the run itself fed it; nothing
+# outside the sandbox parses through it. Accepted 2026-09-30 by the owner for
+# 0.8.3; delete when Debian 13 ships a fix.
+CVE-2026-6653

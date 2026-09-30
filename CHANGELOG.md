@@ -8,6 +8,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-09-30
+
+### Security
+
+- **The agent images run on Debian 13 (trixie), which fixes three CRITICAL Perl vulnerabilities that
+  Debian 12 does not.** `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode` and
+  `agent-novnc` moved from Debian 12 (bookworm) to Debian 13. Three CRITICAL Perl vulnerabilities
+  (CVE-2026-57433, CVE-2026-12087, CVE-2026-13221, in `perl`, `perl-base` and `libperl5.36`) have
+  no fix in Debian 12, and container scanners that count a fix in any Debian release refused the
+  images. Perl can't be left out: `perl-base` is essential to Debian and `git` depends on `perl`.
+  Every agent image build now also runs `apt-get upgrade`, so packages the pinned base already
+  carries take their security updates (today, OpenSSL's `libssl3t64`). Two CRITICALs
+  that no stable Debian release fixes yet, and that Debian rates minor, stay in the images and are
+  accepted with reasons in `.trivyignore`: `openssh-client` CVE-2026-60002 (every agent image) and
+  `libxml2` CVE-2026-6653 (`agent-novnc`). Both were in the 0.8.2 images too. `wardynd` and
+  `wardyn-proxy` are unchanged. No configuration changes.
+- **CI fails on any CRITICAL in a published image, fixed or not.** The image scan used to fail only
+  on a CRITICAL with a fix in the image's own Debian release. It now also fails on any CRITICAL, the
+  way adopters' mirror scanners judge an image; `.trivyignore` stays the only exception path, and
+  every entry there names its package, its reason and when it was accepted.
+- **The nightly scans the images already published.** A new nightly job scans the latest release's
+  agent images with the same policy, so a vulnerability published after a release is found before an
+  adopter's scanner finds it.
+
 ## [0.8.2] — 2026-09-30
 
 ### Before you upgrade: Entra changes (Azure DevOps)

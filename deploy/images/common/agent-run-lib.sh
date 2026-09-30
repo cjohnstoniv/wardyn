@@ -299,7 +299,7 @@ provision_git_helper_secret() {
     local secret_file="${dir}/git-helper.secret"
     mkdir -p "$dir"
     # Generate a fresh 256-bit random secret as hex (no shell-special chars).
-    # /dev/urandom + od are always present in the bookworm-slim base image.
+    # /dev/urandom + od are always present in the trixie-slim base image.
     local secret
     secret="$(od -An -tx1 -N 32 /dev/urandom | tr -d ' \n')"
     if [[ -z "$secret" ]]; then
