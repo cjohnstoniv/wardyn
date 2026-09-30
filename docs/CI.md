@@ -376,8 +376,10 @@ runner-minutes as well as minutes.
 `pull_request:` carries no `branches:` filter — that field matches the PR's
 *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>`
 branches (#90), not on `main`, so a filtered trigger gave a stacked PR no
-checks at all. `push:` stays narrow to `main`, `master`, `release/**` and
-`feature/**`, since every commit already gets a run from its own PR.
+checks at all. `push:` stays narrow to `main`, `master` and `feature/**`, since
+every commit already gets a run from its own PR. `release/**` is absent on purpose:
+a release branch only fast-forwards to a tree its own PR run tested, and
+`release.yml` accepts that run by tree (`scripts/green-by-tree.sh`).
 
 **Before and after #211**, measured from the GitHub Actions API: job times over
 the 60 most recent completed `ci.yml` runs as of 2026-09-21 05:00Z (a "green run" is one
@@ -451,6 +453,7 @@ split below; timings for the current aggregator and the new jobs remain pending:
 | `helm` | 60 | 0.1 | 0.7 | 10 |
 | `dco` | 60 | 0.1 | 0.1 | 10 |
 | `main-red` | – | pending | pending | 10 |
+| `notify-flaky` | – | pending | pending | 10 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
