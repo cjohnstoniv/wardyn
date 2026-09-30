@@ -39,8 +39,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   blocked by the organisation, or add, replace, expiring and expired. New Run says what the run's
   token carries and asks to connect before launching. The run page lists each token the run held,
   oldest first, and an approval says it adds the access to the run's token. A row the upgrade
-  switched off says why and turns on with "Save and turn on". The token choice is shown once the
-  server lanes that create the tokens ship; the own-token choice saves today.
+  switched off says why and turns on with "Save and turn on". An Azure DevOps row no longer shows
+  lane checkboxes or a place to store a shared token or key: "Add provider" writes the entra lane
+  with a token choice, and an Azure DevOps Server address makes the row a git-only per-person token
+  row with no Entra block.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

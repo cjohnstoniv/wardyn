@@ -56,7 +56,7 @@ describe("AdoLaunchNote", () => {
   });
 
   it("8a: blocked by the organisation says the launch is refused and who can fix it, with no button", () => {
-    render(<AdoLaunchNote access={access({ state: "blocked" })} connecting={false} onConnect={vi.fn()} />);
+    render(<AdoLaunchNote access={access({ state: "expired_signin", cause: "blocked" })} connecting={false} onConnect={vi.fn()} />);
     expect(screen.getByText(ADO_PAT.LAUNCH_POLICY_REFUSED)).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
@@ -72,6 +72,13 @@ describe("AdoLaunchNote", () => {
     expect(screen.getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
     expect(onConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("a row the console cannot redeem is the admin's to fix: no Connect to press", () => {
+    const { container } = render(
+      <AdoLaunchNote access={access({ state: "expired_signin", cause: "ado_pat_needs_console_app" })} connecting={false} onConnect={vi.fn()} />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("says nothing when connected, on the Entra sign-in lane, or with no answer", () => {
