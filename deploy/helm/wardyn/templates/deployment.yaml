@@ -312,6 +312,15 @@ spec:
             - name: WARDYN_VAULT_KV_MAX_VERSIONS
               value: {{ .vault.maxVersions | quote }}
             {{- end }}
+            {{- with .vault }}
+            {{- with .transitKeyPlatform }}
+            # A second Transit key, reached as rolePlatform, wraps wardynd's own
+            # signing, session and SSH host keys (docs/operations/secrets-and-keys.md
+            # "Two Vault roles"); kek.transit.key then wraps only the credentials.
+            - name: WARDYN_VAULT_TRANSIT_KEY_PLATFORM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key

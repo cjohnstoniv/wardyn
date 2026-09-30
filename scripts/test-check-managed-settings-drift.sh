@@ -5,8 +5,9 @@
 # test-check-managed-settings-drift.sh — the drift probe fails on the drift it exists for,
 # and passes when there is none. A probe that cannot go red is worse than none.
 #
-# Daemon-free, network-free: CLAUDE_CODE_DIR points the probe at a fake installed CLI (a
-# shell script whose text carries the strings a real binary would), inside a throwaway tree.
+# Daemon-free, network-free: CLAUDE_CODE_DIR and CLAUDE_CODE_DIR_ARM64 point the probe at fake
+# installed CLIs (a shell script whose text carries the strings a real binary would), and a
+# fake `docker` on PATH stands in for the behaviour check's container, inside a throwaway tree.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
@@ -20,14 +21,30 @@ cp -r "$ROOT/internal/agentpolicy" "$TMP/internal/"
 pin="$(sed -nE 's/^ARG CLAUDE_CODE_VERSION=(.*)$/\1/p' "$TMP/deploy/images/claude-code/Dockerfile")"
 [ -n "$pin" ] || fail "no CLAUDE_CODE_VERSION pin in the Dockerfile"
 
-# fake_cli <version> <string...>: an installed prefix whose "claude" reports <version> and contains <string...>.
+# fake_cli <version> <string...>: an amd64 prefix whose "claude" reports <version> and contains <string...>,
+# and an arm64 prefix (same version, same strings) that is only ever read.
 fake_cli() {
-    local dir="$TMP/cli" v="$1"; shift
-    rm -rf "$dir"; mkdir -p "$dir/node_modules/@anthropic-ai/claude-code-linux-x64"
-    { echo '#!/bin/sh'; echo "echo '$v (Claude Code)'"; echo 'exit 0'; printf '# %s\n' "$@"; } > "$dir/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
-    chmod +x "$dir/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+    local v="$1" d arch; shift
+    for arch in x64 arm64; do
+        d="$TMP/cli-$arch/node_modules/@anthropic-ai/claude-code-linux-$arch"
+        rm -rf "$TMP/cli-$arch"; mkdir -p "$d"
+        { echo '#!/bin/sh'; echo "echo '$v (Claude Code)'"; echo 'exit 0'; printf '# %s\n' "$@"; } > "$d/claude"
+        chmod +x "$d/claude"
+        printf '{\n  "name": "@anthropic-ai/claude-code-linux-%s",\n  "version": "%s"\n}\n' "$arch" "$v" > "$d/package.json"
+    done
 }
-probe() { CLAUDE_CODE_DIR="$TMP/cli" "$TMP/scripts/check-managed-settings-drift.sh" 2>&1; }
+# A docker that reports the permissionMode a CLI honouring the mounted managed-settings.json would:
+# its defaultMode, or $FAKE_MODE when set (a CLI that ignores the file).
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/docker" <<'FAKE'
+#!/bin/sh
+for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; esac; done
+mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"${FAKE_BYPASS_MODE:-${FAKE_MODE:-$mode}}\"}"
+exit 1
+FAKE
+chmod +x "$TMP/bin/docker"
+probe() { PATH="$TMP/bin:$PATH" CLAUDE_CODE_DIR="$TMP/cli-x64" CLAUDE_CODE_DIR_ARM64="$TMP/cli-arm64" "$TMP/scripts/check-managed-settings-drift.sh" 2>&1; }
 all=(permissions defaultMode disableBypassPermissionsMode disableAutoMode allowManagedHooksOnly allowManagedPermissionRulesOnly /etc/claude-code managed-settings.json)
 
 # 1. Nothing drifted => pass.
@@ -53,7 +70,42 @@ if out="$(probe)"; then fail "a CLI at a version other than the pin must FAIL"; 
 grep -q "not the pinned $pin" <<<"$out" || fail "version mismatch must be named; got: $out"
 echo "ok  a version other than the pin fails"
 
-# 5. An unpinned Dockerfile (a channel) => fail before anything is installed.
+# 5. arm64 gone a key the amd64 binary still has => fail, naming the key and the arch.
+fake_cli "$pin" "${all[@]}"
+printf '# %s\n' permissions defaultMode disableBypassPermissionsMode disableAutoMode allowManagedHooksOnly /etc/claude-code managed-settings.json > "$TMP/cli-arm64/node_modules/@anthropic-ai/claude-code-linux-arm64/claude"
+if out="$(probe)"; then fail "an arm64 CLI missing allowManagedPermissionRulesOnly must FAIL"; fi
+grep -q "key 'allowManagedPermissionRulesOnly' is not in Claude Code $pin (arm64)" <<<"$out" || fail "arm64 drift must name the key and the arch; got: $out"
+grep -q "(amd64)" <<<"$out" && fail "amd64 still has the key and must not be blamed; got: $out"
+echo "ok  an arm64-only missing key fails and is named"
+
+# 6. arm64 package at another version than amd64 => fail.
+fake_cli "$pin" "${all[@]}"
+sed -i 's/"version": ".*"/"version": "0.0.1"/' "$TMP/cli-arm64/node_modules/@anthropic-ai/claude-code-linux-arm64/package.json"
+if out="$(probe)"; then fail "an arm64 package at another version than amd64 must FAIL"; fi
+grep -q "arm64 package version '0.0.1'.*not the amd64 one '$pin'" <<<"$out" || fail "arm64 version skew must be named; got: $out"
+echo "ok  an arm64 version that differs from amd64 fails"
+
+# 7. A CLI that reads the file but does not act on it => fail naming the document.
+fake_cli "$pin" "${all[@]}"
+if out="$(FAKE_MODE=bypassPermissions probe)"; then fail "a CLI reporting a mode other than the managed defaultMode must FAIL"; fi
+grep -q "permissionMode 'bypassPermissions', the managed defaultMode is" <<<"$out" || fail "behaviour drift must name the mode; got: $out"
+echo "ok  a reported mode that differs from the file fails"
+
+# 8. Bypass not locked under --permission-mode bypassPermissions => fail. The fake answers the plain
+# run correctly and the bypass run with the bypass mode, as a CLI ignoring disableBypassPermissionsMode would.
+cat > "$TMP/bin/docker" <<'FAKE'
+#!/bin/sh
+for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; bypassPermissions) by=1 ;; esac; done
+mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
+[ -z "${by:-}" ] || mode=bypassPermissions
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\"}"
+exit 1
+FAKE
+if out="$(probe)"; then fail "a CLI that lets --permission-mode bypassPermissions through must FAIL"; fi
+grep -q "bypass lock is not honoured" <<<"$out" || fail "an unlocked bypass must be named; got: $out"
+echo "ok  an unlocked bypass fails"
+
+# 9. An unpinned Dockerfile (a channel) => fail before anything is installed. Last: it leaves the copy unpinned.
 fake_cli "$pin" "${all[@]}"
 sed -i -E 's/^ARG CLAUDE_CODE_VERSION=.*/ARG CLAUDE_CODE_VERSION=latest/' "$TMP/deploy/images/claude-code/Dockerfile"
 if out="$(probe)"; then fail "CLAUDE_CODE_VERSION=latest must FAIL"; fi

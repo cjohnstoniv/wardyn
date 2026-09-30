@@ -28,6 +28,9 @@ import (
 // (-rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
 // one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
+	if *f.rewrapRetirePlatformKey && !*f.rewrap {
+		return true, fmt.Errorf("refusing to run: -rewrap-retire-platform-key is a mode of -rewrap; run `wardynd -rewrap -rewrap-retire-platform-key`")
+	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
 	}

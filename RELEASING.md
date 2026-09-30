@@ -39,6 +39,10 @@ document is that process, written down.
   `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`), not a
   `ci.yml` job, so a pull request never runs it, and it is the only build of
   the arm64 half before `release.yml` publishes it.
+  A scheduled nightly that lands on the tag's sha after your dispatch can shadow
+  it in `preflight-green`, because it reads only the newest run on that sha and a
+  scheduled run skips the staging jobs. If that happens, re-dispatch the nightly
+  before tagging.
 - `release.yml`'s own `preflight-green` job (T-06, #666) checks the two bullets
   above again, automatically, on the tag commit itself, the moment step 5
   pushes the tag: every required status check green on that exact SHA, plus

@@ -72,9 +72,10 @@ export interface AccessResponse {
   // that only needs presence.
   operator_emails: string[];
   allow_email_mappings: boolean;
-  // Whether WARDYN_OIDC_EMAIL_DOMAINS is set — EMAIL_KEY_BODY's
+  // Whether sign-in enforces email_verified (WARDYN_OIDC_EMAIL_DOMAINS is set
+  // or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is on) — EMAIL_KEY_BODY's
   // email_verified clause only applies when this is false (that claim is
-  // untrue once a domains list is configured).
+  // untrue once either is configured).
   email_domains_configured: boolean;
   // provider: human-facing IdP name, derived server-side from the OIDC issuer
   // URL (e.g. "Microsoft Entra ID") — the SSO chip names WHERE sign-in comes

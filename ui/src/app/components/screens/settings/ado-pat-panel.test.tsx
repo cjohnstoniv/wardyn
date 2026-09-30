@@ -158,6 +158,25 @@ describe("a row where each person adds their own token", () => {
     token_scopes: ["Code (Read & write)", "Project and Team (Read)", "Work Items (Read)"],
   };
 
+  // #1445: the refused card is drawn apart from the live one by its primary
+  // Replace button and its danger border, which no text assertion can see.
+  it("refused: Replace token is the primary button and the card carries the danger border; live has neither", async () => {
+    const refused_at = new Date(2000, 9, 2, 9, 30).toISOString();
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/account"]}>
+        <AdoConnectionCard status={status({ ...own, state: "live", source: "own", expires_on: "2000-10-27", refused_at })} onChanged={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await expandCard("Azure DevOps");
+    expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toHaveClass("bg-primary");
+    expect(document.getElementById("azure-devops")).toHaveClass("border-danger");
+    unmount();
+    renderCard({ ...own, state: "live", source: "own", expires_on: "2000-10-27" });
+    await expandCard("Azure DevOps");
+    expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).not.toHaveClass("bg-primary");
+    expect(document.getElementById("azure-devops")).not.toHaveClass("border-danger");
+  });
+
   it("10b: no token yet offers Add your personal access token, and the dialog says what to create", async () => {
     renderCard({ ...own, state: "not_configured" });
     await expandCard("Azure DevOps");
