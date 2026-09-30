@@ -96,6 +96,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
   row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
   was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **Reviving, restarting or extending a run whose model provider was deleted or turned off is
+  refused up front (#1081).** The revive used to replace the proxy and answer `200`, and the run's
+  first model call was then refused. A run carrying a credential its provider authored is now
+  refused `409` with `model_provider_gone` (the provider was deleted, or re-created under the same
+  id) or `model_provider_disabled`, audited as `run.revive` or `run.end.set` denied, before anything
+  changes.
+- **Purging a model provider stops masking its people's sign-in secrets (#1001).** An AWS sign-in's
+  refresh token and client secret stayed in the process-wide output mask until `wardynd` restarted
+  after their provider was deleted or moved; they are now let go one sweep grace later, as for any
+  deleted credential.
+- **A run that fails on model access says so, in the agent's own words (#1280).** On the per-user
+  AWS SSO Bedrock lane the proxy cannot see the model's refusal, so such a run ended `FAILED` with no
+  reason. When a run exits non-zero with no reason of its own and its recording's last lines name a
+  model-access problem, that line is its failure hint, quoted as the agent's output, with a pointer
+  to the recording.
 
 ## [0.8.0] — 2026-09-29
 

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -179,5 +180,73 @@ func TestBedrockDataPlaneFault_AuditRowCarriesTheClass(t *testing.T) {
 	_ = json.Unmarshal(lastAuditEvent(t, h.audit.events, "egress.allow").Data, &data)
 	if data["upstream_fault"] != "ThrottlingException" {
 		t.Fatalf("egress.allow data = %v, want upstream_fault", data)
+	}
+}
+
+// modelAccessCast is a recording whose agent printed Claude Code's model-access
+// error, as seen on the per-user AWS SSO Bedrock lane (#1280), with the
+// terminal's escape sequences around it, and then something else.
+func modelAccessCast(t *testing.T) string {
+	t.Helper()
+	lines := []string{`{"version":2,"width":80,"height":24}`}
+	for i, out := range []string{
+		"\x1b[?25l\x1b[2K\x1b[1G Working on the task\r\n",
+		"\x1b[31m\u23bf  There's an issue with the selected model (us.anthropic.claude-sonnet-4-5-20250929-v1:0). " +
+			"It may not exist or you may not have access to it. Run /model to pick a different model.\x1b[39m\r\n",
+		"\x1b[?25h\r\n",
+	} {
+		ev, _ := json.Marshal([]any{float64(i) + 0.5, "o", out})
+		lines = append(lines, string(ev))
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// TestModelAccessFailureHint_QuotesTheAgentsOwnLine (#1280): a run that exits
+// non-zero with no reason of its own, whose recording's last lines name a
+// model-access problem, is served that line as its failure hint, quoted as the
+// agent's output and pointing at the recording; the proxy never saw the
+// model's answer on that lane, so the hint claims no cause of its own. A run
+// that succeeded, a recording naming no such problem, and a failure that
+// already has its reason are left as they were.
+func TestModelAccessFailureHint_QuotesTheAgentsOwnLine(t *testing.T) {
+	const quoted = `"There's an issue with the selected model (us.anthropic.claude-sonnet-4-5-20250929-v1:0). ` +
+		`It may not exist or you may not have access to it. Run /model to pick a different model."`
+	for _, tc := range []struct {
+		name    string
+		exit    int
+		cast    func(*testing.T) string
+		arrange func(*faultRun)
+		want    func(string) bool
+	}{
+		{"failed, model access named", 1, modelAccessCast, func(*faultRun) {},
+			func(h string) bool { return strings.Contains(h, quoted) && strings.Contains(h, "recording") }},
+		{"failed, nothing named", 1, func(*testing.T) string {
+			return `{"version":2,"width":80,"height":24}` + "\n" + `[0.5, "o", "error: tests failed\r\n"]` + "\n"
+		}, func(*faultRun) {}, func(h string) bool { return h == "" }},
+		{"failed, no recording", 1, nil, func(*faultRun) {}, func(h string) bool { return h == "" }},
+		{"succeeded", 0, modelAccessCast, func(*faultRun) {}, func(h string) bool { return h == "" }},
+		{"failed with its own reason", 1, modelAccessCast, func(f *faultRun) { f.post("AccessDeniedException") },
+			func(h string) bool {
+				return strings.Contains(h, "AccessDeniedException") && !strings.Contains(h, "selected model")
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFaultRun(t, tc.exit)
+			store, err := recording.NewFSStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.srv.cfg.RecordingStore = store
+			if tc.cast != nil {
+				if err := store.SaveCast(context.Background(), f.id.String(), strings.NewReader(tc.cast(t))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tc.arrange(f)
+			f.end(map[bool]types.RunState{true: types.RunCompleted, false: types.RunFailed}[tc.exit == 0])
+			if h := f.hint(); !tc.want(h) {
+				t.Fatalf("hint = %q", h)
+			}
+		})
 	}
 }
