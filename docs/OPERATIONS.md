@@ -2737,6 +2737,52 @@ classified admin/member/owner/anonymous/internal before it can ship;
 403 a member. What Wardyn gives up is *breadth* — a deliberate two-tier split, not
 per-user roles or multi-org depth — not the governance itself.
 
+## The policy a run got
+
+`GET /api/v1/runs/{id}/policy`, `wardyn run policy <run-id>` and the SDK's
+`GetRunPolicy` answer "what was this run allowed to do?" after the run has
+started, which the saved policy cannot: it is overwritten in place, and an
+inline or default policy leaves no row at all. The answer comes from what
+dispatch recorded in the append-only audit log, so it is what the sandbox's proxy
+enforces, not a re-derivation:
+
+- **The policy itself** is the `run.policy.resolve` envelope, as a normal policy
+  document, with restart denies (`run.revive` `denied_added`) folded in.
+- **Where it started** is the `policy_source` datum on the run's `run.create`
+  row: the saved policy (id, and its name and content as they read at launch), an
+  inline policy, the default, or the governance profile the run's creator was
+  bound to. It is recorded already redacted, because the run's creator can read
+  that row through `GET /audit`.
+- **What changed at launch** is each difference between the two, given a cause:
+  `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
+  `profile`, `org_disk`, `restart`, `limits` or `launch`. The launch audit rows
+  (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`,
+  `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`,
+  `run.revive`) name the cause first; the rest are derived; anything nothing
+  names is `launch`. `limits` is only ever claimed for a member the governance
+  bound applied to.
+- **Whether the saved policy has moved** (`stored_policy_now`) compares the
+  saved policy today with its recorded launch content. A run from before the
+  record existed can only say the policy was updated after launch, which a rename
+  alone also does.
+
+**Who can read it.** Whoever can read the run (`GET /runs/{id}`): its creator or
+an admin. Anyone else gets the run's own `404` and a `not_owner` audit row. A
+portal's delegated token is refused `403` `delegation_scope`: the route is not on
+the delegation list. Below the security admin tier the policy's mount sources
+read `<redacted>` and grant secret names are dropped (`redacted: true`), the same
+rule as reading a policy; `llm_inspection` secret values are never returned. The
+result is a policy document you can reuse as is only from the security admin tier
+up; below it, fill in the hidden values first.
+
+**What it does not cover:** hosts approved while the run was running (Approvals),
+credentials the run was handed (Credentials), folders added from a workspace or a
+drive, and Azure DevOps access that came from the connection's defaults. A run
+that has not reached sandbox setup answers `state: "not_yet"`, and one that ended
+before it `"never"`; the CLI prints the sentence and exits `1` so a redirect never
+writes an empty file. A run from before `policy_source` existed answers
+`complete: false`: its changes list only what the launch rows state.
+
 ## Run lifetime: lease, extend, revive, ends
 
 Moved to [run-lifetime.md](operations/run-lifetime.md).

@@ -52,6 +52,7 @@ func newADOHarness(t *testing.T, caps ...adoscope.Capability) *adoHarness {
 	p.mitmPorts = map[string]int{adoHost: 443}
 	p.mitmPlaintext = map[string]bool{plaintextKey(adoHost, 443): true}
 	p.adoGrants = adoGrantsByHost{adoHost: {Organization: "acme", Capabilities: caps}}
+	echoControlPlane(t, inj)
 	return &adoHarness{p: p, fake: fake, log: func() string {
 		_ = p.sink.close(context.Background())
 		return buf.String()

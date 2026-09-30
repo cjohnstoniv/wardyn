@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -330,18 +331,25 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	if err != nil {
 		return nil, err
 	}
-	var apps []types.UIApp
+	envelope, _, _ := latestPolicyResolve(events)
+	return envelope.UIApps, nil
+}
+
+// latestPolicyResolve is the run's last decodable run.policy.resolve envelope
+// and when it was written — last wins, because a re-dispatch supersedes an
+// earlier one. ok=false when there is none, and every caller fails closed on it.
+func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
 		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
-		var spec types.RunPolicySpec
-		if uerr := json.Unmarshal(ev.Data, &spec); uerr != nil {
+		var d effectivePolicyDatum
+		if json.Unmarshal(ev.Data, &d) != nil {
 			continue
 		}
-		apps = spec.UIApps // last wins: a re-dispatch supersedes an earlier envelope
+		envelope, at, ok = d, ev.Time, true
 	}
-	return apps, nil
+	return envelope, at, ok
 }
 
 // resolvePolicy returns the spec + policy id to attach. When policyID is nil it
@@ -361,7 +369,7 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 // admin-authored content, and bounding it to the caller's ceiling needs the
 // full member pipeline rather than a spec swap — that is resolveRunPolicy's
 // job.
-func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling governanceCeiling) (types.RunPolicySpec, *uuid.UUID, error) {
+func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling governanceCeiling) (types.RunPolicySpec, *uuid.UUID, policyOrigin, error) {
 	// Clone before handing the spec out. The ceiling is either cfg.DefaultPolicy
 	// — a process-global shared by every run — or a freshly-read profile row; a
 	// shallow struct copy of either still shares its slice backing arrays, so a
@@ -380,14 +388,18 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 		if !s.isOperator(ctx) {
 			spec.AzureDevOpsCapabilities = nil
 		}
-		return spec, nil, nil
+		origin := policyOrigin{kind: policyKindDefault}
+		if ceiling.Profile != nil {
+			origin = policyOrigin{kind: policyKindProfile, name: ceiling.Profile.Name}
+		}
+		return spec, nil, origin, nil
 	}
 	p, err := s.cfg.Store.GetPolicy(ctx, *policyID)
 	if err != nil {
-		return types.RunPolicySpec{}, nil, err
+		return types.RunPolicySpec{}, nil, policyOrigin{}, err
 	}
 	pid := p.ID
-	return p.Spec.Clone(), &pid, nil
+	return p.Spec.Clone(), &pid, policyOrigin{kind: policyKindStored, name: p.Name, updatedAt: &p.UpdatedAt}, nil
 }
 
 // bestClass returns the strongest class a runner declares (slice is

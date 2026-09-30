@@ -254,7 +254,7 @@ func resolveInline(t *testing.T, h *harness, spec types.RunPolicySpec) (types.Ru
 	w := httptest.NewRecorder()
 	r := memberRequest(t)
 	req := createRunRequest{Agent: "claude-code", InlinePolicy: &spec}
-	got, _, warns, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+	got, _, warns, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
 	if !ok {
 		t.Fatalf("resolveRunPolicy refused: %d %s", w.Code, w.Body.String())
 	}
@@ -329,7 +329,7 @@ func TestInlinePolicy_EgressHostNarrowing(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := memberRequest(t)
 		req := createRunRequest{Agent: "claude-code"}
-		got, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+		got, _, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
 		if !ok {
 			t.Fatalf("resolveRunPolicy refused the default policy: %d %s", w.Code, w.Body.String())
 		}
@@ -433,7 +433,7 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 	req := createRunRequest{Agent: "claude-code", InlinePolicy: &types.RunPolicySpec{
 		MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"},
 	}}
-	_, _, warns, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, true)
+	_, _, warns, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, true)
 	if !ok {
 		t.Fatalf("preflight resolution refused: %d %s", w.Code, w.Body.String())
 	}
@@ -649,7 +649,7 @@ func TestInlinePolicy_WorkspaceNarrowing(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := memberRequest(t)
 		req := createRunRequest{Agent: "claude-code", InlinePolicy: &authored}
-		_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+		_, _, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
 		if ok {
 			t.Fatalf("resolveRunPolicy: ok = true, want refused — an inline repo is not a way around the workspace grant")
 		}
@@ -708,7 +708,7 @@ func TestInlinePolicy_WorkspaceNarrowingIsSharedByBothDoors(t *testing.T) {
 			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: repo, Target: "/work/repo"}},
 		}
 		req := createRunRequest{Agent: "claude-code", InlinePolicy: &spec}
-		_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, dryRun)
+		_, _, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, dryRun)
 		if ok {
 			t.Fatalf("dryRun=%v: resolveRunPolicy: ok = true, want refused on both doors", dryRun)
 		}

@@ -213,4 +213,38 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, tsFile), "utf8"), tsName);
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
+  // GET /api/v1/runs/{id}/policy (#1425): the SDK's RunPolicyView and its three
+  // nested DTOs, the server struct they are pinned to, and the closed value sets.
+  it.each([
+    ["RunPolicyView", "runPolicyResponse", "RunPolicyView"],
+    ["RunPolicySource", "runPolicySource", "RunPolicySource"],
+    ["RunPolicyChange", "runPolicyChange", "RunPolicyChange"],
+    ["StoredPolicyNow", "storedPolicyNow", "StoredPolicyNow"],
+  ])("%s: full parity between pkg/client, the server struct and the TS mirror", (sdkName, serverName, tsName) => {
+    const sdkGo = readFileSync(join(root, "pkg/client/run_policy.go"), "utf8");
+    const serverGo = readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8");
+    const sdkTags = goJSONTags(sdkGo, sdkName);
+    expect(sdkTags.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(goJSONTags(serverGo, serverName))).toEqual(new Set(sdkTags));
+    expect(new Set(tsInterfaceTopKeys(runsTs, tsName))).toEqual(new Set(sdkTags));
+  });
+
+  it("RunPolicyView value sets: source kinds, causes and stored_policy_now states match the server", () => {
+    const serverGo = readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8");
+    const explainGo = readFileSync(join(root, "internal/api/run_policy_explain.go"), "utf8");
+    const consts = (src: string, prefix: string) =>
+      new Set([...src.matchAll(new RegExp(`\\b${prefix}[A-Za-z]+\\s*=\\s*"([a-z_]+)"`, "g"))].map((m) => m[1]));
+    const tsUnion = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(stripComments(runsTs));
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    expect(tsUnion("RunPolicySourceKind")).toEqual(consts(serverGo, "policyKind"));
+    expect(tsUnion("RunPolicyCause")).toEqual(consts(explainGo, "cause"));
+    expect(tsUnion("RunPolicyState")).toEqual(consts(serverGo, "policyView"));
+    const states = new Set([...serverGo.matchAll(/storedPolicyNow\{State: "([a-z]+)"/g)].map((m) => m[1]));
+    for (const m of serverGo.matchAll(/now\.State = "([a-z]+)"/g)) states.add(m[1]);
+    const tsStates = /state: ([^;]+);/.exec(tsInterfaceBody(runsTs, "StoredPolicyNow"))![1];
+    expect(new Set([...tsStates.matchAll(/"([a-z]+)"/g)].map((m) => m[1]))).toEqual(states);
+  });
 });
