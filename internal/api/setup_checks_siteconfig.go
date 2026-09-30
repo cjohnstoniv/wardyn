@@ -64,14 +64,13 @@ func adoEntraRowsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 // (#1429). Migration 0103 turns off every Azure DevOps row that used the shared
 // token or SSH key, and a disabled row still claims its hosts, so clones from
 // that organisation fail until an admin chooses how people connect and turns it
-// on. Not blocking: nothing else on the checklist depends on it. Unfrozen copy —
-// it awaits the owner's canon sitting like the rest of the retirement's strings.
+// on. Not blocking: nothing else on the checklist depends on it.
 func adoRowsOffCheck(sc types.SiteConfig) (SetupCheck, bool) {
 	for _, row := range gitProviderRows(sc) {
 		if row.Kind == types.GitProviderAzureDevOps && row.Disabled {
 			return SetupCheck{
 				ID: "ado_rows_off", Label: "Azure DevOps", Status: "warn",
-				Detail: "An Azure DevOps connection is turned off, so runs can't clone from it. Azure DevOps no longer uses one shared token or SSH key: choose how people connect, then turn it on.",
+				Detail: "Azure DevOps no longer uses one shared token. Choose how people connect.",
 				Fix:    "Settings → Workspace providers → Azure DevOps",
 			}, true
 		}

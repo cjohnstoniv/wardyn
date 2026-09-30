@@ -109,6 +109,45 @@ func adoGrantHost(sc types.SiteConfig, host string) bool {
 	return slices.ContainsFunc(adoSharedHosts(sc), func(h string) bool { return slugHost(h) == slug })
 }
 
+// adoGitGrants applies the Azure DevOps rules to a policy's needed git_pat
+// secrets: a grant for an Azure DevOps host is owner_only whatever the policy
+// said, unless every row deciding it takes each person's own token, in which
+// case it is dropped. That is the 0.8.1 shared-token wiring: the pat lane never
+// carries it (vetoed on Services, superseded by the ADO lane on Server), so the
+// run reads the own token, whose absence is refused at dispatch. Legacy open
+// mode has no rows, so nothing is dropped there.
+func (s *Server) adoGitGrants(ctx context.Context, needed []neededSecret, spec types.RunPolicySpec) ([]neededSecret, error) {
+	var sc types.SiteConfig
+	kept := needed[:0]
+	for _, n := range needed {
+		if n.kind == types.GrantGitPAT && n.host != "" {
+			if s.cfg.Store != nil && sc.WorkspaceProviders == nil {
+				var err error
+				if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
+					return nil, fmt.Errorf("get site config: %w", err)
+				}
+			}
+			if adoGrantHost(sc, n.host) {
+				if providersConfigured(sc) && adoRowsTakeOwnToken(laneRowsForGrantHost(sc, n.host, repoLocatorsOf(spec.WorkspaceRepos)), n.host) {
+					continue
+				}
+				n.ownerOnly = true
+			}
+		}
+		kept = append(kept, n)
+	}
+	return kept, nil
+}
+
+// adoRowsTakeOwnToken reports whether rows are all Azure DevOps rows that carry
+// each person's own token (on a Services host, any Azure DevOps row: it has no
+// pat lane).
+func adoRowsTakeOwnToken(rows []types.GitProvider, host string) bool {
+	return len(rows) > 0 && !slices.ContainsFunc(rows, func(row types.GitProvider) bool {
+		return row.Kind != types.GitProviderAzureDevOps || !(adoServicesHost(host) || isADOOwnTokenRow(row))
+	})
+}
+
 // adoSSHGrantDropped is the warning on a run whose policy grants an SSH key for
 // an Azure DevOps host.
 const adoSSHGrantDropped = "ssh_key grant dropped: Azure DevOps has no SSH lane, its credentials are per person"

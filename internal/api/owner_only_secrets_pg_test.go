@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
@@ -229,6 +230,37 @@ func TestOwnerOnlyGrant_NeverServesTheOperatorRow(t *testing.T) {
 			t.Fatalf("mint = %d %s, want a refusal and never the operator's value", w.Code, w.Body.String())
 		}
 	})
+}
+
+// TestOwnerOnlyGrant_LegacyADOGrantWithOwnToken is the 0.8.1 upgrade: a stored
+// policy wires the shared token as a git_pat grant for an Azure DevOps host, and
+// the row now takes each person's own token. The grant is never carried by the
+// pat lane, so it must not refuse the launch of a person who added their own
+// token through the door; legacy open mode (no rows) still refuses.
+func TestOwnerOnlyGrant_LegacyADOGrantWithOwnToken(t *testing.T) {
+	e := newOwnerOnlyPG(t)
+	ctx := context.Background()
+	legacy := e.storePolicy(t, "legacy-ado", "git-pat-dev-azure-com", false)
+
+	if w := e.createRun(t, "nobody", legacy); w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("legacy open mode: create = %d %s, want 422 (no rows, the owner_only rule holds)", w.Code, w.Body.String())
+	}
+
+	sc := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{{
+		ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
+		Lanes: []types.GitLane{types.GitLaneEntra}, CredentialSource: types.CredentialSourcePerUser,
+		Entra: &types.ADOEntraConfig{TokenMode: types.ADOTokenModeOwnPAT},
+	}}}}
+	if _, err := e.h.srv.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
+		t.Fatalf("PutSiteConfig: %v", err)
+	}
+	raw, _ := json.Marshal(adoOwnPATBlob{Token: "alice-own", Org: "acme", ExpiresOn: time.Now().AddDate(0, 0, 5)})
+	if err := e.sec.For("alice").Put(ctx, adoOwnPATSecretName("ado"), raw); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.createRun(t, "alice", legacy); w.Code != http.StatusCreated {
+		t.Fatalf("own token + legacy grant: create = %d %s, want 201", w.Code, w.Body.String())
+	}
 }
 
 // TestStoredPolicy_SecretRefsResolvePerRunOwner is #1123: an admin stores a
