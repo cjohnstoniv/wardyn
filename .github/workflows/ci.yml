@@ -1235,6 +1235,15 @@ jobs:
   # in .trivyignore (trivy's own allowlist format — one id per line, each with
   # a comment saying who accepted it and why).
   #
+  # A SECOND, STRICT step follows (severity CRITICAL, NO --ignore-unfixed). It
+  # exists because adopters mirror our images through scanners that count a
+  # CRITICAL fixed in ANY Debian release, not just the one we build on: three
+  # Perl CRITICALs that bookworm had not fixed (fixed only in trixie) passed the
+  # step above and got the published agent images refused. The first step still
+  # answers "can a rebuild clear this"; the strict one answers "will a scanner
+  # that ignores distro no-fix status accept this". .trivyignore stays the ONLY
+  # exception path for either step, under its reason-and-date rules.
+  #
   # Native amd64 build (no QEMU, no platforms list): a CVE in a Debian package
   # is not arch-specific, so scanning one arch finds the same advisories.
   #
@@ -1316,6 +1325,20 @@ jobs:
           trivyignores: .trivyignore
           exit-code: '1'
           cache: false
+      # Strict policy: any CRITICAL, fixed or not (see the job comment). Reuses the
+      # trivy the step above installed and the DB it already pulled into
+      # TRIVY_CACHE_DIR, so nothing is installed or downloaded twice.
+      - name: Trivy strict scan (CRITICAL, fixed or not)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: wardyn/${{ matrix.name }}:trivy-scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+          exit-code: '1'
+          cache: false
+          skip-setup-trivy: true
       - name: Save trivy DB cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
