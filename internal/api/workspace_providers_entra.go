@@ -177,9 +177,11 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 			strings.Join(types.ClosedADOTokenModeList(), ", "))
 	}
 	if cfg.PATMaxHours < 0 || cfg.PATMaxHours > types.ADOPATMaxHoursLimit {
+		//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
 		return fmt.Errorf(providers400EntraHrs, i, types.ADOPATMaxHoursLimit)
 	}
 	if cfg.PATMaxDays < 0 || cfg.PATMaxDays > types.ADOPATMaxDaysLimit {
+		//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
 		return fmt.Errorf(providers400EntraDays, i, types.ADOPATMaxDaysLimit)
 	}
 	return nil
@@ -226,6 +228,7 @@ func (s *Server) validateADOTokenModes(p *types.WorkspaceProviders) error {
 		}
 		if !hasSecret || loginClient == "" || !strings.EqualFold(row.Entra.ClientID, loginClient) ||
 			!strings.EqualFold(row.Entra.TenantID, loginTenant) {
+			//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
 			return fmt.Errorf(providers400EntraS1, i)
 		}
 		minted[strings.ToLower(row.Entra.ClientID)] = i
@@ -235,6 +238,7 @@ func (s *Server) validateADOTokenModes(p *types.WorkspaceProviders) error {
 			continue
 		}
 		if j, ok := minted[strings.ToLower(row.Entra.ClientID)]; ok {
+			//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
 			return fmt.Errorf(providers400EntraApp, i, j)
 		}
 	}

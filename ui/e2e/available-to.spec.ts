@@ -175,7 +175,7 @@ test.describe("Available to — a stored policy (#923)", () => {
     const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
     await expect(dialog.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     await expect(dialog.getByText(AVAILABILITY.POLICY_NOTE)).toBeVisible();
-    await dialog.getByLabel("Name").fill(POLICY_NAME);
+    await dialog.getByLabel("Name", { exact: true }).fill(POLICY_NAME);
     await dialog.getByLabel("Spec (JSON)").fill(POLICY_SPEC);
     await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("portfolio-manager");
     await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();

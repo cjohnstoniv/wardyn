@@ -44,6 +44,7 @@ type faultRun struct {
 	t     *testing.T
 	srv   *Server
 	st    faultHintStore
+	rb    *raceBroker
 	id    uuid.UUID
 	token string
 }
@@ -57,9 +58,10 @@ func newFaultRun(t *testing.T, exitCode int) *faultRun {
 	t.Cleanup(cancel)
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = &exitRunner{fakeRunner: &fakeRunner{}, code: exitCode}
-	cfg.Broker = &raceBroker{}
+	rb := &raceBroker{}
+	cfg.Broker = rb
 	cfg.BaseCtx = baseCtx
-	return &faultRun{t: t, srv: New(cfg), st: st, id: run.ID, token: h.mintRunToken(t, run.ID)}
+	return &faultRun{t: t, srv: New(cfg), st: st, rb: rb, id: run.ID, token: h.mintRunToken(t, run.ID)}
 }
 
 // post sends the decision row the proxy writes for one relayed Bedrock call.
@@ -76,7 +78,9 @@ func (f *faultRun) post(fault string) {
 	}
 }
 
-// end lets the agent exit and waits for the watcher's terminal transition.
+// end lets the agent exit and waits for the watcher to finish the run: the
+// state flips first, the recording-derived hint is written after it, and the
+// credential revocation that closes the watcher's tail comes after both.
 func (f *faultRun) end(want types.RunState) {
 	f.t.Helper()
 	f.srv.startCompletionWatcher(f.id, "ref", "exec")
@@ -86,6 +90,12 @@ func (f *faultRun) end(want types.RunState) {
 	}
 	if got := f.st.State(); got != want {
 		f.t.Fatalf("state = %s, want %s", got, want)
+	}
+	for f.rb.revocations(f.id) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if f.rb.revocations(f.id) == 0 {
+		f.t.Fatal("the watcher never finished the run's tail")
 	}
 }
 

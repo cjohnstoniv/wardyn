@@ -456,9 +456,9 @@ func TestRunResources_DiskUsedBytes_Absent(t *testing.T) {
 // stream. Both are the finished-run 409, never a 500, and write no failure row.
 func TestRunResources_SandboxGoneBeforeStateFlips(t *testing.T) {
 	for name, execFn := range map[string]func(runner.ExecSpec) (*runner.ExecSession, error){
-		"launch": func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, gonePodErr },
+		"launch": func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, errGonePod },
 		"stream": func(runner.ExecSpec) (*runner.ExecSession, error) {
-			return &runner.ExecSession{Stdout: errReader{gonePodErr}}, nil
+			return &runner.ExecSession{Stdout: errReader{errGonePod}}, nil
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

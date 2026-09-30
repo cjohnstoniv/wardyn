@@ -399,9 +399,9 @@ func TestRepoCloneLeaf(t *testing.T) {
 	}
 }
 
-// gonePodErr is what a substrate hands back when the pod or container is
+// errGonePod is what a substrate hands back when the pod or container is
 // already removed: the run's state has not flipped yet, its sandbox has.
-var gonePodErr = fmt.Errorf("%w: container not found (\"wardyn-agent\")", runner.ErrSandboxGone)
+var errGonePod = fmt.Errorf("%w: container not found (\"wardyn-agent\")", runner.ErrSandboxGone)
 
 // TestRunFiles_SandboxGoneBeforeStateFlips is a finishing run's read: the pod is
 // removed while the run still reads RUNNING, and the exec fails at launch, on
@@ -409,14 +409,14 @@ var gonePodErr = fmt.Errorf("%w: container not found (\"wardyn-agent\")", runner
 // writes no failure row (the widget polls).
 func TestRunFiles_SandboxGoneBeforeStateFlips(t *testing.T) {
 	for name, execFn := range map[string]func(runner.ExecSpec) (*runner.ExecSession, error){
-		"launch": func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, gonePodErr },
+		"launch": func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, errGonePod },
 		"stream": func(runner.ExecSpec) (*runner.ExecSession, error) {
-			return &runner.ExecSession{Stdout: errReader{gonePodErr}}, nil
+			return &runner.ExecSession{Stdout: errReader{errGonePod}}, nil
 		},
 		"wait": func(runner.ExecSpec) (*runner.ExecSession, error) {
 			return &runner.ExecSession{
 				Stdout: strings.NewReader(""),
-				Wait:   func() (int, error) { return 0, gonePodErr },
+				Wait:   func() (int, error) { return 0, errGonePod },
 			}, nil
 		},
 	} {
