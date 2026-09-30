@@ -9,7 +9,7 @@
 // no server route yet: their paths and shapes are this console's assumption,
 // spliced at the route in the e2e specs, and a daemon without them fails like
 // any missing route, leaving the card that asked as it was.
-import type { ADOOrgCheck, ADOOwnTokenBody, ADORunToken } from "../types/ado-pat";
+import type { ADOOrgCheck, ADOOwnTokenBody, ADOPATRefusal, ADORunToken } from "../types/ado-pat";
 import { asJson, errText, HttpError, wfetch } from "./core";
 
 // The reasons an own-token store answers with (internal/api reasons_routes.go,
@@ -46,6 +46,14 @@ export const adoPat = {
   async orgCheck(rowId: string): Promise<ADOOrgCheck> {
     const res = await wfetch(`/workspace-providers/git/${encodeURIComponent(rowId)}/org-check`, { method: "POST" });
     return asJson<ADOOrgCheck>(res);
+  },
+
+  // GET /api/v1/workspace-providers/git/{id}/ado-pat-refusal: the newest launch
+  // in the last seven days refused on the organisation's token-creation policy,
+  // or null (204) when there is none. Admin only.
+  async refusal(rowId: string): Promise<ADOPATRefusal | null> {
+    const res = await wfetch(`/workspace-providers/git/${encodeURIComponent(rowId)}/ado-pat-refusal`, { method: "GET" });
+    return res.status === 204 ? null : asJson<ADOPATRefusal>(res);
   },
 
   // DELETE /api/v1/scm/azure-devops/connection (no server route yet): forgets
