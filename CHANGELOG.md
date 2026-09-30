@@ -66,8 +66,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
 - **Reviving a live run is bounded to once a minute (#1005).** Each revive of a running run, through
   `POST /runs/{id}/revive` or the admin "Restart with current limits", removes and recreates its
-  proxy; a second one within a minute of the last is refused `429` `revive_live_too_soon`. A
-  revive of a lost run is never bounded.
+  proxy; a second one within a minute of the last that reached the proxy is refused `429`
+  `revive_live_too_soon`. The bound is kept per `wardynd` process, so each replica allows one a
+  minute. A revive of a lost run is never bounded.
 
 ### Fixed
 

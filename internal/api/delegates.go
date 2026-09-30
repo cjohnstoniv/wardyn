@@ -63,8 +63,9 @@ type registerDelegateRequest struct {
 //
 // The group is canonicalized the way a sign-in's group snapshot is
 // (oidc.CanonicalGroupSubject), so it matches the exact string a person's
-// token produces. The portal's IdP client id may not be this deployment's own:
-// a subject token issued to Wardyn would then pass the audience check for it.
+// token produces. The portal's IdP client id may not be this deployment's own,
+// in any case or as its App ID URI: a subject token issued to Wardyn would then
+// pass the audience check for it.
 func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) {
 	ds, ok := s.delegateStoreOr501(w)
 	if !ok {
@@ -84,7 +85,7 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateClientIDInvalid, "idp_client_id: required, at most 200 bytes, no control characters")
 		return
 	}
-	if s.cfg.OIDC != nil && clientID == s.cfg.OIDC.ClientID() {
+	if s.cfg.OIDC != nil && isOwnClientID(clientID, s.cfg.OIDC.ClientID()) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDelegateClientIDIsPortal, "idp_client_id: must be the portal's own client, not this deployment's")
 		return
 	}
@@ -106,6 +107,13 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 		mustJSON(map[string]any{"name": d.Name, "idp_client_id": d.IdPClientID, "group": d.Group})))
 	d.Credential = raw
 	writeJSON(w, http.StatusCreated, d)
+}
+
+// isOwnClientID reports whether id names the deployment's own client, in any
+// case or as its App ID URI (api://<client id>), the audience an Entra v1
+// access token for an exposed API carries.
+func isOwnClientID(id, own string) bool {
+	return strings.EqualFold(strings.TrimPrefix(strings.ToLower(id), "api://"), own)
 }
 
 // handleListDelegates is GET /api/v1/admin/delegates: every registered portal,

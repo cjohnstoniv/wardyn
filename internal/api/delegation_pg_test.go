@@ -450,12 +450,14 @@ func TestDelegation_PortalCredentialAndRevocation(t *testing.T) {
 }
 
 // TestDelegation_RegisterRefusesTheDeploymentsOwnClientID pins the registry's
-// own refusal of a portal under Wardyn's OIDC client id (#1234): a subject
-// token issued to Wardyn would then pass the audience check for that portal.
+// own refusal of a portal under Wardyn's OIDC client id (#1234), in any case
+// or as its api:// App ID URI: a subject token issued to Wardyn would then
+// pass the audience check for that portal.
 // The exchange's verifier refuses it too; this is the first layer.
 func TestDelegation_RegisterRefusesTheDeploymentsOwnClientID(t *testing.T) {
 	e := newDelegationPG(t)
-	for _, id := range []string{e.h.srv.cfg.OIDC.ClientID(), " " + e.h.srv.cfg.OIDC.ClientID() + " "} {
+	own := e.h.srv.cfg.OIDC.ClientID()
+	for _, id := range []string{own, " " + own + " ", strings.ToUpper(own), "api://" + own, "API://" + strings.ToUpper(own)} {
 		w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/admin/delegates", e.admin,
 			`{"name":"front end","idp_client_id":"`+id+`","group":"`+delegGroup+`"}`)
 		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonDelegateClientIDIsPortal {

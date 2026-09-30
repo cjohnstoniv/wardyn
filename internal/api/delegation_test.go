@@ -413,11 +413,16 @@ func TestDelegation_AttachPromoteAndDetachCarryVia(t *testing.T) {
 
 // TestDelegation_UIGatewayRelayRowsCarryVia is #1234's UI-gateway half: the
 // relay audits on the daemon's context, so the session minted from a delegated
-// ticket carries the portal onto ui.start, ui.open, ui.close and a re-assert's
-// ui.authorize refusal, not only onto the entry row.
+// ticket carries the portal onto ui.start, ui.open, ui.close, a re-assert's
+// ui.authorize refusal and the run.resume its presence thaws a paused run
+// with, not only onto the entry row.
 func TestDelegation_UIGatewayRelayRowsCarryVia(t *testing.T) {
 	h := newUIHarness(t, closingBackend("sandbox app"))
 	h.launcher = 5 // the app was started by this request, so ui.start is written
+	h.srv.cfg.Store = &uiPauseStore{uiMemStore: h.store, pauseMarks: pauseMarks{paused: true}}
+	paused, pausedAt := h.run, h.clock.now()
+	paused.PausedAt, paused.PausedReason = &pausedAt, types.PauseReason("idle")
+	h.store.putRun(paused)
 	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
 	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, time.Now())
 	if err != nil {
@@ -444,7 +449,7 @@ func TestDelegation_UIGatewayRelayRowsCarryVia(t *testing.T) {
 		t.Fatalf("relay on a handed-over run: %d %s, want 403", r.Code, r.Body.String())
 	}
 
-	want := map[string]bool{"ui.start": false, "ui.open": false, "ui.close": false, "ui.authorize/denied": false}
+	want := map[string]bool{"run.resume": false, "ui.start": false, "ui.open": false, "ui.close": false, "ui.authorize/denied": false}
 	waitFor(t, "the relay rows", func() bool {
 		h.audit.mu.Lock()
 		defer h.audit.mu.Unlock()
@@ -462,7 +467,7 @@ func TestDelegation_UIGatewayRelayRowsCarryVia(t *testing.T) {
 	h.audit.mu.Lock()
 	defer h.audit.mu.Unlock()
 	for _, ev := range h.audit.events {
-		if !strings.HasPrefix(ev.Action, "ui.") {
+		if !strings.HasPrefix(ev.Action, "ui.") && ev.Action != "run.resume" {
 			continue
 		}
 		if viaOf(t, ev) != via {

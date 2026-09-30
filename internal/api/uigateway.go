@@ -62,6 +62,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -438,9 +439,12 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	if s.shouldTouch(runID, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
-	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(r.Context(), runID, types.ActorHuman, sess.Principal, "presence")
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
+	if sess.Via != nil {
+		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
+	}
+	// The same human is presence for the pause, and thaws a paused run.
+	_ = s.markPresent(ctx, runID, types.ActorHuman, sess.Principal, "presence")
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
 	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
 }

@@ -258,6 +258,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			// while its allowlisted egress keeps flowing audit-dark for up to
 			// the lapsed-token sweep's ~1h05m window.
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 				"the run's proxy was not replaced, and the run keeps its current proxy: "+err.Error())
 		}

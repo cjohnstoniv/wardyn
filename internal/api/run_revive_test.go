@@ -522,6 +522,22 @@ func TestReviveRun_ALiveRunIsBounded(t *testing.T) {
 	}
 }
 
+// TestReviveRun_AnUntouchedProxyDoesNotArmTheLiveBound: a live-run revive
+// whose replace failed before the old proxy was touched (revive_proxy_kept_current)
+// replaced nothing, so the next one is not refused as too soon.
+func TestReviveRun_AnUntouchedProxyDoesNotArmTheLiveBound(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.run.LostAt, f.st.run.LostReason = nil, ""
+	f.rr.replaceErr = errors.New("inspect the proxy: daemon busy")
+	if res := f.restart(t); res.OK || res.Reason != reasonReviveProxyKeptCurrent {
+		t.Fatalf("restart with an untouched failed replace: %+v, want reason %s", res, reasonReviveProxyKeptCurrent)
+	}
+	f.rr.replaceErr = nil
+	if res := f.restart(t); !res.OK {
+		t.Fatalf("restart after an untouched failure: %+v, want OK — nothing was replaced to bound", res)
+	}
+}
+
 // TestAdminProxyWindow lists the runs whose proxy release is outside N and
 // N-1, including one no release was recorded for.
 func TestAdminProxyWindow(t *testing.T) {
