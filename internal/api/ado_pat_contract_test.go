@@ -93,7 +93,7 @@ func TestADOPATVocabulary(t *testing.T) {
 // TestADOPATNeverPrintsTheToken: the secret does not survive %v, %+v, %#v-free
 // formatting or a structured log line.
 func TestADOPATNeverPrintsTheToken(t *testing.T) {
-	p := adoPAT{AuthorizationID: "a-1", Token: "s3cret", Scope: "vso.code", ValidTo: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	p := adoPAT{AuthorizationID: "a-1", Token: "s3cret", Scope: "vso.code", ValidTo: time.Now().Add(time.Hour).UTC()}
 	var buf strings.Builder
 	slog.New(slog.NewTextHandler(&buf, nil)).Info("minted", "pat", p)
 	for name, got := range map[string]string{
