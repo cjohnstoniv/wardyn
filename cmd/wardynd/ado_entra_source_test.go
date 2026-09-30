@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -145,8 +147,17 @@ func TestADOEntraSource_SkipsOwnPATRows(t *testing.T) {
 	if err != nil || !found || cfg.RowID != "ado" {
 		t.Errorf("own_pat first: row %q found=%v err=%v, want the minted row", cfg.RowID, found, err)
 	}
+	// Through the api's own login seam: no widened login, nothing captured,
+	// and no "unusable" warning for a row that simply has no sign-in.
+	srv := api.New(api.Config{ADOEntra: adoEntraSource(fakeSiteConfig{WorkspaceProviders: &types.WorkspaceProviders{
+		Git: []types.GitProvider{own}}}, testLogin)})
+	if got := srv.LoginScopes(context.Background()); got != nil {
+		t.Errorf("LoginScopes = %v with only an own_pat row, want nil", got)
+	}
+	srv.CaptureLoginGrant(context.Background(), "a-person", oidc.LoginGrant{RefreshToken: "rt-0123456789abcdef",
+		Scope: strings.Join(adoscope.MintScopes(), " ")})
 	if logs.Len() != 0 {
-		t.Errorf("the source logged %q", logs.String())
+		t.Errorf("logged %q", logs.String())
 	}
 }
 
