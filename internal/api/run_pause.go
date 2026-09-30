@@ -540,6 +540,9 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": reason, "quiet_sec": int64(quiet.Seconds()), "active_at": run.ActiveAt,
 			})))
+		// A paused run holds no Azure DevOps token; its resume creates one.
+		// After the mark, so a resolve racing it sees the pause and creates none.
+		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
 		return
 	}
 	if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {

@@ -59,9 +59,15 @@ func newOwnerOnlyPG(t *testing.T) ownerOnlyPG {
 // secretName and returns its id; the admin's own namespace is the operator's.
 func (e ownerOnlyPG) storePolicy(t *testing.T, name, secretName string, ownerOnly bool) string {
 	t.Helper()
-	body := `{"name":"` + name + `","spec":{"min_confinement_class":"CC2","allowed_domains":["dev.azure.com"],` +
+	return e.storePolicyFor(t, name, "dev.azure.com", secretName, ownerOnly)
+}
+
+// storePolicyFor is storePolicy for a git_pat grant on another host.
+func (e ownerOnlyPG) storePolicyFor(t *testing.T, name, host, secretName string, ownerOnly bool) string {
+	t.Helper()
+	body := `{"name":"` + name + `","spec":{"min_confinement_class":"CC2","allowed_domains":["` + host + `"],` +
 		`"eligible_grants":[{"kind":"git_pat","owner_only":` + strconv.FormatBool(ownerOnly) +
-		`,"scope":{"host":"dev.azure.com","secret_name":"` + secretName + `"}}]}}`
+		`,"scope":{"host":"` + host + `","secret_name":"` + secretName + `"}}]}}`
 	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/policies", e.admin, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("admin stores policy %s naming %q: %d, want 201: %s", name, secretName, w.Code, w.Body.String())
@@ -158,7 +164,9 @@ func TestOwnerOnlyGrant_NeverServesTheOperatorRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	strict := e.storePolicy(t, "strict", "x", true)
-	fallback := e.storePolicy(t, "fallback", "x", false)
+	// The unflagged fallback still holds for every forge but Azure DevOps.
+	fallback := e.storePolicyFor(t, "fallback", "git.corp.example", "x", false)
+	adoUnflagged := e.storePolicy(t, "ado-unflagged", "x", false)
 
 	t.Run("owner_only and no own row: launch refused with the reason", func(t *testing.T) {
 		w := e.createRun(t, "alice", strict)
@@ -175,6 +183,22 @@ func TestOwnerOnlyGrant_NeverServesTheOperatorRow(t *testing.T) {
 		rows := e.mintRows(t)
 		if len(rows) != before+1 || rows[len(rows)-1]["secret_scope"] != "operator" {
 			t.Errorf("mint rows = %v, want one more with secret_scope=operator", rows[before:])
+		}
+	})
+
+	t.Run("an Azure DevOps host with no flag is owner_only anyway: refused at launch, never the operator's row (#1429)", func(t *testing.T) {
+		w := e.createRun(t, "alice", adoUnflagged)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `secret \"x\" is owner_only`) {
+			t.Fatalf("create = %d %s, want 422 naming the owner_only grant, as if the policy had said so", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("an Azure DevOps host with no flag and an own row: mints the own row only", func(t *testing.T) {
+		if err := e.sec.For("frank").Put(ctx, "x", []byte("frank-pat")); err != nil {
+			t.Fatal(err)
+		}
+		if got := mintedToken(t, e.mint(t, "frank", mustCreate(t, e.createRun(t, "frank", adoUnflagged)))); got != "frank-pat" {
+			t.Fatalf("minted %q, want frank's own row", got)
 		}
 	})
 
@@ -214,8 +238,10 @@ func TestOwnerOnlyGrant_NeverServesTheOperatorRow(t *testing.T) {
 // member with one mints from it. An owner_only grant is stored the same way.
 func TestStoredPolicy_SecretRefsResolvePerRunOwner(t *testing.T) {
 	e := newOwnerOnlyPG(t)
-	shared := e.storePolicy(t, "per-person", "nowhere", false)
-	e.storePolicy(t, "per-person-strict", "nowhere", true)
+	// A non-Azure DevOps host: an Azure DevOps grant is owner_only whatever the
+	// policy says (#1429) and is covered in TestOwnerOnlyGrant_NeverServesTheOperatorRow.
+	shared := e.storePolicyFor(t, "per-person", "git.corp.example", "nowhere", false)
+	e.storePolicyFor(t, "per-person-strict", "git.corp.example", "nowhere", true)
 
 	if w := e.createRun(t, "dave", shared); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `unknown secret \"nowhere\"`) {
 		t.Fatalf("member without a row: create = %d %s, want 422 at run-create", w.Code, w.Body.String())

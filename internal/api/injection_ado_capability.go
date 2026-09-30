@@ -555,7 +555,6 @@ func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, cla
 	snapshot adoEntraScopeSnapshot, cfg ADOEntraConfig, grantID uuid.UUID, jti string,
 	capAsk adoCapabilityGrant, need []string, access ADOEntraAccess, fail adoFail,
 ) bool {
-	ctx := r.Context()
 	// The authority's GRANTED set is the person's whole consent for the
 	// resource (measured), so a capability whose scope is missing from it is
 	// one they have not consented to — whoever approved it here.
@@ -566,6 +565,18 @@ func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, cla
 	if capAsk.once == nil {
 		return false
 	}
+	return s.spendADOOnce(w, r, claims, snapshot, grantID, jti, capAsk, fail)
+}
+
+// spendADOOnce spends the `once` approval a capability resolve names, once a
+// credential is in hand. handled=true means a response has been written: the
+// approval was unspendable, or another request spent it first and this one
+// asks again. A `minted_pat` run's token already carries the capability by
+// then; the approval still lets only this request through.
+func (s *Server) spendADOOnce(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
+	snapshot adoEntraScopeSnapshot, grantID uuid.UUID, jti string, capAsk adoCapabilityGrant, fail adoFail,
+) bool {
+	ctx := r.Context()
 	spender, ok := s.cfg.Store.(approvalOnceSpender)
 	if !ok {
 		return fail(http.StatusServiceUnavailable, reasonOnceUnspendable, adoCapUnspendableBody, nil)

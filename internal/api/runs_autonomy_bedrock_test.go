@@ -205,7 +205,9 @@ func TestAutonomyGradesTheBedrockModelCredentialAtBothDoors(t *testing.T) {
 // the same derived tool_approvals.
 func TestAutonomyBedrockCredentialCapsLikeAnyPowerfulSecret(t *testing.T) {
 	member := func(t *testing.T) *http.Cookie { return govSession(t, bedrockAutonomyMember, []string{"eng"}, false) }
-	pat := types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "dev.azure.com", "secret_name": govCorpSecret})}
+	// Any git_pat is the powerful secret here; a non-Azure DevOps host, since an
+	// Azure DevOps one is owner_only and needs the member's own token (#1429).
+	pat := types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "git.corp.example", "secret_name": govCorpSecret})}
 	patBody := `{"agent":"claude-code","task":"t","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2",` +
 		`"allowed_domains":["api.anthropic.com"],"eligible_grants":[` + string(mustJSON(pat)) + `]}}`
 

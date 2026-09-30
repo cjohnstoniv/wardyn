@@ -491,6 +491,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// caller's own OIDC subject (computeSCMAccessRows), so a member reading only
 	// their own answer discloses nothing about anyone else.
 	"GET /api/v1/me/scm-access": {class: classMember},
+	// The caller's own Azure DevOps token (ado_own_pat.go): own namespace only.
+	"PUT /api/v1/me/scm/azure-devops/token":    {class: classMember},
+	"DELETE /api/v1/me/scm/azure-devops/token": {class: classMember},
 	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for
 	// the same reason as /me/ssh-keys above — a member signs in FOR
 	// THEMSELVES. Both doors refuse a caller with no identity provider

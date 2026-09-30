@@ -574,6 +574,7 @@ var auditActionGrammarAllow = map[string]bool{
 	"ado_pat.org_check":              true,
 	"ado_pat.revoke.failed":          true,
 	"ado_bearer.refused_mint_scopes": true,
+	"ado_pat.mint.denied":            true,
 	// Past tense. The single heaviest-cited action in the tree and a
 	// compatibility surface docs/OPERATIONS.md already commits to by name; its
 	// rename is its own reviewed change, not a rider on #205's.

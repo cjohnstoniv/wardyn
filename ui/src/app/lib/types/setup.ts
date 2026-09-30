@@ -219,6 +219,18 @@ export interface SCMAccess {
   /** The row's capability_ceiling — the most any run on it may hold. The
    *  policy editor locks every capability outside it. Read-only. */
   capability_ceiling?: string[];
+  // The fields below are set only on a row where each person adds their own
+  // token (token_mode own_pat, or an Azure DevOps Server row).
+  /** "own_pat" on both. */
+  token_mode?: string;
+  /** The date (YYYY-MM-DD) the person said their token expires. */
+  expires_on?: string;
+  /** The furthest expiry, in days from today, the row's administrator allows. */
+  max_days?: number;
+  /** What to tick on Azure DevOps' own token page, in its own wording. */
+  token_scopes?: string[];
+  /** An Azure DevOps Server row: its token carries git and nothing else. */
+  git_only?: boolean;
 }
 
 // One model provider as THIS PRINCIPAL sees it (internal/api.SetupModelProvider)

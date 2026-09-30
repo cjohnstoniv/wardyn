@@ -649,15 +649,15 @@ func TestProviderLaneVetoAtTheThreeGrantArms(t *testing.T) {
 // widens, so an EMPTY Lanes list (today's every deployment) and a row that names
 // the lane both wire exactly what 0.7.1 wired.
 func TestProviderLaneVetoPermitsWhatTheRowPermits(t *testing.T) {
-	scope := mustJSON(map[string]any{"host": "dev.azure.com", "secret_name": "ado-pat"})
+	scope := mustJSON(map[string]any{"host": "git.corp.example", "secret_name": "corp-pat"})
 	for _, tc := range []struct {
 		name string
 		sc   types.SiteConfig
 	}{
 		{"no provider rows (the upgrade pin)", types.SiteConfig{}},
 		{"a row with no lanes named", providersConfig([]types.GitProvider{
-			adoRow(admitRowID, false, "https://dev.azure.com/acme")})},
-		{"a row naming the lane", laneVetoSite(types.GitProviderAzureDevOps, "https://dev.azure.com/acme", types.GitLanePAT)},
+			githubRow(admitRowID, false, "https://git.corp.example/acme")})},
+		{"a row naming the lane", laneVetoSite(types.GitProviderAzureDevOps, "https://git.corp.example/acme", types.GitLanePAT)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})
