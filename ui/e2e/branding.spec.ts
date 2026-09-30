@@ -132,3 +132,50 @@ test.describe("branded console", () => {
     await expect(page.getByLabel(BRANDING.ORG_NAME_LABEL)).toHaveValue("Example Corp");
   });
 });
+
+// #1215 — Remove logo and Remove branding. The two server doors (PUT with
+// remove_logo, DELETE) are internal/api/branding_test.go's; like the branded
+// half above, this routes them so the suite's one real branding record is
+// never touched. What it pins is the console half: each removal asks first,
+// sends the right request, and toasts.
+test.describe("branding removal controls", () => {
+  test("Remove logo and Remove branding each confirm, act and toast", async ({ page }) => {
+    let put: Record<string, unknown> | null = null;
+    let deleted = 0;
+    await serveBrand(page, "https://status.example.com");
+    await page.route("**/api/v1/branding/settings", (r) => {
+      const method = r.request().method();
+      if (method === "PUT") {
+        put = r.request().postDataJSON();
+        return r.fulfill({ json: { ...BRAND, logo_url: undefined, dark_custom: true } });
+      }
+      if (method === "DELETE") {
+        deleted++;
+        return r.fulfill({ status: 204 });
+      }
+      return r.fallback();
+    });
+    await gotoConsole(page, "admin");
+    await page.goto("/admin/settings");
+    await expandCard(page, BRANDING.TITLE);
+
+    await page.getByRole("button", { name: BRANDING.REMOVE_LOGO }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(BRANDING.REMOVE_LOGO_TITLE)).toBeVisible();
+    await expect(dialog.getByText(BRANDING.REMOVE_LOGO_BODY("Example Corp"))).toBeVisible();
+    expect(put).toBeNull();
+    await dialog.getByRole("button", { name: BRANDING.REMOVE_LOGO_CONFIRM }).click();
+    await expect(page.getByText(BRANDING.REMOVE_LOGO_TOAST)).toBeVisible();
+    expect(put).toMatchObject({ org_name: "Example Corp", remove_logo: true });
+    await expect(page.getByRole("button", { name: BRANDING.REMOVE_LOGO })).toHaveCount(0);
+
+    await page.getByRole("button", { name: BRANDING.REMOVE_BRANDING }).click();
+    await expect(dialog.getByText(BRANDING.REMOVE_BRANDING_TITLE)).toBeVisible();
+    await expect(dialog.getByText(BRANDING.REMOVE_BRANDING_BODY)).toBeVisible();
+    expect(deleted).toBe(0);
+    await dialog.getByRole("button", { name: BRANDING.REMOVE_BRANDING_CONFIRM }).click();
+    await expect(page.getByText(BRANDING.REMOVE_BRANDING_TOAST)).toBeVisible();
+    expect(deleted).toBe(1);
+    await expect(page.getByLabel(BRANDING.ORG_NAME_LABEL)).toHaveValue("");
+  });
+});

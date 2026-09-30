@@ -45,10 +45,31 @@ Denied hosts card and `ApprovalStateBadge`. The initial loading screen keeps the
 | `BRANDING.ERR_LINK` | Branding card | This link must use https. http:// links, and links with no scheme, aren't allowed. |
 | `BRANDING.ERR_LOGO(size)` | Branding card | This logo is {size}. Upload an image under 512 KB (SVG or PNG). |
 
+## Frozen strings — remove controls (#1215)
+
+The Remove logo and Remove branding packet, approved by the owner on 2026-09-30 as drawn, byte for
+byte (the apostrophes are U+2019, as in the packet). "Cancel" on both dialogs is the console's own
+word.
+
+| Key | Renders at | Frozen string |
+|---|---|---|
+| `BRANDING.REMOVE_LOGO` | Branding card, beside the stored logo | Remove logo |
+| `BRANDING.REMOVE_BRANDING` | Branding card, beside Save branding | Remove branding |
+| `BRANDING.REMOVE_LOGO_TITLE` | Remove logo dialog, title | Remove the logo? |
+| `BRANDING.REMOVE_LOGO_BODY(company)` | Remove logo dialog, body | The header and the browser tab show {company}’s initials instead. The name and colours stay. |
+| `BRANDING.REMOVE_LOGO_CONFIRM` | Remove logo dialog, confirm button | Remove logo |
+| `BRANDING.REMOVE_LOGO_TOAST` | toast after the logo is removed | Logo removed. |
+| `BRANDING.REMOVE_BRANDING_TITLE` | Remove branding dialog, title | Remove all branding? |
+| `BRANDING.REMOVE_BRANDING_BODY` | Remove branding dialog, body | The console goes back to Wardyn’s own name, colours and mark for everyone, including the sign-in page. The logo and Support link are deleted. |
+| `BRANDING.REMOVE_BRANDING_CONFIRM` | Remove branding dialog, confirm button | Remove branding |
+| `BRANDING.REMOVE_BRANDING_TOAST` | toast after all branding is removed | Branding removed. |
+| `BRANDING.FILE_LOGO_NOTE` | Branding card, under a logo the site configuration delivers (no Remove logo there) | This logo comes from your site configuration. To remove it, take branding.logo_path out of that file. |
+| `BRANDING.FILE_LOGO_DIALOG_LINE` | Remove branding dialog, second paragraph, only for that logo | The logo from your site configuration comes back the next time it is applied. |
+
 ## Implementation strings
 
 Drawn in the packet's prototype but not rowed in its Strings table; taken from the prototype as
-drawn. The last two are the card's own save feedback, which the prototype does not draw.
+drawn. The last four are the card's own save and removal feedback, which the prototypes do not draw.
 
 | Key | Renders at | Frozen string |
 |---|---|---|
@@ -61,6 +82,8 @@ drawn. The last two are the card's own save feedback, which the prototype does n
 | `BRANDING.FIXED_TITLE` | Branding card, preview column | Fixed, never brandable |
 | `BRANDING.SAVED` | toast after a save | Branding saved. |
 | `BRANDING.SAVE_FAILED` | toast when the server refuses a save | Branding wasn't saved. |
+| `BRANDING.REMOVE_LOGO_FAILED` | toast when the server refuses Remove logo | Logo wasn't removed. |
+| `BRANDING.REMOVE_BRANDING_FAILED` | toast when the server refuses Remove branding | Branding wasn't removed. |
 
 ## Where the brand applies, and where it never does
 
