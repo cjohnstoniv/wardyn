@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A run shows its startup progress while its sandbox comes up (#1419).** While a run is Pending or
+  Starting, the run page's terminal area shows the sign-in door's step list (Starting the sandbox,
+  Downloading the image, then Opening the terminal, Starting the task or Starting the command)
+  instead of one fixed sentence, drawn by the same shared component. A download says so at once; any
+  other wait speaks once the sandbox has been starting for a minute, counted from when Starting
+  began rather than from launch; a reason waiting cannot fix marks the step failed and shows the
+  substrate's own words. Past the longest a healthy start takes (4 min 30 s in Starting, 30 min in
+  Pending) the list stops claiming a step is in progress and says to kill and relaunch, which also
+  covers a run left mid-start by a daemon restart. The header chip stays; it and the Runs row
+  also read "Building the image" for an `image: Building` line.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

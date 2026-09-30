@@ -6,8 +6,17 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
+import { SIGNIN_PROGRESS } from "./settings/login-pane-copy";
 import {
+  isImagePullFailure,
   isTerminalStatusReason,
+  RUN_PENDING_OVERDUE_MS,
+  RUN_POLL_SLOW_START_MS,
+  RUN_START_OVERDUE_MS,
+  RUN_STARTUP,
+  runStartupView,
+  STATUS_REASON_BUILDING,
+  type StartupLastStep,
   parseStatusDetail,
   statusDetailChip,
   statusDetailSentence,
@@ -175,5 +184,257 @@ describe("TERMINAL_STATUS_REASONS mirrors the Go list", () => {
     const fromGo = [...block.slice(0, block.indexOf("}")).matchAll(/"([A-Za-z]+)":\s*true/g)].map((m) => m[1]);
     expect(fromGo.length).toBeGreaterThan(0);
     expect([...fromGo].sort()).toEqual([...TERMINAL_STATUS_REASONS].sort());
+  });
+});
+
+// ---- #1419: the run page's startup view --------------------------------------
+
+const T0 = Date.parse("2026-09-29T12:00:00Z");
+const ago = (ms: number) => new Date(T0 - ms).toISOString();
+const S = 1000;
+const MIN = 60 * S;
+
+type RunIn = Parameters<typeof runStartupView>[0];
+const mk = (over: Partial<RunIn> & { createdAgo?: number; updatedAgo?: number }): RunIn => {
+  const { createdAgo = 0, updatedAgo = 0, ...rest } = over;
+  return { state: "STARTING", created_at: ago(createdAgo), updated_at: ago(updatedAgo), ...rest };
+};
+const view = (run: RunIn, o: { lastStep?: StartupLastStep; sawBuilding?: boolean } = {}) =>
+  runStartupView(run, T0, { lastStep: "terminal", sawBuilding: false, ...o });
+const marks = (v: ReturnType<typeof view>) => v!.rows.map((r) => `${r.label}=${r.mark}`);
+
+const START = RUN_STARTUP.STEP_START;
+const DL = CHIP_DOWNLOADING;
+const TERM = RUN_STARTUP.STEP_TERMINAL;
+const PULLING = { status_detail: "image: Pulling: wardyn/agent:1", status_reason: "Pulling" };
+const BUILDING = { status_detail: "image: Building", status_reason: STATUS_REASON_BUILDING };
+
+describe("runStartupView: the plan's table", () => {
+  it("is null unless the run is PENDING or STARTING", () => {
+    for (const state of ["RUNNING", "COMPLETED", "FAILED", "KILLED", "STOPPED", "WAITING_FOR_CONFIRMATION"]) {
+      expect(view(mk({ state }))).toBeNull();
+    }
+  });
+
+  it("PENDING, no detail: Start active, quiet before 60 s", () => {
+    const v = view(mk({ state: "PENDING", createdAgo: 5 * S }))!;
+    expect(marks(v)).toEqual([`${START}=active`, `${DL}=pending`, `${TERM}=pending`]);
+    expect(v.hint).toBe("");
+    expect(v.alert).toBe("");
+  });
+
+  it("PENDING + Building: Build active, the rest pending, BUILD_HINT at once", () => {
+    const v = view(mk({ state: "PENDING", createdAgo: 2 * S, ...BUILDING }))!;
+    expect(marks(v)).toEqual([
+      `${RUN_STARTUP.STEP_BUILD}=active`,
+      `${START}=pending`,
+      `${DL}=pending`,
+      `${TERM}=pending`,
+    ]);
+    expect(v.hint).toBe(RUN_STARTUP.BUILD_HINT);
+  });
+
+  it("STARTING after a Building read (sawBuilding): Build done, then the STARTING rows", () => {
+    const v = view(mk({ updatedAgo: 5 * S, createdAgo: 10 * MIN }), { sawBuilding: true })!;
+    expect(marks(v)).toEqual([
+      `${RUN_STARTUP.STEP_BUILD}=done`,
+      `${START}=active`,
+      `${DL}=pending`,
+      `${TERM}=pending`,
+    ]);
+  });
+
+  it("STARTING without sawBuilding (a reload): no Build row, and the row is never pending", () => {
+    const v = view(mk({ updatedAgo: 5 * S }))!;
+    expect(v.rows.map((r) => r.key)).toEqual(["start", "download", "last"]);
+    for (const sawBuilding of [true, false]) {
+      for (const state of ["PENDING", "STARTING"]) {
+        const r = view(mk({ state, ...(state === "PENDING" ? BUILDING : {}) }), { sawBuilding })!;
+        expect(r.rows.find((x) => x.key === "build")?.mark ?? "done").not.toBe("pending");
+      }
+    }
+  });
+
+  it("STARTING + a Building line (the server blanks it; defence in depth): reads as no detail", () => {
+    const v = view(mk({ updatedAgo: 90 * S, ...BUILDING }))!;
+    expect(marks(v)[0]).toBe(`${START}=active`);
+    expect(v.rows.some((r) => r.key === "build")).toBe(false);
+    expect(v.hint).toBe(RUN_STARTUP.SLOW);
+  });
+
+  it("STARTING + Pulling: Start done, Download active, DOWNLOAD_HINT at once", () => {
+    const v = view(mk({ updatedAgo: 3 * S, ...PULLING }))!;
+    expect(marks(v)).toEqual([`${START}=done`, `${DL}=active`, `${TERM}=pending`]);
+    expect(v.hint).toBe(SIGNIN_PROGRESS.DOWNLOAD_HINT);
+  });
+
+  it("STARTING + ContainerCreating / Unschedulable / Pending: the substrate sentence, once slow", () => {
+    const cases: Array<[string, string, string]> = [
+      ["agent: ContainerCreating", "ContainerCreating", STARTING_CONTAINER_CREATING],
+      ["pod: Unschedulable: 0/1 nodes", "Unschedulable", STARTING_UNSCHEDULABLE],
+      ["pod: Pending", "Pending", STARTING_WAITING_FOR_NODE],
+    ];
+    for (const [status_detail, status_reason, sentence] of cases) {
+      const quiet = view(mk({ updatedAgo: 59 * S, status_detail, status_reason }))!;
+      expect(marks(quiet)).toEqual([`${START}=active`, `${DL}=pending`, `${TERM}=pending`]);
+      expect(quiet.hint).toBe("");
+      expect(view(mk({ updatedAgo: 60 * S, status_detail, status_reason }))!.hint).toBe(sentence);
+    }
+  });
+
+  it("STARTING, no detail: SLOW from 60 s", () => {
+    expect(view(mk({ updatedAgo: 59 * S }))!.hint).toBe("");
+    expect(view(mk({ updatedAgo: 60 * S }))!.hint).toBe(RUN_STARTUP.SLOW);
+    expect(RUN_POLL_SLOW_START_MS).toBe(60 * S);
+  });
+
+  it("PENDING with no detail: SLOW from 60 s measured from created_at", () => {
+    expect(view(mk({ state: "PENDING", createdAgo: 59 * S }))!.hint).toBe("");
+    expect(view(mk({ state: "PENDING", createdAgo: 60 * S }))!.hint).toBe(RUN_STARTUP.SLOW);
+  });
+
+  it("STARTING clock is updated_at: created 10 min ago, updated 5 s ago -> no hint (a build just finished)", () => {
+    const v = view(mk({ createdAgo: 10 * MIN, updatedAgo: 5 * S }))!;
+    expect(v.hint).toBe("");
+    expect(v.rows[0].mark).toBe("active");
+  });
+
+  it("PENDING clock is created_at, whatever updated_at says", () => {
+    expect(view(mk({ state: "PENDING", createdAgo: 61 * S, updatedAgo: 1 * S }))!.hint).toBe(RUN_STARTUP.SLOW);
+  });
+
+  it("overdue in STARTING: 4:29 is live, 4:30 drops the spinner and says OVERDUE", () => {
+    const live = view(mk({ updatedAgo: 4 * MIN + 29 * S, ...PULLING }))!;
+    expect(marks(live)).toEqual([`${START}=done`, `${DL}=active`, `${TERM}=pending`]);
+    expect(live.hint).toBe(SIGNIN_PROGRESS.DOWNLOAD_HINT);
+
+    const late = view(mk({ updatedAgo: 4 * MIN + 30 * S, ...PULLING }))!;
+    expect(marks(late)).toEqual([`${START}=done`, `${DL}=pending`, `${TERM}=pending`]);
+    expect(late.rows.some((r) => r.mark === "active")).toBe(false);
+    expect(late.hint).toBe(RUN_STARTUP.OVERDUE);
+    expect(late.alert).toBe("");
+    // Only the row that was active is marked stale.
+    expect(late.rows.filter((r) => r.stale).map((r) => r.label)).toEqual([DL]);
+    expect(live.rows.some((r) => r.stale)).toBe(false);
+  });
+
+  it("overdue in STARTING with no detail: Start loses its spinner", () => {
+    const late = view(mk({ updatedAgo: RUN_START_OVERDUE_MS }))!;
+    expect(marks(late)[0]).toBe(`${START}=pending`);
+    expect(late.hint).toBe(RUN_STARTUP.OVERDUE);
+  });
+
+  it("overdue in PENDING: 29:59 is live, 30:00 drops the spinner (Building or not)", () => {
+    const live = view(mk({ state: "PENDING", createdAgo: 30 * MIN - S, ...BUILDING }))!;
+    expect(live.rows[0].mark).toBe("active");
+    expect(live.hint).toBe(RUN_STARTUP.BUILD_HINT);
+    const late = view(mk({ state: "PENDING", createdAgo: 30 * MIN, ...BUILDING }))!;
+    expect(late.rows.some((r) => r.mark === "active")).toBe(false);
+    expect(late.rows[0].label).toBe(RUN_STARTUP.STEP_BUILD);
+    expect(late.hint).toBe(RUN_STARTUP.OVERDUE);
+    const plain = view(mk({ state: "PENDING", createdAgo: 30 * MIN }))!;
+    expect(plain.rows.some((r) => r.mark === "active")).toBe(false);
+    expect(plain.hint).toBe(RUN_STARTUP.OVERDUE);
+  });
+
+  it("STARTING + a terminal PULL reason: Start done, Download failed, list stops, alert carries the registry's words", () => {
+    for (const reason of ["ImagePullBackOff", "ErrImagePull", "InvalidImageName"]) {
+      const detail = `agent: ${reason}: rpc error: code = NotFound desc = not found`;
+      const v = view(mk({ updatedAgo: 2 * S, status_detail: detail, status_reason: reason }))!;
+      expect(marks(v)).toEqual([`${START}=done`, `${RUN_STARTUP.STEP_DOWNLOAD_FAILED}=failed`]);
+      expect(v.hint).toBe("");
+      expect(v.alert).toBe(statusDetailSentence(detail, reason));
+      expect(v.alert).toContain("rpc error: code = NotFound desc = not found");
+    }
+    expect(view(mk({ status_detail: "agent: ImagePullBackOff: x", status_reason: "ImagePullBackOff" }))!.alert).toContain(
+      STUCK_IMAGE_PULL,
+    );
+  });
+
+  it("a terminal reason outranks overdue", () => {
+    const v = view(
+      mk({ updatedAgo: 10 * MIN, status_detail: "agent: ImagePullBackOff: x", status_reason: "ImagePullBackOff" }),
+    )!;
+    expect(v.hint).toBe("");
+    expect(v.rows[1].mark).toBe("failed");
+  });
+
+  it("STARTING + another terminal reason: Start failed, list stops, existing sentence", () => {
+    for (const [reason, lead] of [
+      ["CrashLoopBackOff", STUCK_CRASH_LOOP],
+      ["CreateContainerError", STUCK_CREATE_CONTAINER],
+      ["CreateContainerConfigError", STUCK_CREATE_CONTAINER],
+    ]) {
+      const v = view(mk({ status_detail: `agent: ${reason}: back-off`, status_reason: reason }))!;
+      expect(marks(v)).toEqual([`${RUN_STARTUP.STEP_START_FAILED}=failed`]);
+      expect(v.alert).toBe(`${lead} back-off`);
+    }
+  });
+
+  it("a terminal reason with no detail still alerts (the server rebuilds it, but the guard holds)", () => {
+    const v = view(mk({ status_reason: "CrashLoopBackOff" }))!;
+    expect(v.alert).not.toBe("");
+  });
+
+  it("an unparseable clock reads as zero elapsed, never overdue", () => {
+    const v = view(mk({ created_at: "nope", updated_at: "nope" }))!;
+    expect(v.hint).toBe("");
+    expect(v.rows[0].mark).toBe("active");
+  });
+});
+
+describe("runStartupView: the last row", () => {
+  const label = (lastStep: StartupLastStep) => view(mk({}), { lastStep })!.rows.at(-1)!.label;
+  it("names what comes next", () => {
+    expect(label("terminal")).toBe(RUN_STARTUP.STEP_TERMINAL);
+    expect(label("task")).toBe(RUN_STARTUP.STEP_TASK);
+    expect(label("command")).toBe(RUN_STARTUP.STEP_COMMAND);
+  });
+  it("null: an interactive run this viewer cannot attach has no last row", () => {
+    const v = view(mk({ ...PULLING }), { lastStep: null })!;
+    expect(marks(v)).toEqual([`${START}=done`, `${DL}=active`]);
+    expect(view(mk({ state: "PENDING", ...BUILDING }), { lastStep: null })!.rows).toHaveLength(3);
+  });
+});
+
+describe("runStartupView: mirrors of the Go sources", () => {
+  const go = (rel: string) => readFileSync(resolve(process.cwd(), "..", rel), "utf8");
+
+  it("RUN_START_OVERDUE_MS = canaryWaitTimeout + podIPWaitTimeout (internal/runner/k8s/canary.go)", () => {
+    const src = go("internal/runner/k8s/canary.go");
+    const dur = (name: string) => {
+      const m = new RegExp(`${name}\\s*=\\s*(\\d+)\\s*\\*\\s*time\\.(Minute|Second)`).exec(src);
+      expect(m, name).not.toBeNull();
+      return Number(m![1]) * (m![2] === "Minute" ? MIN : S);
+    };
+    expect(RUN_START_OVERDUE_MS).toBe(dur("canaryWaitTimeout") + dur("podIPWaitTimeout"));
+  });
+
+  it("RUN_PENDING_OVERDUE_MS = imageBuildTimeout (internal/api/runs.go)", () => {
+    const m = /const imageBuildTimeout = (\d+) \* time\.Minute/.exec(go("internal/api/runs.go"));
+    expect(m).not.toBeNull();
+    expect(RUN_PENDING_OVERDUE_MS).toBe(Number(m![1]) * MIN);
+  });
+
+  // The Go constant lands with the server lane (#1419 lane A); until then there
+  // is nothing to compare against, and this test says so instead of passing on
+  // an empty match. Once the constant exists it must equal the TS token.
+  const goBuilding = /statusReasonBuilding\s*=\s*"([^"]+)"/.exec(
+    go("internal/api/runs_status_detail.go"),
+  );
+  it.skipIf(!goBuilding)("STATUS_REASON_BUILDING equals Go's statusReasonBuilding", () => {
+    expect(STATUS_REASON_BUILDING).toBe(goBuilding![1]);
+  });
+});
+
+describe("Building arms and the image-pull predicate", () => {
+  it("the header chip and the board sentence read Building from the shared canon", () => {
+    expect(statusDetailChip("image: Building", "Building")).toBe(RUN_STARTUP.STEP_BUILD);
+    expect(statusDetailSentence("image: Building", "Building")).toBe(RUN_STARTUP.BUILD_HINT);
+    expect(statusDetailChip("image: Building")).toBe(RUN_STARTUP.STEP_BUILD);
+  });
+  it("isImagePullFailure is exactly the three pull reasons", () => {
+    for (const r of ["ImagePullBackOff", "ErrImagePull", "InvalidImageName"]) expect(isImagePullFailure(r)).toBe(true);
+    for (const r of ["CrashLoopBackOff", "Pulling", "", null, undefined]) expect(isImagePullFailure(r)).toBe(false);
   });
 });
