@@ -28,12 +28,13 @@ import (
 type Capability string
 
 // The GRANTABLE capabilities — the only values a provider row's ceiling or
-// profile may name, and the only ones ScopesFor turns into scopes.
+// profile may name, and the only ones ScopesFor turns into scopes. One read
+// per Azure DevOps area, then that area's write and admin rows, following
+// Azure DevOps' own read → write → manage scope ladder.
 const (
-	// CapRead is a read of any area in readAreas: the floor every profile
-	// starts from. WIDER than "read the code" — it can also read
-	// service-connection config, groups/users and directory identities.
-	CapRead Capability = "read"
+	// CapCodeRead is a read of the git and policy areas, a pull-request query,
+	// code search, and a clone or fetch through the git broker.
+	CapCodeRead Capability = "code_read"
 	// CapCodeWrite is a commit, a push or a ref move. The caller holds a ref
 	// move to the run's own branch namespace unless the run's policy sets
 	// git_push_any_branch; that rule is the run's, never a capability's.
@@ -50,26 +51,75 @@ const (
 	CapPolicyBypass Capability = "policy_bypass"
 	// CapRepoAdmin is creating, renaming or deleting a repository.
 	CapRepoAdmin Capability = "repo_admin"
-	// CapSecurityAdmin is changing permissions, ACLs or directory identities.
-	CapSecurityAdmin Capability = "security_admin"
+	// CapWorkRead is a read of work items, queries and boards, including the
+	// two query POSTs and work-item search.
+	CapWorkRead Capability = "work_read"
+	// CapWorkWrite is creating and updating work items, including through the
+	// batch door.
+	CapWorkWrite Capability = "work_write"
+	// CapWorkAdmin is deleting or destroying work items and changing the
+	// organisation's area and iteration paths, fields and tags. Azure DevOps
+	// serves all of it from vso.work_write; only its permission model tells it
+	// apart from editing, so the classifier does too.
+	CapWorkAdmin Capability = "work_admin"
+	// CapWikiRead is a read of wikis, including wiki search.
+	CapWikiRead Capability = "wiki_read"
+	// CapWikiWrite is writing a wiki.
+	CapWikiWrite Capability = "wiki_write"
+	// CapBuildRead is a read of builds and pipelines.
+	CapBuildRead Capability = "build_read"
+	// CapBuildExecute is queueing, cancelling or updating a pipeline run.
+	CapBuildExecute Capability = "build_execute"
+	// CapBuildAdmin is editing a pipeline definition — deciding what every
+	// future run executes.
+	CapBuildAdmin Capability = "build_admin"
+	// CapReleaseRead is a read of classic releases and release pipelines.
+	CapReleaseRead Capability = "release_read"
+	// CapReleaseExecute is creating, deploying and deleting a release.
+	CapReleaseExecute Capability = "release_execute"
+	// CapReleaseAdmin is editing a release pipeline or answering a release
+	// approval — deciding what every future release deploys.
+	CapReleaseAdmin Capability = "release_admin"
+	// CapServiceEndpointRead is a read of service connections.
+	CapServiceEndpointRead Capability = "serviceendpoint_read"
 	// CapServiceEndpointAdmin is changing a service connection — the object
 	// that holds someone else's cloud credential.
 	CapServiceEndpointAdmin Capability = "serviceendpoint_admin"
-	// CapBuildExecute is queueing a pipeline run, plus creating, deploying and
-	// deleting releases (the classic release area folds onto build here).
-	CapBuildExecute Capability = "build_execute"
-	// CapBuildAdmin is editing a pipeline or release definition — deciding
-	// what every future run and release executes.
-	CapBuildAdmin Capability = "build_admin"
-	// CapWorkWrite is writing work items, including through the batch door.
-	CapWorkWrite Capability = "work_write"
-	// CapWikiWrite is writing a wiki.
-	CapWikiWrite Capability = "wiki_write"
-	// CapPackagingWrite is publishing to a feed.
+	// CapLibraryRead is a read of variable groups and secure files.
+	CapLibraryRead Capability = "library_read"
+	// CapPackagingRead is a read of feeds and packages, including a package
+	// client's download.
+	CapPackagingRead Capability = "packaging_read"
+	// CapPackagingWrite is publishing, promoting, deprecating or unlisting a
+	// package version.
 	CapPackagingWrite Capability = "packaging_write"
+	// CapPackagingManage is deleting or unpublishing a package version and
+	// creating, changing or deleting a feed — Azure DevOps serves these only
+	// under vso.packaging_manage.
+	CapPackagingManage Capability = "packaging_manage"
+	// CapTestRead is a read of test plans, runs and results.
+	CapTestRead Capability = "test_read"
+	// CapProjectRead is a read of projects and teams, and the signed-in
+	// person's own profile and organisations.
+	CapProjectRead Capability = "project_read"
+	// CapIdentityRead is a read of the organisation's users, groups,
+	// entitlements and directory identities.
+	CapIdentityRead Capability = "identity_read"
+	// CapAnalyticsRead is an Analytics query — which reaches the work-item,
+	// pipeline and test data of every project.
+	CapAnalyticsRead Capability = "analytics_read"
 	// CapProjectAdmin is creating, changing or deleting a project.
 	CapProjectAdmin Capability = "project_admin"
+	// CapSecurityAdmin is changing permissions, ACLs or directory identities.
+	CapSecurityAdmin Capability = "security_admin"
 )
+
+// CapDiscovery is Azure DevOps' own API discovery: OPTIONS location
+// discovery, connectiondata and resourceareas. It returns route templates,
+// not organisation data, and Azure DevOps gates it on no scope. It is NOT
+// grantable — no list may name it — and Permits allows it to any run holding
+// at least one grantable capability, so no row has to be a floor.
+const CapDiscovery Capability = "discovery"
 
 // The REFUSED capabilities: Capability values, not errors, so a refusal can
 // name the area it refused — an operator reading "denied_tokens" learns more
@@ -99,11 +149,17 @@ const (
 // grantableCapabilities is the closed grantable set — the only values a
 // ceiling, a profile or a scope request may name.
 var grantableCapabilities = map[Capability]bool{
-	CapRead: true, CapCodeWrite: true, CapPR: true, CapPolicyAdmin: true,
-	CapPolicyBypass: true, CapRepoAdmin: true, CapSecurityAdmin: true,
-	CapServiceEndpointAdmin: true, CapBuildExecute: true, CapBuildAdmin: true,
-	CapWorkWrite: true, CapWikiWrite: true, CapPackagingWrite: true,
-	CapProjectAdmin: true,
+	CapCodeRead: true, CapCodeWrite: true, CapPR: true, CapPolicyAdmin: true,
+	CapPolicyBypass: true, CapRepoAdmin: true,
+	CapWorkRead: true, CapWorkWrite: true, CapWorkAdmin: true,
+	CapWikiRead: true, CapWikiWrite: true,
+	CapBuildRead: true, CapBuildExecute: true, CapBuildAdmin: true,
+	CapReleaseRead: true, CapReleaseExecute: true, CapReleaseAdmin: true,
+	CapServiceEndpointRead: true, CapServiceEndpointAdmin: true, CapLibraryRead: true,
+	CapPackagingRead: true, CapPackagingWrite: true, CapPackagingManage: true,
+	CapTestRead:    true,
+	CapProjectRead: true, CapIdentityRead: true, CapAnalyticsRead: true,
+	CapProjectAdmin: true, CapSecurityAdmin: true,
 }
 
 // deniedCapabilities is the closed refused set.
@@ -122,7 +178,7 @@ func (c Capability) Denied() bool { return deniedCapabilities[c] }
 
 // Valid reports whether c is a value Classify can return at all.
 func (c Capability) Valid() bool {
-	return c.Grantable() || c.Denied() || c == CapUnclassifiedWrite || c == CapUnclassifiedRead
+	return c.Grantable() || c.Denied() || c == CapDiscovery || c == CapUnclassifiedWrite || c == CapUnclassifiedRead
 }
 
 // GrantableCapabilities is the grantable set in a stable order, for the
@@ -146,20 +202,37 @@ func GrantableCapabilityList() string {
 // person ("this run may …"). Kept here, not in a console, so wording can't
 // drift into a second definition of what a capability permits.
 var labels = map[Capability]string{
-	CapRead:                 "Read code, work items, pipelines, releases, wikis and feeds — including service connection settings, the organisation's groups and users, and directory identities",
+	CapCodeRead:             "Clone, fetch and browse repositories, commits, branches, pull requests and branch policies, and search code",
 	CapCodeWrite:            "Push commits and create or move branches, inside this run's own branch unless its policy allows any branch",
 	CapPR:                   "Open, review and complete pull requests",
 	CapPolicyAdmin:          "Change the branch policies themselves",
 	CapPolicyBypass:         "Complete a pull request without its required reviewers or checks",
 	CapRepoAdmin:            "Create, rename and delete repositories",
-	CapSecurityAdmin:        "Change permissions and identities",
-	CapServiceEndpointAdmin: "Change service connections and the credentials they hold",
-	CapBuildExecute:         "Queue pipeline runs, and create, deploy and delete releases",
-	CapBuildAdmin:           "Change pipeline and release definitions — what every future run and release executes",
+	CapWorkRead:             "Read work items, queries, boards, backlogs, areas and iterations, and search work items",
 	CapWorkWrite:            "Create and update work items",
+	CapWorkAdmin:            "Delete, restore or permanently destroy work items, and change area and iteration paths, fields and tags for everyone",
+	CapWikiRead:             "Read wiki pages, their history and attachments, and search wikis",
 	CapWikiWrite:            "Write wiki pages",
+	CapBuildRead:            "Read pipelines, runs, builds, logs and artifacts",
+	CapBuildExecute:         "Queue, cancel or update a pipeline run",
+	CapBuildAdmin:           "Change pipeline definitions — what every future run executes",
+	CapReleaseRead:          "Read classic release pipelines, releases and their stages",
+	CapReleaseExecute:       "Create releases, deploy them to a stage, and delete them",
+	CapReleaseAdmin:         "Change release pipelines and answer release approvals — what every future release deploys",
+	CapServiceEndpointRead:  "Read service connection names, types and settings",
+	CapServiceEndpointAdmin: "Change service connections and the credentials they hold",
+	CapLibraryRead:          "Read variable groups and secure-file details",
+	CapPackagingRead:        "List feeds, and download or restore packages",
 	CapPackagingWrite:       "Publish packages to feeds",
+	CapPackagingManage:      "Delete or unpublish package versions, and create, change or delete feeds, views and their permissions",
+	CapTestRead:             "Read test plans, suites, cases, runs and results",
+	CapProjectRead:          "Read projects, teams and your own profile",
+	CapIdentityRead:         "Read the organisation's users, groups, memberships and licences, and directory identities",
+	CapAnalyticsRead:        "Query Analytics — reports on work items, pipelines and tests across every project",
 	CapProjectAdmin:         "Create, change and delete projects",
+	CapSecurityAdmin:        "Change permissions and identities",
+
+	CapDiscovery: "Find where Azure DevOps serves each API — no organisation data",
 
 	CapDeniedTokens:       "Not available: minting or revoking access tokens",
 	CapDeniedServiceHooks: "Not available: forwarding organisation events to another address",
@@ -175,20 +248,35 @@ var labels = map[Capability]string{
 // ui/src/app/lib/workspace-providers-copy.ts carries the same names, and
 // ui/src/app/lib/ado-access-copy.test.ts pins the two together.
 var shortLabels = map[Capability]string{
-	CapRead:                 "Read",
+	CapCodeRead:             "Read code",
 	CapCodeWrite:            "Push to the run's own branch",
-	CapPR:                   "Open pull requests",
-	CapWorkWrite:            "Work items",
-	CapWikiWrite:            "Wiki",
-	CapBuildExecute:         "Run pipelines & releases",
-	CapPackagingWrite:       "Publish packages",
-	CapPolicyAdmin:          "Change branch policies",
-	CapPolicyBypass:         "Bypass branch policies",
-	CapRepoAdmin:            "Manage repositories",
-	CapSecurityAdmin:        "Change permissions & identities",
+	CapPR:                   "Contribute to pull requests",
+	CapPolicyAdmin:          "Edit branch policies",
+	CapPolicyBypass:         "Bypass policies when completing pull requests",
+	CapRepoAdmin:            "Create, rename and delete repositories",
+	CapWorkRead:             "View work items",
+	CapWorkWrite:            "Edit work items",
+	CapWorkAdmin:            "Delete work items & manage work tracking",
+	CapWikiRead:             "Read wikis",
+	CapWikiWrite:            "Edit wikis",
+	CapBuildRead:            "View builds & pipelines",
+	CapBuildExecute:         "Queue builds",
+	CapBuildAdmin:           "Edit build pipelines",
+	CapReleaseRead:          "View releases",
+	CapReleaseExecute:       "Create releases & deploy",
+	CapReleaseAdmin:         "Edit release pipelines",
+	CapServiceEndpointRead:  "View service connections",
 	CapServiceEndpointAdmin: "Manage service connections",
-	CapBuildAdmin:           "Change pipeline definitions",
-	CapProjectAdmin:         "Manage projects",
+	CapLibraryRead:          "View variable groups & secure files",
+	CapPackagingRead:        "Read feeds & packages",
+	CapPackagingWrite:       "Publish packages",
+	CapPackagingManage:      "Delete packages & manage feeds",
+	CapTestRead:             "View test plans & results",
+	CapProjectRead:          "View projects & teams",
+	CapIdentityRead:         "Read users & groups",
+	CapAnalyticsRead:        "View analytics",
+	CapProjectAdmin:         "Manage projects & teams",
+	CapSecurityAdmin:        "Manage permissions & identities",
 }
 
 // ShortLabel is c's canon short name, or its wire name for a value outside
@@ -204,15 +292,7 @@ func ShortLabel(c Capability) string {
 // never a guess, so an unrecognized capability can't render as understood.
 func Label(c Capability) string { return labels[c] }
 
-// ProfileRead is the DEFAULT profile: reads and nothing else — a provider
-// row with empty default_profile gets this, making read-only the
-// catalogue's fact rather than a field someone remembered to fill in.
-func ProfileRead() []Capability { return []Capability{CapRead} }
-
-// ProfileContribute is the "do the work" profile: read, push, pull requests,
-// work items and wiki. CapBuildExecute is deliberately ABSENT: a pipeline
-// runs under a different, usually wider identity, so it stays opt-in rather
-// than part of "contribute".
-func ProfileContribute() []Capability {
-	return []Capability{CapRead, CapCodeWrite, CapPR, CapWorkWrite, CapWikiWrite}
-}
+// ProfileDefault is the profile a provider row with an empty default_profile
+// gets: read the code and see the projects. Anything wider is a row's own
+// choice, written out on the row.
+func ProfileDefault() []Capability { return []Capability{CapProjectRead, CapCodeRead} }

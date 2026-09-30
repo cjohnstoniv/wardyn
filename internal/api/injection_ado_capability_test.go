@@ -252,7 +252,7 @@ func TestADOCapability_ForThisRunWidensTheRun(t *testing.T) {
 		t.Errorf("rows = %d, want the one approval only", len(f.approvals.requested))
 	}
 	// An administrator narrowing the ceiling takes it back.
-	f.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
+	f.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
 	if w := f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath); w.Code != http.StatusForbidden {
 		t.Errorf("after narrowing: status %d, want 403", w.Code)
 	}

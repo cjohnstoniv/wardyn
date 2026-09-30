@@ -102,7 +102,7 @@ az rest --method PATCH \
   }'
 
 # Azure DevOps delegated permissions for an `entra` provider row whose ceiling
-# is read + code_write + pr (docs/adoption/azure-devops-entra.md, "The app
+# is every per-area read + code_write + pr (docs/AZURE-DEVOPS.md, "The app
 # registration"). The Azure DevOps service principal exists in a tenant only
 # once an Azure DevOps organisation is connected to it; without one this step
 # is skipped and the Azure DevOps lane cannot be tested on this tenant.

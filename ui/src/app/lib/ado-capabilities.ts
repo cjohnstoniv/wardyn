@@ -4,48 +4,70 @@
  */
 
 // The console's Azure DevOps capability catalogue: every grantable capability
-// (adoscope.GrantableCapabilities), the group it is shown under, and whether it
-// is high risk. One module so the policy editor and the provider-row editor
-// cannot group or flag a capability differently. Labels and hints stay in
-// ado-entra-copy.ts; a capability without one renders as its wire name.
-//
-// DRAFT: group names await the approved mock (mock-first law).
-import { ADO } from "./ado-entra-copy";
+// (adoscope.GrantableCapabilities), the Azure DevOps area it is shown under,
+// and whether it is high risk. One module so the policy editor and the
+// provider-row editor cannot group or flag a capability differently. Names,
+// consequence lines and the grey Azure DevOps line live in
+// workspace-providers-copy.ts (ADO_CAP_COPY); a capability without one renders
+// as its wire name.
 
-export type ADOCapabilityGroup = "read" | "contribute" | "work" | "pipelines" | "high_risk";
+export type ADOCapabilityGroup = "repos" | "boards" | "wiki" | "pipelines" | "artifacts" | "test_plans" | "organization";
 
-export const ADO_CAPABILITY_GROUPS: readonly { id: ADOCapabilityGroup; title: string }[] = [
-  { id: "read", title: "Read" },
-  { id: "contribute", title: "Contribute" },
-  { id: "work", title: "Work tracking" },
-  { id: "pipelines", title: "Pipelines & packages" },
-  { id: "high_risk", title: "High-risk" },
+// Azure DevOps' own services, in the approved mock's order. Titles live in
+// ADO_GROUP_COPY.
+export const ADO_CAPABILITY_GROUPS: readonly { id: ADOCapabilityGroup }[] = [
+  { id: "repos" },
+  { id: "boards" },
+  { id: "wiki" },
+  { id: "pipelines" },
+  { id: "artifacts" },
+  { id: "test_plans" },
+  { id: "organization" },
 ];
 
 export interface ADOCapabilityInfo {
   cap: string;
   group: ADOCapabilityGroup;
   highRisk: boolean;
-  label?: string;
-  hint?: string;
+  // One of the twelve per-area reads the summary folds into "Read (every area)".
+  read: boolean;
 }
 
-// In the approved mock's order: group by group, and within a group the order
-// the mock draws (High risk leads with policy_admin). ado-capabilities.test.ts
-// pins the set to internal/adoscope/capability.go and the order to this list.
+// In the approved mock's order: area by area, and within an area read → write
+// → admin, the way Azure DevOps' own scopes go. High-risk rows sit inside their
+// area. ado-capabilities.test.ts pins the set to internal/adoscope/capability.go
+// and the order to this list.
 export const ADO_CAPABILITIES: readonly ADOCapabilityInfo[] = [
-  { cap: "read", group: "read", highRisk: false, label: ADO.CAP_READ, hint: ADO.CAP_READ_HINT },
-  { cap: "code_write", group: "contribute", highRisk: false, label: ADO.CAP_CODE_WRITE, hint: ADO.CAP_CODE_WRITE_HINT },
-  { cap: "pr", group: "contribute", highRisk: false, label: ADO.CAP_PR, hint: ADO.CAP_PR_HINT },
-  { cap: "work_write", group: "work", highRisk: false, label: ADO.CAP_WORK_WRITE, hint: ADO.CAP_WORK_WRITE_HINT },
-  { cap: "wiki_write", group: "work", highRisk: false, label: ADO.CAP_WIKI_WRITE, hint: ADO.CAP_WIKI_WRITE_HINT },
-  { cap: "build_execute", group: "pipelines", highRisk: false, label: ADO.CAP_BUILD_EXECUTE, hint: ADO.CAP_BUILD_EXECUTE_HINT },
-  { cap: "packaging_write", group: "pipelines", highRisk: false },
-  { cap: "policy_admin", group: "high_risk", highRisk: true, label: ADO.CAP_POLICY_ADMIN, hint: ADO.CAP_POLICY_ADMIN_HINT },
-  { cap: "policy_bypass", group: "high_risk", highRisk: true, label: ADO.CAP_POLICY_BYPASS, hint: ADO.CAP_POLICY_BYPASS_HINT },
-  { cap: "repo_admin", group: "high_risk", highRisk: true, label: ADO.CAP_REPO_ADMIN, hint: ADO.CAP_REPO_ADMIN_HINT },
-  { cap: "security_admin", group: "high_risk", highRisk: true },
-  { cap: "serviceendpoint_admin", group: "high_risk", highRisk: true },
-  { cap: "build_admin", group: "high_risk", highRisk: true },
-  { cap: "project_admin", group: "high_risk", highRisk: true },
+  { cap: "code_read", group: "repos", highRisk: false, read: true },
+  { cap: "code_write", group: "repos", highRisk: false, read: false },
+  { cap: "pr", group: "repos", highRisk: false, read: false },
+  { cap: "policy_admin", group: "repos", highRisk: true, read: false },
+  { cap: "policy_bypass", group: "repos", highRisk: true, read: false },
+  { cap: "repo_admin", group: "repos", highRisk: true, read: false },
+  { cap: "work_read", group: "boards", highRisk: false, read: true },
+  { cap: "work_write", group: "boards", highRisk: false, read: false },
+  { cap: "work_admin", group: "boards", highRisk: true, read: false },
+  { cap: "wiki_read", group: "wiki", highRisk: false, read: true },
+  { cap: "wiki_write", group: "wiki", highRisk: false, read: false },
+  { cap: "build_read", group: "pipelines", highRisk: false, read: true },
+  { cap: "build_execute", group: "pipelines", highRisk: false, read: false },
+  { cap: "build_admin", group: "pipelines", highRisk: true, read: false },
+  { cap: "release_read", group: "pipelines", highRisk: false, read: true },
+  { cap: "release_execute", group: "pipelines", highRisk: false, read: false },
+  { cap: "release_admin", group: "pipelines", highRisk: true, read: false },
+  { cap: "serviceendpoint_read", group: "pipelines", highRisk: false, read: true },
+  { cap: "serviceendpoint_admin", group: "pipelines", highRisk: true, read: false },
+  { cap: "library_read", group: "pipelines", highRisk: false, read: true },
+  { cap: "packaging_read", group: "artifacts", highRisk: false, read: true },
+  { cap: "packaging_write", group: "artifacts", highRisk: false, read: false },
+  { cap: "packaging_manage", group: "artifacts", highRisk: true, read: false },
+  { cap: "test_read", group: "test_plans", highRisk: false, read: true },
+  { cap: "project_read", group: "organization", highRisk: false, read: true },
+  { cap: "identity_read", group: "organization", highRisk: false, read: true },
+  { cap: "analytics_read", group: "organization", highRisk: false, read: true },
+  { cap: "project_admin", group: "organization", highRisk: true, read: false },
+  { cap: "security_admin", group: "organization", highRisk: true, read: false },
 ];
+
+// What an empty default_profile means on the server (adoscope.ProfileDefault).
+export const ADO_DEFAULT_PROFILE: readonly string[] = ["project_read", "code_read"];

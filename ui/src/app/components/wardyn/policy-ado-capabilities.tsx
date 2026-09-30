@@ -6,8 +6,10 @@
 // The policy editor's "Azure DevOps access" section — azure_devops_capabilities
 // as a grouped checklist beside the spec, the same shape as ToolRulesSection: it
 // reads and writes the one document the textarea shows, so there is no second
-// source of truth. Layout and copy are the owner-approved mock's (mock-08,
-// Member · State 4).
+// source of truth. Layout and copy are the owner-approved mocks' (mock-08,
+// Member · State 4; the per-area packet, Member · State 3): one group per Azure
+// DevOps area, and a High-risk row sits inside its area with the badge and a
+// red left edge.
 //
 // A capability off the row's ceiling renders LOCKED — a red crossed box and a
 // struck-through name — because a policy naming it is refused at launch. When
@@ -55,7 +57,12 @@ function CapabilityRow({
   const inert = locked && !checked;
   return (
     <li
-      className={clsx("flex items-start gap-2.5 border-b border-border py-2 last:border-b-0", inert && "cursor-not-allowed")}
+      className={clsx(
+        "flex items-start gap-2.5 border-b border-border py-2 last:border-b-0",
+        info.highRisk && "-ml-3 border-l-[3px] border-l-danger pl-[9px]",
+        inert && "cursor-not-allowed",
+      )}
+      data-high-risk={info.highRisk || undefined}
       title={locked ? ADO_ACCESS.LOCKED : undefined}
       aria-disabled={inert || undefined}
     >
@@ -116,27 +123,19 @@ export function ADOCapabilitiesSection({
     <div className="rounded-lg border border-border p-3">
       <SectionLabel>{ADO_ACCESS.SECTION_TITLE}</SectionLabel>
       <p className="mt-1 text-xs leading-snug text-muted-foreground">{ADO_ACCESS.SECTION_LEAD}</p>
+      <p className="mt-2.5 flex flex-wrap items-baseline gap-2 rounded-lg bg-danger-subtle px-3 py-2 text-xs text-danger">
+        <HighRiskBadge />
+        <span>{ADO_ACCESS.HIGH_RISK_WARN_MEMBER}</span>
+      </p>
       <div className="mt-1">
         {ADO_CAPABILITY_GROUPS.map((g) => {
-          const risk = g.id === "high_risk";
           const title = adoGroupName(g.id);
           return (
-            <fieldset
-              key={g.id}
-              className={clsx("mt-2.5 overflow-hidden rounded-lg border", risk ? "border-danger/60" : "border-border")}
-            >
+            <fieldset key={g.id} className="mt-2.5 overflow-hidden rounded-lg border border-border">
               <legend className="sr-only">{title}</legend>
-              <div
-                aria-hidden="true"
-                className={clsx("px-3 py-2 text-xs font-semibold", risk ? "bg-danger-subtle text-danger" : "bg-muted")}
-              >
+              <div aria-hidden="true" className="bg-muted px-3 py-2 text-xs font-semibold">
                 {title}
               </div>
-              {risk && (
-                <p className="border-t border-dashed border-danger bg-danger-subtle px-3 py-1.5 text-xs text-danger">
-                  {ADO_ACCESS.HIGH_RISK_WARN_MEMBER}
-                </p>
-              )}
               <ul className="px-3">
                 {ADO_CAPABILITIES.filter((c) => c.group === g.id).map((info) => (
                   <CapabilityRow

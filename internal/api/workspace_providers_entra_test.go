@@ -28,7 +28,7 @@ func entraRow(mutate func(*types.GitProvider)) types.GitProvider {
 		Entra: &types.ADOEntraConfig{
 			TenantID:          "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
 			ClientID:          "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
-			CapabilityCeiling: []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR},
+			CapabilityCeiling: []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
 		},
 	}
 	if mutate != nil {
@@ -79,7 +79,7 @@ func TestValidateProviderEntra(t *testing.T) {
 			Entra: &types.ADOEntraConfig{
 				TenantID:          "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
 				ClientID:          "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
-				CapabilityCeiling: []adoscope.Capability{adoscope.CapRead},
+				CapabilityCeiling: []adoscope.Capability{adoscope.CapCodeRead},
 			},
 		}), true},
 
@@ -109,35 +109,53 @@ func TestValidateProviderEntra(t *testing.T) {
 			r.Entra.CapabilityCeiling = nil
 		})), true},
 		{"an invented capability in the ceiling", block(entraRow(func(r *types.GitProvider) {
-			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead, "superuser"}
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead, "superuser"}
 		})), true},
 		{"a DENIED area is not a capability anyone can be granted", block(entraRow(func(r *types.GitProvider) {
-			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead, adoscope.CapDeniedTokens}
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapDeniedTokens}
 		})), true},
 		{"the unclassified-write placeholder is not grantable either", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapUnclassifiedWrite}
 		})), true},
 
 		{"a profile inside the ceiling", block(entraRow(func(r *types.GitProvider) {
-			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
+			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
 		})), false},
 		{"a profile outside the ceiling", block(entraRow(func(r *types.GitProvider) {
-			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapPolicyBypass}
+			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPolicyBypass}
 		})), true},
 		{"an invented capability in the profile", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.DefaultProfile = []adoscope.Capability{"superuser"}
 		})), true},
-		{"an EMPTY profile reads as the read profile, which the ceiling admits", block(entraRow(func(r *types.GitProvider) {
-			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead}
+		{"an EMPTY profile reads as the default profile, which the ceiling admits", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapCodeRead}
 			r.Entra.DefaultProfile = nil
 		})), false},
-		{"a ceiling that cannot read is refused whatever the profile says", block(entraRow(func(r *types.GitProvider) {
-			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
+		{"an EMPTY profile needs project_read on the ceiling", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead}
 			r.Entra.DefaultProfile = nil
 		})), true},
-		{"and refused even when the profile names only what it does admit", block(entraRow(func(r *types.GitProvider) {
+		{"an EMPTY profile needs code_read on the ceiling", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapProjectRead, adoscope.CapWorkRead}
+			r.Entra.DefaultProfile = nil
+		})), true},
+		{"a Boards-only ceiling without code_read is admitted when its profile names no code read", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapWorkRead, adoscope.CapWorkWrite}
+			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapWorkRead}
+		})), false},
+		{"a ceiling with no read at all is admitted when its profile is inside it", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
 			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeWrite}
+		})), false},
+		{"the pre-split read id is refused in the ceiling", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{"read", adoscope.CapCodeWrite}
+			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeWrite}
+		})), true},
+		{"the pre-split read id is refused in the profile", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.DefaultProfile = []adoscope.Capability{"read"}
+		})), true},
+		{"discovery is not a capability a row may name", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = append(r.Entra.CapabilityCeiling, adoscope.CapDiscovery)
 		})), true},
 
 		{"the bearer token mode", block(entraRow(func(r *types.GitProvider) {
@@ -214,9 +232,9 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 		{"minted_pat", entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
 		}), "only lets Microsoft's own clients mint"},
-		{"a ceiling that cannot read", entraRow(func(r *types.GitProvider) {
-			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
-		}), "every profile starts from reads"},
+		{"the pre-split read id", entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{"read"}
+		}), `entra.capability_ceiling[0]: "read" is not a capability — want one of: analytics_read, build_admin,`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{tc.row}}, true)
@@ -341,7 +359,7 @@ func TestEntraBlockRoundTripsThroughBothDoors(t *testing.T) {
 	off := false
 	row := entraRow(func(r *types.GitProvider) {
 		r.CredentialSource = types.CredentialSourcePerUser
-		r.Entra.DefaultProfile = adoscope.ProfileRead()
+		r.Entra.DefaultProfile = adoscope.ProfileDefault()
 		r.Entra.TokenMode = types.ADOTokenModeBearer
 		r.Entra.RESTAPI = &off
 	})
@@ -374,20 +392,20 @@ func TestEntraBlockRoundTripsThroughBothDoors(t *testing.T) {
 	}
 }
 
-// TestEntraProfileDefaultsToRead pins the one spelling of the default: a row
-// that named no profile gets the catalogue's read-only one, so no call site
-// has to decide what "unset" means.
-func TestEntraProfileDefaultsToRead(t *testing.T) {
+// TestEntraProfileDefaultsToDefaultProfile pins the one spelling of the
+// default: a row that named no profile gets the catalogue's default one, so no
+// call site has to decide what "unset" means.
+func TestEntraProfileDefaultsToDefaultProfile(t *testing.T) {
 	cfg := entraRow(nil).Entra
-	if !slices.Equal(cfg.Profile(), adoscope.ProfileRead()) {
-		t.Fatalf("Profile() = %v, want %v", cfg.Profile(), adoscope.ProfileRead())
+	if !slices.Equal(cfg.Profile(), adoscope.ProfileDefault()) {
+		t.Fatalf("Profile() = %v, want %v", cfg.Profile(), adoscope.ProfileDefault())
 	}
-	cfg.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapPR}
+	cfg.DefaultProfile = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}
 	if !slices.Equal(cfg.Profile(), cfg.DefaultProfile) {
 		t.Fatalf("Profile() = %v, want the written profile %v", cfg.Profile(), cfg.DefaultProfile)
 	}
 	var absent *types.ADOEntraConfig
-	if !slices.Equal(absent.Profile(), adoscope.ProfileRead()) {
+	if !slices.Equal(absent.Profile(), adoscope.ProfileDefault()) {
 		t.Fatalf("a row with no block answers %v", absent.Profile())
 	}
 	if !absent.RESTAPIEnabled() {
