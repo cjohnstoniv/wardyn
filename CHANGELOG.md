@@ -92,9 +92,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `GET /runs/{id}` carries `model_provider_name` and, once the provider is deleted,
   `model_provider_deleted`. The header chip used the viewer's own setup status, which lists only what
   their agents use, so a provider that still existed showed as "(removed)" by its id, and a deleted
-  one showed its id in place of its name. The `run.create` row now freezes the provider's name, and an
-  AWS sign-in hold's scope carries `provider_name`, so the approval card names a provider its viewer's
-  setup status does not list.
+  one showed its id in place of its name. The `run.create` row now freezes the provider's name, and the
+  AWS sign-in approval card names the run's provider from that read when its viewer's setup status
+  does not list it.
 - **The Images tab reads user types once (#1016).** Each row's "Available to" control fetched
   `GET /user-types` on its own, so a tab of N images made N reads; they now share one.
 - **The run page no longer gets a 500 in the moment a finishing run's sandbox is already gone

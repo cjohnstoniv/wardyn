@@ -546,9 +546,10 @@ func TestProviderSignInReauth(t *testing.T) {
 		if sc["provider"] != p.ID || sc["provider_uid"] != p.UID || sc["owner"] != "alice@example.com" {
 			t.Fatalf("requested_scope = %v, want the provider's id and uid and alice", sc)
 		}
-		// #996: and its name, so a card names it for a viewer whose setup status does not list it.
-		if sc["provider_name"] != p.Name {
-			t.Errorf("requested_scope provider_name = %q, want %q", sc["provider_name"], p.Name)
+		// The scope is the 0022 dedup key: identity only. A provider's name (#996) rides
+		// GET /runs/{id} instead, so renaming a provider cannot admit a second PENDING row.
+		if len(sc) != 5 || sc["provider_name"] != "" {
+			t.Errorf("requested_scope = %v, want exactly mechanism, credential_source, owner, provider and provider_uid", sc)
 		}
 	})
 

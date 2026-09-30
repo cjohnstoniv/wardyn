@@ -11,7 +11,7 @@ import {
   isAdoCapabilityRequest,
   isAdoConsentRequest,
   isTerminalRunState,
-  type AgentRun,
+  type RunDetail,
   type ApprovalRequest,
   type DecisionOptions,
 } from "../../lib/types";
@@ -66,9 +66,6 @@ export function PendingCard({
   const view = useConsoleMode();
   const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal, view });
   const { status } = useShellSetupStatus();
-  const reauthProvider = reauth.provider
-    ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.providerName || reauth.provider)
-    : "";
   // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
   // personal reauth door either, even on the admin's own row — same rule as
   // the cockpit's ReauthRow, with a switch link back to it there instead. The
@@ -112,7 +109,15 @@ export function PendingCard({
   // both leave the controls exactly as they were: the screen withdraws them on
   // a KNOWN terminal state, never on a guess, which is the same direction the
   // rest of this card errs in.
-  const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  // The hold's provider is the run's own, so its name rides the run read (#996,
+  // model_provider_name) for a viewer whose setup status does not list it. It is
+  // not on the hold: that scope is the dedup key, identity only.
+  const reauthProvider = reauth.provider
+    ? status?.model_providers?.find((p) => p.id === reauth.provider)?.name ||
+      (run?.model_provider_id === reauth.provider ? run.model_provider_name : "") ||
+      reauth.provider
+    : "";
   const runEnded = !!run && isTerminalRunState(run.state);
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
 

@@ -121,10 +121,6 @@ export interface ReauthAudience {
    *  door is the one that opens: a sign-in to another AWS provider cannot
    *  clear it (#543). */
   provider: string;
-  /** The provider's name as the hold recorded it (#996), for a viewer whose
-   *  own setup status does not list the provider. Absent on a hold raised
-   *  before it was recorded. */
-  providerName?: string;
   /** The row names this viewer — true for the admin's own run in the Admin
    *  view too, where a provider's door does not open (canAct is false). */
   mine: boolean;
@@ -156,10 +152,9 @@ export function reauthAudience(
   const shared = String((request.requested_scope?.credential_source as string) ?? "") === "shared";
   const owner = String((request.requested_scope?.owner as string) ?? "");
   const provider = String((request.requested_scope?.provider as string) ?? "");
-  const providerName = String((request.requested_scope?.provider_name as string) ?? "");
   const mine = !!viewer.principal && owner === viewer.principal;
   const canAct = shared ? viewer.operator : mine && !(provider && viewer.view === "admin");
-  return { canAct, shared, owner, provider, providerName, mine };
+  return { canAct, shared, owner, provider, mine };
 }
 
 /** The row's sentence for that audience — the door's own hint, or the one
