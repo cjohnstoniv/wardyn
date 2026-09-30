@@ -101,6 +101,11 @@
   },
   {
     "reason": "capability_model_provider",
+    "target": "\"runs.model_provider\"",
+    "sentence": "choice.refusal"
+  },
+  {
+    "reason": "capability_model_provider",
     "target": "target",
     "sentence": "(audit only)"
   },

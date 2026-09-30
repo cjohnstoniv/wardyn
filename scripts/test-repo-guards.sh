@@ -465,7 +465,10 @@ old_actions="$(awk -F'|' '/^## Renamed in 0.8/{f=1;next} f&&/^## /{exit} f&&$2~/
 [ -n "$old_actions" ] || bad "docs/AUDIT-ACTIONS.md's 'Renamed in 0.8' table has no rows — guard 14 is pointing at nothing"
 stale_actions=0
 for name in $old_actions; do
-    hits="$(git grep -nP "(?<![\\w.])${name//./\\.}(?!\\.?\\w)" -- 'ui/e2e/demo/**' 'ui/e2e/live*/**' 'scripts/lib/verify-demo-take-*' || true)"
+    # git grep: 0 = hits, 1 = none, anything else = the grep itself failed
+    # (no PCRE in this git, a bad pattern), which must never read as clean.
+    hits="$(git grep -nP "(?<![\\w.])${name//./\\.}(?!\\.?\\w)" -- 'ui/e2e/demo/**' 'ui/e2e/live*/**' 'scripts/lib/verify-demo-take-*')" && rc=0 || rc=$?
+    if [ "$rc" -gt 1 ]; then stale_actions=1; bad "guard 14: git grep failed (rc=$rc) for '$name'"; continue; fi
     [ -z "$hits" ] || { stale_actions=1; bad "retired audit action name '$name' is still used by a demo/live spec or demo-take verifier (see docs/AUDIT-ACTIONS.md 'Renamed in 0.8'):
 $hits"; }
 done

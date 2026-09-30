@@ -143,12 +143,14 @@ func (s *Server) credentialOwner(w http.ResponseWriter, r *http.Request) string 
 // providerForCredential reads the provider {id} names as this caller may see
 // it. granted requires it to serve an agent the caller may launch (the
 // /setup/status projection's own rule) and to be available to them
-// (denyProviderAsMissing); a delete requires neither, so a person whose grant
-// was withdrawn can still remove their key. A provider the caller cannot see,
-// or one whose credential is a sign-in, is refused here. The caller holds
+// (denyProviderAsMissing). A delete requires neither, so a person whose grant
+// was withdrawn can still remove their key — but one who holds no key for it
+// is answered as a PUT would be answered on availability, or DELETE would tell
+// a restricted provider from an unknown id (D-6). A provider the caller cannot
+// see, or one whose credential is a sign-in, is refused here. The caller holds
 // siteConfigMu, so the UID read here is still the provider's when the write
 // lands — rule 8's purge runs under the same lock.
-func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, granted bool) (types.ModelProvider, bool) {
+func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, owner string, granted bool) (types.ModelProvider, bool) {
 	id := chi.URLParam(r, "id")
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
@@ -165,7 +167,8 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, g
 	}
 	// Ahead of the kind check, whose 422 would tell a provider apart from an
 	// unknown id.
-	if granted && s.denyProviderAsMissing(w, r, id, "model_provider.credential") {
+	holdsKey := !granted && s.ownsSecretMemoized(r.Context(), owner, providerSecretName(p.UID, providerKeyPart))
+	if !holdsKey && s.denyProviderAsMissing(w, r, id, "model_provider.credential") {
 		return types.ModelProvider{}, false
 	}
 	if !providerTypedKinds[p.Kind] {
@@ -221,7 +224,7 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	}
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
-	p, ok := s.providerForCredential(w, r, true)
+	p, ok := s.providerForCredential(w, r, owner, true)
 	if !ok {
 		return
 	}
@@ -252,7 +255,7 @@ func (s *Server) handleDeleteProviderCredential(w http.ResponseWriter, r *http.R
 	}
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
-	p, ok := s.providerForCredential(w, r, false)
+	p, ok := s.providerForCredential(w, r, owner, false)
 	if !ok {
 		return
 	}

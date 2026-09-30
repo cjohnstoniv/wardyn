@@ -65,12 +65,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
   CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
 
-- **A model provider that isn't available to you answers like one that doesn't exist, at the key and
-  sign-in doors (#1018).** `PUT /model-providers/{id}/credential` and `/model-providers/{id}/sign-in`
+- **A model provider that isn't available to you answers like one that doesn't exist (#1018).** The
+  key door (`PUT` and `DELETE /model-providers/{id}/credential`) and `/model-providers/{id}/sign-in`
   now answer a provider its "Available to" list leaves you out of with the same `404`
   (`model_provider_not_found`) and sentence an unknown id gets, instead of a `403` naming it,
   because provider ids are guessable. The key door checks this before it says a provider is
-  signed in to rather than keyed. The `authz.denied` row still records `capability_model_provider`.
+  signed in to rather than keyed, and a `DELETE` of a key you still hold is never refused. At
+  `POST /runs` and `POST /runs/preflight`, a provider you name (or your workspace pins) and are not
+  granted answers the `422` "there is no model provider by that name", whatever its state, instead
+  of the `403`. The `authz.denied` row still records `capability_model_provider`.
 - **The User view's forced exit is dual-emitted too (#1020).** When `GET /me` finds the viewed user
   type deleted and drops the session back to the Admin view, it writes `auth.member_mode` beside
   `auth.user_view.set`, with the same data, as the toggle does through 0.8.x.

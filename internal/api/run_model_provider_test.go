@@ -57,11 +57,15 @@ func TestChooseModelProvider(t *testing.T) {
 			wantRefusal: refusal("b", mpRunStateOff)},
 		{name: "a requested provider that does not serve the agent", sc: site("", a, codexOnly), requested: "codex", granted: all,
 			wantRefusal: refusal("codex", fmt.Sprintf(mpRunStateNotServing, "claude-code"))},
+		// D-6 (#1018): a named provider the caller is not granted reads as
+		// missing, whatever its state.
 		{name: "a requested provider the caller is not granted", sc: site("", a, b), requested: "b", granted: only("a"),
-			wantRefusal: refusal("b", mpRunStateNotGranted), wantNotGranted: true},
+			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
+		{name: "a requested provider the caller is not granted that is also off", sc: site("", a, off(b)), requested: "b", granted: only("a"),
+			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
 		{name: "the pin, with no request", sc: site("a", a, b), pin: "b", granted: all, wantID: "b"},
 		{name: "a pin the caller is not granted is refused, never passed over", sc: site("a", a, b), pin: "b", granted: only("a"),
-			wantRefusal: refusal("b", mpRunStateNotGranted), wantNotGranted: true},
+			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
 		{name: "a pin that is off is refused, never passed over", sc: site("a", a, off(b)), pin: "b", granted: all,
 			wantRefusal: refusal("b", mpRunStateOff)},
 		{name: "the default among two candidates", sc: site("b", a, b), granted: all, wantID: "b"},
@@ -97,6 +101,27 @@ func TestChooseModelProvider(t *testing.T) {
 			t.Errorf("err = %v, want the capability read's error", err)
 		}
 	})
+}
+
+// TestRunModelProviderNotGrantedReadsAsMissing (D-6, #1018): at create and
+// Review, a named provider the member is not granted answers byte for byte as
+// an id no provider has; only the audit row tells them apart.
+func TestRunModelProviderNotGrantedReadsAsMissing(t *testing.T) {
+	cs := func() *capStore { return &capStore{enf: map[string]bool{capModelProvider: true}} }
+	withCorp := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider("corp", "claude-code"))}
+	withoutCorp := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"))}
+	const body = `{"agent":"claude-code","task":"t","model_provider":"corp"}`
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		restricted := providerRunFixture(t, withCorp, cs(), nil)
+		w := doSSO(t, restricted, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
+		unknown := doSSO(t, providerRunFixture(t, withoutCorp, cs(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
+		if w.Code != unknown.Code || w.Body.String() != unknown.Body.String() {
+			t.Errorf("%s: not granted = %d %s\nunknown = %d %s", path, w.Code, w.Body.String(), unknown.Code, unknown.Body.String())
+		}
+		if !slices.Contains(auditReasons(t, restricted, "authz.denied"), "capability_model_provider") {
+			t.Errorf("%s: the not-granted refusal wrote no capability_model_provider row", path)
+		}
+	}
 }
 
 // providerRunFixture is a create/preflight server whose site config carries
@@ -181,15 +206,18 @@ func TestRunModelProviderDoors(t *testing.T) {
 	}{
 		{name: "a requested provider the member is not granted", site: twoKeys, cs: &capStore{enf: enforced},
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateMissing, mpRunRemedy), denied: true,
+			wantProvider: "corp"},
 		{name: "a workspace pin naming a provider the member is not granted", site: twoKeys, ws: pinned,
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
-			body: onPinned, want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+			body: onPinned, want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateMissing, mpRunRemedy), denied: true,
+			wantProvider: "corp"},
 		{name: "workspace_id: the pin names a provider the member is not granted", site: twoKeys, ws: pinned,
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
-			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+			body: byID(pinned, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateMissing, mpRunRemedy), denied: true,
+			wantProvider: "corp"},
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
 		{name: "workspace_id: a chosen Bedrock provider with no region or model", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
@@ -278,12 +306,14 @@ func TestRunModelProviderDoors(t *testing.T) {
 				wantReason := tc.wantReasonOverride
 				switch {
 				case wantReason != "":
-				case tc.denied:
-					wantReason = string(authz.ReasonCapabilityModelProvider)
 				case tc.credential:
 					wantReason = llmRefusalAuditReason
 				case tc.want == http.StatusUnprocessableEntity:
+					// A not-granted named provider too (D-6): only its audit row
+					// says capability_model_provider.
 					wantReason = string(authz.ReasonModelProviderUnavailable)
+				case tc.denied:
+					wantReason = string(authz.ReasonCapabilityModelProvider)
 				}
 				if body.Reason != wantReason || body.Provider != tc.wantProvider || body.Kind != string(tc.wantKind) {
 					t.Errorf("%s: reason/provider/kind = %q/%q/%q, want %q/%q/%q",
