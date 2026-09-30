@@ -115,7 +115,10 @@ and which ones depends on how the Azure DevOps provider row connects people
 
 Run `ADO_TOKEN_MODE=bearer deploy/azure-entra-sso/02-app.sh` for the second.
 The choice is recorded in `.env.local`, so a re-run keeps it, and a re-run adds
-only the permissions the app does not already hold. The script warns when a
+only the permissions the app does not already hold. A fresh run defaults to
+`minted_pat`. A re-run on an existing app whose `.env.local` predates this setting
+stops and asks you to set `ADO_TOKEN_MODE`, because adding the token permissions to
+an app that serves a `bearer` row stops that row's runs. The script warns when a
 `bearer` app holds the two token permissions, because a `bearer` row refuses
 to inject a token that can create tokens.
 

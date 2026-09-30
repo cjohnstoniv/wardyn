@@ -32,6 +32,7 @@ command -v az >/dev/null 2>&1 || { echo "az (Azure CLI) not found on PATH" >&2; 
 command -v uuidgen >/dev/null 2>&1 || { echo "uuidgen not found on PATH" >&2; exit 1; }
 
 DISPLAY_NAME="wardyn-sso-validation"
+ADO_TOKEN_MODE_GIVEN="${ADO_TOKEN_MODE:+1}"
 ADO_TOKEN_MODE="${ADO_TOKEN_MODE:-minted_pat}"
 case "${ADO_TOKEN_MODE}" in
   minted_pat | bearer) ;;
@@ -94,6 +95,13 @@ EOF
     --web-redirect-uris "${REDIRECT_URI}" "${ADO_REDIRECT_URI}" \
     --app-roles @"${ROLES_JSON}" \
     --query appId -o tsv)"
+fi
+
+if [[ "${APP_REUSED}" == "1" && -z "${ADO_TOKEN_MODE_GIVEN}" ]]; then
+  echo "ADO_TOKEN_MODE is not recorded for the existing app '${DISPLAY_NAME}'. An app set up before 0.8.2 serves an" >&2
+  echo "Entra sign-in (bearer) row, which refuses a token that can create tokens. Re-run with ADO_TOKEN_MODE=bearer to" >&2
+  echo "keep that row working, or ADO_TOKEN_MODE=minted_pat once you switch the row to token_mode minted_pat." >&2
+  exit 1
 fi
 
 APP_OBJECT_ID="$(az ad app show --id "${CLIENT_ID}" --query id -o tsv)"

@@ -12,8 +12,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 Azure DevOps no longer uses one shared personal access token. For each run, Wardyn now creates a short-lived
 token in the name of the person who started it, with only that run's access, and revokes it when the run
-ends. **No new app registration is needed.** In Microsoft Entra, on the app registration Wardyn already
-signs in with:
+ends. This needs Wardyn's console to sign in with Microsoft Entra ID, and **no new app registration is needed**:
+you change the one Wardyn already signs in with. (If Wardyn signs in with another identity provider, use Entra
+sign-in for Azure DevOps with an app registration of its own (`bearer`), or let each person add their own token
+(`own_pat`).) In Microsoft Entra, on the app registration Wardyn already signs in with:
 
 1. **API permissions → Add a permission → Azure DevOps → Delegated permissions:** add `vso.pats` and
    `vso.pats_manage`. (Keep `openid` and `offline_access`.)
@@ -26,7 +28,8 @@ signs in with:
    console redirect URI is registered under the **Web** platform (not Single-page application or Mobile and
    desktop). Then add a client secret and set `WARDYN_OIDC_CLIENT_SECRET`. Per-run tokens require a
    confidential app, and the Azure DevOps row must name this same app. (`AADSTS700025` means the redirect is
-   still on a public-client platform.)
+   still on a public-client platform.) Per-run tokens need Wardyn's console to sign in with Microsoft Entra ID
+   (`WARDYN_OIDC_ISSUER` is your tenant's issuer).
 
 In Azure DevOps (**Organization settings**):
 

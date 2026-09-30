@@ -41,7 +41,10 @@ refuses to run when the app holds them (see [Two layers of enforcement](#two-lay
 
 There is no new app to create. Wire this into the same app registration Wardyn already uses for
 console sign-in: the one the organisation's Entra tenant already trusts and that people already
-consent to when they sign in to Wardyn itself. The Azure DevOps API resource is
+consent to when they sign in to Wardyn itself. That means per-run tokens need Wardyn's console to sign
+in with Microsoft Entra ID (`WARDYN_OIDC_ISSUER` is your tenant's issuer). If Wardyn signs in with
+another identity provider, there is no such app: use Entra sign-in (`bearer`, with an app registration of
+its own) or `own_pat`. The Azure DevOps API resource is
 `499b84ac-1321-427f-aa17-267ca6975798`.
 
 ### For per-run tokens (`minted_pat`)
