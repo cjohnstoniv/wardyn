@@ -145,6 +145,7 @@ var queryParamNotAnID = map[string]string{
 	"error":                     "OAuth error echo",
 	"error_description":         "OAuth error echo",
 	"phase":                     "ADO sign-in phase marker",
+	"stale_jti":                 "internal injection resolve: an Azure DevOps token id the proxy saw refused, compared only against the calling run's own tokens",
 	"prompt":                    "ADO sign-in: Microsoft's own prompt hint (adoRequestedPrompt), a closed set (\"\"/select_account) never forwarded on trust",
 	"scopes":                    "ADO sign-in: requested scopes, clamped to the admin's ceiling",
 	"capabilities":              "ADO sign-in: requested capabilities, clamped to the admin's ceiling",

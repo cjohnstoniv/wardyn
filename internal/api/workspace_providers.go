@@ -738,6 +738,10 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
 		return
 	}
+	if err := s.validateADOTokenModes(block); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
+		return
+	}
 	// SEAM-1: serializes this read-modify-write against the site config's other
 	// writers (handlePutSiteConfig and the two integration handlers), which read
 	// and rewrite the SAME singleton document — see handlePutIntegration's

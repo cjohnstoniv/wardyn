@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -161,9 +162,9 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"the bearer token mode", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeBearer
 		})), false},
-		{"the minted-PAT token mode is REFUSED for now — it is not yet available", block(entraRow(func(r *types.GitProvider) {
+		{"the minted-PAT token mode saves here; S1 is held at the doors (validateADOTokenModes)", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
-		})), true},
+		})), false},
 		{"own_pat saves with no tenant and no client", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeOwnPAT
 			r.Entra.TenantID, r.Entra.ClientID = "", ""
@@ -261,9 +262,6 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 		{"shared on the lane", entraRow(func(r *types.GitProvider) {
 			r.CredentialSource = types.CredentialSourceShared
 		}), "no such thing as a shared Entra sign-in"},
-		{"minted_pat", entraRow(func(r *types.GitProvider) {
-			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
-		}), "minted_pat is not yet available"},
 		{"pat_max_hours", entraRow(func(r *types.GitProvider) {
 			r.Entra.PATMaxHours = 169
 		}), "Enter 1 to 168 hours."},
@@ -501,4 +499,85 @@ func entraRowJSON(id, org string) string {
 		panic(err)
 	}
 	return string(raw)
+}
+
+// The two token-mode rules the doors hold beside the pure row rules: S1 (a
+// minted_pat row names the console's own app, and that app holds a secret)
+// and the bearer/minted app guard.
+func TestValidateADOTokenModes(t *testing.T) {
+	console := entraRow(nil).Entra
+	facts := func(client, tenant string, secret bool) func() (string, string, bool) {
+		return func() (string, string, bool) { return client, tenant, secret }
+	}
+	minted := entraRow(func(r *types.GitProvider) { r.Entra.TokenMode = types.ADOTokenModeMintedPAT })
+	bearerSameApp := entraRow(func(r *types.GitProvider) { r.ID, r.Disabled = "old", true })
+	ownPAT := entraRow(func(r *types.GitProvider) {
+		r.Entra.TokenMode = types.ADOTokenModeOwnPAT
+		r.Entra.TenantID, r.Entra.ClientID = "", ""
+	})
+	for _, tc := range []struct {
+		name  string
+		facts func() (string, string, bool)
+		rows  []types.GitProvider
+		want  string
+	}{
+		{"minted_pat with no OIDC sign-in", nil, []types.GitProvider{minted}, "Per-run tokens need"},
+		{"minted_pat naming another client", facts("11111111-1111-4111-8111-111111111111", console.TenantID, true),
+			[]types.GitProvider{minted}, "Per-run tokens need"},
+		{"minted_pat in another tenant", facts(console.ClientID, "22222222-2222-4222-8222-222222222222", true),
+			[]types.GitProvider{minted}, "Per-run tokens need"},
+		{"minted_pat when the console has no secret", facts(console.ClientID, console.TenantID, false),
+			[]types.GitProvider{minted}, "Per-run tokens need"},
+		{"minted_pat on the console's own confidential app", facts(strings.ToUpper(console.ClientID), console.TenantID, true),
+			[]types.GitProvider{minted}, ""},
+		{"a bearer row naming the minted row's app, even disabled", facts(console.ClientID, console.TenantID, true),
+			[]types.GitProvider{minted, bearerSameApp}, "git[1].entra.client_id: git[0] creates per-run tokens"},
+		{"a bearer row alone, with no OIDC", nil, []types.GitProvider{entraRow(nil)}, ""},
+		{"own_pat alone, with no OIDC", nil, []types.GitProvider{ownPAT}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &Server{cfg: Config{ADOLoginFacts: tc.facts}}
+			err := srv.validateADOTokenModes(&types.WorkspaceProviders{Git: tc.rows})
+			if tc.want == "" && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// Both write doors hold S1: the console's PUT /workspace-providers and the
+// MDM PUT /site-config.
+func TestADOTokenModes_BothDoorsRefuseMintedWithoutTheConsoleApp(t *testing.T) {
+	row := strings.Replace(entraRowJSON("ado", "acme"), `"capability_ceiling"`, `"token_mode":"minted_pat","capability_ceiling"`, 1)
+	console := entraRow(nil).Entra
+	for door, put := range map[string]func(*testing.T) (*Server, func() *httptest.ResponseRecorder, func() bool){
+		"workspace-providers": func(t *testing.T) (*Server, func() *httptest.ResponseRecorder, func() bool) {
+			fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+			srv, _ := newProvidersHarness(t, fake)
+			return srv, func() *httptest.ResponseRecorder {
+				return do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, `{"git":[`+row+`]}`)
+			}, func() bool { return fake.putSeen != nil }
+		},
+		"site-config": func(t *testing.T) (*Server, func() *httptest.ResponseRecorder, func() bool) {
+			fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+			srv, _ := newProvidersHarness(t, fake)
+			return srv, func() *httptest.ResponseRecorder {
+				return do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"workspace_providers":{"git":[`+row+`]}}`)
+			}, func() bool { return fake.putSeen != nil }
+		},
+	} {
+		t.Run(door, func(t *testing.T) {
+			srv, send, written := put(t)
+			if w := send(); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Per-run tokens need") || written() {
+				t.Fatalf("no OIDC: PUT = %d %s written=%v, want the S1 refusal and nothing stored", w.Code, w.Body.String(), written())
+			}
+			srv.cfg.ADOLoginFacts = func() (string, string, bool) { return console.ClientID, console.TenantID, true }
+			if w := send(); w.Code != http.StatusOK || !written() {
+				t.Fatalf("console app with a secret: PUT = %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
 }
