@@ -54,6 +54,7 @@ mkrepo() {  # $1=dir; leaves a committed copy of FILES at the current version
 # ── 1. full apply, 7-char --expect-tip ───────────────────────────────────────
 R1="$WORK/r1"; mkrepo "$R1"
 TIP7=$(git -C "$R1" rev-parse --short=7 HEAD)
+cp "$R1/CHANGELOG.md" "$WORK/cl1.before"
 out=$("$SCRIPT" --apply --tree "$R1" --from "$CUR" --to "$NEXT" --date 2030-01-02 --highlights "Fake highlights" --expect-tip "$TIP7" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "apply exits 0" || { bad "apply exit $rc"; echo "$out"; }
 expect "version.go bumped"     grep -qF "const Version = \"$NEXT\"" "$R1/internal/version/version.go"
@@ -74,6 +75,18 @@ expect "commit subject"        test "$(git -C "$R1" log -1 --format=%s)" = "rele
 expect "commit has Signed-off-by" grep -qx 'Signed-off-by: Release-Test <release-test@example.invalid>' <<<"$(git -C "$R1" log -1 --format=%B)"
 expect "commit author is the caller" test "$(git -C "$R1" log -1 --format=%an)" = Release-Test
 expect "tree clean after commit" test -z "$(git -C "$R1" status --porcelain)"
+released_tail() { sed -n "/^## \\[$CUR\\]/,\$p" "$1"; }
+expect "released CHANGELOG sections byte-identical" cmp <(released_tail "$WORK/cl1.before") <(released_tail "$R1/CHANGELOG.md")
+expect "released tail is not empty" test -n "$(released_tail "$R1/CHANGELOG.md")"
+
+# ── 1b. a second --apply over the finished release refuses and edits nothing ─
+TIP_DONE=$(git -C "$R1" rev-parse HEAD)
+out=$("$SCRIPT" --apply --tree "$R1" --from "$CUR" --to "$NEXT" --date 2030-01-03 --highlights "Fake highlights" 2>&1); rc=$?
+expect "second apply exits 4" test "$rc" = 4
+expect "second apply names the existing section" grep -q "## \[$NEXT\] already exists" <<<"$out"
+expect "second apply commits nothing" test "$(git -C "$R1" rev-parse HEAD)" = "$TIP_DONE"
+expect "second apply edits nothing" test -z "$(git -C "$R1" status --porcelain)"
+expect "CHANGELOG still has one [$NEXT] section" test "$(grep -c "^## \[$NEXT\]" "$R1/CHANGELOG.md")" = 1
 
 # ── 2. 40-char --expect-tip prefix; wrong prefix refuses ─────────────────────
 R2="$WORK/r2"; mkrepo "$R2"
@@ -81,6 +94,10 @@ R2="$WORK/r2"; mkrepo "$R2"
 expect "40-char --expect-tip accepted" test $? = 0
 "$SCRIPT" --dry-run --tree "$R2" --from "$CUR" --to "$NEXT" --highlights x --expect-tip deadbee >/dev/null 2>&1
 expect "wrong --expect-tip refused (exit 3)" test $? = 3
+"$SCRIPT" --dry-run --tree "$R2" --from "$CUR" --to "$NEXT" --highlights x --expect-tip HEAD >/dev/null 2>&1
+expect "--expect-tip HEAD refused (exit 2)" test $? = 2
+"$SCRIPT" --dry-run --tree "$R2" --from "$CUR" --to "$NEXT" --highlights x --expect-tip "$(git -C "$R2" rev-parse HEAD | cut -c1-6)" >/dev/null 2>&1
+expect "--expect-tip under 7 characters refused (exit 2)" test $? = 2
 
 # ── 3. a pre-bumped pin passes ───────────────────────────────────────────────
 R3="$WORK/r3"; mkrepo "$R3"
@@ -110,10 +127,46 @@ expect "refusal commits nothing" test "$(git -C "$R5" log --format=%s | wc -l)" 
 R6="$WORK/r6"; mkrepo "$R6"
 RC="$MAJ.$MIN.$((PAT + 1))-rc.1"
 printf '## [%s] — 2030-01-01\n\nRehearsal notes.\n' "$RC" > "$WORK/notes.md"
+cp "$R6/CHANGELOG.md" "$WORK/cl6.before"
 out=$("$SCRIPT" --apply --tree "$R6" --from "$CUR" --to "$RC" --date 2030-01-02 --highlights x --notes "$WORK/notes.md" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "rc apply exits 0" || { bad "rc apply exit $rc"; echo "$out"; }
 expect "rc CHANGELOG heading" grep -qF "## [$RC] — 2030-01-02" "$R6/CHANGELOG.md"
 expect "rc version.go"        grep -qF "const Version = \"$RC\"" "$R6/internal/version/version.go"
+expect "rc: released CHANGELOG sections byte-identical" cmp <(released_tail "$WORK/cl6.before") <(released_tail "$R6/CHANGELOG.md")
+# ── 7. prefix-safe pins: one version that is a prefix of another is not "already" ─
+# 7a. a pre-bumped rc pin passes as already-bumped and is not bumped twice.
+R7="$WORK/r7"; mkrepo "$R7"
+sed -i "s/ref: v$CUR\$/ref: v$RC/" "$R7/docs/ci/github-actions.yml"
+git -C "$R7" commit -q -am prebump-rc
+out=$("$SCRIPT" --apply --tree "$R7" --from "$CUR" --to "$RC" --highlights x 2>&1); rc=$?
+expect "pre-bumped rc pin: apply exits 0" test "$rc" = 0
+expect "pre-bumped rc pin reported as already bumped" grep -q "github-actions.yml: OK (already $RC)" <<<"$out"
+expect "pre-bumped rc pin not doubled" grep -qx "          ref: v$RC" "$R7/docs/ci/github-actions.yml"
+# 7b. --from CUR where the tree carries CUR-rc.1 (old is a prefix of the pin): bumped once, not doubled.
+R7B="$WORK/r7b"; mkrepo "$R7B"
+sed -i "s/ref: v$CUR\$/ref: v$CUR-rc.1/" "$R7B/docs/ci/github-actions.yml"
+git -C "$R7B" commit -q -am leftover-rc
+"$SCRIPT" --apply --tree "$R7B" --from "$CUR" --to "$NEXT" --highlights x >/dev/null 2>&1
+expect "old pin that prefixes a leftover rc pin exits 4" test $? = 4
+# 7c. a leftover NEXT-rc.1 pin is not "already NEXT".
+R7C="$WORK/r7c"; mkrepo "$R7C"
+sed -i "s/ref: v$CUR\$/ref: v$NEXT-rc.1/" "$R7C/docs/ci/github-actions.yml"
+git -C "$R7C" commit -q -am leftover-next-rc
+out=$("$SCRIPT" --dry-run --tree "$R7C" --from "$CUR" --to "$NEXT" --highlights x 2>&1); rc=$?
+expect "leftover X.Y.Z-rc.N pin is not read as already X.Y.Z (exit 4)" test "$rc" = 4
+expect "leftover rc pin is not reported as already" bash -c '! grep -q "already" <<<"$1"' _ "$out"
+# 7d. v<NEXT>0 (0.8.4 vs 0.8.40) is not "already NEXT", for both anchored pins.
+R7D="$WORK/r7d"; mkrepo "$R7D"
+sed -i "s/ref: v$CUR\$/ref: v${NEXT}0/" "$R7D/docs/ci/github-actions.yml"
+git -C "$R7D" commit -q -am longer-pin
+"$SCRIPT" --dry-run --tree "$R7D" --from "$CUR" --to "$NEXT" --highlights x >/dev/null 2>&1
+expect "github-actions ref v${NEXT}0 is not read as already $NEXT (exit 4)" test $? = 4
+R7E="$WORK/r7e"; mkrepo "$R7E"
+sed -i "s/^version: $CUR\$/version: $NEXT/; s/^appVersion: $CUR\$/appVersion: ${NEXT}0/" "$R7E/deploy/helm/wardyn/Chart.yaml"
+git -C "$R7E" commit -q -am longer-chart
+"$SCRIPT" --dry-run --tree "$R7E" --from "$CUR" --to "$NEXT" --highlights x >/dev/null 2>&1
+expect "Chart.yaml appVersion ${NEXT}0 is not read as already $NEXT (exit 4)" test $? = 4
+
 "$SCRIPT" --dry-run --tree "$R6" --from "$CUR" --to "1.2" --highlights x >/dev/null 2>&1
 expect "malformed --to refused (exit 2)" test $? = 2
 

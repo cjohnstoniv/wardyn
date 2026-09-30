@@ -50,7 +50,14 @@ fi
 [ -n "$FROM" ] && [ -n "$TO" ] || { sed -n '5,8p' "$0"; exit 2; }
 cd "$TREE" || exit 2
 [ -z "$(git status --porcelain)" ] || { echo "REFUSE: worktree not clean"; git status --short | head; exit 3; }
-[ -z "$EXPECT" ] || [ "$(git rev-parse --verify "$EXPECT^{commit}" 2>/dev/null)" = "$(git rev-parse HEAD)" ] || { echo "REFUSE: HEAD $(git rev-parse --short=8 HEAD) != --expect-tip $EXPECT"; exit 3; }
+if [ -n "$EXPECT" ]; then
+  [[ "$EXPECT" =~ ^[0-9a-f]{7,40}$ ]] || { echo "--expect-tip wants 7-40 hex characters of the commit id, got '$EXPECT'" >&2; exit 2; }
+  if [ "$(git rev-parse --verify -q "$EXPECT^{commit}" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
+    if [ "$(git rev-parse --disambiguate="$EXPECT" | wc -l)" -gt 1 ]; then echo "REFUSE: --expect-tip $EXPECT is ambiguous (several objects share that prefix); give more characters"
+    else echo "REFUSE: HEAD $(git rev-parse --short=8 HEAD) != --expect-tip $EXPECT"; fi
+    exit 3
+  fi
+fi
 if [ -n "$NOTES" ]; then
   [ -s "$NOTES" ] || { echo "REFUSE: notes file missing: $NOTES"; exit 3; }
   if grep -q '> \*\*NOTE' "$NOTES"; then echo "REFUSE: $NOTES still carries $(grep -c '> \*\*NOTE' "$NOTES") '> **NOTE' block(s) — resolve them first"; exit 3; fi
@@ -61,11 +68,11 @@ from pathlib import Path
 mode,date,notes,V_OLD,V_NEW,highlights=sys.argv[1:7]
 edits=[  # (path, exact old, new, expected count)
  ("internal/version/version.go", f'const Version = "{V_OLD}"', f'const Version = "{V_NEW}"', 1),
- ("deploy/helm/wardyn/Chart.yaml", f"version: {V_OLD}\nappVersion: {V_OLD}", f"version: {V_NEW}\nappVersion: {V_NEW}", 1),
+ ("deploy/helm/wardyn/Chart.yaml", f"version: {V_OLD}\nappVersion: {V_OLD}\n", f"version: {V_NEW}\nappVersion: {V_NEW}\n", 1),
  ("ui/package.json", f'"version": "{V_OLD}"', f'"version": "{V_NEW}"', 1),
  ("README.md", f"releases/download/v{V_OLD}/install.sh", f"releases/download/v{V_NEW}/install.sh", 1),
  ("install.sh", f"releases/download/v{V_OLD}/install.sh", f"releases/download/v{V_NEW}/install.sh", 1),
- ("docs/ci/github-actions.yml", f"ref: v{V_OLD}", f"ref: v{V_NEW}", 1),
+ ("docs/ci/github-actions.yml", f"ref: v{V_OLD}\n", f"ref: v{V_NEW}\n", 1),
  ("docs/ci/azure-pipelines.yml", f"--branch v{V_OLD} ", f"--branch v{V_NEW} ", 1),
  ("threatmodel/THREAT-MODEL.md", f"last reviewed at v{V_OLD})", f"last reviewed at v{V_NEW})", 1),
  ("deploy/helm/wardyn/values.yaml", f"resolves to .Chart.AppVersion, which is {V_OLD} ", f"resolves to .Chart.AppVersion, which is {V_NEW} ", 1),  # TestShippedVersionStringsAgree's tenth pin
@@ -107,6 +114,8 @@ if notes:
     print(f"OK  notes: {len(block.splitlines())} lines, heading -> '## [{V_NEW}] — {date}'")
 else:
     print("(no --notes: the section is renamed only; the lead/hardening block is NOT inserted)")
+if f"\n## [{V_NEW}]" in cl:
+    print(f"BAD CHANGELOG.md: ## [{V_NEW}] already exists — this release was already cut"); ok=False
 if not ok: sys.exit(4)
 if not roadmap_has_row:
     if not highlights: print(f"REFUSE: ROADMAP.md has no Shipped row for v{V_NEW}; pass --highlights TEXT"); sys.exit(3)
