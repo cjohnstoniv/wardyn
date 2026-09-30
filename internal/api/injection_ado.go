@@ -137,7 +137,15 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok && !fresh {
 		return a, nil
 	}
-	a, err := s.RedeemADOEntraAccess(ctx, cfg, owner, scopes)
+	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
+		return ADOEntraAccess{}, err
+	}
+	// The put is under the redemption lock too, so a disconnect or an erase
+	// (eraseADOSignIn) that deletes the sign-in and forgets the cache under
+	// it cannot be followed by a token cached from the sign-in it deleted.
+	unlock := s.adoEntra.lock(owner, cfg.RowID)
+	defer unlock()
+	a, err := s.redeemADOEntraAccessLocked(ctx, cfg, owner, scopes)
 	if err != nil {
 		return ADOEntraAccess{}, err
 	}

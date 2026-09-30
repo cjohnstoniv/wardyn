@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -99,8 +100,11 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Revoke first: revoking a token redeems the sign-in this then forgets.
+	// A token created while this runs revokes itself (adoSignInEnds).
+	end := s.adoSignInEnds.begin(subject, adoPATRevokeDisconnect)
 	s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
 	removed, err := s.forgetADOSignIn(ctx, subject, rowID)
+	end()
 	data, outcome := map[string]any{"provider_row": rowID, "removed": removed}, "success"
 	if err != nil {
 		data["error"], outcome = err.Error(), "failure"
@@ -137,19 +141,145 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 // forgetADOSignIn deletes owner's stored sign-in for rowID and drops any
 // access token held for them. removed reports whether one was stored.
 func (s *Server) forgetADOSignIn(ctx context.Context, owner, rowID string) (removed bool, err error) {
-	defer s.adoEntraTokens.forget(owner)
-	if s.cfg.Secrets == nil {
-		return false, nil
+	err = s.eraseADOSignIn(owner, rowID, func() error {
+		if s.cfg.Secrets == nil {
+			return nil
+		}
+		st, name := s.cfg.Secrets.For(owner), adoEntraSecretName(rowID)
+		own, err := st.List(ctx)
+		if err != nil || !slices.Contains(own, name) {
+			return err
+		}
+		if err := st.Delete(ctx, name); err != nil && !errors.Is(err, secretstore.ErrNotFound) {
+			return err
+		}
+		removed = true
+		return nil
+	})
+	return removed, err
+}
+
+// eraseADOSignIn runs del, which deletes owner's stored Azure DevOps sign-in,
+// under the redemption lock for rowID, and forgets the access tokens cached
+// for owner before releasing it. A redemption in flight either finishes first
+// (and del deletes its rotated refresh token, the forget its cached token) or
+// starts after, reads the store under the lock and finds nothing. rowID ""
+// takes no lock: no sign-in row is configured, so none can be redeemed.
+func (s *Server) eraseADOSignIn(owner, rowID string, del func() error) error {
+	if rowID != "" {
+		unlock := s.adoEntra.lock(owner, rowID)
+		defer unlock()
 	}
-	st, name := s.cfg.Secrets.For(owner), adoEntraSecretName(rowID)
-	own, err := st.List(ctx)
-	if err != nil || !slices.Contains(own, name) {
-		return false, err
+	defer s.adoEntraTokens.forget(owner) // runs before the unlock
+	return del()
+}
+
+// adoSignInRowID is the row this deployment's Azure DevOps sign-in redeems
+// for, "" when none is configured or the configuration cannot be read.
+func (s *Server) adoSignInRowID(ctx context.Context) string {
+	if s.cfg.ADOEntra == nil {
+		return ""
 	}
-	if err := st.Delete(ctx, name); err != nil && !errors.Is(err, secretstore.ErrNotFound) {
-		return false, err
+	cfg, found, err := s.cfg.ADOEntra(ctx)
+	if err != nil || !found {
+		return ""
 	}
-	return true, nil
+	return cfg.RowID
+}
+
+// adoSignInEnds counts, per person, the disconnects and erases of their
+// Azure DevOps sign-in. revokeOwnerRunPATs revokes the tokens recorded when it
+// lists them; a mint that redeemed before the sign-in was deleted can record
+// its token after that. mintRunPAT reads the count before it redeems and
+// checks it after it records: a count that moved, or an end still running,
+// means the token was created across an end, and the mint revokes it itself.
+//
+// In memory, per process: on a deployment with more than one replica a mint
+// on another replica keeps this gap, bounded by the token's valid_to.
+type adoSignInEnds struct {
+	mu sync.Mutex
+	m  map[string]*adoSignInEnd
+}
+
+// adoSignInEnd is one person's count: gen moves at each end's start and
+// finish, active counts ends still running, reason is the last one's revoke
+// reason. An entry is never removed, so a count read earlier is never
+// mistaken for an unchanged one.
+type adoSignInEnd struct {
+	gen    uint64
+	active int
+	reason string
+}
+
+// begin marks the start of an end of owner's sign-in; the returned func marks
+// its finish.
+func (c *adoSignInEnds) begin(owner, reason string) func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]*adoSignInEnd{}
+	}
+	e := c.m[owner]
+	if e == nil {
+		e = &adoSignInEnd{}
+		c.m[owner] = e
+	}
+	e.gen++
+	e.active++
+	e.reason = reason
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		e.gen++
+		e.active--
+	}
+}
+
+// read is owner's count now.
+func (c *adoSignInEnds) read(owner string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.m[owner]; e != nil {
+		return e.gen
+	}
+	return 0
+}
+
+// since reports whether an end of owner's sign-in started, finished or is
+// still running since read returned gen, and that end's revoke reason.
+func (c *adoSignInEnds) since(owner string, gen uint64) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.m[owner]
+	if e == nil || (e.gen == gen && e.active == 0) {
+		return "", false
+	}
+	return e.reason, true
+}
+
+// revokeRunPATCreatedAcrossEnd revokes a token mintRunPAT recorded while its
+// owner's sign-in was ending, with the access token the mint still holds (the
+// stored sign-in may already be gone), and closes its row.
+func (s *Server) revokeRunPATCreatedAcrossEnd(ctx context.Context, st store.RunPATStore, client adoPATClient,
+	accessToken string, p store.RunPAT, reason string,
+) {
+	data := map[string]any{"reason": reason, "authorization_id": p.AuthorizationID, "owner": p.Owner,
+		"provider_row": p.ProviderRowID, "organisation": p.Org}
+	err := client.Revoke(ctx, p.Org, accessToken, p.AuthorizationID.String())
+	var pe *adoPATError
+	if err == nil || (errors.As(err, &pe) && pe.Status == http.StatusNotFound) {
+		if s.closeRunPAT(ctx, st, p, reason, "") {
+			s.recordAudit(ctx, s.auditEvent(&p.RunID, types.ActorSystem, "wardynd", adoPATAuditRevoke,
+				p.AuthorizationID.String(), "success", mustJSON(data)))
+		}
+		return
+	}
+	// Nothing can redeem the sign-in again to retry: the token lives to its
+	// valid_to, and its record says so.
+	data["error"], data["abandoned"] = err.Error(), true
+	s.recordAudit(ctx, s.auditEvent(&p.RunID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed,
+		p.AuthorizationID.String(), "failure", mustJSON(data)))
+	s.closeRunPAT(ctx, st, p, reason, err.Error())
 }
 
 // adoRunToken is one token a run held (GET /runs/{id}/ado-tokens): a row of

@@ -154,6 +154,9 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 			runID.String(), "failure", mustJSON(data)))
 		return adoPAT{}, err
 	}
+	// Read before the redeem: a disconnect or erase from here on is caught
+	// after the record (adoSignInEnds).
+	ends := s.adoSignInEnds.read(sn.OwnerSubject)
 	// mintAccess holds S1: the sign-in is redeemed only with the console's
 	// own secret.
 	access, err := s.mintAccess(ctx, cfg, sn.OwnerSubject)
@@ -190,6 +193,10 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 		// after a crash. Revoke it now, best-effort.
 		_ = client.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
 		return adoPAT{}, fmt.Errorf("record the run's personal access token: %w", err)
+	}
+	if why, ended := s.adoSignInEnds.since(sn.OwnerSubject, ends); ended {
+		s.revokeRunPATCreatedAcrossEnd(ctx, st, client, access.AccessToken, row, why)
+		return denied(fmt.Errorf("%w: the sign-in ended while this token was created", ErrADOEntraNotCaptured))
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", adoPATAuditMint,
 		pat.AuthorizationID, "success", mustJSON(map[string]any{
