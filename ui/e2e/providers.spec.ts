@@ -179,10 +179,17 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // it supplies a real org path before saving — the way an admin who hit
     // the refusal above would.
     await row.locator("textarea").fill("https://dev.azure.com/acme");
-    await saveProviders(page);
+
+    // The shared pat and ssh lanes of an Azure DevOps row are retired (#1429), so
+    // the row "Add provider" makes — no per-person lane — is refused by the
+    // server and nothing is stored. The console has no way to choose the
+    // per-person lane yet (that is the token-mode work, #1428/L4), which this
+    // test then replaces with a save that succeeds.
+    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+    await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toBeVisible();
 
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
-    expect(snap.git.map((g: { kind: string }) => g.kind).sort()).toEqual(["azure_devops", "github"]);
+    expect(snap.git.map((g: { kind: string }) => g.kind)).toEqual(["github"]);
   });
 
   test("storing a PAT inside the GitHub row writes the secret, inline", async ({ page }) => {
