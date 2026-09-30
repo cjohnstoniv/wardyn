@@ -71,6 +71,16 @@ const (
 	scmAccessCauseTokenExpired = "token_expired"
 )
 
+// A minted_pat row's own `expired_signin` causes, each an organisation's fix
+// rather than the person's: the stored sign-in lacks a token permission
+// (admin consent is missing), or Azure DevOps last refused to create a token
+// for this person on policy grounds (mintADOPAT). A row the console cannot
+// redeem with its own secret (S1) carries ReasonADOPATNeedsConsoleApp.
+const (
+	scmAccessCausePermissionsMissing = "permissions_missing"
+	scmAccessCauseBlocked            = "blocked"
+)
+
 // SCMAccess is THIS PRINCIPAL's Azure DevOps access answer for ONE row — the
 // shape the Getting-started chip, the Settings connected panel, the New Run
 // rail's preflight line, and GET /me/scm-access all read instead of each
@@ -164,7 +174,12 @@ func (s *Server) adoEntraRowConfig(ctx context.Context, rowID string) (ADOEntraC
 	if !found || cfg.RowID != rowID {
 		return ADOEntraConfig{}, false, nil
 	}
-	if err := cfg.validate(); err != nil || !cfg.isLoginApplication() {
+	// A minted_pat row S1 refuses is still this deployment's per-user row: it
+	// is graded (scmAccessForRow) rather than dropped, so the setup check and
+	// the launch gate say why nobody can connect.
+	if err := cfg.validate(); errors.Is(err, ErrADOMintNeedsSecret) {
+		return cfg, true, nil
+	} else if err != nil || !cfg.isLoginApplication() {
 		return ADOEntraConfig{}, false, nil
 	}
 	return cfg, true, nil
@@ -256,9 +271,11 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		return s.scmAccessForOwnPAT(ctx, row, subject)
 	}
 	isMechanism := subject == ""
+	minted := cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT
+	unusable := minted && !isMechanism && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
 	var blob adoEntraBlob
 	var found bool
-	if !isMechanism {
+	if !isMechanism && !unusable {
 		var err error
 		if blob, found, err = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID); err != nil {
 			return SCMAccess{}, err
@@ -269,10 +286,16 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
 	}
 	switch {
+	case unusable:
+		out.State, out.Cause = modelAccessExpiredSignin, ReasonADOPATNeedsConsoleApp
 	case out.State != modelAccessLive:
 	case blob.signInEnded():
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded
-	case !adoBlobCoversBaseline(blob, row):
+	case minted && !adoBlobCoversMint(blob):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCausePermissionsMissing
+	case minted && !blob.MintBlockedAt.IsZero():
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseBlocked
+	case !minted && !adoBlobCoversBaseline(blob, row):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseConsentNeeded
 	}
 	if out.State == modelAccessLive || out.State == modelAccessExpiredSignin {
@@ -323,6 +346,12 @@ func (s *Server) scmAccessForOwnPAT(ctx context.Context, row types.GitProvider, 
 func adoBlobCoversBaseline(blob adoEntraBlob, row types.GitProvider) bool {
 	need, err := adoscope.ScopesFor(row.Entra.Profile())
 	return err == nil && subsetOf(need, blob.Scopes)
+}
+
+// adoBlobCoversMint reports whether a minted_pat row's stored sign-in was
+// granted both token permissions.
+func adoBlobCoversMint(blob adoEntraBlob) bool {
+	return subsetOf(adoscope.MintScopes(), blob.Scopes)
 }
 
 // adoOrgDisplay is the row's own address, for the {org} the connect/launch
