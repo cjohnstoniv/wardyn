@@ -442,7 +442,9 @@ func repoLocatorsOf(repos []types.WorkspaceRepo) []string {
 // lane must be NAMED on the row (GitLane.Legacy).
 func laneAllowed(row types.GitProvider, lane types.GitLane) bool {
 	if len(row.Lanes) == 0 {
-		return lane.Legacy()
+		// Not an Azure DevOps row: its empty list once meant the shared pat and
+		// ssh lanes, which are retired (#1429).
+		return row.Kind != types.GitProviderAzureDevOps && lane.Legacy()
 	}
 	return slices.Contains(row.Lanes, lane)
 }
@@ -513,8 +515,17 @@ func claimingRows(sc types.SiteConfig, host string) []types.GitProvider {
 // durable row a member can read may not.
 func (s *Server) laneVetoed(ctx context.Context, runID uuid.UUID,
 	lane types.GitLane, grant types.GrantKind, rows []types.GitProvider) (string, bool) {
+	return s.laneVetoedBy(ctx, runID, lane, grant, rows, laneAllowed)
+}
+
+// laneVetoedBy is laneVetoed with the per-row permission question supplied, for
+// the one lane whose answer also depends on the host asked about (the pat lane
+// on Azure DevOps Services, see laneVetoedForGrantHost).
+func (s *Server) laneVetoedBy(ctx context.Context, runID uuid.UUID,
+	lane types.GitLane, grant types.GrantKind, rows []types.GitProvider,
+	allowed func(types.GitProvider, types.GitLane) bool) (string, bool) {
 	if len(rows) == 0 || slices.ContainsFunc(rows, func(row types.GitProvider) bool {
-		return laneAllowed(row, lane)
+		return allowed(row, lane)
 	}) {
 		return "", false
 	}
@@ -549,7 +560,16 @@ func (s *Server) laneVetoedForGrantHost(ctx context.Context, sc types.SiteConfig
 	if !providersConfigured(sc) {
 		return "", false
 	}
-	return s.laneVetoed(ctx, runID, lane, grant, laneRowsForGrantHost(sc, host, repos))
+	rows := laneRowsForGrantHost(sc, host, repos)
+	if lane == types.GitLanePAT && adoServicesHost(host) {
+		// Azure DevOps Services has no token lane (#1429): a row of mixed
+		// addresses can keep its pat lane for its Server address, but never for
+		// a Services one.
+		return s.laneVetoedBy(ctx, runID, lane, grant, rows, func(row types.GitProvider, l types.GitLane) bool {
+			return row.Kind != types.GitProviderAzureDevOps && laneAllowed(row, l)
+		})
+	}
+	return s.laneVetoed(ctx, runID, lane, grant, rows)
 }
 
 // laneRowsForGrantHost picks the rows that decide a host-scoped grant's lane:

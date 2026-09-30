@@ -247,6 +247,9 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonSecretNameReserved, name+" is a retired model credential: "+RetiredModelCredentialRefusal)
 		return
 	}
+	if s.refuseRetiredADOSharedName(w, r, name, owner) {
+		return
+	}
 	var body putSecretRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil || body.Value == "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonSecretBodyInvalid, `body must be {"value":"<non-empty secret>"}`)

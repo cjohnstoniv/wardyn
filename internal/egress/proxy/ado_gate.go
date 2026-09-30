@@ -119,6 +119,21 @@ func (p *Proxy) refuseADOPlain(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// refuseADOTunnel refuses a CONNECT to a host the run's Azure DevOps grant
+// covers, and reports whether it did. The caller reaches it only for a CONNECT
+// it will not terminate: such a host is served only through gateADO on a
+// terminated connection or the git broker, and a blind tunnel would pass the
+// organisation pin and the capability check by. It is what keeps an Azure
+// DevOps Server host's REST, which the gate can't classify, refused when no
+// one authored its interception.
+func (p *Proxy) refuseADOTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	if !p.isADOLane(host) {
+		return false
+	}
+	p.refuseADO(w, r, host, port, "Wardyn refused this Azure DevOps connection: this run reaches this host only through Wardyn's checked Azure DevOps doors.", nil)
+	return true
+}
+
 // adoCheck returns "" when r may be forwarded, else the refusal sentence. held
 // is non-nil only for the ONE refusal a person may lift — a grantable
 // capability the run does not hold — and names what the request needs.
@@ -190,8 +205,11 @@ func adoRawPath(r *http.Request) string {
 
 // adoOrgMatches is the organisation pin, applied before anything else: on a
 // legacy <org>.visualstudio.com host the organisation is the first label; on
-// every other host it's the first path segment. Compared as raw bytes, so an
-// encoded spelling of the right name is refused rather than decoded.
+// dev.azure.com it's the first path segment; on an Azure DevOps Server host
+// (any host adoHostedHost does not name) the grant's organisation is the
+// collection's path and the request's path must start with all of it
+// (adoServerCollection). Compared as raw bytes, so an encoded spelling of the
+// right name is refused rather than decoded.
 func adoOrgMatches(host, path, org string) bool {
 	want := strings.ToLower(strings.TrimSpace(org))
 	if want == "" {
@@ -201,8 +219,38 @@ func adoOrgMatches(host, path, org string) bool {
 		label, _, _ := strings.Cut(host, ".")
 		return label == want
 	}
+	if !adoHostedHost(host) {
+		return adoServerCollection(strings.Split(strings.TrimPrefix(path, "/"), "/"), want)
+	}
 	first, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 	return strings.ToLower(first) == want
+}
+
+// adoHostedHost reports whether host is Azure DevOps Services: dev.azure.com
+// and its service subdomains, or a legacy <org>.visualstudio.com — the host set
+// adoscope classifies (its azureDevOpsHost). Every other host an Azure DevOps
+// grant covers is an Azure DevOps Server, which adoscope refuses to classify.
+func adoHostedHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
+}
+
+// adoServerCollection is the Azure DevOps Server pin: segs (a path split on
+// "/", leading "/" removed) must start with every segment of collection, the
+// row's collection path lowercased — "tfs/defaultcollection" or
+// "defaultcollection". A collection of more than two segments, or with an
+// empty one, pins nothing and matches nothing.
+func adoServerCollection(segs []string, collection string) bool {
+	want := strings.Split(strings.Trim(collection, "/"), "/")
+	if len(want) > 2 || slices.Contains(want, "") || len(segs) < len(want) {
+		return false
+	}
+	for i, w := range want {
+		if strings.ToLower(segs[i]) != w {
+			return false
+		}
+	}
+	return true
 }
 
 // adoGitPath reports whether path is a git smart-HTTP endpoint.

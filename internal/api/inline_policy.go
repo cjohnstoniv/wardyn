@@ -865,6 +865,7 @@ type neededSecret struct {
 	name      string
 	kind      types.GrantKind
 	ownerOnly bool
+	host      string // a git_pat grant's host, for the Azure DevOps owner_only rule
 }
 
 // secretRefsOf is validateInlineSecretRefs' shape half: the secret names a
@@ -890,9 +891,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if sinkReservedSecret(rule.SecretName) {
 				return nil, fmt.Errorf("api_key grant references reserved secret name %q", rule.SecretName)
 			}
-			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly})
+			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly, ""})
 		case types.GrantGitPAT:
-			_, secretName, _, derr := gitPATScopeFields(g.Scope)
+			patHost, secretName, _, derr := gitPATScopeFields(g.Scope)
 			if derr != nil {
 				return nil, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
@@ -903,7 +904,7 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if nameSinkReservedSecret(secretName) {
 				return nil, fmt.Errorf("git_pat grant references reserved secret name %q", secretName)
 			}
-			needed = append(needed, neededSecret{secretName, types.GrantGitPAT, g.OwnerOnly})
+			needed = append(needed, neededSecret{secretName, types.GrantGitPAT, g.OwnerOnly, patHost})
 		case types.GrantSSHKey:
 			_, keyRef, _, khRef, derr := sshKeyScopeFields(g.Scope)
 			if derr != nil {
@@ -914,9 +915,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if nameSinkReservedSecret(keyRef) || nameSinkReservedSecret(khRef) {
 				return nil, errors.New("ssh_key grant references a reserved secret name")
 			}
-			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly})
+			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly, ""})
 			if khRef != "" {
-				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly})
+				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly, ""})
 			}
 		default:
 			continue
@@ -954,6 +955,23 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 	known := make(map[string]bool, len(have))
 	for _, n := range have {
 		known[n] = true
+	}
+	// A git token for an Azure DevOps host is owner_only whatever the policy
+	// said (persistRunGrants forces it, #1429), so it is checked as one: a
+	// person with no token of their own is refused here, with the reason,
+	// rather than started into a clone that fails inside the sandbox.
+	var sc types.SiteConfig
+	for i, n := range needed {
+		if n.kind != types.GrantGitPAT || n.ownerOnly || n.host == "" {
+			continue
+		}
+		if s.cfg.Store != nil && sc.WorkspaceProviders == nil {
+			var serr error
+			if sc, serr = s.cfg.Store.GetSiteConfig(ctx); serr != nil {
+				return http.StatusInternalServerError, fmt.Errorf("get site config: %w", serr)
+			}
+		}
+		needed[i].ownerOnly = adoGrantHost(sc, n.host)
 	}
 	for _, n := range needed {
 		// A person's owner_only grant never reads the operator namespace (#1106):

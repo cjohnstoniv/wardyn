@@ -578,6 +578,27 @@ const (
 	reasonADOOrgCheckOrganisation = "ado_org_check_organisation" // the row names no organisation and the request named none it serves
 )
 
+// PUT/DELETE /me/scm/azure-devops/token (ado_own_pat.go): a person adding or
+// removing their own Azure DevOps token. A caller with no session subject is
+// answered with reasonADOSignInNoSession, the same cause at the sign-in door.
+const (
+	reasonADOOwnPATUnknownRow       = "ado_own_pat_unknown_row"       // no own-token row the caller may use has this address
+	reasonADOOwnPATTokenInvalid     = "ado_own_pat_token_invalid"     // the pasted value is empty, too long, or has spaces
+	reasonADOOwnPATExpiryInvalid    = "ado_own_pat_expiry_invalid"    // expires_on is not a date after today
+	reasonADOOwnPATExpiryTooLong    = "ado_own_pat_expiry_too_long"   // expires_on is past the row's pat_max_days
+	reasonADOOwnPATRejected         = "ado_own_pat_rejected"          // Azure DevOps did not accept the token for the organisation
+	reasonADOOwnPATIdentityMismatch = "ado_own_pat_identity_mismatch" // the token belongs to another account (never named)
+	reasonADOOwnPATCheckUnavailable = "ado_own_pat_check_unavailable" // Azure DevOps could not be asked; nothing is known
+)
+
+// The own-token arm of the Azure DevOps injection resolve
+// (runs_dispatch_ado_own_pat.go), beside reasons.go's Azure DevOps resolve set.
+const (
+	reasonADOOwnPATNotAdded = "ado_own_pat_not_added" // the run's owner has no token of their own stored for the row
+	reasonADOOwnPATExpired  = "ado_own_pat_expired"   // the owner's token has reached the expiry they entered
+	reasonADOOwnPATOtherOrg = "ado_own_pat_other_org" // the owner's token is for a different organisation than the run's
+)
+
 // The callback half of the same door (consumeADOCookies, handleADOCallback):
 // browser-reachable (the identity provider's own redirect lands here), and
 // previously answered with a bare http.Error — no JSON body, no reason at

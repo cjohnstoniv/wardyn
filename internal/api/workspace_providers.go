@@ -51,11 +51,19 @@ const (
 	providers400LaneKind    = "git[%d].lanes: %q is not a lane — want one of: %s"
 	providers400LaneSSHPath = "git %q: the SSH lane has no org path to bound, so it would admit the whole host — drop the SSH lane or widen this row's addresses to the bare host"
 	providers400Negative    = "%s: %d is not a size in MiB — use 0 for unset"
+	providers400ADOLanes    = "git[%d].lanes: name the lanes of an Azure DevOps row — an empty list no longer means the shared pat and ssh lanes, which are retired. Use %q, or %q with credential_source per_user on an Azure DevOps Server row"
 	providers412Stale       = "providers changed since you loaded them — reload and retry"
 
 	// laneAppReason / laneSSHReason are the "(%s)" half of providers400Lane.
 	laneAppReason = "the App broker mints repository-scoped tokens on github.com only"
 	laneSSHReason = "the SSH lane is limited to the two hosts that publish an SSH-over-443 endpoint, github.com and dev.azure.com"
+
+	// adoSSHRetired / adoPATRetired are the "(%s)" half of providers400Lane for
+	// the shared Azure DevOps lanes (#1429): one account's standing credential
+	// used for every person's runs. Azure DevOps credentials are per person.
+	adoSSHRetired = "the shared SSH key is retired: Azure DevOps credentials are per person"
+	adoPATRetired = "the shared token is retired: a person's own token needs credential_source per_user"
+	adoPATHosted  = "Azure DevOps Services has no token lane: use the entra lane with token_mode own_pat"
 )
 
 // maxProviderBaseURLs bounds one row's base URLs. Eight is "an org and its
@@ -277,6 +285,9 @@ func validateProviderLanes(i int, row types.GitProvider, refuseSSHPathScope bool
 				strings.Join(types.ClosedGitLaneList(), ", "))
 		}
 	}
+	if err := validateADOSharedLanes(i, row); err != nil {
+		return err
+	}
 	hasGitHubCom, hasSSHEndpoint := false, false
 	for _, raw := range row.BaseURLs {
 		host := hostrules.HostOf(raw)
@@ -311,6 +322,37 @@ func validateProviderLanes(i int, row types.GitProvider, refuseSSHPathScope bool
 		if refuseSSHPathScope && sshLaneExceedsPathScope(row) {
 			return fmt.Errorf(providers400LaneSSHPath, row.ID)
 		}
+	}
+	return nil
+}
+
+// validateADOSharedLanes refuses the retired shared credential lanes on an
+// Azure DevOps row (#1429), on both doors: no ssh lane, no pat lane unless it is
+// per_user on a Server row (whose person pastes their own token), and no empty
+// list — which read as the legacy pat, ssh and app lanes.
+func validateADOSharedLanes(i int, row types.GitProvider) error {
+	if row.Kind != types.GitProviderAzureDevOps {
+		return nil
+	}
+	if len(row.Lanes) == 0 {
+		return fmt.Errorf(providers400ADOLanes, i, string(types.GitLaneEntra), string(types.GitLanePAT))
+	}
+	if slices.Contains(row.Lanes, types.GitLaneSSH) {
+		return fmt.Errorf(providers400Lane, string(types.GitLaneSSH), string(row.Kind), adoSSHRetired)
+	}
+	if !slices.Contains(row.Lanes, types.GitLanePAT) {
+		return nil
+	}
+	if row.CredentialSource != types.CredentialSourcePerUser {
+		return fmt.Errorf(providers400Lane, string(types.GitLanePAT), string(row.Kind), adoPATRetired)
+	}
+	// Only a Server row keeps a pat lane; a row of Services addresses alone
+	// gives a person their own token through the entra lane.
+	if !slices.ContainsFunc(row.BaseURLs, func(raw string) bool {
+		host := strings.ToLower(hostrules.HostOf(raw))
+		return host != "dev.azure.com" && !strings.HasSuffix(host, ".visualstudio.com")
+	}) {
+		return fmt.Errorf(providers400Lane, string(types.GitLanePAT), string(row.Kind), adoPATHosted)
 	}
 	return nil
 }
