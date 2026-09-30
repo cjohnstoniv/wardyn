@@ -23,7 +23,8 @@ func TestPatRoutesTakeOnlyAnEntraBearerWithBothPATScopes(t *testing.T) {
 	s.RegisterToken("manage-only", ScopePatsManage)
 	s.RegisterToken("both", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
-	body := []byte(`{"displayName":"x","scope":"vso.code","validTo":"2099-01-01T00:00:00Z","allOrgs":false}`)
+	body := []byte(fmt.Sprintf(`{"displayName":"x","scope":"vso.code","validTo":%q,"allOrgs":false}`,
+		time.Now().Add(time.Hour).UTC().Format(time.RFC3339)))
 
 	for _, tok := range []string{"tokens-only", "pats-only", "manage-only"} {
 		if status, _ := postJSON(t, base, tok, body); status != http.StatusUnauthorized {
