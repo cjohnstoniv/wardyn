@@ -12,7 +12,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, Clock, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
-import type { AgentRun } from "../../lib/types";
+import type { RunDetail } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -23,7 +23,6 @@ import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy"
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
-import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import {
   isTerminalStatusReason,
@@ -61,13 +60,12 @@ function useElapsed(createdAt: string, updatedAt: string, terminal: boolean): st
 }
 
 // The model provider this run chose at create (#543, decision 5) — fixed on the
-// run, so it never changes after launch. Named from the shell's /setup/status;
-// a provider no longer there is marked removed, by its id, the only name the
-// run records. Nothing is claimed removed before that answer is in.
-function RunProviderChip({ id }: { id: string }) {
-  const { status } = useShellSetupStatus();
-  const p = status?.model_providers?.find((v) => v.id === id);
-  return <Chip tone="neutral">{RUN_FACTS.PROVIDER(p?.name || id, !!status && !p)}</Chip>;
+// run, so it never changes after launch. The server names it and says when it
+// is gone (#996); the id stands in only when it has no name, and "(removed)" is
+// said only when the server says deleted.
+function RunProviderChip({ run }: { run: RunDetail }) {
+  const name = run.model_provider_name || run.model_provider_id || "";
+  return <Chip tone="neutral">{RUN_FACTS.PROVIDER(name, !!run.model_provider_deleted)}</Chip>;
 }
 
 export function SummaryHeader({
@@ -84,7 +82,7 @@ export function SummaryHeader({
   onClone,
   onRename,
 }: {
-  run: AgentRun;
+  run: RunDetail;
   terminal: boolean;
   // The agent's own exit code (audit-derived); undefined when none was recorded.
   exitCode?: number;
@@ -365,7 +363,7 @@ export function SummaryHeader({
           information — and runs-detail.spec.ts's width loop measures 800px
           alongside 1024/1280/1536. */}
       <div className="flex shrink-0 items-center gap-2">
-        {run.model_provider_id && <RunProviderChip id={run.model_provider_id} />}
+        {run.model_provider_id && <RunProviderChip run={run} />}
         <ConfinementChip value={run.confinement_class} />
         {/* run.autonomy_level (#97) freezes the level resolveRunAutonomy
             capped this run at, at create time. Empty for a run under no

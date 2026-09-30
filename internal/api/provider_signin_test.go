@@ -502,7 +502,7 @@ func waitSignInRunning(t *testing.T, st *signInStore, runID uuid.UUID) {
 // the provider's own name.
 func providerReauthFixture(t *testing.T) (*reauthFixture, types.ModelProvider) {
 	t.Helper()
-	p := types.ModelProvider{ID: "bedrock-prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
+	p := types.ModelProvider{ID: "bedrock-prod", Name: "Bedrock prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
 		Bedrock: &types.BedrockSettings{Region: reauthRegion, SSOStartURL: "https://acme.awsapps.com/start",
 			SSOAccountID: "111122223333", SSORoleName: "WardynAgent"},
 		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: brModel}}}
@@ -545,6 +545,10 @@ func TestProviderSignInReauth(t *testing.T) {
 		_ = json.Unmarshal(ap.RequestedScope, &sc)
 		if sc["provider"] != p.ID || sc["provider_uid"] != p.UID || sc["owner"] != "alice@example.com" {
 			t.Fatalf("requested_scope = %v, want the provider's id and uid and alice", sc)
+		}
+		// #996: and its name, so a card names it for a viewer whose setup status does not list it.
+		if sc["provider_name"] != p.Name {
+			t.Errorf("requested_scope provider_name = %q, want %q", sc["provider_name"], p.Name)
 		}
 	})
 

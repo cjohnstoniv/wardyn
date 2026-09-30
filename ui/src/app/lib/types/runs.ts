@@ -340,9 +340,18 @@ export interface AdminRestartResponse {
 // same handler (runUserTypeName) because GET /user-types is securityOps and a
 // user-tier owner could not resolve the id themselves. Absent for a run with no
 // type or a type since deleted — the Identity widget then shows no "Ran as".
+//
+// model_provider_name and model_provider_deleted (#996) do the same for
+// AgentRun.model_provider_id: the provider's name (live, else the one run.create
+// froze) and — only when true — that it has since been deleted. The server
+// answers them for every viewer, so the page never infers "removed" from a
+// setup status that lists just what the viewer's own agents use. Absent when
+// the run names no provider or the server could not tell.
 export interface RunDetail extends AgentRun {
   ui_apps?: UIApp[];
   user_type_name?: string;
+  model_provider_name?: string;
+  model_provider_deleted?: boolean;
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror

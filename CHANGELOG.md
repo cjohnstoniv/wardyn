@@ -96,6 +96,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
   row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
   was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **A member whose Azure DevOps list is narrowed by their bound is told when they launch (#1384).**
+  When a run policy's `azure_devops_capabilities` names more than the provider row's default profile
+  and the member's governance profile stand, the launch's `201` carries one sentence naming what was
+  dropped, and the run's Effective policy shows it (it is in the `run.create` row's
+  `clamp_warnings`). Review refuses a list none of which may stand with `422` and reason
+  `ado_capabilities_none_permitted`, the refusal launch already gave at dispatch. The
+  `azure_devops_capabilities` field help now says a member stands only what the provider's default
+  profile or their governance profile grants, and Review's repository-access row names Azure DevOps,
+  not GitHub, for an Azure DevOps workspace.
+- **The run page names a run's model provider, and says "(removed)" only when it is (#996).**
+  `GET /runs/{id}` carries `model_provider_name` and, once the provider is deleted,
+  `model_provider_deleted`. The header chip used the viewer's own setup status, which lists only what
+  their agents use, so a provider that still existed showed as "(removed)" by its id, and a deleted
+  one showed its id in place of its name. The `run.create` row now freezes the provider's name, and an
+  AWS sign-in hold's scope carries `provider_name`, so the approval card names a provider its viewer's
+  setup status does not list.
+- **The Images tab reads user types once (#1016).** Each row's "Available to" control fetched
+  `GET /user-types` on its own, so a tab of N images made N reads; they now share one.
 
 ## [0.8.0] — 2026-09-29
 

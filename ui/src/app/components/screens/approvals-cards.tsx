@@ -67,7 +67,7 @@ export function PendingCard({
   const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal, view });
   const { status } = useShellSetupStatus();
   const reauthProvider = reauth.provider
-    ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.provider)
+    ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.providerName || reauth.provider)
     : "";
   // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
   // personal reauth door either, even on the admin's own row — same rule as

@@ -119,6 +119,10 @@ async function refusedRun(page: Page, provider: (typeof P)[keyof typeof P], sent
       json.failure_hint = sentence;
       json.created_by = owner;
       json.model_provider_id = provider.id;
+      // What GET /runs/{id} answers for a provider that is still configured
+      // (#996); the seeded backend has none, so it would call this one deleted.
+      json.model_provider_name = provider.name;
+      delete json.model_provider_deleted;
     }
     await route.fulfill({ response, json });
   });

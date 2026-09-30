@@ -176,6 +176,17 @@ describe("/approvals — a provider run's hold (#543)", () => {
     expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
   });
 
+  it("names the provider from the hold when this viewer's status does not list it (#996)", async () => {
+    await mountAt("/admin/approvals", "ann@acme.example", {
+      ...HOLD,
+      provider: "unlisted-bedrock",
+      provider_uid: "uid-unlisted",
+      provider_name: "Unlisted Bedrock",
+    });
+    expect(screen.getByText(REAUTH_ROW.PROVIDER("Unlisted Bedrock"))).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_ROW.PROVIDER("unlisted-bedrock"))).toBeNull();
+  });
+
   it("Admin view, another user's hold: whose sign-in it waits on, and no door", async () => {
     await mountAt("/admin/approvals", "ann@acme.example");
     expect(screen.getByText(REAUTH_ROW.PROVIDER(bedrock.name))).toBeInTheDocument();

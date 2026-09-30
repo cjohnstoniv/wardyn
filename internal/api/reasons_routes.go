@@ -170,6 +170,9 @@ const (
 	// preset's inline_policy: the spec's
 	// azure_devops_capabilities names something the catalogue cannot grant.
 	reasonADOCapabilityUnknown = "ado_capability_unknown"
+	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
+	// that leaves nothing standing (POST /runs/preflight).
+	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
 )
 
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field

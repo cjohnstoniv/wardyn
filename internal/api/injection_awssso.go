@@ -256,7 +256,8 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	if reason != "" {
 		// A provider run is held like any other: its owner's sign-in through
 		// that provider's own door (provider_signin.go) answers the hold.
-		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, run.ModelProviderID, reason)
+		provider, _ := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
+		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, run.ModelProviderID, provider.Name, reason)
 	}
 
 	// (6) LIVE. Per-run masking is ADDITIVE to the global registration
@@ -316,6 +317,11 @@ type awsSSOReauthScopeBody struct {
 	Owner            string `json:"owner"`
 	Provider         string `json:"provider,omitempty"`
 	ProviderUID      string `json:"provider_uid,omitempty"`
+	// ProviderName is the provider's name at the moment of the hold (#996), so a
+	// card names it for a viewer whose own setup status does not list it. The
+	// hold is only raised for a provider that is live, so a deleted flag would
+	// never be true here.
+	ProviderName string `json:"provider_name,omitempty"`
 }
 
 // holdOrRefuseCredentialReauth answers the DEAD-credential path: 423 while a
@@ -326,7 +332,7 @@ type awsSSOReauthScopeBody struct {
 // sweeper) answers TERMINAL at once, so the hold ends within one poll instead of
 // running its whole budget against a question nobody can answer.
 func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Request,
-	claims *identity.Claims, snapshot awsSSOScopeSnapshot, modelProvider, reason string,
+	claims *identity.Claims, snapshot awsSSOScopeSnapshot, modelProvider, providerName, reason string,
 ) bool {
 	ctx := r.Context()
 	rows, lerr := s.runApprovals(ctx, claims.RunID, "")
@@ -387,7 +393,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		Owner:            snapshot.OwnerSubject,
 	}
 	if snapshot.ProviderUID != "" {
-		scope.Provider, scope.ProviderUID = modelProvider, snapshot.ProviderUID
+		scope.Provider, scope.ProviderUID, scope.ProviderName = modelProvider, snapshot.ProviderUID, providerName
 	}
 	reqScope, _ := json.Marshal(scope)
 	// The id is minted HERE so this caller can tell whether it RAISED the request

@@ -333,11 +333,18 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
         /* private mode — ignore */
       }
     });
+    // Cache-and-serve, not route.fetch()+refulfill per match (new-run.spec's
+    // spliceNoBarrier, #1365): the Environment step this test clicks through
+    // to re-reads /setup/status, and a round trip per match raced Playwright
+    // disposing an in-flight route's response ("Response has been disposed").
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const json = await (await route.fetch()).json();
+        json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+        cached = json;
+      }
+      await route.fulfill({ json: cached! });
     });
     await gotoConsole(page);
 
