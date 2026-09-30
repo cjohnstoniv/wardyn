@@ -114,7 +114,10 @@ var ClosedGitLanes = map[GitLane]bool{
 // LegacyGitLanes are the lanes an empty GitProvider.Lanes list admits: not
 // "every lane in ClosedGitLanes" but the three from when this rule was
 // written, frozen forever so growing the closed set never silently opts a
-// stored row into a new lane.
+// stored row into a new lane. It never applies to an Azure DevOps row: an
+// empty list there is refused at the write boundary (the shared pat and ssh
+// lanes it would expand to are retired), and migration 0102 rewrote every
+// stored one.
 var LegacyGitLanes = []GitLane{GitLaneApp, GitLanePAT, GitLaneSSH}
 
 // Legacy reports whether l is admitted by an empty Lanes list; expanding one must ask this, never ClosedGitLanes.
@@ -252,7 +255,7 @@ type GitProvider struct {
 	// Lanes are the credential lanes usable for this provider; empty means
 	// every legacy lane (LegacyGitLanes) — the field narrows, never widens.
 	Lanes            []GitLane        `json:"lanes,omitempty"`
-	CredentialSource CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra
+	CredentialSource CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra, or GitLanePAT on an Azure DevOps row (a Server row, which has no Entra sign-in)
 	Entra            *ADOEntraConfig  `json:"entra,omitempty"`             // present only on, and required by, a row whose Lanes name GitLaneEntra
 }
 

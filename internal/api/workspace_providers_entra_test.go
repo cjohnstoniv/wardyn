@@ -58,9 +58,9 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"a legacy visualstudio.com host", block(entraRow(func(r *types.GitProvider) {
 			r.BaseURLs = []string{"https://acme.visualstudio.com"}
 		})), false},
-		{"the lane beside the legacy lanes", block(entraRow(func(r *types.GitProvider) {
+		{"the lane beside a pat lane: Services has no token lane (#1429)", block(entraRow(func(r *types.GitProvider) {
 			r.Lanes = []types.GitLane{types.GitLanePAT, types.GitLaneEntra}
-		})), false},
+		})), true},
 
 		{"an Azure DevOps SERVER host cannot carry the lane", block(entraRow(func(r *types.GitProvider) {
 			r.BaseURLs = []string{"https://tfs.corp.example/acme"}
@@ -191,8 +191,8 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"and refused with none at all, which reads as shared", block(entraRow(func(r *types.GitProvider) {
 			r.CredentialSource = ""
 		})), true},
-		{"per_user without the lane has no per-person path", withSource(block(adoRow("ado", false, "https://dev.azure.com/acme")), types.CredentialSourcePerUser), true},
-		{"shared without the lane is today's behaviour", withSource(block(adoRow("ado", false, "https://dev.azure.com/acme")), types.CredentialSourceShared), false},
+		{"per_user without the lane has no per-person path", withSource(block(githubRow("gh", false, "https://github.com/acme")), types.CredentialSourcePerUser), true},
+		{"shared without the lane is today's behaviour", withSource(block(githubRow("gh", false, "https://github.com/acme")), types.CredentialSourceShared), false},
 		{"an invented credential source", withSource(block(githubRow("gh", false, "https://github.com/acme")), "borrowed"), true},
 		{"an absent credential source on a legacy row", block(githubRow("gh", false, "https://github.com/acme")), false},
 
@@ -202,8 +202,8 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"a second row on the lane is admitted while it is disabled", block(entraRow(nil), entraRow(func(r *types.GitProvider) {
 			r.ID, r.BaseURLs, r.Disabled = "ado2", []string{"https://dev.azure.com/other"}, true
 		})), false},
-		{"a second Azure DevOps row on a shared lane beside the entra row", block(entraRow(nil),
-			adoRow("ado2", false, "https://dev.azure.com/other")), false},
+		{"a Server row on the per_user pat lane beside the entra row", block(entraRow(nil),
+			adoServerPAT(adoRow("ado2", false, "https://tfs.corp.example/other"))), false},
 
 		{"the lane is refused on a github row's host", block(types.GitProvider{
 			ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"},
@@ -236,7 +236,7 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapPolicyBypass}
 		}), "outside capability_ceiling"},
 		{"per_user", func() types.GitProvider {
-			r := adoRow("ado", false, "https://dev.azure.com/acme")
+			r := githubRow("gh", false, "https://github.com/acme")
 			r.CredentialSource = types.CredentialSourcePerUser
 			return r
 		}(), "needs the \"entra\" lane"},
@@ -346,8 +346,15 @@ func TestStoredProviderBlockRoundTripsByteIdentical(t *testing.T) {
 	if string(again) != storedProviderBlock {
 		t.Fatalf("a stored block did not round-trip:\n got %s\nwant %s", again, storedProviderBlock)
 	}
-	if err := validateWorkspaceProviders(&block, true); err != nil {
-		t.Fatalf("a stored block no longer validates: %v", err)
+	// The 0.7.9 document still holds the row no Azure DevOps write may name any
+	// more: no lanes, which read as the retired shared pat and ssh lanes (#1429).
+	// Every other row still validates.
+	want := fmt.Sprintf(providers400ADOLanes, 1, string(types.GitLaneEntra), string(types.GitLanePAT))
+	if err := validateWorkspaceProviders(&block, true); err == nil || err.Error() != want {
+		t.Fatalf("the stored block's Azure DevOps row: validation = %v, want %q", err, want)
+	}
+	if err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{block.Git[0], block.Git[2]}}, true); err != nil {
+		t.Fatalf("a stored GitHub block no longer validates: %v", err)
 	}
 	for _, row := range block.Git {
 		if row.Entra != nil {

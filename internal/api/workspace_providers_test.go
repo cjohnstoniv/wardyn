@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -72,6 +73,25 @@ func adoRow(id string, disabled bool, baseURLs ...string) types.GitProvider {
 	return types.GitProvider{ID: id, Kind: types.GitProviderAzureDevOps, Disabled: disabled, BaseURLs: baseURLs}
 }
 
+// adoEntra and adoServerPAT give an Azure DevOps row the two per-person shapes
+// the shared-lane retirement leaves it (#1429): a hosted row's entra lane (own
+// token, so no tenant or client), and a Server row's per_user pat lane.
+func adoEntra(r types.GitProvider) types.GitProvider {
+	r.Lanes = []types.GitLane{types.GitLaneEntra}
+	r.CredentialSource = types.CredentialSourcePerUser
+	r.Entra = &types.ADOEntraConfig{
+		TokenMode:         types.ADOTokenModeOwnPAT,
+		CapabilityCeiling: []adoscope.Capability{adoscope.CapRead},
+	}
+	return r
+}
+
+func adoServerPAT(r types.GitProvider) types.GitProvider {
+	r.Lanes = []types.GitLane{types.GitLanePAT}
+	r.CredentialSource = types.CredentialSourcePerUser
+	return r
+}
+
 func providersConfig(rows []types.GitProvider, scmHosts ...string) types.SiteConfig {
 	sc := types.SiteConfig{ScmHosts: scmHosts}
 	if rows != nil {
@@ -98,9 +118,9 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 		{"github.com with an org", ok(githubRow("gh", false, "https://github.com/acme")), false},
 		{"bare github.com", ok(githubRow("gh", false, "https://github.com")), false},
 		{"GHES host with two segments", ok(githubRow("ghes", false, "https://git.corp.example/acme/team")), false},
-		{"dev.azure.com with the org", ok(adoRow("ado", false, "https://dev.azure.com/acme")), false},
-		{"legacy visualstudio.com", ok(adoRow("ado", false, "https://acme.visualstudio.com")), false},
-		{"ADO Server host", ok(adoRow("ados", false, "https://tfs.corp.example/acme")), false},
+		{"dev.azure.com with the org", ok(adoEntra(adoRow("ado", false, "https://dev.azure.com/acme"))), false},
+		{"legacy visualstudio.com", ok(adoEntra(adoRow("ado", false, "https://acme.visualstudio.com"))), false},
+		{"ADO Server host", ok(adoServerPAT(adoRow("ados", false, "https://tfs.corp.example/acme"))), false},
 
 		{"http is refused", ok(githubRow("gh", false, "http://github.com/acme")), true},
 		{"userinfo is refused", ok(githubRow("gh", false, "https://user:pw@github.com/acme")), true},
@@ -125,9 +145,9 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 
 		{"an ADO host on a github row", ok(githubRow("gh", false, "https://dev.azure.com/acme")), true},
 		{"visualstudio.com on a github row", ok(githubRow("gh", false, "https://acme.visualstudio.com")), true},
-		{"github.com on an ADO row", ok(adoRow("ado", false, "https://github.com/acme")), true},
-		{"dev.azure.com without an org", ok(adoRow("ado", false, "https://dev.azure.com")), true},
-		{"dev.azure.com with two segments", ok(adoRow("ado", false, "https://dev.azure.com/acme/team")), true},
+		{"github.com on an ADO row", ok(adoServerPAT(adoRow("ado", false, "https://github.com/acme"))), true},
+		{"dev.azure.com without an org", ok(adoServerPAT(adoRow("ado", false, "https://dev.azure.com"))), true},
+		{"dev.azure.com with two segments", ok(adoServerPAT(adoRow("ado", false, "https://dev.azure.com/acme/team"))), true},
 
 		{"an empty id", ok(githubRow("", false, "https://github.com/acme")), true},
 		{"an uppercase id", ok(githubRow("GH", false, "https://github.com/acme")), true},
@@ -158,9 +178,9 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
 			Lanes: []types.GitLane{types.GitLaneSSH},
 		}), true},
-		{"#380: empty lanes on an org-scoped row is admitted (host-level SSH warns, not refuses)",
+		{"#380: empty lanes on an org-scoped GitHub row is admitted (host-level SSH warns, not refuses)",
 			ok(types.GitProvider{
-				ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
+				ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"},
 			}), false},
 		{"pat needs no host", ok(types.GitProvider{
 			ID: "ghes", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://git.corp.example/acme"},
@@ -275,9 +295,15 @@ func TestBaseURLClientMirrorParity(t *testing.T) {
 		{"https://tfs.corp.example/p%20", types.GitProviderAzureDevOps, true},
 		{"not a url", types.GitProviderGitHub, true},
 	} {
-		block := &types.WorkspaceProviders{Git: []types.GitProvider{
-			{ID: "row", Kind: tc.kind, BaseURLs: []string{tc.url}},
-		}}
+		row := types.GitProvider{ID: "row", Kind: tc.kind, BaseURLs: []string{tc.url}}
+		if tc.kind == types.GitProviderAzureDevOps { // the lanes an Azure DevOps row must name (#1429)
+			if strings.Contains(tc.url, "dev.azure.com") || strings.Contains(tc.url, ".visualstudio.com") {
+				row = adoEntra(row)
+			} else {
+				row = adoServerPAT(row)
+			}
+		}
+		block := &types.WorkspaceProviders{Git: []types.GitProvider{row}}
 		err := validateWorkspaceProviders(normalizeWorkspaceProviders(block), true)
 		if (err != nil) != tc.refused {
 			t.Errorf("validate(%q, %s) = %v, want refused=%v", tc.url, string(tc.kind), err, tc.refused)
@@ -982,7 +1008,7 @@ func TestSiteConfigDoorFailsRatherThanMiscount(t *testing.T) {
 // rather than failing silently.
 func TestSiteConfigDoorGrandfathersExplicitSSHPathScope(t *testing.T) {
 	body := `{"workspace_providers":{"git":[` +
-		`{"id":"ado","kind":"azure_devops","base_urls":["https://dev.azure.com/acme"],"lanes":["ssh"]}]}}`
+		`{"id":"gh","kind":"github","base_urls":["https://github.com/acme"],"lanes":["ssh"]}]}}`
 
 	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
 	srv, audit := newProvidersHarness(t, fake)
@@ -1001,8 +1027,8 @@ func TestSiteConfigDoorGrandfathersExplicitSSHPathScope(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.SSHLaneWidePastPath) != 1 || resp.SSHLaneWidePastPath[0] != "ado" {
-		t.Errorf("ssh_lane_wide_past_path = %v, want [\"ado\"] — the grandfather must be reported, never silent",
+	if len(resp.SSHLaneWidePastPath) != 1 || resp.SSHLaneWidePastPath[0] != "gh" {
+		t.Errorf("ssh_lane_wide_past_path = %v, want [\"gh\"] — the grandfather must be reported, never silent",
 			resp.SSHLaneWidePastPath)
 	}
 	found := false
@@ -1020,7 +1046,7 @@ func TestSiteConfigDoorGrandfathersExplicitSSHPathScope(t *testing.T) {
 	fake2 := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
 	srv2, _ := newProvidersHarness(t, fake2)
 	w2 := do(t, srv2, http.MethodPut, "/api/v1/workspace-providers", adminToken,
-		`{"git":[{"id":"ado","kind":"azure_devops","base_urls":["https://dev.azure.com/acme"],"lanes":["ssh"]}]}`)
+		`{"git":[{"id":"gh","kind":"github","base_urls":["https://github.com/acme"],"lanes":["ssh"]}]}`)
 	if w2.Code != http.StatusBadRequest {
 		t.Errorf("PUT /workspace-providers with the same row = %d, want 400 (console door keeps refusing)", w2.Code)
 	}
