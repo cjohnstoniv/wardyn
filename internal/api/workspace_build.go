@@ -459,7 +459,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx := context.WithoutCancel(r.Context())
 		logSink := &buildLogWriter{t: &s.builds, id: ws.ID}
-		built, okBuild := s.resolveWorkspaceImage(ctx, buildID, ws, logSink)
+		built, okBuild := s.resolveWorkspaceImage(ctx, buildID, ws, logSink, nil)
 		if !okBuild {
 			// resolveWorkspaceImage audited the specific failure under buildID —
 			// read it back so the wizard shows the REAL reason, not a pointer
