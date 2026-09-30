@@ -20,6 +20,7 @@ package proxy
 // in its policy refused it. No message or log line carries credential bytes.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,6 +39,10 @@ const (
 	ruleSourceADOGitUpstreamNotSignedIn = "brokered:ado-git:upstream-not-signed-in"
 	ruleSourceADOGitUpstreamRefused     = "brokered:ado-git:upstream-refused"
 	ruleSourceADOGitUpstreamNoAccess    = "brokered:ado-git:upstream-no-access"
+	// A request retried once with a re-resolved header after Azure DevOps refused a stale one
+	// (healADOHeader); an allow, written between the two forwarding rows.
+	ruleSourceADOReresolved    = "brokered:ado:reresolved"
+	ruleSourceADOGitReresolved = "brokered:ado-git:reresolved"
 )
 
 // adoUpstreamClass is what an Azure DevOps answer says about the request.
@@ -65,6 +70,36 @@ func classifyADOUpstream(resp *http.Response) adoUpstreamClass {
 		}
 	}
 	return adoUpstreamOK
+}
+
+// adoCredentialRefused reports whether Azure DevOps refused the injected credential itself — a 401,
+// or a 203 sign-in page — which is what a stale per-host header gets. Both doors ask BEFORE they
+// relay, so healADOHeader can run first.
+func adoCredentialRefused(resp *http.Response) bool {
+	c := classifyADOUpstream(resp)
+	return c == adoUpstreamRefused || c == adoUpstreamNotSignedIn
+}
+
+// healADOHeader answers Azure DevOps refusing sent, host's injected header. The header is dropped
+// either way, so the host's next request re-resolves with stale_jti. A request whose body can be sent
+// again re-resolves now: retry reports a header other than sent to retry with, false when the
+// control plane had nothing newer (bearer and own_pat resolves return the same credential). err is
+// the re-resolve's own, a 423's ended hold included; the caller answers it as a failed resolve.
+func (p *Proxy) healADOHeader(ctx context.Context, host string, sent injectedHeader, replayable bool) (fresh injectedHeader, retry bool, err error) {
+	if !replayable {
+		p.inject.dropStale(host, sent.jti)
+		return injectedHeader{}, false, nil
+	}
+	if fresh, err = p.inject.reresolveStale(ctx, host, sent.jti); err != nil {
+		return injectedHeader{}, false, err
+	}
+	return fresh, fresh.value != "" && fresh.value != sent.value, nil
+}
+
+// drainClose reads what is left of a response the caller will not relay, up to 64 KiB, and closes it.
+func drainClose(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	_ = resp.Body.Close()
 }
 
 // ruleSource is the class's decision-log rule source on the REST or git door.
