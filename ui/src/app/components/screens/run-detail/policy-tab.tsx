@@ -13,7 +13,14 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { runs } from "../../../lib/api/runs";
 import { asFirstUseMode } from "../../../lib/types";
-import type { RunDetail, RunPolicyChange, RunPolicySource, RunPolicyView } from "../../../lib/types";
+import type {
+  ConfinementClass,
+  RunDetail,
+  RunPolicyChange,
+  RunPolicySource,
+  RunPolicySpec,
+  RunPolicyView,
+} from "../../../lib/types";
 import { adoCapName } from "../../../lib/ado-access-copy";
 import { CAPABILITY, POLICY_UI_APPS } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -265,9 +272,31 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
   return [...groups.values()];
 }
 
-// A bare number under disk_mib is a size, and would read as nothing without its unit.
+// Single-value fields arrive as one-entry sets of the raw value; each reads in the
+// console's own words, as the Summary does, never as a wire code like CC2.
 function entryText(field: string, text: string): string {
-  return field === "disk_mib" && /^\d+$/.test(text) ? SUMMARY.mibValue(Number(text)) : text;
+  const n = Number(text);
+  switch (field) {
+    case "min_confinement_class":
+      return CC_META[text as ConfinementClass]?.label ?? text;
+    case "first_use_approval":
+      return firstUseText(text, 0);
+    case "first_use_hold_seconds":
+      return SUMMARY.held(n);
+    case "git_push_any_branch":
+      return text === "true" ? SUMMARY.anyBranch : SUMMARY.ownBranch;
+    case "allow_all_egress":
+      return text === "true" ? CAPABILITY.allowAllEgress : text;
+    case "auto_stop_after_sec":
+      return lifecycleSummary({ auto_stop_after_sec: n } as RunPolicySpec);
+    case "resources.cpu_millis":
+      return cpuText(n);
+    case "resources.memory_mib":
+    case "resources.disk_mib":
+      return mib(n);
+    default:
+      return text;
+  }
 }
 
 // Which spec entries a change names, so the Summary can flag them.
@@ -328,9 +357,9 @@ function List({ items, field, marks }: { items: string[]; field: string; marks: 
   );
 }
 
-function otherHostText(spec: NonNullable<RunPolicyView["spec"]>): string {
-  const mode = asFirstUseMode(spec.first_use_approval);
-  if (mode === "wait_for_review") return SUMMARY.held(spec.first_use_hold_seconds || 30);
+function firstUseText(approval: unknown, holdSeconds: number | undefined): string {
+  const mode = asFirstUseMode(approval);
+  if (mode === "wait_for_review") return SUMMARY.held(holdSeconds || 30);
   return mode === "deny_with_review" ? SUMMARY.refusedThenApproval : SUMMARY.refused;
 }
 
@@ -364,7 +393,7 @@ function PolicySummary({ spec, run, marks }: { spec: NonNullable<RunPolicyView["
         <Row label={SUMMARY.blockedHosts}>
           <List items={spec.denied_domains ?? []} field="denied_domains" marks={marks} />
         </Row>
-        <Row label={SUMMARY.otherHost}>{otherHostText(spec)}</Row>
+        <Row label={SUMMARY.otherHost}>{firstUseText(spec.first_use_approval, spec.first_use_hold_seconds)}</Row>
         <Row label={SUMMARY.requestTypes}>
           {spec.allowed_methods?.length ? spec.allowed_methods.join(", ") : SUMMARY.allMethods}
         </Row>
@@ -416,7 +445,7 @@ function PolicySummary({ spec, run, marks }: { spec: NonNullable<RunPolicyView["
           {repos.length === 0
             ? SUMMARY.none
             : repos.map((r) => (
-                <Item key={`${r.repo}${r.target}`} mark={marks("workspace_repos", r.repo)}>
+                <Item key={`${r.repo}${r.target}`} mark={marks("workspace_repos", r.ref ? `${r.repo}@${r.ref}` : r.repo)}>
                   <Mono>{`${r.repo}${r.ref ? ` at ${r.ref}` : ""}${r.target ? ` → ${r.target}` : ""}`}</Mono>
                 </Item>
               ))}

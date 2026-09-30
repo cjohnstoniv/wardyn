@@ -292,7 +292,7 @@ describe("PolicyTab — changes grouped by cause", () => {
   });
 
   it("disk size (S-22): a bare number reads as MiB, with no chip", async () => {
-    show(view({ changes: [change({ cause: "org_disk", field: "disk_mib", added: ["20480"] })] }));
+    show(view({ changes: [change({ cause: "org_disk", field: "resources.disk_mib", added: ["20480"] })] }));
     await ready();
     const g = screen.getByRole("heading", { name: "Disk size set from your organization's default" }).parentElement!;
     expect(within(g).getByText("20480 MiB").parentElement).not.toHaveTextContent("Added at start");
@@ -323,6 +323,40 @@ describe("PolicyTab — changes grouped by cause", () => {
       expect(screen.getByText("dropped 1 egress domain(s) not in operator allowlist: pastebin.com")).toBeInTheDocument();
       expect(screen.getByText('confinement raised from "CC1" to operator minimum "CC2"')).toBeInTheDocument();
     });
+  });
+
+  // The server keys a repo with a ref as `repo@ref`.
+  it("keeps the Added chip on a repo that carries a ref", async () => {
+    show(
+      view({
+        spec: { ...SPEC, workspace_repos: [{ repo: "acme/api", ref: "main", target: "work/api" }] },
+        changes: [change({ cause: "workspace", field: "workspace_repos", added: ["acme/api@main"] })],
+      }),
+    );
+    await ready();
+    expect(rowValue("Files and code", "Repositories")).toHaveTextContent("acme/api at main → work/api" + "Added at start");
+  });
+
+  it("reads single-value changes in the console's own words, never as wire codes", async () => {
+    show(
+      view({
+        changes: [
+          change({ cause: "limits", field: "min_confinement_class", added: ["CC2"], removed: ["CC1"] }),
+          change({ cause: "limits", field: "first_use_approval", added: ["deny_with_review"], removed: ["wait_for_review"] }),
+          change({ cause: "limits", field: "resources.memory_mib", added: ["4096"] }),
+          change({ cause: "limits", field: "resources.disk_mib", added: ["9000"] }),
+          change({ cause: "limits", field: "resources.cpu_millis", added: ["1500"] }),
+        ],
+      }),
+    );
+    await ready();
+    const g = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
+    for (const t of ["Wall", "Fence", "Refused, then sent for approval", "4096 MiB", "9000 MiB", "1.5 CPU"]) {
+      expect(within(g).getByText(t)).toBeInTheDocument();
+    }
+    for (const raw of ["CC2", "CC1", "deny_with_review", "wait_for_review"]) {
+      expect(within(g).queryByText(raw)).not.toBeInTheDocument();
+    }
   });
 
   it("flags a changed entry in the Summary too", async () => {
