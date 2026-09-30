@@ -413,6 +413,9 @@ func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string, r
 	if strings.TrimSpace(*v.rolePlatform) == strings.TrimSpace(*v.role) {
 		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_ROLE_PLATFORM is the same role as WARDYN_VAULT_ROLE, which separates nothing; name the second role")
 	}
+	if key == strings.TrimSpace(*v.transitKey) {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM is the same key as WARDYN_VAULT_TRANSIT_KEY, which separates nothing; name a second key")
+	}
 	cfg := vaultConfig(v, trustedCAFile)
 	cfg.Role, cfg.RolePlatform = cfg.RolePlatform, ""
 	t, err := vaultkv.NewPlatformTransit(ctx, cfg, strings.TrimSpace(*v.transitMount), key)

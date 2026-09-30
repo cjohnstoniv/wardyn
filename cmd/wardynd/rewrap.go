@@ -136,7 +136,11 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion > 0 {
-		fmt.Fprintf(os.Stdout, "every sealed secret is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", res.KeyService, res.KeyVersion, res.KeyVersion)
+		what := "secret"
+		if d.PlatformKEKWrites {
+			what = "credential" // the boot keys are under the platform key, reported below
+		}
+		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", what, res.KeyService, res.KeyVersion, res.KeyVersion)
 	}
 	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
 		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM and restart every replica\n", d.PlatformKEK.ID())

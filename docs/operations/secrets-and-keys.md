@@ -613,8 +613,8 @@ mount, give `wardyn-platform` `update` on `transit/encrypt/<platform-key>` and
   `WARDYN_VAULT_TRANSIT_KEY` as the credentials role. A leaked credentials
   token then unwraps no boot key.
 - Boot refuses when it is set with `WARDYN_KEK=local`, without
-  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or with the two roles the
-  same. With it set, a boot key still under another key is refused at boot.
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or with the two roles or
+  the two keys the same. With it set, a boot key still under another key is refused at boot.
 - Run `wardynd -rewrap` with the same settings to move the boot keys onto it;
   it touches no credential row and a second run changes nothing. The run prints
   the key version to raise `min_decryption_version` to, as for the credential

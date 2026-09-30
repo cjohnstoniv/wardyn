@@ -2144,8 +2144,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     cannot check; and the move onto the platform key (`wardynd -rewrap`), like
     the move off it (`-rewrap-retire-platform-key`), is one more moment at which
     one key vouches for the boot keys. What neither setup lets anyone do from the
-    database alone is pass one wrap off as another's: each wrap's `associated_data` binds `kek_id`, owner and name, so a
-    wrap moved to another row, or to the other key, does not unwrap.
+    database alone is pass one wrap off as another's: each wrap's
+    `associated_data` binds `kek_id`, owner and name, so a wrap moved to another
+    row, or to the other key, does not unwrap.
 
 50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`

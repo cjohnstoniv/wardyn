@@ -61,9 +61,14 @@ func TestBuildPlatformKEK_FailsClosed(t *testing.T) {
 		{"without a platform role", "transit", "kubernetes", "wardyn", "", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_ROLE_PLATFORM"},
 		{"with token-file auth", "transit", "token-file", "wardyn", "wardyn-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_AUTH=kubernetes"},
 		{"with one role for both", "transit", "kubernetes", "wardyn", "wardyn", "WARDYN_VAULT_ROLE_PLATFORM is the same role as WARDYN_VAULT_ROLE"},
+		{"with one key for both", "transit", "kubernetes", "wardyn", "wardyn-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM is the same key as WARDYN_VAULT_TRANSIT_KEY"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, _ := testExternalFlags("https://vault.example", "")
+			v.transitKey = strp("wardyn")
+			if tc.name == "with one key for both" {
+				v.transitKey = strp(" wardyn-platform ")
+			}
 			v.kek, v.transitMount, v.transitKeyPlatform, v.rolePlatform = strp(tc.sel), strp("transit"), strp("wardyn-platform"), strp(tc.rolePlatform)
 			v.auth, v.role = strp(tc.auth), strp(tc.role)
 			k, err := buildPlatformKEK(t.Context(), v, "", false)
@@ -73,7 +78,7 @@ func TestBuildPlatformKEK_FailsClosed(t *testing.T) {
 		})
 	}
 	v, _ := testExternalFlags("", "")
-	v.kek, v.transitKeyPlatform = strp("local"), strp("")
+	v.kek, v.transitKey, v.transitKeyPlatform = strp("local"), strp(""), strp("")
 	if k, err := buildPlatformKEK(t.Context(), v, "", false); k != nil || err != nil {
 		t.Fatalf("no platform key = (%v, %v); want no key service", k, err)
 	}
@@ -96,7 +101,7 @@ func TestBuildPlatformKEK_LogsInAsThePlatformRole(t *testing.T) {
 	}
 	v, _ := testExternalFlags(srv.URL, "")
 	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
-	v.kek, v.transitMount, v.transitKeyPlatform = strp("transit"), strp("transit"), strp("wardyn-platform")
+	v.kek, v.transitMount, v.transitKey, v.transitKeyPlatform = strp("transit"), strp("transit"), strp("wardyn"), strp("wardyn-platform")
 	k, err := buildPlatformKEK(t.Context(), v, "", false)
 	if err == nil || k != nil || !strings.Contains(err.Error(), `role "wardyn-platform"`) {
 		t.Fatalf("buildPlatformKEK = (%v, %v); want a login refusal as the platform role", k, err)
@@ -122,7 +127,13 @@ func TestBuildPlatformKEK_RetireNeedsNoTransitKEK(t *testing.T) {
 	}
 	v, _ := testExternalFlags(srv.URL, "")
 	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
-	v.kek, v.transitMount, v.transitKeyPlatform = strp("local"), strp("transit"), strp("wardyn-platform")
+	v.kek, v.transitMount, v.transitKey, v.transitKeyPlatform = strp("local"), strp("transit"), strp("wardyn"), strp("wardyn-platform")
+	// Retiring the credential key's twin is meaningless too.
+	same := v
+	same.transitKey = strp("wardyn-platform")
+	if _, err := buildPlatformKEK(t.Context(), same, "", true); err == nil || !strings.Contains(err.Error(), "is the same key as WARDYN_VAULT_TRANSIT_KEY") {
+		t.Fatalf("retiring with one key for both = %v; want the refusal", err)
+	}
 	if _, err := buildPlatformKEK(t.Context(), v, "", false); err == nil || !strings.Contains(err.Error(), "needs WARDYN_KEK=transit") {
 		t.Fatalf("a start with WARDYN_KEK=local = %v; want the refusal", err)
 	}
