@@ -365,7 +365,7 @@ func TestResolveADOInjection_PreSplitSnapshotIsCeilingDrift(t *testing.T) {
 	rf.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{
 		adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWikiRead, adoscope.CapBuildRead,
 		adoscope.CapReleaseRead, adoscope.CapServiceEndpointRead, adoscope.CapLibraryRead, adoscope.CapPackagingRead,
-		adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead, adoscope.CapAnalyticsRead,
+		adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead,
 		adoscope.CapCodeWrite, adoscope.CapPR,
 	}
 	w := rf.resolve(t, rf.subject, "dev.azure.com")

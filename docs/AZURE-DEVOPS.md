@@ -137,7 +137,6 @@ the reads some row's ceiling will hold — or all of them:
 
 | Scope | Needed by | Reads |
 |---|---|---|
-| `vso.analytics` | `analytics_read` | Analytics |
 | `vso.build` | `build_read` | Builds and pipelines |
 | `vso.code` | `code_read` | Repositories, commits, branches, pull requests, branch policies, and code search |
 | `vso.graph` | `identity_read` | The organisation's groups and users |
@@ -608,7 +607,6 @@ people's work, identities, or credentials.
 | Test Plans | `test_read` | Read test plans, suites, cases, runs and results |
 | Organization | `project_read` | Read projects, teams and the signed-in person's own profile |
 | Organization | `identity_read` | Read the organisation's users, groups, memberships and licences, and directory identities |
-| Organization | `analytics_read` | Query Analytics — which reaches the work-item, pipeline and test data of every project |
 | Organization | `project_admin` (High risk) | Create, rename, change or delete a project or a team |
 | Organization | `security_admin` (High risk) | Change who can do what across the whole organisation — permissions, groups, directory identities |
 

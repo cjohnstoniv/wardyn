@@ -30,7 +30,7 @@ export function HighRiskBadge({ className }: { className?: string }) {
 
 // adoAccessSummary folds the chosen capabilities into one line, in catalogue
 // order (the approved per-area mock's State 4):
-//   1. all twelve reads chosen → "Read (every area)" first, and the reads are
+//   1. all eleven reads chosen → "Read (every area)" first, and the reads are
 //      then left out of every area below;
 //   2. an area whose rows that are not High risk are all chosen → its name;
 //   3. otherwise each chosen row by name — and a High-risk row is always named

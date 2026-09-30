@@ -194,3 +194,21 @@ func TestADOLoginFacts(t *testing.T) {
 		t.Errorf("from flags: %q %q %v", c, tn, has)
 	}
 }
+
+// A disabled row is not the sign-in source, but a token created through it is
+// still revoked through it: the by-row source finds it by id with the console's
+// secret and answers not found only for an id no Azure DevOps row has.
+func TestADOEntraByRow_FindsADisabledRow(t *testing.T) {
+	sc := mintedSite(testLoginClient, testTenant)
+	sc.WorkspaceProviders.Git[0].Disabled = true
+	if _, found, _ := adoEntraSource(sc, testLogin)(context.Background()); found {
+		t.Fatal("the sign-in source served a disabled row")
+	}
+	cfg, found, err := adoEntraByRow(sc, testLogin)(context.Background(), "ado")
+	if err != nil || !found || cfg.RowID != "ado" || cfg.ClientSecret != "console-secret" || !slices.Equal(cfg.Scopes, adoscope.MintScopes()) {
+		t.Fatalf("by row: found=%v err=%v cfg=%+v, want the disabled row with the console secret and the mint scopes", found, err, cfg)
+	}
+	if _, found, err := adoEntraByRow(sc, testLogin)(context.Background(), "gone"); found || err != nil {
+		t.Fatalf("an unknown id: found=%v err=%v, want not found", found, err)
+	}
+}

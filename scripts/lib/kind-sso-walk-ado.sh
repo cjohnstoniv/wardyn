@@ -188,7 +188,7 @@ step "the admin configures the per-person Azure DevOps row and onboards the repo
 # Every per-area read: exactly what the single pre-split "read" allowed.
 providers="$(jq -n --arg id "${ROW_ID}" --arg org "https://dev.azure.com/${ORG}" --arg t "${TENANT}" --arg c "${CLIENT_ID}" '
   ["code_read", "work_read", "wiki_read", "build_read", "release_read", "serviceendpoint_read", "library_read",
-   "packaging_read", "test_read", "project_read", "identity_read", "analytics_read"] as $reads | {
+   "packaging_read", "test_read", "project_read", "identity_read"] as $reads | {
   git: [{id: $id, kind: "azure_devops", base_urls: [$org], lanes: ["entra"], credential_source: "per_user",
          entra: {tenant_id: $t, client_id: $c, capability_ceiling: $reads, default_profile: $reads}}]}')"
 code="$(curl -s -o "${EVIDENCE_DIR}/workspace-providers-put.json" -w '%{http_code}' -X PUT -b "${WORK}/admin.jar" \

@@ -158,7 +158,7 @@ func newFake(cfg config) (*fake, error) {
 	consented, err := adoscope.ScopesFor([]adoscope.Capability{
 		adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWikiRead, adoscope.CapBuildRead,
 		adoscope.CapReleaseRead, adoscope.CapServiceEndpointRead, adoscope.CapLibraryRead, adoscope.CapPackagingRead,
-		adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead, adoscope.CapAnalyticsRead,
+		adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead,
 		adoscope.CapCodeWrite, adoscope.CapWorkWrite,
 	})
 	if err != nil {

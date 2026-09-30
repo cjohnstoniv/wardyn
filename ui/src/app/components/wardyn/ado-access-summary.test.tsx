@@ -10,12 +10,12 @@ import { ADOAccessSummary, adoAccessSummary } from "./ado-access-summary";
 
 // The four saved policies of the approved per-area packet (Member · State 4),
 // with the summary line each one reads as.
-const TWELVE_READS = [
+const ELEVEN_READS = [
   "code_read", "work_read", "wiki_read", "build_read", "release_read", "serviceendpoint_read",
-  "library_read", "packaging_read", "test_read", "project_read", "identity_read", "analytics_read",
+  "library_read", "packaging_read", "test_read", "project_read", "identity_read",
 ];
 const STATE_4 = [
-  { caps: [...TWELVE_READS, "code_write", "pr"], line: "Azure DevOps: Read (every area) · Repos" },
+  { caps: [...ELEVEN_READS, "code_write", "pr"], line: "Azure DevOps: Read (every area) · Repos" },
   { caps: ["code_read", "work_read", "work_write", "project_read"], line: "Azure DevOps: Read code · Boards · View projects & teams" },
   { caps: ["code_read", "policy_admin"], line: "Azure DevOps: Read code · Edit branch policies High risk" },
   { caps: ["work_read", "work_write", "work_admin"], line: "Azure DevOps: Boards · Delete work items & manage work tracking High risk" },
@@ -35,9 +35,9 @@ describe("ADOAccessSummary — the saved-policy summary line", () => {
   });
 
   it("folds every read to one phrase, and then leaves the reads out of each area", () => {
-    expect(adoAccessSummary(TWELVE_READS)).toEqual({ parts: ["Read (every area)"], highRisk: false });
+    expect(adoAccessSummary(ELEVEN_READS)).toEqual({ parts: ["Read (every area)"], highRisk: false });
     // Eleven reads are not every read: each area names its own.
-    expect(adoAccessSummary(TWELVE_READS.slice(1)).parts[0]).toBe("View work items");
+    expect(adoAccessSummary(ELEVEN_READS.slice(1)).parts[0]).toBe("View work items");
   });
 
   it("names an area whose everyday rows are all chosen, else each row, and never folds high risk", () => {

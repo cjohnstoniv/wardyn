@@ -134,32 +134,64 @@ func adoEntraSource(st siteConfigReader, login adoEntraLogin) api.ADOEntraSource
 				return api.ADOEntraConfig{}, false, fmt.Errorf("azure devops provider row %q: %w", row.ID, err)
 			}
 		}
-		cfg := api.ADOEntraConfig{
-			RowID:              row.ID,
-			TenantID:           row.Entra.TenantID,
-			ClientID:           row.Entra.ClientID,
-			RedirectURL:        login.redirectURL,
-			Scopes:             scopes,
-			TokenMode:          mode,
-			LoginClientID:      login.clientID,
-			LoginTenantID:      login.tenantID,
-			AllowTestEndpoints: login.allowTestEndpoints,
-		}
-		// The console's client secret belongs to the console's app registration
-		// and is sent to NO OTHER. A row naming a different application gets no
-		// secret; its sign-in is refused by name before any token request anyway.
-		if login.clientID != "" && strings.EqualFold(row.Entra.ClientID, login.clientID) {
-			cfg.ClientSecret = login.clientSecret
-		}
-		// S1 at first read: a row that creates tokens and names another tenant
-		// gets no secret either, so the one test every door applies — an empty
-		// secret is unusable for minting (api.ErrADOMintNeedsSecret) — covers
-		// every way the console could not redeem it as a confidential client.
-		if mode == types.ADOTokenModeMintedPAT && !strings.EqualFold(row.Entra.TenantID, login.tenantID) {
-			cfg.ClientSecret = ""
-		}
-		return cfg, true, nil
+		return adoEntraConfigFor(row, login, mode, scopes), true, nil
 	}
+}
+
+// adoEntraByRow fills api.Config.ADOEntraByRow: the row with this id, found
+// whether or not it is enabled or the first — what revoking a token created
+// through a row an admin has since disabled needs. A row that is gone, is not
+// Azure DevOps or has no Entra block answers found=false. The revoke uses only
+// the row's tenant, client and the console's secret, so no filter that decides
+// which row signs people in applies, and neither does its scope ceiling.
+func adoEntraByRow(st siteConfigReader, login adoEntraLogin) func(ctx context.Context, rowID string) (api.ADOEntraConfig, bool, error) {
+	return func(ctx context.Context, rowID string) (api.ADOEntraConfig, bool, error) {
+		sc, err := st.GetSiteConfig(ctx)
+		if err != nil || sc.WorkspaceProviders == nil {
+			return api.ADOEntraConfig{}, false, err
+		}
+		for _, row := range sc.WorkspaceProviders.Git {
+			if row.ID != rowID || row.Kind != types.GitProviderAzureDevOps || row.Entra == nil {
+				continue
+			}
+			mode := row.Entra.TokenMode
+			if mode == "" {
+				mode = types.ADOTokenModeBearer
+			}
+			return adoEntraConfigFor(row, login, mode, adoscope.MintScopes()), true, nil
+		}
+		return api.ADOEntraConfig{}, false, nil
+	}
+}
+
+// adoEntraConfigFor is the configuration row describes under login, with the
+// console's secret attached only where it may be redeemed.
+func adoEntraConfigFor(row types.GitProvider, login adoEntraLogin, mode types.ADOTokenMode, scopes []string) api.ADOEntraConfig {
+	cfg := api.ADOEntraConfig{
+		RowID:              row.ID,
+		TenantID:           row.Entra.TenantID,
+		ClientID:           row.Entra.ClientID,
+		RedirectURL:        login.redirectURL,
+		Scopes:             scopes,
+		TokenMode:          mode,
+		LoginClientID:      login.clientID,
+		LoginTenantID:      login.tenantID,
+		AllowTestEndpoints: login.allowTestEndpoints,
+	}
+	// The console's client secret belongs to the console's app registration
+	// and is sent to NO OTHER. A row naming a different application gets no
+	// secret; its sign-in is refused by name before any token request anyway.
+	if login.clientID != "" && strings.EqualFold(row.Entra.ClientID, login.clientID) {
+		cfg.ClientSecret = login.clientSecret
+	}
+	// S1 at first read: a row that creates tokens and names another tenant
+	// gets no secret either, so the one test every door applies — an empty
+	// secret is unusable for minting (api.ErrADOMintNeedsSecret) — covers
+	// every way the console could not redeem it as a confidential client.
+	if mode == types.ADOTokenModeMintedPAT && !strings.EqualFold(row.Entra.TenantID, login.tenantID) {
+		cfg.ClientSecret = ""
+	}
+	return cfg
 }
 
 // adoEntraRow is the first ENABLED Azure DevOps row that permits the per-person

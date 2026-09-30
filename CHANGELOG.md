@@ -177,8 +177,8 @@ none of the steps above, and its app must **not** hold `vso.pats` or `vso.pats_m
 ### Changed
 
 - **Azure DevOps capabilities: one read per area, in Azure DevOps' own names (#1409).** The single
-  `read` capability becomes twelve reads, one per Azure DevOps area, and each area's write and admin
-  rows follow Azure DevOps' own read → write → manage ladder. The catalogue now has 29 grantable
+  `read` capability becomes eleven reads, one per Azure DevOps area, and each area's write and admin
+  rows follow Azure DevOps' own read → write → manage ladder. The catalogue now has 28 grantable
   capabilities, grouped in the console as Repos, Boards, Wiki, Pipelines, Artifacts, Test Plans and
   Organization, and every row shows the scope Wardyn requests and the permission as Azure DevOps'
   Project settings shows it. High-risk rows sit inside their area with a red badge and edge.
@@ -209,11 +209,11 @@ none of the steps above, and its app must **not** hold `vso.pats` or `vso.pats_m
 
     | Stored | Becomes |
     |---|---|
-    | `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read`, `analytics_read` |
+    | `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read` |
     | `work_write` | `work_write`, `work_admin` |
     | `build_execute` | `build_execute`, `release_execute` |
     | `build_admin` | `build_admin`, `release_admin` |
-    | an empty `default_profile` | the twelve reads, written out |
+    | an empty `default_profile` | the eleven reads, written out |
     | every other id | itself |
 
   - **Upgrading:** upgrade with no Azure DevOps Entra runs in flight. A run dispatched before the

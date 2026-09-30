@@ -88,7 +88,6 @@ const CAP_THING: Record<string, string> = {
   test_read: ADO.CAP_THING_READ,
   project_read: ADO.CAP_THING_READ,
   identity_read: ADO.CAP_THING_READ,
-  analytics_read: ADO.CAP_THING_READ,
   release_execute: ADO.CAP_THING_BUILD_EXECUTE,
   code_write: ADO.CAP_THING_CODE_WRITE,
   pr: ADO.CAP_THING_PR,

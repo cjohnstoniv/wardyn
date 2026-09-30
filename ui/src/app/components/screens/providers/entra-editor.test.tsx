@@ -67,7 +67,7 @@ describe("EntraEditor", () => {
     expect(names.slice(0, 9)).toEqual(
       ["code_read", "code_write", "pr", "policy_admin", "policy_bypass", "repo_admin", "work_read", "work_write", "work_admin"].map(name),
     );
-    expect(names).toHaveLength(29);
+    expect(names).toHaveLength(28);
     expect(screen.getByTestId("entra-ceiling-policy_admin")).toHaveClass("border-l-danger");
     expect(screen.getByTestId("entra-ceiling-code_read")).not.toHaveClass("border-l-danger");
   });

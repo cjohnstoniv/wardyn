@@ -391,6 +391,10 @@ type Config struct {
 	// A function rather than a value so the provider row stays the single
 	// source of truth and the sign-in never acts on a cached copy of it.
 	ADOEntra ADOEntraSource
+	// ADOEntraByRow resolves the row with this id whether or not it is enabled or
+	// first, so a token created through a row an admin has since disabled can
+	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
+	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
