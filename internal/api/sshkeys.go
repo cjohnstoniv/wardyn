@@ -75,6 +75,9 @@ const sshKeyFeatureRefusal = "SSH keys aren't available to you. Ask your admin."
 func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// A body held across session revocation must not create a newer credential.
 	authorizedAt := s.cfg.Now().UTC()
+	if s.refuseDelegated(w, r) {
+		return
+	}
 	// May this person add a key at all (capFeature). Before the body is read,
 	// so a refused caller learns nothing about their key's validity. Member
 	// mode is not refused here — it CLAMPS the stored role below, same as any

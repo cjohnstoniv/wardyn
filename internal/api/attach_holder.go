@@ -27,6 +27,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -76,6 +77,10 @@ type attachHolder struct {
 	// a person typing is presence, and a paused run is thawed first
 	// (run_pause.go). An observer's input is dropped, so it never counts.
 	onInput func()
+	// via is the portal a delegated attach ticket was minted through (#1142),
+	// nil otherwise: a promotion is written long after the attach, on the
+	// daemon's context, so the holder carries it to session.promote (#1234).
+	via *types.DelegationVia
 
 	// displace ends this holder's session with a reason the DISPLACED CLIENT can
 	// read, and is deliberately a closure rather than the bare context.CancelFunc
@@ -182,6 +187,9 @@ const attachWriteChunk = 4 * 1024
 // ponytail: chunk loop, no queue and no writer goroutine — the upgrade path is
 // that exec teardown, if one chunk is ever one too many.
 func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
+	if h == nil {
+		return nil
+	}
 	if h.onInput != nil && len(p) > 0 && h.canWrite() {
 		h.onInput()
 	}
@@ -425,6 +433,9 @@ func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder
 		ctx := s.cfg.BaseCtx
 		if ctx == nil {
 			ctx = context.Background()
+		}
+		if promoted.via != nil {
+			ctx = audit.WithDelegation(ctx, *promoted.via)
 		}
 		s.recordAudit(ctx, s.auditEvent(&runID, promoted.actorType, promoted.principal, "session.promote",
 			runID.String(), "success", mustJSON(map[string]any{

@@ -64,6 +64,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
   row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
   CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
+- **Reviving a live run is bounded to once a minute (#1005).** Each revive of a running run, through
+  `POST /runs/{id}/revive` or the admin "Restart with current limits", removes and recreates its
+  proxy; a second one within a minute of the last that reached the proxy is refused `429`
+  `revive_live_too_soon`. The bound is kept per `wardynd` process, so each replica allows one a
+  minute. A revive of a lost run is never bounded.
 
 ### Fixed
 
@@ -109,6 +114,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   for a minute (a sandbox too big to walk in time is not walked again on every poll), and the idle
   reading waits out a walk in progress and holds off a new one while it samples, so it reads the
   agent alone.
+- **Every row of a portal's attach and UI-gateway session names the portal (#1234).** A session
+  entered with an attach ticket minted through a portal wrote `data.via` on its entry rows only;
+  `session.promote` and the UI gateway's `ui.start`, `ui.open`, `ui.close` and re-check refusal rows
+  now carry it too. `PUT /secrets/{name}` and `POST /me/ssh-keys` also refuse a delegated request
+  themselves (`403` `delegation_scope`), not only through the delegation allow-list.
 
 ## [0.8.1] — 2026-09-29
 

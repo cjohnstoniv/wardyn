@@ -120,6 +120,11 @@
     "sentence": "delegationRefusal"
   },
   {
+    "reason": "delegation_scope",
+    "target": "r.URL.Path",
+    "sentence": "delegationRefusal"
+  },
+  {
     "reason": "governance_profile",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), name, level, bound)"

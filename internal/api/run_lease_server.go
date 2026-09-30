@@ -33,4 +33,8 @@ type runLeaseState struct {
 	// in this process (run_revive.go), so two revives of one run cannot race
 	// each other's remove-and-create of the same sidecar.
 	reviving sync.Map
+	// liveRevived holds when this process last started replacing each live
+	// run's proxy (run_revive.go, #1005), so a revive of a live run is bounded
+	// to one per reviveLiveEvery. An entry drops itself once it has lapsed.
+	liveRevived sync.Map
 }
