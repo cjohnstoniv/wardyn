@@ -45,7 +45,8 @@ func (s *Server) mountModelProviderRoutes(r, operatorOnly chi.Router) {
 // door on r — as one line in routes(), which sits at its funlen ratchet.
 func (s *Server) mountProviderRoutes(r, operatorOnly chi.Router) {
 	s.mountWorkspaceProviderRoutes(operatorOnly)
-	s.mountADOOrgCheckRoute(operatorOnly) // ado_pat_orgcheck.go
+	s.mountADOOrgCheckRoute(operatorOnly)   // ado_pat_orgcheck.go
+	s.mountADOPATRefusalRoute(operatorOnly) // ado_pat_refusal.go
 	s.mountAgentProviderRoutes(operatorOnly)
 	s.mountModelProviderRoutes(r, operatorOnly)
 }

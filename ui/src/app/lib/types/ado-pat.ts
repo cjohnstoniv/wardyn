@@ -5,7 +5,8 @@
 
 // The wire shapes the per-person Azure DevOps token console reads (#1428,
 // #1430), each mirroring its Go struct: ADOPATAccess and adoRunToken
-// (internal/api/ado_pat_console.go), adoOrgCheckResult (ado_pat_orgcheck.go).
+// (internal/api/ado_pat_console.go), adoOrgCheckResult (ado_pat_orgcheck.go),
+// adoPATRefusal (ado_pat_refusal.go).
 // SCMAccess's own token_mode, expires_on, max_days, token_scopes and git_only
 // are in setup.ts. wire-parity.test.ts holds each of these to its Go struct.
 import type { SCMAccess } from "./setup";
@@ -60,6 +61,15 @@ export interface ADOOrgCheck {
   lifespan_error?: string;
   /** Canaries Wardyn created and could not revoke. */
   unrevoked?: string[];
+}
+
+/** GET /workspace-providers/git/{id}/ado-pat-refusal's answer (internal/api
+ *  adoPATRefusal): the newest launch in the last seven days the organisation's
+ *  token-creation policy refused, as the refused person's email and the time.
+ *  Admin only; 204 (no body) when there is none. */
+export interface ADOPATRefusal {
+  person: string;
+  at: string;
 }
 
 /** What the own-token dialog sends: PUT /me/scm/azure-devops/token's body. */

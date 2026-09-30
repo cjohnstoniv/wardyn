@@ -209,6 +209,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
     // #1428: the per-person token console's reads.
     ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
+    ["adoPATRefusal", "internal/api/ado_pat_refusal.go", "ADOPATRefusal", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoRunToken", "internal/api/ado_pat_console.go", "ADORunToken", "ui/src/app/lib/types/ado-pat.ts"],
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
