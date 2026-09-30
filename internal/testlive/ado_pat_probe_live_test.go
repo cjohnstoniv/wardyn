@@ -23,6 +23,10 @@ import (
 	"time"
 )
 
+// envADOPATProbePATScope names the scopes the minted PAT is created with,
+// separated by a single space.
+const envADOPATProbePATScope = "WARDYN_LIVE_ADO_PAT_PROBE_PAT_SCOPE"
+
 // TestLiveADOPATMintProbe (LL2c) re-measures the one fact the minted_pat token
 // mode was dropped on: can an application that is NOT a Microsoft first-party
 // client mint a personal access token through the token lifecycle API with a
@@ -33,10 +37,6 @@ import (
 // It is a probe, not a regression test: it passes whichever way Azure DevOps
 // answers and logs the verdict. It fails only when it cannot get an answer. A
 // PAT that does get minted is revoked before the test returns.
-// envADOPATProbePATScope names the scopes the minted PAT is created with,
-// separated by a single space.
-const envADOPATProbePATScope = "WARDYN_LIVE_ADO_PAT_PROBE_PAT_SCOPE"
-
 func TestLiveADOPATMintProbe(t *testing.T) {
 	Require(t, EnvADOPATProbe, EnvADOPATProbeTenant, EnvADOPATProbeClient, EnvADOOrg)
 	tenant, clientID, org := os.Getenv(EnvADOPATProbeTenant), os.Getenv(EnvADOPATProbeClient), os.Getenv(EnvADOOrg)
@@ -70,6 +70,15 @@ func TestLiveADOPATMintProbe(t *testing.T) {
 	}
 	_ = json.Unmarshal(raw, &created)
 	if status == http.StatusOK && created.PatToken.Token != "" {
+		// Revoke on every exit, including a failed use call: a probe must never
+		// leave a live PAT behind.
+		revoked := 0
+		defer func() {
+			if revoked == 0 {
+				st, _, _ := probeCall(context.Background(), t, token, http.MethodDelete, base+"&authorizationId="+url.QueryEscape(created.PatToken.AuthorizationID), "")
+				Logf(t, "revoke after an early exit: HTTP %d", st)
+			}
+		}()
 		useReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://dev.azure.com/"+url.PathEscape(org)+"/_apis/projects?api-version=7.1", nil)
 		if err != nil {
 			Fatalf(t, "use: %v", err)
@@ -82,6 +91,7 @@ func TestLiveADOPATMintProbe(t *testing.T) {
 		useResp.Body.Close()
 		Logf(t, "use: HTTP %d", useResp.StatusCode)
 		st, _, _ := probeCall(ctx, t, token, http.MethodDelete, base+"&authorizationId="+url.QueryEscape(created.PatToken.AuthorizationID), "")
+		revoked = st
 		if st != http.StatusOK && st != http.StatusNoContent {
 			Fatalf(t, "VERDICT: MINT WORKS, REVOKE FAILED (HTTP %d) — revoke it by hand under Personal access tokens", st)
 		}
