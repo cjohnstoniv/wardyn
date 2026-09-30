@@ -28,6 +28,7 @@ const (
 	reasonReviveUnsupportedRunner           = "revive_unsupported_runner"
 	reasonReviveBulkCannotStartAgent        = "revive_bulk_cannot_start_agent"        // a bulk restart cannot start a stopped agent; only the run's own page can
 	reasonReviveAlreadyInProgress           = "revive_already_in_progress"            // another revive of this run is already running
+	reasonReviveLiveTooSoon                 = "revive_live_too_soon"                  // a live run's proxy was replaced less than reviveLiveEvery ago
 	reasonReviveMintIdentityFailed          = "revive_mint_identity_failed"           // minting the fresh run token failed
 	reasonReviveEncodeConfigFailed          = "revive_encode_config_failed"           // the rewritten proxy config would not marshal to JSON
 	reasonRevivePullImageFailed             = "revive_pull_image_failed"              // the proxy image could not be pulled

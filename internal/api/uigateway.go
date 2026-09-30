@@ -62,6 +62,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -369,7 +370,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
 		Principal: ta.principal, Role: ta.role,
-		Expires: now.Add(ttl).Unix(), IssuedAt: now.Unix(),
+		Expires: now.Add(ttl).Unix(), IssuedAt: now.Unix(), Via: ta.via,
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -438,9 +439,12 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	if s.shouldTouch(runID, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
-	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(r.Context(), runID, types.ActorHuman, sess.Principal, "presence")
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
+	if sess.Via != nil {
+		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
+	}
+	// The same human is presence for the pause, and thaws a paused run.
+	_ = s.markPresent(ctx, runID, types.ActorHuman, sess.Principal, "presence")
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
 	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
 }
@@ -788,13 +792,13 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	go s.attachKeepalive(keepCtx, sess.Run)
 
 	opened := s.cfg.Now()
-	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
+	s.auditUISession(sess, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 		map[string]any{"app": sess.App, "port": sess.Port})
 	conn := newExecConn(execSess, run.SandboxRef+":"+strconv.Itoa(sess.Port))
 	return &uiConn{execConn: conn, closeFn: func() {
 		stopKeepalive()
 		release()
-		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
+		s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
 	}}, nil
 }
@@ -900,7 +904,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		return nil
 	case 5:
 		s.markUIAppReady(key)
-		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.start", sess.App, "success",
+		s.auditUISession(sess, "ui.start", sess.App, "success",
 			map[string]any{"app": sess.App, "port": sess.Port, "launcher": launcher})
 		return nil
 	case 3:
@@ -909,7 +913,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherMissing,
 			"no UI launcher in this image: "+launcher+" not found")
 	case 4:
-		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.start", sess.App, "failure",
+		s.auditUISession(sess, "ui.start", sess.App, "failure",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": "did not listen in time"})
 		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherNotListening,
 			fmt.Sprintf("%s started but nothing was listening on 127.0.0.1:%d after %ds", launcher, sess.Port, uiEnsureWaitSecs))
