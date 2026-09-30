@@ -9,10 +9,12 @@
 // screen's one whole-document Save is still the only write.
 //
 // Grouping and the High-risk flag come from lib/ado-capabilities.ts; every
-// string from workspace-providers-copy.ts.
+// string from workspace-providers-copy.ts. One group per Azure DevOps area; a
+// High-risk row sits inside its area with the badge and a red left edge (the
+// approved per-area mock).
 import { useId, type ReactNode } from "react";
 import type { ADOEntraConfig, GitProvider } from "../../../lib/api/providers";
-import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../../lib/ado-capabilities";
+import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, ADO_DEFAULT_PROFILE } from "../../../lib/ado-capabilities";
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../lib/workspace-providers-copy";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
@@ -21,10 +23,10 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 // tokens, so cn() drops them whenever a text colour class is merged in.
 import { clsx } from "clsx";
 
-// An empty default_profile reads as ["read"] on the server
+// An empty default_profile reads as ADO_DEFAULT_PROFILE on the server
 // (ADOEntraConfig.Profile), so the checklist shows that.
 function effectiveDefault(cfg: ADOEntraConfig): string[] {
-  return cfg.default_profile && cfg.default_profile.length > 0 ? cfg.default_profile : ["read"];
+  return cfg.default_profile && cfg.default_profile.length > 0 ? cfg.default_profile : [...ADO_DEFAULT_PROFILE];
 }
 
 // The defaults that sit outside the ceiling — the one thing the server refuses
@@ -46,9 +48,14 @@ function toggled(list: string[], cap: string, on: boolean): string[] {
 
 const nameOf = (cap: string) => ADO_CAP_COPY[cap]?.name ?? cap;
 
-function RiskBadge() {
+function RiskBadge({ className = "ml-1.5" }: { className?: string }) {
   return (
-    <span className="ml-1.5 inline-flex items-center rounded-full bg-danger-subtle px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-danger">
+    <span
+      className={clsx(
+        "inline-flex items-center rounded-full bg-danger-subtle px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-danger",
+        className,
+      )}
+    >
       {E.HIGH_RISK_BADGE}
     </span>
   );
@@ -66,6 +73,7 @@ function CapRow({
   bad,
   tip,
   consequence,
+  adoLine,
   onChange,
 }: {
   id: string;
@@ -76,6 +84,7 @@ function CapRow({
   bad?: boolean;
   tip?: string;
   consequence?: boolean;
+  adoLine?: boolean;
   onChange: (on: boolean) => void;
 }) {
   const info = ADO_CAPABILITIES.find((c) => c.cap === cap);
@@ -84,7 +93,12 @@ function CapRow({
   const domId = `${useId()}${id}`;
   return (
     <div
-      className={clsx("grid grid-cols-[20px_1fr] gap-2 py-1.5", locked && "cursor-not-allowed", bad && "rounded-md bg-danger-subtle")}
+      className={clsx(
+        "grid grid-cols-[20px_1fr] gap-2 py-1.5",
+        info?.highRisk && "-ml-3 border-l-[3px] border-l-danger pl-[9px]",
+        locked && "cursor-not-allowed",
+        bad && "rounded-md bg-danger-subtle",
+      )}
       title={tip}
       data-testid={id}
     >
@@ -117,6 +131,11 @@ function CapRow({
         {consequence && ADO_CAP_COPY[cap] && (
           <span className="block text-meta text-muted-foreground">{ADO_CAP_COPY[cap].consequence}</span>
         )}
+        {adoLine && ADO_CAP_COPY[cap] && (
+          <span className="mt-0.5 block font-mono text-[10.5px] text-muted-foreground" data-testid={`${id}-ado`}>
+            {ADO_CAP_COPY[cap].ado}
+          </span>
+        )}
       </label>
     </div>
   );
@@ -124,34 +143,38 @@ function CapRow({
 
 function Groups({
   label,
-  ceilingView,
+  withLead,
   children,
 }: {
   label: string;
-  ceilingView: boolean;
+  withLead: boolean;
   children: (groupId: string) => ReactNode;
 }) {
   return (
     <div role="group" aria-label={label} className="mt-2 space-y-2.5">
       {ADO_CAPABILITY_GROUPS.map((g) => {
-        const risk = g.id === "high_risk";
         const copy = ADO_GROUP_COPY[g.id];
         return (
-          <div key={g.id} className={clsx("overflow-hidden rounded-lg border", risk ? "border-danger" : "border-border")}>
-            <div className={clsx("flex flex-wrap items-baseline gap-2 px-3 py-2", risk ? "bg-danger-subtle" : "bg-muted/40")}>
-              <span className={clsx("text-body font-semibold", risk && "text-danger")}>
-                {ceilingView ? copy.name : risk ? E.HIGH_RISK_BADGE : copy.name}
-              </span>
-              {ceilingView && <span className={clsx("text-meta", risk ? "text-danger" : "text-muted-foreground")}>{copy.lead}</span>}
+          <div key={g.id} className="overflow-hidden rounded-lg border border-border">
+            <div className="flex flex-wrap items-baseline gap-2 bg-muted/40 px-3 py-2">
+              <span className="text-body font-semibold">{copy.name}</span>
+              {withLead && <span className="text-meta text-muted-foreground">{copy.lead}</span>}
             </div>
-            {ceilingView && risk && (
-              <p className="border-t border-dashed border-danger bg-danger-subtle px-3 py-1.5 text-meta text-danger">{E.HIGH_RISK_WARN}</p>
-            )}
             <div className="divide-y divide-border px-3">{children(g.id)}</div>
           </div>
         );
       })}
     </div>
+  );
+}
+
+// The High-risk legend: the badge, then what it means.
+function RiskLegend() {
+  return (
+    <p className="mt-2.5 flex flex-wrap items-baseline gap-2 rounded-lg bg-danger-subtle px-3 py-2 text-meta text-danger">
+      <RiskBadge className="" />
+      <span>{E.HIGH_RISK_WARN}</span>
+    </p>
   );
 }
 
@@ -209,8 +232,14 @@ export function EntraEditor({
 
       <div>
         <h4 className="text-sm font-medium text-foreground">{E.CEILING_TITLE}</h4>
-        {operator && <p className="mt-0.5 text-body text-muted-foreground">{E.CEILING_LEAD}</p>}
-        <Groups label={E.CEILING_TITLE} ceilingView={operator}>
+        {operator && (
+          <>
+            <p className="mt-0.5 text-body text-muted-foreground">{E.CEILING_LEAD}</p>
+            <p className="mt-1 text-body text-muted-foreground">{E.CEILING_LEAD_ADO}</p>
+            <RiskLegend />
+          </>
+        )}
+        <Groups label={E.CEILING_TITLE} withLead={operator}>
           {(groupId) =>
             inGroup(groupId).map(({ cap }) => (
               <CapRow
@@ -220,6 +249,7 @@ export function EntraEditor({
                 checked={ceiling.includes(cap)}
                 disabled={!operator}
                 consequence={operator}
+                adoLine
                 onChange={(on) => set({ capability_ceiling: toggled(ceiling, cap, on) })}
               />
             ))
@@ -229,8 +259,13 @@ export function EntraEditor({
 
       <div>
         <h4 className="text-sm font-medium text-foreground">{E.DEFAULT_TITLE}</h4>
-        {operator && <p className="mt-0.5 text-body text-muted-foreground">{E.DEFAULT_LEAD}</p>}
-        <Groups label={E.DEFAULT_TITLE} ceilingView={false}>
+        {operator && (
+          <>
+            <p className="mt-0.5 text-body text-muted-foreground">{E.DEFAULT_LEAD}</p>
+            <p className="mt-1.5 text-meta text-muted-foreground">{E.DEFAULT_EMPTY_HINT}</p>
+          </>
+        )}
+        <Groups label={E.DEFAULT_TITLE} withLead={false}>
           {(groupId) =>
             inGroup(groupId).map(({ cap, highRisk }) => {
               const onCeiling = ceiling.includes(cap);

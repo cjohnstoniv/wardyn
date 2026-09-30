@@ -54,7 +54,7 @@ func TestADOGate_LargeBodyOnAPathOnlyRouteStreamsThrough(t *testing.T) {
 // End to end through the MITM: the 1 MiB attachment is forwarded under
 // brokered:ado (the fake has no wiki route, so what answers is its 404).
 func TestADOGate_LargeWikiAttachmentIsForwarded(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapWikiWrite)
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapWikiWrite)
 	rec := h.do(t, http.MethodPut, "/acme/proj/_apis/wiki/wikis/w/attachments?name=a.bin", strings.Repeat("x", 1<<20), nil)
 	if rec.Code == http.StatusForbidden {
 		t.Fatalf("a 1 MiB wiki attachment was refused: %s", rec.Body.String())
@@ -83,7 +83,7 @@ func TestADOGate_DuplicateKeyOnABodyRouteIsRefused(t *testing.T) {
 // One ref rule across both doors: a REST push whose ref walks out of the run
 // namespace is refused, not read as a run-namespace code_write.
 func TestADOGate_RESTRefTraversalOutOfTheRunNamespaceIsRefused(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `../../main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
 	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil), "could not tell")
 }
@@ -97,7 +97,7 @@ func TestADOGate_ChunkedBypassCompletionIsPeeked(t *testing.T) {
 		strings.NewReader(`{"status":"completed","completionOptions":{"bypassPolicy":true}}`))
 	r.ContentLength = -1
 	r.Header.Del("Content-Length")
-	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead, adoscope.CapPR}}
+	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}}
 	if msg, held := adoCheck(r, adoHost, grant, refuseEveryRef); held == nil || held.Capability != adoscope.CapPolicyBypass {
 		t.Fatalf("adoCheck = %q, %v; want a hold naming %s", msg, held, adoscope.CapPolicyBypass)
 	}

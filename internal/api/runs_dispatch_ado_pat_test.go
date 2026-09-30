@@ -444,7 +444,7 @@ func TestMintedPAT_WideningInstallsAUnionToken(t *testing.T) {
 	}
 	ask.Set("approval", id.String())
 	union := fx.ok(t, "dev.azure.com", ask)
-	wantScope, _ := adoscope.PATScope([]adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR})
+	wantScope, _ := adoscope.PATScope([]adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR})
 	if union.JTI == first.JTI || fx.pats.createCount() != 2 || fx.pats.creates[1].Scope != wantScope ||
 		!slices.Contains(union.Capabilities, string(adoscope.CapPR)) {
 		t.Fatalf("union = %+v creates %d scope %q, want a new token scoped %q", union, fx.pats.createCount(),
@@ -576,7 +576,7 @@ func TestMintedPAT_EveryEndPathRevokes(t *testing.T) {
 			}
 		}, adoPATRevokeSweep},
 		"drift": {func(fx *adoPATFixture) {
-			fx.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead}
+			fx.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead}
 			if w, _ := fx.resolve(t, "dev.azure.com", nil); w.Code != http.StatusForbidden {
 				t.Fatalf("drifted resolve: status %d, want 403", w.Code)
 			}

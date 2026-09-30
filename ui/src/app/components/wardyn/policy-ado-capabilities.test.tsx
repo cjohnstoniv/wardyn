@@ -19,8 +19,11 @@ const BASE: RunPolicySpec = {
   min_confinement_class: "CC2",
 };
 
-// The mock's row (Member · State 4): read, contribute and policy_admin only.
-const CEILING = ["read", "code_write", "pr", "policy_admin"];
+// The per-area packet's row (Member · State 3), as its locks show it.
+const CEILING = [
+  "code_read", "code_write", "pr", "policy_admin", "work_read", "work_write", "wiki_read",
+  "build_read", "packaging_read", "project_read",
+];
 
 function Harness({ initial, seen, ceiling }: { initial: RunPolicySpec; seen: RunPolicySpec[]; ceiling?: string[] }) {
   const [spec, setSpec] = React.useState(initial);
@@ -39,39 +42,42 @@ function Harness({ initial, seen, ceiling }: { initial: RunPolicySpec; seen: Run
 const box = (name: string) => screen.getByRole("checkbox", { name: new RegExp(`^${name}`) });
 
 describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” section", () => {
-  it("shows the five groups, in order, with the section lead", () => {
+  it("shows the seven Azure DevOps areas, in order, with the section lead and the High-risk legend", () => {
     render(<Harness initial={BASE} seen={[]} />);
     expect(screen.getByText(ADO_ACCESS.SECTION_TITLE)).toBeInTheDocument();
     expect(screen.getByText(ADO_ACCESS.SECTION_LEAD)).toBeInTheDocument();
     expect(screen.getAllByRole("group").map((g) => g.querySelector("legend")?.textContent)).toEqual([
-      "Read",
-      "Contribute",
-      "Work tracking",
-      "Pipelines & packages",
-      "High risk",
+      "Repos",
+      "Boards",
+      "Wiki",
+      "Pipelines",
+      "Artifacts",
+      "Test Plans",
+      "Organization",
     ]);
-    expect(within(screen.getByRole("group", { name: "Contribute" })).getAllByRole("checkbox")).toHaveLength(2);
+    expect(within(screen.getByRole("group", { name: "Boards" })).getAllByRole("checkbox")).toHaveLength(3);
+    const legend = screen.getByText(ADO_ACCESS.HIGH_RISK_WARN_MEMBER).closest("p")!;
+    expect(within(legend).getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeInTheDocument();
   });
 
-  it("badges every high-risk capability and warns once on its group", () => {
+  it("keeps each High-risk row inside its area, with the badge and the red left edge", () => {
     render(<Harness initial={BASE} seen={[]} />);
-    const risky = screen.getByRole("group", { name: "High risk" });
     const n = ADO_CAPABILITIES.filter((c) => c.highRisk).length;
-    // The badge sits inside each capability's label; the group's own heading
-    // says "High risk" too, outside any label.
-    const badges = (scope: HTMLElement) =>
-      within(scope).getAllByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE).filter((el) => el.closest("label"));
-    expect(badges(risky)).toHaveLength(n);
-    expect(within(risky).getByText(ADO_ACCESS.HIGH_RISK_WARN_MEMBER)).toBeInTheDocument();
-    expect(badges(document.body)).toHaveLength(n);
+    const badges = screen.getAllByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE).filter((el) => el.closest("label"));
+    expect(badges).toHaveLength(n);
+    const rows = document.querySelectorAll("li[data-high-risk]");
+    expect(rows).toHaveLength(n);
+    for (const row of rows) expect(row).toHaveClass("border-l-danger");
+    expect(box("Edit branch policies").closest("fieldset")).toBe(screen.getByRole("group", { name: "Repos" }));
+    expect(box("Read code").closest("li")).not.toHaveClass("border-l-danger");
   });
 
   it("writes the checked set in catalogue order, and drops the key when nothing is checked", async () => {
     const seen: RunPolicySpec[] = [];
     render(<Harness initial={BASE} seen={seen} ceiling={CEILING} />);
-    const picks = ["Open pull requests", "Read", "Push to the run's own branch"];
+    const picks = ["View projects & teams", "Contribute to pull requests", "Read code", "Push to the run's own branch"];
     for (const name of picks) await userEvent.click(box(name));
-    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["read", "code_write", "pr"]);
+    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["code_read", "code_write", "pr", "project_read"]);
     for (const name of picks) await userEvent.click(box(name));
     expect(seen.at(-1)).not.toHaveProperty("azure_devops_capabilities");
     expect(seen.at(-1)).toEqual(BASE);
@@ -95,22 +101,22 @@ describe("ADOCapabilitiesSection — the mock's “Azure DevOps access” sectio
     await userEvent.click(within(row).getByText("Manage service connections"));
     expect(seen).toHaveLength(0);
     // What the ceiling grants is not locked.
-    expect(box("Change branch policies")).toBeEnabled();
-    expect(box("Change branch policies").closest("li")).not.toHaveAttribute("title");
+    expect(box("Edit branch policies")).toBeEnabled();
+    expect(box("Edit branch policies").closest("li")).not.toHaveAttribute("title");
     // Locked count = everything off the ceiling.
     expect(screen.getAllByTitle(ADO_ACCESS.LOCKED)).toHaveLength(ADO_CAPABILITIES.length - CEILING.length);
   });
 
   it("lets a stored policy's off-ceiling capability be taken out, never put back", async () => {
     const seen: RunPolicySpec[] = [];
-    render(<Harness initial={{ ...BASE, azure_devops_capabilities: ["read", "wiki_write"] }} seen={seen} ceiling={CEILING} />);
-    const wiki = box("Wiki");
+    render(<Harness initial={{ ...BASE, azure_devops_capabilities: ["code_read", "wiki_write"] }} seen={seen} ceiling={CEILING} />);
+    const wiki = box("Edit wikis");
     expect(wiki).toBeEnabled();
     expect(wiki).toBeChecked();
     expect(wiki.closest("li")).toHaveAttribute("title", ADO_ACCESS.LOCKED);
     await userEvent.click(wiki);
-    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["read"]);
-    expect(box("Wiki")).toBeDisabled();
+    expect(seen.at(-1)?.azure_devops_capabilities).toEqual(["code_read"]);
+    expect(box("Edit wikis")).toBeDisabled();
   });
 
   it("locks nothing when the ceiling is unknown", () => {

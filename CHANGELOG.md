@@ -81,6 +81,50 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Azure DevOps capabilities: one read per area, in Azure DevOps' own names (#1409).** The single
+  `read` capability becomes twelve reads, one per Azure DevOps area, and each area's write and admin
+  rows follow Azure DevOps' own read → write → manage ladder. The catalogue now has 29 grantable
+  capabilities, grouped in the console as Repos, Boards, Wiki, Pipelines, Artifacts, Test Plans and
+  Organization, and every row shows the scope Wardyn requests and the permission as Azure DevOps'
+  Project settings shows it. High-risk rows sit inside their area with a red badge and edge.
+  - A read a run does not hold is held for approval like any write: a run holding only `code_read`
+    that fetches a work item is asked for `work_read`.
+  - People consent only to the scopes of the rows on a ceiling, and a row whose `default_profile` is
+    empty now starts from `code_read` and `project_read`. A ceiling no longer has to hold a read.
+  - Azure DevOps' API discovery (`OPTIONS` location discovery, `connectionData`, `resourceAreas`) is
+    allowed to any run holding a capability and needs none of its own.
+  - Deleting or destroying work items and changing areas, iterations, fields and tags is
+    `work_admin`, split from `work_write`. Creating, deploying and deleting classic releases is
+    `release_execute`, split from `build_execute`, and editing release pipelines or answering release
+    approvals is `release_admin`, split from `build_admin`. A work-item `$batch` needs the widest
+    capability among its operations, and one whose method cannot be read is refused.
+  - Deleting a package and creating, changing or deleting a feed is `packaging_manage`
+    (`vso.packaging_manage`). Azure DevOps refused these under the `vso.packaging_write` scope
+    Wardyn requested before, so they never worked.
+  - Only the three documented search resources classify: code, work item and wiki search. Any other
+    `almsearch` resource is refused as an unclassified read.
+  - **This is a clean break.** Migration `0101_ado_capability_split` rewrites every stored list to
+    its exact equivalent, as in the table below: provider ceilings and default profiles, saved
+    policies, governance profiles and launch presets. The scopes each list requests do not change,
+    so nobody consents again. After it, the old `read` id is a `400` at every write door
+    (`PUT /workspace-providers`; policies, inline policies, presets and governance profiles with
+    reason `ado_capability_unknown`), and the daemon refuses to boot on a `WARDYN_DEFAULT_POLICY`
+    file that names it. The migration cancels every pending Azure DevOps capability approval, with
+    one `approval.cancel` audit row per run. Pending consent requests name scopes and stay pending.
+
+    | Stored | Becomes |
+    |---|---|
+    | `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read`, `analytics_read` |
+    | `work_write` | `work_write`, `work_admin` |
+    | `build_execute` | `build_execute`, `release_execute` |
+    | `build_admin` | `build_admin`, `release_admin` |
+    | an empty `default_profile` | the twelve reads, written out |
+    | every other id | itself |
+
+  - **Upgrading:** upgrade with no Azure DevOps Entra runs in flight. A run dispatched before the
+    upgrade holds the old ids: its next Azure DevOps request is refused (`scope_changed`, drift
+    `capability_ceiling`) and it must be relaunched. Update any `WARDYN_DEFAULT_POLICY` file that
+    names `read` before upgrading.
 - **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
   to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
   (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
