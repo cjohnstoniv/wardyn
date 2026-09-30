@@ -161,8 +161,8 @@ var awsAccountID = regexp.MustCompile(`^\d{12}$`)
 // cmd/wardynd's bedrockModelAccountWarning).
 //
 // "" is a valid, COMMON ANSWER, and everything downstream must treat it as SKIP
-// rather than as a failure: WARDYN_BEDROCK_MODEL is passed verbatim
-// (boot_flags.go) and is most often a bare cross-region inference profile id
+// rather than as a failure: a provider's model is passed verbatim and is most
+// often a bare cross-region inference profile id
 // ("us.anthropic.claude-…"), which carries no account. Failing closed on that
 // would take capture away from every non-ARN deployment on upgrade, to enforce
 // a check there is no data for.

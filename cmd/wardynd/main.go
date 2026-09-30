@@ -136,8 +136,8 @@ func run() error {
 
 	// Parse the agent images map at boot so a malformed value fails closed
 	// immediately rather than silently using the convention for all agents.
-	// Extracted into parseAgentImages (boot_gateway.go) for the same reason
-	// the endpoint knobs above are: run()'s cyclomatic budget is full.
+	// Extracted into parseAgentImages (boot_deps.go): run()'s cyclomatic
+	// budget is full.
 	agentImages, err := parseAgentImages(*f.agentImagesJSON)
 	if err != nil {
 		return err
@@ -313,25 +313,14 @@ func run() error {
 		return err
 	}
 
-	// Internal model gateway (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL):
-	// validated once at boot, fail closed on a malformed value — same posture
-	// class as WARDYN_TRUSTED_CA_FILE above. Warn (never refuse: the default
-	// policy is not always the ceiling every run inherits) when the default
-	// policy's allowed_domains does not list a configured gateway's host — the
-	// operator must add it, or every run under that policy 404s on its first
-	// model call once its api_key grant points at the gateway.
-	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(bootCtx, f, runnerTarget)
+	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
+	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
 	if err != nil {
 		return err
 	}
-	warnMissingGatewayHosts(defaultPolicy, llmGateways)
 
-	// WARDYN_DEMO_VIDEO_BASE_URL: same fail-closed-at-boot posture as the
-	// model gateways above, but answers a different question (where the
-	// Getting Started demo episodes stream from, not where a model call
-	// goes) — so it is validated on its own rather than folded into
-	// validateModelEndpoints, whose own test fixture is about model
-	// endpoints only.
+	// WARDYN_DEMO_VIDEO_BASE_URL: validated once at boot, fail closed on a
+	// malformed value.
 	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
 	if err != nil {
 		return err
@@ -341,31 +330,10 @@ func run() error {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 
-	// SHARED-SUBSCRIPTION posture. Decided here because its three inputs only
-	// converge at this point: runnerTarget comes from buildRunnerFromFlags above,
-	// lm.enabled from resolveLocalMode, and the issuer from the flags. Computed
-	// BEFORE buildOptionalFeatures so the credential providers are never even
-	// constructed on a deployment that may not share one operator's subscription.
-	subPostureOK, subPostureReason := subscriptionInjectPosture(
-		runnerTarget, strings.TrimSpace(*f.oidcIssuer) != "", lm.enabled, *f.allowSharedSubscription)
-	if !subPostureOK {
-		slog.Info("wardynd: shared subscription credential injection is DISABLED for this deployment posture",
-			slog.String("reason", subPostureReason),
-		)
-	} else if !lm.enabled {
-		// Reached only via WARDYN_ALLOW_SHARED_SUBSCRIPTION. Warn at the same volume
-		// as the demo-admin-token warning: the operator has waived a refusal that
-		// exists because of a third party's terms, not merely Wardyn's own policy.
-		slog.Warn("wardynd: WARDYN_ALLOW_SHARED_SUBSCRIPTION is set — ONE operator's Anthropic subscription will be injected into runs on a daemon that is not -local-mode. "+
-			"The harness vendor's terms require each end user to authenticate with their own credential; you are asserting this box is single-user. Demo boxes only.",
-			slog.String("operator", lm.operator),
-		)
-	}
-
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
-	// subscription/managed LLM credential providers, advisory AI scan
-	// fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
-	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, bootKeys, posture.secureCookies, subPostureOK)
+	// advisory AI scan fallback) — each nil/off when unconfigured; see
+	// buildOptionalFeatures.
+	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, bootKeys, posture.secureCookies)
 	if err != nil {
 		return err
 	}
@@ -384,13 +352,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// The SiteConfig half of warnMissingGatewayHosts above: that call (line
-	// ~305) runs before st exists (SiteConfig lives in Postgres), so its
-	// sibling — no upstream_proxy_no_proxy entry covering a configured
-	// gateway host — reads st here instead, against the same llmGateways.
-	// See warnUpstreamProxyNoBypass.
-	warnUpstreamProxyNoBypass(bootCtx, st, llmGateways)
-
 	srv := api.New(api.Config{
 		Store:     st,
 		Identity:  idp,
@@ -409,30 +370,26 @@ func run() error {
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:                auditSpool,
-		AuditDrainRecorder:        auditDrainRec,
-		AuditSinkDrops:            sinkDropsReporter(fan),
-		AuditCoalesceWindow:       *f.auditCoalesceWindow,
-		Runner:                    run,
-		AdminToken:                *f.adminToken,
-		LocalMode:                 lm.enabled,
-		MemberMode:                *f.memberMode,
-		SSOOnly:                   *f.ssoOnly,
-		SubscriptionPostureOK:     subPostureOK,
-		SubscriptionPostureReason: subPostureReason,
-		LocalOperator:             lm.operator,
-		TrustDomain:               *f.trustDomain,
-		DefaultPolicy:             defaultPolicy,
-		TrustedCAPEM:              trustedCAPEM,
-		LLMGateways:               llmGateways,
-		DemoVideoBaseURL:          demoVideoBaseURL,
-		LLMGatewayAuth:            llmGatewayAuth,
-		RunnerTarget:              runnerTarget,
-		UIDir:                     *f.uiDir,
-		ControlPlaneURL:           *f.controlURL,
-		ControlPlaneCAPEM:         feats.hop.caCertPEM(),
-		RecordingStore:            feats.recStore,
-		OIDC:                      feats.authn,
+		AuditSpool:          auditSpool,
+		AuditDrainRecorder:  auditDrainRec,
+		AuditSinkDrops:      sinkDropsReporter(fan),
+		AuditCoalesceWindow: *f.auditCoalesceWindow,
+		Runner:              run,
+		AdminToken:          *f.adminToken,
+		LocalMode:           lm.enabled,
+		MemberMode:          *f.memberMode,
+		SSOOnly:             *f.ssoOnly,
+		LocalOperator:       lm.operator,
+		TrustDomain:         *f.trustDomain,
+		DefaultPolicy:       defaultPolicy,
+		TrustedCAPEM:        trustedCAPEM,
+		DemoVideoBaseURL:    demoVideoBaseURL,
+		RunnerTarget:        runnerTarget,
+		UIDir:               *f.uiDir,
+		ControlPlaneURL:     *f.controlURL,
+		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
+		RecordingStore:      feats.recStore,
+		OIDC:                feats.authn,
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.
@@ -441,39 +398,28 @@ func run() error {
 		// (the read side Middleware checks), given here to internal/api so the
 		// admin revoke-sessions endpoint has the write side. nil exactly when
 		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
-		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
-		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
-		AllowEmailMappings:        *f.oidcAllowEmailMappings,
-		UserMounts:                memberMounts,
-		UserDriveHostRoots:        driveHostRoots,
-		ImageBuilder:              feats.imgBuilder,
-		AgentImages:               agentImages,
-		AgentAnthropicModel:       *f.agentModel,
-		BedrockRegion:             *f.bedrockRegion,
-		BedrockModel:              *f.bedrockModel,
-		BedrockBaseURL:            bedrockBaseURL,
-		AWSSSOEndpointOverride:    awsSSOEndpointOverride,
-		AllowTestEndpoints:        *f.allowTestEndpoints,
-		AWSSSOProxyInject:         api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
-		HarnessLoginCPUMillis:     *f.harnessLoginCPUMillis,
-		HarnessLoginMemoryMiB:     *f.harnessLoginMemoryMiB,
-		BedrockAWSConfigDir:       *f.bedrockAWSDir,
-		BedrockAWSProfile:         *f.bedrockAWSProfile,
-		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,
-		ProxyURL:                  *f.proxyURL,
-		Secrets:                   secrets,
-		MaskRegistry:              maskReg,
-		ADOEntra:                  adoEntraSourceFromFlags(st, f), // ado_entra_source.go
-		SubscriptionToken:         feats.subToken,
-		ManagedToken:              feats.managedToken,
-		DisableSubscriptionInject: feats.disableSubInject,
-		Components:                componentsInfo(f, runnerTarget, feats.recStore),
-		ScanAIAdvisor:             feats.scanAdvisor,
-		RequireOperatorSetEgress:  *f.requireOpSetEgress,
+		SessionRevocations:       sessionRevocationsFor(feats.authn, pool),
+		OperatorEmails:           splitCSV(*f.oidcOperatorEmails),
+		AllowEmailMappings:       *f.oidcAllowEmailMappings,
+		UserMounts:               memberMounts,
+		UserDriveHostRoots:       driveHostRoots,
+		ImageBuilder:             feats.imgBuilder,
+		AgentImages:              agentImages,
+		AWSSSOEndpointOverride:   awsSSOEndpointOverride,
+		AllowTestEndpoints:       *f.allowTestEndpoints,
+		AWSSSOProxyInject:        api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
+		HarnessLoginCPUMillis:    *f.harnessLoginCPUMillis,
+		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
+		ProxyURL:                 *f.proxyURL,
+		Secrets:                  secrets,
+		MaskRegistry:             maskReg,
+		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
+		Components:               componentsInfo(f, runnerTarget, feats.recStore),
+		ScanAIAdvisor:            feats.scanAdvisor,
+		RequireOperatorSetEgress: *f.requireOpSetEgress,
 		// "off" is the only value that disables it: a typo must not silently
 		// turn a security posture off, so anything else (including "false",
-		// "no", or a misspelling) leaves the broker ON. Same shape as the
-		// subscription-inject escape hatch.
+		// "no", or a misspelling) leaves the broker ON.
 		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),

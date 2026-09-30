@@ -45,9 +45,10 @@ v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
 are shipped, and so is 0.7's governance and desktop work (above, through
 `v0.7.12`), so what is left below is the alpha RC and beyond.
 
-**v0.8 is in progress (from 2026-09-19).** The plan — every lane, decision and open
-question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the work is tracked on
-the `0.8.0` and `0.8.1` milestones, one issue per lane, and nothing starts before its issue
+**v0.8.0 shipped as a pre-release on 2026-09-29, and the 0.8.1 patch shipped the same day;
+0.8.2 is in progress.** The plan — every lane, decision and open
+question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the remaining work is tracked
+on the `0.8.2` milestone, one issue per lane, and nothing starts before its issue
 carries the `approved` label ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a

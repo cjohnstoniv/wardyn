@@ -6,7 +6,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
-import type { AgentRun } from "../../lib/types";
+import type { RunDetail } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
 import { rowHeadline } from "../screens/runs/board-groups";
 import { AgentBadge, ConfinementChip } from "./primitives";
@@ -31,10 +31,10 @@ export function RunContextRow({
    *  dead control on a governance surface — and this row already fetches
    *  exactly that record. A second getRun in the parent would be two reads of
    *  one run that can disagree. null = gone, or unreadable by this caller. */
-  onRun?: (run: AgentRun | null) => void;
+  onRun?: (run: RunDetail | null) => void;
 }) {
-  // undefined = loading, null = fetch failed / run gone, AgentRun = loaded.
-  const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  // undefined = loading, null = fetch failed / run gone, RunDetail = loaded.
+  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const view = useConsoleMode();
   // A ref, not a dependency: a fresh closure on every parent render must not
   // re-fire the fetch (the reason attach-terminal.tsx keeps onClose in one).
@@ -45,7 +45,7 @@ export function RunContextRow({
 
   React.useEffect(() => {
     let alive = true;
-    const settle = (r: AgentRun | null) => {
+    const settle = (r: RunDetail | null) => {
       if (!alive) return;
       setRun(r);
       onRunRef.current?.(r);

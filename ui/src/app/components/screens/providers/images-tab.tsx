@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import {
   AvailabilityControl,
   AvailabilityDraft,
+  AvailabilityUserTypes,
   writeAvailability,
   type AvailabilityDraftValue,
 } from "../../wardyn/availability-control";
@@ -36,7 +37,16 @@ import { EmptyState, TableSkeleton } from "../../wardyn/states";
 
 const withMono = makeMono(["--image"]);
 
+// One user-types read for every row's control and the Add image dialog's.
 export function ImagesTab() {
+  return (
+    <AvailabilityUserTypes>
+      <ImagesTabBody />
+    </AvailabilityUserTypes>
+  );
+}
+
+function ImagesTabBody() {
   const [rows, setRows] = React.useState<BaseImageEntry[] | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [adding, setAdding] = React.useState(false);

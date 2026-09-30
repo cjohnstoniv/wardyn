@@ -583,7 +583,7 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	}
 	ado, permitted := ado.withPolicyCapabilities(policy.AzureDevOpsCapabilities, standing)
 	if !permitted {
-		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, "ado_capabilities_none_permitted",
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, reasonADOCapabilitiesNonePermitted,
 			adoNonePermitted(policy.AzureDevOpsCapabilities))
 	}
 	if ado.capsFromPolicy {

@@ -18,9 +18,9 @@ import (
 // and the ssoInject sandbox env (bedrockSSOAuth). Moving fewer than all five
 // leaves a fake reachable by one side and denied by the other. Gated: refused
 // unless WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNs at boot, and documented in
-// docs/ENV.md and threatmodel/THREAT-MODEL.md. DELIBERATELY NOT
-// WARDYN_BEDROCK_BASE_URL (the Bedrock DATA PLANE, a real PrivateLink posture)
-// nor the global AWS_ENDPOINT_URL, which re-points every AWS service.
+// docs/ENV.md and threatmodel/THREAT-MODEL.md. DELIBERATELY NOT a provider's
+// bedrock.base_url (the Bedrock DATA PLANE, a real PrivateLink posture) nor the
+// global AWS_ENDPOINT_URL, which re-points every AWS service.
 
 // DRAFT (M2 canon pending)
 

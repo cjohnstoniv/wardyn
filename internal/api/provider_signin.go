@@ -9,9 +9,6 @@
 // sign-in is stored by the sandbox's own helper upload (ssotoken.go, bound to
 // the provider as it read at launch); a Claude sign-in by PUT on the same path,
 // with the setup-token the sandbox printed, bound to that sign-in's own run.
-//
-// The doors answer only while the model-provider block exists, and POST
-// /setup/harness-login only while it does not: the two never both apply.
 package api
 
 import (

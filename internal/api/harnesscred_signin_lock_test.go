@@ -136,7 +136,6 @@ func TestUploadSSOToken_ALockWaitThatExpiresStoresNothing(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	cfg := baseTestConfig(h, st)
 	cfg.Secrets = sec
-	cfg.BedrockRegion = "us-west-2"
 	srv := New(cfg)
 	h.srv = srv
 	tok := h.mintRunToken(t, runID)

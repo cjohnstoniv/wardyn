@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Two static demo users: `demo@wardyn.local` (admin) and `member@wardyn.local` (member) — a genuine second identity, the same shape the kind SSO overlay's `admin@wardyn.local`/`member@wardyn.local` pair already gives it. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. `WARDYN_OIDC_ROLE_MAP` (the real **admin/member** RBAC) is a plain passthrough (empty unless you set it) — `deploy/compose/.env.example` pre-seeds `demo@wardyn.local=admin,member@wardyn.local=user` for a **fresh** `.env` only (never for an existing one — see the [Quick start](#quick-start) SSO section), so the two Dex users land in the right role automatically on a new stack; set your own map (or fall back to the legacy `WARDYN_OIDC_OPERATOR_EMAILS` allowlist) and an unlisted signer-in becomes a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login): 403 on the harness-credential/policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image — reading and launching/killing stay open, and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling). That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md). Members of this stack: [`../../docs/USERS.md`](../../docs/USERS.md). |
+| `dex`      | OIDC IdP for human SSO. Two static demo users: `demo@wardyn.local` (admin) and `member@wardyn.local` (member) — a genuine second identity, the same shape the kind SSO overlay's `admin@wardyn.local`/`member@wardyn.local` pair already gives it. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. `WARDYN_OIDC_ROLE_MAP` (the real **admin/member** RBAC) is a plain passthrough (empty unless you set it) — `deploy/compose/.env.example` pre-seeds `demo@wardyn.local=admin,member@wardyn.local=user` for a **fresh** `.env` only (never for an existing one — see the [Quick start](#quick-start) SSO section), so the two Dex users land in the right role automatically on a new stack; set your own map (or fall back to the legacy `WARDYN_OIDC_OPERATOR_EMAILS` allowlist) and an unlisted signer-in becomes a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login): 403 on the policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image — reading and launching/killing stay open, and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling). That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md). Members of this stack: [`../../docs/USERS.md`](../../docs/USERS.md). |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -157,15 +157,12 @@ WARDYN_DEFAULT_POLICY=/examples/policies/default.json make demo
 ## Environment variables
 
 Full reference: [docs/ENV.md](../../docs/ENV.md) — set them via
-`deploy/compose/.env` (copy `.env.example`) or the shell environment. One
-default is stack-specific: `WARDYN_SUBSCRIPTION_INJECT=off`, because the
-distroless compose `wardynd` has no `claude` binary, so proxy-side OAuth
-injection would fail-lazily and crash the run's proxy; a run that mounts
-`~/.claude` uses those creds directly instead (stage them with
-`WARDYN_SUBSCRIPTION_INJECT=off scripts/stage-claude-creds.sh`). This flag
-covers ONLY that resident-mount path — the separate Wardyn-managed lane (a
-connected managed setup-token, no `~/.claude` mount) still injects proxy-side
-and still MITMs `api.anthropic.com` regardless of this setting.
+`deploy/compose/.env` (copy `.env.example`) or the shell environment. Note that
+model access is not an environment variable: an admin adds providers under
+Settings -> Model providers and each person connects their own credential there
+(the boot-time model variables were retired in 0.8.2). This stack no longer
+forwards them, so one left in a 0.7 `.env` boots clean and does nothing;
+`make doctor` lists any still set there.
 
 **CI overlay.** [`docker-compose.ci.yaml`](docker-compose.ci.yaml) layers onto
 the base stack (`docker compose -f docker-compose.yaml -f docker-compose.ci.yaml`)

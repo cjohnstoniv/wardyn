@@ -586,7 +586,7 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"age_key", "auth", "bedrock", "checks", "checks_redacted", "credential_storage", "deployment", "harnesses",
+		"age_key", "auth", "checks", "checks_redacted", "credential_storage", "harnesses",
 		"has_runs", "host_proxy", "llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm",
 		"secrets",
 	}

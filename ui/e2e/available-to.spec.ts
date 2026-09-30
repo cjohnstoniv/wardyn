@@ -225,8 +225,12 @@ test.describe("Available to — a stored policy (#923)", () => {
     expect(JSON.parse(body).error).toBe(
       `Stored policy ${policyId} isn't available to you. Ask your admin, or launch without policy_id.`,
     );
-    // The listed type is not refused on the policy (whatever else its launch meets).
-    expect(await (await run(insider)).text()).not.toContain("isn't available to you");
+    // The listed type launches on it: a 201 for a run that carries the policy,
+    // not merely a response that avoids the refusal sentence.
+    const allowed = await run(insider);
+    const allowedBody = await allowed.text();
+    expect(allowed.status(), allowedBody).toBe(201);
+    expect(JSON.parse(allowedBody).policy_id).toBe(policyId);
   });
 
   test("a person outside the list doesn't see it in the list; a person on the list does", async ({ page }) => {

@@ -172,6 +172,9 @@ const (
 	// preset's inline_policy: the spec's
 	// azure_devops_capabilities names something the catalogue cannot grant.
 	reasonADOCapabilityUnknown = "ado_capability_unknown"
+	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
+	// that leaves nothing standing (POST /runs/preflight).
+	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
 )
 
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
@@ -423,12 +426,9 @@ const reasonRecordCeilingLimit = "record_ceiling_limit"
 // resolve door. Most values here are already the exact strings each site's
 // own secret.read audit row wrote.
 const (
-	reasonInjectionGrantNotAPIKey            = "injection_grant_not_api_key"
-	reasonInjectionReservedSecretName        = "reserved_secret_name"
-	reasonInjectionInvalidHeaderName         = "invalid_header_name"
-	reasonInjectionOAuthHostNotAnthropic     = "oauth_host_not_anthropic"
-	reasonInjectionSharedSubscriptionPosture = "shared_subscription_posture"
-	reasonInjectionNoOAuthProvider           = "no_oauth_provider"
+	reasonInjectionGrantNotAPIKey     = "injection_grant_not_api_key"
+	reasonInjectionReservedSecretName = "reserved_secret_name"
+	reasonInjectionInvalidHeaderName  = "invalid_header_name"
 )
 
 // Record Mode (record.go): per-task recording sandboxes and their promotion

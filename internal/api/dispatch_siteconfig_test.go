@@ -264,36 +264,6 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	}
 }
 
-// TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder is the
-// precedence negative case: Bedrock region+model are configured at boot but no
-// model provider offers Bedrock, so nothing credentials it. Dispatch must NOT
-// half-wire Bedrock — no CLAUDE_CODE_USE_BEDROCK — and keeps the
-// proxy-injected api-key placeholder.
-func TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder(t *testing.T) {
-	fr := &fakeRunner{}
-	srv, _ := pgHarnessWithRunner(t, fr)
-	srv.cfg.BedrockRegion = "us-east-1"
-	srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}} // no aws-* secrets stored
-
-	body := `{"agent":"claude-code","repo":"acme/widgets","task":"do the thing"}`
-	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
-	}
-	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
-	if fr.createCalls != 1 {
-		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
-	}
-	spec := fr.lastSpec
-	if _, ok := spec.Env["CLAUDE_CODE_USE_BEDROCK"]; ok {
-		t.Errorf("Env[CLAUDE_CODE_USE_BEDROCK] present with no AWS creds stored; want absent (fallback, not a half-wired Bedrock)")
-	}
-	if spec.Env["ANTHROPIC_API_KEY"] != "wardyn-proxy-injected" {
-		t.Errorf("Env[ANTHROPIC_API_KEY] = %q, want the proxy-injected sentinel (api-key fallback)", spec.Env["ANTHROPIC_API_KEY"])
-	}
-}
-
 // TestDispatch_BedrockPrivateEndpoint_Composed is the acceptance test an adopter
 // on a PrivateLink estate asked for, and it is the only place the four pieces are
 // proven to compose. Each has its own unit test — the bypass list

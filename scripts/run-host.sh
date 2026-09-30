@@ -2,16 +2,14 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Run wardynd on the HOST (outside compose) so the Claude CLI composer backend can exec
-# the resident `claude` binary (your subscription) and so the docker runner can launch
-# sandboxes against the host daemon.
+# Run wardynd on the HOST (outside compose) so the docker runner can launch sandboxes
+# against the host daemon.
 #
 # Prereqs:
 #   - go build -tags docker -o bin/wardynd ./cmd/wardynd   (and: -o bin/wardyn ./cmd/wardyn)
 #   - cd ui && pnpm build                                  (serves ui/dist)
 #   - compose Postgres up with its loopback port published (deploy/compose/docker-compose.yaml
 #     publishes 127.0.0.1:5432) — e.g. `docker compose -f deploy/compose/docker-compose.yaml up -d postgres`
-#   - `claude` logged in on the host PATH (for the cli composer backend)
 #
 # Secrets (the age key) are read from the gitignored deploy/compose/.env so they are never
 # committed. Override any WARDYN_* var by exporting it before running this script.
@@ -39,7 +37,7 @@ if [ -z "${WARDYN_AGE_KEY:-}" ] && [ -f deploy/compose/.env ]; then
   export WARDYN_AGE_KEY
 fi
 
-# Resident `claude` CLI for the composer backend.
+# `claude` CLI on PATH for the optional workspace-scan AI advisor (WARDYN_SCAN_AI_ADVISOR).
 export PATH="$HOME/.local/bin:$PATH"
 
 # Reach the host control plane from agent/proxy sandbox containers. Use the cross-docker
@@ -61,17 +59,9 @@ export WARDYN_LOCAL_MODE="${WARDYN_LOCAL_MODE:-true}"
 export WARDYN_RUNNER="${WARDYN_RUNNER:-docker}"
 export WARDYN_UI_DIR="${WARDYN_UI_DIR:-$ROOT/ui/dist}"
 export WARDYN_PROXY_IMAGE="${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
-# claude-llm.json is the model-capable ceiling: it lists an api_key grant
-# (so a composed LLM run's brokered model credential survives the clamp) and the
-# LLM egress domains. demo.json (github_token only) would clamp the model grant
-# away, leaving composed runs with no model access. When the operator has staged
-# subscription creds (scripts/stage-claude-creds.sh), prefer the generated
-# subscription ceiling — it additionally blesses the ~/.claude cred mounts that
-# a composed run receives on the per-run "Use my Claude subscription" opt-in.
-SUB_POLICY="${HOME}/.wardyn/claude-subscription.json"
-if [ -z "${WARDYN_DEFAULT_POLICY:-}" ] && [ -f "${SUB_POLICY}" ]; then
-  WARDYN_DEFAULT_POLICY="${SUB_POLICY}"
-fi
+# claude-llm.json is the model-capable ceiling: it carries the LLM egress domains
+# a composed run needs. The model credential itself is the run's model provider's
+# (Settings -> Model providers), not a policy grant.
 export WARDYN_DEFAULT_POLICY="${WARDYN_DEFAULT_POLICY:-$ROOT/examples/policies/claude-llm.json}"
 # Map agent names to the LOCALLY-built demo images (else the runner pulls the ghcr
 # convention image, which doesn't exist → run.create fails "registry: denied").
@@ -82,12 +72,6 @@ export WARDYN_DEFAULT_POLICY="${WARDYN_DEFAULT_POLICY:-$ROOT/examples/policies/c
 # back with a stray `}` appended and wardynd refused to boot on it.
 _default_agent_images='{"base":"wardyn/agent-base:local","claude-code":"wardyn/agent-claude-code:local","codex-cli":"wardyn/agent-codex-cli:local","oracle":"wardyn/agent-oracle:local","aws-sso":"wardyn/agent-aws-sso:local"}'
 export WARDYN_AGENT_IMAGES="${WARDYN_AGENT_IMAGES:-$_default_agent_images}"
-
-# Pin the claude-code agent to Opus so it never falls back to the account default
-# (a promo can push that to Fable). Overridable; empty uses the CLI default.
-export WARDYN_AGENT_ANTHROPIC_MODEL="${WARDYN_AGENT_ANTHROPIC_MODEL:-opus}"
-
-# Host mode uses the Claude CLI composer backend (Opus via your subscription). This
 
 # Ensure the control-plane-facing network the proxy sidecar joins exists. The
 # compose stack defines it (deploy/compose/docker-compose.yaml: name
@@ -101,5 +85,5 @@ if ! docker network inspect "$WARDYN_INTERNAL_NETWORK" >/dev/null 2>&1; then
     || echo "wardynd (host mode): WARNING could not create network $WARDYN_INTERNAL_NETWORK"
 fi
 
-echo "wardynd (host mode): listen=$WARDYN_LISTEN composer=claude-cli-opus control-plane=$WARDYN_CONTROL_PLANE_URL"
+echo "wardynd (host mode): listen=$WARDYN_LISTEN control-plane=$WARDYN_CONTROL_PLANE_URL"
 exec ./bin/wardynd

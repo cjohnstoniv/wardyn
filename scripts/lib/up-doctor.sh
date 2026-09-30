@@ -180,20 +180,17 @@ cmd_doctor() {
     unset _sock
   fi
 
-  # Bedrock model-auth preflight (host vs container): which credential source is
-  # usable here. Region/model come from env or deploy/compose/.env; the actual
-  # secrets (bedrock-api-key / static keys) live in the store and are reported by
-  # `wardyn setup status` after boot. This is a pre-boot heads-up only.
-  _br_region="${WARDYN_BEDROCK_REGION:-$(env_get "${ENV_FILE}" WARDYN_BEDROCK_REGION 2>/dev/null || true)}"
-  _br_dir="${WARDYN_BEDROCK_AWS_DIR:-$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR 2>/dev/null || true)}"
-  if [ -n "${_br_region}" ]; then
-    if [ -n "${_br_dir}" ] && [ -d "${_br_dir}" ]; then
-      report ok "Bedrock configured with an ~/.aws mount (${_br_dir}) — SSO/temp creds auto-rotate; grant uid 1000 read (setfacl -R -m u:1000:rX '${_br_dir}') if runs can't auth."
-    else
-      report ok "Bedrock region set (${_br_region}). Prefer a bedrock-api-key bearer (never resident) or an ~/.aws mount for SSO; add credentials in the UI or via 'wardyn secret set' — 'wardyn setup status' shows which path is live after boot."
-    fi
+  # Model access lives under Settings -> Model providers (each person connects
+  # their own credential there). The boot-time model-lane variables were retired
+  # in 0.8.2 and wardynd REFUSES them; flag any still set here, in the
+  # environment or in deploy/compose/.env, before they surface as a boot refusal.
+  _retired=$( { env; [ -f "${ENV_FILE}" ] && cat "${ENV_FILE}"; } 2>/dev/null \
+    | grep -E '^WARDYN_((ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|AGENT_ANTHROPIC_MODEL|SUBSCRIPTION_INJECT|ALLOW_SHARED_SUBSCRIPTION)=' \
+    | grep -Eiv '=(false|off)?$' | cut -d= -f1 | sort -u | tr '\n' ' ' || true)
+  if [ -n "${_retired}" ]; then
+    report warn "retired model-access variable(s) set: ${_retired}— remove them; wardynd refuses them at boot. Configure model access under Settings -> Model providers instead."
   fi
-  unset _br_region _br_dir
+  unset _retired
 
   if [ "${DOCTOR_BLOCKED}" -eq 1 ]; then
     printf '\n' >&2

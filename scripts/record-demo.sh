@@ -307,9 +307,8 @@ fi
 # Model access. The token is read from a file and piped, so it is never an
 # argument, never in the environment of a child we do not control, and never
 # rendered on camera. A stackless take uses no model at all.
-if [[ "${STACKLESS}" == 0 && "${WARDYN_DEMO_SKIP_MODEL:-}" != 1 \
-      && -z "${WARDYN_SUBSCRIPTION_TOKEN:-}" && ! -s "${TOKEN_FILE}" ]]; then
-  die "no Claude subscription token. Run:  claude setup-token > ${TOKEN_FILE}   (or export WARDYN_SUBSCRIPTION_TOKEN)"
+if [[ "${STACKLESS}" == 0 && "${WARDYN_DEMO_SKIP_MODEL:-}" != 1 && ! -s "${TOKEN_FILE}" ]]; then
+  die "no Claude subscription token. Run:  claude setup-token > ${TOKEN_FILE}"
 fi
 
 # Output path: prefer the real Windows Videos folder — encoding 1080p30 onto the
@@ -484,22 +483,67 @@ fi
 
 # WARDYN_DEMO_SKIP_MODEL=1 leaves the stack's model access alone. Set it for a
 # take against an install that is not this box's compose stack — 02c and 13 film
-# the kind quickstart, where `subscription connect` would either fail on bearer
-# auth or write the operator's token into someone else's cluster. (The CLI picks
+# the kind quickstart, where the sign-in call below would either fail on bearer
+# auth or store the operator's token in someone else's cluster. (The CLI picks
 # up WARDYN_ADMIN_TOKEN from the environment on its own — main.go's --token
 # default — so an exported token reaches every ./wardyn call below.)
 if [[ "${WARDYN_DEMO_SKIP_MODEL:-}" == 1 ]]; then
   step "Act 0 · Model access skipped (WARDYN_DEMO_SKIP_MODEL=1)"
 else
 step "Act 0 · Model access"
-log "connecting the Claude subscription (token piped from a file — never printed, never an argument)"
-if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
-  printf '%s' "${WARDYN_SUBSCRIPTION_TOKEN}" | ./wardyn subscription connect --token-stdin \
-    || die "subscription connect failed"
-else
-  ./wardyn subscription connect --token-stdin < "${TOKEN_FILE}" \
-    || die "subscription connect failed"
+log "connecting your Claude subscription through the per-person sign-in door (token read from a file — never printed, never an argument)"
+DEMO_API="${WARDYN_URL:-http://localhost:${WARDYN_UP_PORT:-8080}}/api/v1"
+# demo_api METHOD PATH [curl args...] -> body on stdout; dies with the body on a
+# non-2xx. The admin token (if the stack wants one) rides a header, as in the
+# other scripts; the setup-token itself never appears in any argument.
+demo_api() {
+  local _m="$1" _p="$2" _tok="${WARDYN_ADMIN_TOKEN:-${WARDYN_TOKEN:-}}" _out _code
+  shift 2
+  _out="$(curl -sS --max-time 60 -X "${_m}" ${_tok:+-H "Authorization: Bearer ${_tok}"} \
+            -H 'Content-Type: application/json' -w '\n%{http_code}' "$@" "${DEMO_API}${_p}")" \
+    || die "${_m} ${_p} failed"
+  _code="${_out##*$'\n'}"
+  [[ "${_code}" =~ ^2 ]] || die "${_m} ${_p} -> HTTP ${_code}: ${_out%$'\n'*}"
+  printf '%s' "${_out%$'\n'*}"
+}
+# An anthropic_subscription provider serving claude-code must exist. Read the
+# whole block first and write it back whole (PUT replaces it).
+DEMO_PROVIDERS="$(demo_api GET /model-providers)" || die "could not read /model-providers"
+DEMO_PROVIDER_ID="$(python3 -c '
+import json, sys
+for p in json.load(sys.stdin).get("providers", []):
+    if p.get("kind") == "anthropic_subscription" and not p.get("disabled") \
+       and any(h.get("harness") == "claude-code" for h in p.get("harnesses", [])):
+        print(p["id"]); break
+' <<<"${DEMO_PROVIDERS}")"
+if [[ -z "${DEMO_PROVIDER_ID}" ]]; then
+  DEMO_PROVIDER_ID="claude-subscription"
+  log "no Claude subscription provider serves claude-code — adding ${DEMO_PROVIDER_ID}"
+  python3 -c '
+import json, sys
+block = json.load(sys.stdin)
+block.pop("connected_people", None)  # read-only; PUT refuses it
+new = {"id": sys.argv[1], "name": "Claude subscription", "kind": "anthropic_subscription",
+       "harnesses": [{"harness": "claude-code"}]}
+block["providers"] = [p for p in block.get("providers", []) if p.get("id") != new["id"]] + [new]
+print(json.dumps(block))
+' "${DEMO_PROVIDER_ID}" <<<"${DEMO_PROVIDERS}" \
+    | demo_api PUT /model-providers --data-binary @- >/dev/null \
+    || die "could not add the ${DEMO_PROVIDER_ID} provider"
 fi
+DEMO_SIGNIN_RUN="$(demo_api POST "/model-providers/${DEMO_PROVIDER_ID}/sign-in" \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["run_id"])')" \
+  || die "sign-in did not start"
+# The capture body is built inside python from the token file, so the token is
+# neither an argument nor echoed.
+python3 -c '
+import json, sys
+print(json.dumps({"run_id": sys.argv[1], "token": open(sys.argv[2]).read().strip()}))
+' "${DEMO_SIGNIN_RUN}" "${TOKEN_FILE}" \
+  | demo_api PUT "/model-providers/${DEMO_PROVIDER_ID}/sign-in" --data-binary @- >/dev/null \
+  || die "storing the sign-in failed"
+demo_api POST "/runs/${DEMO_SIGNIN_RUN}/kill" >/dev/null 2>&1 || true  # the login sandbox has done its job
+unset DEMO_PROVIDERS DEMO_PROVIDER_ID DEMO_SIGNIN_RUN
 ./wardyn setup status || true
 fi # WARDYN_DEMO_SKIP_MODEL
 fi # STACKLESS

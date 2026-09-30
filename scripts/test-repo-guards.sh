@@ -46,6 +46,11 @@
 #      `continue-on-error` escape hatch (T-06, #666).
 #  14. no demo/live spec or demo-take verifier still names an audit action
 #      docs/AUDIT-ACTIONS.md's "Renamed in 0.8" table retires (#1020).
+#  15. no script that boots a wardynd (the e2e backend, the kind SSO walk,
+#      ci-run.sh, the Entra kind deploy, the survival walk and its compose
+#      override) sets a model variable 0.8.2 retired — wardynd refuses to boot
+#      on one (#549, #672). The compose files and Helm values are rendered by
+#      `make compose-config` / `make helm-lint` instead.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -473,6 +478,21 @@ for name in $old_actions; do
 $hits"; }
 done
 if [ -n "$old_actions" ] && [ "$stale_actions" = 0 ]; then ok "no demo/live spec or demo-take verifier names a retired 0.8 audit action"; fi
+# ── 15. no wardynd-booting script sets a retired model variable ─────────────
+retired_re='(WARDYN_(ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|WARDYN_AGENT_ANTHROPIC_MODEL|WARDYN_SUBSCRIPTION_INJECT|WARDYN_ALLOW_SHARED_SUBSCRIPTION)'
+retired_fail=0
+for f in scripts/e2e-backend.sh scripts/kind-sso-walk.sh scripts/ci-run.sh scripts/survival-walk.sh \
+         deploy/azure-entra-sso/05-kind-deploy.sh test/survival-walk/compose-override.yaml; do
+    # An assignment (VAR=value, export VAR=), a Helm --set env.VAR=value, or a
+    # YAML key (VAR: value) with a non-empty value other than false/off.
+    hits="$(grep -nE "(^|[[:space:]\"'.])${retired_re}(=|: +)[\"']?[^\"'[:space:]]" "$f" \
+        | grep -vE "${retired_re}(=|: +)[\"']?(false|off)[\"']?([[:space:]]|$)" || true)"
+    if [ -n "$hits" ]; then
+        bad "$f sets a retired model variable wardynd refuses to boot on (#549): $hits"
+        retired_fail=1
+    fi
+done
+[ "$retired_fail" = 0 ] && ok "no wardynd-booting script sets a retired model variable"
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

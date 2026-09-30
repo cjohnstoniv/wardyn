@@ -688,27 +688,6 @@ func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
 	}
 }
 
-// TestBedrockProviderRow_PartialBootEnvText pins the boot-environment Bedrock
-// row's partially-configured text, byte for byte.
-func TestBedrockProviderRow_PartialBootEnvText(t *testing.T) {
-	srv := New(Config{
-		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-		Secrets: &memSecrets{m: map[string][]byte{}},
-	})
-	chk, ok := bedrockProviderRow(srv.setupBedrock(map[string]bool{}))
-	if !ok {
-		t.Fatal("a region+model-configured Bedrock row must surface a check")
-	}
-	want := SetupCheck{
-		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
-		Fix:    "Still needed: a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, or aws-access-key-id + aws-secret-access-key secrets.",
-	}
-	if chk != want {
-		t.Errorf("row text drifted:\n got  %+v\n want %+v", chk, want)
-	}
-}
-
 // TestLLMProviderCheck_NoProviderIsInfo pins the optional-provider sentence: a
 // caller no model provider serves reads INFO, never a gap they must clear.
 func TestLLMProviderCheck_NoProviderIsInfo(t *testing.T) {
@@ -881,17 +860,6 @@ func TestSetupCheckBlocking(t *testing.T) {
 	// warn — the caller's own provider credential is missing; per person, so
 	// it must stay non-blocking.
 	assertSetupCheckBlocking(t, llmProviderCheck([]SetupProviderAccess{{Provider: "corp-gateway", State: modelAccessNotConfigured}}))
-
-	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", CredsPresent: true}); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("bedrockProviderRow absent")
-	}
-	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m"}); ok {
-		assertSetupCheckBlocking(t, chk)
-	} else {
-		t.Fatal("bedrockProviderRow absent")
-	}
 
 	assertSetupCheckBlocking(t, agentImageCheck(nil))
 

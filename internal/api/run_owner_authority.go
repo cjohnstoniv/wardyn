@@ -385,8 +385,8 @@ func integrationHoldsSecret(in types.Integration, secret string) bool {
 
 // refreshDeploymentConfig replaces the parts of a rendered proxy config that
 // come from the deployment, not the run, with the current configuration: the
-// upstream proxy, the trusted CA, the internal model gateways and the
-// internal-host lift. A site config that cannot be read refuses rather than
+// upstream proxy, the trusted CA and the internal-host lift. The model
+// upstreams are the run's own provider's (dispatch-time), so they stay. A site config that cannot be read refuses rather than
 // reuse the rendered copy. The internal-host lift only narrows: a host the
 // operator added since is not lifted for a run that never had it. The
 // brokered-LLM 404 detail (LLMUnavailableDetail) keeps its rendered text:
@@ -400,7 +400,6 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
-	cfg.LLMUpstreams = s.cfg.LLMGateways
 	cfg.InternalHosts = slices.DeleteFunc(cfg.InternalHosts, func(h types.InternalHost) bool {
 		return !slices.ContainsFunc(sc.InternalHosts, func(c types.InternalHost) bool {
 			return c.HostSuffix == h.HostSuffix && slices.Equal(c.CIDRs, h.CIDRs)

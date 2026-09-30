@@ -98,12 +98,10 @@ func ssoRefreshServer(t *testing.T) (*Server, *memAudit, awsSSOBlob) {
 	t.Helper()
 	audit := &memAudit{}
 	s := &Server{cfg: Config{
-		BedrockRegion: "us-east-1",
-		BedrockModel:  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-		Secrets:       &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}},
-		MaskRegistry:  secretmask.NewRegistry(),
-		Now:           func() time.Time { return awsSSOTestFixedNow },
-		Audit:         audit,
+		Secrets:      &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}},
+		MaskRegistry: secretmask.NewRegistry(),
+		Now:          func() time.Time { return awsSSOTestFixedNow },
+		Audit:        audit,
 	}}
 	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute))
 	return s, audit, blob

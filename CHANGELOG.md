@@ -69,8 +69,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run's stored proxy config, so a run dispatched before the upgrade comes back without the
   operator's model key. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
   and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
-  row. Still on the operator's boot lanes until #549: the Bedrock boot knobs' status report and the
-  CLI's `wardyn subscription connect`/`disconnect`, which call the removed routes.
+  row.
 - **A model provider that isn't available to you answers like one that doesn't exist (#1018).** The
   key door (`PUT` and `DELETE /model-providers/{id}/credential`) and `/model-providers/{id}/sign-in`
   now answer a provider its "Available to" list leaves you out of with the same `404`
@@ -87,6 +86,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The User view's forced exit is dual-emitted too (#1020).** When `GET /me` finds the viewed user
   type deleted and drops the session back to the Admin view, it writes `auth.member_mode` beside
   `auth.user_view.set`, with the same data, as the toggle does through 0.8.x.
+- **The operator-held model credential lanes are retired (#549).** Model access is configured only
+  under Settings → Model providers, and each person connects their own credential there. Boot
+  refuses every `WARDYN_ANTHROPIC_*`, `WARDYN_OPENAI_*` and `WARDYN_BEDROCK_*` variable,
+  `WARDYN_AGENT_ANTHROPIC_MODEL`, `WARDYN_SUBSCRIPTION_INJECT` and
+  `WARDYN_ALLOW_SHARED_SUBSCRIPTION` set to anything but empty, `false` or `off`, naming each;
+  `WARDYN_SUBSCRIPTION_TOKEN` is no longer read. `wardyn subscription` is removed. `PUT
+  /secrets/{name}` (`wardyn secret set`) refuses `anthropic-api-key`, `openai-api-key`,
+  `bedrock-api-key`, `aws-access-key-id`, `aws-secret-access-key` and `aws-session-token` with `403
+  secret_name_reserved`, and every boot deletes those names and the two harness sign-in names
+  (`wardyn-harness-anthropic-oauth`, `wardyn-harness-aws-oauth`) from every namespace, audited once
+  as `model_credential.retire`. The two legacy sentinels `anthropic-subscription-oauth` and
+  `anthropic-managed-oauth` are refused as reserved names, at the injection sink and at policy
+  write. The host `~/.claude` and `~/.aws` mounts, the static SigV4 lane and
+  `scripts/stage-claude-creds.sh` are gone: a policy whose `workspace_mounts` targets
+  `/home/agent/.claude` or `/home/agent/.claude.json` is refused at every policy write and at boot,
+  and dispatch drops such a mount from a stored policy. `GET /setup/status` no longer carries
+  `bedrock`, `auth.shared_subscription_allowed`, `auth.shared_subscription_reason`, `deployment`
+  or `providers[].auth_mode`/`logged_in`/`login_detected_via` (a host CLI sign-in credentials no
+  run), and the `bedrock_provider` check is gone. The Helm chart refuses to render a retired
+  variable set in `env` or `extraEnv`. **Upgrade note:** unset the
+  retired variables before upgrading (on the compose stack they are simply no longer forwarded, so a
+  0.7 `.env` still carrying one boots clean and the value is inert — `make doctor` lists any still in
+  `.env`), then set up Settings → Model providers and have each person
+  connect their own credential (a key, or a Claude or AWS sign-in).
 - **Reviving a live run is bounded to once a minute (#1005).** Each revive of a running run, through
   `POST /runs/{id}/revive` or the admin "Restart with current limits", removes and recreates its
   proxy; a second one within a minute of the last that reached the proxy is refused `429`
@@ -107,6 +130,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
   row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
   was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **A member whose Azure DevOps list is narrowed by their bound is told when they launch (#1384).**
+  When a run policy's `azure_devops_capabilities` names more than the provider row's default profile
+  and the member's governance profile stand, the launch's `201` carries one sentence naming what was
+  dropped, and the run's Effective policy shows it (it is in the `run.create` row's
+  `clamp_warnings`). Review refuses a list none of which may stand with `422` and reason
+  `ado_capabilities_none_permitted`, the refusal launch already gave at dispatch. The
+  `azure_devops_capabilities` field help now says a member stands only what the provider's default
+  profile or their governance profile grants, and Review's repository-access row names Azure DevOps,
+  not GitHub, for an Azure DevOps workspace.
+- **The run page names a run's model provider, and says "(removed)" only when it is (#996).**
+  `GET /runs/{id}` carries `model_provider_name` and, once the provider is deleted,
+  `model_provider_deleted`. The header chip used the viewer's own setup status, which lists only what
+  their agents use, so a provider that still existed showed as "(removed)" by its id, and a deleted
+  one showed its id in place of its name. The `run.create` row now freezes the provider's name, and the
+  AWS sign-in approval card names the run's provider from that read when its viewer's setup status
+  does not list it.
+- **The Images tab reads user types once (#1016).** Each row's "Available to" control fetched
+  `GET /user-types` on its own, so a tab of N images made N reads; they now share one.
 - **The run page no longer gets a 500 in the moment a finishing run's sandbox is already gone
   (#1270).** A short run's pod (or container) is removed a moment before its state flips to
   finished, and in that window the Sandbox and Files widgets read a sandbox that was not there and

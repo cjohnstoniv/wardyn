@@ -61,8 +61,6 @@ func mpHarness(t *testing.T, st *bearerGuardStore, p types.ModelProvider) *harne
 	if err := sec.For(mpOwner).Put(context.Background(), name, []byte(mpOwnerKey)); err != nil {
 		t.Fatal(err)
 	}
-	// A boot gateway that must reach no provider run.
-	h.srv.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://boot-gw.corp.example"}
 	return h
 }
 
@@ -97,7 +95,7 @@ func TestProviderDispatch_KeyLaneServesTheOwnersKeyOnly(t *testing.T) {
 	legacy := []runner.InjectionGrant{
 		mpInjection("api.anthropic.com", "anthropic-api-key"),
 		mpInjection("api.anthropic.com", types.SubscriptionOAuthSecret),
-		mpInjection("boot-gw.corp.example", "anthropic-api-key"),
+		mpInjection("gw.corp.example", "anthropic-api-key"), // a retired name, on any host
 		mpInjection("evil.example", providerSecretName("uid-a", providerKeyPart)),
 	}
 	policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/home/op/.claude", Target: claudeCredTarget}}}
@@ -121,7 +119,7 @@ func TestProviderDispatch_KeyLaneServesTheOwnersKeyOnly(t *testing.T) {
 		t.Errorf("allowlist %v mounts %v, want the exact vendor host and no ~/.claude mount", policy.AllowedDomains, policy.WorkspaceMounts)
 	}
 	if plan.llmUpstreams != nil {
-		t.Errorf("upstreams = %v, want none — the boot gateway reaches no provider run", plan.llmUpstreams)
+		t.Errorf("upstreams = %v, want none for a key provider with no route-through", plan.llmUpstreams)
 	}
 	if env["ANTHROPIC_API_KEY"] != "wardyn-proxy-injected" || env["ANTHROPIC_MODEL"] != "claude-opus-test" {
 		t.Errorf("env = %v, want the placeholder and the provider's model", env)

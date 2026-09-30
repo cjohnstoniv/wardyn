@@ -270,38 +270,6 @@ func llmProviderCheck(access []SetupProviderAccess) SetupCheck {
 	}
 }
 
-// bedrockProviderRow surfaces the boot-environment Bedrock lanes only once the
-// operator has touched ANY Bedrock knob (ok=false otherwise), so the majority
-// who never use AWS aren't shown an irrelevant row. warn = partially
-// configured.
-func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
-	if !bedrock.configured() {
-		return SetupCheck{}, false
-	}
-	if bedrock.ready() {
-		return SetupCheck{
-			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "ok",
-			Detail: fmt.Sprintf("Bedrock is configured (region %s, model %s) for Claude runs via %s.", bedrock.Region, bedrock.Model, bedrock.credSourceDesc()),
-		}, true
-	}
-	var missing []string
-	if bedrock.Region == "" {
-		missing = append(missing, "-bedrock-region")
-	}
-	if bedrock.Model == "" {
-		missing = append(missing, "-bedrock-model")
-	}
-	credentialMissing := !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent
-	if credentialMissing {
-		missing = append(missing, "a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, or aws-access-key-id + aws-secret-access-key secrets")
-	}
-	return SetupCheck{
-		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
-		Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
-	}, true
-}
-
 // ageKeyCheck warns when the secret store's age key is EPHEMERAL: a fresh
 // identity is minted at every boot with none configured, so what is stored now
 // is lost at the next restart, and that boot refuses to start over the rows it

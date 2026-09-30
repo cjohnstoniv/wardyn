@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -21,7 +22,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -32,7 +32,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -137,11 +136,10 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 // unknown migration present, db.MigrateAllowingUnknown itself logs nothing —
 // so a var left in an env file (or a chart values.yaml) after the break-glass
 // boot it was meant for silently disarms the downgrade refusal for the NEXT
-// real downgrade too, with no signal at any boot in between. Same volume and
-// posture as the WARDYN_ALLOW_SHARED_SUBSCRIPTION warn in run(): an operator
+// real downgrade too, with no signal at any boot in between: an operator
 // waiving a safety refusal should see that stated on every boot it applies to.
 // Kept out of run() itself (a single call, no branch) to hold its cyclomatic
-// complexity, matching warnMissingGatewayHosts.
+// complexity.
 func warnAllowUnknownMigrations(allow bool) {
 	if !allow {
 		return
@@ -298,17 +296,13 @@ func knownRunnerTargets() []string {
 }
 
 // optionalFeatures groups the off-by-default subsystems run() wires into
-// api.Config: recording replay, human SSO, devcontainer builds, the
-// subscription/managed LLM credential providers, and the advisory AI scan
-// fallback. Each is nil/zero when unconfigured (fail closed / feature off).
+// api.Config: recording replay, human SSO, devcontainer builds and the
+// advisory AI scan fallback. Each is nil/zero when unconfigured (fail closed / feature off).
 type optionalFeatures struct {
-	recStore         recording.Store
-	authn            *oidc.Authenticator
-	imgBuilder       api.ImageBuilder
-	subToken         subscription.Provider
-	disableSubInject bool
-	managedToken     subscription.Provider
-	scanAdvisor      func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
+	recStore    recording.Store
+	authn       *oidc.Authenticator
+	imgBuilder  api.ImageBuilder
+	scanAdvisor func(context.Context, workspacescan.ScanFacts, workspacescan.WorkspaceProfile) workspacescan.WorkspaceProfile
 	// sshHostKey is the SSH gateway's ed25519 host key, loaded/generated ONLY
 	// when -ssh-listen is set — nil (the zero value) otherwise, matching
 	// "empty = off = no listener, no new surface" all the way down to never
@@ -331,7 +325,7 @@ type optionalFeatures struct {
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
 // verbatim from run() — construction order and log lines are unchanged.
-func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, bootKeys bootKeyStore, secureCookies bool, subPostureOK bool) (optionalFeatures, error) {
+func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, bootKeys bootKeyStore, secureCookies bool) (optionalFeatures, error) {
 	var of optionalFeatures
 
 	// Recording store (pluggable seam; default "pg" — see boot_flags.go). pg
@@ -447,7 +441,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
 			slog.Info("wardynd: NOTE a first-class packaged team deployment (SAML/SCIM, per-user tokens) does not exist yet, but admin/member RBAC does. "+
 				"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are MEMBERS (unless a WARDYN_OIDC_ROLE_MAP entry raises them to admin) — owner-scoped: they launch/kill runs and "+
-				"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment (harness-credential, "+
+				"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment ("+
 				"policy, workspace, site-config writes), on secret writes/deletes, and on admin-only credential/tool_call approvals (a member may still "+
 				"decide egress_domain approvals on their own runs). admin/member is the only role tier — everything else, incl. the admin token, is always admin",
 				slog.Int("operator_emails", len(ops)))
@@ -506,43 +500,6 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 		of.imgBuilder = b
 		slog.Info("wardynd: devcontainer builds enabled")
-	}
-
-	// Subscription OAuth token provider: yields the operator's LIVE Anthropic
-	// access token from the resident ~/.claude so subscription runs are
-	// credentialed PROXY-SIDE (the sandbox holds an inert sentinel that never
-	// goes stale) instead of a copy whose refresh token rotates out from under it.
-	// Constructed unconditionally; it only reads/refreshes when a subscription run
-	// resolves its injection. Escape hatch: WARDYN_SUBSCRIPTION_INJECT=off keeps
-	// the legacy resident-copy behavior.
-	//
-	// NOT constructed at all when subscriptionInjectPosture (boot_posture.go) says
-	// this deployment may not share one operator's credential. Refusing at the sink
-	// would be enough to stop a run getting the token, but refusing to CONSTRUCT is
-	// what makes "this deployment cannot read or refresh the operator's ~/.claude"
-	// a statement about the process rather than a boolean someone can chase through
-	// call sites — subscription.Provider.Current() shells out to the resident
-	// `claude` and ROTATES that file, so a provider that exists is a provider that
-	// can mutate the operator's personal credential.
-	of.subToken = newSubscriptionProvider(subPostureOK)
-	// Default ON: unset (and the compose ${…:-off} passthrough when actually set
-	// to a truthy) injects proxy-side. off/0/false/no disable it; garbage exits 2
-	// via EnvBool rather than silently staying ON. (Previously only the literal
-	// "off" disabled; 0/false/no silently left injection ON — the security gap.)
-	of.disableSubInject = !cliutil.EnvBool("WARDYN_SUBSCRIPTION_INJECT", true)
-
-	// Managed subscription token: a long-lived `claude setup-token` captured via
-	// the container-login flow and stored age-encrypted. Serves subscription runs
-	// PROXY-SIDE in deployments (compose) whose distroless wardynd has no host
-	// ~/.claude for subToken above. Store-only (no Server dependency, no cycle);
-	// nil when there is no secret store.
-	// Posture-gated for the same reason as subToken above: the managed lane is a
-	// DEFAULT FALLBACK for every claude-code run (runs_dispatch_llm.go), needing no
-	// policy, no integration id and no flag, so on a multi-user stack it is the
-	// broadest sharing path of the two — and WARDYN_SUBSCRIPTION_INJECT never
-	// covered it.
-	if subPostureOK {
-		of.managedToken = api.NewManagedCredProvider(secrets, "anthropic")
 	}
 
 	// Advisory AI scan fallback (opt-in): wired to the fail-open
@@ -785,28 +742,6 @@ func chartMapHasNoAdminPath(roleMap map[string]string, operatorEmails []string, 
 	return sec
 }
 
-// newSubscriptionProvider builds the resident-subscription token provider, or nil
-// when this deployment's posture forbids sharing one operator's credential.
-//
-// Returning nil is the point, not an optimisation: subscription.Provider.Current()
-// shells out to the resident `claude` and ROTATES the operator's own
-// ~/.claude/.credentials.json, so a provider that exists is a provider that can
-// mutate their personal credential. Not constructing it makes "this deployment
-// cannot read or refresh that file" a property of the process.
-func newSubscriptionProvider(postureOK bool) subscription.Provider {
-	if !postureOK {
-		return nil
-	}
-	p, err := subscription.New(subscription.Config{})
-	if err != nil {
-		slog.Warn("wardynd: subscription token provider unavailable; subscription runs fall back to the resident-copy behavior",
-			slog.Any("err", err),
-		)
-		return nil
-	}
-	return p
-}
-
 // buildDirectoryConnector resolves the §I directory config and, when the feature
 // is on, constructs the connector and announces the posture expansion. Returns a
 // nil Directory when WARDYN_DIRECTORY_PROVIDER is unset — off is a zero config and
@@ -916,4 +851,20 @@ func validateOIDCRedirectURL(raw string) error {
 		return fmt.Errorf("invalid WARDYN_OIDC_REDIRECT_URL %q: want an absolute URL with a scheme and host, e.g. https://wardyn.example.com/auth/callback — its HOST is also the second origin the console's CSRF guard accepts as same-origin, so a value without one refuses every console write behind a TLS-terminating ingress", raw)
 	}
 	return nil
+}
+
+// parseAgentImages decodes WARDYN_AGENT_IMAGES (a JSON object mapping agent
+// name to OCI image ref) and logs what it took. Empty is not an error: it
+// means "use the ghcr convention for every agent". A malformed value fails
+// closed at boot rather than silently falling back to the convention.
+func parseAgentImages(raw string) (map[string]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var images map[string]string
+	if err := json.Unmarshal([]byte(raw), &images); err != nil {
+		return nil, fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
+	}
+	slog.Info("wardynd: agent image overrides", slog.Any("images", images))
+	return images, nil
 }

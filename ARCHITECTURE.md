@@ -28,7 +28,7 @@ everything; CNCF Sandbox is the governance target.
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
 | `wardyn-toolgate` | In-sandbox stdio MCP relay, built into the agent images: exposes one tool (`approve`), wired as claude's `--permission-prompt-tool` on a run dispatched with `tool_approvals=hold`. Each tool call is raised through the proxy's brokered `POST /wardyn/v1/approvals` and blocks until decided; `DENIED`/`EXPIRED` fail closed. Operator-authored `tool_rules` are resolved PROXY-SIDE first (`decideByToolRules`), so an `allow`/`deny` answers without waking anyone. **Cooperative, not a boundary** — an agent that never calls it is not gated; see `threatmodel/THREAT-MODEL.md` B3. |
 | `wardyn-aws-sso` | In-sandbox uploader for the containerized `aws sso login` capture lane: brokers the resulting SSO token cache back to the control plane over `PUT /wardyn/v1/sso-token/{runID}`. Built into the AWS-SSO agent image; the login run itself is a throwaway box that is never recorded. |
-| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill/attach/ssh), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn logs`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy` (list/get/default/set/delete/render — one upsert verb), `wardyn secret` (set/list/delete), `wardyn record`, `wardyn sessions` (revoke/list), `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/set), `wardyn support-bundle`, `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
+| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill/attach/ssh), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn logs`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy` (list/get/default/set/delete/render — one upsert verb), `wardyn secret` (set/list/delete), `wardyn record`, `wardyn sessions` (revoke/list), `wardyn site-config` (get/set), `wardyn support-bundle`, `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
 
@@ -262,8 +262,8 @@ the seams that shape needs (`Decision` is already wire-serializable;
    "complete" is a drift surface, and this one had fallen five rows behind the
    table it pointed at (four printed here against nine there). Read §5.1a. The
    shapes it covers are grant-delivered credentials with no injection seam, the
-   SigV4 modes that sign in-process, the operator's own mounted credential
-   material, and the container-login runs whose whole purpose is to obtain a
+   AWS role credentials a person's own `bedrock_sso` run derives in-process, and
+   the container-login runs whose whole purpose is to obtain a
    credential that does not exist yet.
 
    Secret values are masked on the audit/recording/decision-log streams by

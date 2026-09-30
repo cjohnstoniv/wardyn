@@ -15,9 +15,9 @@ import (
 
 // This file pins the SET of SetupCheck.ID values GET /api/v1/setup/status emits
 // across a small matrix of fixtures (see TestSetupCheckIds_Golden). Callers key
-// real behavior off specific ids — `wardyn subscription` (see
-// cmd/wardyn/subscription.go) decodes the raw JSON and looks for "llm_provider"
-// rather than sharing a Go type with internal/api — so a check silently renamed
+// real behavior off specific ids — the console and `wardyn setup status`
+// decode the raw JSON rather than sharing a Go type with internal/api — so a
+// check silently renamed
 // or dropped is a real break that a full-content diff would bury among
 // prose/detail wording changes. TestSetupCheckIds_Golden exists to make an id
 // rename/drop loud.
@@ -112,15 +112,6 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 				UpstreamProxySecretRef: "corp-proxy-url",
 				EgressRedirects:        []types.EgressRedirect{{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", Ecosystem: "npm"}},
 				ScmHosts:               []string{"ghes.corp.example"},
-			}},
-		})),
-
-		"with_bedrock_knobs": setupCheckIds(t, New(Config{
-			AdminToken:    adminToken,
-			BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-			Secrets: &memSecrets{m: map[string][]byte{
-				bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
-				bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
 			}},
 		})),
 

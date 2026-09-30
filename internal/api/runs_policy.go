@@ -231,11 +231,58 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: effective ui_apps lookup failed", "run_id", id, "err", err)
 	}
+	providerName, providerDeleted := s.runModelProviderFacts(r.Context(), run)
 	writeJSON(w, http.StatusOK, struct {
 		types.AgentRun
-		UIApps       []types.UIApp `json:"ui_apps,omitempty"`
-		UserTypeName string        `json:"user_type_name,omitempty"`
-	}{AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType)})
+		UIApps               []types.UIApp `json:"ui_apps,omitempty"`
+		UserTypeName         string        `json:"user_type_name,omitempty"`
+		ModelProviderName    string        `json:"model_provider_name,omitempty"`
+		ModelProviderDeleted bool          `json:"model_provider_deleted,omitempty"`
+	}{
+		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
+		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
+	})
+}
+
+// runModelProviderFacts names the model provider a run chose and says whether
+// it is gone (#996), so the run page never guesses "(removed)" from a list the
+// viewer may not be able to see: the setup status lists only what the viewer's
+// own agents use. The row freezes the id alone, so:
+//
+//   - the provider is still in the site config: its live name, deleted=false;
+//   - it is not: deleted=true, with the name the run.create snapshot froze
+//     (empty when that row carries none, and the page then shows the id);
+//   - the site config could not be read: nothing, so nothing is claimed.
+func (s *Server) runModelProviderFacts(ctx context.Context, run types.AgentRun) (name string, deleted bool) {
+	if run.ModelProviderID == "" || s.cfg.Store == nil {
+		return "", false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "api: could not read the site config for the run's model provider", "run_id", run.ID, "error", err)
+		return "", false
+	}
+	if p, ok := modelProviderByID(sc.ModelProviders, run.ModelProviderID); ok {
+		return p.Name, false
+	}
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, effectivePolicyAuditScan)
+	if err != nil {
+		return "", true
+	}
+	for _, ev := range events {
+		if canonicalAction(ev.Action) != "run.create" || ev.Outcome != "success" {
+			continue
+		}
+		var data struct {
+			ModelProvider struct {
+				Name string `json:"name"`
+			} `json:"model_provider"`
+		}
+		if json.Unmarshal(ev.Data, &data) == nil && data.ModelProvider.Name != "" {
+			return data.ModelProvider.Name, true
+		}
+	}
+	return "", true
 }
 
 // runUserTypeName is the display name of the type a run was launched as, for

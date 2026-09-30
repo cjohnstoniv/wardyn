@@ -197,9 +197,8 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // workspace simply is not onboarded.
 //
 // Runs AFTER validateWorkspaceSources (which has already refused every
-// un-onboarded source), so the index lookups below can only miss for a source
-// that gate deliberately let past — a blessed system mount, whose source is the
-// operator's own staged creds dir and belongs to no workspace.
+// un-onboarded source), so the index lookups below always find the owning
+// workspace.
 func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Request, spec types.RunPolicySpec) (int, string, error) {
 	if s.cfg.Store == nil || (len(spec.WorkspaceMounts) == 0 && len(spec.WorkspaceRepos) == 0) {
 		return 0, "", nil
@@ -210,9 +209,6 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	}
 	idx := indexWorkspacesBySource(all)
 	for _, wm := range spec.WorkspaceMounts {
-		if systemMountTargets[wm.Target] {
-			continue // operator-blessed system creds mount — source already vetted against the ceiling
-		}
 		if ws, ok := idx.localDir[wm.Source]; ok && !s.mayLaunchWorkspace(r, ws) {
 			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)

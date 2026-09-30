@@ -221,19 +221,11 @@ cmd_up() {
   # drive backend can name, so without it the API refuses EVERY drive with a 400
   # and the drives screen has nothing to exercise. Registration only — this
   # daemon still dispatches nothing.
-  #
-  # WARDYN_BEDROCK_MODEL/_REGION (console-agents, 0.7.3): the operator's boot
-  # Bedrock knobs, a FULL ARN naming a fake account (222222222222). Since #548
-  # no run is credentialed from them — a run's model credential comes only
-  # from its model provider — so they feed only the status surfaces that still
-  # report them.
   if [[ -n "${BASE_PATH}" ]]; then
     export WARDYN_BASE_PATH="${BASE_PATH}"
   fi
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     WARDYN_RUNNER_TARGET=docker \
-    WARDYN_BEDROCK_REGION="us-east-1" \
-    WARDYN_BEDROCK_MODEL="arn:aws:bedrock:us-east-1:222222222222:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0" \
     "${BIN_DIR}/wardynd" \
       -runner none \
       -listen "${ADDR}" \

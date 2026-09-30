@@ -172,10 +172,9 @@ type Config struct {
 	// to today.
 	InternalHosts []types.InternalHost `json:"internal_hosts,omitempty"`
 	// LLMUpstreams maps a public vendor host ("api.anthropic.com" /
-	// "api.openai.com") to an operator-configured internal gateway base URL
-	// (api.Config.LLMGateways, forwarded verbatim; WARDYN_ANTHROPIC_BASE_URL /
-	// WARDYN_OPENAI_BASE_URL) that the /wardyn/llm/* brokered routes dial
-	// instead of the vendor host. Control-plane-authored, same trust boundary
+	// "api.openai.com") to the run's model provider's base URL (a custom
+	// endpoint or route-through gateway, set at dispatch) that the
+	// /wardyn/llm/* brokered routes dial instead of the vendor host. Control-plane-authored, same trust boundary
 	// as TrustedCAPEM/InternalHosts above — the sandbox cannot set this. Empty
 	// (the default) => every brokered LLM route dials the vendor host,
 	// byte-identical to today.

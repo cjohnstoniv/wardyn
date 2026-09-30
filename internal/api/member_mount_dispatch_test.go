@@ -28,16 +28,11 @@ import (
 // TOCTOU defense, which is the whole point of §c check 2.
 //
 // They also pin the asymmetry that broke the feature once: the roots gate the
-// MEMBER's own binds, never the operator-staged credential mounts that ride the
-// same spec (runner.Mount.MemberAuthored).
-
-// memberCredsSource is the operator's staged ~/.claude dir — deliberately a
-// path under no member root, which is what every real deployment looks like.
-const memberCredsSource = "/var/lib/wardyn/claude-creds"
+// MEMBER's own binds only (runner.Mount.MemberAuthored).
 
 // userDispatchHarness is ownerHarness (OIDC on, real workspace list) plus the
 // two things a DISPATCH assertion needs: a runner that captures the SandboxSpec
-// and the operator ceiling that blesses the subscription credential mount.
+// and an operator ceiling.
 func userDispatchHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerStore, *fakeRunner) {
 	t.Helper()
 	st := newOwnerStore()
@@ -51,9 +46,6 @@ func userDispatchHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, 
 	cfg.DefaultPolicy = types.RunPolicySpec{
 		AllowedDomains:      []string{"api.anthropic.com"},
 		MinConfinementClass: types.CC2,
-		// The operator-blessed subscription creds mount (scripts/stage-claude-creds.sh
-		// + WARDYN_DEFAULT_POLICY) — the compose/resident-copy posture.
-		WorkspaceMounts: []types.WorkspaceMount{{Source: memberCredsSource, Target: claudeCredTarget}},
 	}
 	return New(cfg), st, fr
 }

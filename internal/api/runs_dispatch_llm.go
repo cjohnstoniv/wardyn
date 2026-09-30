@@ -24,12 +24,6 @@ import (
 // grant-authoring / SandboxSpec phases of dispatchRun. The zero value is a run
 // no provider credentials.
 type llmTransport struct {
-	// modelRun: this dispatch actually invokes the model (isModelRun) — false
-	// for task-mode=exec, a non-interactive scan run and a login box.
-	// buildRunMounts reads this to drop the operator's resident ~/.claude mount
-	// (claudeCredTarget/claudeCredJSONTarget) from a non-model run's spec even
-	// when the resolved POLICY still carries it.
-	modelRun bool
 	// bedrock is the resolved Bedrock auth posture; ready gates all Bedrock use.
 	bedrock      bedrockAuth
 	bedrockReady bool

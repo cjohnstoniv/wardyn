@@ -43,15 +43,19 @@
 #  1. wardynd, Postgres and (once built) the agent images, on a dedicated
 #     compose project — never the operator's own stack.
 #  2. wardynd pointed at the fake for its OWN direct calls (never
-#     proxy/sandbox-gated): WARDYN_ALLOW_TEST_ENDPOINTS=true,
-#     WARDYN_AWS_SSO_ENDPOINT_OVERRIDE / WARDYN_BEDROCK_BASE_URL both aimed at
-#     the fake by CONTAINER NAME on a third network only wardynd and the fake
-#     join (test/survival-walk/compose-override.yaml) — never the control-plane
-#     network, never host.docker.internal (see below). internal/api/awssso_refresh.go's createAWSSSOToken is wardynd's
-#     OWN outbound HTTP call, so this alone is enough for it.
-#  3. the org's agent standard declared bedrock_sso/shared (PUT
-#     /site-config), so a claude-code run actually dispatches on the AWS-SSO
-#     Bedrock lane at all.
+#     proxy/sandbox-gated): WARDYN_ALLOW_TEST_ENDPOINTS=true and
+#     WARDYN_AWS_SSO_ENDPOINT_OVERRIDE aimed at the fake by CONTAINER NAME on
+#     a third network only wardynd and the fake join
+#     (test/survival-walk/compose-override.yaml) — never the control-plane
+#     network, never host.docker.internal (see below).
+#     internal/api/awssso_refresh.go's createAWSSSOToken is wardynd's OWN
+#     outbound HTTP call, so this alone is enough for it.
+#  3. a bedrock_sso MODEL PROVIDER (PUT /model-providers: region, the fake as
+#     its bedrock.base_url, the start URL and the pinned account/role, the
+#     claude-code model) named claude-code's default (PUT /agent-providers),
+#     so a claude-code run actually dispatches on the AWS-SSO Bedrock lane.
+#     The credential is the admin token principal's own sign-in for that
+#     provider (wardyn-provider-<uid>-sso in its own namespace).
 #
 # THE CAPTURE NEVER GOES THROUGH THE SANDBOX-FACING PROXY, DELIBERATELY. A
 # first attempt drove the real interactive `aws sso login` device-code flow
@@ -68,7 +72,9 @@
 # non-locally-attached address space with no compose equivalent, so the same
 # recipe cannot be ported verbatim.
 #
-# Instead, this walk drives the SAME upload cmd/wardyn-aws-sso makes after a
+# Instead, this walk launches the provider's own sign-in (POST
+# /model-providers/{id}/sign-in, for a real launch-time stamp) and drives the
+# SAME upload cmd/wardyn-aws-sso makes after a
 # real device-code login — PUT ${WARDYN_PROXY_URL}/wardyn/v1/sso-token/${id},
 # a BROKERED route the proxy forwards to wardynd's own
 # /api/v1/internal/sso-token/{runID} with the run's identity injected, never
@@ -98,13 +104,9 @@
 # fake a normal container identity on a network wardynd joins removes the
 # unreliable hop entirely.
 #
-# NOT the control-plane network (#1352): wardynd's boot guard
-# (refuseBedrockAddrsOnSubnets, cmd/wardynd/bedrock_subnet_guard.go) refuses a
-# WARDYN_BEDROCK_BASE_URL that resolves onto ${PROJECT}-internal's subnet, so
-# a fake there stopped wardynd from ever booting. The third network is one
-# the per-run proxy never joins and whose subnet Docker allocates clear of
-# every existing network, so the guard evaluates the fake's real address and
-# passes, with no exemption in the guard.
+# NOT the control-plane network (#1352): the third network is one the
+# per-run proxy never joins and whose subnet Docker allocates clear of every
+# existing network.
 #
 # GUARD: like every other dedicated-stack e2e script, self-skips unless
 # WARDYN_TEST_DOCKER=1. Tears down its own project (compose down --volumes,
@@ -175,7 +177,8 @@ FAKE_CONTAINER="${PROJECT}-awsssofake"
 FAKE_NETWORK="${PROJECT}-awsfake" # the third network — see this file's header
 FAKE_URL="http://${FAKE_CONTAINER}:8090" # container DNS on ${FAKE_NETWORK}
 PG_CONTAINER="${PROJECT}-postgres"
-SECRET_NAME="wardyn-harness-aws-oauth" # internal/api/harnesscred.go's harnessCredSecretName(awsSSOProvider), shared scope
+PROVIDER_ID="survival-bedrock"
+SECRET_NAME="" # wardyn-provider-<uid>-sso, set once PUT /model-providers mints the uid
 
 EVIDENCE_DIR="${WARDYN_SURVIVAL_EVIDENCE:-${ROOT}/local/evidence/survival-walk}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -186,8 +189,7 @@ compose() {
   # test/survival-walk/compose-override.yaml's own environment: block (see
   # that file's header for why: the base compose file's wardynd service does not
   # reference these at all, so it is the OVERRIDE file's job, not a bare
-  # shell export, to get them into the container). WARDYN_BEDROCK_REGION/
-  # AWS_SSO_REGION/MODEL, by contrast, the BASE file already forwards.
+  # shell export, to get them into the container).
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" \
     WARDYN_SSH_PORT="${SSH_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_SANDBOX_PORT}" \
@@ -195,9 +197,6 @@ compose() {
     WARDYN_AGENT_IMAGES="$(jq -nc --arg cc "${AGENT_IMAGE}" --arg aws "${AWSSSO_AGENT_IMAGE}" \
       '{"claude-code":$cc,"aws-sso":$aws}')" \
     WARDYN_SURVIVAL_FAKE_URL="${FAKE_URL}" WARDYN_SURVIVAL_FAKE_NETWORK="${FAKE_NETWORK}" \
-    WARDYN_BEDROCK_REGION="${SSO_REGION}" \
-    WARDYN_BEDROCK_AWS_SSO_REGION="${SSO_REGION}" \
-    WARDYN_BEDROCK_MODEL="${BEDROCK_MODEL}" \
     WARDYN_CREDENTIAL_REAUTH_TIMEOUT="${WARDYN_SURVIVAL_REAUTH_TIMEOUT:-30s}" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" "$@"
 }
@@ -289,10 +288,9 @@ compose up -d postgres || die "compose up (postgres) failed for ${PROJECT}"
 
 # The fake (test/awsssofake/cmd), as a CONTAINER on ${FAKE_NETWORK} — never a
 # host process reached via host.docker.internal, never the control-plane
-# network (see this file's header for both). Started BEFORE wardynd so the
-# boot guard resolves its name and checks a real address, rather than
-# WARNing the check UNVERIFIED. CGO_ENABLED=0 for a static binary portable
-# into the small, already-pulled base image below.
+# network (see this file's header for both). Started BEFORE wardynd, whose
+# own refresh calls reach it by name. CGO_ENABLED=0 for a static binary
+# portable into the small, already-pulled base image below.
 #
 # STARTS WITH REAUTH DISABLED (AWSSSOFAKE_REAUTH_AFTER=0): every refresh
 # succeeds until this walk explicitly arms it (POST /_control/reauth?after=N,
@@ -339,24 +337,20 @@ for _ in $(seq 1 60); do
 done
 [[ -n "${healthy}" ]] || { compose logs wardynd | tail -80; die "wardynd did not become healthy"; }
 pass "stack up and healthy (${BASE})"
-# Healthy alone does not prove the Bedrock subnet guard checked the fake: it
-# also boots when it could not resolve the host or read the control-plane
-# subnet, WARNing the check UNVERIFIED.
-compose logs wardynd >"${EVIDENCE_DIR}/wardynd-boot.log" 2>&1 || die "could not read wardynd's boot log"
-# A positive marker too: an empty or failed capture must not read as a pass.
-# The plain-HTTP Bedrock WARN is logged right after the guard returns nil.
-grep -qF "WARDYN_BEDROCK_BASE_URL is plain http://" "${EVIDENCE_DIR}/wardynd-boot.log" \
-  || die "wardynd's boot log does not show the Bedrock guard completing (no plain-HTTP Bedrock WARN)"
-if grep -qE "could not resolve WARDYN_BEDROCK_BASE_URL|could not determine the docker control-plane network's subnet" "${EVIDENCE_DIR}/wardynd-boot.log"; then
-  die "wardynd booted without checking the fake's address against the control-plane subnet (UNVERIFIED WARN in its log)"
-fi
-pass "Bedrock subnet guard checked ${FAKE_URL} against ${PROJECT}-internal and passed"
 
 # ── the preconditions ────────────────────────────────────────────────────────
-step "declaring the org agent standard: claude-code on bedrock_sso, shared credential"
-code=$(api PUT /api/v1/site-config '{"agent_providers":{"agents":[{"id":"claude-code","mechanism":"bedrock_sso","credential_source":"shared"}]}}')
-[[ "${code}" == "200" ]] || { cat "${TMPDIR}/resp.json" >&2; die "PUT /site-config (agent_providers) answered ${code}"; }
-pass "agent standard declared"
+step "configuring the model provider: ${PROVIDER_ID} (bedrock_sso, the fake as its Bedrock endpoint) as claude-code's default"
+code=$(api PUT /api/v1/model-providers "$(jq -nc --arg id "${PROVIDER_ID}" --arg r "${SSO_REGION}" --arg b "${FAKE_URL}" \
+  --arg u "${SSO_START_URL}" --arg a "${PIN_ACCOUNT}" --arg role "${PIN_ROLE}" --arg m "${BEDROCK_MODEL}" \
+  '{providers:[{id:$id,kind:"bedrock_sso",bedrock:{region:$r,base_url:$b,sso_start_url:$u,sso_account_id:$a,sso_role_name:$role},
+    harnesses:[{harness:"claude-code",model:$m}]}]}')")
+[[ "${code}" == "200" ]] || { cat "${TMPDIR}/resp.json" >&2; die "PUT /model-providers answered ${code}"; }
+PROVIDER_UID="$(jq -r --arg id "${PROVIDER_ID}" '.providers[] | select(.id == $id) | .uid // empty' "${TMPDIR}/resp.json")"
+[[ -n "${PROVIDER_UID}" ]] || { cat "${TMPDIR}/resp.json" >&2; die "PUT /model-providers minted no uid for ${PROVIDER_ID}"; }
+SECRET_NAME="wardyn-provider-${PROVIDER_UID}-sso"
+code=$(api PUT /api/v1/agent-providers "$(jq -nc --arg id "${PROVIDER_ID}" '{agents:[{id:"claude-code",default_provider:$id}]}')")
+[[ "${code}" == "200" ]] || { cat "${TMPDIR}/resp.json" >&2; die "PUT /agent-providers answered ${code}"; }
+pass "provider ${PROVIDER_ID} (uid ${PROVIDER_UID}) is claude-code's default"
 
 # fake_device_login -> prints a fresh awsSSOBlob (JSON, matching
 # internal/api/harnesscred.go's struct) on stdout, from a REAL RegisterClient +
@@ -395,18 +389,18 @@ fake_device_login() {
       account_id:$a,role_name:$role,expires_at:$exp,captured_at:$now}'
 }
 
-# capture_aws_credential: launch a login run (POST /setup/harness-login, for
-# a real launch-time stamp), then upload a freshly-minted blob into ITS OWN
+# capture_aws_credential: launch the provider's sign-in run (POST
+# /model-providers/{id}/sign-in, for a real launch-time stamp), then upload a freshly-minted blob into ITS OWN
 # sandbox via the same brokered route cmd/wardyn-aws-sso uses
 # (PUT ${WARDYN_PROXY_URL}/wardyn/v1/sso-token/${WARDYN_RUN_ID}, read out of
 # the container's own env — never a bearer token this script holds). Sets
 # LOGIN_RUN_ID (teardown's own safety net). Called again by the resolve step
 # once the credential is spent.
 capture_aws_credential() {
-  code=$(api POST /api/v1/setup/harness-login "$(jq -nc --arg u "${SSO_START_URL}" '{provider:"aws",sso_start_url:$u}')")
-  [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /setup/harness-login answered ${code}"; }
+  code=$(api POST "/api/v1/model-providers/${PROVIDER_ID}/sign-in")
+  [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /model-providers/${PROVIDER_ID}/sign-in answered ${code}"; }
   LOGIN_RUN_ID="$(jq -r '.run_id // .id' "${TMPDIR}/resp.json")"
-  [[ -n "${LOGIN_RUN_ID}" && "${LOGIN_RUN_ID}" != "null" ]] || { cat "${TMPDIR}/resp.json" >&2; die "harness-login: no run id in response"; }
+  [[ -n "${LOGIN_RUN_ID}" && "${LOGIN_RUN_ID}" != "null" ]] || { cat "${TMPDIR}/resp.json" >&2; die "sign-in: no run id in response"; }
   local sandbox="wardyn-agent-${LOGIN_RUN_ID}" up=""
   for _ in $(seq 1 30); do
     [[ "$(docker inspect -f '{{.State.Running}}' "${sandbox}" 2>/dev/null)" == "true" ]] && { up=1; break; }
@@ -421,7 +415,7 @@ capture_aws_credential() {
   for _ in $(seq 1 30); do
     code=$(api GET /api/v1/setup/status)
     [[ "${code}" == "200" ]] || { sleep 2; continue; }
-    [[ "$(jq -r '.model_access.state // empty' "${TMPDIR}/resp.json")" == "live" ]] && { live=1; break; }
+    [[ "$(jq -r --arg id "${PROVIDER_ID}" '.provider_access[]? | select(.provider == $id) | .state' "${TMPDIR}/resp.json")" == "live" ]] && { live=1; break; }
     sleep 2
   done
   # The login sandbox is an INTERACTIVE run that stays open (idle, for
@@ -441,8 +435,8 @@ capture_aws_credential() {
 }
 
 step "capturing the initial AWS SSO session"
-capture_aws_credential || die "the initial capture never reached model_access.state=live (see ${EVIDENCE_DIR}/awsssofake.log)"
-pass "initial capture landed (model_access.state=live, via login run ${LOGIN_RUN_ID})"
+capture_aws_credential || die "the initial capture never reached provider_access[${PROVIDER_ID}].state=live (see ${EVIDENCE_DIR}/awsssofake.log)"
+pass "initial capture landed (provider_access[${PROVIDER_ID}].state=live, via sign-in run ${LOGIN_RUN_ID})"
 
 # ── WHAT THIS WALK PROVES, AND WHAT IT DELIBERATELY DOES NOT ────────────────
 #
@@ -476,25 +470,21 @@ pass "initial capture landed (model_access.state=live, via login run ${LOGIN_RUN
 # untestable here without either patching wardynd's runner or letting the
 # sandbox dial a REAL AWS hostname (which this walk must never do).
 #
-# What it proves INSTEAD: this walk declares `agent_providers` (never
-# `model_providers`), so the credential check CREATE RUN actually runs is
-# internal/api/runs.go:264's `s.enforceCreateLLMMechanism(ctx, w, req, spec,
-# bedrockRef, ssoSubject, &modelCred, true)` — the trailing `true` is
-# `refresh`, meaning this call may redeem and rotate the captured SSO session,
-# not merely read its cached state (runs_dispatch_llm_mechanism.go's own doc
-# comment on resolveRunLLMLanes). That function calls resolveRunLLMLanes
-# (runs_dispatch_llm_mechanism.go:439), which calls resolveBedrockAuth
-# (runs_bedrock.go), which — when a captured SSO credential is on file — calls
-# refreshAWSSSOBlob (internal/api/awssso_refresh.go) with refresh=true. This
-# is wardynd's OWN direct outbound call, never proxy/sandbox-gated, and
-# reliable here (container-to-container to the fake).
+# What it proves INSTEAD: CREATE RUN checks the run's model provider's
+# credential with refresh on (provider_bedrock.go's Bedrock provider access
+# check), so the captured SSO session is redeemed and rotated, not merely read
+# from its cached state — through refreshAWSSSOBlob
+# (internal/api/awssso_refresh.go). This is wardynd's OWN direct outbound
+# call, never proxy/sandbox-gated, and reliable here (container-to-container
+# to the fake).
 #
 # On a refresh failure the SAME code path does two things worth reading back
 # directly rather than inferring from a dispatch refusal alone
 # (harnesscred.go:417 deleteSpentAWSSSOBlob, awssso_refresh.go:399
 # markAWSSSOTokenSpent):
-#   - the stored credential (Postgres `secrets` row named
-#     "wardyn-harness-aws-oauth" for this shared-scope walk) is DELETED —
+#   - the stored credential (the Postgres `secrets` row named
+#     wardyn-provider-<uid>-sso, the admin token principal's own sign-in for
+#     the provider) is DELETED —
 #     from then on every dispatch refuses as "no credential", not literally
 #     "spent"; and
 #   - the refresh token's fingerprint (8 bytes of its SHA-256, hex) is written to
@@ -646,7 +636,7 @@ try_dispatch
 pass "dispatch still refuses, consistent with what Postgres holds"
 
 step "signing in again (fresh capture) to clear the spent state"
-capture_aws_credential || die "the post-restart capture never reached model_access.state=live"
+capture_aws_credential || die "the post-restart capture never reached provider_access[${PROVIDER_ID}].state=live"
 pass "fresh capture landed"
 
 step "confirming dispatch succeeds again after the resolve"

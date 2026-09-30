@@ -255,6 +255,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A member's bounded Azure DevOps list is said out loud on the 201 and the
+	// run.create row (#1384); the none-permitted refusal is dispatch's, which
+	// preflight mirrors (adoStandingAtDoor).
+	if narrowed, _ := s.adoStandingAtDoor(r, spec, scmSite, ceiling); narrowed != "" {
+		policyWarns = append(policyWarns, narrowed)
+	}
 
 	// Host capacity, the last refusal and before the mint, the same siting as
 	// the autonomy gate: a refusal leaves no identity and no run row.
@@ -664,7 +670,13 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		data["credential_confinement"] = credentialConfinementBelowFloor
 	}
 	if mp.chosen {
-		data["model_provider"] = map[string]any{"id": mp.provider.ID, "kind": mp.provider.Kind}
+		snapshot := map[string]any{"id": mp.provider.ID, "kind": mp.provider.Kind}
+		if mp.provider.Name != "" {
+			// The name the run was launched under (#996): a provider deleted later
+			// takes its name with it, and the row freezes the id alone.
+			snapshot["name"] = mp.provider.Name
+		}
+		data["model_provider"] = snapshot
 	}
 	return data
 }

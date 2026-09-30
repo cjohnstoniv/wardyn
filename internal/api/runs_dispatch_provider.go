@@ -386,19 +386,20 @@ func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentR
 }
 
 // modelCredentialInjection is the strip's test: whether an injection rule
-// would credential a model, by the secret it names or the host it is bound
-// for (dropLegacyModelInjections' list). A revive applies it to a stored
+// would credential a model, by the secret it names (a provider's, a retired
+// operator-lane name or sentinel) or the host it is bound for
+// (dropLegacyModelInjections' list). A revive applies it to a stored
 // config (stripRevivedModelInjections).
 func (s *Server) modelCredentialInjection(laneHosts []string, serving func(string) bool) func(egress.InjectionRule) bool {
 	hosts := slices.Clone(laneHosts)
 	for _, h := range harnessCatalog {
 		if h.Gateway != nil {
-			hosts = append(hosts, h.Gateway.host, gatewayHost(s.cfg.LLMGateways[h.Gateway.host]))
+			hosts = append(hosts, h.Gateway.host)
 		}
 	}
 	return func(r egress.InjectionRule) bool {
 		name := r.SecretName
-		return strings.HasPrefix(name, providerSecretPrefix) ||
+		return strings.HasPrefix(name, providerSecretPrefix) || slices.Contains(retiredModelCredentialNames, name) ||
 			name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret ||
 			name == types.AWSSSOAccessTokenSecret || name == bedrockAPIKeySecret ||
 			slices.ContainsFunc(hosts, func(h string) bool { return h != "" && hostEqual(h, r.Host) }) ||
@@ -437,14 +438,14 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 	switch run.Agent {
 	case "claude-code":
 		sandboxEnv[envAnthropicAPIKey] = "wardyn-proxy-injected"
-		if model := cmp.Or(lane.key.model, s.cfg.AgentAnthropicModel); model != "" {
+		if model := lane.key.model; model != "" {
 			sandboxEnv[envAnthropicModel] = model
 		}
 	case "codex-cli":
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
 	}
-	return llmTransport{modelRun: true, provider: lane.chosen}
+	return llmTransport{provider: lane.chosen}
 }
 
 // authorProviderKeyInjection writes the key arm's one model-credential grant:

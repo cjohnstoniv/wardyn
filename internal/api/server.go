@@ -36,7 +36,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -210,25 +209,6 @@ type Config struct {
 	// reads to drop the admin-token form and the role-derivation caveat — can
 	// never overclaim.
 	SSOOnly bool
-	// SubscriptionPostureOK reports whether this deployment may resolve a SHARED
-	// subscription credential (one operator's live Anthropic OAuth token) into an
-	// agent run. Decided once at boot by subscriptionInjectPosture (cmd/wardynd) —
-	// false on the k8s runner, false when an OIDC issuer is configured, and false
-	// off local mode unless WARDYN_ALLOW_SHARED_SUBSCRIPTION waives that one clause.
-	//
-	// This is a COMPLIANCE boundary, not only a security one: the harness vendor's
-	// terms require each end user to authenticate with their own credential, so a
-	// multi-user deployment sharing one subscription puts the OPERATOR in breach.
-	// It is enforced at three depths — providers are not constructed at boot,
-	// dispatch does not author a sentinel grant, and the injection sink refuses to
-	// resolve one. The sink is the load-bearing layer: four other code paths can
-	// put a sentinel grant on a run without consulting dispatch (a stored policy
-	// naming it, an integration_id, a recorded profile, the managed fallback).
-	SubscriptionPostureOK bool
-	// SubscriptionPostureReason says WHY injection is unavailable, so the setup and
-	// integrations surfaces can explain it instead of rendering identically to
-	// "the operator never logged in". Empty when SubscriptionPostureOK is true.
-	SubscriptionPostureReason string
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
@@ -244,31 +224,6 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
-	// LLMGateways maps a public model-provider host ("api.anthropic.com" /
-	// "api.openai.com") to an operator-configured internal gateway base URL
-	// (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL, validated by
-	// ValidateLLMGateways). Control-plane-authored, same trust boundary as
-	// TrustedCAPEM above — the sandbox cannot set this. nil/empty (the
-	// default) => every lane dials the public host, byte-identical to today.
-	// Consulted by (*Server).llmProviderFor (the api-key lane's host
-	// substitution) and, for Anthropic specifically, by
-	// (*Server).anthropicBaseURL/anthropicGatewayHost/anthropicGatewayHostPort
-	// (the subscription and Wardyn-managed lanes, runs_dispatch_llm.go) and the
-	// subscription-injection host allowlist (injection.go). The harness-login
-	// (`claude setup-token`) lane never consults it and always stays on the
-	// public host — that flow mints the OAuth token itself.
-	LLMGateways map[string]string
-	// LLMGatewayAuth maps the same public model-provider host key as
-	// LLMGateways to an operator-configured injection header/format override
-	// (WARDYN_<VENDOR>_GATEWAY_HEADER / _GATEWAY_FORMAT, validated by
-	// ValidateLLMGateways) — independent of whether that provider also has an
-	// LLMGateways entry. nil/empty (the default) => every provider keeps the
-	// harness catalog's compile-time convention (harness.go's Gateway field),
-	// byte-identical to today. Consulted by (*Server).llmProviderFor, which
-	// applies Header/Format field-by-field onto the InjectionRule it builds —
-	// never onto the mint path directly, so a stored/proposed grant always
-	// reflects the resolved convention at proposal time.
-	LLMGatewayAuth map[string]LLMGatewayAuth
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -373,50 +328,10 @@ type Config struct {
 	// (must parse if set); nil disables the override and the convention is used
 	// for every agent.
 	AgentImages map[string]string
-	// AgentAnthropicModel, when set, pins the ANTHROPIC_MODEL env inside a
-	// claude-code sandbox (e.g. "opus") so the agent uses a specific model rather
-	// than the account/CLI default (which a promo can push to a cheaper model like
-	// Fable). Empty = unset; the CLI's own default is used. Applies in both
-	// subscription and api-key auth modes.
-	AgentAnthropicModel string
-	// BedrockRegion / BedrockModel, when BOTH set, opt a claude-code run into the
-	// Amazon Bedrock Anthropic transport (CLAUDE_CODE_USE_BEDROCK) instead of the
-	// default api-key/proxy-inject path — an enterprise path with no direct
-	// Anthropic egress, billed via AWS. BedrockModel is a Bedrock model id (a
-	// cross-region inference-profile id like "us.anthropic.claude-..." is what
-	// claude-code actually expects, not a bare foundation-model id). Boot-time
-	// config only (mirrors AgentAnthropicModel — no live admin write path); the
-	// AWS credentials themselves come from the secret store (aws-access-key-id /
-	// aws-secret-access-key / optional aws-session-token), read directly at
-	// dispatch time because Bedrock's AWS SigV4 request signing can't be
-	// proxy-injected the way a static x-api-key header can. Since 0.8 no run
-	// is credentialed from these (a run's Bedrock credential is its model
-	// provider's); the setup readiness row still reads them.
+	// BedrockRegion is read by nothing: the boot Bedrock lane (WARDYN_BEDROCK_*)
+	// is retired and a run's region is its provider's. ponytail: kept only so
+	// the ssotoken tests that still set it compile; delete it with those lines.
 	BedrockRegion string
-	BedrockModel  string
-	// BedrockBaseURL re-points the Bedrock DATA plane (bedrock-runtime) at a
-	// private VPC/PrivateLink endpoint — the default posture for a regulated
-	// estate, where inference traffic must never traverse the public internet.
-	// Normalized https base URL (WARDYN_BEDROCK_BASE_URL, validated by
-	// ValidateBedrockBaseURL at boot). Empty (the default) => every Bedrock
-	// lane dials the regional public host, byte-identical to today.
-	//
-	// A boot flag, never a SiteConfig field: in bearer mode this value
-	// IS the TLS-MITM target and the Authorization-injection scope, so a
-	// runtime-writable field would let an admin re-point the operator's Bedrock
-	// credential at a host of their choosing with no restart and no boot log —
-	// the trust class THREAT-MODEL.md pins as boot-time-only. It is deliberately
-	// NOT folded into LLMGateways either: that map carries brokered
-	// reverse-proxy semantics (a run's api_key grant targets it and the
-	// proxy serves the host over /wardyn/llm/*), while Bedrock is a CONNECT
-	// tunnel with SigV4, or MITM + bearer.
-	//
-	// Ceiling: ONE data-plane host per deployment — the override wins
-	// for every region, including a workspace's own region override, so a
-	// multi-region estate must not set it. The CONTROL plane
-	// (bedrock.<region>.amazonaws.com) is deliberately NOT overridden; an
-	// inference-profile ARN is the answer there.
-	BedrockBaseURL string
 	// AWSSSOEndpointOverride re-points the two AWS IAM Identity Center services
 	// (sso-oidc and the sso portal) at ONE server of the operator's choosing —
 	// a TEST hatch, and nothing else. It exists so "a member signs in on
@@ -424,15 +339,15 @@ type Config struct {
 	// without a real AWS tenant, by pointing the login sandbox, the dispatch
 	// egress list and the dispatch-time token renewal at test/awsssofake running
 	// on the cluster. See awssso_endpoint.go for the five derivations it moves
-	// and why it is neither BedrockBaseURL nor the global AWS_ENDPOINT_URL.
+	// and why it is not the global AWS_ENDPOINT_URL.
 	//
 	// Normalized by ValidateAWSSSOEndpointOverride at boot, which REFUSES a
 	// non-empty value unless WARDYN_ALLOW_TEST_ENDPOINTS=true; wardynd also
 	// WARNs on every boot that carries it. Empty (the default, and every real
 	// deployment) => every SSO derivation is byte-identical to a build that
-	// never had this field. A BOOT flag, never a SiteConfig field, for the same
-	// reason as BedrockBaseURL: a runtime-writable spelling would let an
-	// admin re-point a credential exchange with no restart and no boot log.
+	// never had this field. A BOOT flag, never a SiteConfig field: a
+	// runtime-writable spelling would let an admin re-point a credential
+	// exchange with no restart and no boot log.
 	AWSSSOEndpointOverride string
 	// AllowTestEndpoints is WARDYN_ALLOW_TEST_ENDPOINTS: the only thing that lets
 	// a model provider's bedrock.base_url be plain http:// (validateProviderBedrock).
@@ -454,34 +369,6 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
-	// BedrockAWSConfigDir, when set, bind-mounts a host AWS config directory
-	// (a `~/.aws`) READ-ONLY into the sandbox at /home/agent/.aws, so the AWS
-	// SDK inside the run resolves credentials itself — including short-lived AWS
-	// SSO / IAM Identity Center sessions, which it refreshes on demand. This is
-	// the HOST-MODE alternative to pasting static aws-access-key-id/-secret
-	// secrets (which expire under SSO and must be re-pasted): with the mount,
-	// `aws sso login` on the host is enough and nothing is stored in Wardyn.
-	// It is OFF by default. Host-mode setup.sh auto-detects ~/.aws; the compose
-	// stack supports it too via the WARDYN_BEDROCK_AWS_DIR bind (same
-	// host==container path, :ro — see deploy/compose/docker-compose.yaml), an
-	// opt-in the operator sets explicitly. Because it mounts the operator's
-	// ambient cloud credentials into runs, it is a single-user / self-hosted
-	// choice, not for a shared multi-tenant service (invariant 1) — the deliberate
-	// residency tradeoff already accepted for the ~/.claude subscription mount.
-	// Empty = disabled. Takes precedence over the resident static-key path but not
-	// over a bedrock-api-key bearer.
-	BedrockAWSConfigDir string
-	// BedrockAWSProfile, when set, is passed as AWS_PROFILE into the sandbox so
-	// the SDK selects a named profile from the mounted config (common with SSO:
-	// `aws sso login --profile X`). Only meaningful with BedrockAWSConfigDir.
-	BedrockAWSProfile string
-	// BedrockAWSSSORegion is the AWS region whose SSO endpoints (oidc.<r>,
-	// portal.sso.<r>) the sandbox is allowed to reach so the SDK can exchange an
-	// SSO token for role credentials. It often differs from BedrockRegion.
-	// Empty defaults to BedrockRegion. Used by the BedrockAWSConfigDir mount path
-	// AND by the containerized `aws sso login` (harnessLogin.loginEgress), which
-	// has no other way to know which regional SSO endpoints to allow.
-	BedrockAWSSSORegion string
 	// Secrets is the at-rest secret store. It backs the admin secret-management
 	// endpoints (PUT/DELETE/list — values are NEVER readable via the API) and
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
@@ -497,28 +384,6 @@ type Config struct {
 	// A function rather than a value so the provider row stays the single
 	// source of truth and the sign-in never acts on a cached copy of it.
 	ADOEntra ADOEntraSource
-	// SubscriptionToken, when non-nil, yields the operator's LIVE Anthropic
-	// subscription OAuth access token from the resident ~/.claude credentials.
-	// The internal injection-resolve endpoint uses it to inject a fresh token
-	// per request for subscription runs (secret name subscriptionOAuthSecret),
-	// so the sandbox holds only an inert sentinel instead of a copy that goes
-	// stale. Nil disables the subscription-injection path (falls back to the
-	// resident-copy behavior).
-	SubscriptionToken subscription.Provider
-	// ManagedToken, when non-nil, yields the Wardyn-MANAGED Anthropic subscription
-	// token — a long-lived `claude setup-token` the operator captured via the
-	// container-login flow, stored age-encrypted. The injection sink resolves the
-	// types.ManagedOAuthSecret sentinel through it, exactly like SubscriptionToken
-	// resolves the resident-host sentinel. This is what credentials a subscription
-	// run in a COMPOSE deployment whose distroless wardynd has no host ~/.claude.
-	// Nil disables the managed-injection path.
-	ManagedToken subscription.Provider
-	// DisableSubscriptionInject is the operator ESCAPE HATCH: when true (env
-	// WARDYN_SUBSCRIPTION_INJECT=off), subscription runs keep the legacy
-	// resident-copy behavior (the mounted credential, which can go stale) instead
-	// of auto-enabling TLS-MITM + injecting the live host token. Default false =
-	// the safe proxy-side default whenever a SubscriptionToken provider is wired.
-	DisableSubscriptionInject bool
 	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
 	// same boundary, reason, path and peer — into the first row plus one summary
 	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,
@@ -722,7 +587,7 @@ type Config struct {
 	// media-src this base's host is echoed into (cspMediaSrc,
 	// security_headers.go). Empty (the default) = the two hardcoded GitHub
 	// hosts, byte-identical to today. Control-plane-authored only, same trust
-	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
+	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
 }

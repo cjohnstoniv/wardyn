@@ -134,13 +134,6 @@ func testLocalModeFlags(listen string, trustFwd bool) *bootFlags {
 		localOperator: new(string),
 		oidcIssuer:    new(string),
 		localTrustFwd: &tf,
-		// resolveLocalMode continues past the local-mode branch into the
-		// host-mode Bedrock auto-detect; these three are read there. Without
-		// them the function nil-derefs and the panic stands in for the
-		// assertion, which is a green that means nothing.
-		bedrockRegion: new(string),
-		bedrockModel:  new(string),
-		bedrockAWSDir: new(string),
 	}
 }
 

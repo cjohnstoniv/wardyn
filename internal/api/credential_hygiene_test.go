@@ -110,32 +110,6 @@ func TestInternalInjection_RefusedStoredKeyIsDefinitiveAndSaysSo(t *testing.T) {
 	}
 }
 
-// The managed subscription token is a stored credential too: a store outage
-// is the transient 503, and a resolve carries the stored-key expiry.
-func TestInternalInjection_ManagedTokenIsAStoredCredential(t *testing.T) {
-	h, sec := newSecretsHarness(t)
-	h.srv.cfg.Store = &bearerGuardStore{} // no provider block: the legacy sentinels resolve (#551)
-	h.srv.router = h.srv.routes()
-	h.srv.cfg.SubscriptionPostureOK = true
-	blob, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-managed-token-value"})
-	sec.m[harnessCredSecretName("anthropic")] = blob
-	h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: "j-m",
-		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "Authorization", SecretName: types.ManagedOAuthSecret}}
-	token := h.mintRunToken(t, uuid.New())
-
-	h.srv.cfg.ManagedToken = NewManagedCredProvider(sec, "anthropic")
-	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
-	if ri := decodeResolved(t, rr.Body.Bytes()); rr.Code != http.StatusOK || ri.ExpiresAt == 0 {
-		t.Fatalf("managed resolve: %d expires_at=%d, want 200 with the stored-key expiry", rr.Code, ri.ExpiresAt)
-	}
-
-	h.srv.cfg.ManagedToken = NewManagedCredProvider(failingSecrets{sec, errStoreDown}, "anthropic")
-	rr = do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
-	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "couldn't reach the service") {
-		t.Fatalf("managed store outage: %d %s, want the transient 503", rr.Code, rr.Body.String())
-	}
-}
-
 // The captured AWS SSO arm answered every store error with the 503 the proxy
 // now rides out: an access-denied store would have kept a revoked session
 // injected for the whole grace.
@@ -337,27 +311,32 @@ func TestCaptureLoginGrant_ALostStoreWriteKeepsTheHeldTokenMasked(t *testing.T) 
 	}
 }
 
-// countingSecrets counts Gets and can be made to fail.
-type countingSecrets struct {
-	*memSecrets
+// countingOwnSecrets is one person's namespace holding one row, counting
+// Gets and able to fail them — the strict read ownSecret makes.
+type countingOwnSecrets struct {
+	secretstore.Store
+	name string
+	blob []byte
 	gets atomic.Int32
 	fail atomic.Bool
 }
 
-func (c *countingSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+func (c *countingOwnSecrets) For(string) secretstore.Store           { return c }
+func (c *countingOwnSecrets) List(context.Context) ([]string, error) { return []string{c.name}, nil }
+func (c *countingOwnSecrets) Get(context.Context, string) ([]byte, error) {
 	c.gets.Add(1)
 	if c.fail.Load() {
 		return nil, errStoreDown
 	}
-	return c.memSecrets.Get(ctx, name)
+	return c.blob, nil
 }
 
-// §2.3a.4: the managed token was read from the store on every resolve. It is
-// cached for a minute now, and only a successful read is cached.
+// §2.3a.4: a person's Claude sign-in was read from the store on every
+// resolve. It is cached for a minute now, and only a successful read is cached.
 func TestManagedCredProvider_CachesAMinuteButNeverAFailure(t *testing.T) {
 	blob, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-managed-token-value"})
-	st := &countingSecrets{memSecrets: &memSecrets{m: map[string][]byte{harnessCredSecretName("anthropic"): blob}}}
-	p := NewManagedCredProvider(st, "anthropic").(*managedCredProvider)
+	st := &countingOwnSecrets{name: providerSecretName("uid-1", providerOAuthPart), blob: blob}
+	p := (&Server{cfg: Config{Secrets: st}}).ownerSubscriptionToken("alice@example.com", "uid-1").(*managedCredProvider)
 
 	st.fail.Store(true)
 	if _, err := p.Current(context.Background()); err == nil {

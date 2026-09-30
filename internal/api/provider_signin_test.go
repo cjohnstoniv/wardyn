@@ -82,7 +82,6 @@ func signInFixture(t *testing.T, cs *capStore, site types.SiteConfig) (*Server, 
 	sec := &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	cfg.Secrets = sec
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion, cfg.BedrockAWSSSORegion = "eu-central-1", "eu-central-1"
 	cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg), st, audit, sec
@@ -313,8 +312,6 @@ func providerSSOUpload(t *testing.T, p types.ModelProvider, site types.SiteConfi
 	}}
 	srv, sec, tok := newSSOUploadSrvWith(t, events, site, runID)
 	sec.owned = map[string]map[string][]byte{}
-	// Boot config no provider names: a binding that read it would show.
-	srv.cfg.BedrockRegion = "eu-central-1"
 	return srv, sec, tok, runID
 }
 
@@ -519,7 +516,7 @@ func waitSignInRunning(t *testing.T, st *signInStore, runID uuid.UUID) {
 // the provider's own name.
 func providerReauthFixture(t *testing.T) (*reauthFixture, types.ModelProvider) {
 	t.Helper()
-	p := types.ModelProvider{ID: "bedrock-prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
+	p := types.ModelProvider{ID: "bedrock-prod", Name: "Bedrock prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
 		Bedrock: &types.BedrockSettings{Region: reauthRegion, SSOStartURL: "https://acme.awsapps.com/start",
 			SSOAccountID: "111122223333", SSORoleName: "WardynAgent"},
 		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: brModel}}}
@@ -562,6 +559,11 @@ func TestProviderSignInReauth(t *testing.T) {
 		_ = json.Unmarshal(ap.RequestedScope, &sc)
 		if sc["provider"] != p.ID || sc["provider_uid"] != p.UID || sc["owner"] != "alice@example.com" {
 			t.Fatalf("requested_scope = %v, want the provider's id and uid and alice", sc)
+		}
+		// The scope is the 0022 dedup key: identity only. A provider's name (#996) rides
+		// GET /runs/{id} instead, so renaming a provider cannot admit a second PENDING row.
+		if len(sc) != 5 || sc["provider_name"] != "" {
+			t.Errorf("requested_scope = %v, want exactly mechanism, credential_source, owner, provider and provider_uid", sc)
 		}
 	})
 
