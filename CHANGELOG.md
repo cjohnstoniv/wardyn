@@ -137,6 +137,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
     upgrade holds the old ids: its next Azure DevOps request is refused (`scope_changed`, drift
     `capability_ceiling`) and it must be relaunched. Update any `WARDYN_DEFAULT_POLICY` file that
     names `read` before upgrading.
+- **Breaking: Azure DevOps stops using shared credentials (#1429).** A shared personal access token or
+  SSH key was one account's standing credential, used for every person's runs. From this release an
+  Azure DevOps provider row carries only per-person lanes, and both write doors (`PUT
+  /workspace-providers` and `PUT /site-config`) refuse the retired ones with a `400`: a `pat` lane
+  that is not `per_user` (and any `pat` lane on a row of `dev.azure.com` or `*.visualstudio.com`
+  addresses alone), any `ssh` lane, and a row with no lanes at all, which used to mean the shared
+  `pat` and `ssh` lanes; an empty lane list on an Azure DevOps row no longer admits any lane at run
+  time either. An Azure DevOps Server row, which has no Entra sign-in, is now `lanes: ["pat"]` with
+  `credential_source: per_user` and no `entra` block; a hosted row's own token is `lanes:
+  ["entra"]` with `token_mode: own_pat`, and any number of enabled `own_pat` rows may coexist (only a
+  row that signs in is limited to one). Migration `0103_retire_ado_shared_credentials` rewrites every
+  stored Azure DevOps row that named a shared lane or none: pat and ssh leave its lanes, and a row left
+  with no per-person lane is turned off (`disabled`) with those per-person shapes, keeping its id and
+  addresses; a hosted row that already has the `entra` lane keeps it and stays as it was. A turned-off
+  row still claims its hosts, so **clones from those organisations fail with a reason until an admin
+  chooses how people connect and turns the row on**, and `/setup/status` carries a non-blocking
+  `ado_rows_off` warning until they do. Runs read a stored git token for an Azure DevOps host from the
+  run owner's own row only (`owner_only` is forced on the grant, and a person with no token of their own is refused at launch, for every `dev.azure.com` and `*.visualstudio.com` address whether or not a row names it), an `ssh_key` grant for one is dropped
+  with a warning, the operator can no longer store a secret under a retired shared name (`PUT
+  /secrets` answers `400`), and a `pat` lane is never used for a `dev.azure.com` or
+  `*.visualstudio.com` address, even on a row that also names a Server one. **Upgrading:** at the
+  **first start after the upgrade** (once; never again) Wardyn **deletes, irreversibly**, these stored
+  secrets for every Azure DevOps host it can name (`dev.azure.com`, `ssh.dev.azure.com`,
+  `vs-ssh.visualstudio.com`, every host an Azure DevOps provider row names, and every
+  `*.visualstudio.com` entry in `scm_hosts`), in the operator's namespace and in every person's
+  namespace: `git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>`, where `<host>` is the host
+  with each run of characters other than letters and digits turned into one `-`
+  (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`, `known-hosts-ssh-dev-azure-com`,
+  `git-pat-tfs-corp-example`). A stored secret is write-only and cannot be exported, so **keep your
+  own copy first if you might roll back.** Each namespace that held any is audited once as
+  `ado_shared_credential.retire`, listing names and no values. **Not deleted:** a shared token, key or
+  known-hosts secret stored under any other name (one a policy's `secret_name` points at, for
+  example) — remove it yourself; and any name whose host a GitHub or other non-Azure DevOps provider
+  row also names (or that slugs to the same name as one, or `github.com`), which is skipped and logged
+  as a warning, since it may be that forge's own credential — delete a shared Azure DevOps credential
+  there by hand. Wardyn's own sealed Azure DevOps names and every other forge's secrets are left
+  alone. GitHub and GitLab rows are unchanged.
 - **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
   to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
   (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a

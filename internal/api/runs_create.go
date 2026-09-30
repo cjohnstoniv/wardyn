@@ -457,6 +457,14 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	specRepos := repoLocatorsOf(spec.WorkspaceRepos)
 	for _, g := range spec.EligibleGrants {
 		grantID := uuid.New()
+		// A stored git token for an Azure DevOps host is read from the run
+		// owner's OWN row only (#1429): the shared, operator-namespace token is
+		// retired, and the fallback to it is what would serve it.
+		if g.Kind == types.GrantGitPAT {
+			if host, _, _, derr := gitPATScopeFields(g.Scope); derr == nil && adoGrantHost(sc, host) {
+				g.OwnerOnly = true
+			}
+		}
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID:        grantID,
 			RunID:     runID,
@@ -514,6 +522,12 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 			// validatePolicySpec already vetted the host is a supported SSH-over-443
 			// provider, so sshOver443Endpoint is expected to resolve here.
 			if host, _, _, _, derr := sshKeyScopeFields(g.Scope); derr == nil {
+				// Azure DevOps has no SSH lane (#1429): the grant row stays as an
+				// eligibility record, and nothing is wired, so no key reaches the sandbox.
+				if adoGrantHost(sc, host) {
+					gw.warnings = append(gw.warnings, adoSSHGrantDropped)
+					continue
+				}
 				// The `ssh` lane, vetoed: no WARDYN_SSH_GRANTS entry and no :443
 				// endpoint added — so no private key is ever written into the sandbox
 				// for a clone the admin said must not use one.

@@ -144,7 +144,7 @@ func TestADONames_ProjectScopedProviderRow(t *testing.T) {
 		"https://tfs.corp.example/Payments%20Platform",
 	} {
 		block := normalizeWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{
-			{ID: "row", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{base}},
+			adoServerPAT(types.GitProvider{ID: "row", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{base}}),
 		}})
 		if err := validateWorkspaceProviders(block, true); err != nil {
 			t.Errorf("%q refused: %v", base, err)

@@ -66,13 +66,14 @@ test.describe("Available to — a person's git provider (#922)", () => {
   let listedToken = "";
 
   test.beforeAll(async ({ request }) => {
-    // A shared (non-Entra) Azure DevOps row — one PUT, additive to whatever
+    // A per-person (own token) Azure DevOps row — the shared pat and ssh lanes
+    // are retired (#1429) — one PUT, additive to whatever
     // this backend already carries (GET-then-merge, the resetProviders
     // idiom providers.spec.ts uses, so this never clobbers another file's row).
     const before = await request.get("/api/v1/workspace-providers", { headers: auth });
     const cur = await before.json();
     const git = (cur.git ?? []).filter((g: { id: string }) => g.id !== PROVIDER_ID);
-    git.push({ id: PROVIDER_ID, kind: "azure_devops", base_urls: [ORG_BASE_URL] });
+    git.push({ id: PROVIDER_ID, kind: "azure_devops", base_urls: [ORG_BASE_URL], lanes: ["entra"], credential_source: "per_user", entra: { token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"] } });
     const put = await request.put("/api/v1/workspace-providers", {
       headers: { ...auth, "If-Match": before.headers()["etag"] ?? "" },
       data: { git, storage: cur.storage },
