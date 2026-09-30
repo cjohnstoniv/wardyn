@@ -91,6 +91,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
   row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
   was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **A member whose Azure DevOps list is narrowed by their bound is told when they launch (#1384).**
+  When a run policy's `azure_devops_capabilities` names more than the provider row's default profile
+  and the member's governance profile stand, the launch's `201` carries one sentence naming what was
+  dropped, and the run's Effective policy shows it (it is in the `run.create` row's
+  `clamp_warnings`). Review refuses a list none of which may stand with `422` and reason
+  `ado_capabilities_none_permitted`, the refusal launch already gave at dispatch. The
+  `azure_devops_capabilities` field help now says a member stands only what the provider's default
+  profile or their governance profile grants, and Review's repository-access row names Azure DevOps,
+  not GitHub, for an Azure DevOps workspace.
+- **The run page names a run's model provider, and says "(removed)" only when it is (#996).**
+  `GET /runs/{id}` carries `model_provider_name` and, once the provider is deleted,
+  `model_provider_deleted`. The header chip used the viewer's own setup status, which lists only what
+  their agents use, so a provider that still existed showed as "(removed)" by its id, and a deleted
+  one showed its id in place of its name. The `run.create` row now freezes the provider's name, and the
+  AWS sign-in approval card names the run's provider from that read when its viewer's setup status
+  does not list it.
+- **The Images tab reads user types once (#1016).** Each row's "Available to" control fetched
+  `GET /user-types` on its own, so a tab of N images made N reads; they now share one.
 - **The run page no longer gets a 500 in the moment a finishing run's sandbox is already gone
   (#1270).** A short run's pod (or container) is removed a moment before its state flips to
   finished, and in that window the Sandbox and Files widgets read a sandbox that was not there and
