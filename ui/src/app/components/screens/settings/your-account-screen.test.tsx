@@ -63,13 +63,13 @@ describe("YourAccountScreen", () => {
     expect(screen.getByText(YOUR_ACCOUNT.LEDE)).toBeInTheDocument();
   });
 
-  it("draws Model provider then Your SSH keys, with no Azure DevOps card when none is configured", async () => {
+  // The settings-split mock draws exactly three cards here; the retired
+  // Model provider card (and its unapproved pointer sentence) is not one.
+  it("draws no Model provider card, and no Azure DevOps card when none is configured", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: startsWith("Model provider") });
-    expect(screen.getByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
-    const html = document.body.innerHTML;
-    expect(html.indexOf(">Model provider<")).toBeLessThan(html.indexOf(">Your SSH keys<"));
-    expect(heading).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: startsWith("Model provider") })).not.toBeInTheDocument();
+    expect(screen.queryByText(/set up as model providers/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Azure DevOps")).not.toBeInTheDocument();
   });
 
@@ -86,7 +86,7 @@ describe("YourAccountScreen", () => {
   // all stayed there. Nothing here belongs to the deployment.
   it("has no admin cards — Host, Model providers, Providers, User drives, Admin SSH keys", async () => {
     renderScreen();
-    await screen.findByRole("heading", { name: startsWith("Model provider") });
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
     expect(screen.queryByRole("heading", { name: "Host" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Model providers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Workspace providers" })).not.toBeInTheDocument();
@@ -100,7 +100,7 @@ describe("YourAccountScreen", () => {
   // GET /site-config) left this page entirely.
   it("fires no site-config read regardless of the caller's tier", async () => {
     renderScreen(/* operator */ true);
-    await screen.findByRole("heading", { name: startsWith("Model provider") });
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
     // No Host card means no button that would even offer the read; the
     // absence itself is the proof, alongside the module mock list above
     // carrying no health.getSiteConfig entry at all.
@@ -154,8 +154,7 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
 });
 
 // #541: Your model connections is the User view's card. An admin reaches it
-// by switching to the User view, so under an /admin/ path the page keeps only
-// the shared model card.
+// by switching to the User view, so under an /admin/ path the page omits it.
 describe("YourAccountScreen — Your model connections", () => {
   const status = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
   const renderAt = (path: string) =>
@@ -174,7 +173,7 @@ describe("YourAccountScreen — Your model connections", () => {
   it("does not show it in the Admin view", async () => {
     getSetupStatusMock.mockResolvedValue(status);
     renderAt("/admin/account");
-    expect(await screen.findByRole("heading", { name: startsWith("Model provider") })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
     expect(screen.queryByTestId("model-connections-card")).toBeNull();
   });
 });

@@ -8,10 +8,9 @@
 // this for free from the browser via shared `name` grouping) had no roving
 // tabindex or arrow keys — Tab visited every option one at a time instead of
 // once per group, and Left/Right/Up/Down did nothing. This is the WAI-ARIA
-// APG radio-group keyboard pattern, factored once so the three groups
-// (connection-cards.tsx's ModelProviderCard, git-tab.tsx's credential lanes,
-// agents-tab.tsx's credential-source toggle) can't drift into three
-// half-implementations. Native radiogroups (agents-tab.tsx's mechanism
+// APG radio-group keyboard pattern, factored once so the groups
+// (git-tab.tsx's credential lanes, agents-tab.tsx's credential-source toggle)
+// can't drift into half-implementations. Native radiogroups (agents-tab.tsx's mechanism
 // picker) already have this and are NOT wired through here — that would be
 // redundant, and a second, JS-driven arrow-key handler racing the browser's
 // own is a bug generator, not a fix.

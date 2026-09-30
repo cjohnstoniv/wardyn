@@ -103,7 +103,6 @@ vi.mock("../../wardyn/console-view", async (importOriginal) => ({
 import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { DRIVES } from "../../../lib/user-drives-copy";
-import { S } from "../settings/connection-cards";
 
 
 // The Integrations step embeds IntegrationsScreen, and its own "Manage in
@@ -480,11 +479,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(
       await screen.findByRole("heading", { name: /^secrets$/i }),
     ).toBeInTheDocument();
-    // The SHARED Settings model-provider card, not the deleted /integrations
-    // catalog. (connection-cards.test.tsx owns its own behaviour; this
-    // asserts the orchestrator mounts it.) Since #548 it says where model
-    // access is set up rather than holding the deployment's own lanes.
-    expect(await screen.findByText(S.MODEL_MOVED)).toBeInTheDocument();
+    // Neither the deleted /integrations catalog nor the retired Model
+    // provider card.
+    expect(screen.queryByRole("heading", { name: "Model provider" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/set up as model providers/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: /git host/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
     // Both PhaseRail landmarks share the "Setup steps" accessible name
