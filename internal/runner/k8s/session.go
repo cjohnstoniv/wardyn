@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
@@ -104,7 +105,7 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 	}
 	pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("k8s: exec stream: get pod %q: %w", ref, err)
+		return nil, sandboxGoneErr(fmt.Errorf("k8s: exec stream: get pod %q: %w", ref, err))
 	}
 	container := resolveExecContainer(pod)
 
@@ -208,6 +209,22 @@ func (d *Driver) newExecutor(podName, container string, cmd []string, stdin, tty
 	return exec, nil
 }
 
+// sandboxGoneErr marks err runner.ErrSandboxGone when it says the pod or its
+// container no longer exists: the apiserver's NotFound on the pod, or the
+// kubelet's "container not found" / "pod not found" that the exec upgrade
+// answers with (an InternalError carrying only text) when a finished run's pod
+// is torn down under the read. Any other err comes back unchanged.
+func sandboxGoneErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if apierrors.IsNotFound(err) || strings.Contains(msg, "container not found") || strings.Contains(msg, "pod not found") {
+		return fmt.Errorf("%w: %w", runner.ErrSandboxGone, err)
+	}
+	return err
+}
+
 // k8sStream bridges remotecommand's push-based StreamWithContext (an
 // io.Reader/io.Writer trio, blocking until the exec ends) to the pull-based
 // io.Reader/io.WriteCloser shapes runner.Session and runner.ExecSession need
@@ -266,7 +283,7 @@ func newK8sStream(ctx context.Context, exec remotecommand.Executor, tty bool) *k
 			if errors.As(err, &codeErr) {
 				code = codeErr.Code
 			} else {
-				streamErr = err
+				streamErr = sandboxGoneErr(err)
 			}
 		}
 		s.exitCode, s.exitErr = code, streamErr
