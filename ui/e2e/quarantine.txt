@@ -1,0 +1,25 @@
+# Flaky-test quarantine for scripts/run-ui-e2e.sh (#1461).
+#
+# Rule: a test that passes only after a Playwright retry fails the e2e gate.
+# A test listed here passes the gate with a warning instead, and is recorded in
+# test/reports/e2e/flaky.tsv. Every flake lands in that file, listed or not.
+# Quarantine is a short, reviewed, tracked exception, never a fix:
+#   - every entry names an open issue and an owner;
+#   - every entry expires within 14 days of the day it is written;
+#   - an expired or malformed entry fails every e2e run AND `make test-scripts`,
+#     so it turns every PR red until someone fixes the test and deletes the
+#     line, or renews the date in a reviewed PR.
+#
+# Format: '#' lines are comments. One entry per line, five fields separated by
+# ' | ' (space, pipe, space):
+#
+#   <spec file basename> | <title path> | #<issue> | @<owner> | <YYYY-MM-DD>
+#
+# The title path is the describe titles and the test title joined with ' › ',
+# exactly as the list reporter prints them after 'file:line:col ›'. The date is
+# the last day the quarantine applies (UTC).
+#
+# Example (keep commented out):
+#   runs.spec.ts | Runs page › filters by status | #1234 | @cjohnstoniv | 2026-10-07
+#
+# Entries:

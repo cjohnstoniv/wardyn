@@ -619,6 +619,31 @@ describe("SummaryHeader — the run's model provider chip", () => {
   });
 });
 
+// #1234: the thin line under the bar for a run a portal launched. The two
+// strings are the approved canon, asserted verbatim.
+describe("SummaryHeader — Launched via", () => {
+  const portalId = "0b1c2d3e-0000-4000-8000-000000000001";
+  function header(run: RunDetail) {
+    renderHeader(<SummaryHeader run={run} terminal={false} onKill={() => {}} />);
+  }
+
+  it("a portal-launched run: the line, with the portal's name", () => {
+    header({ ...runningInteractive, created_via: portalId, created_via_name: "Acme Support Portal" });
+    expect(screen.getByTestId("run-launched-via")).toHaveTextContent(/^Launched via Acme Support Portal$/);
+  });
+
+  it("a portal the server could not name: the fallback line", () => {
+    header({ ...runningInteractive, created_via: portalId });
+    expect(screen.getByTestId("run-launched-via")).toHaveTextContent(/^Launched via a portal$/);
+  });
+
+  it("a self-launched run: no line", () => {
+    header({ ...runningInteractive, created_via_name: "Acme Support Portal" });
+    expect(screen.queryByTestId("run-launched-via")).toBeNull();
+    expect(screen.queryByText(/Launched via/)).toBeNull();
+  });
+});
+
 // #1197 L2, review round 2 (F3/F5): what the Rename draft is seeded with,
 // and what happens when it is submitted empty.
 describe("SummaryHeader — Rename draft seeding and empty-submit", () => {

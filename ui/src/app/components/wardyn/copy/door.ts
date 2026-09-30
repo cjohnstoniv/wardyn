@@ -68,8 +68,13 @@ export const CONNECTIONS = {
 
 // The run's model provider in the run header (#543, decision 5). A provider
 // deleted since the run chose it keeps its chip, marked removed.
+// LAUNCHED_VIA (#1234) is the line under the header bar for a run a registered
+// portal launched on its owner's behalf; the fallback is for a portal whose
+// name the server could not give.
 export const RUN_FACTS = {
   PROVIDER: (name: string, removed: boolean) => `Model provider · ${name}${removed ? " (removed)" : ""}`,
+  LAUNCHED_VIA: (name: string) => `Launched via ${name}`,
+  LAUNCHED_VIA_FALLBACK: "Launched via a portal",
 } as const;
 
 export const DOOR = {

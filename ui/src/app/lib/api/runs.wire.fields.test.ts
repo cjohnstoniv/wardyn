@@ -337,10 +337,16 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name and the model provider's name and deleted flag over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, and the launching portal's name over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
-    expect(runDetailOwnKeys).toEqual(["ui_apps", "user_type_name", "model_provider_name", "model_provider_deleted"]);
+    expect(runDetailOwnKeys).toEqual([
+      "ui_apps",
+      "user_type_name",
+      "model_provider_name",
+      "model_provider_deleted",
+      "created_via_name",
+    ]);
   });
 
   it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {
