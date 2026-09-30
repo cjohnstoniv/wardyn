@@ -131,8 +131,11 @@ func TestADOServerOwnPATPut_Refusals(t *testing.T) {
 	if _, found := d.stored(t); found {
 		t.Fatal("a refused token was stored")
 	}
-	if rows := d.auditRows(adoPATAuditOwnMismatch); len(rows) != 1 || strings.Contains(strings.ToLower(string(rows[0].Data)), "carol") {
-		t.Errorf("identity_mismatch rows = %+v", rows)
+	mismatch := slices.DeleteFunc(d.auditRows(adoPATAuditOwnStore), func(ev types.AuditEvent) bool {
+		return !strings.Contains(string(ev.Data), `"reason":"identity_mismatch"`)
+	})
+	if len(mismatch) != 1 || strings.Contains(strings.ToLower(string(mismatch[0].Data)), "carol") {
+		t.Errorf("identity_mismatch store rows = %+v", mismatch)
 	}
 }
 

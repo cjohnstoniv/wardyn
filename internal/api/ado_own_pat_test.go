@@ -169,9 +169,9 @@ func TestADOOwnPATPut_RefusesAnotherAccountsToken(t *testing.T) {
 	if _, found := d.stored(t); found {
 		t.Fatal("another account's token was stored")
 	}
-	rows := d.auditRows(adoPATAuditOwnMismatch)
-	if len(rows) != 1 || rows[0].Outcome != "failure" {
-		t.Fatalf("ado_pat.own.identity_mismatch rows = %+v, want one failure", rows)
+	rows := d.auditRows(adoPATAuditOwnStore)
+	if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), `"reason":"identity_mismatch"`) {
+		t.Fatalf("ado_pat.own.store rows = %+v, want one failure with reason identity_mismatch", rows)
 	}
 	for _, s := range []string{body, string(rows[0].Data)} {
 		if strings.Contains(strings.ToLower(s), "carol") {

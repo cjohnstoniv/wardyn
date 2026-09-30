@@ -43,12 +43,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expiring` (within 7 days) or `expired_signin` (`cause: token_expired`) with `expires_on`,
   `max_days` and the scopes to create in Azure DevOps' own wording. A launch with an expired token is
   refused, and a run whose token expires mid-run is held on the Azure DevOps sign-in request until a
-  new token is added. Audited as `ado_pat.own.store`, `ado_pat.own.identity_mismatch` and
-  `ado_pat.own.delete`. On an Azure DevOps Server row (the `pat` lane, `per_user`, an address naming
-  its collection, `https://host/Collection`) the same token is git only: its owner is matched by the
-  `Mail` the server gives the token's account, it may last up to 30 days, and the proxy's git broker
-  carries it to that one host, pinned to the collection; a Server row naming only its host is not
-  served. The console's dialog follows separately.
+  new token is added. Audited as `ado_pat.own.store` (a refused token of another account as its
+  failure, `reason: identity_mismatch`) and `ado_pat.own.delete`. On an Azure DevOps Server row (the
+  `pat` lane, `per_user`, an address naming its collection, `https://host/Collection`) the same
+  token is git only: its owner is matched by the `Mail` the server gives the token's account, it may
+  last up to 30 days, and the proxy's git broker carries it to that one host, pinned to the
+  collection; a Server row naming only its host is not served. The console's dialog follows
+  separately.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

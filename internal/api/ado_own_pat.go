@@ -229,8 +229,8 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	if basis := adoOwnPATMismatch(names, oidcEmailFromContext(ctx)); basis != "" {
 		// Never the account the token named: the refusal and the audit row say
 		// only that it is not the caller's.
-		audit["basis"] = basis
-		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnMismatch, row.ID, "failure", audit)
+		audit["reason"], audit["basis"] = "identity_mismatch", basis
+		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnStore, row.ID, "failure", audit)
 		body := adoOwnPATMismatchRefusal
 		if basis == "no_email" {
 			body = adoOwnPATNoEmailRefusal
