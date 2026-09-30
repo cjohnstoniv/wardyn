@@ -64,6 +64,8 @@ var kernelDoors = map[string][]string{
 	"handleCreateAPIToken": {"capFeature"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).
 	"denyProviderAsMissing": {"capModelProvider"},
+	// A workspace read hides a pin to a provider the reader may not use.
+	"pinStamper": {"capModelProvider"},
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.
