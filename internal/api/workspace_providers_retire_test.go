@@ -14,10 +14,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const (
-	adoEntraBlockJSON = `{"tenant_id":"0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f","client_id":"7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d","capability_ceiling":["read"]}`
-	adoOwnPATBlock    = `{"token_mode":"own_pat","capability_ceiling":["read"]}`
-)
+// adoEntraBlockJSON and adoOwnPATBlock are an entra block that signs in and one
+// that pastes a token, with a ceiling the current catalogue accepts.
+func adoEntraBlockJSON() string {
+	ceiling, _ := json.Marshal(adoTestCeiling())
+	return `{"tenant_id":"0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f","client_id":"7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d","capability_ceiling":` + string(ceiling) + `}`
+}
+
+func adoOwnPATBlock() string {
+	ceiling, _ := json.Marshal(adoTestCeiling())
+	return `{"token_mode":"own_pat","capability_ceiling":` + string(ceiling) + `}`
+}
 
 // TestSharedADOLanesRefusedAtBothWriteDoors (#1429): the retired shared pat and
 // ssh lanes on an Azure DevOps row are a 400 from the console door AND the
@@ -39,9 +46,9 @@ func TestSharedADOLanesRefusedAtBothWriteDoors(t *testing.T) {
 			adoRefusal(types.GitLaneSSH, adoSSHRetired)},
 		{"Services, both and a shared source named outright", `{"id":"ado","kind":"azure_devops","base_urls":[` + services + `],"lanes":["pat","ssh"],"credential_source":"shared"}`,
 			adoRefusal(types.GitLaneSSH, adoSSHRetired)},
-		{"Services, both plus entra", `{"id":"ado","kind":"azure_devops","base_urls":[` + services + `],"lanes":["pat","ssh","entra"],"credential_source":"per_user","entra":` + adoEntraBlockJSON + `}`,
+		{"Services, both plus entra", `{"id":"ado","kind":"azure_devops","base_urls":[` + services + `],"lanes":["pat","ssh","entra"],"credential_source":"per_user","entra":` + adoEntraBlockJSON() + `}`,
 			adoRefusal(types.GitLaneSSH, adoSSHRetired)},
-		{"Services, pat plus entra (a token lane Services does not have)", `{"id":"ado","kind":"azure_devops","base_urls":[` + services + `],"lanes":["entra","pat"],"credential_source":"per_user","entra":` + adoEntraBlockJSON + `}`,
+		{"Services, pat plus entra (a token lane Services does not have)", `{"id":"ado","kind":"azure_devops","base_urls":[` + services + `],"lanes":["entra","pat"],"credential_source":"per_user","entra":` + adoEntraBlockJSON() + `}`,
 			adoRefusal(types.GitLanePAT, adoPATHosted)},
 		{"Services, per_user pat without the entra lane", `{"id":"ado","kind":"azure_devops","base_urls":[` + services + `],"lanes":["pat"],"credential_source":"per_user"}`,
 			adoRefusal(types.GitLanePAT, adoPATHosted)},
@@ -92,7 +99,7 @@ func TestSharedADOLanesRefusedAtBothWriteDoors(t *testing.T) {
 // and both save through both doors and read back exactly as written. A Server
 // row with an entra block is still refused: Server has no Entra sign-in.
 func TestPerPersonADORowsAreAcceptedAtBothWriteDoors(t *testing.T) {
-	hosted := `{"id":"ado","kind":"azure_devops","disabled":true,"base_urls":["https://dev.azure.com/acme"],"lanes":["entra"],"credential_source":"per_user","entra":` + adoOwnPATBlock + `}`
+	hosted := `{"id":"ado","kind":"azure_devops","disabled":true,"base_urls":["https://dev.azure.com/acme"],"lanes":["entra"],"credential_source":"per_user","entra":` + adoOwnPATBlock() + `}`
 	server := `{"id":"ados","kind":"azure_devops","disabled":true,"base_urls":["https://tfs.corp.example/acme"],"lanes":["pat"],"credential_source":"per_user"}`
 	mixed := `{"id":"adom","kind":"azure_devops","base_urls":["https://dev.azure.com/acme","https://tfs.corp.example/acme"],"lanes":["pat"],"credential_source":"per_user"}`
 	block := `{"git":[` + hosted + `,` + server + `,` + mixed + `]}`
@@ -115,7 +122,7 @@ func TestPerPersonADORowsAreAcceptedAtBothWriteDoors(t *testing.T) {
 		}
 	}
 
-	serverWithEntra := `{"git":[{"id":"ados","kind":"azure_devops","base_urls":["https://tfs.corp.example/acme"],"lanes":["entra"],"credential_source":"per_user","entra":` + adoOwnPATBlock + `}]}`
+	serverWithEntra := `{"git":[{"id":"ados","kind":"azure_devops","base_urls":["https://tfs.corp.example/acme"],"lanes":["entra"],"credential_source":"per_user","entra":` + adoOwnPATBlock() + `}]}`
 	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
 	srv, _ := newProvidersHarness(t, fake)
 	if w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, serverWithEntra); w.Code != http.StatusBadRequest {
