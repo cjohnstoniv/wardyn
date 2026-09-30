@@ -1340,6 +1340,19 @@ jobs:
             || { echo "::error::no usable published release tag (got '${tag}')"; exit 1; }
           echo "Scanning ${{ matrix.name }} from release ${tag}"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      # Same DB cache ci.yml's trivy job restores (ci.yml saves it from main pushes),
+      # so five parallel scans do not each download the vulnerability DB from a
+      # rate-limited registry. trivy-action's own cache stays off (cache: false).
+      - name: Trivy DB cache key date
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore trivy DB cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            cache-trivy-
       - name: Trivy strict scan of the published image (CRITICAL, fixed or not)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -1366,15 +1379,15 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          title="nightly: a published agent image has a CRITICAL vulnerability"
+          title="nightly: the published-image scan failed"
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "The strict trivy scan (any CRITICAL, fixed or not, minus .trivyignore) of the latest published release's agent images failed: agent-base, agent-codex-cli, agent-aws-sso, agent-vscode or agent-novnc." \
+              "The published-image scan failed; see the run." \
               "" \
-              "These images are already out, so a patch release is due. The run log names the image, the package and the CVE." \
+              "The job strict-scans the latest published release's agent images (agent-base, agent-codex-cli, agent-aws-sso, agent-vscode, agent-novnc) for any CRITICAL, fixed or not, minus .trivyignore. A red run is either a finding or a scan failure (DB download, image pull, no release to resolve); the run log says which and names the image, package and CVE for a finding. A finding means a patch release is due." \
               "" \
               "Run: $RUN_URL")
             gh issue create --title "$title" --body "$body"

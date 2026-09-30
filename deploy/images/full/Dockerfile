@@ -21,7 +21,7 @@
 # `toolchain` line of the repos you build (this digest is go1.27; wardyn itself
 # pins toolchain go1.26.6). Bump the pin rather than relaxing GOTOOLCHAIN.
 FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS goroot
-FROM rust:1.98.0-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS rustroot
+FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
 # deploy/images/claude-code/Dockerfile), not a registry image — it has no
@@ -87,7 +87,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi;
 # JDK 21 (Temurin) + Maven, for jsoup (needs 21) and JVM projects generally.
 RUN install -d /etc/apt/keyrings \
     && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" > /etc/apt/sources.list.d/adoptium.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb trixie main" > /etc/apt/sources.list.d/adoptium.list \
     && apt-get update && apt-get install -y --no-install-recommends temurin-21-jdk maven \
     && rm -rf /var/lib/apt/lists/*
 ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
