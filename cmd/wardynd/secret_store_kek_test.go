@@ -66,7 +66,7 @@ func TestBuildPlatformKEK_FailsClosed(t *testing.T) {
 			v, _ := testExternalFlags("https://vault.example", "")
 			v.kek, v.transitMount, v.transitKeyPlatform, v.rolePlatform = strp(tc.sel), strp("transit"), strp("wardyn-platform"), strp(tc.rolePlatform)
 			v.auth, v.role = strp(tc.auth), strp(tc.role)
-			k, err := buildPlatformKEK(t.Context(), v, "")
+			k, err := buildPlatformKEK(t.Context(), v, "", false)
 			if err == nil || k != nil || !strings.Contains(err.Error(), "refusing to start: "+tc.want) {
 				t.Fatalf("buildPlatformKEK = (%v, %v); want a refusal %q", k, err, tc.want)
 			}
@@ -74,7 +74,7 @@ func TestBuildPlatformKEK_FailsClosed(t *testing.T) {
 	}
 	v, _ := testExternalFlags("", "")
 	v.kek, v.transitKeyPlatform = strp("local"), strp("")
-	if k, err := buildPlatformKEK(t.Context(), v, ""); k != nil || err != nil {
+	if k, err := buildPlatformKEK(t.Context(), v, "", false); k != nil || err != nil {
 		t.Fatalf("no platform key = (%v, %v); want no key service", k, err)
 	}
 }
@@ -97,7 +97,7 @@ func TestBuildPlatformKEK_LogsInAsThePlatformRole(t *testing.T) {
 	v, _ := testExternalFlags(srv.URL, "")
 	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
 	v.kek, v.transitMount, v.transitKeyPlatform = strp("transit"), strp("transit"), strp("wardyn-platform")
-	k, err := buildPlatformKEK(t.Context(), v, "")
+	k, err := buildPlatformKEK(t.Context(), v, "", false)
 	if err == nil || k != nil || !strings.Contains(err.Error(), `role "wardyn-platform"`) {
 		t.Fatalf("buildPlatformKEK = (%v, %v); want a login refusal as the platform role", k, err)
 	}
@@ -108,5 +108,25 @@ func TestBuildPlatformKEK_LogsInAsThePlatformRole(t *testing.T) {
 		if !strings.Contains(body, `"role":"wardyn-platform"`) || strings.Contains(body, "wardyn-cred") {
 			t.Fatalf("login body %s; want the platform role only", body)
 		}
+	}
+}
+
+// Retiring reads the platform key whatever WARDYN_KEK is, so it is not refused
+// for WARDYN_KEK=local; a start or a plain -rewrap still is.
+func TestBuildPlatformKEK_RetireNeedsNoTransitKEK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
+	defer srv.Close()
+	jwt := filepath.Join(t.TempDir(), "jwt")
+	if err := os.WriteFile(jwt, []byte("sa-jwt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := testExternalFlags(srv.URL, "")
+	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
+	v.kek, v.transitMount, v.transitKeyPlatform = strp("local"), strp("transit"), strp("wardyn-platform")
+	if _, err := buildPlatformKEK(t.Context(), v, "", false); err == nil || !strings.Contains(err.Error(), "needs WARDYN_KEK=transit") {
+		t.Fatalf("a start with WARDYN_KEK=local = %v; want the refusal", err)
+	}
+	if _, err := buildPlatformKEK(t.Context(), v, "", true); err == nil || !strings.Contains(err.Error(), `login (role "wardyn-platform")`) {
+		t.Fatalf("retiring with WARDYN_KEK=local = %v; want it to reach the platform login", err)
 	}
 }

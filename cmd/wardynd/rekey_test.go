@@ -23,15 +23,16 @@ import (
 // posture by default so each test perturbs exactly one field.
 func rekeyFlags(dsn, storeSel, ageKey string) *bootFlags {
 	return &bootFlags{
-		dsn:             &dsn,
-		secretStoreSel:  &storeSel,
-		ageKey:          &ageKey,
-		platformKeyFile: new(string),
-		auditSinks:      new(string),
-		auditSpool:      new(string),
-		auditSource:     new(string),
-		trustedCAFile:   new(string),
-		vault:           vaultFlags{kek: new(string), transitKey: new(string), transitKeyPlatform: new(string)},
+		dsn:                     &dsn,
+		secretStoreSel:          &storeSel,
+		ageKey:                  &ageKey,
+		platformKeyFile:         new(string),
+		auditSinks:              new(string),
+		auditSpool:              new(string),
+		auditSource:             new(string),
+		trustedCAFile:           new(string),
+		vault:                   vaultFlags{kek: new(string), transitKey: new(string), transitKeyPlatform: new(string)},
+		rewrapRetirePlatformKey: new(bool),
 	}
 }
 

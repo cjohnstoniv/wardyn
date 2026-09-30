@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -166,5 +167,160 @@ func TestRewrapKeys_PlatformKeyServiceIsSeparate(t *testing.T) {
 		if err := pool.QueryRow(t.Context(), `SELECT kek_id FROM secrets WHERE owned_by='' AND name=$1`, name).Scan(&got); err != nil || got != want {
 			t.Fatalf("%s is sealed under %q (%v), want %q", name, got, err, want)
 		}
+	}
+}
+
+// seedPlatformSplit leaves a boot key under plat and a credential under cred,
+// as a run of -rewrap with the platform key set does.
+func seedPlatformSplit(t *testing.T, pool *pgxpool.Pool, cred *memKEK, plat platformMemKEK) *age.X25519Identity {
+	t.Helper()
+	id := mustAgeIdentity(t)
+	s, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"wardyn-signing-key", "a-credential"} {
+		if err := s.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true}
+	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func rewrapKEKID(t *testing.T, pool *pgxpool.Pool, name string) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(t.Context(), `SELECT kek_id FROM secrets WHERE owned_by='' AND name=$1`, name).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// -rewrap-retire-platform-key reads the boot keys under the platform key
+// (read-only) and writes them under the credential key; a credential row is
+// untouched, a second run moves nothing, and a start that still names the
+// platform key refuses the boot key it no longer finds there.
+func TestRewrapKeys_RetirePlatformKeyToCredentialKey(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	seedPlatformSplit(t, pool, cred, plat)
+	var credBefore []byte
+	if err := pool.QueryRow(t.Context(), `SELECT wrapped_dek FROM secrets WHERE owned_by='' AND name='a-credential'`).Scan(&credBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	retire := secretstore.Deps{Pool: pool, KEK: cred, KEKWrites: true, PlatformKEK: plat}
+	rec := &capturingRecorder{}
+	if err := rewrapKeys(t.Context(), rec, retire); err != nil {
+		t.Fatal(err)
+	}
+	if got := rewrapKEKID(t, pool, "wardyn-signing-key"); got != cred.ID() {
+		t.Fatalf("boot key is sealed under %q, want the credential key %q", got, cred.ID())
+	}
+	var credAfter []byte
+	if err := pool.QueryRow(t.Context(), `SELECT wrapped_dek FROM secrets WHERE owned_by='' AND name='a-credential'`).Scan(&credAfter); err != nil || string(credAfter) != string(credBefore) {
+		t.Fatalf("the credential row was rewrapped (%v)", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.got[0].Data, &data); err != nil || data["secrets"] != float64(1) || data["platform_key_separate"] != false {
+		t.Fatalf("audit fields = %s (%v); want 1 row and no separate platform key", rec.got[0].Data, err)
+	}
+
+	rec2 := &capturingRecorder{}
+	if err := rewrapKeys(t.Context(), rec2, retire); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rec2.got[0].Data, &data); err != nil || data["secrets"] != float64(0) {
+		t.Fatalf("second run audit = %s (%v); want nothing moved", rec2.got[0].Data, err)
+	}
+
+	// The old env, at a normal start, is still refused.
+	s, err := buildSecretStore(t.Context(), pool, "", nil, "", storeClients{kek: cred, kekWrites: true, platformKEK: plat}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(secretstore.WithPurpose(t.Context(), secretstore.PurposeBoot), "wardyn-signing-key"); err == nil || !strings.Contains(err.Error(), "opens boot keys only under") {
+		t.Fatalf("Get of a boot key with the platform key still named = %v; want a refusal", err)
+	}
+	// Without it, the boot key reads under the credential key.
+	s, err = buildSecretStore(t.Context(), pool, "", nil, "", storeClients{kek: cred, kekWrites: true}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.Get(secretstore.WithPurpose(t.Context(), secretstore.PurposeBoot), "wardyn-signing-key"); err != nil || string(v) != "v-wardyn-signing-key" {
+		t.Fatalf("Get of the boot key after the retire = (%q, %v)", v, err)
+	}
+}
+
+// With WARDYN_KEK=local the boot keys retire onto the local key (every row
+// moves there, as a plain -rewrap back to local does).
+func TestRewrapKeys_RetirePlatformKeyToLocalKey(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	id := seedPlatformSplit(t, pool, cred, plat)
+
+	retire := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, PlatformKEK: plat}
+	rec := &capturingRecorder{}
+	if err := rewrapKeys(t.Context(), rec, retire); err != nil {
+		t.Fatal(err)
+	}
+	for name, prefix := range map[string]string{"wardyn-signing-key": "local/platform:", "a-credential": "local/cred:"} {
+		if got := rewrapKEKID(t, pool, name); !strings.HasPrefix(got, prefix) {
+			t.Fatalf("%s is sealed under %q, want %q…", name, got, prefix)
+		}
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.got[0].Data, &data); err != nil || data["secrets"] != float64(2) || data["platform_key_separate"] != false {
+		t.Fatalf("audit fields = %s (%v); want 2 rows and no separate platform key", rec.got[0].Data, err)
+	}
+	rec2 := &capturingRecorder{}
+	if err := rewrapKeys(t.Context(), rec2, retire); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rec2.got[0].Data, &data); err != nil || data["secrets"] != float64(0) {
+		t.Fatalf("second run audit = %s (%v); want nothing moved", rec2.got[0].Data, err)
+	}
+	s, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"wardyn-signing-key", "a-credential"} {
+		if v, err := s.Get(secretstore.WithPurpose(t.Context(), secretstore.PurposeBoot), name); err != nil || string(v) != "v-"+name {
+			t.Fatalf("local Get(%s) after the retire = (%q, %v)", name, v, err)
+		}
+	}
+}
+
+// -rewrap-retire-platform-key needs -rewrap and the key to retire.
+func TestRewrapRetirePlatformKey_Refusals(t *testing.T) {
+	f := rekeyFlags("", "", "")
+	f.rewrap = new(bool)
+	*f.rewrapRetirePlatformKey = true
+	if ran, err := maintenanceMode(f); !ran || err == nil || !strings.Contains(err.Error(), "is a mode of -rewrap") {
+		t.Fatalf("-rewrap-retire-platform-key alone = (%v, %v); want a refusal", ran, err)
+	}
+	ageKey := newIdentity(t).String()
+	f = rekeyFlags("postgres://nobody@127.0.0.1:1/nope?connect_timeout=1", "", ageKey)
+	*f.rewrapRetirePlatformKey = true
+	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM") {
+		t.Fatalf("-rewrap-retire-platform-key with no key named = %v; want a refusal", err)
+	}
+}
+
+// Retiring builds the platform key read-only; a plain -rewrap builds it writing.
+func TestWithPlatformKEK(t *testing.T) {
+	plat := platformMemKEK{newMemKEK()}
+	if d := withPlatformKEK(secretstore.Deps{}, plat, false); d.PlatformKEK == nil || !d.PlatformKEKWrites {
+		t.Fatalf("-rewrap: %+v; want the platform key writing", d)
+	}
+	if d := withPlatformKEK(secretstore.Deps{}, plat, true); d.PlatformKEK == nil || d.PlatformKEKWrites {
+		t.Fatalf("-rewrap-retire-platform-key: %+v; want the platform key read-only", d)
+	}
+	if d := withPlatformKEK(secretstore.Deps{}, nil, true); d.PlatformKEK != nil || d.PlatformKEKWrites {
+		t.Fatalf("no platform key: %+v; want none", d)
 	}
 }

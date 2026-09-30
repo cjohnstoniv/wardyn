@@ -63,7 +63,7 @@ func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) 
 	if err != nil {
 		return storeClients{}, err
 	}
-	pk, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile)
+	pk, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, false)
 	if err != nil {
 		return storeClients{}, err
 	}
@@ -320,7 +320,7 @@ func registerVaultFlags() vaultFlags {
 		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY) or "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client)`),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
 		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
-		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap` moves the boot keys onto it. Empty = one key for both. See docs/operations/secrets-and-keys.md"),
+		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap` moves the boot keys onto it, `-rewrap -rewrap-retire-platform-key` back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),
 	}
 }
 
@@ -386,13 +386,21 @@ func buildKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (kek.KEK,
 // under (WARDYN_VAULT_TRANSIT_KEY_PLATFORM), or nil when none is named. It is
 // reached as WARDYN_VAULT_ROLE_PLATFORM, so a token that reaches the
 // credential key never reaches it. Like buildKEK it is proven at boot.
-func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (kek.KEK, error) {
+//
+// retire is `wardynd -rewrap-retire-platform-key` alone: the key is built to be
+// read, for the boot keys still under it, so it does not need WARDYN_KEK=transit
+// (the boot keys may be moving back to the local key). A normal start and a
+// plain -rewrap never pass it.
+func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string, retire bool) (kek.KEK, error) {
 	key := strings.TrimSpace(*v.transitKeyPlatform)
 	if key == "" {
 		return nil, nil
 	}
-	if sel := strings.TrimSpace(*v.kek); sel != kekTransit {
+	if sel := strings.TrimSpace(*v.kek); sel != kekTransit && !retire {
 		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_KEK=transit")
+	}
+	if strings.TrimSpace(*v.addr) == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM is set but WARDYN_VAULT_ADDR is not")
 	}
 	if strings.TrimSpace(*v.rolePlatform) == "" {
 		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_ROLE_PLATFORM")
@@ -407,7 +415,7 @@ func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (
 	}
 	cfg := vaultConfig(v, trustedCAFile)
 	cfg.Role, cfg.RolePlatform = cfg.RolePlatform, ""
-	t, err := vaultkv.NewTransit(ctx, cfg, strings.TrimSpace(*v.transitMount), key)
+	t, err := vaultkv.NewPlatformTransit(ctx, cfg, strings.TrimSpace(*v.transitMount), key)
 	if err != nil {
 		return nil, fmt.Errorf("refusing to start: %w", err)
 	}

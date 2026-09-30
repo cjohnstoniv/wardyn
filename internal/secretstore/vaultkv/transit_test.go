@@ -227,3 +227,20 @@ func TestTransit_WrapIsBoundToItsKeyID(t *testing.T) {
 		}
 	}
 }
+
+// The platform key's refusals name the platform settings, not the credential
+// key's.
+func TestNewPlatformTransit_RefusalsNameThePlatformSettings(t *testing.T) {
+	cfg := Config{Addr: "http://127.0.0.1:1", Auth: AuthKubernetes, AuthMount: "kubernetes", K8sTokenFile: writeFile(t, "x")}
+	_, err := NewPlatformTransit(t.Context(), cfg, "transit", "a/b")
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_VAULT_TRANSIT_KEY_PLATFORM \"a/b\"") {
+		t.Fatalf("a bad platform key = %v", err)
+	}
+	_, err = NewPlatformTransit(t.Context(), cfg, "transit", "wardyn-platform")
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_VAULT_ROLE_PLATFORM is required") {
+		t.Fatalf("no platform role = %v", err)
+	}
+	if _, err = NewTransit(t.Context(), cfg, "transit", "a/b"); err == nil || !strings.Contains(err.Error(), "WARDYN_VAULT_TRANSIT_KEY \"a/b\"") {
+		t.Fatalf("a bad credential key = %v", err)
+	}
+}
