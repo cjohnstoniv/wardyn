@@ -343,17 +343,122 @@ func TestOrgCheck_Canary1Refused(t *testing.T) {
 		if res.TokenLife != adoOrgCheckRefused || res.Refusal != reasonADOPATPolicyBlocked || res.Lifespan != adoOrgCheckUnknown {
 			t.Fatalf("result = %+v, want refused / policy blocked / unknown", res)
 		}
-		got := mf.srv.scmAccessValue(context.Background(), mf.site, mf.subject)
-		if got.State != modelAccessExpiredSignin || got.Cause != scmAccessCauseBlocked {
-			t.Fatalf("scm access = %+v, want expired_signin / blocked", got)
+		// A canary probes the organisation; it never marks the admin blocked.
+		if got := mf.srv.scmAccessValue(context.Background(), mf.site, mf.subject); got.State != modelAccessLive {
+			t.Fatalf("scm access = %+v after the org check, want live", got)
 		}
-		mf.ado.SetPatCreateError(adofake.PatTokenErrorNone) // a later token clears it
-		if _, err := mf.srv.mintADOPAT(context.Background(), mf.cfg, mf.subject, "contoso",
-			adoPATRequest{DisplayName: "x", Scope: "vso.profile", ValidTo: time.Now().Add(time.Hour)}); err != nil {
+	})
+}
+
+// TestMintADOPAT_BlockedIsRecordedClearedAndBounded: a policy refusal marks the
+// person blocked, a created token clears it, and it stops reading as blocked
+// after adoMintBlockedFor so an allow-list fix is not hidden by a stale flag.
+func TestMintADOPAT_BlockedIsRecordedClearedAndBounded(t *testing.T) {
+	mf := newMintFixture(t)
+	mf.connect(t)
+	ctx := context.Background()
+	mint := func() error {
+		_, err := mf.srv.mintADOPAT(ctx, mf.cfg, mf.subject, "contoso",
+			adoPATRequest{DisplayName: "x", Scope: "vso.profile", ValidTo: time.Now().Add(time.Hour)})
+		return err
+	}
+	mf.ado.SetPatCreateError(adofake.PatTokenErrorAccessDenied)
+	if err := mint(); err == nil {
+		t.Fatal("the refused create succeeded")
+	}
+	if got := mf.srv.scmAccessValue(ctx, mf.site, mf.subject); got.State != modelAccessExpiredSignin || got.Cause != scmAccessCauseBlocked {
+		t.Fatalf("scm access = %+v, want expired_signin / blocked", got)
+	}
+	mf.srv.cfg.Now = func() time.Time { return time.Now().Add(adoMintBlockedFor + time.Minute) }
+	if got := mf.srv.scmAccessValue(ctx, mf.site, mf.subject); got.State != modelAccessLive {
+		t.Fatalf("scm access = %+v past adoMintBlockedFor, want live", got)
+	}
+	mf.srv.cfg.Now = time.Now
+	mf.ado.SetPatCreateError(adofake.PatTokenErrorNone)
+	if err := mint(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mf.srv.scmAccessValue(ctx, mf.site, mf.subject); got.State != modelAccessLive {
+		t.Fatalf("scm access = %+v after a token was created, want live", got)
+	}
+}
+
+// TestOrgCheck_CanaryRevokedWhenTheRequestIsGone: the admin's request is
+// cancelled after a canary was created; its revoke still happens.
+func TestOrgCheck_CanaryRevokedWhenTheRequestIsGone(t *testing.T) {
+	mf := newMintFixture(t)
+	mf.connect(t)
+	pat, err := mf.srv.createADOPAT(context.Background(), mf.cfg, mf.subject, "contoso",
+		adoPATRequest{DisplayName: adoOrgCheckTokenName, Scope: "vso.profile", ValidTo: time.Now().Add(adoOrgCheckCanaryLife)}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	var res adoOrgCheckResult
+	mf.srv.revokeADOOrgCheckCanary(gone, mf.cfg, mf.subject, "contoso", pat.AuthorizationID, &res)
+	if n := mf.ado.Count(adofake.EndpointPatsRevoke); n != 1 || len(res.Unrevoked) != 0 {
+		t.Fatalf("revokes = %d unrevoked = %v, want the canary revoked", n, res.Unrevoked)
+	}
+}
+
+// TestGitCredentialRefusal_MintedCauses pins the three minted_pat launch
+// refusals; "blocked" carries the mock's "Blocked by your organisation" words.
+func TestGitCredentialRefusal_MintedCauses(t *testing.T) {
+	for _, want := range []string{"doesn't let you create personal access tokens",
+		"ask an Azure DevOps administrator to add you to the allow list"} {
+		if !strings.Contains(strings.ToLower(gitCredentialBlockedRefusal), strings.ToLower(want)) {
+			t.Errorf("gitCredentialBlockedRefusal = %q, want the canon %q", gitCredentialBlockedRefusal, want)
+		}
+	}
+	pins := map[string]string{
+		gitCredentialBlockedRefusal: "your organisation doesn't let you create personal access tokens — ask an Azure DevOps " +
+			"administrator to add you to the allow list, then start the run again",
+		gitCredentialPermissionsRefusal: "your Azure DevOps sign-in can't create tokens yet — an administrator must grant " +
+			"the token permissions; then connect and start the run again",
+		adoPATNeedsConsoleAppRefusal: "Per-run tokens need your Wardyn app registration to have a client secret. " +
+			"Set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
+	}
+	for got, want := range pins {
+		if got != want {
+			t.Errorf("sentence = %q, want %q", got, want)
+		}
+	}
+	gate := func(t *testing.T, mf *mintFixture) string {
+		t.Helper()
+		var gc *gitCredentialRefusalError
+		if err := mf.srv.gitCredentialRefusalForLauncher(context.Background(), mf.subject, adoTestRepo); !errors.As(err, &gc) {
+			t.Fatalf("gate = %v, want a git_credential refusal", err)
+		}
+		return gc.Sentence
+	}
+	t.Run("blocked", func(t *testing.T) {
+		mf := newMintFixture(t)
+		mf.connect(t)
+		mf.ado.SetPatCreateError(adofake.PatTokenErrorAccessDenied)
+		_, _ = mf.srv.mintADOPAT(context.Background(), mf.cfg, mf.subject, "contoso",
+			adoPATRequest{DisplayName: "x", Scope: "vso.profile", ValidTo: time.Now().Add(time.Hour)})
+		if got := gate(t, mf); got != gitCredentialBlockedRefusal {
+			t.Errorf("sentence = %q", got)
+		}
+	})
+	t.Run("permissions missing", func(t *testing.T) {
+		mf := newMintFixture(t)
+		if err := mf.srv.storeADOEntraBlob(context.Background(), mf.subject, mf.cfg.RowID, adoEntraBlob{
+			RefreshToken: "rt-0123456789abcdef", Scopes: []string{adoscope.ResourceID + "/vso.pats"},
+			TenantID: mf.cfg.TenantID, ClientID: mf.cfg.ClientID, Subject: mf.subject, Source: adoEntraSourceLogin,
+		}); err != nil {
 			t.Fatal(err)
 		}
-		if got := mf.srv.scmAccessValue(context.Background(), mf.site, mf.subject); got.State != modelAccessLive {
-			t.Fatalf("scm access = %+v after a token was created, want live", got)
+		if got := gate(t, mf); got != gitCredentialPermissionsRefusal {
+			t.Errorf("sentence = %q", got)
+		}
+	})
+	t.Run("S1 unusable", func(t *testing.T) {
+		mf := newMintFixture(t)
+		mf.cfg.ClientSecret = ""
+		if got := gate(t, mf); got != adoPATNeedsConsoleAppRefusal {
+			t.Errorf("sentence = %q", got)
 		}
 	})
 }
@@ -420,16 +525,6 @@ func TestOrgCheck_S1RefusedWithTheReason(t *testing.T) {
 	w := mf.orgCheck(t, mf.cfg.RowID)
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), ReasonADOPATNeedsConsoleApp) {
 		t.Fatalf("status %d body %q, want 409 %s", w.Code, w.Body.String(), ReasonADOPATNeedsConsoleApp)
-	}
-}
-
-// ── the dispatch predicate ─────────────────────────────────────────────────
-
-func TestResolveADOEntraRun_SkipsOwnPATRows(t *testing.T) {
-	row := adoEntraTestRow()
-	row.Entra.TokenMode = types.ADOTokenModeOwnPAT
-	if ado, ok := resolveADOEntraRun(adoSite(row), []string{adoTestRepo}, adoTestOwner); ok {
-		t.Fatalf("an own_pat row resolved the Entra lane: %+v", ado)
 	}
 }
 

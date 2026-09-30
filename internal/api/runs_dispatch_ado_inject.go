@@ -319,9 +319,6 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 		return adoEntraRun{}, false
 	case row.CredentialSource != types.CredentialSourcePerUser:
 		return adoEntraRun{}, false
-	case row.Entra.TokenMode == types.ADOTokenModeOwnPAT:
-		// No sign-in to redeem: a pasted token is served by its own lane.
-		return adoEntraRun{}, false
 	}
 	org, ok := adoOrganisationOf(repo)
 	if !ok {

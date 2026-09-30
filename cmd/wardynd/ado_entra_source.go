@@ -164,10 +164,10 @@ func adoEntraSource(st siteConfigReader, login adoEntraLogin) api.ADOEntraSource
 
 // adoEntraRow is the first ENABLED Azure DevOps row that permits the per-person
 // sign-in: the entra lane named, an Entra block present, a per_user credential
-// source, and a token mode that signs in — the same predicate the dispatch lane
-// authors a credential under (resolveADOEntraRun), so a row the dispatch will
-// not serve never drives a capture either. An own_pat row pastes a token and
-// has no sign-in, so it is skipped rather than allowed to shadow one that does.
+// source — the dispatch lane's own predicate (resolveADOEntraRun), so a row the
+// dispatch will not serve never drives a capture — and a token mode that signs
+// in. An own_pat row pastes a token and has no sign-in, so it is skipped here
+// rather than allowed to shadow one that does; its dispatch is its own lane's.
 //
 // A bearer row and a minted_pat row naming the same application are refused
 // together: one app registration holds one consent, so the bearer row's token
