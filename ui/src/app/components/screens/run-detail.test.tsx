@@ -11,7 +11,7 @@
 // description now names that reason too (without disambiguating which case
 // applies — preserves the anti-enumeration property).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
@@ -83,6 +83,7 @@ vi.mock("../../lib/api/health", () => ({
 
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT } from "../wardyn/copy";
+import { RUN_STARTUP } from "./run-status-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { aheadByHours } from "../../lib/test-clock";
@@ -164,6 +165,19 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
     expect(screen.queryByText(/the agent drives/i)).not.toBeInTheDocument();
   });
 
+  // #1419: an exec run is also non-interactive, so the last startup row must
+  // read "command", not "task" (the same precedence as the pane chip).
+  it("names the last startup step by run kind: task, command, and terminal", async () => {
+    renderRun({ ...RUN, interactive: false, state: "STARTING" });
+    expect(await screen.findByTestId("run-startup-progress")).toHaveTextContent(RUN_STARTUP.STEP_TASK);
+    cleanup();
+    auditMocks.taskMode = "exec";
+    renderRun({ ...RUN, interactive: false, state: "STARTING" });
+    const list = await screen.findByTestId("run-startup-progress");
+    expect(list).toHaveTextContent(RUN_STARTUP.STEP_COMMAND);
+    expect(list).not.toHaveTextContent(RUN_STARTUP.STEP_TASK);
+  });
+
   it("a finished run replays in place rather than leaving the biggest pane dead", async () => {
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
     // Match the pane's own chip, not the word "Recording" — that also names the
@@ -199,7 +213,10 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
 describe("RunDetailScreen — a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
   it("an operator on a STARTING interactive run sees the starting notice, never the admin-role refusal", async () => {
     renderRun({ ...RUN, state: "STARTING", interactive: true });
-    expect(await screen.findByText(RUN_COCKPIT.starting)).toBeInTheDocument();
+    // #1419: the step list replaces the retired "hasn't started yet" sentence;
+    // the last row says the terminal is what comes next.
+    const list = await screen.findByTestId("run-startup-progress");
+    expect(list).toHaveTextContent(RUN_STARTUP.STEP_TERMINAL);
     expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Watch the captured session/)).not.toBeInTheDocument();
   });
@@ -218,7 +235,28 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
       </MemoryRouter>,
     );
     expect(await screen.findByText("Requires the admin role.")).toBeInTheDocument();
-    expect(screen.queryByText(RUN_COCKPIT.starting)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-startup-progress")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunDetailScreen — a STARTING interactive run seen by someone who cannot attach", () => {
+  // #1419: the list is about the run, so they see it; no "Opening the terminal"
+  // row is promised to them, and today's refusal and link stay under it.
+  it("shows the step list without the terminal row, then the admin-role refusal", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "STARTING", interactive: true, created_by: "someone-else" });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const list = await screen.findByTestId("run-startup-progress");
+    expect(list).toHaveTextContent(RUN_STARTUP.STEP_START);
+    expect(list).not.toHaveTextContent(RUN_STARTUP.STEP_TERMINAL);
+    expect(screen.getByText("Requires the admin role.")).toBeInTheDocument();
   });
 });
 

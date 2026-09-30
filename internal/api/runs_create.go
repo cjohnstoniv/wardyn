@@ -796,6 +796,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// shell or the harness binary).
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil)
 		cancelBuild()
 		if berr != nil {
@@ -810,6 +811,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag, nil)
 		cancelBuild()
 		if berr != nil {
@@ -841,7 +843,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			return "", true
 		}
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
-		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0], nil); ok {
+		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0], nil, s.announceImageBuild(ctx, runID)); ok {
 			image = built
 		}
 		cancelBuild()
