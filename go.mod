@@ -19,7 +19,7 @@ require (
 	github.com/moby/docker-image-spec v1.3.1
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
-	github.com/moby/profiles/seccomp v0.2.3
+	github.com/moby/profiles/seccomp v0.2.4
 	github.com/spf13/cobra v1.10.2
 	github.com/spiffe/go-spiffe/v2 v2.8.2
 	golang.org/x/crypto v0.57.0
@@ -28,9 +28,9 @@ require (
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.37.0
-	k8s.io/apimachinery v0.37.0
-	k8s.io/client-go v0.37.0
+	k8s.io/api v0.37.1
+	k8s.io/apimachinery v0.37.1
+	k8s.io/client-go v0.37.1
 	k8s.io/streaming v0.37.1
 )
 
