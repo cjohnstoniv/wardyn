@@ -553,7 +553,8 @@ RBAC ships least-privilege: the namespaced Role covers exactly the verbs the
 substrate issues (pods create/get/list/delete/deletecollection;
 `pods/ephemeralcontainers` update; `pods/exec` get+create — the exec
 subresource's websocket transport issues GET, SPDY issues POST, and the
-driver tries websocket first; secrets create/delete/deletecollection and
+driver tries websocket first; `pods/log` get, which streams an exec run's
+output into its tail for `GET /runs/{id}/output`; secrets create/delete/deletecollection and
 networkpolicies create/list/delete/deletecollection — deliberately **no**
 `get`, `list` or `watch` on `secrets`: every one of those returns the object's
 body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.

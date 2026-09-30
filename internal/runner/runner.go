@@ -87,6 +87,10 @@ type SandboxSpec struct {
 	// Interactive marks a run that comes up idle for `wardyn run attach`; a
 	// driver prepares the workspace on the idle main process for it.
 	Interactive bool
+	// ExecOutput, non-nil, receives a copy of the agent exec's combined
+	// stdout/stderr (GET /runs/{id}/output). Its Write must never block or
+	// fail: the driver drains the exec through it.
+	ExecOutput io.Writer `json:"-"`
 }
 
 // NotifyWaiting delivers one OnWaiting report, or does nothing when this spec
