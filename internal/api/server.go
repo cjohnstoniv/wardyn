@@ -391,6 +391,8 @@ type Config struct {
 	// A function rather than a value so the provider row stays the single
 	// source of truth and the sign-in never acts on a cached copy of it.
 	ADOEntra ADOEntraSource
+	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
+	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
 	// same boundary, reason, path and peer — into the first row plus one summary
 	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,

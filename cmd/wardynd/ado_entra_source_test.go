@@ -4,7 +4,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -77,5 +81,105 @@ func TestADOEntraSource_FailsClosed(t *testing.T) {
 	dex := newADOEntraLogin("https://sso.corp.example/dex", testLoginClient, "s", "", "", false)
 	if cfg, _, _ = adoEntraSource(entraSite(testLoginClient), dex)(context.Background()); cfg.LoginTenantID != "" {
 		t.Errorf("a non-Entra issuer produced a login tenant %q", cfg.LoginTenantID)
+	}
+}
+
+func mintedSite(clientID, tenantID string) fakeSiteConfig {
+	sc := entraSite(clientID)
+	sc.WorkspaceProviders.Git[0].Entra.TenantID = tenantID
+	sc.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeMintedPAT
+	return sc
+}
+
+// A minted_pat row on the console's own confidential app asks for the two
+// token permissions and nothing else, and is handed the console's secret.
+func TestADOEntraSource_MintedRowAsksForTheMintScopes(t *testing.T) {
+	cfg, found, err := adoEntraSource(mintedSite(testLoginClient, testTenant), testLogin)(context.Background())
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if cfg.TokenMode != types.ADOTokenModeMintedPAT || !slices.Equal(cfg.Scopes, adoscope.MintScopes()) || cfg.ClientSecret != "console-secret" {
+		t.Fatalf("cfg = %+v, want minted_pat, exactly the mint scopes, the console secret", cfg)
+	}
+}
+
+// S1 at first read: a minted_pat row the console cannot redeem with its own
+// secret resolves with no secret, which every api door reads as unusable
+// (ado_pat_needs_console_app) — never as a public client.
+func TestADOEntraSource_S1FirstReadLeavesNoSecret(t *testing.T) {
+	noSecret := newADOEntraLogin("https://login.microsoftonline.com/"+testTenant+"/v2.0",
+		testLoginClient, "", "https://wardyn.corp.example/auth/callback", "", false)
+	for name, tc := range map[string]struct {
+		sc    fakeSiteConfig
+		login adoEntraLogin
+	}{
+		"another application": {mintedSite("99999999-0000-0000-0000-000000000000", testTenant), testLogin},
+		"another tenant":      {mintedSite(testLoginClient, "77777777-0000-0000-0000-000000000000"), testLogin},
+		"no console secret":   {mintedSite(testLoginClient, testTenant), noSecret},
+	} {
+		cfg, found, err := adoEntraSource(tc.sc, tc.login)(context.Background())
+		if err != nil || !found || cfg.TokenMode != types.ADOTokenModeMintedPAT || cfg.ClientSecret != "" {
+			t.Errorf("%s: found=%v err=%v secret=%q mode=%q, want a minted row with no secret", name, found, err, cfg.ClientSecret, cfg.TokenMode)
+		}
+	}
+}
+
+// An own_pat row has no sign-in: it never drives the login, never shadows a
+// row that does, and never reaches the api's "unusable" warning.
+func TestADOEntraSource_SkipsOwnPATRows(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	own := entraSite(testLoginClient).WorkspaceProviders.Git[0]
+	own.ID, own.Entra = "own", &types.ADOEntraConfig{TokenMode: types.ADOTokenModeOwnPAT,
+		CapabilityCeiling: []adoscope.Capability{adoscope.CapRead}}
+	if _, found, err := adoEntraSource(fakeSiteConfig{WorkspaceProviders: &types.WorkspaceProviders{
+		Git: []types.GitProvider{own}}}, testLogin)(context.Background()); found || err != nil {
+		t.Errorf("an own_pat row alone: found=%v err=%v, want not found", found, err)
+	}
+	sc := mintedSite(testLoginClient, testTenant)
+	sc.WorkspaceProviders.Git = append([]types.GitProvider{own}, sc.WorkspaceProviders.Git...)
+	cfg, found, err := adoEntraSource(sc, testLogin)(context.Background())
+	if err != nil || !found || cfg.RowID != "ado" {
+		t.Errorf("own_pat first: row %q found=%v err=%v, want the minted row", cfg.RowID, found, err)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("the source logged %q", logs.String())
+	}
+}
+
+// One application holds one consent: a bearer row naming the minted row's
+// application would carry the token permissions into runs.
+func TestADOEntraSource_BearerAndMintedRowsMayNotShareAnApplication(t *testing.T) {
+	sc := mintedSite(testLoginClient, testTenant)
+	bearer := entraSite(testLoginClient).WorkspaceProviders.Git[0]
+	bearer.ID = "ado-bearer"
+	sc.WorkspaceProviders.Git = append(sc.WorkspaceProviders.Git, bearer)
+	if _, _, err := adoEntraSource(sc, testLogin)(context.Background()); err == nil || !strings.Contains(err.Error(), "same application") {
+		t.Fatalf("err = %v, want the shared-application refusal", err)
+	}
+	bearer.Entra = &types.ADOEntraConfig{TenantID: testTenant, ClientID: "99999999-0000-0000-0000-000000000000",
+		CapabilityCeiling: []adoscope.Capability{adoscope.CapRead}}
+	sc.WorkspaceProviders.Git[1] = bearer
+	if _, found, err := adoEntraSource(sc, testLogin)(context.Background()); err != nil || !found {
+		t.Fatalf("different applications: found=%v err=%v", found, err)
+	}
+}
+
+func TestADOLoginFacts(t *testing.T) {
+	if c, tn, has := testLogin.facts(); c != testLoginClient || tn != testTenant || !has {
+		t.Errorf("with a secret: %q %q %v", c, tn, has)
+	}
+	noSecret := newADOEntraLogin("https://login.microsoftonline.com/"+testTenant+"/v2.0", testLoginClient, "", "", "", false)
+	if c, tn, has := noSecret.facts(); c != testLoginClient || tn != testTenant || has {
+		t.Errorf("without a secret: %q %q %v", c, tn, has)
+	}
+	f := &bootFlags{}
+	issuer, client, secret, redirect, base, allow := "https://login.microsoftonline.com/"+testTenant+"/v2.0", testLoginClient, "s", "", "", false
+	f.oidcIssuer, f.oidcClientID, f.oidcClientSecret, f.oidcRedirectURL, f.basePath, f.allowTestEndpoints = &issuer, &client, &secret, &redirect, &base, &allow
+	if c, tn, has := adoLoginFactsFromFlags(f)(); c != testLoginClient || tn != testTenant || !has {
+		t.Errorf("from flags: %q %q %v", c, tn, has)
 	}
 }
