@@ -396,6 +396,10 @@ func (h *adoGitHarness) withHold(t *testing.T, cp *capControlPlane, reader appro
 	inj.base, inj.token, inj.client = cp.srv.URL, tok, cp.srv.Client()
 	inj.reauth, inj.approvals = newReauthCoordinator(), reader
 	t.Cleanup(inj.reauth.stop)
+	// An approval answers with this harness's own registered credential.
+	cp.mu.Lock()
+	cp.value = inj.byHost["dev.azure.com"].header.value
+	cp.mu.Unlock()
 }
 
 // push commits on branch in dir and pushes it.
@@ -444,6 +448,43 @@ func TestADOGitBroker_HeldPushApprovedOnceThenAsksAgain(t *testing.T) {
 	}
 	if _, raised := cp.snapshot(); len(raised) != 2 {
 		t.Errorf("the second push raised %d approvals in total, want 2 — a once approval covers one push", len(raised))
+	}
+	h.finish(t)
+}
+
+// THE APPROVAL'S PAT REACHES THE PUSH: the run holds a read-only PAT, the approval
+// mints a union PAT, and the one pack upload carries it — so one once approval is
+// enough, not a failed 401 push that spends it.
+func TestADOGitBroker_HeldPushGoesOutUnderTheApprovalsPAT(t *testing.T) {
+	patB := "pat-b-" + uuid.NewString()
+	// Azure DevOps refuses the pack upload of any PAT but the approval's.
+	onlyB := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/git-receive-pack") && r.Method == http.MethodPost &&
+				r.Header.Get("Authorization") != "Bearer "+patB {
+				http.Error(w, "TF400813", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	h := newADOGitHarnessFront(t, nil, onlyB, adoscope.CapCodeRead)
+	h.fake.RegisterToken(patB, adofake.ScopeCodeRead, adofake.ScopeCodeWrite)
+	cp := newCapControlPlane(t)
+	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
+	cp.mu.Lock()
+	cp.value = "Bearer " + patB
+	cp.mu.Unlock()
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+
+	if out, err := h.push(t, dir, h.runBranch()); err != nil {
+		t.Fatalf("held push, approved once: %v\n%s", err, out)
+	}
+	if _, raised := cp.snapshot(); len(raised) != 1 {
+		t.Errorf("the push raised %d approvals, want 1", len(raised))
+	}
+	if n := h.countEndpoint(adofake.EndpointGitReceivePack, ""); n != 1 {
+		t.Errorf("Azure DevOps saw %d pack uploads, want 1", n)
 	}
 	h.finish(t)
 }
@@ -581,7 +622,8 @@ func TestADOGitBroker_CloneWithoutCodeReadIsHeldAsCodeRead(t *testing.T) {
 	// The hold is wired before the server serves: the clone is the first
 	// request, and git reaches the proxy from a subprocess the race detector
 	// cannot order after a later write.
-	h := newADOGitHarnessWith(t, func(p *Proxy, _ string) {
+	h := newADOGitHarnessWith(t, func(p *Proxy, token string) {
+		cp.value = "Bearer " + token
 		tok := &tokenSource{}
 		tok.Set("run-token")
 		inj := p.inject
