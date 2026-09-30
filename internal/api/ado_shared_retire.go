@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -155,7 +156,8 @@ func (s *Server) requireADOOwnToken(ctx context.Context, subject string, rows []
 		return 0, nil
 	}
 	for _, row := range rows {
-		_, found, err := s.readADOOwnPAT(ctx, subject, row.ID)
+		// A presence check, like the Settings card's: marked, never a value read out.
+		_, found, err := s.readADOOwnPAT(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, row.ID)
 		if err != nil {
 			return http.StatusInternalServerError, fmt.Errorf("read own Azure DevOps token: %w", err)
 		}
