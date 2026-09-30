@@ -494,7 +494,8 @@ run's capabilities are held by the proxy's request check exactly as in every oth
 
 **A token Azure DevOps refuses before its expiry** is noted, not stopped. When the proxy has to ask for the
 token again because Azure DevOps answered it with a 401 and the date the person entered is still ahead,
-Wardyn stamps the stored token once (`refused_at` on `GET /api/v1/me/scm-access`, which still reads
+Wardyn asks Azure DevOps once whether it still accepts the token (the check a paste runs); only if it
+does not, Wardyn stamps the stored token once (`refused_at` on `GET /api/v1/me/scm-access`, which still reads
 `live`) and audits it once. A 401 answers a revoked token, an expired one and a missing scope alike, so
 Wardyn keeps using the token until its date; adding a new token clears the stamp.
 

@@ -286,6 +286,10 @@ func (s *Server) handleDeleteADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Held across the read and the delete, like the paste's write: a stamp
+	// mid-rewrite must not put the removed token back.
+	adoOwnPATWriteMu.Lock()
+	defer adoOwnPATWriteMu.Unlock()
 	_, found, err := s.readADOOwnPAT(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, row.ID)
 	if err != nil {
 		writeServerError(w, r, "read the Azure DevOps token", err)
@@ -469,9 +473,13 @@ func (s *Server) adoOwnPATBoundByObjectID(ctx context.Context, subject, org, des
 	}
 	resp, err := adoOwnPATGet(ctx, adoOwnPATGraphBase+"/"+url.PathEscape(org)+"/_apis/graph/users/"+url.PathEscape(descriptor)+"?api-version=7.1-preview.1", token)
 	if err != nil {
+		slog.DebugContext(ctx, "wardynd: the Azure DevOps Graph lookup did not complete; binding by name", slog.Any("err", err))
 		return false
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 500 {
+		slog.DebugContext(ctx, "wardynd: the Azure DevOps Graph lookup failed; binding by name", slog.Int("status", resp.StatusCode))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
@@ -513,11 +521,15 @@ func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outco
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, actor, action, adoOwnPATSecretName(rowID), outcome, mustJSON(data)))
 }
 
-// adoOwnPATWriteMu orders the two writers of a stored own token in this
-// process — a paste (handlePutADOOwnPAT) and the refusal stamp — so a stamp
-// never writes an old token back over a fresh paste. The secret store has no
-// compare-and-set, so a second replica can still interleave the two; the cost
-// is one stale informational stamp, cleared by the next paste.
+// adoOwnPATWriteMu orders the three writers of a stored own token in this
+// process — a paste (handlePutADOOwnPAT), a removal (handleDeleteADOOwnPAT) and
+// the refusal stamp — so a stamp never writes an old token back over a fresh
+// paste, nor a removed one back into the store. The stamp reads and writes under
+// it and only ever rewrites a record it just found, so it cannot create one.
+// The secret store has no compare-and-set or tombstone, so a second replica can
+// still interleave: a stamp there can resurrect a token removed here, or leave
+// one stale informational stamp the next paste clears. Closing that needs a
+// compare-and-set or a delete tombstone in the secret store.
 var adoOwnPATWriteMu sync.Mutex
 
 // stampADOOwnPATRefused records, once, that Azure DevOps refused owner's own
@@ -528,7 +540,16 @@ var adoOwnPATWriteMu sync.Mutex
 // stamp and one audit row on the own-token store action (reason
 // upstream_refused) are all that changes. A token already stamped, removed,
 // replaced or expired since blob was read is left alone.
-func (s *Server) stampADOOwnPATRefused(ctx context.Context, claims *identity.Claims, sn adoEntraScopeSnapshot, blob adoOwnPATBlob) {
+//
+// A 401 on one request can be a missing scope, so before stamping the token is
+// put to the same accept-check a paste runs (connectionData at identityURL, one
+// call per attempt, made outside the lock): only a token Azure DevOps itself
+// rejects is stamped. One that still authenticates, or a check that could not
+// complete, stamps nothing.
+func (s *Server) stampADOOwnPATRefused(ctx context.Context, claims *identity.Claims, sn adoEntraScopeSnapshot, blob adoOwnPATBlob, identityURL string) {
+	if _, err := s.adoOwnPATOwner(ctx, identityURL, blob.Token); !errors.Is(err, errADOOwnPATRejected) {
+		return
+	}
 	adoOwnPATWriteMu.Lock()
 	defer adoOwnPATWriteMu.Unlock()
 	now := s.cfg.Now().UTC()
