@@ -232,7 +232,8 @@ func TestProviderCredentialRefusals(t *testing.T) {
 // TestProviderCredentialAvailableTo: the key door stores nothing for a person
 // the provider's "Available to" list does not admit — the launch door's own
 // capModelProvider check, its audited refusal, and its tiers (a security admin
-// is bounded, a super admin exempt). A resolver error refuses too.
+// is bounded, a super admin exempt). The refusal answers exactly as an unknown
+// id does (D-6, #1018). A resolver error refuses too.
 func TestProviderCredentialAvailableTo(t *testing.T) {
 	site := credentialSite(keyProvider("anthropic", "claude-code"))
 	const path, body = "/api/v1/model-providers/anthropic/credential", `{"value":"sk-ant-member-own-key-0001"}`
@@ -248,8 +249,8 @@ func TestProviderCredentialAvailableTo(t *testing.T) {
 		want                   int
 	}{
 		{"listed: stored", "sub-listed", "listed@corp.example", oidc.RoleUser, http.StatusNoContent},
-		{"unlisted: refused", "sub-member", "member@corp.example", oidc.RoleUser, http.StatusForbidden},
-		{"an unlisted security admin is bounded like the launch door", "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin, http.StatusForbidden},
+		{"unlisted: refused", "sub-member", "member@corp.example", oidc.RoleUser, http.StatusNotFound},
+		{"an unlisted security admin is bounded like the launch door", "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin, http.StatusNotFound},
 		{"a super admin is exempt", "sub-admin", "admin@corp.example", oidc.RoleAdmin, http.StatusNoContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -269,15 +270,63 @@ func TestProviderCredentialAvailableTo(t *testing.T) {
 			if stored {
 				t.Fatalf("a refused PUT wrote %v / %v", mem.m, mem.owned)
 			}
-			var got struct{ Error string }
-			if want := fmt.Sprintf(mpcNotGranted, "anthropic"); json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Error != want {
-				t.Errorf("body = %s, want %q", w.Body.String(), want)
+			unknown := doSSO(t, modelProvidersStatusSrv(t, credentialSite(openAIProvider()), restricted()), http.MethodPut, path,
+				ssoSession(t, tc.sub, tc.email, tc.role), body)
+			if unknown.Code != w.Code || unknown.Body.String() != w.Body.String() {
+				t.Errorf("refused = %d %s, want an unknown id's %d %s", w.Code, w.Body.String(), unknown.Code, unknown.Body.String())
 			}
 			if reasons := auditReasons(t, srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_model_provider"}) {
 				t.Errorf("authz.denied reasons = %v, want [capability_model_provider]", reasons)
 			}
 		})
 	}
+
+	// DELETE (#1018 F1): a caller holding no key is answered on availability as
+	// PUT is, so DELETE is no existence or kind oracle; one whose grant was
+	// withdrawn after storing a key can still remove it.
+	t.Run("DELETE: a restricted provider the caller holds nothing for reads as absent", func(t *testing.T) {
+		both := credentialSite(keyProvider("anthropic", "claude-code"), subProvider("claude"))
+		cs := func() *capStore {
+			c := restricted()
+			c.restricted[capModelProvider]["claude"] = true
+			return c
+		}
+		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+		for _, id := range []string{"anthropic", "claude"} {
+			del := "/api/v1/model-providers/" + id + "/credential"
+			srv := modelProvidersStatusSrv(t, both, cs())
+			w := doSSO(t, srv, http.MethodDelete, del, member, "")
+			unknown := doSSO(t, modelProvidersStatusSrv(t, credentialSite(openAIProvider()), cs()), http.MethodDelete, del, member, "")
+			if w.Code != http.StatusNotFound || unknown.Code != w.Code || unknown.Body.String() != w.Body.String() {
+				t.Errorf("DELETE %s = %d %s, want an unknown id's 404 %s", id, w.Code, w.Body.String(), unknown.Body.String())
+			}
+			if reasons := auditReasons(t, srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_model_provider"}) {
+				t.Errorf("DELETE %s authz.denied reasons = %v, want [capability_model_provider]", id, reasons)
+			}
+		}
+	})
+
+	t.Run("DELETE: a withdrawn grant never strands a stored key", func(t *testing.T) {
+		c := restricted()
+		srv := modelProvidersStatusSrv(t, site, c)
+		mem := srv.cfg.Secrets.(*memSecrets)
+		listed := ssoSession(t, "sub-listed", "listed@corp.example", oidc.RoleUser)
+		if w := doSSO(t, srv, http.MethodPut, path, listed, body); w.Code != http.StatusNoContent {
+			t.Fatalf("PUT = %d %s", w.Code, w.Body.String())
+		}
+		c.grants = nil // the grant is withdrawn; the key is still stored
+		if w := doSSO(t, srv, http.MethodDelete, path, listed, ""); w.Code != http.StatusNoContent {
+			t.Fatalf("DELETE with a stored key = %d %s, want 204", w.Code, w.Body.String())
+		}
+		for owner, rows := range mem.owned {
+			if len(rows) != 0 {
+				t.Errorf("%s still holds %v after the DELETE", owner, slices.Collect(maps.Keys(rows)))
+			}
+		}
+		if w := doSSO(t, srv, http.MethodDelete, path, listed, ""); w.Code != http.StatusNotFound {
+			t.Errorf("DELETE again, holding nothing = %d %s, want the 404 twin", w.Code, w.Body.String())
+		}
+	})
 
 	t.Run("a resolver error refuses and stores nothing, even for the listed person", func(t *testing.T) {
 		cs := restricted()
