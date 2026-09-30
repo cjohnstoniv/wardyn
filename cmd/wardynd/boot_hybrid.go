@@ -78,6 +78,10 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 					"and WARDYN_ORG_ENROLMENT_TOKEN is unset — deliver an enrolment token an org admin minted")
 			}
 			resp, err := client.Enrol(ctx, enrolToken)
+			if err != nil && boundElsewhere {
+				return nil, fmt.Errorf("refusing to start: the stored org credential was enrolled at a different WARDYN_ORG_URL "+
+					"and enrolling there with WARDYN_ORG_ENROLMENT_TOKEN failed — restore the original URL, or deliver a token the new organisation minted: %w", err)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("refusing to start: enrolment at WARDYN_ORG_URL failed: %w", err)
 			}

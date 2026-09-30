@@ -12,10 +12,10 @@ import (
 
 var tlsServed = tlsPosture{tlsEnabled: true, secureCookies: true}
 
-// TestPlaintextIssuerWarnings pins #156: a non-loopback http:// issuer warns
+// TestBootPosturePlaintextIssuerWarnings pins #156: a non-loopback http:// issuer warns
 // once the console has a TLS posture, names the variable, and stays silent for
 // https, for loopback, and for the plaintext Compose demo's bundled Dex.
-func TestPlaintextIssuerWarnings(t *testing.T) {
+func TestBootPosturePlaintextIssuerWarnings(t *testing.T) {
 	for _, tc := range []struct {
 		name, issuer, internal string
 		posture                tlsPosture
@@ -26,6 +26,7 @@ func TestPlaintextIssuerWarnings(t *testing.T) {
 		{name: "loopback ip is silent", issuer: "http://127.0.0.1:5556", internal: "http://[::1]:5556", posture: tlsServed},
 		{name: "no issuer is silent", posture: tlsServed},
 		{name: "compose demo internal dex is silent", issuer: "http://localhost:5556", internal: "http://dex:5556"},
+		{name: "oidc off: compose default internal issuer is silent", internal: "http://dex:5556", posture: tlsServed},
 		{name: "plaintext public issuer warns", issuer: "http://idp.example.com/", posture: tlsServed, want: []string{"WARDYN_OIDC_ISSUER"}},
 		{name: "plaintext internal issuer warns", issuer: "https://idp.example.com/", internal: "http://dex:5556", posture: tlsServed, want: []string{"WARDYN_OIDC_INTERNAL_ISSUER"}},
 		{name: "both warn", issuer: "http://idp.example.com", internal: "http://10.0.0.7:5556", posture: tlsServed,
@@ -46,11 +47,11 @@ func TestPlaintextIssuerWarnings(t *testing.T) {
 	}
 }
 
-// TestUIGatewaySharesConsoleHostWarning pins #1269: under secure cookies a
+// TestBootPostureUIGatewaySharesConsoleHost pins #1269: under secure cookies a
 // path-mode gateway advertised on the console's own hostname warns and names
 // the remedy; a hostname of its own, host mode, the gateway off, or plain-HTTP
 // cookies stay quiet. Ports are ignored on purpose — cookies ignore them.
-func TestUIGatewaySharesConsoleHostWarning(t *testing.T) {
+func TestBootPostureUIGatewaySharesConsoleHost(t *testing.T) {
 	const redirect = "https://wardyn.example.com/auth/callback"
 	for _, tc := range []struct {
 		name, uiListen, advertise, template, redirect string

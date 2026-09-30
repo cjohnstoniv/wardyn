@@ -42,9 +42,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
   warning; the Compose demo is exempt. With secure cookies, a UI gateway advertised on the console's
   own hostname logs a warning that names the fix, a hostname of its own. Neither refuses boot. A
-  managed laptop's device credential now records a hash of `WARDYN_ORG_URL`: a different URL re-enrols
-  with `WARDYN_ORG_ENROLMENT_TOKEN`, or refuses to start without one, instead of sending the old bearer
-  to the new host. A credential stored earlier is kept and bound to the URL set at its first boot after
+  managed laptop's device credential now records a hash of `WARDYN_ORG_URL`: a different URL (case, a
+  default port and trailing slashes do not count) re-enrols with a fresh `WARDYN_ORG_ENROLMENT_TOKEN`
+  minted for that URL, since the spent one is refused there, or refuses to start without one, instead
+  of sending the old bearer to the new host. A credential stored earlier is kept and bound to the URL set at its first boot after
   the upgrade. `docs/operations/secrets-and-keys.md` notes that a Vault platform policy must cover
   `<prefix>/platform/*`.
 - **A run's model credential comes only from its model provider; the 0.8.2 upgrade converts 0.7.x

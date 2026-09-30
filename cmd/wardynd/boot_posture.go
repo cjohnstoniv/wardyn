@@ -437,8 +437,8 @@ func bootPostureWarnings(f *bootFlags, posture tlsPosture) []string {
 // the clear — or, for the public issuer, send the browser's sign-in there.
 // A warning, not a refusal: an in-cluster IdP behind a mesh is a real setup.
 func plaintextIssuerWarnings(issuer, internalIssuer string, posture tlsPosture) []string {
-	if !posture.secureCookies {
-		return nil
+	if !posture.secureCookies || strings.TrimSpace(issuer) == "" {
+		return nil // OIDC is configured by the public issuer; an internal one alone is dead config
 	}
 	var out []string
 	for _, c := range []struct{ env, raw string }{

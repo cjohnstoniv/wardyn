@@ -12,8 +12,23 @@ import (
 // drops surrounding space and trailing slashes, so the hash must too) and that
 // a credential stored before the field existed decodes with an empty hash.
 func TestOrgURLSHA256(t *testing.T) {
-	if OrgURLSHA256(" https://org.example.com// ") != OrgURLSHA256("https://org.example.com") {
-		t.Error("trailing slashes and space changed the hash")
+	for _, same := range []string{
+		" https://org.example.com// ", "HTTPS://Org.Example.COM", "https://org.example.com:443", "https://org.example.com:443/",
+	} {
+		if OrgURLSHA256(same) != OrgURLSHA256("https://org.example.com") {
+			t.Errorf("%q hashes differently from https://org.example.com", same)
+		}
+	}
+	if OrgURLSHA256("http://org.example.com:80") != OrgURLSHA256("http://org.example.com") {
+		t.Error("http default port changed the hash")
+	}
+	for _, other := range []string{"https://org.example.com:8443", "http://org.example.com", "https://org.example.com/base", "https://[::1]:443x"} {
+		if OrgURLSHA256(other) == OrgURLSHA256("https://org.example.com") {
+			t.Errorf("%q hashes like https://org.example.com", other)
+		}
+	}
+	if OrgURLSHA256("https://[::1]:443") != OrgURLSHA256("https://[::1]") {
+		t.Error("ipv6 default port changed the hash")
 	}
 	if OrgURLSHA256("https://org.example.com") == OrgURLSHA256("https://other.example.com") {
 		t.Error("different hosts hash alike")

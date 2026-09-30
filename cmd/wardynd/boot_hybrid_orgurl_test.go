@@ -55,6 +55,15 @@ func TestBootHybrid_ChangedOrgURLReEnrols(t *testing.T) {
 		t.Fatal("the stored credential was replaced by a refused boot")
 	}
 
+	// Another URL where the enrolment fails (the spent token MDM leaves behind
+	// is refused there): the refusal names the URL change, not just the failure.
+	second.setDown(true)
+	_, err = bootHybrid(context.Background(), ctx, urlB, "wde_first", unlocked(secrets), st, rec)
+	second.setDown(false)
+	if err == nil || !strings.Contains(err.Error(), "different WARDYN_ORG_URL") || !strings.Contains(err.Error(), "enrolling there") {
+		t.Fatalf("err = %v, want the refusal to name the changed URL", err)
+	}
+
 	// Another URL with a fresh token: re-enrols there, bound to the new URL.
 	fwd, err = bootHybrid(context.Background(), ctx, urlB, "wde_second", unlocked(secrets), st, rec)
 	hj.add(fwd)
@@ -108,5 +117,30 @@ func TestBootHybrid_CredentialWithoutOrgURLHashIsAdopted(t *testing.T) {
 	if _, err := bootHybrid(context.Background(), ctx, other, "", unlocked(secrets), &hybridStore{}, &hybridRecorder{}); err == nil ||
 		!strings.Contains(err.Error(), "different WARDYN_ORG_URL") {
 		t.Fatalf("err = %v, want the adopted binding to refuse a changed URL", err)
+	}
+}
+
+// TestBootHybrid_CosmeticOrgURLEditKeepsTheCredential pins that spelling
+// variants of one URL are one URL: an MDM edit of case or a default port must
+// not force a re-enrolment.
+func TestBootHybrid_CosmeticOrgURLEditKeepsTheCredential(t *testing.T) {
+	org := &hybridOrg{}
+	base := org.serve(t).URL // http://127.0.0.1:<port>
+	secrets, st, rec := hybridSecrets{}, &hybridStore{}, &hybridRecorder{}
+	ctx, hj := newHybridJoin(t)
+	fwd, err := bootHybrid(context.Background(), ctx, base, "wde_first", unlocked(secrets), st, rec)
+	hj.add(fwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []string{"HTTP://" + strings.TrimPrefix(base, "http://") + "/", " " + base + " "} {
+		if fwd, err := bootHybrid(context.Background(), ctx, variant, "", unlocked(secrets), st, rec); err != nil {
+			t.Fatalf("%q: %v", variant, err)
+		} else {
+			hj.add(fwd)
+		}
+	}
+	if e, _ := org.seen(); len(e) != 1 {
+		t.Fatalf("a cosmetic edit re-enrolled: %v", e)
 	}
 }

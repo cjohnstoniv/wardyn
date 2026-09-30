@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -45,11 +46,32 @@ type Credential struct {
 	Name                 string    `json:"name,omitempty"`
 }
 
-// OrgURLSHA256 is hex(sha256(url)) of the organisation URL as NewClient reads
-// it (surrounding space and trailing slashes dropped), the form Credential records.
+// OrgURLSHA256 is hex(sha256(url)) of the organisation URL, the form Credential
+// records. The URL is normalised first, so a cosmetic edit is not a change of
+// organisation: surrounding space, the case of scheme and host, a default
+// port (:443 for https, :80 for http) and trailing slashes do not matter. A
+// value that does not parse as a URL with a host is hashed as trimmed.
 func OrgURLSHA256(orgURL string) string {
-	sum := sha256.Sum256([]byte(strings.TrimRight(strings.TrimSpace(orgURL), "/")))
+	sum := sha256.Sum256([]byte(normaliseOrgURL(orgURL)))
 	return hex.EncodeToString(sum[:])
+}
+
+func normaliseOrgURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" {
+		return strings.TrimRight(raw, "/")
+	}
+	scheme, host, port := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port == "" || (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	} else {
+		port = ":" + port
+	}
+	return scheme + "://" + host + port + strings.TrimRight(u.EscapedPath(), "/")
 }
 
 // TokenSHA256 is hex(sha256(token)), the form Credential records.
