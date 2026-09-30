@@ -96,7 +96,9 @@ func TestADOPATNeverPrintsTheToken(t *testing.T) {
 	var buf strings.Builder
 	slog.New(slog.NewTextHandler(&buf, nil)).Info("minted", "pat", p)
 	for name, got := range map[string]string{
-		"%v": fmt.Sprintf("%v", p), "%+v": fmt.Sprintf("%+v", p), "%s": fmt.Sprintf("%s", p), "slog": buf.String(),
+		"%v": fmt.Sprintf("%v", p), "%+v": fmt.Sprintf("%+v", p),
+		//lint:ignore S1025 the case pins the %s verb itself, not the String method
+		"%s": fmt.Sprintf("%s", p), "slog": buf.String(),
 	} {
 		if strings.Contains(got, "s3cret") {
 			t.Errorf("%s printed the token: %q", name, got)

@@ -743,7 +743,6 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 // per-binary copy.
 var (
 	flagEnv      = cliutil.FlagEnv
-	envOr        = cliutil.EnvOr
 	flagBool     = cliutil.FlagBool
 	flagDuration = cliutil.FlagDuration
 	flagIntEnv   = cliutil.FlagIntEnv

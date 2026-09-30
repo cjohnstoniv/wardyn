@@ -57,8 +57,10 @@ func runPolicyCmd(client clientFn) *cobra.Command {
 			// Never an empty file behind `> p.yaml`: no policy is an error.
 			switch view.State {
 			case sdk.RunPolicyViewNotYet:
+				//lint:ignore ST1005 the sentence the operator reads, as written in the approved copy; it ends as a sentence does
 				return errors.New(runPolicyNotYet)
 			case sdk.RunPolicyViewNever:
+				//lint:ignore ST1005 the sentence the operator reads, as written in the approved copy; it ends as a sentence does
 				return errors.New(runPolicyNever)
 			}
 			body, err := runPolicyYAML(view)

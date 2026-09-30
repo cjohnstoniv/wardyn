@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -21,7 +20,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -566,20 +564,6 @@ func TestInjectionResolve_OperatorRunUnchanged(t *testing.T) {
 // Every case below configures a WORKING sentinel resolve (posture ok, provider
 // wired) and changes only the host, so the refusal it asserts can come from the
 // host pin and nothing else.
-
-// liveOAuthProvider is a subscription.Provider that yields a LIVE-shaped token
-// with a machine-readable expiry.
-type liveOAuthProvider struct {
-	value   string
-	expires time.Time
-}
-
-func (p liveOAuthProvider) Current(context.Context) (subscription.Token, error) {
-	return subscription.Token{Value: p.value, ExpiresAt: p.expires}, nil
-}
-func (p liveOAuthProvider) Peek() (subscription.Token, error) {
-	return subscription.Token{Value: p.value, ExpiresAt: p.expires}, nil
-}
 
 // TestInternalInjection_RetiredSentinelsNeverResolve: the two sentinels of the
 // retired shared-subscription lanes resolve to nothing in 0.8.2. A grant naming
