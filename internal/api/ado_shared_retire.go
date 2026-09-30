@@ -114,9 +114,12 @@ func adoGrantHost(sc types.SiteConfig, host string) bool {
 // said, unless every row deciding it takes each person's own token, in which
 // case it is dropped. That is the 0.8.1 shared-token wiring: the pat lane never
 // carries it (vetoed on Services, superseded by the ADO lane on Server), so the
-// run reads the own token, whose absence is refused at dispatch. Legacy open
-// mode has no rows, so nothing is dropped there.
-func (s *Server) adoGitGrants(ctx context.Context, needed []neededSecret, spec types.RunPolicySpec) ([]neededSecret, error) {
+// run reads the person's own credential instead. Where every deciding row is an
+// own-token row, a launcher (subject) who has added no token on any of them is
+// refused here, with the dispatch refusal's reason, rather than started into a
+// proxy that cannot boot. Legacy open mode has no rows, so nothing is dropped
+// there. A refusal comes back as a 422 status; any other error is a 500.
+func (s *Server) adoGitGrants(ctx context.Context, subject string, needed []neededSecret, spec types.RunPolicySpec) ([]neededSecret, int, error) {
 	var sc types.SiteConfig
 	kept := needed[:0]
 	for _, n := range needed {
@@ -124,11 +127,15 @@ func (s *Server) adoGitGrants(ctx context.Context, needed []neededSecret, spec t
 			if s.cfg.Store != nil && sc.WorkspaceProviders == nil {
 				var err error
 				if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
-					return nil, fmt.Errorf("get site config: %w", err)
+					return nil, http.StatusInternalServerError, fmt.Errorf("get site config: %w", err)
 				}
 			}
 			if adoGrantHost(sc, n.host) {
-				if providersConfigured(sc) && adoRowsTakeOwnToken(laneRowsForGrantHost(sc, n.host, repoLocatorsOf(spec.WorkspaceRepos)), n.host) {
+				rows := laneRowsForGrantHost(sc, n.host, repoLocatorsOf(spec.WorkspaceRepos))
+				if providersConfigured(sc) && adoRowsTakeOwnToken(rows, n.host) {
+					if code, err := s.requireADOOwnToken(ctx, subject, rows); err != nil {
+						return nil, code, err
+					}
 					continue
 				}
 				n.ownerOnly = true
@@ -136,7 +143,27 @@ func (s *Server) adoGitGrants(ctx context.Context, needed []neededSecret, spec t
 		}
 		kept = append(kept, n)
 	}
-	return kept, nil
+	return kept, 0, nil
+}
+
+// requireADOOwnToken refuses a launch whose Azure DevOps rows all take each
+// person's own token when the launcher has added none on any of them. A row
+// that signs in through Entra carries the run's credential itself, so its
+// presence asks for nothing here.
+func (s *Server) requireADOOwnToken(ctx context.Context, subject string, rows []types.GitProvider) (int, error) {
+	if slices.ContainsFunc(rows, func(row types.GitProvider) bool { return !isADOOwnTokenRow(row) }) {
+		return 0, nil
+	}
+	for _, row := range rows {
+		_, found, err := s.readADOOwnPAT(ctx, subject, row.ID)
+		if err != nil {
+			return http.StatusInternalServerError, fmt.Errorf("read own Azure DevOps token: %w", err)
+		}
+		if found {
+			return 0, nil
+		}
+	}
+	return http.StatusUnprocessableEntity, errors.New(adoOwnPATNotAddedRefusal)
 }
 
 // adoRowsTakeOwnToken reports whether rows are all Azure DevOps rows that carry

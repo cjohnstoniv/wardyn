@@ -961,9 +961,9 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 	// person with no token of their own is refused here, with the reason,
 	// rather than started into a clone that fails inside the sandbox (adoGitGrants
 	// drops the grant where the row takes each person's own token instead).
-	needed, err = s.adoGitGrants(ctx, needed, spec)
+	needed, code, err := s.adoGitGrants(ctx, subject, needed, spec)
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return code, err
 	}
 	for _, n := range needed {
 		// A person's owner_only grant never reads the operator namespace (#1106):

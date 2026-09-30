@@ -254,6 +254,9 @@ func TestOwnerOnlyGrant_LegacyADOGrantWithOwnToken(t *testing.T) {
 	if _, err := e.h.srv.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
 		t.Fatalf("PutSiteConfig: %v", err)
 	}
+	if w := e.createRun(t, "bob", legacy); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "has not added their own Azure DevOps token") {
+		t.Fatalf("no own token + legacy grant: create = %d %s, want 422 naming the missing token", w.Code, w.Body.String())
+	}
 	raw, _ := json.Marshal(adoOwnPATBlob{Token: "alice-own", Org: "acme", ExpiresOn: time.Now().AddDate(0, 0, 5)})
 	if err := e.sec.For("alice").Put(ctx, adoOwnPATSecretName("ado"), raw); err != nil {
 		t.Fatal(err)
