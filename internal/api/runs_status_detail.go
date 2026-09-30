@@ -50,6 +50,46 @@ var startWaitReasons = []string{
 
 const startWaitReasonOther = "other"
 
+// statusReasonBuilding is the reason token of the one stage line the CONTROL
+// PLANE writes to status_detail itself, rather than a substrate reporting it: the
+// sandbox image is being built (BYOI wrap, devcontainer, workspace base image;
+// bounded by imageBuildTimeout). The console mirrors this token by name and
+// value, so it is pinned by a parity test there.
+const (
+	statusReasonBuilding = "Building"
+	statusDetailBuilding = "image: " + statusReasonBuilding
+)
+
+// persistRunStatusDetail is the one bounded, failure-swallowing status_detail
+// write: statusDetailWriteTimeout, and a debug log rather than an error, because
+// a lost status line is a lost sentence on a screen, never a reason to fail a
+// dispatch or a build.
+func persistRunStatusDetail(ctx context.Context, setter runStatusDetailSetter, runID uuid.UUID, detail string) {
+	wctx, cancel := context.WithTimeout(ctx, statusDetailWriteTimeout)
+	defer cancel()
+	if err := setter.SetRunStatusDetail(wctx, runID, detail); err != nil {
+		slog.DebugContext(ctx, "wardynd: could not persist run status detail",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
+}
+
+// announceImageBuild returns the callback that says "the image build for this run
+// is starting NOW". Call it immediately before a builder call, never on a cache
+// hit: the line is only true while a build is actually running.
+//
+// It deliberately does NOT go through runStatusDetailWriter. That writer times
+// every reason it sees into wardyn_run_start_wait_seconds, and a 30-minute build
+// would land there as an "other" stretch — a substrate-wait series polluted with
+// time the substrate was never asked to spend. The line carries no ref: a
+// devcontainer URL is not echoed onto a status line.
+func (s *Server) announceImageBuild(ctx context.Context, runID uuid.UUID) func() {
+	setter, ok := s.cfg.Store.(runStatusDetailSetter)
+	if !ok {
+		return func() {}
+	}
+	return func() { persistRunStatusDetail(ctx, setter, runID, statusDetailBuilding) }
+}
+
 // startWaitReasonLabel folds a raw substrate reason onto that closed set.
 func startWaitReasonLabel(reason string) string {
 	for _, known := range startWaitReasons {
@@ -93,14 +133,7 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 			now := time.Now()
 			closeStretch(now)
 			last, since = detail, now
-			wctx, cancel := context.WithTimeout(ctx, statusDetailWriteTimeout)
-			defer cancel()
-			if err := setter.SetRunStatusDetail(wctx, runID, detail); err != nil {
-				// Debug, and discarded: a lost status line is a lost sentence on
-				// a screen, never a reason to fail a dispatch.
-				slog.DebugContext(ctx, "wardynd: could not persist run status detail",
-					slog.String("run_id", runID.String()), slog.Any("err", err))
-			}
+			persistRunStatusDetail(ctx, setter, runID, detail)
 		}, func() {
 			closeStretch(time.Now())
 			last = ""
@@ -119,7 +152,12 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 // every route that serves a run. It is a read-side projection because
 // status_detail is never cleared by a write (the column keeps the last reason for
 // a postmortem), so honesty on the wire is this function's job alone.
-//   - STARTING: the reason as stored, plus the derived token.
+//   - PENDING while the image builds ("image: Building"): kept, plus its token.
+//     The build happens before dispatch, so PENDING is the only state it is true
+//     in.
+//   - STARTING: the reason as stored, plus the derived token. A leftover Building
+//     line is blanked: on a warm Docker start nothing ever overwrites it, and a
+//     finished build must not narrate the sandbox start.
 //   - FAILED on a TERMINAL reason: kept — a run can fail between two browser
 //     polls, and a reader who never saw STARTING would lose the reason that names
 //     the fix. It comes from the detail or, when that never landed, from the
@@ -133,6 +171,10 @@ func projectStatusDetail(runs []types.AgentRun) {
 		r := &runs[i]
 		reason := statusDetailReason(r.StatusDetail)
 		switch {
+		case r.State == types.RunPending && reason == statusReasonBuilding:
+			r.StatusReason = reason
+		case r.State == types.RunStarting && reason == statusReasonBuilding:
+			r.StatusDetail = ""
 		case r.State == types.RunStarting:
 			r.StatusReason = reason
 		case r.State == types.RunFailed:

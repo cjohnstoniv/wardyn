@@ -3970,6 +3970,7 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | `agent: PodInitializing` | as above, init containers | yes |
 | `pod: Unschedulable: <scheduler's message>` | no node will take the pod (a taint, a full cluster, an unbound claim) — read the message | yes, if the cluster changes |
 | `pod: Pending` | the pod exists and nothing has claimed it yet | yes |
+| `image: Building` | the control plane is building this run's sandbox image (a wrapped base image, a devcontainer, a workspace image), up to 30 minutes. Written only when a build actually starts, never on a cache hit, and carries no image or repo reference. Shown while the run is `PENDING` only | yes, up to the 30-minute build bound |
 | `image: Pulling: <ref>` | the image is downloading now. Docker: the host does not have it. Kubernetes (since 0.8, #807): the kubelet's latest Event for the agent container is `Pulling` | yes |
 | `agent: ImagePullBackOff: <registry's message>` | the registry refused or the tag does not exist | **no** |
 | `agent: ErrImagePull: <registry's message>` | as above, first failure | **no** |
@@ -3984,9 +3985,21 @@ changes the cluster or the image. They are the list in `internal/runner/waiting.
 (`TerminalWaitingReasons`), which the Kubernetes poll loops, the control plane's read projection and
 the console's mirror all read from.
 
+`image: Building` is the one line the control plane writes itself rather than a substrate reporting
+it. The build runs before dispatch, so the line is true only while the run is `PENDING`: the API
+shows it there, and blanks it on a `STARTING` run, where a warm Docker start never overwrites it and a
+finished build must not narrate the sandbox start. It is written outside the start-wait accounting, so
+a long build never appears in `wardyn_run_start_wait_seconds`.
+
+After a daemon restart the last stored line stays on the row. A run that was `PENDING` or `STARTING`
+has no `sandbox_ref` yet, and `finalizeUndispatchedRuns` reaps such a run only after
+`undispatchedGrace` (twice the 30-minute image-build bound, so up to 60 minutes). Until then a run
+whose build or start died with the daemon can still read `image: Building` (or the last substrate wait)
+as if it were current. It is not: kill the run and launch it again.
+
 `status_detail` is display-only, never interpreted, and never cleared by a write: the API blanks it
-at READ for any run that is not `STARTING` — except a run that FAILED on one of the terminal reasons,
-where the reason IS the failure. The last reason therefore survives on the row for a `SELECT`
+at READ for any run that is not `STARTING` (or, for `image: Building`, `PENDING`) — except a run that
+FAILED on one of the terminal reasons, where the reason IS the failure. The last reason therefore survives on the row for a `SELECT`
 postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
 daemon, or a run that started before this upgrade, simply carries no reason.
 
