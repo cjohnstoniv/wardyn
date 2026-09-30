@@ -231,30 +231,26 @@ export interface RunTokenView {
   revokeFailedAt: string[];
 }
 
-// A live token is renewed at 75% of its life (the server's renewal point), so a
-// token the next one followed at or after that point was renewed. One replaced
-// earlier was replaced for another reason (a widening, a resume, a restart) that
-// the wire does not name, so it gets no note rather than a guess.
-const RENEWAL_POINT = 0.75;
-const RENEWAL_SLACK_MS = 60_000;
-
-function wasRenewed(t: ADORunToken, next: ADORunToken): boolean {
-  const created = Date.parse(t.created_at);
-  const life = Date.parse(t.valid_to) - created;
-  return Date.parse(next.created_at) >= created + RENEWAL_POINT * life - RENEWAL_SLACK_MS;
+// The token that followed a replaced one reads "(access added)" when its scope
+// names everything the replaced one did and more, and "(renewed)" otherwise. The
+// wire carries the scope of each, so this is a fact of the two rows, not a guess
+// at when the server renewed.
+function widened(t: ADORunToken, next: ADORunToken): boolean {
+  const had = new Set(t.scope);
+  const has = new Set(next.scope);
+  return has.size > had.size && [...had].every((n) => has.has(n));
 }
 
 /** A run's tokens as the page draws them, oldest first. `paused` is the run's own
  *  state; the token list alone cannot say a run is paused.
  *
- *  A token is never revoked early: one a renewal replaced is still live at Azure
- *  DevOps until its own expiry. So a token the next one followed at its renewal
- *  point reads "(renewed)", from its position and times, not from a revoke
- *  reason. One closed at its own expiry reads "(expired)". Only a token the
- *  server actually revoked (a pause, the run's end, a disconnect, and the like)
- *  names a revoke time and reason. A widening's new token is not told apart from
- *  another replacement by anything the server sends, so "access added" is not
- *  drawn. */
+ *  A token is never revoked early: one a renewal or a widening replaced is still
+ *  live at Azure DevOps until its own expiry. So a token the next one followed
+ *  reads "(access added)" when the next one's scope is a strict superset of its
+ *  own and "(renewed)" otherwise, from the two rows, not from a revoke reason.
+ *  One closed at its own expiry reads "(expired)". Only a token the server
+ *  actually revoked (a pause, the run's end, a disconnect, and the like) names a
+ *  revoke time and reason. */
 export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenView {
   const sorted = [...tokens].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   const lines = sorted.map((t, i) => {
@@ -267,10 +263,8 @@ export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenVi
       return { text: ADO_PAT.RUN_TOKEN_LINE_REVOKED(created, expires, formatClock(t.revoked_at!), reason), old: !!next || paused };
     }
     if (next && !revoked) {
-      const text = wasRenewed(t, next)
-        ? ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.renewed)
-        : ADO_PAT.RUN_TOKEN_LINE(created, expires);
-      return { text, old: true };
+      const note = widened(t, next) ? ADO_PAT.RUN_TOKEN_NOTE.access_added : ADO_PAT.RUN_TOKEN_NOTE.renewed;
+      return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, note), old: true };
     }
     if (t.revoke_reason === "expired") return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, ADO_PAT.RUN_TOKEN_NOTE.expired), old: true };
     return { text: ADO_PAT.RUN_TOKEN_LINE(created, expires), old: !!next };

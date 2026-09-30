@@ -30,6 +30,8 @@ export type SCMAccessPAT = SCMAccess & ADOPATAccess;
 export interface ADORunToken {
   created_at: string;
   valid_to: string;
+  /** The token's scope names as stored, e.g. ["vso.code", "vso.project"]. */
+  scope: string[];
   /** Set once the record is closed. With revoke_reason "expired" it is when the
    *  record was closed, not a revoke. */
   revoked_at?: string;

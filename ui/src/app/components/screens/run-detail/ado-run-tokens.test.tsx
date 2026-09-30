@@ -19,7 +19,7 @@ vi.mock("../../../lib/api/ado-pat", async () => {
 });
 
 const at = (h: number, m: number) => new Date(2000, 8, 29, h, m).toISOString();
-const tok = (over: Partial<ADORunToken> = {}): ADORunToken => ({ created_at: at(9, 2), valid_to: at(17, 2), ...over });
+const tok = (over: Partial<ADORunToken> = {}): ADORunToken => ({ created_at: at(9, 2), valid_to: at(17, 2), scope: ["vso.code", "vso.project"], ...over });
 
 beforeEach(() => {
   runTokensMock.mockReset();
@@ -64,11 +64,11 @@ describe("AdoRunTokens", () => {
     expect(await screen.findByText(ADO_PAT.RUN_REVOKE_FAILED("17:02"))).toBeInTheDocument();
   });
 
-  it("7: a token replaced before its renewal point carries no note, and no 'Access added' line", async () => {
-    await draw([tok({ created_at: at(9, 20), valid_to: at(17, 20) }), tok({})]);
-    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02")).toBeInTheDocument();
+  it("7: a token a wider one replaced reads (access added), with no separate 'Access added' line", async () => {
+    await draw([tok({ created_at: at(9, 20), valid_to: at(17, 20), scope: ["vso.code", "vso.project", "vso.code_write"] }), tok({})]);
+    expect(await screen.findByText("Azure DevOps token: created 09:02 · expires 17:02 (access added)")).toBeInTheDocument();
     expect(screen.getByText("Azure DevOps token: created 09:20 · expires 17:20")).toBeInTheDocument();
-    expect(screen.queryByText(/Access added/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Access added/)).not.toBeInTheDocument();
   });
 
   it("draws nothing for a run that holds no token", async () => {

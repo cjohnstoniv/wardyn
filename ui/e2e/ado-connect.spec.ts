@@ -51,13 +51,15 @@ interface SeededToken {
   revokedAt?: Date;
   reason?: string;
   lastError?: string;
+  /** Space-joined, as the column stores it; defaults to a read scope. */
+  scope?: string;
 }
 function seedRunTokens(runId: string, tokens: SeededToken[]): void {
   const at = (d?: Date) => (d ? `'${d.toISOString()}'::timestamptz` : "NULL");
   for (const t of tokens) {
     sql(
       `INSERT INTO ado_run_pats (run_id, authorization_id, owner, provider_row_id, org, scope, valid_to, created_at, revoked_at, revoke_reason, last_error) ` +
-        `VALUES ('${runId}', gen_random_uuid(), 'e2e-owner', 'azure_devops', 'wardyn-e2e', 'vso.code', ${at(t.validTo)}, ${at(t.createdAt)}, ${at(t.revokedAt)}, '${t.reason ?? ""}', '${t.lastError ?? ""}')`,
+        `VALUES ('${runId}', gen_random_uuid(), 'e2e-owner', 'azure_devops', 'wardyn-e2e', '${t.scope ?? "vso.code vso.project"}', ${at(t.validTo)}, ${at(t.createdAt)}, ${at(t.revokedAt)}, '${t.reason ?? ""}', '${t.lastError ?? ""}')`,
     );
   }
 }
@@ -272,10 +274,12 @@ test.describe("the run page", () => {
     clearRunTokens(runId);
     try {
       seedRunTokens(runId, [
-        // Replaced at 15:02, its 75% renewal point, and closed at its own expiry.
+        // Replaced by a token of the same scope, and closed at its own expiry.
         { createdAt: t(9, 2), validTo: t(17, 2), revokedAt: t(17, 2), reason: "expired" },
-        // Ended with its run, and Azure DevOps refused the revoke: it lives to 23:02 on its own.
-        { createdAt: t(15, 2), validTo: t(23, 2), revokedAt: t(15, 40), reason: "run_end", lastError: "revoke refused" },
+        // Replaced by a wider token: access was added.
+        { createdAt: t(15, 2), validTo: t(23, 2), revokedAt: t(23, 2), reason: "expired" },
+        // Ended with its run, and Azure DevOps refused the revoke: it lives to 23:30 on its own.
+        { createdAt: t(16, 0), validTo: t(23, 30), revokedAt: t(16, 40), reason: "run_end", lastError: "revoke refused", scope: "vso.code vso.project vso.code_write" },
       ]);
       await gotoConsole(page);
       await navToRoute(page, `/runs/${runId}`);
@@ -283,8 +287,9 @@ test.describe("the run page", () => {
       await expect(tokens.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeVisible();
       const lines = tokens.locator("p:not([role=alert])");
       await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created 09:02 · expires 17:02 (renewed)`);
-      await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created 15:02 · expires 23:02 · revoked 15:40 (run ended)`);
-      await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(t(23, 2))));
+      await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created 15:02 · expires 23:02 (access added)`);
+      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created 16:00 · expires 23:30 · revoked 16:40 (run ended)`);
+      await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(t(23, 30))));
     } finally {
       clearRunTokens(runId);
     }

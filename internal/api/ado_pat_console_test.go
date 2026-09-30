@@ -265,12 +265,25 @@ func TestRunADOTokens_OldestFirstWithoutSecrets(t *testing.T) {
 	}
 	for i, tok := range got {
 		for k := range tok {
-			if !slices.Contains([]string{"created_at", "valid_to", "revoked_at", "revoke_reason", "revoke_failed"}, k) {
+			if !slices.Contains([]string{"created_at", "valid_to", "scope", "revoked_at", "revoke_reason", "revoke_failed"}, k) {
 				t.Errorf("token %d carries %q: %s", i, k, body)
 			}
 		}
 		if want := []string{adoPATRevokeSweep, adoPATRevokeKill}[i]; tok["revoke_reason"] != want || tok["revoked_at"] == nil {
 			t.Errorf("token %d = %v, want revoked with reason %s", i, tok, want)
+		}
+	}
+	// The scope is the stored scope names, split on single spaces, never a token.
+	for i, p := range rows {
+		want := strings.Split(p.Scope, " ")
+		sc, _ := got[i]["scope"].([]any)
+		if len(want) == 0 || len(sc) != len(want) {
+			t.Fatalf("token %d scope = %v, want %v", i, got[i]["scope"], want)
+		}
+		for j, name := range want {
+			if sc[j] != name || strings.ContainsAny(name, " \t") || name == "" {
+				t.Errorf("token %d scope[%d] = %v, want %q", i, j, sc[j], name)
+			}
 		}
 	}
 	older, _ := time.Parse(time.RFC3339Nano, got[0]["created_at"].(string))

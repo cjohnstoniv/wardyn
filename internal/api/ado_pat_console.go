@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,10 +100,12 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Revoke first: revoking a token redeems the sign-in this then forgets.
 	// A token created while this runs revokes itself (adoSignInEnds).
-	end := s.adoSignInEnds.begin(subject, adoPATRevokeDisconnect)
-	s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
-	removed, err := s.forgetADOSignIn(ctx, subject, rowID)
-	end()
+	// end runs even on a panic, or the person's mints would self-revoke until restart.
+	removed, err := func() (bool, error) {
+		defer s.adoSignInEnds.begin(subject, adoPATRevokeDisconnect)()
+		s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
+		return s.forgetADOSignIn(ctx, subject, rowID)
+	}()
 	data, outcome := map[string]any{"provider_row": rowID, "removed": removed}, "success"
 	if err != nil {
 		data["error"], outcome = err.Error(), "failure"
@@ -281,10 +284,15 @@ func (s *Server) revokeRunPATCreatedAcrossEnd(ctx context.Context, st store.RunP
 }
 
 // adoRunToken is one token a run held (GET /runs/{id}/ado-tokens): a row of
-// ado_run_pats without its authorization id, owner, organisation or scope.
+// ado_run_pats without its authorization id, owner or organisation.
 type adoRunToken struct {
-	CreatedAt time.Time  `json:"created_at"`
-	ValidTo   time.Time  `json:"valid_to"`
+	CreatedAt time.Time `json:"created_at"`
+	ValidTo   time.Time `json:"valid_to"`
+	// Scope is the token's scope names as stored (ado_run_pats.scope split on
+	// single spaces, e.g. ["vso.code","vso.project"]): what it could do, so a
+	// reader can tell a token that a wider one replaced from a plain renewal.
+	// Names only, never a token value.
+	Scope     []string   `json:"scope"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	// RevokeReason is L2's revoke reason, as written: run_end, kill, pause,
 	// drift, disconnect, offboarding, upstream_401, sweep, or expired (the
@@ -321,7 +329,7 @@ func (s *Server) handleListRunADOTokens(w http.ResponseWriter, r *http.Request) 
 	}
 	for _, p := range rows {
 		out = append(out, adoRunToken{
-			CreatedAt: p.CreatedAt, ValidTo: p.ValidTo, RevokedAt: p.RevokedAt, RevokeReason: p.RevokeReason,
+			CreatedAt: p.CreatedAt, ValidTo: p.ValidTo, Scope: strings.Split(p.Scope, " "), RevokedAt: p.RevokedAt, RevokeReason: p.RevokeReason,
 			RevokeFailed: p.RevokedAt != nil && p.LastError != "",
 		})
 	}

@@ -213,7 +213,8 @@ describe("newRunTokenCaps", () => {
 });
 
 describe("runTokenView: the run page's token list (state 6, 7)", () => {
-  const tok = (over: Partial<ADORunToken>): ADORunToken => ({ created_at: at(9, 2), valid_to: at(17, 2), ...over });
+  const READ = ["vso.code", "vso.project"];
+  const tok = (over: Partial<ADORunToken>): ADORunToken => ({ created_at: at(9, 2), valid_to: at(17, 2), scope: READ, ...over });
   it("6a: an active token is one plain line", () => {
     const v = runTokenView([tok({})], false);
     expect(v.lines).toEqual([{ text: "Azure DevOps token: created 09:02 · expires 17:02", old: false }]);
@@ -262,18 +263,23 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
   it("6f: a revoke that was abandoned names when the token expires on its own", () => {
     expect(runTokenView([tok({ revoke_failed: true })], false).revokeFailedAt).toEqual(["17:02"]);
   });
-  it("7: a token replaced before its renewal point is not called renewed: the wire does not say why, so no note", () => {
-    // Replaced at 09:20, 18 minutes into an eight-hour life (a widening, a resume or a restart).
-    const v = runTokenView([tok({ created_at: at(9, 20), valid_to: at(17, 20) }), tok({})], false);
+  it("7: a token whose successor's scope is a strict superset reads (access added), whenever it was replaced", () => {
+    // Replaced at 09:20, 18 minutes into an eight-hour life: the timing says nothing, the scope does.
+    const v = runTokenView([tok({ created_at: at(9, 20), valid_to: at(17, 20), scope: [...READ, "vso.code_write"] }), tok({})], false);
     expect(v.lines.map((l) => l.text)).toEqual([
-      "Azure DevOps token: created 09:02 · expires 17:02",
+      "Azure DevOps token: created 09:02 · expires 17:02 (access added)",
       "Azure DevOps token: created 09:20 · expires 17:20",
     ]);
-    expect(v.lines.map((l) => l.text).join()).not.toMatch(/access added|renewed|revoked/);
   });
-  it("a token replaced at its 75% renewal point (a minute early at most) is renewed", () => {
-    const v = runTokenView([tok({ created_at: at(15, 1), valid_to: at(23, 2) }), tok({})], false);
-    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
+  it("an equal, narrower or unrelated successor scope is a renewal, whenever it came", () => {
+    for (const next of [READ, ["vso.code"], ["vso.code", "vso.work"], ["vso.build"]]) {
+      const v = runTokenView([tok({ created_at: at(9, 20), valid_to: at(17, 20), scope: next }), tok({})], false);
+      expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
+    }
+  });
+  it("scope order and duplicates do not matter to a widening", () => {
+    const v = runTokenView([tok({ created_at: at(9, 20), scope: ["vso.project", "vso.code_write", "vso.code"] }), tok({})], false);
+    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 (access added)");
   });
   it("lists oldest first whatever order the wire sends", () => {
     const v = runTokenView([tok({ created_at: at(15, 2), valid_to: at(23, 2) }), tok({})], false);
