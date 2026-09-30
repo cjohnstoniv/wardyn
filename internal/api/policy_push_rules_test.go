@@ -83,6 +83,12 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.require_review_paths[1]: \"a/../b\" has an empty"},
 		{"hold_seconds negative", spec(&types.PushRulesSpec{HoldSeconds: -1}),
 			"push_rules.hold_seconds must be between 0 and 600"},
+		{"max_file_size_mib negative", spec(&types.PushRulesSpec{MaxFileSizeMiB: -1}),
+			"push_rules.max_file_size_mib must be between 0 and 1024"},
+		{"max_file_size_mib above the cap", spec(&types.PushRulesSpec{MaxFileSizeMiB: maxPushRulesFileSizeMiB + 1}),
+			"push_rules.max_file_size_mib must be between 0 and 1024"},
+		{"deny_new_executables is not enforced yet", spec(&types.PushRulesSpec{DenyNewExecutables: true}),
+			"push_rules.deny_new_executables is not supported yet"},
 		{"hold_seconds above the proxy's hold ceiling", spec(&types.PushRulesSpec{HoldSeconds: maxPushRulesHoldSeconds + 1}),
 			"push_rules.hold_seconds must be between 0 and 600"},
 	}
@@ -105,6 +111,7 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec(&types.PushRulesSpec{DenyPaths: []string{".github/workflows/**", "infra/**"}, MaxInspectPackMiB: 8}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{"infra/", "/infra/**"}}), // trailing and leading separators read, not refused
 		spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB}),
+		spec(&types.PushRulesSpec{MaxFileSizeMiB: maxPushRulesFileSizeMiB}),
 		spec(&types.PushRulesSpec{RequireReviewPaths: []string{".github/workflows/**"}, HoldSeconds: maxPushRulesHoldSeconds}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{"secrets/**"}, RequireReviewPaths: []string{"infra/"}}),
 	} {

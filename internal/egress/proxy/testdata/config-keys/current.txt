@@ -68,8 +68,10 @@ policy.llm_inspection.workspace_secret_values
 policy.max_holds
 policy.min_confinement_class
 policy.push_rules
+policy.push_rules.deny_new_executables
 policy.push_rules.deny_paths
 policy.push_rules.hold_seconds
+policy.push_rules.max_file_size_mib
 policy.push_rules.max_inspect_pack_mib
 policy.push_rules.require_review_paths
 policy.resources
