@@ -276,17 +276,17 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 	return validateStorageProviders(p.Storage)
 }
 
-// validateHostOneKind refuses one host on rows of two kinds (#1450): a host is
-// one forge. Disabled rows count, so re-enabling one cannot create the clash.
+// validateHostOneKind refuses one host (keyed by its secret-name slug) on rows of
+// two kinds (#1450): a host is one forge. Disabled rows count toward it too.
 func validateHostOneKind(rows []types.GitProvider) error {
 	kindOf := map[string]types.GitProviderKind{}
 	for i, row := range rows {
 		for _, raw := range row.BaseURLs {
 			host := canonicalProviderHost(strings.ToLower(hostrules.HostOf(raw)))
-			if first, ok := kindOf[host]; ok && first != row.Kind {
+			if first, ok := kindOf[slugHost(host)]; ok && first != row.Kind {
 				return fmt.Errorf(providers400HostTwoKind, i, host, string(first))
 			}
-			kindOf[host] = row.Kind
+			kindOf[slugHost(host)] = row.Kind
 		}
 	}
 	return nil

@@ -1210,6 +1210,12 @@ const (
 		`{"id":"ghes","kind":"github","base_urls":["https://git.corp.example/acme"]},` +
 		`{"id":"ados","kind":"azure_devops","lanes":["pat"],"credential_source":"per_user","disabled":true,` +
 		`"base_urls":["https://git.corp.example/acme"]}]}`
+	// Two hosts whose secret-name slugs collide (tfs-corp.example and
+	// tfs.corp.example both slug to tfs-corp-example) are one host to the rule.
+	providersOnSlugTwoKinds = `{"git":[` +
+		`{"id":"ghes","kind":"github","base_urls":["https://tfs-corp.example/acme"]},` +
+		`{"id":"ados","kind":"azure_devops","lanes":["pat"],"credential_source":"per_user",` +
+		`"base_urls":["https://tfs.corp.example/Collection"]}]}`
 	providersOnHostOneKind = `{"git":[` +
 		`{"id":"ghes","kind":"github","base_urls":["https://git.corp.example/acme"]},` +
 		`{"id":"ghes2","kind":"github","base_urls":["https://git.corp.example/other"]}]}`
@@ -1225,6 +1231,11 @@ func TestPutWorkspaceProviders_HostOnRowsOfOneKindOnly(t *testing.T) {
 	w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnHostTwoKinds)
 	if w.Code != http.StatusBadRequest || !strings.Contains(decodedError(t, w), want) {
 		t.Fatalf("two kinds = %d %s, want 400 carrying %q", w.Code, w.Body.String(), want)
+	}
+	slug := fmt.Sprintf(providers400HostTwoKind, 1, "tfs.corp.example", "github")
+	w = do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnSlugTwoKinds)
+	if w.Code != http.StatusBadRequest || !strings.Contains(decodedError(t, w), slug) {
+		t.Fatalf("two kinds on one slug = %d %s, want 400 carrying %q", w.Code, w.Body.String(), slug)
 	}
 	w = do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnHostOneKind)
 	if w.Code != http.StatusOK {
