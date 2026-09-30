@@ -10,7 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -29,6 +31,17 @@ func (s *Server) mountDelegationRoutes(r chi.Router) {
 		securityOps.Get("/admin/delegates", s.handleListDelegates)
 		securityOps.Delete("/admin/delegates/{id}", s.handleRevokeDelegate)
 	})
+}
+
+// refuseDelegated answers a delegated request the allow-list's own 403
+// delegation_scope, with its authz.denied row, and reports whether it did. A
+// handler that must never act for a portal calls it itself, so an edit to
+// delegationAllowed cannot open it (#1234).
+func (s *Server) refuseDelegated(w http.ResponseWriter, r *http.Request) bool {
+	if _, delegated := audit.DelegationFrom(r.Context()); !delegated {
+		return false
+	}
+	return s.refuse(w, r, authz.Deny(authz.ReasonDelegationScope, r.URL.Path, delegationRefusal))
 }
 
 func (s *Server) delegateStoreOr501(w http.ResponseWriter) (store.DelegateStore, bool) {

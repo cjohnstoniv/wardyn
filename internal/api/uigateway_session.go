@@ -108,6 +108,19 @@ type uiSession struct {
 	// (a pre-0.7.4 cookie) is refused, not tolerated: neither of those checks
 	// can be made without it.
 	IssuedAt int64 `json:"i"`
+	// Via is the portal the entry ticket was minted through (#1142), nil
+	// otherwise. The relay audits on the daemon's context, so the session
+	// carries it onto every row it writes after the entry (#1234).
+	Via *types.DelegationVia `json:"v,omitempty"`
+}
+
+// auditUISession writes one ui.* row for sess: its run, its principal, and the
+// portal it was entered through, if any.
+func (s *Server) auditUISession(sess uiSession, action, target, outcome string, data map[string]any) {
+	if sess.Via != nil {
+		data["via"] = sess.Via
+	}
+	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, data)
 }
 
 type uiSessionCtxKey struct{}
@@ -293,7 +306,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 	// the same token bucket that bounds auth.fail keeps the append-only log
 	// honest here too.
 	if s.authFailedLimiter.allow(s.cfg.Now()) {
-		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.authorize", sess.App, "denied",
+		s.auditUISession(sess, "ui.authorize", sess.App, "denied",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
 	}
 	return &uiDialError{status: status, reason: reason, msg: msg}

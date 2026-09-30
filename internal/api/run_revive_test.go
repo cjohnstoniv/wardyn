@@ -489,6 +489,39 @@ func TestReviveRun_RestartsALiveRun(t *testing.T) {
 	}
 }
 
+// TestReviveRun_ALiveRunIsBounded is #1005 item 2: each revive of a live run
+// removes and recreates its proxy, so a second one inside reviveLiveEvery is
+// refused 429 revive_live_too_soon on both doors, while a lost run's revive is
+// never bounded.
+func TestReviveRun_ALiveRunIsBounded(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.run.LostAt, f.st.run.LostReason = nil, ""
+	if res := f.restart(t); !res.OK {
+		t.Fatalf("first restart of a live run: %+v, want OK", res)
+	}
+	if res := f.restart(t); res.OK || res.Reason != reasonReviveLiveTooSoon {
+		t.Fatalf("second restart inside the bound: %+v, want reason %s", res, reasonReviveLiveTooSoon)
+	}
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusTooManyRequests || errorReason(w) != reasonReviveLiveTooSoon {
+		t.Fatalf("revive inside the bound: %d %s, want 429 %s", w.Code, w.Body.String(), reasonReviveLiveTooSoon)
+	}
+	if n := len(f.rr.replaced); n != 1 {
+		t.Fatalf("ReplaceProxy calls = %d, want 1: a refused revive must not touch the proxy", n)
+	}
+
+	lostAt := f.now
+	f.st.run.LostAt, f.st.run.LostReason = &lostAt, types.LostOutage
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive of a lost run inside the bound: %d, want 200 — recovery is never bounded", code)
+	}
+
+	f.now = f.now.Add(reviveLiveEvery)
+	if res := f.restart(t); !res.OK {
+		t.Fatalf("restart once the bound lapsed: %+v, want OK", res)
+	}
+}
+
 // TestAdminProxyWindow lists the runs whose proxy release is outside N and
 // N-1, including one no release was recorded for.
 func TestAdminProxyWindow(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -62,6 +63,12 @@ import (
 
 // reviveBulkMax bounds one admin restart request.
 const reviveBulkMax = 100
+
+// reviveLiveEvery bounds how often a live run's proxy is replaced: each revive
+// of a running run removes and recreates its sidecar, and a run that is lost
+// is never bounded (#1005).
+// ponytail: per process; a stamp on the run row if replicas ever multiply it.
+const reviveLiveEvery = time.Minute
 
 // jtiRevoker is an OPTIONAL identity.Provider capability: revoke a single
 // token by its own jti, without revoking the whole run (O2, least-privilege
@@ -172,8 +179,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
 			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
-	if _, busy := s.reviving.LoadOrStore(run.ID, struct{}{}); busy {
-		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveAlreadyInProgress, "a revive of this run is already in progress")
+	if rerr := s.markReviving(run); rerr != nil {
+		return reviveResult{}, rerr
 	}
 	defer s.reviving.Delete(run.ID)
 
@@ -239,6 +246,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"dropped_broker_lanes":    re.droppedLane,
 		"proxy_release":           version.Version,
 	}
+	s.stampLiveRevive(run)
 	if err := rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -410,6 +418,35 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 		return reviveRefused(http.StatusConflict, reasonReviveUnknownLostReason, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
 	return nil
+}
+
+// markReviving takes run's reviving mark. It refuses a second revive of the
+// run in flight, and a revive of a live run whose proxy this process started
+// replacing less than reviveLiveEvery ago (#1005). Only an attempt that
+// reaches the proxy is stamped (stampLiveRevive), so a refusal before it
+// changes nothing; the mark keeps the check and the stamp from interleaving
+// with another revive of the same run.
+func (s *Server) markReviving(run types.AgentRun) *reviveError {
+	if _, busy := s.reviving.LoadOrStore(run.ID, struct{}{}); busy {
+		return reviveRefused(http.StatusConflict, reasonReviveAlreadyInProgress, "a revive of this run is already in progress")
+	}
+	if last, ok := s.liveRevived.Load(run.ID); ok && run.LostAt == nil && s.cfg.Now().Before(last.(time.Time).Add(reviveLiveEvery)) {
+		s.reviving.Delete(run.ID)
+		return reviveRefused(http.StatusTooManyRequests, reasonReviveLiveTooSoon,
+			"this run's proxy was replaced less than a minute ago; try again in a minute")
+	}
+	return nil
+}
+
+// stampLiveRevive records that a live run's proxy is being replaced now; the
+// entry drops itself once it has lapsed.
+func (s *Server) stampLiveRevive(run types.AgentRun) {
+	if run.LostAt != nil {
+		return
+	}
+	now := s.cfg.Now()
+	s.liveRevived.Store(run.ID, now)
+	time.AfterFunc(reviveLiveEvery, func() { s.liveRevived.CompareAndDelete(run.ID, now) })
 }
 
 // reviveNeedsAgentStart reports whether a revive must start run's agent

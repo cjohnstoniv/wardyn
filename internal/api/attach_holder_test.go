@@ -435,6 +435,22 @@ func TestAttachHolder_EvictionRevokesWriteAuthorityImmediately(t *testing.T) {
 	}
 }
 
+// TestAttachHolder_NilHolderWriteGatedIsANoOp is #1286: writeGated's doc calls
+// a nil holder a read-only observer that writes nothing, so it must return
+// cleanly rather than panic on the onInput read.
+func TestAttachHolder_NilHolderWriteGatedIsANoOp(t *testing.T) {
+	var observer *attachHolder
+	sess := newCountingShellSession()
+	if err := observer.writeGated(sess, []byte("ls\r")); err != nil {
+		t.Fatalf("nil holder writeGated: %v", err)
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.writes) != 0 {
+		t.Fatalf("a nil holder wrote %q into the session", sess.writes)
+	}
+}
+
 // deferred release finally runs. It must not delete its successor — that would
 // silently hand the run back to "nobody attached" while a human is typing.
 func TestAttachHolderRegistry_ReleaseNeverEvictsSuccessor(t *testing.T) {
