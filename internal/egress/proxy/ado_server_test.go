@@ -274,22 +274,32 @@ func TestADOServerGitPath(t *testing.T) {
 
 // A path inside the collection that is no repository's smart-HTTP endpoint is
 // refused at the door and never sent under the person's token.
+// An empty segment inside the pinned shape is refused too: the forward sends the
+// path as written, so it would not be one of the two shapes the door names.
 func TestADOServerGit_UnclassifiablePathIsRefused(t *testing.T) {
-	h := newADOServerHarness(t, adoscope.CapCodeRead)
-	resp, err := http.Get(h.proxy + routePATBroker + adoServerHost + "/tfs/DefaultCollection/proj/app/info/refs?service=git-upload-pack")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "reaches git only at tfs/DefaultCollection/<project>/_git/<repository>") {
-		t.Errorf("status %d body %q, want the Server path refusal", resp.StatusCode, body)
-	}
-	if n := len(h.front.requests("")); n != 0 {
-		t.Errorf("the Server saw %d requests, want 0", n)
-	}
-	if log := h.noPATInLogs(t); !strings.Contains(log, `"`+ruleSourceADOGitDenied+`"`) {
-		t.Errorf("no %s row:\n%s", ruleSourceADOGitDenied, log)
+	for _, path := range []string{
+		"/tfs/DefaultCollection/proj/app/info/refs",
+		"/tfs/DefaultCollection//proj/_git/app/info/refs",
+		"/tfs/DefaultCollection/proj/_git/app//info/refs",
+	} {
+		t.Run(path, func(t *testing.T) {
+			h := newADOServerHarness(t, adoscope.CapCodeRead)
+			resp, err := http.Get(h.proxy + routePATBroker + adoServerHost + path + "?service=git-upload-pack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "reaches git only at tfs/DefaultCollection/<project>/_git/<repository>") {
+				t.Errorf("status %d body %q, want the Server path refusal", resp.StatusCode, body)
+			}
+			if n := len(h.front.requests("")); n != 0 {
+				t.Errorf("the Server saw %d requests, want 0", n)
+			}
+			if log := h.noPATInLogs(t); !strings.Contains(log, `"`+ruleSourceADOGitDenied+`"`) {
+				t.Errorf("no %s row:\n%s", ruleSourceADOGitDenied, log)
+			}
+		})
 	}
 }
 

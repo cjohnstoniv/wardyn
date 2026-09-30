@@ -72,7 +72,8 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization))
 		return
 	}
-	if !adoHostedHost(host) && !adoServerGitPath(keys, grant.Organization) {
+	// adoGitKeys drops empty segments but the forward sends rest as written, so an inner "//" is refused here.
+	if !adoHostedHost(host) && (strings.Contains(strings.Trim(rest, "/"), "//") || !adoServerGitPath(keys, grant.Organization)) {
 		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
 			"Wardyn refused this git request: on Azure DevOps Server this run reaches git only at %s/<project>/_git/<repository>.",
 			strings.Trim(grant.Organization, "/")))
