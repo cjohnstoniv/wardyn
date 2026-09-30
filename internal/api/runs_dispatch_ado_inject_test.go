@@ -115,8 +115,9 @@ func TestResolveADOEntraRun_Golden(t *testing.T) {
 		rowID: "ado-row-1", org: "contoso", owner: adoTestOwner,
 		tenantID: adoTestTenant, clientID: adoTestClient,
 		tokenMode: types.ADOTokenModeBearer, credentialSource: types.CredentialSourcePerUser,
-		caps:    []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
-		ceiling: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+		caps:     []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
+		ceiling:  []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+		patHours: types.ADOPATMaxHoursDefault,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resolved lane = %+v\nwant %+v", got, want)
@@ -274,13 +275,14 @@ func TestAuthorADOEntraInjection_RefusesWithoutCertificateAuthority(t *testing.T
 	}
 }
 
-// minted_pat is not issuable; a ceiling-escaping profile is not authorable.
+// own_pat is not this lane's to issue; a ceiling-escaping profile is not
+// authorable.
 func TestAuthorADOEntraInjection_RefusesUnissuableConfigurations(t *testing.T) {
 	pat := adoTestRun(t)
-	pat.tokenMode = types.ADOTokenModeMintedPAT
+	pat.tokenMode = types.ADOTokenModeOwnPAT
 	escape := adoTestRun(t)
 	escape.caps = append(escape.caps, adoscope.CapPolicyBypass)
-	for name, ado := range map[string]adoEntraRun{"minted_pat": pat, "outside ceiling": escape} {
+	for name, ado := range map[string]adoEntraRun{"own_pat": pat, "outside ceiling": escape} {
 		st := &adoTestStore{}
 		s, _ := newADODispatchServer(st)
 		policy := types.RunPolicySpec{}

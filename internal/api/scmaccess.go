@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -58,6 +59,23 @@ const (
 	scmAccessCauseEnded         = "ended"
 	scmAccessCauseConsentNeeded = "consent_needed"
 )
+
+// A minted_pat row's own `expired_signin` causes, each an organisation's fix
+// rather than the person's: the stored sign-in lacks a token permission
+// (admin consent is missing), or Azure DevOps last refused to create a token
+// for this person on policy grounds (mintADOPAT). A row the console cannot
+// redeem with its own secret (S1) carries ReasonADOPATNeedsConsoleApp.
+const (
+	scmAccessCausePermissionsMissing = "permissions_missing"
+	scmAccessCauseBlocked            = "blocked"
+)
+
+// adoMintBlockedFor is how long a policy refusal reads as `blocked`. Only a
+// created token clears it, and a launch refused as blocked never creates one,
+// so without a bound the flag would outlive the admin's allow-list fix. Past
+// it the launch goes through and the run's own mint re-checks: a refusal that
+// still holds is recorded again.
+const adoMintBlockedFor = 15 * time.Minute
 
 // SCMAccess is THIS PRINCIPAL's Azure DevOps access answer for ONE row — the
 // shape the Getting-started chip, the Settings connected panel, the New Run
@@ -134,7 +152,12 @@ func (s *Server) adoEntraRowConfig(ctx context.Context, rowID string) (ADOEntraC
 	if !found || cfg.RowID != rowID {
 		return ADOEntraConfig{}, false, nil
 	}
-	if err := cfg.validate(); err != nil || !cfg.isLoginApplication() {
+	// A minted_pat row S1 refuses is still this deployment's per-user row: it
+	// is graded (scmAccessForRow) rather than dropped, so the setup check and
+	// the launch gate say why nobody can connect.
+	if err := cfg.validate(); errors.Is(err, ErrADOMintNeedsSecret) {
+		return cfg, true, nil
+	} else if err != nil || !cfg.isLoginApplication() {
 		return ADOEntraConfig{}, false, nil
 	}
 	return cfg, true, nil
@@ -214,9 +237,11 @@ func scmAccessSourceFor(blobSource string) string {
 func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject string) (SCMAccess, error) {
 	row := pr.row
 	isMechanism := subject == ""
+	minted := cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT
+	unusable := minted && !isMechanism && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
 	var blob adoEntraBlob
 	var found bool
-	if !isMechanism {
+	if !isMechanism && !unusable {
 		var err error
 		if blob, found, err = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID); err != nil {
 			return SCMAccess{}, err
@@ -227,10 +252,16 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
 	}
 	switch {
+	case unusable:
+		out.State, out.Cause = modelAccessExpiredSignin, ReasonADOPATNeedsConsoleApp
 	case out.State != modelAccessLive:
 	case blob.signInEnded():
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded
-	case !adoBlobCoversBaseline(blob, row):
+	case minted && !adoBlobCoversMint(blob):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCausePermissionsMissing
+	case minted && s.cfg.Now().Before(blob.MintBlockedAt.Add(adoMintBlockedFor)):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseBlocked
+	case !minted && !adoBlobCoversBaseline(blob, row):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseConsentNeeded
 	}
 	if out.State == modelAccessLive || out.State == modelAccessExpiredSignin {
@@ -246,6 +277,12 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 func adoBlobCoversBaseline(blob adoEntraBlob, row types.GitProvider) bool {
 	need, err := adoscope.ScopesFor(row.Entra.Profile())
 	return err == nil && subsetOf(need, blob.Scopes)
+}
+
+// adoBlobCoversMint reports whether a minted_pat row's stored sign-in was
+// granted both token permissions.
+func adoBlobCoversMint(blob adoEntraBlob) bool {
+	return subsetOf(adoscope.MintScopes(), blob.Scopes)
 }
 
 // adoOrgDisplay is the row's own address, for the {org} the connect/launch
@@ -383,6 +420,16 @@ const (
 	gitCredentialConsentRefusal = "your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
+// A minted_pat row's three launch refusals, by cause. Each names the fix that
+// is someone else's: the organisation's allow list (the mock's "Blocked by
+// your organisation" wording), the admin's consent, or the console's secret.
+const (
+	gitCredentialBlockedRefusal = "your organisation doesn't let you create personal access tokens — ask an " +
+		"Azure DevOps administrator to add you to the allow list, then start the run again"
+	gitCredentialPermissionsRefusal = "your Azure DevOps sign-in can't create tokens yet — an administrator must " +
+		"grant the token permissions; then connect and start the run again"
+)
+
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —
 // errRepoNotAdmitted's shape (workspace_admission.go), for the launchers
 // that hold no ResponseWriter (record.go's launchRecordRun). A caller matches it with errors.As, on the concrete
@@ -457,6 +504,12 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal}
 		case access.Cause == scmAccessCauseConsentNeeded:
 			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal}
+		case access.Cause == scmAccessCauseBlocked:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal}
+		case access.Cause == scmAccessCausePermissionsMissing:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal}
+		case access.Cause == ReasonADOPATNeedsConsoleApp:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal}
 		}
 		return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialNotConnectedRefusal}
 	}

@@ -568,6 +568,13 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 // is for the forward guard: an action deliberately outside docs/AUDIT-ACTIONS.md's
 // "Grammar" section, each with the reason it is not renamed.
 var auditActionGrammarAllow = map[string]bool{
+	// #1428's per-person Azure DevOps token rows, named by its plan and its
+	// contract (ado_pat_contract.go) before they met this grammar; the docs lane
+	// settles the audit names against it, not the lane that first emits them.
+	"ado_pat.org_check":              true,
+	"ado_pat.revoke.failed":          true,
+	"ado_bearer.refused_mint_scopes": true,
+	"ado_pat.mint.denied":            true,
 	// Past tense. The single heaviest-cited action in the tree and a
 	// compatibility surface docs/OPERATIONS.md already commits to by name; its
 	// rename is its own reviewed change, not a rider on #205's.

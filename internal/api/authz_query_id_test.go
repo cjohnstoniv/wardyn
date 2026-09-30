@@ -118,6 +118,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
@@ -144,6 +145,7 @@ var queryParamNotAnID = map[string]string{
 	"error":                     "OAuth error echo",
 	"error_description":         "OAuth error echo",
 	"phase":                     "ADO sign-in phase marker",
+	"stale_jti":                 "internal injection resolve: an Azure DevOps token id the proxy saw refused, compared only against the calling run's own tokens",
 	"prompt":                    "ADO sign-in: Microsoft's own prompt hint (adoRequestedPrompt), a closed set (\"\"/select_account) never forwarded on trust",
 	"scopes":                    "ADO sign-in: requested scopes, clamped to the admin's ceiling",
 	"capabilities":              "ADO sign-in: requested capabilities, clamped to the admin's ceiling",

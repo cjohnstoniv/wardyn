@@ -414,7 +414,7 @@ func unionADOEntraLane(out *types.RunPolicySpec, spec types.RunPolicySpec, ado a
 	if ado.org == "" {
 		return
 	}
-	out.EligibleGrants = append(slices.Clone(spec.EligibleGrants), adoEntraPostureGrants(ado.org)...)
+	out.EligibleGrants = append(slices.Clone(spec.EligibleGrants), adoEntraPostureGrants(ado.org, ado.tokenMode)...)
 	unionAllowedDomains(out, adoEntraEgressEntries(ado.org))
 }
 
@@ -428,13 +428,13 @@ func unionADOEntraLane(out *types.RunPolicySpec, spec types.RunPolicySpec, ado a
 // about it exists yet at create — nor is it graded: apiKeyToNonBaselineHost
 // reads the host and the kind, and `dev.azure.com` is outside
 // composer.safeBaselineDomains, which is what makes this lane POWERFUL.
-func adoEntraPostureGrants(org string) []types.GrantSpec {
+func adoEntraPostureGrants(org string, mode types.ADOTokenMode) []types.GrantSpec {
 	hosts := adoEntraHosts(org)
 	out := make([]types.GrantSpec, 0, len(hosts))
 	for _, host := range hosts {
 		out = append(out, types.GrantSpec{Kind: types.GrantAPIKey, TTLSeconds: adoEntraGrantTTLSeconds,
 			Scope: mustJSON(map[string]any{
-				"host": host, "header": adoEntraInjectHeader, "format": adoEntraInjectFormat,
+				"host": host, "header": adoEntraInjectHeader, "format": adoInjectFormat(mode),
 				"secret_name": types.ADOEntraAccessTokenSecret, "require_tls": true,
 			})})
 	}
