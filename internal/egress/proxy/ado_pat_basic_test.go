@@ -64,6 +64,7 @@ func newADOBasicHarness(t *testing.T, caps ...adoscope.Capability) (*adoHarness,
 	h.fake.RegisterToken(pat, adofake.ScopeCodeRead, adofake.ScopeCodeWrite, adofake.ScopeWorkRead,
 		adofake.ScopeWorkWrite, adofake.ScopeProjectRead, adofake.ScopeTokens)
 	useBasicPAT(h.p, pat)
+	echoControlPlane(t, h.p.inject)
 	return h, pat
 }
 

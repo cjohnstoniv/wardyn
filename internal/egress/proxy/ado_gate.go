@@ -240,6 +240,7 @@ func adoPeekBody(r *http.Request) ([]byte, string) {
 		return nil, "Wardyn refused this Azure DevOps request: its body is too large to check."
 	}
 	r.Body = io.NopCloser(bytes.NewReader(peek))
+	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(peek)), nil } // adoReplayBody
 	if len(peek) == 0 {
 		return nil, ""
 	}

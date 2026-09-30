@@ -70,6 +70,8 @@ type injector struct {
 type injectedHeader struct {
 	name  string
 	value string
+	// jti names the credential (ResolvedInjection.JTI), so an upstream refusal of it can say which one went stale.
+	jti string
 }
 
 // injEntry is one host's injection: grantID is immutable; header + expiresAt are guarded by reMu,
@@ -89,14 +91,19 @@ type injEntry struct {
 	// retryAt is set while last-good is served after a transient failure, or a stale re-resolve
 	// (install). Guarded by reMu.
 	retryAt time.Time
+	// staleJTI is the credential Azure DevOps refused after dropStale dropped the header: the next
+	// re-resolve sends it as stale_jti, until a credential is installed. staleAt paces dropStale.
+	// Guarded by reMu.
+	staleJTI string
+	staleAt  time.Time
 }
 
 // install writes a re-resolved credential onto e, pacing like an outage if the answer is already
 // inside injectRefreshMargin (else every request would re-resolve: a mint + secret.read row). Caller holds reMu.
 func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
-	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
+	e.header = injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI}
 	e.expiresAt = resolved.ExpiresAt
-	e.retryAt = time.Time{}
+	e.retryAt, e.staleJTI = time.Time{}, ""
 	if e.expiresAt != 0 && !now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
 		e.retryAt = now.Add(lastGoodRetry)
 	}
@@ -152,7 +159,7 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 		// The control plane resolves header + formatted value server-side; the local rule only governs the host binding, gated above.
 		inj.byHost[host] = &injEntry{
 			grantID:    r.GrantID,
-			header:     injectedHeader{name: resolved.Header, value: resolved.Value},
+			header:     injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI},
 			requireTLS: r.RequireTLS,
 			rule:       r.InjectionRule,
 			expiresAt:  resolved.ExpiresAt,
@@ -191,7 +198,9 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 	for {
 		e.reMu.Lock()
 		now := time.Now()
-		if e.expiresAt == 0 || now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) || now.Before(e.retryAt) {
+		// A dropped header (empty) is never served: it re-resolves whatever its expiry says.
+		if e.header.value != "" &&
+			(e.expiresAt == 0 || now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) || now.Before(e.retryAt)) {
 			h := e.header
 			e.reMu.Unlock()
 			return h, true, nil // static, dynamic and still fresh, or riding out an outage
@@ -215,7 +224,11 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			return i.installHeader(e, wf, resolved), true, nil
 		}
 
-		resolved, err := resolveInjection(ctx, i.base, i.token.Get(), e.grantID, i.client)
+		var query url.Values
+		if e.staleJTI != "" {
+			query = url.Values{"stale_jti": {e.staleJTI}}
+		}
+		resolved, err := resolveInjectionQuery(ctx, i.base, i.token.Get(), e.grantID, query, i.client)
 		if err == nil {
 			e.install(resolved, time.Now())
 			h := e.header
@@ -264,6 +277,44 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 		}
 		return i.installHeader(e, wf, held), true, nil
 	}
+}
+
+// dropStale drops host's header after Azure DevOps refused the credential named jti, so the host's
+// next request re-resolves with stale_jti. The control plane decides what the hint means (a newer
+// credential it already holds, or a fresh one); the proxy only asks.
+//
+// Paced: at most one drop per entry per lastGoodRetry, and none once the entry holds another
+// credential than jti, so concurrent refusals of one header make one re-resolve, and a credential
+// refused again straight after its re-resolve is not asked about in a loop.
+func (i *injector) dropStale(host, jti string) {
+	if i == nil {
+		return
+	}
+	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	i.mu.Lock()
+	e, ok := i.byHost[key]
+	i.mu.Unlock()
+	if !ok {
+		return
+	}
+	e.reMu.Lock()
+	defer e.reMu.Unlock()
+	now := time.Now()
+	if e.header.value == "" || e.header.jti != jti || now.Before(e.staleAt.Add(lastGoodRetry)) {
+		return
+	}
+	e.header, e.retryAt = injectedHeader{}, time.Time{}
+	e.staleJTI, e.staleAt = jti, now
+}
+
+// reresolveStale is dropStale followed at once by the re-resolve, for a request that will be
+// retried with the answer. The re-resolve is resolveCtx's own: single-flighted on reMu, and a 423
+// joins the re-auth hold exactly as an expiry re-resolve does. A paced drop re-resolves nothing and
+// answers the header the entry holds.
+func (i *injector) reresolveStale(ctx context.Context, host, jti string) (injectedHeader, error) {
+	i.dropStale(host, jti)
+	h, _, err := i.resolveCtx(ctx, host)
+	return h, err
 }
 
 // dropIfFinished takes a workflow off the entry only once terminal: a caller that hangs up must
@@ -458,17 +509,13 @@ func (i *injector) headerFor(host string) (injectedHeader, bool) {
 	return h, ok
 }
 
-// resolveInjection calls GET /api/v1/internal/injection/{grantID} with the run token. SECURITY: the
-// only place the proxy obtains secret values, structurally unreachable from the sandbox.
-func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID, client *http.Client) (types.ResolvedInjection, error) {
-	return resolveInjectionQuery(ctx, base, token, grantID, nil, client)
-}
-
 // bootResolveQuery marks the sidecar's boot-time resolves (mirrors adoResolvePhase/adoResolvePhaseBoot).
 var bootResolveQuery = url.Values{"phase": {"boot"}}
 
-// resolveInjectionQuery is resolveInjection with a query, for the Azure DevOps capability hold's
-// per-(host, capability) ask (ado_hold.go); nil is the plain resolve, byte-identical on the wire.
+// resolveInjectionQuery calls GET /api/v1/internal/injection/{grantID} with the run token. SECURITY: the
+// only place the proxy obtains secret values, structurally unreachable from the sandbox. query carries
+// the boot phase, the Azure DevOps capability hold's per-(host, capability) ask (ado_hold.go) or a
+// stale_jti; nil is the plain resolve.
 func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid.UUID, query url.Values, client *http.Client) (types.ResolvedInjection, error) {
 	target := base + "/api/v1/internal/injection/" + grantID.String()
 	if len(query) > 0 {
