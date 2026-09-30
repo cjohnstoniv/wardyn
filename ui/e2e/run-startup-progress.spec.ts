@@ -237,7 +237,9 @@ test.describe("Run page — startup progress in the terminal hero (#1419)", () =
   });
 
   test("RUNNING: the list is gone", async ({ page }) => {
-    await openRun(page, "e2e fixture 3");
+    // Seeded fixture 2 is RUNNING (fixture 3 is WAITING_FOR_CONFIRMATION).
+    await openRun(page, "e2e fixture 2");
+    await expect(page.getByTestId("run-summary-header").getByText("Running", { exact: true })).toBeVisible();
     // Wait for the RUNNING pane itself (the autonomous notice), then assert the
     // list is absent, so the absence is not just "the page had not rendered".
     await expect(pane(page).getByText(RUN_MODE.autonomous.blurb)).toBeVisible();

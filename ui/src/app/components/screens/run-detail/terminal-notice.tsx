@@ -115,17 +115,16 @@ export function TerminalPane({
         title={run.interactive ? "Terminal" : "Output"}
         chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
       >
-        <StartupProgress run={run} lastStep={lastStep} />
-        {lastStep === null && (
-          <PaneNotice
-            text={OPERATOR_ONLY_REASON}
-            action={
+        <StartupProgress run={run} lastStep={lastStep}>
+          {lastStep === null && (
+            <div className="flex flex-col items-center gap-2 pt-2 text-center">
+              <p className="text-sm text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
               <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
                 Watch the captured session →
               </button>
-            }
-          />
-        )}
+            </div>
+          )}
+        </StartupProgress>
       </PaneFrame>
     );
   }

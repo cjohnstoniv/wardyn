@@ -272,7 +272,14 @@ export function isImagePullFailure(reason: string | null | undefined): boolean {
 }
 
 export type StartupMark = "done" | "active" | "pending" | "failed";
-export type StartupRow = { key: "build" | "start" | "download" | "last"; label: string; mark: StartupMark };
+// `stale`: the row that was active before the run went overdue (drawn without
+// its spinner but in the normal text colour, as the mock's stale row).
+export type StartupRow = {
+  key: "build" | "start" | "download" | "last";
+  label: string;
+  mark: StartupMark;
+  stale?: boolean;
+};
 export type StartupView = {
   rows: StartupRow[];
   // "" when there is nothing to say (rendered as a role=status line).
@@ -361,14 +368,24 @@ export function runStartupView(
 
   const rows: StartupRow[] = [];
   if (building) {
-    rows.push({ key: "build", label: RUN_STARTUP.STEP_BUILD, mark: active });
+    rows.push({ key: "build", label: RUN_STARTUP.STEP_BUILD, mark: active, ...(overdue && { stale: true }) });
     rows.push({ key: "start", label: RUN_STARTUP.STEP_START, mark: "pending" });
     rows.push({ key: "download", label: CHIP_DOWNLOADING, mark: "pending" });
     rows.push(...last("pending"));
   } else {
     if (starting && opts.sawBuilding) rows.push({ key: "build", label: RUN_STARTUP.STEP_BUILD, mark: "done" });
-    rows.push({ key: "start", label: RUN_STARTUP.STEP_START, mark: pulling ? "done" : active });
-    rows.push({ key: "download", label: CHIP_DOWNLOADING, mark: pulling ? active : "pending" });
+    rows.push({
+      key: "start",
+      label: RUN_STARTUP.STEP_START,
+      mark: pulling ? "done" : active,
+      ...(overdue && !pulling && { stale: true }),
+    });
+    rows.push({
+      key: "download",
+      label: CHIP_DOWNLOADING,
+      mark: pulling ? active : "pending",
+      ...(overdue && pulling && { stale: true }),
+    });
     rows.push(...last("pending"));
   }
 

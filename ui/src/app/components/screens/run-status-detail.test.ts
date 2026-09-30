@@ -313,6 +313,9 @@ describe("runStartupView: the plan's table", () => {
     expect(late.rows.some((r) => r.mark === "active")).toBe(false);
     expect(late.hint).toBe(RUN_STARTUP.OVERDUE);
     expect(late.alert).toBe("");
+    // Only the row that was active is marked stale.
+    expect(late.rows.filter((r) => r.stale).map((r) => r.label)).toEqual([DL]);
+    expect(live.rows.some((r) => r.stale)).toBe(false);
   });
 
   it("overdue in STARTING with no detail: Start loses its spinner", () => {

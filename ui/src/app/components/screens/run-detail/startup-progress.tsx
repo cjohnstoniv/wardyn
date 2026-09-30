@@ -16,7 +16,16 @@ import { runStartupView, STATUS_REASON_BUILDING, type StartupLastStep } from "..
 // of their deadline, without waiting for the next 4 s run poll.
 const CLOCK_TICK_MS = 1000;
 
-export function StartupProgress({ run, lastStep }: { run: AgentRun; lastStep: StartupLastStep }) {
+export function StartupProgress({
+  run,
+  lastStep,
+  children,
+}: {
+  run: AgentRun;
+  lastStep: StartupLastStep;
+  // Drawn inside the same dark-scoped column, under the list (state 9's note).
+  children?: React.ReactNode;
+}) {
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
@@ -41,7 +50,7 @@ export function StartupProgress({ run, lastStep }: { run: AgentRun; lastStep: St
     // scopes the tokens so the list stays readable in the light theme.
     <div className="dark flex min-h-0 flex-1 flex-col items-center justify-center p-6">
       <div className="w-full max-w-sm space-y-2.5">
-        <ProgressSteps rows={view.rows} testId="run-startup-progress" />
+        <ProgressSteps rows={view.rows} testId="run-startup-progress" variant="run" />
         {view.hint && (
           <p role="status" className="text-xs leading-relaxed text-muted-foreground">
             {view.hint}
@@ -55,6 +64,7 @@ export function StartupProgress({ run, lastStep }: { run: AgentRun; lastStep: St
             {view.alert}
           </p>
         )}
+        {children}
       </div>
     </div>
   );

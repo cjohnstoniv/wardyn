@@ -82,6 +82,46 @@ describe("StartupProgress", () => {
     expect(states()).toEqual(["active", "pending", "pending"]);
   });
 
+  it("draws its children (state 9's note) inside the same dark-scoped column", () => {
+    vi.useFakeTimers({ now: T0 });
+    render(
+      <StartupProgress lastStep={null} run={run({})}>
+        <p>Requires the admin role.</p>
+      </StartupProgress>,
+    );
+    const note = screen.getByText("Requires the admin role.");
+    expect(note.closest(".dark")).not.toBeNull();
+    expect(note.closest(".dark")).toContainElement(screen.getByTestId("run-startup-progress"));
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("follows the mock's colours: a stale (overdue) row keeps the normal text colour, a failed row is red, the active row is medium", () => {
+    vi.useFakeTimers({ now: T0 + 5 * 60_000 });
+    const { unmount } = render(
+      <StartupProgress lastStep="terminal" run={run({ status_detail: "image: Pulling: x", status_reason: "Pulling" })} />,
+    );
+    const [start, download, last] = screen.getAllByRole("listitem");
+    expect(download).toHaveAttribute("data-state", "pending");
+    expect(download).toHaveClass("text-foreground");
+    expect(download).not.toHaveClass("text-muted-foreground");
+    expect(last).toHaveClass("text-muted-foreground");
+    expect(start).toHaveClass("text-foreground");
+    unmount();
+
+    vi.setSystemTime(T0);
+    const failed = render(
+      <StartupProgress
+        lastStep="terminal"
+        run={run({ status_detail: "agent: CrashLoopBackOff: x", status_reason: "CrashLoopBackOff" })}
+      />,
+    );
+    expect(screen.getByRole("listitem")).toHaveClass("text-danger", "font-medium");
+    failed.unmount();
+
+    render(<StartupProgress lastStep="terminal" run={run({})} />);
+    expect(screen.getAllByRole("listitem")[0]).toHaveClass("font-medium", "text-foreground");
+  });
+
   it("renders nothing for a run that is up", () => {
     const { container } = render(<StartupProgress lastStep="terminal" run={run({ state: "RUNNING" })} />);
     expect(container).toBeEmptyDOMElement();
