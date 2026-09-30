@@ -10,6 +10,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | Configure a deployment (every `WARDYN_*` variable, defaults, which binary reads it) | [ENV.md](ENV.md) |
 | Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
 | Run a governed sandbox from a pipeline, headless | [CI.md](CI.md) + [ci/](ci/) |
+| Run each CI job as a confined one-shot run on a control plane you operate (governance profile, pinned image, runner token, `--wait`, audit) | [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
 | SSH / sftp / port-forward / VS Code Remote-SSH / scripted access for another tool into a run | [SSH.md](SSH.md) |
 | Relay a UI app inside a run — a code editor, a dev server — to your browser | [UI-SANDBOXES.md](UI-SANDBOXES.md) |
 | Build against the API in Go, or with curl | [sdk.md](sdk.md) |

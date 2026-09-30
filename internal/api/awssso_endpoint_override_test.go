@@ -303,18 +303,18 @@ func TestSSOEndpointOverride_MountLaneMovesEnvAndEgressTogether(t *testing.T) {
 			}
 		})
 	}
-	// …and the caller that must stay symmetric: resolveBedrockAuth's mount
-	// branch must merge the same pair its ssoInject sibling does. Source-level,
-	// because constructing a full mount-lane Server here would assert nothing
-	// about that one line.
+	// …and the caller that must stay symmetric: bedrockSSOAuth, the one
+	// dispatch lane that hands the sandbox a session, must merge both halves.
+	// Source-level, because constructing a full dispatch here would assert
+	// nothing about that one pair of lines.
 	src, err := os.ReadFile("runs_bedrock.go")
 	if err != nil {
 		t.Fatalf("read runs_bedrock.go: %v", err)
 	}
-	if n := strings.Count(string(src), "ssoEgressHosts(ssoRegion, s.cfg.AWSSSOEndpointOverride)"); n != 1 {
-		t.Fatalf("expected exactly 1 mount-lane ssoEgressHosts call, found %d", n)
+	if n := strings.Count(string(src), "ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)"); n != 1 {
+		t.Fatalf("expected exactly 1 dispatch-lane ssoEgressHosts call, found %d", n)
 	}
-	if got, want := strings.Count(string(src), "ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride)"), 2; got != want {
+	if got, want := strings.Count(string(src), "ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride)"), 1; got != want {
 		t.Errorf("ssoInjectEndpointEnv is merged into %d sandbox envs, want %d — every lane that appends ssoEgressHosts must also point the SDK at them", got, want)
 	}
 }

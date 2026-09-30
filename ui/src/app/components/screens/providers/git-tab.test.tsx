@@ -14,11 +14,30 @@ import type { GitProvider } from "../../../lib/api/providers";
 import { ADO_ENTRA_EDITOR as E, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { GitTab } from "./git-tab";
+import { ADO_PAT } from "../../../lib/ado-pat-copy";
 
 const setSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a), deleteSecret: vi.fn() },
 }));
+
+// An Azure DevOps Services row as the console writes it: the entra lane, per
+// person, a token for each run. adoServer is a Server row: git-only, per person.
+const adoServices: GitProvider = {
+  id: "ado",
+  kind: "azure_devops",
+  base_urls: ["https://dev.azure.com/acme"],
+  lanes: ["entra"],
+  credential_source: "per_user",
+  entra: { tenant_id: "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f", client_id: "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d", token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"] },
+};
+const adoServer: GitProvider = {
+  id: "ado",
+  kind: "azure_devops",
+  base_urls: ["https://tfs.corp.example/acme"],
+  lanes: ["pat"],
+  credential_source: "per_user",
+};
 
 function Harness({
   initial,
@@ -247,13 +266,20 @@ describe("GitTab", () => {
     });
   });
 
-  it("the app lane is disabled with its reason on an Azure DevOps row", () => {
-    render(
-      <Harness
-        initial={[{ id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/acme"] }]}
-      />,
-    );
-    expect(screen.getByText(PROVIDERS.LANE_APP_UNAVAILABLE)).toBeInTheDocument();
+  // #1429: the shared token and key are retired, so an Azure DevOps row has no
+  // lane to tick and no credential to store here: how people connect is its
+  // choice (ado-token-mode.tsx), and a stored shared secret would be swept at
+  // startup.
+  it("an Azure DevOps row draws no lane checkboxes, no credential lanes and no secret field", () => {
+    render(<CredHarness initial={[adoServices]} present={[]} githubApp={false} />);
+    const row = screen.getByTestId("provider-row-azure_devops");
+    expect(within(row).queryByRole("group", { name: PROVIDERS.FIELD_LANES })).not.toBeInTheDocument();
+    expect(within(row).queryByText(PROVIDERS.LANE_APP_UNAVAILABLE)).not.toBeInTheDocument();
+    expect(within(row).queryByRole("radiogroup", { name: /credentials/ })).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText("Access token")).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText("Private key")).not.toBeInTheDocument();
+    // The row's own choice is there instead.
+    expect(within(row).getByRole("radiogroup", { name: ADO_PAT.SECTION_TITLE })).toBeInTheDocument();
   });
 
   it("the ssh lane is disabled with its reason on a self-hosted GHES row", () => {
@@ -323,59 +349,89 @@ describe("GitTab", () => {
     });
   });
 
-  // The Git tab renders the three LEGACY lanes only; "entra" is configured
-  // elsewhere. Rewriting `lanes` from the rendered set alone DROPPED it, and a
-  // row left holding an entra block with no entra lane is refused by the
-  // server as an orphaned block — a 400 on Save that no admin could trace back
-  // to the checkbox they clicked.
-  describe("a lane this tab does not render survives a toggle", () => {
-    const entraRow: GitProvider = {
-      id: "ado",
-      kind: "azure_devops",
-      base_urls: ["https://dev.azure.com/acme"],
-      lanes: ["entra"],
-      credential_source: "per_user",
-      entra: {
-        tenant_id: "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
-        client_id: "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
-        capability_ceiling: ["read", "code_write"],
-      },
-    };
-
-    it("toggling pat on an entra row keeps entra", async () => {
-      let latest: GitProvider[] = [];
-      render(<Harness initial={[entraRow]} onLatest={(g) => (latest = g)} />);
+  // The three legacy lanes are GitHub's. An Azure DevOps row's lane follows its
+  // addresses (ado-row-shape.ts), and the tab writes it: it never presents a
+  // lane checkbox that could take the entra lane away or add a retired one.
+  describe("an Azure DevOps row's lane follows its addresses", () => {
+    it("an entra row has the token choices and no lane checkboxes to toggle", () => {
+      render(<Harness initial={[adoServices]} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · brokered/ }));
-      expect(latest[0].lanes).toContain("entra");
-      expect(latest[0].lanes).toContain("pat");
+      expect(within(row).queryByRole("checkbox", { name: /PAT · brokered/ })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("checkbox", { name: /SSH · resident/ })).not.toBeInTheDocument();
+      expect(within(row).getByLabelText(E.FIELD_TENANT)).toBeInTheDocument();
+    });
+
+    it("a fresh row is the valid Services shape: entra lane, per person, a token for each run", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com"] }]} onLatest={(g) => (latest = g)} />);
+      await userEvent.click(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }));
+      const ado = latest.find((r) => r.kind === "azure_devops")!;
+      expect(ado.lanes).toEqual(["entra"]);
+      expect(ado.credential_source).toBe("per_user");
+      expect(ado.entra).toEqual(
+        expect.objectContaining({ token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"] }),
+      );
+    });
+
+    it("naming an Azure DevOps Server address makes the row a git-only per-person token row, with no Entra block", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[adoServices]} onLatest={(g) => (latest = g)} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://tfs.corp.example/acme");
+      // The lane follows the address once it is settled (on leaving the field).
+      expect(latest[0].lanes).toEqual(["entra"]);
+      await userEvent.tab();
+      expect(latest[0].lanes).toEqual(["pat"]);
+      expect(latest[0].credential_source).toBe("per_user");
+      expect(latest[0].entra).toBeUndefined();
+      expect("entra" in latest[0]).toBe(false);
+      expect(within(row).getByTestId("ado-server-row")).toBeInTheDocument();
+      expect(within(row).getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeInTheDocument();
+      expect(within(row).queryByLabelText(E.FIELD_TENANT)).not.toBeInTheDocument();
+    });
+
+    it("and going back to a Services address restores the entra lane", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[adoServer]} onLatest={(g) => (latest = g)} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://dev.azure.com/acme");
+      await userEvent.tab();
+      expect(latest[0].lanes).toEqual(["entra"]);
       expect(latest[0].entra).toBeDefined();
     });
 
-    it("and never collapses to the empty 'every legacy lane' form while entra is held", async () => {
+    it("a mistyped host that reshapes the row to Server and back keeps what was entered in the Entra block", async () => {
       let latest: GitProvider[] = [];
-      render(<Harness initial={[{ ...entraRow, lanes: ["entra"] }]} onLatest={(g) => (latest = g)} />);
+      render(<Harness initial={[adoServices]} onLatest={(g) => (latest = g)} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      // PAT is the only legacy lane an Azure DevOps row can tick (#380 makes ssh
-      // unselectable on every legal row, and app has no ADO equivalent). Ticking
-      // and then clearing it must leave entra held — never the empty list, which
-      // the server reads as "every legacy lane" and which drops entra.
-      const pat = within(row).getByRole("checkbox", { name: /PAT · brokered/ });
-      await userEvent.click(pat);
-      expect(latest[0].lanes).toEqual(expect.arrayContaining(["pat", "entra"]));
-      await userEvent.click(pat);
+      const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+      // "dev.azure.co" is a valid address on a non-Services host, so leaving the field reshapes to Server.
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://dev.azure.co/acme");
+      await userEvent.tab();
+      expect(latest[0].lanes).toEqual(["pat"]);
+      expect(latest[0].entra).toBeUndefined();
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://dev.azure.com/acme");
+      await userEvent.tab();
       expect(latest[0].lanes).toEqual(["entra"]);
-      expect(latest[0].lanes).not.toEqual([]);
+      expect(latest[0].entra).toEqual(adoServices.entra);
     });
 
-    it("an entra lane leaves the three legacy checkboxes unchecked — the field narrows", () => {
-      render(<Harness initial={[entraRow]} />);
+    it("half-typing an address never flips the lane and loses what was entered", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[adoServices]} onLatest={(g) => (latest = g)} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      // The lane checkboxes only: the row's Entra section draws its own.
-      const lanes = within(row).getByRole("group", { name: PROVIDERS.FIELD_LANES });
-      for (const box of within(lanes).getAllByRole("checkbox")) {
-        expect(box).toHaveAttribute("aria-checked", "false");
-      }
+      await userEvent.type(within(row).getByLabelText(E.FIELD_TENANT), "x");
+      const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://dev.azure.com/");
+      expect(latest[0].lanes).toEqual(["entra"]);
+      expect(latest[0].entra?.tenant_id).toMatch(/x$/);
     });
   });
 
@@ -408,29 +464,6 @@ describe("GitTab", () => {
   // must not write `["app","pat"]`, since the server 400s that and the
   // disabled `app` checkbox leaves no way to un-write it.
   describe("lane toggling never writes an unavailable lane (HIGH fix)", () => {
-    // #380 F5: an Azure DevOps base URL's org segment is MANDATORY
-    // (validateProviderHostForKind), so no legal ADO row can ever present a
-    // bare dev.azure.com entry — the explicit ssh lane is therefore never
-    // selectable there (sshLaneExceedsPathScope is unconditionally true for
-    // it), the same way app already never is. The checkbox stays DISABLED
-    // with its own reason rather than 400ing on Save, and clicking it is a
-    // no-op — the row is never touched.
-    it("ssh is disabled with its own path-scoped reason on every Azure DevOps row, and clicking it is a no-op", async () => {
-      let latest: GitProvider[] = [];
-      render(
-        <Harness
-          initial={[{ id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/acme"] }]}
-          onLatest={(g) => (latest = g)}
-        />,
-      );
-      const row = screen.getByTestId("provider-row-azure_devops");
-      const checkbox = within(row).getByRole("checkbox", { name: /SSH · resident/ });
-      expect(checkbox).toBeDisabled();
-      expect(within(row).getByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).toBeInTheDocument();
-      await userEvent.click(checkbox);
-      expect(latest[0].lanes).toBeUndefined();
-    });
-
     it("toggling pat off a self-hosted GHES row (app + ssh unavailable) never writes app or ssh", async () => {
       let latest: GitProvider[] = [];
       render(
@@ -551,41 +584,13 @@ describe("GitTab", () => {
   // git-pat-github-com, the secret the GitHub clone helper reads, from inside
   // a radiogroup labelled "Azure DevOps credentials".
   describe("the credential lanes never default to github.com (BLOCKER)", () => {
-    it("a row with no parseable address disables every lane, names no secret, and can save nothing", async () => {
+    it("an Azure DevOps row has no credential lane at all, so nothing can be keyed to github.com", async () => {
       setSecretMock.mockReset();
-      render(<CredHarness initial={[{ id: "ado", kind: "azure_devops", base_urls: [] }]} present={[]} githubApp={false} />);
+      render(<CredHarness initial={[{ ...adoServices, base_urls: [] }]} present={[]} githubApp={false} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      expect(within(row).getByText(PROVIDERS.LANES_NEED_ADDRESS)).toBeInTheDocument();
-      const lanes = within(row).getAllByRole("radio");
-      expect(lanes.length).toBeGreaterThan(0);
-      for (const lane of lanes) {
-        expect(lane).toBeDisabled();
-        // Nothing is OPEN either: a lane body is where Save and the secret name live.
-        expect(lane).toHaveAttribute("aria-checked", "false");
-      }
+      expect(within(row).queryAllByRole("radio", { name: /Personal access token|SSH key|GitHub App/ })).toHaveLength(0);
       expect(within(row).queryByText(/git-pat-/)).not.toBeInTheDocument();
-      expect(within(row).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
-      for (const lane of lanes) await userEvent.click(lane);
       expect(setSecretMock).not.toHaveBeenCalled();
-    });
-
-    it("an Azure DevOps row with its own address saves the PAT under ITS host", async () => {
-      setSecretMock.mockReset();
-      render(
-        <CredHarness
-          initial={[{ id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/acme"] }]}
-          present={[]}
-          githubApp={false}
-        />,
-      );
-      const row = screen.getByTestId("provider-row-azure_devops");
-      expect(within(row).queryByText(PROVIDERS.LANES_NEED_ADDRESS)).not.toBeInTheDocument();
-      await userEvent.type(within(row).getByLabelText("Access token"), "ado-pat-value");
-      await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-      expect(setSecretMock).toHaveBeenCalledWith("git-pat-dev-azure-com", "ado-pat-value");
-      // The field must not suggest GitHub's `ghp_…` placeholder on the ADO row
-      // — the cosmetic sibling of the very bug this screen exists to stop.
-      expect(within(row).getByLabelText("Access token")).toHaveAttribute("placeholder", "Paste the token");
     });
 
     it("a github row still saves the PAT under github.com — the host is the row's, not a default", async () => {
@@ -709,8 +714,8 @@ describe("GitTab — several rows of one kind", () => {
     entra: {
       tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
       client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
-      capability_ceiling: ["read"],
-      default_profile: ["read"],
+      capability_ceiling: ["code_read", "project_read"],
+      default_profile: ["code_read", "project_read"],
     },
   });
 

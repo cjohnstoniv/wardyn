@@ -4,25 +4,18 @@
 package api
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"net"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // mavenProxyOpts builds the MAVEN_OPTS JVM proxy sysprops that route Maven
@@ -153,9 +146,7 @@ func normalizedHTTPProxyURL(raw string) (string, bool) {
 //
 // Region/model default to OPERATOR BOOT-TIME config (BedrockRegion/BedrockModel,
 // mirroring AgentAnthropicModel — no live admin write path, same as the
-// WARDYN_DEFAULT_POLICY precedent) and are overridden per-run by the picked
-// workspace/container's Bedrock binding (types.WorkspaceBedrockRef); the AWS
-// credentials themselves stay global and are read directly
+// WARDYN_DEFAULT_POLICY precedent); the AWS credentials themselves stay global and are read directly
 // from the secret store at dispatch time — a new kind of secret consumption
 // for this codebase (every other consumer is proxy-injection-at-mint-time),
 // necessary because SigV4 can't be injected after the fact.
@@ -172,28 +163,20 @@ const (
 
 // bedrockAuth is the resolved Bedrock authentication plan for a run.
 type bedrockAuth struct {
-	env         map[string]string // sandbox env additions (bearer: placeholder; resident: real creds)
+	env         map[string]string // sandbox env additions (bearer: placeholder; SSO: the synthetic ~/.aws)
 	egressHosts []string          // regional data+control plane hosts to allow
-	ready       bool              // false => fall back to api-key mode
+	ready       bool
 	// bearer selects the never-resident path: bedrock-runtime is TLS-MITM'd and the
-	// Authorization: Bearer header is injected proxy-side from bedrockAPIKeySecret,
-	// so the sandbox holds only a placeholder. When false (resident path), AWS SigV4
-	// creds are placed in env (SigV4 can't be proxy-injected).
+	// Authorization: Bearer header is injected proxy-side from the run owner's own
+	// key for the provider, so the sandbox holds only a placeholder.
 	bearer bool
-	// bearerNamespace is the namespace the bearer was READ from (set only when
-	// bearer is): the operator's under shared, the run owner's own under
-	// per_user. authorBedrockBearerInjection records it on the grant, and the
-	// injection sink resolves the key from exactly that namespace — see
-	// resolveBedrockBearerInjection.
-	bearerNamespace awsSSOScope
 	// runtimeHost is the EFFECTIVE Bedrock data-plane host this run resolved
-	// (bedrockDataPlaneHost: the WARDYN_BEDROCK_BASE_URL override's host when
-	// set, else the regional public one). Audited by applyBedrockTransport in
-	// every mode; in bearer mode it is additionally the TLS-MITM and
-	// Authorization-injection target.
+	// (the provider's base URL host when it names one, else the regional public
+	// one). Audited by applyBedrockTransport in every mode; in bearer mode it is
+	// additionally the TLS-MITM and Authorization-injection target.
 	runtimeHost string
-	// runtimePort is the port runtimeHost is reached on: the
-	// WARDYN_BEDROCK_BASE_URL override's port when it names one, else 443. It
+	// runtimePort is the port runtimeHost is reached on: the provider's
+	// bedrock.base_url port when it names one, else 443. It
 	// exists so bearer mode can author its TLS-MITM entry as "host:port"
 	// (net.JoinHostPort) exactly as planArtifactRedirect does — a BARE MITM
 	// entry is any-port (proxy.parseMITMHostPort), so an agent that can reach
@@ -201,23 +184,13 @@ type bedrockAuth struct {
 	// and have the tunnel TLS-terminated with the Wardyn leaf and the
 	// operator's Bearer injected onto whatever answered there.
 	runtimePort int
-	// awsMount selects the host-mode ~/.aws bind-mount path: the SDK resolves
-	// credentials (incl. auto-refreshing AWS SSO) from the read-only mount, so no
-	// static keys are stored and none are resident in env. awsMountSource is the
-	// host dir to bind read-only at /home/agent/.aws. Mutually exclusive with the
-	// resident-key path; bearer still wins over it.
-	awsMount       bool
-	awsMountSource string
-	// region/model are the EFFECTIVE selection this run resolved (a workspace
-	// binding's override, else the global operator config) — audited by
-	// applyBedrockTransport so the record names what the run actually used.
+	// region/model are the provider's region and this harness's model —
+	// audited by applyBedrockTransport so the record names what the run used.
 	region, model string
 	// ssoInject selects the captured-AWS-SSO-credential delivery path (a
 	// container-login `aws sso login` — see awsSSOBlob in harnesscred.go): a
 	// minimal synthetic ~/.aws is materialized in the sandbox from an env var
-	// (no host mount, no static keys stored). See the resolveBedrockAuth
-	// residency note for why this differs from bearer. Mutually exclusive with
-	// awsMount and the resident-key path; bearer still wins over it.
+	// (no host mount, no static keys stored).
 	ssoInject bool
 	// ssoAccountID/ssoRoleName are the AWS account and IAM role the stored
 	// session this run would carry actually names — the pair
@@ -225,21 +198,12 @@ type bedrockAuth struct {
 	// and botocore then asks GetRoleCredentials for. Set ONLY on the ssoInject
 	// branch, and from the POST-refresh blob, so a comparison against them is a
 	// comparison against what the run will really use.
-	//
-	// They exist because the roster PIN is checked at capture time and nowhere
-	// else: a capture that predates a pin is the one identity the pin was meant
-	// to govern and the one nothing compares. resolveBedrockAuth cannot make
-	// that comparison itself (awsSSOScope is {perUser, owner} — it has no
-	// roster), so the pair rides out to the declared-mechanism gate one frame
-	// up, which already holds the site config. Empty for every other lane, and
-	// for a blob captured by a binary that did not record them — see
-	// bedrockBlobPinMismatch for why empty must never refuse.
 	ssoAccountID, ssoRoleName string
 	// ssoRegion is the captured session's OWN region (blob.Region), which may
 	// differ from the Bedrock region: it is what ssoPortalHost derives the one
 	// injectable host from, and what the dispatch-time scope SNAPSHOT records so
 	// a resolve mid-run compares against the region this run was authored with
-	// rather than whatever the roster says later.
+	// rather than whatever the provider says later.
 	ssoRegion string
 	// ssoProxyInject is PHASE B: the captured SSO access token is injected by the
 	// proxy on portal.sso instead of being written into the sandbox
@@ -247,14 +211,6 @@ type bedrockAuth struct {
 	// running sandbox never changes lane under the operator's flip. False =
 	// unchanged, byte for byte.
 	ssoProxyInject bool
-	// ssoRefreshFailure carries the refusal sentence when a captured AWS SSO
-	// credential COULD have been renewed but the renewal did not land (the
-	// refresh token is spent, or the OIDC call did not complete). It is set only
-	// on a refresh=true pass (the real launch, dispatch) and is independent of ready: the SSO
-	// lane simply did not fire, and within Bedrock the mount/static lanes below
-	// it still may. It exists so the dispatch gate can refuse the run with a
-	// reason instead of letting a run boot toward a model it cannot reach.
-	ssoRefreshFailure string
 }
 
 // bedrockRuntimeHost is the regional Bedrock DATA-PLANE host claude-code's
@@ -271,24 +227,11 @@ func bedrockControlHost(region string) string {
 	return fmt.Sprintf("bedrock.%s.amazonaws.com", region)
 }
 
-// bedrockDataPlaneHost is THE data-plane host every Bedrock consumer derives:
-// the operator's WARDYN_BEDROCK_BASE_URL override when set (a VPC/PrivateLink
-// endpoint), else the regional public host. It exists because four call sites
-// derive that host independently (resolveBedrockAuth's egress + MITM host, the
-// workspace-integration egress union in llmcred.go, the record-mode skip list
-// in record.go) — deriving it in one place is what makes the egress allowlist,
-// the MITM host, the bearer-injection scope and the record-mode skip list all
-// follow the override for free instead of four times.
-//
-// The CONTROL plane (bedrockControlHost) is deliberately NOT overridden: a
-// PrivateLink endpoint is per-SERVICE, and bedrock-runtime and bedrock are two
-// services. See Config.BedrockBaseURL for the ceiling this implies.
-func (s *Server) bedrockDataPlaneHost(region string) string {
-	return bedrockDataPlaneHostFor(region, s.cfg.BedrockBaseURL)
-}
-
-// bedrockDataPlaneHostFor is bedrockDataPlaneHost over an explicit base URL: a
-// model provider's Bedrock.BaseURL rather than the boot config's.
+// bedrockDataPlaneHostFor is the data-plane host a Bedrock provider's runs
+// reach: its Bedrock.BaseURL override when set (a VPC/PrivateLink endpoint),
+// else the regional public host. The CONTROL plane (bedrockControlHost) is
+// deliberately NOT overridden: a PrivateLink endpoint is per-SERVICE, and
+// bedrock-runtime and bedrock are two services.
 func bedrockDataPlaneHostFor(region, baseURL string) string {
 	if h := gatewayHost(baseURL); h != "" {
 		return h
@@ -373,9 +316,8 @@ func ssoPortalHost(ssoRegion, endpointOverride string) string {
 	return fmt.Sprintf("portal.sso.%s.amazonaws.com", ssoRegion)
 }
 
-// sandboxAWSDir is where the host ~/.aws is bind-mounted read-only in the run
-// (awsMount) OR materialized by agent-run from an env var (ssoInject) — same
-// path either way, so the SDK env vars below don't need to branch on which.
+// sandboxAWSDir is where agent-run materializes a captured AWS sign-in's
+// synthetic ~/.aws from an env var (ssoInject).
 const sandboxAWSDir = "/home/agent/.aws"
 
 // awsSSOProfileName is both the generated [sso-session <name>] and
@@ -584,8 +526,7 @@ func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string
 	// Mask GLOBALLY (not per-run, like the static-key branch below does via
 	// the caller): this captured credential is reused across every run that
 	// picks this mode, not minted fresh per run, so a per-run Add would miss
-	// every run after the first. Mirrors handleHarnessCredentialPaste
-	// (harnesscred.go). It ignores the empty strings when a field wasn't
+	// every run after the first. It ignores the empty strings when a field wasn't
 	// captured (Registry.MinLen). Merge, not AddGlobal: this blob may predate
 	// a refresh that ran concurrently outside our read, and replacing the
 	// credential's set with it would retire the refresh's live tokens.
@@ -597,301 +538,4 @@ func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string
 	return bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
 		ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
 		ssoRegion: blob.Region, ssoProxyInject: proxyInjected}
-}
-
-// resolveBedrockAuth is the LEGACY lane chain, for a run that chose no model
-// provider (a deployment whose provider block is nil); it retires with the
-// operator-credential lanes (MP-4b). A run that chose a Bedrock provider never
-// reaches it: its kind names one lane (providerBedrockTransport).
-//
-// resolveBedrockAuth decides whether this run should authenticate to Claude via
-// Amazon Bedrock and, if so, returns the sandbox env additions (the
-// CLAUDE_CODE_USE_BEDROCK on-switch, region, model id, and resident AWS creds)
-// plus the regional egress hosts to allow. ready is false whenever Bedrock isn't
-// configured (region/model unset — the common case for non-Bedrock operators)
-// OR is misconfigured (region/model set but the AWS credential secrets aren't
-// both present) — either way the caller falls back to the existing api-key
-// path, so a partial Bedrock config never breaks a run, it just doesn't get
-// Bedrock. subscriptionActive pre-empts Bedrock: the resident Claude OAuth
-// mount and Bedrock are mutually exclusive Anthropic transports. modelRun=false
-// (a verify or scan run that makes no model call) also returns ready=false, so
-// the resident AWS creds never land in a sandbox that won't sign a Bedrock request.
-//
-// ws is the picked workspace/container's Bedrock selection (nil for a run that
-// binds none): its region/model WIN over the global config, which remains the
-// fallback for whatever the workspace leaves unset. The workspace never carries
-// credentials — those stay operator-global (secrets / ~/.aws / captured SSO).
-//
-// Under the ZERO sso scope every secret read below is in the OPERATOR namespace
-// on purpose (bare Get == For("")): Bedrock credentials are MDM/operator-set
-// daemon config, never a member row (writableSecretName refuses these names for
-// a non-operator).
-//
-// sso.perUser INVERTS that for the whole function, which is why it is a
-// parameter and not a lookup: the org declared that this agent's model
-// credential is one per person, so the ONLY admissible lane is the one the row
-// declares, read from that principal's own namespace — their captured session
-// (bedrock_sso) or their own stored bearer (bedrock_bearer), never the other
-// (awsSSOScope.readsBearer / readsSSO). The ~/.aws-mount and static-key arms
-// are bare operator-namespace reads, so under per_user they are SKIPPED
-// ENTIRELY — a member with no credential of their own is not-configured, never
-// silently served the operator's keys. That is also why the skip is a hard
-// return rather than a per-arm condition: a lane added below later must not
-// quietly become reachable for a member.
-//
-// refresh authorizes SIDE EFFECTS: only with refresh=true may the captured-SSO
-// lane redeem its rotating refresh token and persist the rotated pair. The REAL
-// LAUNCH (create) and DISPATCH pass true; Review's preflight and the create
-// advisory pass false — a dry run must never spend a one-use token, and it does
-// not need to: an expired-but-renewable credential reads READY there.
-// bedrockRegionModel is the EFFECTIVE region and model for a run: the picked
-// workspace/container's per-run override where it names one, else the global
-// operator config.
-func (s *Server) bedrockRegionModel(ws *types.WorkspaceBedrockRef) (region, model string) {
-	region, model = s.cfg.BedrockRegion, s.cfg.BedrockModel
-	if ws != nil {
-		region = cmp.Or(strings.TrimSpace(ws.Region), region)
-		model = cmp.Or(strings.TrimSpace(ws.Model), model)
-	}
-	return region, model
-}
-
-// bedrockLaneSelectable is resolveBedrockAuth's own "is this lane in play at
-// all" predicate, lifted out so the dispatch-time roster guard
-// (enforceReadableRosterForCredential) asks EXACTLY the question this function
-// answers rather than a hand-copied echo of it that drifts.
-func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSecrets bool, region, model string) bool {
-	return modelRun && !subscriptionActive && runAgent == "claude-code" &&
-		region != "" && model != "" && haveSecrets
-}
-
-// bedrockBearerFor reads the Bedrock BEARER token from the namespace scope
-// names, nil when there is none to read there.
-//
-// The ZERO scope is the operator namespace — byte-for-byte the read this was
-// before a member could hold a bearer of their own, and what a `shared` row (or
-// no roster) resolves to.
-//
-// A PER-USER scope reads that principal's OWN row and NEVER the operator's, and
-// the List-then-Get shape is the whole reason this is not a one-liner:
-// Store.For(owner).Get FALLS BACK to the operator's row by contract
-// (internal/secretstore/pg), so the obvious For(owner).Get would serve the
-// ADMIN's bearer to a member who has stored nothing — the cross-principal
-// substitution per_user exists to refuse. For("").List is never consulted, so
-// the owner's own rows are all this can see (ownSecret). readAWSSSOBlob carries the
-// identical dance for the identical reason; a per-user scope with no owner, or
-// one read inside the no-credential member preview, is ABSENT there and here.
-//
-// A per-user scope whose row declares the SSO lane reads NO bearer at all
-// (awsSSOScope.readsBearer): the member's own key must not win the precedence
-// chain over the session the row names and have every run refused for it.
-//
-// An EMPTY or whitespace-only value reads as ABSENT rather than as a configured
-// credential. A blank row would otherwise win the precedence chain, author a
-// grant, and surface as an upstream 403 naming neither the lane it picked nor
-// the empty secret it picked it on.
-func (s *Server) bedrockBearerFor(ctx context.Context, scope awsSSOScope) []byte {
-	raw, _ := s.bedrockBearerRead(ctx, scope)
-	return raw
-}
-
-// bedrockBearerRead is bedrockBearerFor with the store's error kept, for the
-// injection sink, which must tell a store that did not answer from a key that
-// is gone or refused (storeReadRefusal). An absent or blank key is (nil, nil).
-func (s *Server) bedrockBearerRead(ctx context.Context, scope awsSSOScope) ([]byte, error) {
-	if s.cfg.Secrets == nil || !scope.readsBearer() {
-		return nil, nil
-	}
-	var raw []byte
-	var err error
-	if scope.perUser {
-		raw, _, err = s.ownSecret(ctx, scope.owner, bedrockAPIKeySecret)
-	} else {
-		raw, err = s.cfg.Secrets.Get(ctx, bedrockAPIKeySecret)
-		if errors.Is(err, secretstore.ErrNotFound) {
-			return nil, nil
-		}
-	}
-	switch {
-	case err != nil:
-		return nil, err
-	case len(bytes.TrimSpace(raw)) == 0:
-		return nil, nil
-	}
-	return raw, nil
-}
-
-func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef, sso awsSSOScope) bedrockAuth {
-	region, model := s.bedrockRegionModel(ws)
-	profile := s.cfg.BedrockAWSProfile
-	if !bedrockLaneSelectable(runAgent, modelRun, subscriptionActive, s.cfg.Secrets != nil, region, model) {
-		return bedrockAuth{}
-	}
-	runtimeHost := s.bedrockDataPlaneHost(region)
-	runtimePort := redirectPort(s.cfg.BedrockBaseURL)
-	hosts := []string{runtimeHost, bedrockControlHost(region)}
-	// Common Bedrock env: the on-switch, region, and model id. AWS_REGION is what
-	// claude-code reads; AWS_DEFAULT_REGION is the broader AWS-SDK fallback. The
-	// model id is a cross-region INFERENCE-PROFILE id (e.g.
-	// "us.anthropic.claude-sonnet-4-5-...") or an application-inference-profile ARN
-	// — NOT a bare foundation-model id (Bedrock silently rewrites those and can 403
-	// under an SCP). Operator-supplied; Wardyn does not validate the format.
-	base := func() map[string]string { return bedrockBaseEnv(region, model, s.cfg.BedrockBaseURL) }
-	// ssoRefreshFailure is set by the captured-SSO branch when a renewable
-	// credential could not be renewed. Every return below carries it, because the
-	// dispatch gate must be able to name the reason whichever lane (if any) ended
-	// up winning.
-	var ssoRefreshFailure string
-	// ready return shared by every credential mode below: stamps the EFFECTIVE
-	// region/model so the audit names what this run used, not the global config,
-	// and the EFFECTIVE data-plane host so applyBedrockTransport's audit names
-	// where the call actually went (bearer mode additionally uses it as the
-	// TLS-MITM + Authorization-injection target).
-	ready := func(b bedrockAuth) bedrockAuth {
-		b.ready, b.region, b.model, b.runtimeHost = true, region, model, runtimeHost
-		b.runtimePort = runtimePort
-		b.ssoRefreshFailure = ssoRefreshFailure
-		return b
-	}
-
-	// Preferred: bearer-token mode. A Bedrock API key is a STATIC Authorization
-	// header, so the proxy TLS-MITMs bedrock-runtime and injects it — the sandbox
-	// holds only a placeholder, never the real token (trust parity with api-key /
-	// subscription). Selected whenever a bedrock-api-key secret exists in the
-	// namespace this run's scope names — the operator's under `shared`, the
-	// caller's OWN under per_user, never one standing in for the other
-	// (bedrockBearerFor).
-	if bearer := s.bedrockBearerFor(ctx, sso); len(bearer) > 0 {
-		env := base()
-		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
-		// overwrites the Authorization header with the real token on the wire.
-		env[envBedrockBearer] = "wardyn-proxy-injected"
-		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true, bearerNamespace: sso})
-	}
-
-	// Captured AWS SSO credential: a container-login `aws sso login` captured an
-	// SSO access token (readAWSSSOBlob / awsSSOBlob, harnesscred.go). This wins
-	// over the host ~/.aws mount and static keys below — it needs no host access
-	// and stores no long-lived static key — but an explicit bearer token still
-	// wins over it (bearer is never-resident; this mode is).
-	//
-	// Residency (contrast with bearer above): the captured SSO access token DOES
-	// land resident in the sandbox — a minimal synthetic ~/.aws, delivered the
-	// same way the managed-subscription sentinel is (base64 in a sandbox env
-	// var, materialized by agent-run; see WARDYN_CLAUDE_MANAGED_B64 /
-	// materialize_managed_claude_config in deploy/images/common/agent-run-lib.sh
-	// for the precedent this mirrors). The sandbox SDK then exchanges that token
-	// for SHORT-LIVED role credentials itself (portal.sso.<region>
-	// GetRoleCredentials) — those role credentials were always going to be
-	// resident (SigV4 can't be proxy-injected, see the resident-key fallback
-	// below); what's new here is the longer-lived SSO access token also being
-	// resident, not just the ephemeral role creds it mints.
-	//
-	// Phase B (not yet built): proxy-inject the token as the
-	// `x-amz-sso_bearer_token` header on portal.sso.<region> instead of writing
-	// it into the sandbox — that call is authtype:none (unsigned), so a MITM can
-	// set the header without the sandbox ever holding the token, mirroring the
-	// Bedrock bearer path above. Until Phase B ships, this is an accepted,
-	// documented tradeoff (same class as the resident-SigV4 fallback), not an
-	// oversight.
-	//
-	// Renewal (the fix for a credential the next twenty lines would have healed):
-	// an EXPIRED access token is not a dead credential when the blob carries a
-	// refresh token and its client registration has not lapsed — dispatch renews
-	// it here and the lane fires. The fall-through below is kept for exactly the
-	// two cases nothing can heal: no refresh token at all (a legacy
-	// sso_start_url profile) or a lapsed registration. On a renewal FAILURE the
-	// SSO lane simply is not ready and carries its reason: within Bedrock the
-	// mount and static-key lanes below still run exactly as they do today (the
-	// chain is one mechanism), but no reader may read that as permission to
-	// substitute a DIFFERENT mechanism — a credential must never silently change
-	// source, which is what ssoRefreshFailure exists to let the dispatch gate say.
-	//
-	// Under a per_user row that declares the bearer lane a session the member
-	// also holds is never selected (awsSSOScope.readsSSO): it is not the
-	// credential the row names, and renewing it would spend a refresh token for
-	// a run the mechanism gate then refuses.
-	if blob, found, berr := s.readAWSSSOBlob(ctx, sso); sso.readsSSO() && berr == nil && found {
-		if refresh {
-			blob, ssoRefreshFailure = s.refreshAWSSSOBlob(ctx, sso, blob)
-		}
-		switch {
-		case ssoRefreshFailure != "":
-			slog.ErrorContext(ctx, "wardynd: captured AWS SSO credential could not be renewed; this Bedrock lane is not ready",
-				slog.Time("expired_at", blob.ExpiresAt))
-		case !blob.renewable(s.cfg.Now()) && blob.expired(s.cfg.Now()):
-			// Observable so the UI can tell the operator to re-login (setup status
-			// reads the same readAWSSSOBlob + the same predicate this checks); fall
-			// through to the next credential mode rather than handing the run a dead
-			// token.
-			slog.WarnContext(ctx, "wardynd: captured AWS SSO credential expired and cannot be renewed; falling back to the next Bedrock credential mode",
-				slog.Time("expired_at", blob.ExpiresAt))
-		default:
-			return ready(s.bedrockSSOAuth(blob, sso, base(), hosts))
-		}
-	}
-
-	// Per_user stops here. The org declared one credential per person, and the
-	// three arms below are all operator-namespace reads — the host ~/.aws mount
-	// is the deployer's own AWS state, the static keys are the deployer's
-	// secrets. Falling through would serve a member the admin's credential the
-	// moment their own session lapsed, which is the substitution this whole lane
-	// exists to refuse: a credential must never silently change source. The
-	// caller reads a not-ready bedrockAuth (plus any renewal reason) and refuses
-	// the run naming the lane, rather than dispatching on somebody else's keys.
-	if sso.perUser {
-		return bedrockAuth{ssoRefreshFailure: ssoRefreshFailure}
-	}
-
-	// Host-mode ~/.aws mount: bind the operator's host ~/.aws read-only into the
-	// sandbox and let the AWS SDK resolve credentials itself — including AWS SSO /
-	// IAM Identity Center sessions it refreshes on demand, so a short-lived login
-	// never goes stale and nothing is stored in Wardyn. No resident static keys.
-	// Opt-in via WARDYN_BEDROCK_AWS_DIR (host mode OR compose — in compose the same
-	// path is bind-mounted host==container so the daemon-side sandbox mount resolves;
-	// see deploy/compose/docker-compose.yaml). Fail SAFE to the next path if the dir
-	// doesn't exist on this host.
-	if s.cfg.BedrockAWSConfigDir != "" {
-		if st, err := os.Stat(s.cfg.BedrockAWSConfigDir); err == nil && st.IsDir() {
-			env := base()
-			// Point the SDK at the mount explicitly (robust even if HOME isn't
-			// /home/agent for some exec path); no AWS_ACCESS_KEY_ID — the SDK
-			// resolves from the mounted config + SSO cache.
-			env[envAWSConfigFile] = sandboxAWSDir + "/config"
-			env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
-			if profile != "" {
-				env["AWS_PROFILE"] = profile
-			}
-			// The SSO region falls back to the EFFECTIVE Bedrock region (a workspace
-			// override included) — falling back to the global one would allow the
-			// wrong regional oidc/portal.sso endpoints and 403 the credential
-			// exchange for a workspace that moved the run to another region.
-			ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, region)
-			hosts = append(hosts, ssoEgressHosts(ssoRegion, s.cfg.AWSSSOEndpointOverride)...)
-			// The SAME pair the ssoInject branch merges above, for the same
-			// reason: this lane's SDK also exchanges an SSO token for role
-			// credentials, so moving its ALLOWLIST under the test hatch without
-			// moving the SDK left it dialling the real AWS hosts it had just
-			// stopped allowing. nil on every real deployment.
-			maps.Copy(env, ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride))
-			return ready(bedrockAuth{env: env, egressHosts: hosts,
-				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir})
-		}
-	}
-
-	// Fallback: resident SigV4 access keys. SigV4 signs each request in-process, so
-	// the creds MUST be resident in the sandbox env (documented exception, masked +
-	// modelRun-gated). Requires both access key + secret key.
-	accessKey, aerr := s.cfg.Secrets.Get(ctx, bedrockAccessKeyIDSecret)
-	secretKey, serr := s.cfg.Secrets.Get(ctx, bedrockSecretAccessKeySecret)
-	if aerr != nil || serr != nil || len(accessKey) == 0 || len(secretKey) == 0 {
-		return bedrockAuth{ssoRefreshFailure: ssoRefreshFailure}
-	}
-	env := base()
-	env["AWS_ACCESS_KEY_ID"] = string(accessKey)
-	env["AWS_SECRET_ACCESS_KEY"] = string(secretKey)
-	if tok, terr := s.cfg.Secrets.Get(ctx, bedrockSessionTokenSecret); terr == nil && len(tok) > 0 {
-		env["AWS_SESSION_TOKEN"] = string(tok)
-	}
-	return ready(bedrockAuth{env: env, egressHosts: hosts})
 }

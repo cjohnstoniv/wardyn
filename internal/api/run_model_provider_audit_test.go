@@ -89,8 +89,9 @@ func TestRunModelProviderDoors_AuditEachRefusal(t *testing.T) {
 		{name: "a policy grant that would set a model credential", site: codexOnly, cs: &capStore{},
 			body: string(envGrant), wantCode: http.StatusUnprocessableEntity,
 			wantReason: string(authz.ReasonModelProviderUnavailable), wantDetail: map[string]any{}},
+		// Answered as missing (D-6, #1018); the row is the capability one alone.
 		{name: "not granted: the capability row alone", site: twoKeys, cs: &capStore{enf: enforced}, member: true,
-			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`, wantCode: http.StatusForbidden,
+			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`, wantCode: http.StatusUnprocessableEntity,
 			wantReason: string(authz.ReasonCapabilityModelProvider)},
 		{name: "a field-validation refusal writes none", site: twoKeys, cs: &capStore{},
 			body: `{"agent":"claude-code","task":"t","model_provider":"Corp Gateway"}`, wantCode: http.StatusBadRequest},

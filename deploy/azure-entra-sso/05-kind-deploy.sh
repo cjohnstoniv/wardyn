@@ -9,15 +9,15 @@
 # It builds from `git archive` of the ref (the checkout is never touched), tags
 # every image with the commit (so a re-deploy never reuses a stale `:local`
 # agent image another tree built), loads them into the cluster, and makes ONE
-# `helm upgrade --reuse-values` carrying the Entra overlay and the Bedrock
-# settings. It does not re-run quickstart.sh: quickstart's own upgrade carries
-# no overlay, so every deploy through it would roll the cluster through a
+# `helm upgrade --reuse-values` carrying the Entra overlay. It does not re-run quickstart.sh:
+# quickstart's own upgrade carries no overlay, so every deploy through it would roll the cluster through a
 # revision with no OIDC and no egress to the issuer before this restored it.
 # quickstart.sh stays the first install (README.md Step 3); this is every
 # deploy after it.
 #
 # It touches only the local cluster. The tenant side (02-app.sh, consent) and
-# the console-side rows (Azure DevOps provider, Bedrock roster) are separate.
+# the console-side rows (Azure DevOps provider, the Bedrock model provider
+# with its region and model) are separate.
 #
 # Needs TENANT_ID and CLIENT_ID (not secrets). The client secret stays in the
 # cluster's wardyn-entra-oidc Secret, which a first deploy creates from
@@ -31,8 +31,6 @@ TAG="c-${SHA:0:12}"
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-entra}"
 CTX="kind-${CLUSTER}"
 HTTP_PORT="${HTTP_PORT:-8480}"
-BEDROCK_REGION="${WARDYN_BEDROCK_REGION:-us-east-1}"
-BEDROCK_MODEL="${WARDYN_BEDROCK_MODEL:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
 : "${TENANT_ID:?TENANT_ID is required}" "${CLIENT_ID:?CLIENT_ID is required}"
 
 # The default daemon, where Step 3 put the cluster — named explicitly, because
@@ -71,8 +69,6 @@ k8s:
   proxyImage: ${PROXY_IMAGE}
 env:
   WARDYN_AGENT_IMAGES: '{"base":"${BASE_IMAGE}","claude-code":"${AGENT_IMAGE}"}'
-  WARDYN_BEDROCK_REGION: "${BEDROCK_REGION}"
-  WARDYN_BEDROCK_MODEL: "${BEDROCK_MODEL}"
 EOF
 helm --kube-context "${CTX}" upgrade wardyn deploy/helm/wardyn -n wardyn --reuse-values \
   -f "${KIT}/values-entra.yaml" -f "${BUILD}/org.yaml" \

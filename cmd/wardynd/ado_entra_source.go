@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -63,9 +65,42 @@ func adoEntraRedirectURL(oidcRedirectURL, basePath string) string {
 // sign-in, read from the live provider rows and bound to the console's OWN OIDC
 // application. A deployment with no such row answers "not configured" exactly
 // as an unset source does.
+//
+// It reads once at boot so a minted_pat row the console cannot redeem with its
+// own secret (S1, ado_pat_needs_console_app) is named in the log the moment the
+// daemon starts. The row stays unusable on every read after: api validates
+// every resolved configuration before using it.
 func adoEntraSourceFromFlags(st siteConfigReader, f *bootFlags) api.ADOEntraSource {
-	return adoEntraSource(st, newADOEntraLogin(*f.oidcIssuer, *f.oidcClientID,
-		*f.oidcClientSecret, *f.oidcRedirectURL, *f.basePath, *f.allowTestEndpoints))
+	src := adoEntraSource(st, adoEntraLoginFromFlags(f))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cfg, found, err := src(ctx)
+	switch {
+	case err != nil:
+		slog.Error("wardynd: the Azure DevOps sign-in row could not be resolved; Azure DevOps access fails closed until it is fixed",
+			slog.Any("err", err))
+	case found && cfg.TokenMode == types.ADOTokenModeMintedPAT && cfg.ClientSecret == "":
+		slog.Error("wardynd: the Azure DevOps row is unusable for per-run tokens",
+			slog.String("row", cfg.RowID), slog.String("reason", api.ReasonADOPATNeedsConsoleApp), slog.Any("err", api.ErrADOMintNeedsSecret))
+	}
+	return src
+}
+
+// adoLoginFactsFromFlags is api.Config.ADOLoginFacts: the console's own client
+// and tenant, and whether it holds a secret — what a row write needs to decide
+// S1 without ever seeing the secret itself.
+func adoLoginFactsFromFlags(f *bootFlags) func() (clientID, tenantID string, hasSecret bool) {
+	login := adoEntraLoginFromFlags(f)
+	return login.facts
+}
+
+func adoEntraLoginFromFlags(f *bootFlags) adoEntraLogin {
+	return newADOEntraLogin(*f.oidcIssuer, *f.oidcClientID, *f.oidcClientSecret, *f.oidcRedirectURL, *f.basePath, *f.allowTestEndpoints)
+}
+
+// facts reports the login's client, tenant and whether a secret is set.
+func (l adoEntraLogin) facts() (clientID, tenantID string, hasSecret bool) {
+	return l.clientID, l.tenantID, l.clientSecret != ""
 }
 
 // siteConfigReader is the one store read the source needs.
@@ -85,51 +120,119 @@ func adoEntraSource(st siteConfigReader, login adoEntraLogin) api.ADOEntraSource
 		if err != nil {
 			return api.ADOEntraConfig{}, false, err
 		}
-		row, ok := adoEntraRow(sc)
-		if !ok {
-			return api.ADOEntraConfig{}, false, nil
+		row, ok, err := adoEntraRow(sc)
+		if err != nil || !ok {
+			return api.ADOEntraConfig{}, false, err
 		}
-		scopes, err := adoscope.ScopesFor(row.Entra.CapabilityCeiling)
-		if err != nil {
-			return api.ADOEntraConfig{}, false, fmt.Errorf("azure devops provider row %q: %w", row.ID, err)
+		mode := row.Entra.TokenMode
+		if mode == "" {
+			mode = types.ADOTokenModeBearer
 		}
-		cfg := api.ADOEntraConfig{
-			RowID:              row.ID,
-			TenantID:           row.Entra.TenantID,
-			ClientID:           row.Entra.ClientID,
-			RedirectURL:        login.redirectURL,
-			Scopes:             scopes,
-			LoginClientID:      login.clientID,
-			LoginTenantID:      login.tenantID,
-			AllowTestEndpoints: login.allowTestEndpoints,
+		scopes := adoscope.MintScopes()
+		if mode != types.ADOTokenModeMintedPAT {
+			if scopes, err = adoscope.ScopesFor(row.Entra.CapabilityCeiling); err != nil {
+				return api.ADOEntraConfig{}, false, fmt.Errorf("azure devops provider row %q: %w", row.ID, err)
+			}
 		}
-		// The console's client secret belongs to the console's app registration
-		// and is sent to NO OTHER. A row naming a different application gets no
-		// secret; its sign-in is refused by name before any token request anyway.
-		if login.clientID != "" && strings.EqualFold(row.Entra.ClientID, login.clientID) {
-			cfg.ClientSecret = login.clientSecret
-		}
-		return cfg, true, nil
+		return adoEntraConfigFor(row, login, mode, scopes), true, nil
 	}
 }
 
-// adoEntraRow is the first ENABLED Azure DevOps row that permits the per-person
-// lane: the entra lane named, an Entra block present, and a per_user credential
-// source — the same predicate the dispatch lane authors a credential under
-// (resolveADOEntraRun), so a row the dispatch will not serve never drives a
-// capture either.
-func adoEntraRow(sc types.SiteConfig) (types.GitProvider, bool) {
-	if sc.WorkspaceProviders == nil {
-		return types.GitProvider{}, false
+// adoEntraByRow fills api.Config.ADOEntraByRow: the row with this id, found
+// whether or not it is enabled or the first — what revoking a token created
+// through a row an admin has since disabled needs. A row that is gone, is not
+// Azure DevOps or has no Entra block answers found=false. The revoke uses only
+// the row's tenant, client and the console's secret, so no filter that decides
+// which row signs people in applies, and neither does its scope ceiling.
+func adoEntraByRow(st siteConfigReader, login adoEntraLogin) func(ctx context.Context, rowID string) (api.ADOEntraConfig, bool, error) {
+	return func(ctx context.Context, rowID string) (api.ADOEntraConfig, bool, error) {
+		sc, err := st.GetSiteConfig(ctx)
+		if err != nil || sc.WorkspaceProviders == nil {
+			return api.ADOEntraConfig{}, false, err
+		}
+		for _, row := range sc.WorkspaceProviders.Git {
+			if row.ID != rowID || row.Kind != types.GitProviderAzureDevOps || row.Entra == nil {
+				continue
+			}
+			mode := row.Entra.TokenMode
+			if mode == "" {
+				mode = types.ADOTokenModeBearer
+			}
+			return adoEntraConfigFor(row, login, mode, adoscope.MintScopes()), true, nil
+		}
+		return api.ADOEntraConfig{}, false, nil
 	}
+}
+
+// adoEntraConfigFor is the configuration row describes under login, with the
+// console's secret attached only where it may be redeemed.
+func adoEntraConfigFor(row types.GitProvider, login adoEntraLogin, mode types.ADOTokenMode, scopes []string) api.ADOEntraConfig {
+	cfg := api.ADOEntraConfig{
+		RowID:              row.ID,
+		TenantID:           row.Entra.TenantID,
+		ClientID:           row.Entra.ClientID,
+		RedirectURL:        login.redirectURL,
+		Scopes:             scopes,
+		TokenMode:          mode,
+		LoginClientID:      login.clientID,
+		LoginTenantID:      login.tenantID,
+		AllowTestEndpoints: login.allowTestEndpoints,
+	}
+	// The console's client secret belongs to the console's app registration
+	// and is sent to NO OTHER. A row naming a different application gets no
+	// secret; its sign-in is refused by name before any token request anyway.
+	if login.clientID != "" && strings.EqualFold(row.Entra.ClientID, login.clientID) {
+		cfg.ClientSecret = login.clientSecret
+	}
+	// S1 at first read: a row that creates tokens and names another tenant
+	// gets no secret either, so the one test every door applies — an empty
+	// secret is unusable for minting (api.ErrADOMintNeedsSecret) — covers
+	// every way the console could not redeem it as a confidential client.
+	if mode == types.ADOTokenModeMintedPAT && !strings.EqualFold(row.Entra.TenantID, login.tenantID) {
+		cfg.ClientSecret = ""
+	}
+	return cfg
+}
+
+// adoEntraRow is the first ENABLED Azure DevOps row that permits the per-person
+// sign-in: the entra lane named, an Entra block present, a per_user credential
+// source — the dispatch lane's own predicate (resolveADOEntraRun), so a row the
+// dispatch will not serve never drives a capture — and a token mode that signs
+// in. An own_pat row pastes a token and has no sign-in, so it is skipped here
+// rather than allowed to shadow one that does; its dispatch is its own lane's.
+//
+// A bearer row and a minted_pat row naming the same application are refused
+// together: one app registration holds one consent, so the bearer row's token
+// would carry the token permissions the minted row needs (S2's premise).
+func adoEntraRow(sc types.SiteConfig) (types.GitProvider, bool, error) {
+	if sc.WorkspaceProviders == nil {
+		return types.GitProvider{}, false, nil
+	}
+	var rows []types.GitProvider
 	for _, row := range sc.WorkspaceProviders.Git {
 		if row.Disabled || row.Kind != types.GitProviderAzureDevOps || row.Entra == nil {
 			continue
 		}
-		if !slices.Contains(row.Lanes, types.GitLaneEntra) || row.CredentialSource != types.CredentialSourcePerUser {
+		if !slices.Contains(row.Lanes, types.GitLaneEntra) || row.CredentialSource != types.CredentialSourcePerUser ||
+			row.Entra.TokenMode == types.ADOTokenModeOwnPAT {
 			continue
 		}
-		return row, true
+		rows = append(rows, row)
 	}
-	return types.GitProvider{}, false
+	for _, minted := range rows {
+		if minted.Entra.TokenMode != types.ADOTokenModeMintedPAT {
+			continue
+		}
+		for _, other := range rows {
+			if other.Entra.TokenMode != types.ADOTokenModeMintedPAT && strings.EqualFold(other.Entra.ClientID, minted.Entra.ClientID) {
+				return types.GitProvider{}, false, fmt.Errorf("azure devops provider rows %q (bearer) and %q (minted_pat) name the same application %s: "+
+					"its consent carries the token permissions, so its bearer would let a run create tokens — give the bearer row an application without them",
+					other.ID, minted.ID, minted.Entra.ClientID)
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return types.GitProvider{}, false, nil
+	}
+	return rows[0], true, nil
 }

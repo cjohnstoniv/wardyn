@@ -21,8 +21,8 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
-import { NO_BARRIER, RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
-import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
+import { NO_BARRIER, RAIL, RAIL_CREDENTIAL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence } from "../src/app/lib/governance-copy";
@@ -518,118 +518,104 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
 
 // ── Appendix A finding 1: the rail states what the server resolved ───────────
 //
-// Three cases, and the split between them is the design. /setup/status settles
-// residency for ONE row shape (an enabled per_user + bedrock_sso row), because a
-// roster cannot know which lane a run resolves; every other deployment reads
-// "Resolved at launch." until Preflight answers for the exact body. So: case 1
-// pins the no-click state on THIS daemon and asserts the row really is silent,
-// case 2 pins the precise answer against the response the console itself got,
-// and case 3 route-stubs the row-fixed shape at the height suite's viewport so
-// the chip's extra line is MEASURED rather than assumed.
+// Since #548 a run's model credential comes only from its model provider, so
+// the rail reads where it lives off the provider this run would use — before
+// any click — and says only "Resolved at launch." where no provider serves the
+// agent. Case 1 pins a REAL provider on this daemon; the rest splice
+// /setup/status (route.fetch() + patch + refulfill) for the shapes this
+// harness cannot hold for real: its admin bearer is no person, so it can never
+// hold a per-person provider credential.
 
-// railCredentialSentence is the rail's own mapping, spelled once more here so
-// the assertion is "the console repeats the server", not "the console renders a
-// string this spec also hardcodes". It reads the RESOLVED mechanism only — never
-// the roster's declared one. Keep in step with new-run-rail.tsx.
-function railCredentialSentence(cred?: {
-  residency?: string;
-  mechanism?: string;
-  staged_placeholder?: boolean;
-}): string {
-  switch (cred?.residency) {
-    case "proxy":
-      return cred.staged_placeholder ? RAIL_CREDENTIAL.PROXY_STAGED : RAIL_CREDENTIAL.PROXY;
-    case "sandbox":
-      return cred.mechanism === "anthropic_subscription"
-        ? RAIL_CREDENTIAL.SANDBOX_SUBSCRIPTION
-        : RAIL_CREDENTIAL.SANDBOX_BEDROCK;
-    case "image":
-      return RAIL_CREDENTIAL.IMAGE;
-    default:
-      return RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH;
-  }
+const E2E_PROVIDER = { id: "e2e-anthropic", name: "E2E Anthropic" };
+const E2E_BEDROCK = {
+  id: "bedrock-e2e",
+  name: "Bedrock (e2e)",
+  kind: "bedrock_sso",
+  harnesses: ["claude-code"],
+  host: "bedrock-runtime.us-east-1.amazonaws.com",
+};
+
+/** A real key provider serving claude-code, written through the admin API;
+ *  the returned function clears the block again. */
+async function seedKeyProvider(page: Page): Promise<() => Promise<void>> {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  const put = await page.request.put("/api/v1/model-providers", {
+    headers: auth,
+    data: {
+      providers: [
+        { ...E2E_PROVIDER, kind: "anthropic_api_key", harnesses: [{ harness: "claude-code" }] },
+      ],
+    },
+  });
+  expect(put.status(), `PUT /model-providers: ${await put.text()}`).toBe(200);
+  return async () => {
+    const clear = await page.request.put("/api/v1/model-providers", { headers: auth, data: {} });
+    expect(clear.status(), `clearing /model-providers: ${await clear.text()}`).toBe(200);
+  };
+}
+
+/** Splices one Bedrock SSO provider onto /setup/status: claude-code's
+ *  default, and this person not signed in to it. */
+async function bedrockProviderStatus(page: Page): Promise<void> {
+  await page.route("**/api/v1/setup/status*", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.llm_ready = true;
+    body.model_providers = [{ ...E2E_BEDROCK, default_for: ["claude-code"] }];
+    body.provider_access = [{ provider: E2E_BEDROCK.id, state: "not_configured", action: AGENTS.SIGN_IN_AWS }];
+    await route.fulfill({ response, json: body });
+  });
 }
 
 test.describe("New run rail — credentials and recording are read, not asserted", () => {
-  test("with NO Preflight click the rail says exactly what /setup/status and /healthz say", async ({
+  test.afterEach(async ({ page }) => {
+    // The console polls setup/status; a poll in flight at teardown otherwise
+    // surfaces as an orphan "apiResponse.json: Response has been disposed" error.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  test("with NO Preflight click the rail states the provider's residency and what /healthz says", async ({
     page,
   }, testInfo) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-    const status = await (await page.request.get("/api/v1/setup/status", { headers: auth })).json();
-    const health = await (await page.request.get("/healthz", { headers: auth })).json();
-    const row = (status.harnesses ?? []).find((h: { id: string }) => h.id === "claude-code");
-    const recordingOff = health.components?.recording?.selected === "none";
-    testInfo.annotations.push({
-      type: "arm",
-      description: `claude-code row: credential_residency=${row?.credential_residency ?? "(absent)"}, ` +
-        `mechanism=${row?.mechanism ?? "(absent)"}; recording.selected=${health.components?.recording?.selected ?? "(absent)"}`,
-    });
-    // This daemon declares NO agent roster (scripts/e2e-backend.sh), so the row
-    // settles nothing — which is the common deployment and the arm being pinned.
-    // A future seeded roster would have to change this assertion deliberately
-    // rather than silently re-point the case at a different arm.
-    expect(row, "claude-code is in the harness catalog").toBeTruthy();
-    expect(row.credential_residency, "no roster ⇒ the row settles no residency").toBeUndefined();
-
-    await openNewRun(page);
-    // Nothing is clicked: the state every person is in at the decision point, and
-    // the state the old copy answered with "never written into the sandbox".
-    await expect(page.getByTestId("preflight-result")).toHaveCount(0);
-    await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH, { exact: true })).toBeVisible();
-    await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT, { exact: true })).toBeVisible();
-    await expect(
-      page.getByText(recordingOff ? RECORDING_DISABLED_TITLE : RAIL_RECORDING_ON, { exact: true }),
-    ).toBeVisible();
-    // The old unconditional sentence is gone from the screen entirely.
-    await expect(page.getByText(OLD_UNCONDITIONAL_CREDENTIAL_LINE)).toHaveCount(0);
-  });
-
-  test("after Preflight the rail states the verdict for the body it graded", async ({ page }, testInfo) => {
-    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-    // Give the daemon a lane that actually RESOLVES, so this case pins the
-    // precise answer rather than re-pinning "unknown": with a region and model
-    // already configured (scripts/e2e-backend.sh), a stored bedrock-api-key makes
-    // the bearer lane fire — the one Bedrock lane that is never resident.
-    const put = await page.request.put("/api/v1/secrets/bedrock-api-key", {
-      headers: auth,
-      data: { value: "e2e-bedrock-bearer" },
-    });
-    expect(put.ok(), "PUT /secrets/bedrock-api-key").toBeTruthy();
+    const clear = await seedKeyProvider(page);
     try {
-      // Read the response the CONSOLE itself got, rather than reconstructing the
-      // request body here — the override is defined as "the verdict for the body
-      // this screen dry-ran", so that is what must be compared against.
-      let graded: { residency?: string; mechanism?: string; staged_placeholder?: boolean } | undefined;
-      await page.route("**/api/v1/runs/preflight", async (route) => {
-        const response = await route.fetch();
-        graded = (await response.json()).model_credential;
-        await route.fulfill({ response });
+      const health = await (await page.request.get("/healthz", { headers: auth })).json();
+      const recordingOff = health.components?.recording?.selected === "none";
+      testInfo.annotations.push({
+        type: "arm",
+        description: `recording.selected=${health.components?.recording?.selected ?? "(absent)"}`,
       });
 
       await openNewRun(page);
-      await page.getByRole("button", { name: "Preflight" }).click();
-      await expect(page.getByTestId("preflight-result")).toBeVisible();
-      expect(graded, "POST /runs/preflight carried a model_credential").toBeDefined();
-      testInfo.annotations.push({
-        type: "arm",
-        description: `preflight model_credential: residency=${graded!.residency}, mechanism=${graded!.mechanism}`,
-      });
-      // A resolved verdict, not the unresolved one case 1 already covers.
-      expect(graded!.residency, "preflight resolved a lane").not.toBe("unknown");
-      expect(["proxy", "sandbox", "image"]).toContain(graded!.residency);
-      await expect(page.getByText(railCredentialSentence(graded), { exact: true })).toBeVisible();
+      // Nothing is clicked: the state every person is in at the decision point,
+      // and the state the old copy answered with "never written into the sandbox".
+      await expect(page.getByTestId("preflight-result")).toHaveCount(0);
+      await expect(page.getByText(RAIL_PROVIDER.STATIC(E2E_PROVIDER.name), { exact: true })).toBeVisible();
+      await expect(page.getByText(RAIL_CREDENTIAL.PROXY, { exact: true })).toBeVisible();
       await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
+      await expect(
+        page.getByText(recordingOff ? RECORDING_DISABLED_TITLE : RAIL_RECORDING_ON, { exact: true }),
+      ).toBeVisible();
+      // The old unconditional sentence is gone from the screen entirely.
+      await expect(page.getByText(OLD_UNCONDITIONAL_CREDENTIAL_LINE)).toHaveCount(0);
     } finally {
-      await page.request.delete("/api/v1/secrets/bedrock-api-key", { headers: auth });
+      await clear();
     }
   });
 
-  // U-4 (W6 blind lens): a CURRENT verdict that carries no `model_credential` —
-  // what a 0.7.4 daemon always answers, and what 0.7.5 answers when the roster
-  // read failed or there is no store. The rail still told the reader to press the
-  // button whose result was on screen beside it: a promise that is false the
-  // moment it is followed.
+  // U-4 (W6 blind lens): where no provider serves the agent the rail says only
+  // "Resolved at launch." and how to find out — and a CURRENT verdict that
+  // carries no `model_credential` drops that hint: pressing the button whose
+  // result is on screen beside it is a promise that is false the moment it is
+  // followed.
   test("a preflight verdict with no model_credential drops the Run Preflight hint", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.llm_ready = true;
+      await route.fulfill({ response, json: body });
+    });
     await page.route("**/api/v1/runs/preflight", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
@@ -645,26 +631,16 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
   });
 
-  // U-5 (W6 blind lens): a stock install before any key is added — llm_ready
-  // false WITH a roster row. One section said this run's first model call fails
-  // AND that its credential is resolved at launch AND to press Preflight to see
-  // where. Nothing resolves at launch when nothing is connected.
+  // U-5 (W6 blind lens): a stock install before any provider is added. One
+  // section said this run's first model call fails AND that its credential is
+  // resolved at launch AND to press Preflight to see where. Nothing resolves at
+  // launch when nothing is connected.
   test("with no model provider connected the rail makes no residency promise at all", async ({ page }) => {
-    // The warning is derived from the INTEGRATION ROWS (hasLlmPath, lib/
-    // readiness.ts), never from `llm_ready` — one source of truth with the
-    // Integrations page. This daemon has a Bedrock region+model configured
-    // (scripts/e2e-backend.sh), so the splice takes away every input an AI row
-    // is built from: that is the stock install this ruling is about.
+    // The warning reads the server's llm_ready (hasLlmPath, lib/readiness.ts).
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
       body.llm_ready = false;
-      body.secrets = { ...(body.secrets ?? {}), present: [] };
-      body.providers = [];
-      body.harness = [];
-      body.integrations = [];
-      delete body.bedrock;
-      body.composer = { ...(body.composer ?? {}), backends: [] };
       await route.fulfill({ response, json: body });
     });
 
@@ -674,37 +650,31 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
   });
 
-  // The ROW-FIXED shape — the field report's own estate, which this daemon has no
-  // roster for. Stubbed at the height suite's own 1280x650 so the chip's extra
-  // line is MEASURED: the sandbox arm renders a sentence AND a chip where every
-  // other arm renders one line, and Launch must stay reachable.
-  test("a per_user Bedrock SSO row states residency with no click, and Launch stays reachable at 1280x650", async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1280, height: 650 });
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
-        h.id === "claude-code"
-          ? {
-              ...h,
-              mechanism: "bedrock_sso",
-              credential_source: "per_user",
-              credential_residency: "sandbox",
-            }
-          : h,
-      );
-      await route.fulfill({ response, json: body });
-    });
+  // The field report's own estate: a Bedrock SSO provider. The sandbox arm
+  // renders the provider line, a sentence AND a chip where the proxy arm
+  // renders two lines.
+  test("a Bedrock SSO provider states residency with no click", async ({ page }) => {
+    await bedrockProviderStatus(page);
 
     await openNewRun(page);
+    await expect(page.getByText(RAIL_PROVIDER.STATIC(E2E_BEDROCK.name), { exact: true })).toBeVisible();
     await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK, { exact: true })).toBeVisible();
     await expect(
       page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER, { exact: true }),
     ).toBeVisible();
     await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
+  });
 
+  // Under a Bedrock SSO provider the rail's provider section (the provider
+  // line above the residency sentence and chip) once pushed Launch about 25px
+  // below a 1280x650 viewport, out of scroll reach. The launch panel split out
+  // of new-run-screen.tsx (#1360) keeps it reachable; this pins that.
+  test("under a Bedrock SSO provider, Launch stays reachable at 1280x650", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 650 });
+    await bedrockProviderStatus(page);
+
+    await openNewRun(page);
+    await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER, { exact: true })).toBeVisible();
     await page.getByLabel("Title").fill("e2e rail residency");
     await page.mouse.wheel(0, 400);
     const launch = page.getByRole("button", { name: "Launch run" });
@@ -715,30 +685,10 @@ test.describe("New run rail — credentials and recording are read, not asserted
     expect(box!.y + box!.height, "Launch run bottom edge").toBeLessThanOrEqual(650);
   });
 
-  // Finding 1: model_access is a per-PERSON fact, independent of the
-  // deployment-wide llm_ready check the other cases in this describe cover.
-  // This daemon declares no per-user roster (scripts/e2e-backend.sh), so the
-  // state is faked at the wire the same way the height case above fakes
-  // credential_residency — the LIVE proof against a real captured/lapsed
-  // session is e2e-sso-path's case A(rail)+.
-  // The per_user claude-code row every launch-door case below runs under.
-  async function perUserRow(page: Page) {
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.model_access = { state: "not_configured", action: AGENTS.SIGN_IN_AWS };
-      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
-        h.id === "claude-code"
-          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-          : h,
-      );
-      await route.fulfill({ response, json: body });
-    });
-  }
-  // The exact refusal is dispatch's own (llmMechanismRefusal) — these pin the
-  // WIRING (create's 422 lands untruncated in the rail, launch.error), not
-  // the server's wording, which the door/dispatch lanes own.
-  const refusal = "this deployment gives each person their own AWS sign-in; sign in before launching.";
+  // The launch door: create's 422 lands untruncated in the rail (launch.error),
+  // and one carrying reason model_credential opens the door of the provider it
+  // names (#543). These pin the WIRING, not the server's wording.
+  const refusal = `This run's model provider is ${E2E_BEDROCK.name}, and you are not signed in to AWS for it.`;
   async function refuseLaunch(page: Page, body: Record<string, string>) {
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
@@ -746,41 +696,28 @@ test.describe("New run rail — credentials and recording are read, not asserted
     });
   }
 
-  test("a not_configured claude-code row states the rail's own sign-in, and a Launch 422 carrying reason model_credential opens the sign-in itself", async ({
+  test("a Launch 422 carrying reason model_credential and its provider opens that provider's sign-in itself", async ({
     page,
   }) => {
-    await perUserRow(page);
-    // 0.7.7: the create-time credential refusal names its class; the rail
-    // answers it with the door, with no click on any sign-in control.
-    await refuseLaunch(page, { error: refusal, reason: "model_credential" });
+    await bedrockProviderStatus(page);
+    await refuseLaunch(page, { error: refusal, reason: "model_credential", provider: E2E_BEDROCK.id });
 
     await openNewRun(page);
-    await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible();
-    await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
-    // The distinct name (U-13): the strip's/Getting Started's own control is
-    // never reached from the rail. `exact: true` matters here — Playwright's
-    // getByRole name match is substring by default, and the rail's own
-    // accessible name ("Sign in to AWS — from the New Run rail") CONTAINS this
-    // string, which would otherwise pass for the wrong reason.
-    await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
-
     await page.getByLabel("Title").fill("e2e model access refusal");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page.getByText(refusal)).toBeVisible();
     // The door opened itself: the dialog, with the real pane in it.
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
     await expect(page.getByTestId("harness-login-pane")).toBeVisible();
-    // Escape: nothing launched, the sentence stays, the rail's own control
-    // (there throughout under not_configured) is usable, and the page never left.
+    // Escape: nothing launched, the sentence stays, and the page never left.
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByText(refusal)).toBeVisible();
-    await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
     await expect(page).toHaveURL(/\/runs\/new$/);
   });
 
   test("a Launch 422 with no reason — a policy error — shows the sentence and opens nothing", async ({ page }) => {
-    await perUserRow(page);
+    await bedrockProviderStatus(page);
     await refuseLaunch(page, { error: refusal });
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e plain refusal");
@@ -794,14 +731,13 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
 
-  // #725/T-65 — a Codex launch refused for its OWN model_credential reason
-  // must not open "Sign in to AWS": that sign-in repairs the claude-code
-  // row alone, and this deployment's per_user claude-code row (perUserRow,
-  // above) is a DIFFERENT agent than the one that was actually refused.
-  test("a codex launch's model_credential refusal opens no AWS sign-in, on a deployment with a per_user claude-code row", async ({
+  // #725/T-65 — a credential refusal that names no provider opens no door: an
+  // AWS sign-in repairs nothing the server did not name, whatever the
+  // deployment's claude-code default is.
+  test("a model_credential refusal naming no provider opens no sign-in, on a deployment with a Bedrock default", async ({
     page,
   }) => {
-    await perUserRow(page);
+    await bedrockProviderStatus(page);
     await refuseLaunch(page, { error: refusal, reason: "model_credential" });
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e codex refusal");

@@ -15,7 +15,7 @@ import (
 // the funlen gate as this list grows.
 func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
 	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck} {
+	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck, adoRowsOffCheck} {
 		if chk, ok := conditional(sc); ok {
 			checks = append(checks, chk)
 		}
@@ -46,7 +46,8 @@ func signInHelpHTTPCheck(sc types.SiteConfig) (SetupCheck, bool) {
 func adoEntraRowsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 	enabled := 0
 	for _, row := range gitProviderRows(sc) {
-		if !row.Disabled && slices.Contains(row.Lanes, types.GitLaneEntra) {
+		if !row.Disabled && slices.Contains(row.Lanes, types.GitLaneEntra) &&
+			(row.Entra == nil || row.Entra.TokenMode != types.ADOTokenModeOwnPAT) {
 			enabled++
 		}
 	}
@@ -57,4 +58,22 @@ func adoEntraRowsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		ID: "ado_entra_rows", Label: "Azure DevOps", Status: "warn",
 		Detail: "More than one Azure DevOps connection is enabled. Keep one enabled so runs sign in to a single organization.",
 	}, true
+}
+
+// adoRowsOffCheck asks for a choice when an Azure DevOps row is turned off
+// (#1429). Migration 0103 turns off every Azure DevOps row that used the shared
+// token or SSH key, and a disabled row still claims its hosts, so clones from
+// that organisation fail until an admin chooses how people connect and turns it
+// on. Not blocking: nothing else on the checklist depends on it.
+func adoRowsOffCheck(sc types.SiteConfig) (SetupCheck, bool) {
+	for _, row := range gitProviderRows(sc) {
+		if row.Kind == types.GitProviderAzureDevOps && row.Disabled {
+			return SetupCheck{
+				ID: "ado_rows_off", Label: "Azure DevOps", Status: "warn",
+				Detail: "Azure DevOps no longer uses one shared token. Choose how people connect.",
+				Fix:    "Settings → Workspace providers → Azure DevOps",
+			}, true
+		}
+	}
+	return SetupCheck{}, false
 }

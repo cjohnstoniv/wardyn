@@ -260,7 +260,8 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 }
 
 // SetRunStatusDetail scoped-writes ONLY status_detail — what the substrate says
-// a STARTING run is waiting on. Fed by runner.SandboxSpec.OnWaiting, once per
+// a STARTING run is waiting on, or the control plane's own `image: Building`
+// line on a PENDING run. Fed by runner.SandboxSpec.OnWaiting, once per
 // CHANGE of reason. Deliberately does NOT bump updated_at: that column is also
 // what the idle reaper and the killed-run tail-upload grace measure by, and a
 // diagnostic line a kubelet triggers must never buy a run more life or hold a

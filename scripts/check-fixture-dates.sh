@@ -67,11 +67,11 @@ declare -A ALLOWLIST=(
   ["internal/api/auth_failed_coalesce_test.go"]=1
   ["internal/api/devices_bounds_test.go"]=1
   ["internal/api/directory_search_test.go"]=1
+  ["internal/api/fixtures_awssso_test.go"]=1
   ["internal/api/harnesscred_supersede_test.go"]=1
   ["internal/api/modelaccess_member_redaction_test.go"]=2
   ["internal/api/modelaccess_test.go"]=1
   ["internal/api/runs_bedrock_ssoinject_test.go"]=3
-  ["internal/api/runs_bedrock_test.go"]=1
   ["internal/api/setup_checks_test.go"]=1
   ["internal/api/setup_onboarding_test.go"]=8
   ["internal/api/setup_status_scope_failclosed_test.go"]=1
@@ -104,6 +104,10 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5
+  # #1425: the run policy view fixture's created_at/updated_at and a restart
+  # change's `at` are display data rendered into the tab (S-21 prints the
+  # restart date); nothing compares them against the clock.
+  ["ui/src/app/components/screens/run-detail/policy-tab.test.tsx"]=3
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the

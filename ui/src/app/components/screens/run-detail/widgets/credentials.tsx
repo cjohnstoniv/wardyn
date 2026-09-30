@@ -15,8 +15,18 @@ import type { AuditEvent, CredentialGrant } from "../../../../lib/types";
 import { relativeTime } from "../../../../lib/format";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { Chip, WidgetCard } from "../../../wardyn/primitives";
+import { AdoRunTokens } from "../ado-run-tokens";
 
-export function CredentialsWidget({ grants, audit }: { grants: CredentialGrant[]; audit: AuditEvent[] }) {
+export function CredentialsWidget({
+  grants,
+  audit,
+  ado,
+}: {
+  grants: CredentialGrant[];
+  audit: AuditEvent[];
+  /** The run whose Azure DevOps tokens (if it holds any) list below the grants. */
+  ado?: { runId: string; paused: boolean; live: boolean };
+}) {
   const minted = audit.filter((e) => e.action === "credential.mint" && e.outcome === "success");
 
   return (
@@ -67,6 +77,8 @@ export function CredentialsWidget({ grants, audit }: { grants: CredentialGrant[]
           ))}
         </div>
       )}
+
+      {ado && <AdoRunTokens runId={ado.runId} paused={ado.paused} live={ado.live} />}
     </WidgetCard>
   );
 }

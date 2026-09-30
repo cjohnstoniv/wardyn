@@ -500,18 +500,15 @@ describe("ProvidersScreen", () => {
           harnesses: [
             {
               id: "claude-code",
-              display: "Claude Code",
+              display: "Claude Code (refreshed)",
               has_gateway: true,
               has_login: true,
-              mechanism: "bedrock_sso",
-              credential_source: "per_user",
             },
           ],
-          model_access: { state: "not_configured", action: "Sign in to AWS" },
         }),
       );
     putAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
+      providers: { agents: [{ id: "claude-code" }] },
       etag: '"g2"',
     });
     renderScreen();
@@ -522,10 +519,10 @@ describe("ProvidersScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
 
-    // The retry's result (the admin's own model access, absent before) lands,
+    // The retry's result (the refreshed roster row, absent before) lands,
     // proving the second /setup/status call was made and applied despite the
     // first rejecting.
-    expect(await screen.findByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED)).toBeInTheDocument();
+    expect(await screen.findByText("Claude Code (refreshed)")).toBeInTheDocument();
     expect(getSetupStatusMock.mock.calls.length).toBe(3);
   });
 });

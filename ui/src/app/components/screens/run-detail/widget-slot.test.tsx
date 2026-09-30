@@ -72,6 +72,7 @@ function ctx(): WidgetContext {
     heldCount: 0,
     audit: [],
     onGoAudit: () => {},
+    onGoPolicy: () => {},
     terminalPane: <div data-testid="hero">the session</div>,
   };
 }

@@ -2,19 +2,17 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# T-13 / #673's remaining half: the fake-kind SSO walk (scripts/kind-sso-walk.sh)
-# still configures a Bedrock run through the LEGACY operator boot knobs
-# (WARDYN_BEDROCK_REGION/MODEL/BASE_URL, set once via `helm upgrade --set`) —
-# the pre-0.8 lane resolveBedrockAuth reads (runs_bedrock.go). Since MP-9
-# (feat/530-bedrock-provider-dispatch) landed, a run may instead be credentialed
-# by an admin-configured PROVIDER RECORD: PUT /model-providers seeds the
-# bedrock_sso/bedrock_bearer row, PUT /agent-providers names it an agent's
-# DEFAULT, and each person's own credential is captured UID-keyed
-# (wardyn-provider-<uid>-{key,sso}, never the admin-chosen id — a provider
-# deleted and re-added under the same id starts with nobody's credential; see
-# internal/api/model_provider_credentials.go). resolveProviderLane then reaches
-# Bedrock on the PROVIDER's own region/model/base_url (provider_bedrock.go),
-# never s.cfg.BedrockRegion/Model/BaseURL — the walk's real migration target.
+# T-13 / #673's remaining half: a Bedrock run is credentialed by an
+# admin-configured PROVIDER RECORD (since #548 the only way — the kind SSO walk,
+# scripts/kind-sso-walk.sh, seeds one through ui/e2e/walk/helpers.ts): PUT
+# /model-providers seeds the bedrock_sso/bedrock_bearer row, PUT
+# /agent-providers names it an agent's DEFAULT, and each person's own
+# credential is captured UID-keyed (wardyn-provider-<uid>-{key,sso}, never the
+# admin-chosen id — a provider deleted and re-added under the same id starts
+# with nobody's credential; see internal/api/model_provider_credentials.go).
+# resolveProviderLane then reaches Bedrock on the PROVIDER's own
+# region/model/base_url (provider_bedrock.go), never s.cfg.BedrockRegion/Model/
+# BaseURL.
 #
 # Rebuilding the whole kind cluster walk (deploy/kind/quickstart.sh +
 # deploy/kind/sso/overlay.sh + five rebuilt images + a live AWS-SSO Playwright
@@ -27,8 +25,9 @@
 #
 #   1. WRITES: PUT /model-providers + PUT /agent-providers wire a working
 #      roster default, read back correctly (server-minted UID and all).
-#   2. NEVER TOUCHES THE LEGACY ENV: none of WARDYN_BEDROCK_REGION/MODEL/
-#      BASE_URL reach the daemon's own environment — read back off
+#   2. NEVER TOUCHES THE RETIRED ENV: none of the retired boot Bedrock
+#      variables (region, model, base URL; wardynd now refuses them at boot)
+#      reach the daemon's own environment — read back off
 #      /proc/<pid>/environ, not asserted by absence-of-a-flag.
 #   3. CAPTURES UID-BACKED, NOT ID-BACKED: a person's own credential PUT
 #      against the provider id shows up as that provider's connected_people —
@@ -126,12 +125,12 @@ ADMIN_TOKEN="walk-673-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 # nothing).
 FAKE_BEDROCK_URL="http://wardyn-cl-673-fake.internal.test:8090"
 
-step "starting wardynd on ${BASE_URL} (WARDYN_RUNNER=none; NO WARDYN_BEDROCK_* set)"
+step "starting wardynd on ${BASE_URL} (WARDYN_RUNNER=none; no retired Bedrock env set)"
 # THE EXACT ENVIRONMENT wardynd is launched with, as an array rather than an
 # inline `env -i ... &` — so step 5 below can assert against the very list
 # that launched it, instead of reading /proc/<pid>/environ (permission-
 # dependent under some sandboxes/PID-namespace setups, and this script must
-# work under all of them). If a legacy WARDYN_BEDROCK_* var is ever added to
+# work under all of them). If a retired Bedrock var is ever added to
 # this array, the launch and the assertion see the identical change.
 WARDYND_ENV=(
   WARDYN_PG_DSN="postgres://wardyn:wardyn-dev@127.0.0.1:${PG_PORT}/wardyn?sslmode=disable"
@@ -176,7 +175,7 @@ fi
 
 # ── 4. PUT /agent-providers: the roster default ──────────────────────────────
 step "PUT /agent-providers (claude-code's default_provider = walk-673-bedrock)"
-code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":"walk-673-bedrock"}]}')
+code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","default_provider":"walk-673-bedrock"}]}')
 if [[ "${code}" != "200" ]]; then
   bad "PUT /agent-providers = ${code}: $(cat "${RESP_FILE}")"
 else
@@ -189,10 +188,10 @@ else
   bad "GET /agent-providers default_provider = ${got_default@Q}, want walk-673-bedrock"
 fi
 
-# ── 5. no legacy Bedrock env reached the daemon's own environment ───────────
-step "asserting no WARDYN_BEDROCK_* var reached wardynd's environment"
+# ── 5. no retired Bedrock env reached the daemon's own environment ───────────
+step "asserting no retired Bedrock var reached wardynd's environment"
 # Against the exact array that launched it (WARDYND_ENV above) — dynamic (it
-# fails the moment a legacy var is added to that launch, not a source grep of
+# fails the moment a retired var is added to that launch, not a source grep of
 # this file) and portable: /proc/<pid>/environ is permission-gated under some
 # sandboxes even for the parent that spawned the child, which would make a
 # read failure there indistinguishable from "no such var" and pass vacuously.
@@ -211,9 +210,9 @@ else
   warn "could not read /proc/${WARDYND_PID}/environ (sandbox-dependent) — relying on the launch array alone"
 fi
 if [[ -z "${legacy_env}" ]]; then
-  ok "wardynd was launched (env -i) with no WARDYN_BEDROCK_* — the provider record is the only Bedrock config"
+  ok "wardynd was launched (env -i) with no retired Bedrock env — the provider record is the only Bedrock config"
 else
-  bad "wardynd's environment carries legacy Bedrock config this script never set: ${legacy_env}"
+  bad "wardynd's environment carries retired Bedrock config this script never set: ${legacy_env}"
 fi
 
 # ── 6. UID-backed capture: a person's own credential lands under the UID ────
@@ -242,7 +241,7 @@ fi
 # id-keyed store would still find the old capture, because "walk-673-bedrock"
 # never changed.
 step "clearing the roster default so walk-673-bedrock can be deleted"
-code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":""}]}')
+code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","default_provider":""}]}')
 [[ "${code}" == "200" ]] || bad "PUT /agent-providers (clear default) = ${code}: $(cat "${RESP_FILE}")"
 
 step "PUT /model-providers {} — deleting walk-673-bedrock (rule 8 purges its credential)"
@@ -264,7 +263,7 @@ else
 fi
 
 step "restoring the roster default to walk-673-bedrock"
-code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":"walk-673-bedrock"}]}')
+code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","default_provider":"walk-673-bedrock"}]}')
 [[ "${code}" == "200" ]] || bad "PUT /agent-providers (restore default) = ${code}: $(cat "${RESP_FILE}")"
 
 step "asserting the OLD capture did not survive under the re-added id"
@@ -277,7 +276,7 @@ fi
 
 # ── 8. failure propagation: two refusals a rebuilt walk must be able to trust ─
 step "asserting a roster default naming NO real provider is refused"
-code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","mechanism":"bedrock_bearer","default_provider":"no-such-provider"}]}')
+code=$(put_json /agent-providers '{"agents":[{"id":"claude-code","default_provider":"no-such-provider"}]}')
 if [[ "${code}" == "400" ]]; then
   ok "an unknown default_provider is refused (400): $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"])' "${RESP_FILE}" 2>/dev/null || cat "${RESP_FILE}")"
 else

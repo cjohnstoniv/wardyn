@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -793,6 +794,258 @@ func TestStoreMode_DeleteRacesPutWithoutOrphan(t *testing.T) {
 			}
 		})
 	}
+}
+
+// holdBeforeDelete holds an external delete BEFORE it runs, until release: the
+// window in which a migration's old copy still exists and its lock is held.
+type holdBeforeDelete struct {
+	secretstore.External
+	reached, resume chan struct{}
+	hit, once       sync.Once
+}
+
+func (b *holdBeforeDelete) Delete(ctx context.Context, owner, name, ref string) error {
+	b.hit.Do(func() { close(b.reached) })
+	select {
+	case <-b.resume:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return b.External.Delete(ctx, owner, name, ref)
+}
+
+func (b *holdBeforeDelete) release() { b.once.Do(func() { close(b.resume) }) }
+
+// putStaysBlocked waits until the store-mode Put behind putDone is seen waiting
+// on a row lock (true), or has finished (false: it landed without waiting).
+func putStaysBlocked(t *testing.T, pool *pgxpool.Pool, putDone chan error) bool {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		select {
+		case err := <-putDone:
+			putDone <- err
+			return false
+		default:
+		}
+		var n int
+		if err := pool.QueryRow(t.Context(),
+			`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory'`,
+		).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			return true
+		}
+	}
+	t.Fatal("the concurrent Put neither waited on the row's lock nor finished")
+	return false
+}
+
+// #1082: a credential re-saved while the migrator removes the row's old
+// external copy is never lost. The removal is held before it runs; a store-mode
+// Put of the same row must WAIT for it (the removal holds the row's lock),
+// then land after it. Without the lock the Put re-points the row at the copy
+// being removed and the removal deletes the new value: Get is refused.
+func TestMigrate_ToLocalNeverLosesAResavedCredential(t *testing.T) {
+	ctx := t.Context()
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	barrier := &holdBeforeDelete{External: newFakeStore(t, f), reached: make(chan struct{}), resume: make(chan struct{})}
+	t.Cleanup(barrier.release)
+	id, _ := age.GenerateX25519Identity()
+	st := storeMode(t, pool, barrier, id)
+	view := st.For("alice")
+	if err := view.Put(ctx, "review-key", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+
+	migDone := make(chan error, 1)
+	go func() {
+		_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
+		migDone <- err
+	}()
+	select {
+	case <-barrier.reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the migrator's external delete did not reach the barrier")
+	}
+	putDone := make(chan error, 1)
+	go func() { putDone <- view.Put(ctx, "review-key", []byte("v2")) }()
+	blocked := putStaysBlocked(t, pool, putDone)
+	barrier.release()
+
+	for what, ch := range map[string]chan error{"Migrate": migDone, "the concurrent Put": putDone} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s did not finish", what)
+		}
+	}
+	if !blocked {
+		t.Error("the concurrent Put landed while the migrator was removing the old copy")
+	}
+	if got, err := view.Get(ctx, "review-key"); err != nil || string(got) != "v2" {
+		t.Fatalf("Get = (%q, %v), want the re-saved v2", got, err)
+	}
+	if n := vaultPaths(f); n != 1 {
+		t.Fatalf("%d Vault paths, want exactly one", n)
+	}
+}
+
+// failDelete refuses every external delete.
+type failDelete struct{ secretstore.External }
+
+func (failDelete) Delete(context.Context, string, string, string) error {
+	return errors.New("delete refused")
+}
+
+// #1082: a failed removal of the old copy is an orphan the error names, never
+// a row pointing at nothing: the row already holds the value locally.
+func TestMigrate_ToLocalLeavesAnOrphanNamedWhenTheOldCopyCannotBeRemoved(t *testing.T) {
+	ctx := t.Context()
+	pool := throwawayDB(t)
+	ext := newFakeStore(t, newFakeVault(t))
+	id, _ := age.GenerateX25519Identity()
+	st := storeMode(t, pool, failDelete{ext}, id)
+	view := st.For("alice")
+	if err := view.Put(ctx, "review-key", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
+	for _, want := range []string{"review-key", "delete refused", "-reconcile"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Migrate = %v, want an abort mentioning %q", err, want)
+		}
+	}
+	var version int16
+	if err := pool.QueryRow(ctx, `SELECT enc_version FROM secrets WHERE owned_by='alice' AND name='review-key'`).Scan(&version); err != nil || version != 1 {
+		t.Fatalf("enc_version = (%d, %v), want 1: the row holds the value locally", version, err)
+	}
+	if got, err := view.Get(ctx, "review-key"); err != nil || string(got) != "v1" {
+		t.Fatalf("Get = (%q, %v), want v1", got, err)
+	}
+	if rep, err := st.Reconcile(ctx); err != nil || len(rep.Orphans) != 1 {
+		t.Fatalf("Reconcile = (%d orphans, %v), want the one old copy listed", len(rep.Orphans), err)
+	}
+}
+
+// #1082: a read of a row being migrated is never refused. The removal is held
+// right after it succeeded, before its transaction ends: the row must already
+// hold the value locally.
+func TestMigrate_ToLocalNeverRefusesAReadInFlight(t *testing.T) {
+	ctx := t.Context()
+	pool := throwawayDB(t)
+	barrier := &deleteBarrier{External: newFakeStore(t, newFakeVault(t)), deleted: make(chan struct{}), resume: make(chan struct{})}
+	t.Cleanup(barrier.release)
+	id, _ := age.GenerateX25519Identity()
+	st := storeMode(t, pool, barrier, id)
+	view := st.For("alice")
+	if err := view.Put(ctx, "review-key", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	migDone := make(chan error, 1)
+	go func() {
+		_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
+		migDone <- err
+	}()
+	select {
+	case <-barrier.deleted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the migrator's external delete did not reach the barrier")
+	}
+	if got, err := view.Get(ctx, "review-key"); err != nil || string(got) != "v1" {
+		t.Errorf("Get between the external delete and the end of the migration = (%q, %v), want v1", got, err)
+	}
+	barrier.release()
+	if err := <-migDone; err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if got, err := view.Get(ctx, "review-key"); err != nil || string(got) != "v1" {
+		t.Fatalf("Get after the migration = (%q, %v), want v1", got, err)
+	}
+}
+
+// countDelete counts external deletes.
+type countDelete struct {
+	secretstore.External
+	n atomic.Int32
+}
+
+func (c *countDelete) Delete(ctx context.Context, owner, name, ref string) error {
+	c.n.Add(1)
+	return c.External.Delete(ctx, owner, name, ref)
+}
+
+// #1082: a Put that lands between the migrator's flip and its removal of the
+// old copy re-points the row at the same Vault path. The removal rechecks the
+// row under its lock and leaves that path alone: Get returns the new value.
+func TestMigrate_ToLocalSkipsARemovalTheRowWasRepointedAt(t *testing.T) {
+	ctx := t.Context()
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	cnt := &countDelete{External: newFakeStore(t, f)}
+	b := &putBarrier{External: cnt, entered: make(chan struct{}), resume: make(chan struct{})}
+	t.Cleanup(b.release)
+	id, _ := age.GenerateX25519Identity()
+	st := storeMode(t, pool, b, id)
+	view := st.For("alice")
+	if err := view.Put(ctx, "k", []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+
+	putDone := make(chan error, 1)
+	migDone := make(chan error, 1)
+	go func() {
+		// onRead runs inside the migrator's first transaction: queue the Put
+		// on the row's lock behind it, so it lands right after the flip commits.
+		_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {
+			go func() { putDone <- view.Put(ctx, "k", []byte("second")) }()
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				var n int
+				_ = pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory'`).Scan(&n)
+				if n > 0 {
+					return
+				}
+			}
+		})
+		migDone <- err
+	}()
+	select {
+	case <-b.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Put never reached its external write")
+	}
+	waitOnRowLock(t, pool) // the migrator's removal, queued behind the Put
+	b.release()
+
+	for what, ch := range map[string]chan error{"Migrate": migDone, "the Put": putDone} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s did not finish", what)
+		}
+	}
+	if n := cnt.n.Load(); n != 0 {
+		t.Errorf("the migrator deleted %d times, want its removal skipped", n)
+	}
+	if got, err := view.Get(ctx, "k"); err != nil || string(got) != "second" {
+		t.Fatalf("Get = (%q, %v), want second", got, err)
+	}
+	if n := vaultPaths(f); n != 1 {
+		t.Fatalf("%d Vault paths, want exactly one", n)
+	}
+}
+
+func vaultPaths(f *fakeVault) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.kv)
 }
 
 // putBarrier holds a store-mode Put of "second" after its external write,

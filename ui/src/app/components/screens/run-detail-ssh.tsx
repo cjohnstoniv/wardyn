@@ -36,7 +36,7 @@ import { Button } from "../ui/button";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
-import { SectionCard } from "../wardyn/primitives";
+import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
@@ -199,7 +199,14 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
 
   return (
-    <SectionCard title="Attach from your terminal" Icon={KeyRound}>
+    // The body scrolls, not the tile: the canvas tile clips (overflow-hidden), so
+    // a card that sizes to its content loses its bottom lanes on a short tile.
+    <WidgetCard
+      title="Attach from your terminal"
+      Icon={KeyRound}
+      grow
+      bodyClassName="scroll-thin overflow-y-auto p-4"
+    >
       {externalTool && (
         <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
           Managed by an external tool — killing this run tears down that tool's workspace.
@@ -365,7 +372,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           </>
         )}
       </div>
-    </SectionCard>
+    </WidgetCard>
   );
 }
 

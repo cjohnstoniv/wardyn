@@ -17,7 +17,6 @@ vi.mock("../screens/settings/harness-login-pane", () => ({
   HarnessLoginPane: (p: {
     provider: string;
     modelProvider?: string;
-    startURLManaged?: boolean;
     onDone: () => void;
     onCancel: () => void;
   }) => (
@@ -25,7 +24,6 @@ vi.mock("../screens/settings/harness-login-pane", () => ({
       data-testid="fake-pane"
       data-provider={p.provider}
       data-model-provider={p.modelProvider ?? ""}
-      data-managed={String(!!p.startURLManaged)}
     >
       <button type="button" onClick={p.onDone}>
         fake done
@@ -95,7 +93,6 @@ describe("the AWS door for a provider (case a)", () => {
     const pane = await screen.findByTestId("fake-pane");
     expect(pane).toHaveAttribute("data-provider", "aws");
     expect(pane).toHaveAttribute("data-model-provider", "bedrock-prod");
-    expect(pane).toHaveAttribute("data-managed", "true");
   });
 
   it("signed in: the door closes, the shell re-reads, and the toast says so", async () => {
@@ -262,20 +259,24 @@ describe("the key and token door (case c)", () => {
   });
 });
 
-describe("today's door, where there are no providers", () => {
-  it("the AWS door is unchanged: no provider line, the pane on /setup/harness-login", async () => {
+// #548: a sign-in is always a provider's. A login request with no provider
+// of its kind — or in the Admin view, where no provider door mounts — opens
+// nothing rather than a door no sign-in could complete.
+describe("no provider of the kind, no door", () => {
+  it("a login request with no provider of its kind opens nothing", async () => {
     renderDoor(baseStatus(), { for: { login: "aws" } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));
-    const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
-    expect(dialog).not.toHaveTextContent(MODEL_ACCESS_BANNER.DIALOG_CLEANUP_NOTE);
-    expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", "");
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByTestId("fake-pane")).toBeNull();
   });
 
-  it("in the Admin view a login request stays today's door even with providers", async () => {
+  it("in the Admin view a login request opens nothing, even with a provider of its kind", async () => {
     window.history.pushState({}, "", "/admin/providers");
     renderDoor(providerStatus([{ provider: bedrock, defaultFor: ["claude-code"] }]), { for: { login: "aws" } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));
-    expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", "");
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 

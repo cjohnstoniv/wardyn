@@ -150,12 +150,10 @@ trust_mounted_repos() {
     command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null || true
 }
 
-# ── Managed subscription (proxy-injected, compose mode) ───────────────────────
-# In managed mode there is NO host ~/.claude to mount (the compose control plane
-# is distroless). Dispatch instead delivers an inert SENTINEL .credentials.json
-# in WARDYN_CLAUDE_MANAGED_B64 (base64 of the JSON) — the same shape
-# stage-claude-creds.sh writes for the resident path: a placeholder access token,
-# blank refresh token, far-future expiry. It only lets `claude` consider itself
+# ── Claude subscription (proxy-injected) ──────────────────────────────────────
+# A Claude subscription run gets NO credential in the sandbox. Dispatch delivers
+# an inert SENTINEL .credentials.json in WARDYN_CLAUDE_MANAGED_B64 (base64 of the
+# JSON): a placeholder access token, blank refresh token, far-future expiry. It only lets `claude` consider itself
 # logged in and start cleanly; the LIVE token is injected proxy-side per request
 # (Authorization: Bearer, replacing whatever the sandbox sends), so no usable
 # credential is ever resident. Written into CLAUDE_CONFIG_DIR (dispatch points it

@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -270,3 +272,36 @@ func TestFirstBrokeredRepo_RunFallback(t *testing.T) {
 		}
 	})
 }
+
+// TestGithubRefRulesetRowNeverReachesAUser (#1018 item 1): the checklist row
+// names a repo read from every stored policy, unfiltered, and the answer is
+// cached for every caller. That is safe only because a non-admin's
+// /setup/status drops the whole checklist; this pins it, so a repo named by a
+// policy the caller cannot see never reaches them.
+func TestGithubRefRulesetRowNeverReachesAUser(t *testing.T) {
+	const repo = "acme/restricted-only"
+	cfg := baseTestConfig(newHarness(t), rulesetPinStore{&capStore{Store: r3IntegStore{}}})
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	cfg.Secrets = &memSecrets{m: map[string][]byte{secretGitHubAppID: []byte("1"), secretGitHubAppKey: []byte("k")}}
+	cfg.GitHubRulesets = &fakeRefRulesetVerifier{confined: true, detail: repo + ": confined."}
+	cfg.DefaultPolicy = githubPolicy(t, repo)
+	srv := New(cfg)
+
+	admin, _ := getJSON(t, srv, "/api/v1/setup/status", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
+	if !strings.Contains(admin, `"github_ref_ruleset"`) || !strings.Contains(admin, repo) {
+		t.Fatalf("the admin's /setup/status has no ruleset row naming %s, so this pin proves nothing: %s", repo, admin)
+	}
+	for _, role := range []string{oidc.RoleUser, oidc.RoleSecurityAdmin} {
+		body, _ := getJSON(t, srv, "/api/v1/setup/status", ssoSession(t, capSub, capEmail, role))
+		if strings.Contains(body, "github_ref_ruleset") || strings.Contains(body, repo) {
+			t.Errorf("a %s's /setup/status carries the ruleset row or its repo: %s", role, body)
+		}
+	}
+}
+
+// rulesetPinStore answers firstBrokeredRepo's policy read with no stored
+// policy, so the default policy names the repo.
+type rulesetPinStore struct{ *capStore }
+
+func (rulesetPinStore) ListPolicies(context.Context) ([]types.RunPolicy, error) { return nil, nil }

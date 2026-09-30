@@ -9,21 +9,20 @@
 // nothing fetched, rather than the tier-appropriate leftovers this page used
 // to render for them.
 //
-// Host · Model providers · Model provider · Providers · User drives · Admin
+// Host · Model providers · Providers · User drives · Admin
 // SSH keys. The personal cards (a person's own model connection, Azure
 // DevOps, Your SSH keys) moved to Your account (your-account-screen.tsx) —
 // nothing on this page belongs to the admin as a person.
 //
 // This file used to be settings-screen.tsx, mounted unchanged at BOTH
 // /admin/settings and /account until M-5 split it (admin-member-modes-design.md
-// §4.3). HostCard moved here with it; ModelProviderCard/ProvidersCard/
-// UserDrivesCard/BrandingCard/ModelProvidersList are unchanged, shared
-// components.
+// §4.3). HostCard moved here with it; ProvidersCard/UserDrivesCard/
+// BrandingCard/ModelProvidersList are unchanged, shared components.
 //
 // #1200 compact cards (owner-approved mock): every card here collapses to a
 // one-line summary and expands on click, none
 // open by default — see collapsible-card.tsx for why that default is
-// load-bearing. ModelProviderCard/ProvidersCard/UserDrivesCard also render in
+// load-bearing. ProvidersCard/UserDrivesCard also render in
 // Getting started, which must stay fully open, so they take the collapse as
 // an opt-in `compact` prop rather than a new always-on default.
 //
@@ -49,7 +48,6 @@ import { K8sEnvironmentRows, NoRunnerCard, runnerAvailability } from "../setup/e
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
-import { ModelProviderCard } from "./connection-cards";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
 import { ModelProvidersList } from "./model-providers-list";
@@ -337,15 +335,6 @@ export function AdminSettingsScreen() {
           <ModelProvidersList
             harnesses={status.harnesses}
             subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
-          />
-          {/* The shared credential lanes, as built — until MP-18 replaces this
-              card (design §4.3). S-4 (#636): Your account mounts the SAME
-              component for a person's own connection; this is the org one. */}
-          <ModelProviderCard
-            status={status}
-            siteConfig={siteConfig}
-            onChanged={load}
-            compact
           />
           {/* The Providers card replaces Git host: the git credential
               lanes moved into a provider row on /providers, and this card is

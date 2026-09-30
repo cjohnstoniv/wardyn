@@ -78,10 +78,10 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
 
     const card = page.getByTestId("ado-capability-card");
     await expect(card).toBeVisible();
-    // exact: true — "Push" and "acme/payments-api" both also appear as
-    // SUBSTRINGS of the composed Command field's own text (F4 fix: a loose
-    // getByText hit strict-mode multi-match against that field).
-    await expect(card.getByRole("heading", { name: "Push", exact: true })).toBeVisible();
+    // exact: true — "acme/payments-api" also appears as a SUBSTRING of the
+    // composed Command field's own text (F4 fix: a loose getByText hit
+    // strict-mode multi-match against that field).
+    await expect(card.getByRole("heading", { name: "Push to the run's own branch", exact: true })).toBeVisible();
     await expect(card.getByText("acme/payments-api", { exact: true })).toBeVisible();
 
     // Stage "Once" from the caret before deciding — the scope readout tracks
@@ -130,11 +130,43 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
 
     const cards = page.getByTestId("ado-capability-card");
     await expect(cards).toHaveCount(2);
-    const outside = cards.filter({ has: page.getByRole("heading", { name: "Push", exact: true }) });
+    const outside = cards.filter({ has: page.getByRole("heading", { name: "Push to the run's own branch", exact: true }) });
     await expect(outside.getByText("Outside this run's own branch", { exact: true })).toBeVisible();
-    const bypass = cards.filter({ has: page.getByRole("heading", { name: "Bypass branch policies", exact: true }) });
+    const bypass = cards.filter({
+      has: page.getByRole("heading", { name: "Bypass policies when completing pull requests", exact: true }),
+    });
     await expect(bypass.getByText("Complete this pull request past its policies", { exact: true })).toBeVisible();
     await expect(bypass.getByText(ADO.REQ_FIELD_REF_CLASS, { exact: true })).toHaveCount(0);
     await expect(page.getByText(/protected|past a branch policy/i)).toHaveCount(0);
+  });
+
+  // The per-area packet: a run holding only "Read code" that fetches a work
+  // item is held, and the card asks in the editor's own words — "View work
+  // items".
+  test("asks for a read of another area by the catalogue's name", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    const rows = [
+      {
+        ...escalationRow(runId, {
+          capability: "work_read",
+          cmd: "Read work items, queries, boards, backlogs, areas and iterations, and search work items (work_read) in acme",
+        }),
+        id: "e2e-ado-work-read-1",
+      },
+    ];
+    await page.route("**/api/v1/approvals*", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ json: rows });
+        return;
+      }
+      await route.continue();
+    });
+
+    await gotoConsole(page);
+    await navTo(page, "Approvals");
+
+    const card = page.getByTestId("ado-capability-card");
+    await expect(card).toHaveCount(1);
+    await expect(card.getByRole("heading", { name: "View work items", exact: true })).toBeVisible();
   });
 });

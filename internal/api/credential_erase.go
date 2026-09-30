@@ -66,9 +66,21 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
-	rep, err := secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)
-	// Even on a partial erase, which may have removed the sign-in.
-	s.adoEntraTokens.forget(owner)
+	// Revoke the person's live Azure DevOps tokens first: the erase takes the
+	// sign-in that revoking them needs.
+	// Under the sign-in's redemption lock (eraseADOSignIn), so a redemption in
+	// flight cannot store it again; the cache is forgotten even on a partial
+	// erase, which may have removed the sign-in.
+	// end runs even on a panic, or the person's mints would self-revoke until restart.
+	var rep secretstore.EraseReport
+	err := func() error {
+		defer s.adoSignInEnds.begin(owner, adoPATRevokeOffboarding)()
+		s.revokeOwnerRunPATs(r.Context(), owner, adoPATRevokeOffboarding)
+		return s.eraseADOSignIn(owner, s.adoSignInRowID(r.Context()), func() (err error) {
+			rep, err = secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)
+			return err
+		})
+	}()
 	data := map[string]any{"count": rep.Count}
 	if rep.Store != "" {
 		data["store"], data["purged"] = rep.Store, rep.Purged

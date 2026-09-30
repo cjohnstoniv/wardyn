@@ -19,6 +19,7 @@ vi.mock("../../../lib/api/base-images", () => ({
 const getAvailabilityMock = vi.fn();
 const putAvailabilityMock = vi.fn();
 const upsertGrantMock = vi.fn();
+const listUserTypesMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
   return {
@@ -28,9 +29,7 @@ vi.mock("../../../lib/api/permissions", async () => {
       getAvailability: (...a: unknown[]) => getAvailabilityMock(...a),
       putAvailability: (...a: unknown[]) => putAvailabilityMock(...a),
       upsertGrant: (...a: unknown[]) => upsertGrantMock(...a),
-      listUserTypes: async () => [
-        { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 0, built_in: false },
-      ],
+      listUserTypes: (...a: unknown[]) => listUserTypesMock(...a),
     },
   };
 });
@@ -59,6 +58,10 @@ beforeEach(() => {
   getAvailabilityMock.mockReset();
   putAvailabilityMock.mockReset();
   upsertGrantMock.mockReset();
+  listUserTypesMock.mockReset();
+  listUserTypesMock.mockResolvedValue([
+    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 0, built_in: false },
+  ]);
   getAvailabilityMock.mockImplementation(async (kind: string, value: string) => ({
     kind,
     value,
@@ -83,6 +86,14 @@ describe("ImagesTab", () => {
     // The lead, with --image as a literal; one teal: Add image.
     expect(screen.getByText("--image").closest("p")?.textContent).toBe(IMAGES.LEAD);
     expect(teal().map((b) => b.textContent)).toEqual([IMAGES.ADD_CTA]);
+  });
+
+  it("reads the user types once for every row's control, not once per row (#1016)", async () => {
+    listMock.mockResolvedValue([TOOLBOX, ML]);
+    render(<ImagesTab />);
+
+    await waitFor(() => expect(screen.getAllByRole("radio", { name: AVAILABILITY.ADMINS_ONLY })).toHaveLength(2));
+    expect(listUserTypesMock).toHaveBeenCalledTimes(1);
   });
 
   it("empty: says so, and carries Add image as its one teal", async () => {

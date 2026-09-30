@@ -14,8 +14,7 @@
 
 # Left minimal on purpose. Model-provider egress (api.anthropic.com and
 # friends) is unioned in automatically by dispatch from the run's OWN model
-# binding (subscription / api_key / Bedrock) — see applyLLMCredMount,
-# internal/api/llmcred.go — never from this list. Add hosts here only for
+# provider — never from this list. Add hosts here only for
 # what the external tool or the agent inside the sandbox needs beyond that,
 # e.g. a package registry if it builds.
 allowed_domains: []

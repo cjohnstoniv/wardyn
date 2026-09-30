@@ -124,17 +124,17 @@ func TestPutSecret_MemberStampsOwner_AuditSecretOwner(t *testing.T) {
 	h, srv := secretsRBACServer(t, sec)
 	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice, `{"value":"sk-ant-member-owned-value"}`)
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/npm-token", alice, `{"value":"npm-member-owned-value"}`)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("PUT = %d, want 204: %s", w.Code, w.Body.String())
 	}
 
-	got, err := sec.For("alice").Get(context.Background(), "anthropic-api-key")
-	if err != nil || string(got) != "sk-ant-member-owned-value" {
+	got, err := sec.For("alice").Get(context.Background(), "npm-token")
+	if err != nil || string(got) != "npm-member-owned-value" {
 		t.Fatalf("alice's own row = (%q, %v), want the stored value", got, err)
 	}
 	// The operator's namespace stays untouched by a member's write.
-	if _, err := sec.Get(context.Background(), "anthropic-api-key"); !errors.Is(err, secretstore.ErrNotFound) {
+	if _, err := sec.Get(context.Background(), "npm-token"); !errors.Is(err, secretstore.ErrNotFound) {
 		t.Fatalf("operator namespace has a row after a MEMBER's PUT (err=%v); it must not", err)
 	}
 
@@ -224,24 +224,17 @@ func TestListSecrets_AdminOwnerParam_Member403(t *testing.T) {
 }
 
 // memberRefusedAWSNames is the AWS SigV4 name set a non-operator PUT/DELETE is
-// still refused, written out ONE PER NAME rather than as a loop over a slice
-// the production code also builds: the widening these tests guard
-// (writableSecretName dropping bedrockAPIKeySecret) is one clause away from
-// widening all four, and a list derived from the predicate under test would
-// follow it silently. bedrockAPIKeySecret is deliberately absent — see
-// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace.
+// still refused as reserved, written out ONE PER NAME rather than as a loop
+// over a slice the production code also builds, so a widening of the
+// predicate under test cannot silently shrink the list.
 var memberRefusedAWSNames = []string{
 	bedrockAccessKeyIDSecret,
 	bedrockSecretAccessKeySecret,
 	bedrockSessionTokenSecret,
 }
 
-// TestPutSecret_MemberBedrockNames_403: the three resident AWS SigV4 names are
-// refused for a non-operator PUT — they are ALWAYS signed out of the operator
-// namespace, so a member row under one would read as "Bedrock is configured"
-// over a credential dispatch never uses. The negative control proves the
-// refusal is member-specific, not a blanket name ban: an operator may still
-// PUT them.
+// TestPutSecret_MemberBedrockNames_403: the three AWS SigV4 names are
+// refused for a member PUT as reserved, with no row written.
 func TestPutSecret_MemberBedrockNames_403(t *testing.T) {
 	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {
@@ -257,46 +250,40 @@ func TestPutSecret_MemberBedrockNames_403(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range memberRefusedAWSNames {
-		t.Run("negative control: an operator may still PUT "+name, func(t *testing.T) {
-			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
-			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, admin, `{"value":"some-long-enough-value-000000"}`)
-			if w.Code != http.StatusNoContent {
-				t.Fatalf("operator PUT %s = %d, want 204: %s", name, w.Code, w.Body.String())
-			}
-		})
-	}
 }
 
-// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace is the one name #153
-// widened, and the assertion is not merely "204": the row has to land in the
-// MEMBER's namespace and leave the operator's alone. A widening that wrote a
-// member's bearer to the operator row would also answer 204, and would hand
-// every other member's runs one person's key.
-func TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace(t *testing.T) {
-	sec := &memSecrets{m: map[string][]byte{}}
-	_, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
-
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, `{"value":"alice-own-bedrock-bearer-000000"}`)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("member PUT %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
-	}
-	if _, inOperator := sec.m[bedrockAPIKeySecret]; inOperator {
-		t.Fatalf("a member's bearer landed in the OPERATOR namespace — every member's runs would read it")
-	}
-	got := string(sec.owned["alice"][bedrockAPIKeySecret])
-	if got != "alice-own-bedrock-bearer-000000" {
-		t.Fatalf("alice's own namespace holds %q, want her bearer", got)
-	}
-
-	// And she can delete her own row, which is the other half of the door.
-	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, ""); w.Code != http.StatusNoContent {
-		t.Fatalf("member DELETE %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
-	}
-	if _, still := sec.owned["alice"][bedrockAPIKeySecret]; still {
-		t.Fatalf("alice's bearer survived her own DELETE")
+// TestPutSecret_RetiredModelCredentialNamesRefused (#672): the operator-lane
+// model credentials 0.8.2 retires cannot be stored again by anyone — an admin
+// session, the admin token or a member — so a fixture or script still writing
+// one fails loudly instead of planting a row no lane reads. The refusal names
+// where model access lives now, and writes nothing.
+func TestPutSecret_RetiredModelCredentialNamesRefused(t *testing.T) {
+	for _, name := range []string{"anthropic-api-key", "openai-api-key", "bedrock-api-key",
+		"aws-access-key-id", "aws-secret-access-key", "aws-session-token"} {
+		for _, who := range []string{"admin session", "admin token", "member"} {
+			t.Run(name+"/"+who, func(t *testing.T) {
+				sec := &memSecrets{m: map[string][]byte{}}
+				_, srv := secretsRBACServer(t, sec)
+				var w *httptest.ResponseRecorder
+				switch who {
+				case "admin token":
+					w = do(t, srv, http.MethodPut, "/api/v1/secrets/"+name, adminToken, `{"value":"some-long-enough-value-000000"}`)
+				case "admin session":
+					w = doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin), `{"value":"some-long-enough-value-000000"}`)
+				default:
+					w = doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser), `{"value":"some-long-enough-value-000000"}`)
+				}
+				if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonSecretNameReserved) {
+					t.Fatalf("PUT %s = %d %s, want 403 %s", name, w.Code, w.Body.String(), reasonSecretNameReserved)
+				}
+				if who != "member" && !strings.Contains(w.Body.String(), "Settings → Model providers") {
+					t.Errorf("refusal does not name Settings → Model providers: %s", w.Body.String())
+				}
+				if len(sec.m) != 0 || len(sec.owned) != 0 {
+					t.Fatalf("a refused PUT of %s wrote a row", name)
+				}
+			})
+		}
 	}
 }
 
@@ -789,18 +776,5 @@ func TestInternalWrite_RowFailureIsAudited(t *testing.T) {
 		if ev.Outcome != "failure" || ev.Target != c.target || ev.ActorType != types.ActorSystem || string(ev.Data) != c.data {
 			t.Fatalf("secret.write = (%s, %s, %s, %s); want a system failure on %s with %s", ev.ActorType, ev.Outcome, ev.Target, ev.Data, c.target, c.data)
 		}
-	}
-}
-
-// The operator's pasted harness credential is audited by who pasted it.
-func TestHarnessCredentialPaste_RowFailureIsAudited(t *testing.T) {
-	h, srv := harnessCredSrv(t, rowFailingSecrets{&memSecrets{m: map[string][]byte{}}})
-	if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
-		`{"token":"sk-ant-oat01-row-will-fail"}`); w.Code != http.StatusInternalServerError {
-		t.Fatalf("paste = %d, want 500: %s", w.Code, w.Body.String())
-	}
-	ev := lastAuditEvent(t, h.audit.events, "secret.write")
-	if ev.Outcome != "failure" || ev.Target != harnessCredSecretName("anthropic") || string(ev.Data) != `{"reason":"row"}` {
-		t.Fatalf("secret.write = (%s, %s, %s); want a failure on the harness credential with reason row", ev.Outcome, ev.Target, ev.Data)
 	}
 }

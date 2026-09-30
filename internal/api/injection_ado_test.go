@@ -102,8 +102,8 @@ func TestResolveADOInjection_LiveRecordsGrantedScope(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if resp.Header != "Authorization" || !strings.HasPrefix(resp.Value, "Bearer fake-entra-access-") ||
-		resp.Organisation != "contoso" || strings.Join(resp.Capabilities, ",") != "read,code_write" || resp.ExpiresAt == 0 {
-		t.Errorf("response = %+v, want a bearer, organisation contoso, capabilities read,code_write, an expiry", resp)
+		resp.Organisation != "contoso" || strings.Join(resp.Capabilities, ",") != "code_read,code_write" || resp.ExpiresAt == 0 {
+		t.Errorf("response = %+v, want a bearer, organisation contoso, capabilities code_read,code_write, an expiry", resp)
 	}
 	rows := rf.audit.find("secret.read")
 	if len(rows) != 1 || rows[0].Outcome != "success" {
@@ -283,7 +283,7 @@ func TestResolveADOInjection_RefusesSnapshotDrift(t *testing.T) {
 		"tenant_id":          func(r *types.GitProvider) { r.Entra.TenantID = "99999999-0000-0000-0000-000000000001" },
 		"client_id":          func(r *types.GitProvider) { r.Entra.ClientID = "99999999-0000-0000-0000-000000000002" },
 		"organisation":       func(r *types.GitProvider) { r.BaseURLs = []string{"https://dev.azure.com/fabrikam"} },
-		"capability_ceiling": func(r *types.GitProvider) { r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead} },
+		"capability_ceiling": func(r *types.GitProvider) { r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeRead} },
 		"credential_source":  func(r *types.GitProvider) { r.CredentialSource = types.CredentialSourceShared },
 		"token_mode":         func(r *types.GitProvider) { r.Entra.TokenMode = types.ADOTokenModeMintedPAT },
 		"lane_withdrawn":     func(r *types.GitProvider) { r.Lanes = []types.GitLane{types.GitLanePAT} },
@@ -343,5 +343,36 @@ func TestResolveADOInjection_ClassifiesFailures(t *testing.T) {
 				t.Errorf("reason = %v, want %s", d["reason"], want)
 			}
 		})
+	}
+}
+
+// A run dispatched BEFORE the per-area split holds a snapshot naming the old
+// "read". Against the migrated live ceiling (the twelve reads written out) its
+// next resolve is refused as capability_ceiling drift — the documented
+// fail-closed answer for a run in flight during the upgrade.
+func TestResolveADOInjection_PreSplitSnapshotIsCeilingDrift(t *testing.T) {
+	rf := newADOResolveFixture(t)
+	var sc map[string]any
+	if err := json.Unmarshal(rf.st.grants[0].Spec.Scope, &sc); err != nil {
+		t.Fatal(err)
+	}
+	sc["snapshot"].(map[string]any)["capabilities"] = []string{"read", "code_write"}
+	raw, err := json.Marshal(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rf.st.grants[0].Spec.Scope = raw
+	rf.st.site.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{
+		adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWikiRead, adoscope.CapBuildRead,
+		adoscope.CapReleaseRead, adoscope.CapServiceEndpointRead, adoscope.CapLibraryRead, adoscope.CapPackagingRead,
+		adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead,
+		adoscope.CapCodeWrite, adoscope.CapPR,
+	}
+	w := rf.resolve(t, rf.subject, "dev.azure.com")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status %d body %s, want 403", w.Code, w.Body.String())
+	}
+	if d := rf.failureReason(t); d["reason"] != "scope_changed" || d["drift"] != "capability_ceiling" {
+		t.Errorf("audit = %v, want scope_changed/capability_ceiling", d)
 	}
 }

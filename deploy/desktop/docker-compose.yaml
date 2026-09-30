@@ -24,7 +24,7 @@
 # resource") — a CI runner and a developer laptop disagreed on exactly this
 # and the desktop lane broke in CI only. A variable with a harmless default
 # has no such ambiguity at any version, and it is the idiom the included file
-# already uses for WARDYN_WORKSPACES_ROOT and WARDYN_BEDROCK_AWS_DIR.
+# already uses for WARDYN_WORKSPACES_ROOT.
 #
 # Read-only: nothing in wardynd ever writes back into the MDM-managed
 # directory. age.key is deliberately NOT read from here — wardyn-desktop.sh

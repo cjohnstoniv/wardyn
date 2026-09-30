@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { Page } from "@playwright/test";
 import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { CONNECTIONS, KEY_DOOR, REMOVE_CONFIRM } from "../src/app/components/wardyn/copy/door";
 
-// E2E coverage for Settings' Host card and Model provider card
-// (src/app/components/screens/settings/{admin-settings-screen,connection-cards}.tsx)
+// E2E coverage for Settings' Host card and the retired Model provider card
+// (src/app/components/screens/settings/admin-settings-screen.tsx)
 // — X2-F1/F3/F23. corp-network.spec.ts was deleted in b97afcdc "for when
 // Settings gains the Host card"; Settings has had one since. fixtures.ts's
 // mockMemberRole comment used to cite that dead file as the precedent for
@@ -21,10 +23,9 @@ import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, nav
 // already do that against a mock); this is what only an e2e can prove: the
 // real wiring, against the real seeded backend.
 //
-// M-5 (#636) split Settings in two: Host and Model provider both stayed in
-// Admin Settings (/admin/settings), so the tests below are unchanged except
-// the one that used to check /account for a member — Host isn't there at all
-// any more.
+// M-5 (#636) split Settings in two: Host stayed in Admin Settings
+// (/admin/settings), so the tests below are unchanged except the one that
+// used to check /account for a member — Host isn't there at all any more.
 //
 // #1200 compact cards: every card here now collapses to a one-line summary by
 // default and expands on click (collapsible-card.tsx) — every test that reads
@@ -33,10 +34,10 @@ import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, nav
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
-// Serial: the model-provider test writes and deletes a real secret, and the
-// corp-proxy test writes a real site-config redirect — one backend, no
-// mutating test may race a read about the same rows (policies.spec.ts's own
-// rule, for the same reason).
+// Serial: the model-connections test writes and removes a real provider and
+// credential, and the corp-proxy test writes a real site-config redirect —
+// one backend, no mutating test may race a read about the same rows
+// (policies.spec.ts's own rule, for the same reason).
 test.describe.configure({ mode: "serial" });
 
 test.describe("Settings — Host card", () => {
@@ -139,62 +140,89 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict", () =
   });
 });
 
-test.describe("Settings — Model provider Connect / Replace / Disconnect", () => {
+// #548: the Settings Model provider card held the deployment's own model
+// credentials, which no run reads since 0.8.2, and is retired: Model providers
+// is where model access is set up, and each person's own key lives on Your
+// account's "Your model connections". The round-trip this block used to pin
+// against GET /secrets moved there with it, against the provider credential
+// endpoint and the caller's own provider_access.
+test.describe("Settings — no Model provider card, and Your model connections", () => {
   // ticket: X2-F3
-  test("an API-key connect, a replace, and a disconnect all round-trip against GET /secrets", async ({
-    page,
-  }) => {
+  test("Admin Settings draws no Model provider card", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
+    await expect(page.getByRole("heading", { name: "Model providers", level: 3 })).toBeVisible();
 
-    await page.getByRole("radio", { name: "API key" }).click();
-    const field = page.getByLabel("Anthropic API key");
-    await expect(field).toBeVisible();
+    await expect(page.getByTestId("model-provider-card")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Model provider( |$)/ })).toHaveCount(0);
+  });
 
-    // Connect. Two lanes render an unstored "Save" button at once (Anthropic
-    // and OpenAI, api_key's two SecretLanes) — Anthropic's is first in the
-    // DOM (also the only one enabled, since only it carries a value).
-    await field.fill("sk-ant-e2e-connect");
-    await page.getByRole("button", { name: "Save", exact: true }).first().click();
-    await expect(page.getByText(/Stored as\s*anthropic-api-key/)).toBeVisible();
-    await expect(page.getByRole("radio", { name: "API key" }).getByText("Connected")).toBeVisible();
+  test("a key connect, a replace, and a remove on Your model connections all round-trip against the provider", async ({
+    page,
+  }) => {
+    const provider = { id: "e2e-anthropic-key", name: "E2E Anthropic", kind: "anthropic_api_key", harnesses: [{ harness: "claude-code" }] };
+    const before = await putProviders(page, (existing) => [...existing, provider]);
+    try {
+      const state = async () => {
+        const res = await page.request.get("/api/v1/setup/status", { headers: auth });
+        const access: { provider: string; state: string }[] = (await res.json()).provider_access ?? [];
+        return access.find((a) => a.provider === provider.id)?.state;
+      };
+      expect(await state()).toBe("not_configured");
 
-    let secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });
-    let names: string[] = (await secretsRes.json()).names ?? [];
-    expect(names).toContain("anthropic-api-key");
+      await gotoConsole(page);
+      await navToRoute(page, "/account");
+      await expandCard(page, CONNECTIONS.TITLE);
+      const card = page.getByTestId("model-connections-card");
 
-    // Replace. Fix pass (review F2): the secret NAME doesn't change on a
-    // replace, so "Stored as anthropic-api-key" and `names.toContain(...)`
-    // are the SAME claim already proven above — a no-op or a 500 from "Save
-    // replacement" leaves both green. Gate the click on the real write
-    // instead: wait for the actual non-GET /secrets response and assert it
-    // succeeded.
-    await page.getByRole("button", { name: "Replace" }).click();
-    const replaceField = page.getByLabel("Anthropic API key");
-    await expect(replaceField).toBeVisible();
-    await replaceField.fill("sk-ant-e2e-replaced");
-    const replacePut = page.waitForResponse(
-      (r) => r.url().includes("/api/v1/secrets") && r.request().method() !== "GET",
-    );
-    await page.getByRole("button", { name: "Save replacement", exact: true }).click();
-    expect((await replacePut).ok()).toBe(true);
-    await expect(page.getByText(/Stored as\s*anthropic-api-key/)).toBeVisible();
+      // Connect.
+      await card.getByRole("button", { name: CONNECTIONS.ADD_KEY, exact: true }).click();
+      let door = page.getByRole("dialog", { name: KEY_DOOR.TITLE(false, provider.name) });
+      await door.getByLabel(KEY_DOOR.FIELD(false)).fill("sk-ant-e2e-connect-0000000000");
+      await door.getByRole("button", { name: KEY_DOOR.SAVE, exact: true }).click();
+      await expect(page.getByText(KEY_DOOR.SAVED_TOAST(false))).toBeVisible();
+      await expect.poll(state).toBe("live");
 
-    secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });
-    names = (await secretsRes.json()).names ?? [];
-    expect(names).toContain("anthropic-api-key");
+      // Replace. The state reads "live" before and after, so gate on the real
+      // write instead: the PUT to the provider's credential endpoint.
+      await card.getByRole("button", { name: CONNECTIONS.REPLACE, exact: true }).click();
+      door = page.getByRole("dialog", { name: KEY_DOOR.TITLE_REPLACE(false, provider.name) });
+      await door.getByLabel(KEY_DOOR.FIELD(false)).fill("sk-ant-e2e-replaced-000000000");
+      const replacePut = page.waitForResponse(
+        (r) => r.url().includes(`/api/v1/model-providers/${provider.id}/credential`) && r.request().method() === "PUT",
+      );
+      await door.getByRole("button", { name: KEY_DOOR.SAVE, exact: true }).click();
+      expect((await replacePut).ok()).toBe(true);
+      await expect.poll(state).toBe("live");
 
-    // Disconnect.
-    await page.getByRole("button", { name: "Disconnect" }).click();
-    await expect(page.getByLabel("Anthropic API key")).toBeVisible();
-    await expect(page.getByRole("radio", { name: "API key" }).getByText("Connected")).toHaveCount(0);
-
-    secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });
-    names = (await secretsRes.json()).names ?? [];
-    expect(names).not.toContain("anthropic-api-key");
+      // Remove.
+      await card.getByRole("button", { name: CONNECTIONS.REPLACE, exact: true }).click();
+      door = page.getByRole("dialog", { name: KEY_DOOR.TITLE_REPLACE(false, provider.name) });
+      await door.getByRole("button", { name: KEY_DOOR.REMOVE, exact: true }).click();
+      const confirm = page.getByRole("dialog", { name: REMOVE_CONFIRM.TITLE(false, provider.name) });
+      await confirm.getByRole("button", { name: REMOVE_CONFIRM.CONFIRM, exact: true }).click();
+      await expect(page.getByText(REMOVE_CONFIRM.REMOVED_TOAST(false))).toBeVisible();
+      await expect.poll(state).toBe("not_configured");
+      await expect(card.getByRole("button", { name: CONNECTIONS.ADD_KEY, exact: true })).toBeVisible();
+    } finally {
+      await putProviders(page, () => before);
+    }
   });
 });
+
+/** Replaces the stored model-provider block with edit(current), returning the
+ *  block as it was so a test can put it back. */
+async function putProviders(page: Page, edit: (existing: unknown[]) => unknown[]): Promise<unknown[]> {
+  const cur = await page.request.get("/api/v1/model-providers", { headers: auth });
+  expect(cur.status()).toBe(200);
+  const existing: unknown[] = (await cur.json()).providers ?? [];
+  const headers: Record<string, string> = { ...auth };
+  const etag = cur.headers()["etag"];
+  if (etag) headers["If-Match"] = etag;
+  const res = await page.request.put("/api/v1/model-providers", { headers, data: { providers: edit(existing) } });
+  expect(res.status(), await res.text()).toBe(200);
+  return existing;
+}
 
 // M-1b: /integrations and /integrations/:id are deleted, clean break, no
 // alias (admin-member-modes-design.md §2.3) — the redirect this described no

@@ -206,10 +206,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/branding/logo": {class: classAnonymous},
 
 	// admin (SUPER only: a security_admin is refused here too)
-	"GET /metrics":                                       {class: classAdmin},
-	"POST /api/v1/setup/onboarding-complete":             {class: classAdmin},
-	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
-	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},
+	"GET /metrics":                           {class: classAdmin},
+	"POST /api/v1/setup/onboarding-complete": {class: classAdmin},
 	// The stored-policy WRITES stay SUPER even though /governance's profile
 	// authoring is classSecurity (§B, decided): a stored run_policy is
 	// selectable CONTENT, so a SEC write path here would re-open the credential
@@ -282,6 +280,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// member tier is served the provider KIND in a refusal instead.
 	"GET /api/v1/workspace-providers": {class: classAdmin},
 	"PUT /api/v1/workspace-providers": {class: classAdmin},
+	// #1428's organisation check on a minted_pat row: SUPER beside the rows it
+	// checks, and it creates tokens in the caller's own name.
+	"POST /api/v1/workspace-providers/git/{id}/org-check": {class: classAdmin},
 	// The agent roster (0.7.2) — which agents this deployment offers, the lane
 	// each reaches its model on, and (under per_user) the org's AWS access portal
 	// URL. SUPER for the sibling block's reason: it names the org's model-provider
@@ -490,6 +491,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// caller's own OIDC subject (computeSCMAccessRows), so a member reading only
 	// their own answer discloses nothing about anyone else.
 	"GET /api/v1/me/scm-access": {class: classMember},
+	// The caller's own Azure DevOps token (ado_own_pat.go): own namespace only.
+	"PUT /api/v1/me/scm/azure-devops/token":    {class: classMember},
+	"DELETE /api/v1/me/scm/azure-devops/token": {class: classMember},
 	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for
 	// the same reason as /me/ssh-keys above — a member signs in FOR
 	// THEMSELVES. Both doors refuse a caller with no identity provider
@@ -498,6 +502,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// route can reach anyone else's credential whatever tier the caller holds.
 	"GET /api/v1/scm/azure-devops/signin":   {class: classMember},
 	"GET /api/v1/scm/azure-devops/callback": {class: classMember},
+	// The member's disconnect (ado_pat_console.go): the same self-service
+	// shape. It revokes and forgets the CALLER's own tokens and sign-in only,
+	// and a row the caller may not use answers as no row (D-6).
+	"DELETE /api/v1/scm/azure-devops/connection": {class: classMember},
 	// /me/tokens is the same self-service shape as /me/ssh-keys above:
 	// classMember, principal-scoped AT THE STORE, so DELETE /me/tokens/{id}
 	// answers a foreign id with store.ErrNotFound (404) without needing an
@@ -510,22 +518,6 @@ var routeMatrix = map[string]classifiedRoute{
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
 	"GET /api/v1/me/capabilities": {class: classMember},
-	// The container LOGIN launch (0.7.2). classMember is AUTHENTICATION only
-	// here: the real predicate is inside the handler (authorizeHarnessLogin) —
-	// an operator always passes, anyone else needs an enabled `per_user` roster
-	// row for the provider AND capAgent on that row's agent. It sits here rather
-	// than on classAdmin because under such a row the credential this captures is
-	// the CALLER'S OWN, and an admin-only door leaves a member with no route to
-	// model access at all. The token PASTE and DISCONNECT above stay SUPER: those
-	// write the deployment's shared credential.
-	//
-	// The body is NOT the generic "{}": handleHarnessLogin defaults an empty
-	// provider to "anthropic", for which no per_user row can exist (per_user is
-	// bedrock_sso-only), so the generic probe would 403 every member on a route
-	// that admits them — asserting the opposite of this row. newAuthzMatrixServer
-	// seeds the matching enabled row; the 403-WITHOUT-a-row case is
-	// TestHarnessLogin_MemberRefusedWithoutPerUserRow, not a matrix arm.
-	"POST /api/v1/setup/harness-login": {class: classMember, body: `{"provider":"aws"}`},
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
@@ -604,7 +596,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/output":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -746,26 +742,18 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 
 // newAuthzMatrixServer builds the MAXIMALLY-CONFIGURED server both matrix
 // tests walk — and, since 0.7.2, the ROSTER-ENFORCED one: it seeds an agent
-// roster (authzMatrixSiteConfig), so every consumer of this fixture now runs
-// with agent-provider enforcement on rather than in legacy open mode. That is
-// deliberate (POST /setup/harness-login's tier is per-request and unprovable
-// without it) and it is why the store's PutSiteConfig must not persist — every conditional route mounted (OIDC, Secrets, RecordingStore,
+// roster (authzMatrixSiteConfig), so every consumer of this fixture runs with
+// agent-provider enforcement on rather than in open mode, and it is why the
+// store's PutSiteConfig must not persist — every conditional route mounted (OIDC, Secrets, RecordingStore,
 // SessionRevocations) — so chi.Walk sees the whole table and the "every
 // conditional route mounted" doctrine holds for TestSecurityAdminRouteTier
 // too. Shared rather than duplicated: a second copy of this config is exactly
 // where a conditional route silently goes unmounted and therefore unprobed.
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
-// per_user bedrock_sso row for claude-code. It exists because POST
-// /setup/harness-login's tier is per-request — an operator always reaches it, a
-// member reaches it only when the org declared that each person signs in
-// themselves — so without this row the matrix would probe the refusal and pass
-// while asserting the opposite of that route's classification.
+// row for claude-code.
 func authzMatrixSiteConfig() types.SiteConfig {
 	return types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
-		ID:               "claude-code",
-		Mechanism:        types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser,
-		SSOStartURL:      "https://matrix-org.awsapps.com/start",
+		ID: "claude-code",
 	}}}}
 }
 
@@ -790,7 +778,16 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	for _, f := range shape {
 		f(&cfg)
 	}
-	return New(cfg), ast, aap, rs
+	return matrixServer(cfg), ast, aap, rs
+}
+
+// matrixServer is New with the run event stream's hold cut to nothing: that
+// route holds its connection open, and a matrix probe needs the answer, not
+// the stream.
+func matrixServer(cfg Config) *Server {
+	srv := New(cfg)
+	srv.runEvents.hold = time.Nanosecond
+	return srv
 }
 
 // newAuthzMatrixServerWithUI is newAuthzMatrixServer built THE WAY THE SHIPPED
@@ -820,7 +817,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	ast.siteCfg = authzMatrixSiteConfig()
 	cfg.UIDir = dir
-	return New(cfg)
+	return matrixServer(cfg)
 }
 
 func TestAuthzMatrix(t *testing.T) {
@@ -1308,9 +1305,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// they replace — both registrations are still classOwner, so the probe
 		// count grows by exactly the three new patterns (20 -> 23); 24 since
 		// #1197 L2 added PATCH /runs/{id}/title; 25 since #572 added POST
-		// /runs/{id}/resume.
-		if probed != 25 {
-			t.Errorf("probed %d classOwner routes, want 25 — a route that left classOwner takes its tier "+
+		// /runs/{id}/resume; 26 since #1144 added GET /runs/{id}/events; 27
+		// since #1232 added GET /runs/{id}/output; 28 since #1425 added GET
+		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens.
+		if probed != 29 {
+			t.Errorf("probed %d classOwner routes, want 29 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1364,12 +1363,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// born SUPER for the same topology reason as those four reads, = 40 SUPER,
 	// and the two /agent-providers verbs beside them for the same reason again,
 	// = 42 SUPER. 0.7.2 then moved ONE route OUT: POST /setup/harness-login, the
-	// container LOGIN launch, which under a `per_user` agent row captures the
-	// CALLER'S OWN model credential — an admin-only door there leaves a member
-	// with no route to model access at all, so the tier moved and the predicate
-	// went inside the handler. Its two sibling credential verbs (the token paste
-	// and the disconnect) did NOT move: they write the deployment's shared
-	// credential. = 41 SUPER. Issue #168 (0.8) then moved THREE /drives routes
+	// container LOGIN launch, which captured the CALLER'S OWN model credential
+	// (= 41 SUPER); #548 retired it with the roster lane it served. Its two
+	// sibling credential verbs (the token paste and the disconnect) did NOT
+	// move, and #548 removed them too, see the end of this list. Issue #168 (0.8) then moved THREE /drives routes
 	// OUT of SUPER and into SEC — POST /drives/grants, DELETE
 	// /drives/grants/{id}, POST /drives/preview — because none of the three
 	// names a host path, unlike the four /drives routes that stayed = 24 SEC /
@@ -1396,11 +1393,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// (= 41 SEC). #1125's branding writes (PUT/DELETE /branding/settings) are
 	// SUPER, the site-config PUT's tier (= 48 SUPER). #1142's portal registry:
 	// registering is SUPER (= 49 SUPER), listing and revoking are security
-	// (= 43 SEC). A route silently reclassified in the
+	// (= 43 SEC). #548 removed the token paste and the disconnect (PUT/DELETE
+	// /setup/harness-credential/{provider}) with the deployment's shared model
+	// credential they wrote (= 47 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
-	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 43 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 43 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// WRONG tier, exactly the drift the per-route loop cannot see. #1428 added
+	// the Azure DevOps organisation check beside the provider rows (= 48 SUPER).
+	if sec != 43 || super != 48 {
+		t.Errorf("tier split = %d security / %d admin, want 43 / 48 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 
@@ -1481,12 +1481,9 @@ type authzStore struct {
 	// above walks reads exactly as it did before.
 	workspaces map[uuid.UUID]types.Workspace
 	tickets    map[string]store.AttachTicket
-	// siteCfg is real rather than a hard-wired zero because 0.7.2 put a ROUTE'S
-	// TIER behind it: POST /setup/harness-login admits a member only when the
-	// agent roster declares a per_user credential source, so a zero site config
-	// would make the matrix's member arm assert the refusal instead of the
-	// admission. Seeded by newAuthzMatrixServer; every other consumer reads the
-	// same empty document it read before.
+	// siteCfg is real rather than a hard-wired zero so the matrix walks with the
+	// agent roster enforced. Seeded by newAuthzMatrixServer; every other
+	// consumer reads the same empty document it read before.
 	siteCfg types.SiteConfig
 	// The hybrid device capability (store.DeviceStore), so the matrix walks
 	// the device routes with it PRESENT — a device-route 401 is then deviceAuth

@@ -142,12 +142,12 @@ func TestSetupHarnessTools(t *testing.T) {
 	if !claude.HasGateway || !claude.HasLogin {
 		t.Errorf("claude-code = %+v, want HasGateway and HasLogin both true", claude)
 	}
-	// No AgentProviders block: every row enabled, nothing claimed about its lane.
-	// This is the legacy-open-mode half of the roster contract, and the reason an
-	// upgraded install's New Run picker is byte-for-byte what it was.
+	// No AgentProviders block: every row enabled. This is the open-mode half of
+	// the roster contract, and the reason an upgraded install's New Run picker
+	// is byte-for-byte what it was.
 	for _, tool := range tools {
-		if !tool.Enabled || tool.Mechanism != "" || tool.CredentialSource != "" {
-			t.Errorf("with no agent roster, %s = %+v; want enabled with no mechanism or source", tool.ID, tool)
+		if !tool.Enabled {
+			t.Errorf("with no agent roster, %s = %+v; want enabled", tool.ID, tool)
 		}
 	}
 }
@@ -165,8 +165,8 @@ func TestSetupHarnessTools(t *testing.T) {
 func TestSetupHarnessTools_RosterCustomImageAgentAppended(t *testing.T) {
 	const customID = "internal-refactor-bot"
 	sc := types.SiteConfig{AgentProviders: agentBlock(
-		agentRow("claude-code", types.AgentMechanismAnthropicAPIKey),
-		types.AgentProvider{ID: customID, Mechanism: types.AgentMechanismAnthropicAPIKey},
+		types.AgentProvider{ID: "claude-code"},
+		types.AgentProvider{ID: customID},
 	)}
 	images := map[string]string{customID: "registry.corp.internal/agents/refactor-bot:latest"}
 

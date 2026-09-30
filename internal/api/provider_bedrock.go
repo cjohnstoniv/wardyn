@@ -6,8 +6,8 @@
 // base URL the provider record names, on its OWNER's own credential — their
 // AWS sign-in (wardyn-provider-<uid>-sso) or their own Bedrock API key
 // (wardyn-provider-<uid>-key), read strictly from their namespace. The kind
-// names the one lane: resolveBedrockAuth's chain, and its host ~/.aws mount
-// and static SigV4 arms (the operator's credentials), are never reached.
+// names the one lane: the operator's host ~/.aws mount and static SigV4
+// credentials are never reached.
 package api
 
 import (
@@ -131,7 +131,7 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	if refresh {
 		var failure string
 		if blob, failure = s.refreshAWSSSOBlob(ctx, scope, blob); failure != "" {
-			if failure == awsSSORefreshSpentRefusal(true) {
+			if failure == awsSSORefreshSpentSentence {
 				return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 			}
 			return refuse(stateDenial(p.ID, mpBRRenewing, mpBRRemedyRetry))
@@ -144,23 +144,20 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 }
 
 // modelCredential is the model-credential fact both doors read for a run that
-// chose a provider, which skips enforceCreateLLMMechanism, so this is the only
-// place its facts come from (#983): Review publishes them, and the confinement
-// advisory keys on Mechanism. The kind names the one lane its arm authors,
-// always the owner's own credential. Only bedrock_sso is resident (its SDK
-// mints role credentials inside the sandbox, perUserRowResidency); every other
-// arm leaves a placeholder the proxy replaces. A Bedrock provider's run also
-// carries its host, so the autonomy gate grades it WITH that credential, as it
-// does every legacy Bedrock lane (#504, bedrockCredGradeHolds). Zero when no
-// provider was chosen.
+// chose a provider, the only place its facts come from (#983): Review
+// publishes them, and the confinement advisory keys on Kind. The kind names the
+// one lane its arm authors, always the owner's own credential. Only bedrock_sso
+// is resident (its SDK mints role credentials inside the sandbox,
+// kindResidency); every other arm leaves a placeholder the proxy replaces. A
+// Bedrock provider's run also carries its host, so the autonomy gate grades it
+// WITH that credential (#504, bedrockCredGradeHolds). Zero when no provider was
+// chosen.
 func (c runProviderChoice) modelCredential() modelCredentialFacts {
 	if !c.chosen {
 		return modelCredentialFacts{}
 	}
-	f := modelCredentialFacts{Mechanism: string(c.provider.Kind), Residency: residencyProxy,
-		CredentialSource: string(types.CredentialSourcePerUser)}
+	f := modelCredentialFacts{Provider: c.provider.ID, Kind: string(c.provider.Kind), Residency: kindResidency(c.provider.Kind)}
 	if c.provider.Kind.IsBedrock() {
-		f.Residency = perUserRowResidency(types.AgentMechanism(c.provider.Kind))
 		f.bedrockHost = providerBedrockRuntimeHost(c.provider)
 	}
 	return f
@@ -185,17 +182,17 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 		// A non-empty sentinel so claude-code uses bearer auth; the proxy
 		// sets the owner's key on the wire.
 		env[envBedrockBearer] = "wardyn-proxy-injected"
-		auth = bedrockAuth{env: env, egressHosts: hosts, bearer: true, bearerNamespace: c.awsScope()}
+		auth = bedrockAuth{env: env, egressHosts: hosts, bearer: true}
 	} else {
 		auth = s.bedrockSSOAuth(blob, c.awsScope(), env, hosts)
 	}
 	auth.ready, auth.region, auth.model = true, b.Region, model
 	auth.runtimeHost, auth.runtimePort = providerBedrockRuntimeHost(mp), redirectPort(b.BaseURL)
 	t := llmTransport{
-		modelRun: true, provider: &c, bedrock: auth, bedrockReady: true,
+		provider: &c, bedrock: auth, bedrockReady: true,
 		injectBedrockBearer: auth.bearer, injectBedrockSSO: auth.ssoInject && auth.ssoProxyInject,
 	}
-	t.secretEnvKeys, t.bedrockAudit = s.applyBedrockTransport(run, auth, policy, sandboxEnv)
+	t.secretEnvKeys, t.bedrockAudit = s.applyBedrockTransport(auth, policy, sandboxEnv)
 	return t
 }
 

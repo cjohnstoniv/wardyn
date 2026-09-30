@@ -75,7 +75,7 @@ func TestClassifyMethodOverride(t *testing.T) {
 		return r
 	}
 	runCases(t, []caseT{
-		{name: "a plain GET is a read", req: adoReq(http.MethodGet, prPath, ""), want: CapRead},
+		{name: "a plain GET is a read", req: adoReq(http.MethodGet, prPath, ""), want: CapCodeRead},
 		{
 			name: "a POST overridden to PATCH is classified as the PATCH",
 			req:  overridden(http.MethodPost, prPath, "PATCH", `{"status":"completed"}`),
@@ -129,13 +129,13 @@ func TestClassifyMethodOverride(t *testing.T) {
 // read-only grant unable to read.
 func TestClassifyPostsThatAreReads(t *testing.T) {
 	runCases(t, []caseT{
-		{name: "a work-item query", req: adoReq(http.MethodPost, "/acme/_apis/wit/wiql", `{"query":"select 1"}`), want: CapRead},
-		{name: "a project-scoped work-item query", req: adoReq(http.MethodPost, "/acme/proj/_apis/wit/wiql", ""), want: CapRead},
-		{name: "a work-item batch READ", req: adoReq(http.MethodPost, "/acme/_apis/wit/workitemsbatch", ""), want: CapRead},
+		{name: "a work-item query", req: adoReq(http.MethodPost, "/acme/_apis/wit/wiql", `{"query":"select 1"}`), want: CapWorkRead},
+		{name: "a project-scoped work-item query", req: adoReq(http.MethodPost, "/acme/proj/_apis/wit/wiql", ""), want: CapWorkRead},
+		{name: "a work-item batch READ", req: adoReq(http.MethodPost, "/acme/_apis/wit/workitemsbatch", ""), want: CapWorkRead},
 		{
 			name: "a pull-request query",
 			req:  adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pullrequestquery", ""),
-			want: CapRead,
+			want: CapCodeRead,
 		},
 		{
 			name: "code search on its own host",
@@ -144,7 +144,7 @@ func TestClassifyPostsThatAreReads(t *testing.T) {
 				r.Host = "almsearch.dev.azure.com"
 				return r
 			}(),
-			want: CapRead,
+			want: CapCodeRead,
 		},
 		{
 			name: "a search area on the ORDINARY host is not a trusted query door",
@@ -207,12 +207,12 @@ func TestClassifyWorkItemBatch(t *testing.T) {
 		},
 		{
 			name:    "a batch operation with a repeated key is refused",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"/_apis/wit/workitems/1","uri":"/_apis/git/pushes"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/_apis/wit/workitems/1","uri":"/_apis/git/pushes"}]`),
 			wantErr: true,
 		},
 		{
 			name: "an operation URI whose _apis is percent-hidden still reads as the work-item area",
-			req:  adoReq(http.MethodPost, batch, `[{"uri":"/%5Fapis/wit/workitems/1"}]`),
+			req:  adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/%5Fapis/wit/workitems/1"}]`),
 			want: CapWorkWrite,
 		},
 	})
@@ -415,20 +415,20 @@ func TestClassifyOrgPinning(t *testing.T) {
 		return Request{Method: http.MethodGet, Host: host, Path: path, Org: org}
 	}
 	runCases(t, []caseT{
-		{name: "the pinned organisation", req: onHost("dev.azure.com", "/acme/proj/_apis/git/repositories", "acme"), want: CapRead},
+		{name: "the pinned organisation", req: onHost("dev.azure.com", "/acme/proj/_apis/git/repositories", "acme"), want: CapCodeRead},
 		{
 			name: "the comparison folds case, because Azure DevOps' own URLs do",
 			req:  onHost("dev.azure.com", "/ACME/proj/_apis/git/repositories", "acme"),
-			want: CapRead,
+			want: CapCodeRead,
 		},
-		{name: "a pinned organisation written in another case", req: onHost("dev.azure.com", "/acme/_apis/projects", "ACME"), want: CapRead},
+		{name: "a pinned organisation written in another case", req: onHost("dev.azure.com", "/acme/_apis/projects", "ACME"), want: CapProjectRead},
 		{name: "another organisation is refused", req: onHost("dev.azure.com", "/other/proj/_apis/git/repositories", "acme"), wantErr: true},
 		{name: "another organisation behind a backslash is refused", req: onHost("dev.azure.com", `\other\proj/_apis/git/repositories`, "acme"), wantErr: true},
-		{name: "a backslash-led path still names the pinned organisation", req: onHost("dev.azure.com", `\acme\proj\_apis\git\repositories`, "acme"), want: CapRead},
-		{name: "a legacy host names the organisation in the label", req: onHost("acme.visualstudio.com", "/proj/_apis/git/repositories", "acme"), want: CapRead},
+		{name: "a backslash-led path still names the pinned organisation", req: onHost("dev.azure.com", `\acme\proj\_apis\git\repositories`, "acme"), want: CapCodeRead},
+		{name: "a legacy host names the organisation in the label", req: onHost("acme.visualstudio.com", "/proj/_apis/git/repositories", "acme"), want: CapCodeRead},
 		{name: "a legacy host for another organisation is refused", req: onHost("other.visualstudio.com", "/proj/_apis/git/repositories", "acme"), wantErr: true},
-		{name: "a legacy service subdomain still names it first", req: onHost("acme.vssps.visualstudio.com", "/_apis/graph/users", "acme"), want: CapRead},
-		{name: "a service subdomain of dev.azure.com keeps the path organisation", req: onHost("vsrm.dev.azure.com", "/acme/proj/_apis/release/releases", "acme"), want: CapRead},
+		{name: "a legacy service subdomain still names it first", req: onHost("acme.vssps.visualstudio.com", "/_apis/graph/users", "acme"), want: CapIdentityRead},
+		{name: "a service subdomain of dev.azure.com keeps the path organisation", req: onHost("vsrm.dev.azure.com", "/acme/proj/_apis/release/releases", "acme"), want: CapReleaseRead},
 		{name: "a path naming no organisation is refused", req: onHost("dev.azure.com", "/", "acme"), wantErr: true},
 		{name: "an unpinned request is refused", req: onHost("dev.azure.com", "/acme/_apis/projects", ""), wantErr: true},
 		{name: "a host that is not Azure DevOps is refused", req: onHost("github.com", "/acme/repo", "acme"), wantErr: true},
@@ -502,8 +502,8 @@ func TestClassifyWriteAreas(t *testing.T) {
 		{name: "editing a build definition", req: adoReq(http.MethodPut, "/acme/proj/_apis/build/definitions/3", `{}`), want: CapBuildAdmin},
 		{name: "running a pipeline", req: adoReq(http.MethodPost, "/acme/proj/_apis/pipelines/12/runs", `{}`), want: CapBuildExecute},
 		{name: "creating a pipeline", req: adoReq(http.MethodPost, "/acme/proj/_apis/pipelines", `{}`), want: CapBuildAdmin},
-		{name: "a classic release", req: onHost("vsrm.dev.azure.com", adoReq(http.MethodPost, "/acme/proj/_apis/release/releases", `{}`)), want: CapBuildExecute},
-		{name: "a release definition", req: onHost("vsrm.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/_apis/release/definitions/2", `{}`)), want: CapBuildAdmin},
+		{name: "a classic release", req: onHost("vsrm.dev.azure.com", adoReq(http.MethodPost, "/acme/proj/_apis/release/releases", `{}`)), want: CapReleaseExecute},
+		{name: "a release definition", req: onHost("vsrm.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/_apis/release/definitions/2", `{}`)), want: CapReleaseAdmin},
 		{name: "a work item", req: adoReq(http.MethodPatch, "/acme/proj/_apis/wit/workitems/12", `{}`), want: CapWorkWrite},
 		{name: "a wiki page", req: adoReq(http.MethodPut, "/acme/proj/_apis/wiki/wikis/w1/pages", `{}`), want: CapWikiWrite},
 		{name: "publishing a package", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/_apis/packaging/feeds/f1/npm/p/-/p-1.0.0.tgz", `{}`)), want: CapPackagingWrite},
@@ -511,18 +511,18 @@ func TestClassifyWriteAreas(t *testing.T) {
 		{name: "a project-scoped nuget push", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/_packaging/f1/nuget/v2", `{}`)), want: CapPackagingWrite},
 		{name: "a pypi upload", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPost, "/acme/_packaging/f1/pypi/upload", `{}`)), want: CapPackagingWrite},
 		{name: "a maven deploy", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/_packaging/f1/maven/v1/g/a/1/a-1.jar", `{}`)), want: CapPackagingWrite},
-		{name: "a universal package delete", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodDelete, "/acme/_packaging/f1/upack/packages/p/versions/1", "")), want: CapPackagingWrite},
+		{name: "a universal package delete", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodDelete, "/acme/_packaging/f1/upack/packages/p/versions/1", "")), want: CapPackagingManage},
 		{name: "a feed-route PATCH on the legacy host", req: onHost("acme.pkgs.visualstudio.com", adoReq(http.MethodPatch, "/_packaging/f1/npm/registry/p", `{}`)), want: CapPackagingWrite},
-		{name: "a feed-route read", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodGet, "/acme/_packaging/f1/npm/registry/p", "")), want: CapRead},
+		{name: "a feed-route read", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodGet, "/acme/_packaging/f1/npm/registry/p", "")), want: CapPackagingRead},
 		{name: "a feed route with an unknown protocol", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/_packaging/f1/cargo/p", `{}`)), want: CapUnclassifiedWrite},
 		{name: "a feed route off the packages host", req: adoReq(http.MethodPut, "/acme/_packaging/f1/npm/registry/p", `{}`), want: CapUnclassifiedWrite},
 		{name: "_packaging deeper than a project", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/x/_packaging/f1/npm/p", `{}`)), want: CapUnclassifiedWrite},
 		{name: "creating a project", req: adoReq(http.MethodPost, "/acme/_apis/projects", `{}`), want: CapProjectAdmin},
 		{name: "an area with no opinion is refused, not guessed", req: adoReq(http.MethodPost, "/acme/proj/_apis/distributedtask/pools", `{}`), want: CapUnclassifiedWrite},
 		{name: "a write with no _apis at all", req: adoReq(http.MethodPost, "/acme/proj/_admin/whatever", `{}`), want: CapUnclassifiedWrite},
-		{name: "an ordinary read", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/r1/items", ""), want: CapRead},
-		{name: "a HEAD is a read", req: adoReq(http.MethodHead, "/acme/proj/_apis/build/definitions", ""), want: CapRead},
-		{name: "an OPTIONS is a read", req: adoReq(http.MethodOptions, "/acme/_apis/projects", ""), want: CapRead},
+		{name: "an ordinary read", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/r1/items", ""), want: CapCodeRead},
+		{name: "a HEAD is a read", req: adoReq(http.MethodHead, "/acme/proj/_apis/build/definitions", ""), want: CapBuildRead},
+		{name: "an OPTIONS is discovery", req: adoReq(http.MethodOptions, "/acme/_apis/projects", ""), want: CapDiscovery},
 	})
 }
 
@@ -575,9 +575,9 @@ func TestOverrideOnNonPostIsIgnoredUnlessItRaises(t *testing.T) {
 	}
 	pr := "/acme/proj/_apis/git/repositories/r1/pullrequests/7"
 	runCases(t, []caseT{
-		{name: "GET naming GET", req: over(http.MethodGet, pr, "GET", ""), want: CapRead},
-		{name: "GET naming HEAD", req: over(http.MethodGet, pr, "HEAD", ""), want: CapRead},
-		{name: "HEAD naming GET", req: over(http.MethodHead, pr, "GET", ""), want: CapRead},
+		{name: "GET naming GET", req: over(http.MethodGet, pr, "GET", ""), want: CapCodeRead},
+		{name: "GET naming HEAD", req: over(http.MethodGet, pr, "HEAD", ""), want: CapCodeRead},
+		{name: "HEAD naming GET", req: over(http.MethodHead, pr, "GET", ""), want: CapCodeRead},
 		{name: "PATCH naming PATCH", req: over(http.MethodPatch, pr, "PATCH", `{}`), want: CapPR},
 		{name: "PATCH naming a read is classified on the PATCH", req: over(http.MethodPatch, pr, "GET", `{"completionOptions":{"bypassPolicy":true}}`), want: CapPolicyBypass},
 		{name: "DELETE naming DELETE", req: over(http.MethodDelete, "/acme/proj/_apis/git/repositories/r1", "DELETE", ""), want: CapRepoAdmin},
@@ -590,7 +590,7 @@ func TestOverrideOnNonPostIsIgnoredUnlessItRaises(t *testing.T) {
 
 // A read the minted token cannot perform. Reads are an enumerated table: an
 // area outside it is refused as unclassified, and every area in it carries its
-// read scope. A read floor that answered CapRead for any area would classify
+// read scope. A read floor that answered a read for any area would classify
 // an area with no read scope as a read that 403s at the forge.
 func TestReadsAreEnumerated(t *testing.T) {
 	unclassifiedRead := CapUnclassifiedRead
@@ -600,13 +600,13 @@ func TestReadsAreEnumerated(t *testing.T) {
 		{name: "an area this catalogue has never heard of", req: adoReq(http.MethodGet, "/acme/_apis/somethingnew/x", ""), want: unclassifiedRead},
 		{name: "agent pools, which no read scope covers", req: adoReq(http.MethodGet, "/acme/_apis/distributedtask/pools", ""), want: unclassifiedRead},
 		{name: "a path with no _apis at all", req: adoReq(http.MethodGet, "/acme/proj/_admin", ""), want: unclassifiedRead},
-		{name: "variable groups read", req: adoReq(http.MethodGet, "/acme/proj/_apis/distributedtask/variablegroups/1", ""), want: CapRead},
-		{name: "secure files read", req: adoReq(http.MethodGet, "/acme/proj/_apis/distributedtask/securefiles/1", ""), want: CapRead},
-		{name: "user entitlements read", req: onHost("vsaex.dev.azure.com", adoReq(http.MethodGet, "/acme/_apis/userentitlements", "")), want: CapRead},
+		{name: "variable groups read", req: adoReq(http.MethodGet, "/acme/proj/_apis/distributedtask/variablegroups/1", ""), want: CapLibraryRead},
+		{name: "secure files read", req: adoReq(http.MethodGet, "/acme/proj/_apis/distributedtask/securefiles/1", ""), want: CapLibraryRead},
+		{name: "user entitlements read", req: onHost("vsaex.dev.azure.com", adoReq(http.MethodGet, "/acme/_apis/userentitlements", "")), want: CapIdentityRead},
 	})
-	scopes, err := ScopesFor([]Capability{CapRead})
+	scopes, err := ScopesFor([]Capability{CapLibraryRead, CapIdentityRead})
 	if err != nil {
-		t.Fatalf("ScopesFor(read) error = %v", err)
+		t.Fatalf("ScopesFor(library_read, identity_read) error = %v", err)
 	}
 	for _, s := range []string{"vso.variablegroups_read", "vso.securefiles_read", "vso.memberentitlementmanagement"} {
 		if !slices.Contains(scopes, ResourceID+"/"+s) {
@@ -618,16 +618,17 @@ func TestReadsAreEnumerated(t *testing.T) {
 // F-B, F-E — the labels an approver reads must say what the capability grants.
 func TestLabelsSayWhatIsGranted(t *testing.T) {
 	v, err := Classify(adoReq(http.MethodPatch, "/acme/proj/_apis/release/releases/1/environments/2", `{}`))
-	if err != nil || v.Capability != CapBuildExecute {
-		t.Fatalf("a release deployment classified %q, %v — want build_execute", v.Capability, err)
+	if err != nil || v.Capability != CapReleaseExecute {
+		t.Fatalf("a release deployment classified %q, %v — want release_execute", v.Capability, err)
 	}
 	for _, tc := range []struct {
 		c     Capability
 		wants []string
 	}{
-		{CapBuildExecute, []string{"release", "deploy", "delete"}},
-		{CapBuildAdmin, []string{"release"}},
-		{CapRead, []string{"service connection", "identit", "group"}},
+		{CapReleaseExecute, []string{"release", "deploy", "delete"}},
+		{CapReleaseAdmin, []string{"release"}},
+		{CapServiceEndpointRead, []string{"service connection"}},
+		{CapIdentityRead, []string{"identit", "group"}},
 	} {
 		label := strings.ToLower(Label(tc.c))
 		for _, w := range tc.wants {
@@ -658,36 +659,36 @@ func TestOrganisationlessDiscoveryHostIsRefused(t *testing.T) {
 			r := adoReq(http.MethodGet, "/acme/_apis/profile/profiles/me", "")
 			r.Host = "vssps.dev.azure.com"
 			return r
-		}(), want: CapRead},
+		}(), want: CapProjectRead},
 		{name: "another organisation's profile area is still refused", req: func() Request {
 			r := adoReq(http.MethodGet, "/evil/_apis/profile/profiles/me", "")
 			r.Host = "vssps.dev.azure.com"
 			return r
 		}(), wantErr: true},
 	})
-	scopes, err := ScopesFor([]Capability{CapRead})
+	scopes, err := ScopesFor([]Capability{CapProjectRead})
 	if err != nil {
-		t.Fatalf("ScopesFor(read) error = %v", err)
+		t.Fatalf("ScopesFor(project_read) error = %v", err)
 	}
 	if !slices.Contains(scopes, ResourceID+"/vso.profile") {
-		t.Error("the read scope set lacks vso.profile, so a profile read 403s")
+		t.Error("project_read lacks vso.profile, so a profile read 403s")
 	}
 }
 
 // LOCATION DISCOVERY. Measured: the azure-devops CLI extension's FIRST request
 // is `OPTIONS /{org}/_apis` — the Azure DevOps SDK's location-discovery call —
 // and the Node SDK makes the same one. It is a pinned read with no scope, like
-// connectionData. OPTIONS must never carry a write, so a body or any override
+// connectionData, so it is CapDiscovery. OPTIONS must never carry a write, so a body or any override
 // header on it is refused, and it is admitted only on the discovery shapes.
 func TestOptionsLocationDiscovery(t *testing.T) {
 	opt := func(path string) Request { return adoReq(http.MethodOptions, path, "") }
 	withHeader := func(r Request, kv ...string) Request { r.Header = hdr(kv...); return r }
 	runCases(t, []caseT{
-		{name: "the organisation's API root", req: opt("/acme/_apis"), want: CapRead},
-		{name: "one area's location", req: opt("/acme/_apis/git"), want: CapRead},
-		{name: "one area's location under a project", req: opt("/acme/proj/_apis/wit"), want: CapRead},
-		{name: "an area this catalogue has no read entry for", req: opt("/acme/_apis/distributedtask"), want: CapRead},
-		{name: "a legacy host's API root", req: func() Request { r := opt("/_apis"); r.Host = "acme.visualstudio.com"; return r }(), want: CapRead},
+		{name: "the organisation's API root", req: opt("/acme/_apis"), want: CapDiscovery},
+		{name: "one area's location", req: opt("/acme/_apis/git"), want: CapDiscovery},
+		{name: "one area's location under a project", req: opt("/acme/proj/_apis/wit"), want: CapDiscovery},
+		{name: "an area this catalogue has no read entry for", req: opt("/acme/_apis/distributedtask"), want: CapDiscovery},
+		{name: "a legacy host's API root", req: func() Request { r := opt("/_apis"); r.Host = "acme.visualstudio.com"; return r }(), want: CapDiscovery},
 
 		{name: "another organisation is refused", req: opt("/evil/_apis"), wantErr: true},
 		{name: "a body on OPTIONS is refused", req: adoReq(http.MethodOptions, "/acme/_apis", `{"x":1}`), wantErr: true},
@@ -699,6 +700,6 @@ func TestOptionsLocationDiscovery(t *testing.T) {
 		{name: "a denied area stays denied", req: opt("/acme/_apis/tokens"), want: CapDeniedTokens},
 		{name: "OPTIONS below an area is not location discovery", req: opt("/acme/proj/_apis/git/repositories"), want: CapUnclassifiedRead},
 		{name: "OPTIONS off _apis is not location discovery", req: opt("/acme/proj/_admin"), want: CapUnclassifiedRead},
-		{name: "a zero Content-Length is not a body", req: withHeader(opt("/acme/_apis"), "Content-Length", "0"), want: CapRead},
+		{name: "a zero Content-Length is not a body", req: withHeader(opt("/acme/_apis"), "Content-Length", "0"), want: CapDiscovery},
 	})
 }

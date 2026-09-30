@@ -11,7 +11,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestPG_SpentMarkSurvivesRestart is #149's acceptance proof: a refresh
@@ -58,18 +57,11 @@ func TestPG_SpentMarkSurvivesRestart(t *testing.T) {
 	}
 	putAWSSSOBlob(t, s2, awsSSOTestFixedNow.Add(-time.Minute))
 
-	rows, _, _ := s2.setupHarnessCreds(context.Background(), types.SiteConfig{}, awsSSOScope{})
-	var row SetupHarness
-	for _, r := range rows {
-		if r.Provider == awsSSOProvider {
-			row = r
-		}
-	}
-	if !row.Captured || !row.Expired {
-		t.Fatalf("row = %+v; want a captured, expired AWS SSO row", row)
-	}
-	if row.Renewable {
-		t.Fatal("a second Server over the same pool graded Renewable=true for a fingerprint already marked spent and persisted before it started — the restart lost the mark")
+	var row SetupProviderAccess
+	s2.gradeProviderBedrockSSO(context.Background(), &row, awsSSOTestProvider(), awsSSOTestOwner)
+	if row.State != modelAccessExpiredSignin {
+		t.Fatalf("a second Server over the same pool graded %q for an expired session whose refresh token was marked spent "+
+			"and persisted before it started, want %q — the restart lost the mark", row.State, modelAccessExpiredSignin)
 	}
 	if !s2.awsSSOTokenSpentFor(blob) {
 		t.Fatal("awsSSOTokenSpentFor must read the persisted row on a cache miss")

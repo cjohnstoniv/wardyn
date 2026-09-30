@@ -23,8 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// P5 (0.7.3 field report): POST /setup/harness-login blocked through a cold
-// image pull. The whole launch — CreateRun, the audit stamp, then dispatchRun,
+// P5 (0.7.3 field report): a sign-in launch blocked through a cold image pull. The whole launch — CreateRun, the audit stamp, then dispatchRun,
 // which blocks on CreateSandbox for as long as the substrate needs (up to
 // canaryWaitTimeout ON TOP of a pull; the reporting estate measured 131s) — ran
 // inside the request. The console's wfetch deadline is 60s, so the pane showed
@@ -87,18 +86,11 @@ func waitForAuditRows(t *testing.T, audit *memAudit, action string, want int) {
 	t.Fatalf("%s rows = %d after 5s, want %d", action, len(audit.find(action)), want)
 }
 
-func perUserAWSRow() types.AgentProvider {
-	return types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-	}
-}
-
-// TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp is P5's own reproduction:
+// TestProviderSignIn_ReturnsBeforeTheSandboxIsUp is P5's own reproduction:
 // with a CreateSandbox that never returns, the route must still answer — with
 // the run id the pane needs to poll, attach and cancel — and the launch must
 // then finish on its own.
-func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
+func TestProviderSignIn_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 	gr := &coldPullRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{})}
 	released := false
 	t.Cleanup(func() {
@@ -106,19 +98,20 @@ func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 			close(gr.gate)
 		}
 	})
-	srv, audit := perUserLoginSrvWithRunner(t, gr, perUserAWSRow())
+	srv, _, audit, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
+	srv.cfg.Runner = gr
 
 	answered := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		answered <- doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
+		answered <- doSSO(t, srv, http.MethodPost, "/api/v1/model-providers/bedrock-prod/sign-in",
+			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), "")
 	}()
 
 	var w *httptest.ResponseRecorder
 	select {
 	case w = <-answered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("POST /setup/harness-login did not answer within 2s while CreateSandbox blocked — " +
+		t.Fatal("the sign-in POST did not answer within 2s while CreateSandbox blocked — " +
 			"the console's own deadline is 60s and a cold pull exceeds it, so the pane never learns the run id")
 	}
 	if w.Code != http.StatusOK {
@@ -183,7 +176,7 @@ func (s *ceilingBlipStore) failureHint(id uuid.UUID) string {
 	return s.hint[id]
 }
 
-// TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun pins the door P5's
+// TestFinishHarnessLoginLaunch_CeilingErrorAfterCreateFailsTheRun pins the door P5's
 // split opened. resolveDispatchCeiling runs AFTER CreateRun and after the audit
 // stamp. Synchronously its error was a 500 and the caller knew; detached, a
 // bare `return` would leave a 200 already answered, a run PENDING forever with
@@ -195,11 +188,11 @@ func (s *ceilingBlipStore) failureHint(id uuid.UUID) string {
 // and launchHarnessLoginRun already resolved it, so a second failure cannot
 // appear out of a successful first. The blip is therefore simulated exactly
 // where a detached tail would meet one — after the run row exists.
-func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
+func TestFinishHarnessLoginLaunch_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	h := newHarness(t)
 	spy := &revokeSpy{Provider: h.idp}
 	st := &ceilingBlipStore{
-		integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(perUserAWSRow())},
+		integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: credentialSite(ssoProvider())},
 		hint:       map[uuid.UUID]string{},
 	}
 	rnr := &fakeRunner{}
@@ -211,7 +204,6 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	cfg.Runner = rnr
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion = "us-east-1"
 	cfg.DefaultPolicy = govDeployment()
 	srv := New(cfg)
 
@@ -224,7 +216,7 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: "https://acme.awsapps.com/start"})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -290,7 +282,7 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	h := newHarness(t)
 	spy := &revokeSpy{Provider: h.idp}
 	st := &ceilingBlipStore{
-		integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(perUserAWSRow())},
+		integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: credentialSite(ssoProvider())},
 		hint:       map[uuid.UUID]string{},
 	}
 	audit := &memAudit{}
@@ -301,7 +293,6 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	cfg.Runner = &panicRunner{fakeRunner: &fakeRunner{}}
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion = "us-east-1"
 	cfg.DefaultPolicy = govDeployment()
 	srv := New(cfg)
 
@@ -311,7 +302,7 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: "https://acme.awsapps.com/start"})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -234,25 +235,6 @@ func (c *Client) SetupStatus(ctx context.Context) (json.RawMessage, error) {
 	return out, err
 }
 
-// harnessCredRequest mirrors the server wire shape for PUT
-// /api/v1/setup/harness-credential/{provider} (internal/api/harnesscred.go).
-type harnessCredRequest struct {
-	Token string `json:"token"`
-}
-
-// ConnectManagedSubscription stores a captured provider setup-token so the proxy
-// injects it into every eligible run (never resident in the sandbox). The value
-// is write-only. PUT /api/v1/setup/harness-credential/{provider}.
-func (c *Client) ConnectManagedSubscription(ctx context.Context, provider, token string) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/setup/harness-credential/"+provider, harnessCredRequest{Token: token}, nil)
-}
-
-// DisconnectManagedSubscription removes a provider's stored managed subscription
-// token. DELETE /api/v1/setup/harness-credential/{provider}.
-func (c *Client) DisconnectManagedSubscription(ctx context.Context, provider string) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/setup/harness-credential/"+provider, nil, nil)
-}
-
 // Me returns the caller's resolved identity/attribution as raw JSON. GET
 // /api/v1/me.
 func (c *Client) Me(ctx context.Context) (json.RawMessage, error) {
@@ -399,6 +381,31 @@ type RunFiles struct {
 func (c *Client) RunFiles(ctx context.Context, runID uuid.UUID) (RunFiles, error) {
 	var out RunFiles
 	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String()+"/files", nil, &out)
+	return out, err
+}
+
+// RunOutput is GET /runs/{id}/output's body: the end of a task_mode=exec run's
+// combined stdout/stderr.
+type RunOutput struct {
+	Output string `json:"output"`
+	// Truncated: Output does not start at the run's first byte.
+	Truncated bool `json:"truncated"`
+	// Complete: the run has finished; bytes it printed in its last moments can
+	// land a moment later, so read once more after Complete if the end matters.
+	Complete bool `json:"complete"`
+}
+
+// RunOutput reads the last tail bytes of a task_mode=exec run's output
+// (owner-or-admin); tail <= 0 asks for all the server keeps (8 KiB). 409 for
+// an interactive run, when none is kept, or when it is off; 410 once it has
+// expired. Each refusal carries a run_output_* reason.
+func (c *Client) RunOutput(ctx context.Context, runID uuid.UUID, tail int) (RunOutput, error) {
+	path := "/api/v1/runs/" + runID.String() + "/output"
+	if tail > 0 {
+		path += "?tail=" + strconv.Itoa(tail)
+	}
+	var out RunOutput
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
 	return out, err
 }
 

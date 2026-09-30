@@ -39,9 +39,8 @@ import (
 // bearerHeader is the exact header GetRoleCredentials/ListAccounts/
 // ListAccountRoles read the SSO access token from — confirmed in
 // sso/2019-06-10/service-2.json's AccessTokenType member
-// (location=header, locationName=x-amz-sso_bearer_token). Phase B (see
-// runs_bedrock.go's resolveBedrockAuth doc comment) will proxy-inject
-// exactly this header, so a fake that enforces it documents that contract.
+// (location=header, locationName=x-amz-sso_bearer_token). Phase B
+// (authorBedrockSSOInjection) proxy-injects exactly this header, so a fake that enforces it documents that contract.
 const bearerHeader = "x-amz-sso_bearer_token"
 
 // deviceGrantType is the OAuth device-code grant CreateToken expects during

@@ -76,6 +76,13 @@ const (
 // ambiguous.
 var modelProviderIDPattern = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
 
+// iamRoleName is a pinned role's real grammar; the account half is awssso_pin.go's
+// awsAccountID. Both fields are baked VERBATIM into every Bedrock SSO run's
+// generated ~/.aws/config INI (awsSSOConfigFileContents), so the write boundary
+// holds them to what AWS actually accepts rather than merely to "non-empty" — a
+// newline in either would otherwise smuggle extra keys into that file.
+var iamRoleName = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
+
 // modelIDPattern admits every model id shape the two harnesses take: vendor ids
 // ("claude-sonnet-4-5[1m]", "gpt-5-codex"), Bedrock inference-profile ids and
 // ARNs (":" and "/"). It excludes quotes, whitespace and control characters
@@ -318,8 +325,11 @@ func validateHeaderScheme(id, where, header, format string) error {
 }
 
 // validateProviderBedrock: a Bedrock kind needs a region (it names the hosts a
-// run reaches); bedrock_sso alone needs the start URL and may carry the pin,
-// held to the same grammars the agent roster's own pin is. The base URL takes
+// run reaches); bedrock_sso alone needs the start URL and may carry the pin.
+// A provider that is turned off may leave the region and start URL unset —
+// migration 0100 creates one from a Bedrock lane whose region and model came
+// only from the boot environment — and has to be completed before it is turned
+// on; whatever it does set is still held to its grammar. The base URL takes
 // ValidateBedrockBaseURL's rule — the seven gateway rules, plain http:// only
 // under WARDYN_ALLOW_TEST_ENDPOINTS — with this door's own refusal wording.
 func validateProviderBedrock(mp types.ModelProvider, allowTestEndpoints bool) error {
@@ -330,10 +340,16 @@ func validateProviderBedrock(mp types.ModelProvider, allowTestEndpoints bool) er
 		}
 		return nil
 	}
-	if b == nil || b.Region == "" {
-		return fmt.Errorf(mp400BRNeed, mp.ID, string(mp.Kind))
+	if b == nil {
+		if mp.Disabled {
+			return nil
+		}
+		b = &types.BedrockSettings{}
 	}
-	if !awsSSORegionPattern.MatchString(b.Region) {
+	switch {
+	case b.Region == "" && !mp.Disabled:
+		return fmt.Errorf(mp400BRNeed, mp.ID, string(mp.Kind))
+	case b.Region != "" && !awsSSORegionPattern.MatchString(b.Region):
 		return fmt.Errorf(mp400Region, mp.ID, b.Region)
 	}
 	if b.BaseURL != "" {
@@ -348,6 +364,9 @@ func validateProviderBedrock(mp types.ModelProvider, allowTestEndpoints bool) er
 		return nil
 	}
 	if b.SSOStartURL == "" {
+		if mp.Disabled {
+			return validateProviderPin(mp.ID, b)
+		}
 		return fmt.Errorf(mp400StartURLNeed, mp.ID)
 	}
 	if err := validateSSOStartURL(b.SSOStartURL); err != nil {
@@ -409,7 +428,7 @@ func validateProviderHarnesses(mp types.ModelProvider) error {
 
 func validateProviderHarness(mp types.ModelProvider, h types.ProviderHarness) error {
 	switch {
-	case h.Model == "" && mp.Kind.IsBedrock():
+	case h.Model == "" && mp.Kind.IsBedrock() && !mp.Disabled:
 		return fmt.Errorf(mp400ModelNeed, mp.ID, h.Harness)
 	case h.Model != "" && !modelIDPattern.MatchString(h.Model):
 		return fmt.Errorf(mp400Model, mp.ID, h.Harness, h.Model)

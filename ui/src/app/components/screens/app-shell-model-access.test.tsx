@@ -14,10 +14,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, SESSION_EXPIRY_COPY } from "./app-shell";
 import { ThemeProvider } from "../wardyn/theme-provider";
-import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
+import { BANNER } from "../wardyn/copy/door";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
-import { baseStatus } from "../../lib/test-fixtures";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 import { aheadByHours } from "../../lib/test-clock";
 
 // The model-access strip's place in the stack.
@@ -27,15 +27,10 @@ import { aheadByHours } from "../../lib/test-clock";
 // a dying session, a dead control plane and an unknown identity are each the
 // better explanation of what you are looking at, and are read first.
 describe("AppShell (the model-access strip)", () => {
-  const PER_USER_ROW = {
-    id: "claude-code",
-    display: "claude-code",
-    has_gateway: false,
-    has_login: true,
-    enabled: true,
-    mechanism: "bedrock_sso",
-    credential_source: "per_user",
-  };
+  const HARNESSES = [{ id: "claude-code", display: "Claude Code", has_gateway: false, has_login: true }];
+  const STRIP = BANNER.B1("Claude Code", MODEL_PROVIDERS.bedrock.name);
+  const statusAt = (state: string) =>
+    providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state }], { harnesses: HARNESSES });
 
   afterEach(() => vi.unstubAllGlobals());
 
@@ -59,10 +54,7 @@ describe("AppShell (the model-access strip)", () => {
       <MemoryRouter initialEntries={[path]}>
         <ThemeProvider>
           <ModelAccessProvider
-            status={baseStatus({
-              model_access: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
-              harnesses: [PER_USER_ROW],
-            })}
+            status={statusAt("not_configured")}
             onRefresh={() => {}}
           >
             <Routes>
@@ -99,7 +91,7 @@ describe("AppShell (the model-access strip)", () => {
   it("renders BELOW the session-expiry banner", async () => {
     renderShellAt("/runs", MEMBER_WITH_DYING_SESSION());
     const session = await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
-    const model = await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN);
+    const model = await screen.findByText(STRIP);
     // DOCUMENT_POSITION_FOLLOWING: `model` comes after `session` in the DOM.
     expect(session.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -107,21 +99,19 @@ describe("AppShell (the model-access strip)", () => {
   it("is withheld on /setup — that page IS the door", async () => {
     renderShellAt("/setup", MEMBER_WITH_DYING_SESSION());
     await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
-    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
+    expect(screen.queryByText(STRIP)).toBeNull();
   });
 
-  it("is withheld on /admin/settings for an OPERATOR, which already mounts the same pane", async () => {
+  it("is withheld on /admin/settings — the Admin view carries no provider strip", async () => {
     renderShellAt("/admin/settings", { ...MEMBER_WITH_DYING_SESSION(), operator: true, role: "admin" });
     await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
-    await waitFor(() => expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(STRIP)).toBeNull());
   });
 
-  // …and the member it does not: the Settings card's AWS button is
-  // `disabled={!operator}` there, so hiding the strip would strand exactly the
-  // person the refusal sentence sends to that page.
+  // …and a person's own connections page keeps it.
   it("stays for a user on /account", async () => {
     renderShellAt("/account", MEMBER_WITH_DYING_SESSION());
-    expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+    expect(await screen.findByText(STRIP)).toBeInTheDocument();
   });
 
   // The live region is the SHELL's and it is EAGER. role="status" announces
@@ -147,7 +137,7 @@ describe("AppShell (the model-access strip)", () => {
     render(
       <MemoryRouter initialEntries={["/runs"]}>
         <ThemeProvider>
-          <ModelAccessProvider status={baseStatus({ model_access: { state: "live" } })} onRefresh={() => {}}>
+          <ModelAccessProvider status={statusAt("live")} onRefresh={() => {}}>
             <Routes>
               <Route path="*" element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
                 <Route path="*" element={<div>screen</div>} />
@@ -160,11 +150,10 @@ describe("AppShell (the model-access strip)", () => {
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
-  // useOperator()'s fail-open default is TRUE, so until /me lands a member
-  // under a dead shared credential would read the ADMIN's sentence and be
-  // offered a sign-in the server refuses. The door says nothing until the
-  // identity is known.
-  it("says nothing about a shared-dead credential until /me answers, then the member's line", async () => {
+  // useOperator()'s fail-open default is TRUE, and usePrincipal() is "" in
+  // the same window, so a "Not now" there would write an unkeyed flag. The
+  // strip says nothing until the identity is known.
+  it("says nothing until /me answers, then the person's own line", async () => {
     let answer: (me: Record<string, unknown>) => void = () => {};
     const pending = new Promise<Record<string, unknown>>((resolve) => (answer = resolve));
     vi.stubGlobal(
@@ -180,17 +169,10 @@ describe("AppShell (the model-access strip)", () => {
         return Promise.resolve({ ok: true, json: async () => ({}) });
       }) as unknown as typeof fetch,
     );
-    const SHARED_ACTION = "Your admin's model credential expired — ask them to reconnect it";
     render(
       <MemoryRouter initialEntries={["/runs"]}>
         <ThemeProvider>
-          <ModelAccessProvider
-            status={baseStatus({
-              model_access: { state: "shared_expired", action: SHARED_ACTION },
-              harnesses: [{ ...PER_USER_ROW, credential_source: "shared" }],
-            })}
-            onRefresh={() => {}}
-          >
+          <ModelAccessProvider status={statusAt("not_configured")} onRefresh={() => {}}>
             <Routes>
               <Route path="*" element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
                 <Route path="*" element={<div>screen</div>} />
@@ -201,24 +183,18 @@ describe("AppShell (the model-access strip)", () => {
       </MemoryRouter>,
     );
 
-    // While /me is in flight: no admin sentence, no button, no member line.
-    // Two macrotasks first, so the strip's own lazy chunk has certainly
-    // resolved and the silence below is the door's answer rather than a chunk
-    // that had not arrived yet.
+    // While /me is in flight: no line and no button. Two macrotasks first, so
+    // the strip's own lazy chunk has certainly resolved and the silence below
+    // is the strip's answer rather than a chunk that had not arrived yet.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(screen.getByRole("status")).toBeInTheDocument();
-    expect(screen.queryByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeNull();
+    expect(screen.queryByText(STRIP)).toBeNull();
     expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
-    expect(screen.queryByText(SHARED_ACTION)).toBeNull();
 
     answer({ principal: "member@corp.example", role: "user", operator: false, security_operator: false });
-    // …and once it lands, the member reads the server's instruction, with no
-    // button: nobody but their admin can repair it.
-    expect(await screen.findByText(SHARED_ACTION)).toBeInTheDocument();
-    expect(screen.queryByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeNull();
-    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+    expect(await screen.findByText(STRIP)).toBeInTheDocument();
   });
 });

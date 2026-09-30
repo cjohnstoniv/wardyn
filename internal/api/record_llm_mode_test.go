@@ -14,14 +14,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // recordLLMModeStore is a minimal in-memory Store that, unlike fkGrantStore
 // (whose UpdateRunStateIf always returns false), actually advances a run's
-// state — so dispatchRun runs its FULL body (through resolveLLMTransport) and
+// state — so dispatchRun runs its FULL body (through resolveLLMInjections) and
 // this test can observe what launchRecordRun ultimately persists as the
 // session's llm_mode/model, not just its pre-dispatch guess.
 type recordLLMModeStore struct {
@@ -113,68 +112,16 @@ func (s *recordLLMModeStore) lastRecord() RecordTaskResult {
 	return s.records[len(s.records)-1]
 }
 
-// TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode: launchRecordRun
-// computes llm_mode/model before dispatch, from a
-// mount-target check (specHasMountTarget(claudeCredTarget)) that only ever
-// sees a HOST-STAGED resident subscription. The Wardyn-MANAGED subscription
-// (no mount at all — compose-mode, gated on s.managedInjectReady/ManagedToken)
-// is resolved later, inside dispatch's resolveLLMTransport — so a managed
-// session's pre-dispatch guess is stuck at "none" even though the run
-// actually authenticated via the managed subscription. The session entry
-// must instead reflect the ACTUAL transport dispatch resolved.
-func TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode(t *testing.T) {
-	h := newHarness(t)
-	wsID := uuid.New()
-	ws := types.Workspace{ID: wsID, Status: types.WorkspaceScanned} // no Sources: no clone grant to wire
-	fake := newRecordLLMModeStore(ws)
-	cfg := baseTestConfig(h, fake)
-	cfg.Runner = &fakeRunner{}
-	cfg.Broker = h.broker
-	// No resident ~/.claude mount is blessed (DefaultPolicy carries none), so
-	// the ONLY way this run authenticates is the Wardyn-managed subscription —
-	// exactly the lane resolveLLMTransport's `managed` gate covers.
-	cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}
-	// Single-user desktop posture: the managed lane is a shared-subscription path,
-	// so off-posture it is not wired at all and llm_mode would correctly read "none".
-	cfg.SubscriptionPostureOK = true
-	srv := New(cfg)
-
-	// confined=false: AllowAllEgress, satisfying resolveLLMTransport's managed
-	// gate `(AllowAllEgress || len(AllowedDomains) > 0)`.
-	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", ws, "build", "build", false)
-	if err != nil {
-		t.Fatalf("launchRecordRun: %v", err)
-	}
-
-	got := fake.lastRecord()
-	if got.LLMMode != "subscription" {
-		t.Fatalf("session llm_mode = %q, want %q (managed subscription actually credentialed the run — "+
-			"the pre-dispatch guess, which only detects a resident mount, must be corrected against dispatch's "+
-			"resolved llmTransport)", got.LLMMode, "subscription")
-	}
-}
-
 // TestLaunchRecordRun_MintsNoOperatorModelCredential pins #547 on the step-run
 // door (record, verify and build all launch through launchRecordRun): with no
 // model-provider block, a session no longer mints an api_key grant from the
-// OPERATOR's secrets — not the site-wide DefaultFor:agent_runs AI integration's,
-// not the workspace's own AI-integration pin's, and not the convention
-// anthropic-api-key the old fallback reached for (ensureLLMGrant). Each put the
+// OPERATOR's secrets — not the convention anthropic-api-key the old fallback
+// reached for (ensureLLMGrant), nor any other stored key. Each put the
 // operator's key behind every session's model calls.
 func TestLaunchRecordRun_MintsNoOperatorModelCredential(t *testing.T) {
 	h := newHarness(t)
-	ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned,
-		LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "corp-default-anthropic"}}
+	ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}
 	fake := newRecordLLMModeStore(ws)
-	fake.sc = types.SiteConfig{
-		Integrations: []types.Integration{{
-			ID:         "corp-default-anthropic",
-			Name:       "Corp default Anthropic key",
-			Kind:       types.IntegrationKindAnthropicAPIKey,
-			DefaultFor: []string{"agent_runs"},
-			Secrets:    []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}},
-		}},
-	}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker

@@ -47,7 +47,7 @@ import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { RUN } from "../wardyn/copy";
 import { MODEL_ACCESS_RUN_DOOR, REAUTH_ROW } from "../wardyn/model-access-copy";
 import { OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
-import { baseStatus } from "../../lib/test-fixtures";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 
 const ME = "admin@corp";
 const RUN_ROW = {
@@ -67,20 +67,8 @@ const RUN_ROW = {
 
 // The admin's own sign-in is dead on a per-user Bedrock lane — the state in
 // which the User view offers the owner the door.
-const STATUS = baseStatus({
-  model_access: { state: "expired_signin", action: "Sign in to AWS" },
-  harnesses: [
-    {
-      id: "claude-code",
-      display: "claude-code",
-      has_gateway: false,
-      has_login: true,
-      enabled: true,
-      mechanism: "bedrock_sso",
-      credential_source: "per_user",
-    },
-  ],
-});
+const { bedrock } = MODEL_PROVIDERS;
+const STATUS = providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state: "expired_signin" }]);
 
 function mount(path: string, run: Record<string, unknown>) {
   getRunMock.mockResolvedValue(run);
@@ -136,7 +124,7 @@ describe("RunDetailScreen at /admin/runs/:id — the monitor (M-7)", () => {
   });
 
   it("a credential ending on the admin's own run: no door, the switch link instead", async () => {
-    ending.value = { kind: "credential", action: "run.create", outcome: "failure", mechanism: "bedrock_sso" };
+    ending.value = { kind: "credential", action: "run.create", outcome: "failure", provider: bedrock.id };
     mount("/admin/runs/run-1", { ...RUN_ROW, state: "FAILED" });
     const block = await screen.findByTestId("run-failure-block");
     expect(within(block).queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).not.toBeInTheDocument();
@@ -144,7 +132,7 @@ describe("RunDetailScreen at /admin/runs/:id — the monitor (M-7)", () => {
   });
 
   it("the owner door: the same failed run at /runs/:id offers the sign-in", async () => {
-    ending.value = { kind: "credential", action: "run.create", outcome: "failure", mechanism: "bedrock_sso" };
+    ending.value = { kind: "credential", action: "run.create", outcome: "failure", provider: bedrock.id };
     mount("/runs/run-1", { ...RUN_ROW, state: "FAILED" });
     const block = await screen.findByTestId("run-failure-block");
     expect(within(block).getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeInTheDocument();
@@ -157,7 +145,7 @@ function heldReauth(): ApprovalRequest {
     id: "reauth-1",
     run_id: "run-1",
     kind: "credential_reauth",
-    requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: ME },
+    requested_scope: { provider: bedrock.id, credential_source: "per_user", owner: ME },
     state: "PENDING",
     requested_at: new Date().toISOString(),
   } as ApprovalRequest;

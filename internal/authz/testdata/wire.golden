@@ -22,8 +22,6 @@ reason capability_workspace_provider
 reason governance_profile
 reason grant_pairing_not_eligible
 reason groups_snapshot_stale
-reason harness_login_mechanism_principal
-reason harness_login_not_per_user
 reason run_not_found
 reason run_terminal
 reason second_human_required
@@ -35,3 +33,4 @@ reason admin_view
 reason model_provider_unavailable
 reason run_kept
 reason delegation_scope
+reason event_stream_cap

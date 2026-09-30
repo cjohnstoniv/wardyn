@@ -153,8 +153,9 @@ func TestLive_Tasks(t *testing.T) {
 
 // TestLive_RealModel proves a REAL model-backed agent completes real work. Gated
 // (WARDYN_E2E_REAL_MODEL=1) because it calls a real model and costs tokens/time.
-// Runs the model tasks through the manual subscription path when creds are
-// staged. (It also ran a composer lane until the composer was cut in 0.5.)
+// Runs the model tasks through the manual path on the stack's own model
+// provider, when this token's principal has connected one. (It also ran a
+// composer lane until the composer was cut in 0.5.)
 func TestLive_RealModel(t *testing.T) {
 	h := newHarness(t)
 	if !h.realModel {
@@ -162,7 +163,7 @@ func TestLive_RealModel(t *testing.T) {
 	}
 	ctx := context.Background()
 	installedRM := h.installedClasses(ctx)
-	haveCreds := h.subscriptionMounts() != nil
+	haveCreds := h.modelProviderLive(ctx)
 
 	for _, task := range h.loadTasks() {
 		task := task
@@ -170,8 +171,8 @@ func TestLive_RealModel(t *testing.T) {
 			continue
 		}
 
-		// MANUAL path (reliable): launch a real claude-code agent directly with a
-		// subscription inline policy. Proves "a real
+		// MANUAL path (reliable): launch a real claude-code agent directly with an
+		// inline policy; its model credential is its model provider's. Proves "a real
 		// model-backed agent actually completes the task" under EACH installed
 		// confinement substrate (so a real Opus agent is exercised at CC1 AND CC2,
 		// not just the best tier).
@@ -180,7 +181,7 @@ func TestLive_RealModel(t *testing.T) {
 			t.Run("manual/"+class+"/"+task.Name, func(t *testing.T) {
 				hh := h.forT(t)
 				if !haveCreds {
-					t.Skip("no staged Claude subscription creds (scripts/stage-claude-creds.sh); skipping manual real-model lane")
+					t.Skip("no model provider connected for this token's principal (Settings → Model providers); skipping manual real-model lane")
 				}
 				ws := hh.seedWorkspace(task, "manual-"+class, false)
 				spec := hh.buildManualPolicy(task, class, ws, true /* model */, false)

@@ -22,6 +22,7 @@ import type {
   RunEndWaitResult,
   RunFilesResult,
   RunPolicySpec,
+  RunPolicyView,
   RunResources,
 } from "../types";
 import {
@@ -147,10 +148,10 @@ function runWireBody(input: RunWireInput): Record<string, unknown> {
   return body;
 }
 
-// The create-time model-credential refusal — enforceCreateLLMMechanism's 422
+// The create-time model-credential refusal — writeProviderRefusal's 422
 // carrying reason `model_credential`, the failure audit row's own word. It is
 // the one launch refusal a sign-in repairs, so the New Run rail answers it with
-// the AWS sign-in dialog and launches again. Beside createRun because that is
+// the named provider's door and launches again. Beside createRun because that is
 // the call that raises it, and so the screen (at the file-size gate) reaches it
 // through the import line it already has.
 export function isCredentialRefusal(e: unknown): boolean {
@@ -442,6 +443,15 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/files`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<RunFilesResult>(res);
+  },
+
+  // GET /api/v1/runs/{id}/policy — the policy the run got, where it started
+  // from and what launch changed. The tab renders every non-200 as one error
+  // state, so they are left as thrown HttpErrors.
+  async getPolicy(runId: string): Promise<RunPolicyView> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/policy`, { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunPolicyView>(res);
   },
 
   // GET /api/v1/runs/{id}/resources — CPU/memory/disk/process counts read from

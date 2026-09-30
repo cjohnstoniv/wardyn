@@ -228,7 +228,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		s.projectRecordingMeta(r, needs)
-		projectStatusDetail(needs)
+		s.projectStatusDetailFor(r, needs)
 		w.Header().Set("X-Wardyn-Hidden-Older", "0")
 		w.Header().Set("X-Wardyn-Hidden-Killed", "0")
 		windowed, truncated := pageWindow(needs, page.Offset, page.Limit)
@@ -263,7 +263,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		s.projectRecordingMeta(r, runs)
-		projectStatusDetail(runs)
+		s.projectStatusDetailFor(r, runs)
 		return runs, nil
 	}, nil)
 }

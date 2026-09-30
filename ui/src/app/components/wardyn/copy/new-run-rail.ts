@@ -45,35 +45,16 @@ export const RAIL_CREDENTIAL = {
   // it. What every proxy lane shares is where the credential goes and where it
   // does not.
   PROXY: "Model credential — injected by the proxy at launch; never written into the sandbox.",
-  // residency "proxy" + staged_placeholder: the ~/.claude mount with injection
-  // ON. "Proxy" is the deployment's STATED mode, not something Wardyn verified —
-  // the sentinel is written by an operator-run script (scripts/stage-claude-creds.sh)
-  // the daemon never reads back — so the mount is named rather than denied.
-  PROXY_STAGED:
-    "Model credential — this deployment injects it at the proxy; the sign-in mounted into the sandbox is staged as a placeholder.",
   // residency "sandbox", Bedrock family. The operator's own sentence.
   SANDBOX_BEDROCK:
     "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.",
-  // Whose credential that is — the per_user/shared distinction, in the Barrier
-  // chip's shape because it is the same kind of fact: a bound, stated up front.
-  // OWNERSHIP, not status. This chip must be painted from the ROSTER ROW
-  // alone — the rail never reads model_access — so it must not reuse "Your
-  // AWS sign-in" (Getting Started's retired "Your model key" card's own
-  // SIGNED-IN success chip, #541), which would tell a member who had not
-  // signed in that they had. The row's fact is whose credential the lane
-  // uses, and that is what it says.
+  // Whose credential that is, in the Barrier chip's shape because it is the
+  // same kind of fact: a bound, stated up front. OWNERSHIP, not status — it
+  // must not reuse "Your AWS sign-in" (a SIGNED-IN success chip, #541), which
+  // would tell a person who had not signed in that they had.
   SANDBOX_BEDROCK_CHIP_PER_USER: "Per-person AWS sign-in",
-  SANDBOX_BEDROCK_CHIP_SHARED: "Admin's credential",
-  // residency "sandbox", subscription: WARDYN_SUBSCRIPTION_INJECT=off, which is
-  // the COMPOSE stack's own default (threatmodel/THREAT-MODEL.md).
-  SANDBOX_SUBSCRIPTION:
-    "Model credential — this deployment mounts the Claude sign-in into the sandbox, so this run holds it for its lifetime.",
-  // residency "image" (a `none` roster row, BYOA). The server's own
-  // llmMechanismWords wording for that lane, said once in both places.
-  IMAGE: "Wardyn wires no model credential — the image brings its own, and Wardyn cannot say where it lives.",
-  // Nothing resolved, and the absent-row doctrine in one line: the rail states
-  // no residency it was not given. This is the COMMON case, not an error — a
-  // roster cannot settle residency, so only a dry run of this exact body can.
+  // Nothing resolved: the rail states no residency it was not given. Only a
+  // dry run of this exact body can settle it.
   RESOLVED_AT_LAUNCH: "Resolved at launch.",
   // …and therefore the way to find out, said where the absence is. Without it
   // "Resolved at launch." reads as "nothing to see", when the precise answer is

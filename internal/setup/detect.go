@@ -14,15 +14,13 @@ import (
 	"strings"
 )
 
-// CLIProvider is a resident coding-agent CLI. LoggedIn is a HEURISTIC
-// (credential-file check), not a live probe; BinPath (set when Installed)
-// lets the setup surface warn "logged in but the CLI is off PATH".
+// CLIProvider is a coding-agent CLI on the wardynd host's PATH. Whether it is
+// signed in is not read: a host login credentials no run (0.8.2 retired the
+// host ~/.claude lane; a run's model access is its model provider's).
 type CLIProvider struct {
 	Tool      string
 	Installed bool
 	BinPath   string
-	LoggedIn  bool
-	LoginVia  string
 }
 
 // Platform is the wardynd host's OS, WSL/KVM/containerized posture. KVM
@@ -35,56 +33,17 @@ type Platform struct {
 	Containerized bool
 }
 
-// DetectCLIProviders reports the resident coding-agent CLIs (claude, codex):
-// Installed (on PATH) and an advisory LoggedIn+LoginVia signal — heuristic,
-// since a stale credential file still reads as logged-in (no shelling out).
+// DetectCLIProviders reports the coding-agent CLIs (claude, codex) on PATH.
 func DetectCLIProviders() []CLIProvider {
-	home, _ := os.UserHomeDir()
-	claude := detectProvider("claude", home, []string{filepath.Join(".claude", ".credentials.json")})
-	// macOS stores the OAuth credential in Keychain, not on disk — fall back
-	// to a Keychain probe (fixes only the login signal, not host-mode staging).
-	if !claude.LoggedIn {
-		if via := detectMacKeychainClaude(); via != "" {
-			claude.LoggedIn = true
-			claude.LoginVia = via
-		}
-	}
-	return []CLIProvider{
-		claude,
-		detectProvider("codex", home, []string{filepath.Join(".codex", "auth.json")}),
-	}
+	return []CLIProvider{detectProvider("claude"), detectProvider("codex")}
 }
 
-// detectMacKeychainClaude reports the Keychain-backed Claude login on macOS,
-// or "" if absent/not-macOS — presence-only probe (no -w), no ACL prompt.
-func detectMacKeychainClaude() string {
-	if runtime.GOOS != "darwin" {
-		return ""
-	}
-	// -s <service>: match the service attribute; no -w so only metadata is touched.
-	if err := exec.Command("security", "find-generic-password", "-s", "Claude Code-credentials").Run(); err == nil {
-		return "macOS Keychain (Claude Code-credentials)"
-	}
-	return ""
-}
-
-// detectProvider resolves one CLI's install + login heuristic. loginPaths are
-// checked relative to home; the first that exists wins and is recorded verbatim.
-func detectProvider(tool, home string, loginPaths []string) CLIProvider {
+// detectProvider resolves one CLI's install state.
+func detectProvider(tool string) CLIProvider {
 	p := CLIProvider{Tool: tool}
 	if path, err := exec.LookPath(tool); err == nil {
 		p.Installed = true
 		p.BinPath = path
-	}
-	if home != "" {
-		for _, rel := range loginPaths {
-			candidate := filepath.Join(home, rel)
-			if _, err := os.Stat(candidate); err == nil {
-				p.LoggedIn = true
-				p.LoginVia = candidate
-				break
-			}
-		}
 	}
 	return p
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
 
 // The Azure DevOps capability HOLD, from the sandbox's side: a write beyond the
@@ -53,6 +54,16 @@ type capControlPlane struct {
 	// firstAskOK answers a first ask 200 WITHOUT the capability — an older
 	// control plane that ignores the ask.
 	firstAskOK bool
+	// value is the Authorization value a resolve answers with; empty is the REST harness's own token.
+	value string
+}
+
+// credential is the Authorization value a resolve answers with. Caller holds cp.mu.
+func (cp *capControlPlane) credential() string {
+	if cp.value != "" {
+		return cp.value
+	}
+	return "Bearer " + adoToken
 }
 
 func newCapControlPlane(t *testing.T) *capControlPlane {
@@ -67,7 +78,7 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 		if q.Get("approval") == "" {
 			if cp.firstAskOK {
 				_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
-					Header: "Authorization", Value: "Bearer " + adoToken, Capabilities: []string{"read"},
+					Header: "Authorization", Value: cp.credential(), Capabilities: []string{"code_read"},
 				})
 				return
 			}
@@ -98,12 +109,12 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 			_ = json.NewEncoder(w).Encode(map[string]string{"state": "reauth_pending", "approval_id": cp.consent.String()})
 			return
 		}
-		caps := []string{"read"}
+		caps := []string{"code_read"}
 		if cp.forRun {
 			caps = append(caps, q.Get("capability"))
 		}
 		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
-			Header: "Authorization", Value: "Bearer " + adoToken, Capabilities: caps,
+			Header: "Authorization", Value: cp.credential(), Capabilities: caps,
 		})
 	}))
 	t.Cleanup(cp.srv.Close)
@@ -121,7 +132,7 @@ func (cp *capControlPlane) snapshot() ([]url.Values, []uuid.UUID) {
 func newADOHoldHarness(t *testing.T, cp *capControlPlane, reader approvalReader) *adoHarness {
 	t.Helper()
 	fastPolls(t, 5*time.Millisecond)
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapCodeRead)
 	tok := &tokenSource{}
 	tok.Set("run-token")
 	inj := h.p.inject
@@ -323,7 +334,7 @@ func TestCapabilityHoldBudget_ClampedBelowTheReadTimeout(t *testing.T) {
 
 // With no hold lane the gate refuses exactly as before.
 func TestADOHold_NoHoldLaneRefusesAsBefore(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapCodeRead)
 	h.mustRefuse(t, h.patchWorkItem(t), "this run was not granted it")
 }
 
@@ -462,5 +473,45 @@ func TestADOHold_RefClassIsOutsideRunNamespaceOnlyForARefMoveOutsideIt(t *testin
 	prBypass := func(uuid.UUID) string { return `{"status":"completed","completionOptions":{"bypassPolicy":true}}` }
 	if q := ask(t, true, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1", prBypass); q.Get("capability") != string(adoscope.CapPolicyBypass) || q.Has("ref_class") {
 		t.Errorf("PR bypass asked %v, want policy_bypass with no ref_class", q)
+	}
+}
+
+// A READ of another area is askable like any write: a run holding only
+// code_read that GETs a work item is held, and the ask names work_read.
+func TestADOHold_ReadOfAnotherAreaAsksForThatRead(t *testing.T) {
+	cp := newCapControlPlane(t)
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
+
+	rec := h.do(t, http.MethodGet, "/acme/proj/_apis/wit/workitems/1?api-version=7.1", "", nil)
+	asks, raised := cp.snapshot()
+	if len(raised) != 1 || asks[0].Get("capability") != string(adoscope.CapWorkRead) || asks[0].Get("method") != http.MethodGet {
+		t.Fatalf("control plane saw %v, want one ask for work_read on the GET", asks)
+	}
+	if log := h.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+		t.Errorf("the approved read was not forwarded (status %d): %s", rec.Code, log)
+	}
+}
+
+// THE APPROVAL'S PAT REACHES THE APPROVED REQUEST: the control plane mints a union PAT at the
+// approved re-resolve, and the held request goes out under it, not under the narrower PAT
+// cached before the approval (which Azure DevOps refuses).
+func TestADOHold_ApprovedWideningPATReachesTheApprovedRequest(t *testing.T) {
+	cp := newCapControlPlane(t)
+	patB := "pat-b-" + uuid.NewString()
+	cp.value = "Bearer " + patB
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
+	// PAT A, the one the entry holds, cannot write work items; PAT B can.
+	h.fake.RegisterToken(adoToken, adofake.ScopeCodeRead, adofake.ScopeWorkRead, adofake.ScopeProjectRead)
+	h.fake.RegisterToken(patB, adofake.ScopeWorkRead, adofake.ScopeWorkWrite, adofake.ScopeProjectRead)
+
+	if rec := h.patchWorkItem(t); rec.Code != http.StatusOK {
+		t.Fatalf("held write: status %d body %s, want it forwarded under the approval's PAT", rec.Code, rec.Body.String())
+	}
+	reqs := h.fake.Requests()
+	if len(reqs) != 1 || reqs[0].Token != patB || !reqs[0].Authorized {
+		t.Fatalf("upstream saw %+v, want one write under the approval's PAT", reqs)
+	}
+	if _, raised := cp.snapshot(); len(raised) != 1 {
+		t.Errorf("raised %d approvals, want 1", len(raised))
 	}
 }

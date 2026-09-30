@@ -3,8 +3,6 @@
 
 package api
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
-
 // harness.go is the single catalog of coding-agent "harnesses" Wardyn knows
 // how to run. Before this file, the same knowledge was spread across three
 // independent string-matches that had to be kept in sync by hand: agentImage's
@@ -94,9 +92,6 @@ var harnessCatalog = []harnessDef{
 			// locally and named it in WARDYN_AGENT_IMAGES (which wins over this).
 			// That is the same state as before the re-point, not a regression.
 			loginImageKey: "claude-code",
-			secretName:    harnessCredSecretName("anthropic"),
-			sentinel:      types.ManagedOAuthSecret,
-			injectHost:    subscriptionInjectionHost, // api.anthropic.com
 			tokenPrefix:   "sk-ant-oat",
 			// `claude setup-token` OAuth (observed v2.1.x): authorize on claude.com,
 			// remote callback on platform.claude.com, token exchange on the Anthropic

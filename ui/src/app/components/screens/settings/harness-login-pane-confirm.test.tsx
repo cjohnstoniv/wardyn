@@ -7,7 +7,7 @@
 //
 // Its own file because harness-login-pane.test.tsx is at the 1000-line gate
 // (the same split `-launch.test.tsx` already established) — and because the
-// 944-line sibling holds the 19 S-13 / serverConfirmsCapture pins and gets NO
+// 944-line sibling holds the 19 S-13 / serverConfirmsProviderCapture pins and gets NO
 // new cases (the lane brief, COMMON.md's regression law): every case here is
 // NEW behaviour, never a rewrite of what that file already pins.
 //
@@ -38,8 +38,14 @@ vi.mock("../../attach-terminal", () => ({
   }),
 }));
 const harnessLoginMock = vi.fn();
-vi.mock("../../../lib/api/harness-auth", () => ({
-  harnessAuth: { harnessLogin: (...a: unknown[]) => harnessLoginMock(...a), harnessCredentialPaste: vi.fn() },
+// The pane launches and stores through the provider door (#548: the only
+// door), adapted to the mocks below: a launch resolves the run id, a
+// capture passes the token.
+vi.mock("../../../lib/api/model-provider-signin", () => ({
+  modelProviderSignIn: {
+    startSignIn: (...a: unknown[]) => Promise.resolve(harnessLoginMock(...a)).then((runId: unknown) => ({ runId, state: "PENDING" })),
+    captureSignIn: vi.fn(),
+  },
 }));
 const killRunMock = vi.fn();
 const getRunMock = vi.fn();
@@ -82,8 +88,7 @@ function status(overrides: Partial<SetupStatus>): SetupStatus {
 }
 
 async function attachAwsRun(onDone = vi.fn(), onCancel = vi.fn()) {
-  render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
-  await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+  render(<HarnessLoginPane modelProvider="bedrock-prod" provider="aws" onDone={onDone} onCancel={onCancel} />);
   await screen.findByTestId("fake-terminal");
   return { onDone, onCancel };
 }
@@ -117,7 +122,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     const { onDone } = await attachAwsRun();
     listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
-      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+      status({ provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }] }),
     );
 
     await act(async () => {
@@ -136,7 +141,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     const { onDone } = await attachAwsRun();
     listAuditMock.mockResolvedValue([{ id: "a1" }]);
     getSetupStatusMock.mockResolvedValue(
-      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-earlier" }], model_access: { state: "live" } }),
+      status({ provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-earlier" }] }),
     );
 
     await act(async () => {
@@ -153,7 +158,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
 
     listAuditMock.mockResolvedValue([{ id: "a1" }]);
     getSetupStatusMock.mockResolvedValue(
-      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+      status({ provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }] }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(CAPTURE_WATCH_SAMPLE_MS);
@@ -205,7 +210,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     const { onDone } = await attachAwsRun();
     listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
-      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+      status({ provider_access: [{ provider: "bedrock-prod", state: "live", source_run_id: "run-123" }] }),
     );
 
     // The CLI marker fires confirmCapture's own round trip; the watch,

@@ -23,7 +23,6 @@ const (
 	mpRunStateMissing    = "there is no model provider by that name"
 	mpRunStateOff        = "it is turned off"
 	mpRunStateNotServing = "it is not available to %s"
-	mpRunStateNotGranted = "you are not granted it"
 	mpRunNoneGranted     = "No model provider that serves %s is granted to you — ask your admin. Wardyn does not substitute a different model provider."
 	mpRunChoose          = "Choose a model provider for this run: more than one serves %s, and none is its default."
 	mpRunNoBlock         = "model_provider names %q, but this deployment has no model providers — launch without model_provider."
@@ -32,19 +31,20 @@ const (
 )
 
 // runProviderChoice is chooseModelProvider's answer. chosen=false with no
-// refusal is "no provider serves this harness": the run launches on today's
-// path with today's advisory.
+// refusal is "no provider serves this harness": the run launches with no model
+// credential and the advisory that says so.
 type runProviderChoice struct {
 	provider types.ModelProvider
 	chosen   bool
-	// governs: a provider block is set and this is a model run, so the legacy
-	// lanes are bypassed — the run is credentialed by its provider or by
-	// nothing (resolveRunLLMAccess, dispatch's resolveProviderLane).
-	governs bool
-	refusal string
+	refusal  string
 	// notGranted marks a refusal the caller's capability decided — a 403
 	// authz.denied row, not an org-configuration 422.
 	notGranted bool
+	// asMissing marks a notGranted refusal of a provider the caller NAMED
+	// (request or pin): it is answered exactly as a provider that does not
+	// exist, since provider ids are guessable (D-6, #1018), and only the
+	// authz.denied row records capability_model_provider.
+	asMissing bool
 	// providerID and kind (#532) name the provider a refusal is ABOUT, even
 	// when it was never chosen (providerID is set by providerRefusal for
 	// every state refusal; kind is "" when the named provider does not exist,
@@ -79,15 +79,22 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 		return slices.ContainsFunc(candidates, func(p types.ModelProvider) bool { return p.ID == id })
 	}
 	if named := cmp.Or(requested, pin); named != "" {
-		return judgeNamedProvider(sc, agent, named, isCandidate), nil
+		return judgeNamedProvider(sc, agent, named, requested == "", granted)
 	}
 	if row, ok := agentProviderFor(sc, agent); ok && row.DefaultProvider != "" {
-		d, _ := modelProviderByID(sc.ModelProviders, row.DefaultProvider)
-		if d.Disabled {
-			return providerRefusal(d.ID, d.Kind, mpRunStateOff), nil
-		}
-		if isCandidate(d.ID) {
-			return runProviderChoice{provider: d, chosen: true}, nil
+		if d, found := modelProviderByID(sc.ModelProviders, row.DefaultProvider); found {
+			// The grant before the state: a disabled default the caller is not
+			// granted is passed over too, never refused naming it (D-6, #1018).
+			ok, err := granted(d.ID)
+			if err != nil {
+				return runProviderChoice{}, err
+			}
+			if ok && d.Disabled {
+				return providerRefusal(d.ID, d.Kind, mpRunStateOff), nil
+			}
+			if ok && isCandidate(d.ID) {
+				return runProviderChoice{provider: d, chosen: true}, nil
+			}
 		}
 	}
 	switch {
@@ -97,31 +104,48 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 		return runProviderChoice{refusal: fmt.Sprintf(mpRunChoose, agent)}, nil
 	case len(serving) == 0:
 		return runProviderChoice{}, nil
-	case len(serving) == 1:
-		c := providerRefusal(serving[0].ID, serving[0].Kind, mpRunStateNotGranted)
-		c.notGranted = true
-		return c, nil
 	}
-	return runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true}, nil
+	// However many serve the agent, the caller named none, so the refusal names
+	// none either: naming the one that serves would tell them a provider they
+	// are not granted exists (D-6, #1018). The audit row still names it.
+	c := runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true}
+	if len(serving) == 1 {
+		c.providerID = serving[0].ID
+	}
+	return c, nil
 }
 
 // judgeNamedProvider answers for a provider the request or the workspace pin
-// named: it is the choice, or the run is refused naming it.
-func judgeNamedProvider(sc types.SiteConfig, agent, id string, isCandidate func(string) bool) runProviderChoice {
+// named: it is the choice, or the run is refused naming it. The grant is asked
+// before the provider's state, so a provider the caller is not granted reads
+// as one that does not exist whatever its state (asMissing) — or, when the
+// workspace pin named it (fromPin), is refused naming no provider at all: the
+// caller never named it, and a workspace read hides it from them
+// (pinStamper), so the refusal must not be where they learn it.
+func judgeNamedProvider(sc types.SiteConfig, agent, id string, fromPin bool, granted func(id string) (bool, error)) (runProviderChoice, error) {
+	// The grant before existence, so a pin the caller is not granted — even
+	// one naming no provider — is refused exactly as pinStamper hides it.
+	allowed, err := granted(id)
+	if err != nil {
+		return runProviderChoice{}, err
+	}
+	if !allowed && fromPin {
+		return runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true, providerID: id}, nil
+	}
 	p, ok := modelProviderByID(sc.ModelProviders, id)
 	switch {
 	case !ok:
-		return providerRefusal(id, "", mpRunStateMissing)
+		return providerRefusal(id, "", mpRunStateMissing), nil
+	case !allowed:
+		c := providerRefusal(id, "", mpRunStateMissing)
+		c.notGranted, c.asMissing = true, true
+		return c, nil
 	case p.Disabled:
-		return providerRefusal(id, p.Kind, mpRunStateOff)
+		return providerRefusal(id, p.Kind, mpRunStateOff), nil
 	case !p.Serves(agent):
-		return providerRefusal(id, p.Kind, fmt.Sprintf(mpRunStateNotServing, agent))
-	case !isCandidate(id):
-		c := providerRefusal(id, p.Kind, mpRunStateNotGranted)
-		c.notGranted = true
-		return c
+		return providerRefusal(id, p.Kind, fmt.Sprintf(mpRunStateNotServing, agent)), nil
 	}
-	return runProviderChoice{provider: p, chosen: true}
+	return runProviderChoice{provider: p, chosen: true}, nil
 }
 
 // providerRefusal is a state refusal naming id (multi-provider §2.6's one
@@ -146,7 +170,13 @@ func providerRefusal(id string, kind types.ModelProviderKind, state string) runP
 // keeps this envelope, which refuse's plain error would drop, so the row is
 // written beside it with the same provider, kind and credential class.
 func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id string, kind types.ModelProviderKind, msg string, credential bool) {
-	d := authz.Deny(authz.ReasonModelProviderUnavailable, "runs.model_provider", msg)
+	s.writeProviderRefusalAs(w, r, authz.Deny(authz.ReasonModelProviderUnavailable, "runs.model_provider", msg), id, kind, msg, credential)
+}
+
+// writeProviderRefusalAs is writeProviderRefusal with the audit row's decision
+// given: a provider refused as if missing (asMissing) records
+// capability_model_provider under the byte-identical 422.
+func (s *Server) writeProviderRefusalAs(w http.ResponseWriter, r *http.Request, d authz.Decision, id string, kind types.ModelProviderKind, msg string, credential bool) {
 	if id != "" {
 		d = d.With("provider", id)
 	}
@@ -170,9 +200,9 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 
 // enforceRunModelProvider is the model-provider choice at BOTH doors, create
 // and Review, so Review answers the refusal launch would. With no provider
-// block it changes nothing unless the request named a provider, which it
-// refuses rather than ignores. wsRefs[0] is the primary workspace, the one
-// whose pin a run inherits.
+// block nothing serves the run, and a request that named a provider is refused
+// rather than ignored. wsRefs[0] is the primary workspace, the one whose pin a
+// run inherits.
 //
 // A chosen provider is checked live at both doors, as dispatch will check it
 // again (providerLiveness, one check per kind): the caller's own credential for
@@ -186,10 +216,9 @@ func (s *Server) writeProviderRefusal(w http.ResponseWriter, r *http.Request, id
 //
 // The returned runProviderChoice is launch's (runs.go) only source for
 // AgentRun.ModelProviderID and the run.create audit snapshot (#527); Review
-// uses it only for its model-access row. choice.chosen is false with no
-// provider block (the zero runProviderChoice, today's path) and under a block
-// that serves no provider for this agent (governs=true: no model credential
-// at all). Neither is a choice, and callers must not treat a zero
+// uses it only for its model-access row. choice.chosen is false when no
+// provider serves this agent (no model credential at all), and for a run that
+// makes no model call. Neither is a choice, and callers must not treat a zero
 // provider.ID as one.
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace,
@@ -199,10 +228,9 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderIDInvalid, fmt.Sprintf(mpRunBadID, req.ModelProvider))
 		return runProviderChoice{}, false
 	}
-	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is
-	// llmMechanismGateApplies' own predicate, shared here (#767 step 2) so this
-	// door and that one can never again ask a different question of the same
-	// request.
+	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is the one
+	// predicate for which create requests are model runs (#767 step 2), so no
+	// two doors ask a different question of the same request.
 	_, needsModel := agentLLMProvider(req.Agent)
 	if !needsModel || !createDoorIsModelRun(req) {
 		if req.ModelProvider != "" {
@@ -228,12 +256,9 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			return runProviderChoice{}, false
 		}
 	}
-	if sc.ModelProviders == nil {
-		if req.ModelProvider != "" {
-			writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderNoBlockConfigured, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
-			return runProviderChoice{}, false
-		}
-		return runProviderChoice{}, true
+	if sc.ModelProviders == nil && req.ModelProvider != "" {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderNoBlockConfigured, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
+		return runProviderChoice{}, false
 	}
 	var pin string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
@@ -246,8 +271,16 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	case err != nil:
 		writeServerError(w, r, "resolve capability", err)
 		return runProviderChoice{}, false
+	case choice.asMissing:
+		s.writeProviderRefusalAs(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal),
+			choice.providerID, "", choice.refusal, false)
+		return runProviderChoice{}, false
 	case choice.notGranted:
-		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal))
+		d := authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal)
+		if choice.providerID != "" {
+			d = d.With("provider", choice.providerID)
+		}
+		s.refuse(w, r, d)
 		return runProviderChoice{}, false
 	case choice.refusal != "":
 		s.writeProviderRefusal(w, r, choice.providerID, choice.kind, choice.refusal, false)
@@ -275,7 +308,6 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)
 		return runProviderChoice{}, false
 	}
-	choice.governs = true
 	return choice, true
 }
 
@@ -286,8 +318,8 @@ const (
 	mpAccessAWSSignIn   = "model access provisioned for agent %q: your own AWS sign-in for model provider %s serves it."
 )
 
-// providerLLMAccess is the model-access verdict under a provider block: the
-// chosen provider's (its credential was checked when it was chosen), or none.
+// providerLLMAccess is a model run's model-access verdict: the chosen
+// provider's (its credential was checked when it was chosen), or none.
 // An AWS sign-in is the one kind not claimed never-resident: the sandbox's AWS
 // SDK exchanges the session for role credentials it then holds.
 func providerLLMAccess(agent string, mp runProviderChoice) *composeLLMAccess {

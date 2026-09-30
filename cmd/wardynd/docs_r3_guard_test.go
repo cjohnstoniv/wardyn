@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/api"
 )
 
 // readSrc reads a repo file verbatim (no whitespace folding), for the tests
@@ -136,47 +138,23 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 		"`secretOwnerFromRequest` returns `\"\"` for an operator",
 		"`?owner=<principal>`",
 	)
-	// Every AWS SigV4 name the write boundary refuses to a member has to be in
-	// the doc's list, derived from the constants rather than typed twice.
-	for _, name := range bedrockReservedSecretNames(t) {
+	// Every retired model-credential name the write boundary refuses (for
+	// everyone since 0.8.2) has to be in the doc's list, derived from the
+	// source rather than typed twice.
+	for _, name := range api.RetiredModelCredentialNames() {
+		if strings.HasPrefix(name, "wardyn-harness-") {
+			continue // reserved by pattern, never a name a person types
+		}
 		if !strings.Contains(doc, "`"+name+"`") {
-			t.Errorf("docs/DESKTOP.md's admin-only secret list omits %q, which writableSecretName refuses to a member", name)
+			t.Errorf("docs/DESKTOP.md's refused secret list omits %q, which the secrets API refuses to everyone", name)
 		}
 	}
-	// And the one name that is NOT refused any more has to read that way, or the
-	// doc still tells a member the door is shut on a key they can now store.
 	mustNotSay(t, doc, "docs/DESKTOP.md",
-		"`aws-session-token`, `bedrock-api-key`), which a non-operator `PUT`/`DELETE`",
-		"`bedrock-api-key` and the AWS SigV4 pair are refused for a member's own",
-	)
-	mustSay(t, doc, "docs/DESKTOP.md",
 		"a member may store their own `bedrock-api-key`",
 	)
-}
-
-// bedrockReservedSecretNames is the AWS SigV4 name set a non-operator PUT/DELETE
-// is refused, read off the constants the refusal is written against.
-//
-// bedrock-api-key is deliberately excluded and the exclusion is asserted, not
-// assumed: the BEARER is the one Bedrock name a member may write for themselves,
-// and the tempting one-character widening of writableSecretName would hand them
-// these three as well.
-func bedrockReservedSecretNames(t *testing.T) []string {
-	t.Helper()
-	src := readSrc(t, "internal", "api", "runs_bedrock.go")
-	re := regexp.MustCompile(`bedrock\w*Secret\s+=\s+"([a-z0-9-]+)"`)
-	var out []string
-	for _, m := range re.FindAllStringSubmatch(src, -1) {
-		if m[1] == "bedrock-api-key" || slices.Contains(out, m[1]) {
-			continue
-		}
-		out = append(out, m[1])
-	}
-	if len(out) < 3 {
-		t.Fatalf("found %d AWS SigV4 secret-name constants (%v) — this guard's matcher needs updating, it is checking almost nothing", len(out), out)
-	}
-	slices.Sort(out)
-	return out
+	mustSay(t, doc, "docs/DESKTOP.md",
+		"are refused for everyone, the\noperator included",
+	)
 }
 
 // TestAuthzDeniedGovernanceProfileRowNamesEveryTarget closes the level

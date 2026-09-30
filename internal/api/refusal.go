@@ -57,10 +57,17 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 	return true
 }
 
+// requestMethodKey carries the request's method for a refusal decided with
+// only a ctx (callerSubjects' user_type_unknown, selectByTier's
+// groups_snapshot_stale), so its row carries method like every other row a
+// request produced. Installed by ceilingMemoMiddleware.
+type requestMethodKey struct{}
+
 // recordRefusal writes d's authz.denied row alone: for a drop (no response of
 // its own), a 404 twin whose body the caller writes whether or not the row
 // exists, or a decision reached with only a ctx. r may be nil; the row is then
-// the ctx's human's and carries no method.
+// the ctx's human's, with the method requestMethodKey carries (none outside a
+// request).
 func (s *Server) recordRefusal(ctx context.Context, r *http.Request, d authz.Decision) {
 	if _, ok := authz.Lookup(d.Reason); !ok {
 		if strictRefusals {
@@ -74,7 +81,8 @@ func (s *Server) recordRefusal(ctx context.Context, r *http.Request, d authz.Dec
 	if s.cfg.Audit == nil {
 		return
 	}
-	actor, subject, method := types.ActorHuman, oidcHumanFromContext(ctx), ""
+	method, _ := ctx.Value(requestMethodKey{}).(string)
+	actor, subject := types.ActorHuman, oidcHumanFromContext(ctx)
 	if r != nil {
 		actor, subject, method = actorTypeFromRequest(r), principalFromRequest(r), r.Method
 	}

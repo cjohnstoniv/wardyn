@@ -82,7 +82,6 @@ func signInFixture(t *testing.T, cs *capStore, site types.SiteConfig) (*Server, 
 	sec := &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	cfg.Secrets = sec
 	cfg.MaskRegistry = secretmask.NewRegistry()
-	cfg.BedrockRegion, cfg.BedrockAWSSSORegion = "eu-central-1", "eu-central-1"
 	cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg), st, audit, sec
@@ -125,29 +124,14 @@ func loginStamp(t *testing.T, audit *memAudit) loginRunStamp {
 
 func TestProviderSignInDoorsNeverBothAnswer(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	t.Run("the legacy door refuses once a provider block exists", func(t *testing.T) {
+	t.Run("the retired operator-wide door does not answer", func(t *testing.T) {
 		srv, _, audit, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", admin, `{"provider":"aws","sso_start_url":"https://acme.awsapps.com/start"}`)
-		var eb errorBody
-		_ = json.Unmarshal(w.Body.Bytes(), &eb)
-		if w.Code != http.StatusConflict || eb.Error != mpsLegacyDoor {
-			t.Fatalf("legacy door = %d %s, want 409 %q", w.Code, w.Body.String(), mpsLegacyDoor)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("retired door = %d %s, want 404", w.Code, w.Body.String())
 		}
 		if n := len(audit.find("harness.login.start")); n != 0 {
-			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
-		}
-	})
-	// One read decides both: a blip on it is a 503, never a read that says "no
-	// block" beside another that authorizes.
-	t.Run("a blipped read never lets the legacy door launch beside a block", func(t *testing.T) {
-		srv, st, audit, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
-		st.blips = 1
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", admin, `{"provider":"aws","sso_start_url":"https://acme.awsapps.com/start"}`)
-		if w.Code != http.StatusServiceUnavailable {
-			t.Fatalf("legacy door on a blip = %d %s, want 503", w.Code, w.Body.String())
-		}
-		if n := len(audit.find("harness.login.start")); n != 0 {
-			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
+			t.Fatalf("the retired door launched %d sign-ins", n)
 		}
 	})
 	t.Run("the provider door refuses while there is no block", func(t *testing.T) {
@@ -254,8 +238,9 @@ func TestProviderSignInRefusals(t *testing.T) {
 		{"a provider that is turned off", nil, nil, "claude-off", http.StatusUnprocessableEntity, fmt.Sprintf(mpsOff, "claude-off")},
 		{"a provider with no portal set", nil, nil, "bedrock-bare", http.StatusUnprocessableEntity, fmt.Sprintf(mpsNoPortal, "bedrock-bare")},
 		{"no Claude sign-in image", nil, func(s *Server) { s.cfg.AgentImages = nil }, "claude", http.StatusUnprocessableEntity, mpsNoImage},
+		// Answered as an unknown id (D-6, #1018): provider ids are guessable.
 		{"a provider the member is not granted", &capStore{enf: map[string]bool{capModelProvider: true}}, nil,
-			"bedrock-prod", http.StatusForbidden, fmt.Sprintf(mpsNotGranted, "bedrock-prod")},
+			"bedrock-prod", http.StatusNotFound, fmt.Sprintf(mpcNotFound, "bedrock-prod")},
 		{"a provider serving no agent the member may launch", &capStore{grants: []types.CapabilityGrant{{
 			SubjectType: types.CapabilitySubjectAll, Capability: capAgent, Value: "claude-code", Effect: types.CapabilityDeny,
 		}}}, nil, "bedrock-prod", http.StatusNotFound, fmt.Sprintf(mpcNotFound, "bedrock-prod")},
@@ -276,6 +261,22 @@ func TestProviderSignInRefusals(t *testing.T) {
 			}
 		})
 	}
+
+	// D-6 (#1018): a provider the member is not granted is byte-identical to
+	// one that does not exist, and the refusal is still audited.
+	t.Run("a provider the member is not granted reads as absent", func(t *testing.T) {
+		enforced := func() *capStore { return &capStore{enf: map[string]bool{capModelProvider: true}} }
+		srv, _, audit, _ := signInFixture(t, enforced(), site)
+		code, body := signIn(t, srv, member, "bedrock-prod")
+		absent, _, _, _ := signInFixture(t, enforced(), credentialSite(subProvider("claude")))
+		if wantCode, wantBody := signIn(t, absent, member, "bedrock-prod"); code != wantCode || body != wantBody {
+			t.Fatalf("refused = %d %s, want the absent id's %d %s", code, body, wantCode, wantBody)
+		}
+		rows := audit.find("authz.denied")
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"capability_model_provider"`) {
+			t.Fatalf("authz.denied rows = %v, want one capability_model_provider row", rows)
+		}
+	})
 
 	// Rule 5: the admin token under OIDC is a mechanism, not a person — it
 	// has no credential and cannot capture one.
@@ -311,8 +312,6 @@ func providerSSOUpload(t *testing.T, p types.ModelProvider, site types.SiteConfi
 	}}
 	srv, sec, tok := newSSOUploadSrvWith(t, events, site, runID)
 	sec.owned = map[string]map[string][]byte{}
-	// Boot config no provider names: a binding that read it would show.
-	srv.cfg.BedrockRegion = "eu-central-1"
 	return srv, sec, tok, runID
 }
 
@@ -517,7 +516,7 @@ func waitSignInRunning(t *testing.T, st *signInStore, runID uuid.UUID) {
 // the provider's own name.
 func providerReauthFixture(t *testing.T) (*reauthFixture, types.ModelProvider) {
 	t.Helper()
-	p := types.ModelProvider{ID: "bedrock-prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
+	p := types.ModelProvider{ID: "bedrock-prod", Name: "Bedrock prod", UID: uuid.NewString(), Kind: types.ModelProviderBedrockSSO,
 		Bedrock: &types.BedrockSettings{Region: reauthRegion, SSOStartURL: "https://acme.awsapps.com/start",
 			SSOAccountID: "111122223333", SSORoleName: "WardynAgent"},
 		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: brModel}}}
@@ -560,6 +559,11 @@ func TestProviderSignInReauth(t *testing.T) {
 		_ = json.Unmarshal(ap.RequestedScope, &sc)
 		if sc["provider"] != p.ID || sc["provider_uid"] != p.UID || sc["owner"] != "alice@example.com" {
 			t.Fatalf("requested_scope = %v, want the provider's id and uid and alice", sc)
+		}
+		// The scope is the 0022 dedup key: identity only. A provider's name (#996) rides
+		// GET /runs/{id} instead, so renaming a provider cannot admit a second PENDING row.
+		if len(sc) != 5 || sc["provider_name"] != "" {
+			t.Errorf("requested_scope = %v, want exactly mechanism, credential_source, owner, provider and provider_uid", sc)
 		}
 	})
 

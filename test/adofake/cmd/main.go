@@ -155,7 +155,12 @@ func newFake(cfg config) (*fake, error) {
 	es.SetClientSecret(cfg.clientSecret)
 	es.SetRedirectURI(cfg.redirectURI)
 	es.SetIdentities(cfg.identities...)
-	consented, err := adoscope.ScopesFor([]adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapWorkWrite})
+	consented, err := adoscope.ScopesFor([]adoscope.Capability{
+		adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWikiRead, adoscope.CapBuildRead,
+		adoscope.CapReleaseRead, adoscope.CapServiceEndpointRead, adoscope.CapLibraryRead, adoscope.CapPackagingRead,
+		adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead,
+		adoscope.CapCodeWrite, adoscope.CapWorkWrite,
+	})
 	if err != nil {
 		return nil, err
 	}

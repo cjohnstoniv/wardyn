@@ -167,9 +167,9 @@ func TestCanonicalRepoURL(t *testing.T) {
 func TestClassify_SpacedNames(t *testing.T) {
 	runCases(t, []caseT{
 		{name: "read of a spaced repository", req: adoReq(http.MethodGet,
-			"/acme/Payments%20Platform/_apis/git/repositories/Card%20Auth%20(v2).Service/items", ""), want: CapRead},
+			"/acme/Payments%20Platform/_apis/git/repositories/Card%20Auth%20(v2).Service/items", ""), want: CapCodeRead},
 		{name: "read with every character escaped", req: adoReq(http.MethodGet,
-			"/acme/Payments%20Platform/_apis/git/repositories/Card%20Auth%20%28v2%29.Service/items", ""), want: CapRead},
+			"/acme/Payments%20Platform/_apis/git/repositories/Card%20Auth%20%28v2%29.Service/items", ""), want: CapCodeRead},
 		{name: "a repository named like a resource is still positional", req: adoReq(http.MethodDelete,
 			"/acme/Payments%20Platform/_apis/git/repositories/items%20x", ""), want: CapRepoAdmin},
 		{name: "an encoded separator in the project", req: adoReq(http.MethodGet,

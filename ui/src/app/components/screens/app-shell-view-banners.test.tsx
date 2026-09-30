@@ -11,16 +11,17 @@
 // file is the one seam that proves the real pipeline end to end: an SSO
 // principal's role from /me, through useShellView, into the mounted band.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./app-shell";
 import { ThemeProvider } from "../wardyn/theme-provider";
-import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
+import { BANNER } from "../wardyn/copy/door";
+import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
 import { NO_BARRIER } from "../wardyn/copy";
-import { baseStatus } from "../../lib/test-fixtures";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 // Both bands are React.lazy chunks, and the strip's is the slow one (the login
 // pane rides in it). Loaded here, each lazy import resolves from the module
 // cache on first render, so a positive control proves its neighbour rendered
@@ -28,15 +29,12 @@ import { baseStatus } from "../../lib/test-fixtures";
 import "../wardyn/model-access-banner";
 import "../wardyn/confinement-posture";
 
-const PER_USER_ROW = {
-  id: "claude-code",
-  display: "claude-code",
-  has_gateway: false,
-  has_login: true,
-  enabled: true,
-  mechanism: "bedrock_sso",
-  credential_source: "per_user",
-};
+// A person not yet signed in to their claude-code default's AWS sign-in: the
+// strip's B1 line, User view only.
+const STRIP = BANNER.B1("Claude Code", MODEL_PROVIDERS.bedrock.name);
+const STATUS = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"] }], {
+  harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: false, has_login: true }],
+});
 
 const ADMIN_ME = {
   principal: "admin@corp.example",
@@ -71,7 +69,7 @@ function renderShellAt(
     <MemoryRouter initialEntries={[path]}>
       <ThemeProvider>
         <ModelAccessProvider
-          status={baseStatus({ model_access: { state: "not_configured" }, harnesses: [PER_USER_ROW] })}
+          status={STATUS}
           onRefresh={() => {}}
         >
           <Routes>
@@ -96,7 +94,7 @@ describe("the model-access strip is absent in the Admin view (§4.2, M-3)", () =
     // Positive control first: the posture band is Admin-view only, so seeing it
     // proves /me resolved to the Admin view.
     expect(await screen.findByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
-    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
+    expect(screen.queryByText(STRIP)).toBeNull();
   });
 
   it("the same admin sees it once switched to the User view", async () => {
@@ -105,7 +103,7 @@ describe("the model-access strip is absent in the Admin view (§4.2, M-3)", () =
     // URL (currentView), so this is what actually puts the session's
     // resolved view at "user".
     renderShellAt("/runs", { ...ADMIN_ME, user_view: true });
-    expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+    expect(await screen.findByText(STRIP)).toBeInTheDocument();
   });
 });
 
@@ -122,13 +120,13 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
     });
     // Positive control first: the user's own per-user strip proves /me
     // resolved to the User view.
-    expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+    expect(await screen.findByText(STRIP)).toBeInTheDocument();
     expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
   });
 });
 
 describe("a clamped admin at an /admin/* path reads the resolved view, not the URL (§4.2, M-3)", () => {
-  it("a clamped admin's per-user strip shows, and the posture band stays silent, at /admin/runs", async () => {
+  it("a clamped admin's posture band stays silent at /admin/runs", async () => {
     // The interstitial case the PR description calls out: an SSO admin who
     // has switched to the User view (user_view: true) but still has an
     // /admin/* path in the address bar (e.g. a stale tab). useShellView
@@ -136,9 +134,9 @@ describe("a clamped admin at an /admin/* path reads the resolved view, not the U
     // two bands must follow that resolved view, not viewOfPath(pathname) —
     // which would still say "admin" here.
     renderShellAt("/admin/runs", { ...ADMIN_ME, user_view: true }, { runner: "k8s", network_policy: "unenforced" });
-    // Positive control first: the strip is Admin-view-suppressed, so seeing
-    // it proves the shell resolved this session to the User view.
-    expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+    // Positive control first: the User view's own title proves the shell
+    // resolved this session to the User view.
+    await waitFor(() => expect(document.title).toBe(CONSOLE_VIEW.TITLE_USER));
     expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
   });
 });

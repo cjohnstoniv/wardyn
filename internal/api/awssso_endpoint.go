@@ -15,12 +15,12 @@ import (
 // dispatch egress hosts (ssoEgressHosts), the login-run egress hosts
 // (harnessLogin.loginEgress, including device.sso.<r>), the CreateToken URL
 // (Server.awsSSOTokenEndpoint), the LOGIN sandbox env (harnessLogin.loginEnv)
-// and the ssoInject sandbox env (resolveBedrockAuth). Moving fewer than all five
+// and the ssoInject sandbox env (bedrockSSOAuth). Moving fewer than all five
 // leaves a fake reachable by one side and denied by the other. Gated: refused
 // unless WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNs at boot, and documented in
-// docs/ENV.md and threatmodel/THREAT-MODEL.md. DELIBERATELY NOT
-// WARDYN_BEDROCK_BASE_URL (the Bedrock DATA PLANE, a real PrivateLink posture)
-// nor the global AWS_ENDPOINT_URL, which re-points every AWS service.
+// docs/ENV.md and threatmodel/THREAT-MODEL.md. DELIBERATELY NOT a provider's
+// bedrock.base_url (the Bedrock DATA PLANE, a real PrivateLink posture) nor the
+// global AWS_ENDPOINT_URL, which re-points every AWS service.
 
 // DRAFT (M2 canon pending)
 
@@ -106,7 +106,7 @@ func ValidateAWSSSOEndpointOverride(raw string, allowTestEndpoints bool) (string
 // two SDK variables, or NOTHING when the override is unset. nil rather than an
 // empty map so a caller merging it adds no key at all on a real deployment.
 //
-// Never AWS_ENDPOINT_URL: that is the global knob resolveBedrockAuth already
+// Never AWS_ENDPOINT_URL: that is the global knob bedrockBaseEnv already
 // refuses to set, because it would also re-point STS, S3 and everything
 // else the sandbox can reach.
 func ssoInjectEndpointEnv(override string) map[string]string {

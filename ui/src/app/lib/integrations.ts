@@ -393,7 +393,7 @@ export const SUBSCRIPTION_LANE_META: Record<SubscriptionLane, SubscriptionLaneMe
   resident_host: { title: "Host CLI login", residency: "resident_mount", tooltip: T.HOSTCLI_LINE },
 };
 
-export type BedrockLane = "bearer" | "sso" | "aws_dir" | "static";
+export type BedrockLane = "bearer" | "aws_dir" | "static";
 export interface BedrockLaneMeta {
   title: string;
   residency: ResidencyKind;
@@ -401,7 +401,6 @@ export interface BedrockLaneMeta {
 }
 export const BEDROCK_LANE_META: Record<BedrockLane, BedrockLaneMeta> = {
   bearer: { title: "Bearer token", residency: "proxy_injected" },
-  sso: { title: "AWS SSO", residency: "resident_mount", extra: "containerized login" },
   aws_dir: { title: "Host ~/.aws profile", residency: "resident_mount", extra: "boot config" },
   // Raw access keys are exported as environment variables, not a mounted file.
   static: { title: "Access keys", residency: "resident_env" },

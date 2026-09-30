@@ -11,7 +11,8 @@
 #
 # Everything else stays sealed: the agent sees ONLY the directory you mount below
 # (not the rest of your machine), reaches only the listed hosts, and holds no
-# credential — the Claude subscription is injected proxy-side.
+# credential — the model credential is your own, from the run's model provider,
+# injected proxy-side.
 
 # The ONE directory this run may see. Edit `source` to your project.
 # - source MUST be an absolute, cleaned host path (a deny-list rejects /, /etc,
@@ -24,8 +25,8 @@ workspace_mounts:
     target: /home/agent/work
     read_only: false
 
-# Anthropic for the model (the managed subscription is injected proxy-side, so no
-# api_key grant here); npm only if the task installs anything.
+# Anthropic for the model (the run's model provider injects your own credential
+# proxy-side, so no api_key grant here); npm only if the task installs anything.
 allowed_domains:
   - api.anthropic.com
   - "*.anthropic.com"

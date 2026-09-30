@@ -175,7 +175,7 @@ func TestPolicyPostRefusedForReadOnlyToken(t *testing.T) {
 func TestPatLifecycle(t *testing.T) {
 	s := New()
 	defer s.Close()
-	s.RegisterToken("tokens-admin", ScopeTokens)
+	s.RegisterToken("tokens-admin", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
 
 	createBody := []byte(`{"displayName":"ci-token","scope":"vso.code","validTo":"2099-01-01T00:00:00Z","allOrgs":false}`)
@@ -434,7 +434,7 @@ func TestPatRoutesRefuseWrongScopeAndAbsentToken(t *testing.T) {
 func TestPatMintedTokenIsUsableThenRevoked(t *testing.T) {
 	s := New()
 	defer s.Close()
-	s.RegisterToken("admin", ScopeTokens)
+	s.RegisterToken("admin", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
 
 	createBody := []byte(`{"displayName":"usable","scope":"vso.code","validTo":"2099-01-01T00:00:00Z","allOrgs":false}`)
@@ -495,7 +495,7 @@ func TestPatMintedTokenIsUsableThenRevoked(t *testing.T) {
 func TestPatExpiredValidToIsRefused(t *testing.T) {
 	s := New()
 	defer s.Close()
-	s.RegisterToken("admin", ScopeTokens)
+	s.RegisterToken("admin", ScopePats, ScopePatsManage)
 	base := s.URL() + "/fakeorg/_apis/tokens/pats"
 
 	createBody := []byte(`{"displayName":"expired","scope":"vso.code","validTo":"2000-01-01T00:00:00Z","allOrgs":false}`)
@@ -853,4 +853,80 @@ func postJSON(t *testing.T, url, token string, body []byte) (status int, respBod
 		t.Fatalf("read response from POST %s: %v", url, err)
 	}
 	return resp.StatusCode, out
+}
+
+// TestConnectionDataNamesTheTokensOwner: connectionData tells two tokens'
+// owners apart by the account RegisterIdentity gave each, and a token with no
+// identity is answered with a user that carries no Account.
+func TestConnectionDataNamesTheTokensOwner(t *testing.T) {
+	s := New()
+	defer s.Close()
+	s.RegisterToken("alice-pat", ScopeProjectRead)
+	s.RegisterToken("bob-pat", ScopeProjectRead)
+	s.RegisterToken("nobody-pat", ScopeProjectRead)
+	s.RegisterIdentity("alice-pat", "alice@contoso.example")
+	s.RegisterIdentity("bob-pat", "bob@contoso.example")
+
+	account := func(token string) string {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, s.URL()+"/fakeorg/_apis/connectionData?api-version=7.1", nil)
+		req.SetBasicAuth("", token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET connectionData: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET connectionData as %s: status %d", token, resp.StatusCode)
+		}
+		var body struct {
+			AuthenticatedUser struct {
+				Properties map[string]struct {
+					Value string `json:"$value"`
+				} `json:"properties"`
+			} `json:"authenticatedUser"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.AuthenticatedUser.Properties["Account"].Value
+	}
+	if got := account("alice-pat"); got != "alice@contoso.example" {
+		t.Errorf("alice's token names %q", got)
+	}
+	if got := account("bob-pat"); got != "bob@contoso.example" {
+		t.Errorf("bob's token names %q", got)
+	}
+	if got := account("nobody-pat"); got != "" {
+		t.Errorf("a token with no identity names %q, want no Account", got)
+	}
+}
+
+// TestConnectionDataNamesAServerAccountsMail: a Server-style identity carries
+// its DOMAIN\user Account and its Mail, under a collection path.
+func TestConnectionDataNamesAServerAccountsMail(t *testing.T) {
+	s := New()
+	defer s.Close()
+	s.RegisterToken("server-pat", ScopeProjectRead)
+	s.RegisterServerIdentity("server-pat", `CORP\alice`, "alice@corp.example")
+	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/DefaultCollection/_apis/connectionData", nil)
+	req.SetBasicAuth("", "server-pat")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		AuthenticatedUser struct {
+			Properties map[string]struct {
+				Value string `json:"$value"`
+			} `json:"properties"`
+		} `json:"authenticatedUser"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d err %v", resp.StatusCode, err)
+	}
+	if p := body.AuthenticatedUser.Properties; p["Account"].Value != `CORP\alice` || p["Mail"].Value != "alice@corp.example" {
+		t.Errorf("properties = %+v", p)
+	}
 }

@@ -339,7 +339,7 @@ func TestResolveRunPolicy_DefaultArmPreviewsTheEphemeralCap(t *testing.T) {
 	srv := New(cfg)
 
 	r, ctx := boundMemberRequest(t)
-	spec, policyID, warns, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
+	spec, policyID, warns, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets"}, true)
 	if !ok {
 		t.Fatal("the default arm refused a member request carrying no policy at all")
@@ -373,7 +373,7 @@ func TestResolveRunPolicy_DefaultArmPreviewsTheEphemeralCap(t *testing.T) {
 	// exempt from the limit, here exactly as at dispatch.
 	opCtx := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	opReq := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(opCtx)
-	spec, _, _, ok = srv.resolveRunPolicy(opCtx, httptest.NewRecorder(), opReq,
+	spec, _, _, _, ok = srv.resolveRunPolicy(opCtx, httptest.NewRecorder(), opReq,
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets"}, true)
 	if !ok {
 		t.Fatal("the operator request was refused")

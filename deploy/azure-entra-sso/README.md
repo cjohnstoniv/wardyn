@@ -88,7 +88,7 @@ continuing on a tenant device-code sign-in will still fail against. Writes
 ## Step 2 — app, people, values
 
 ```sh
-deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret, Azure DevOps permissions
+deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret, Azure DevOps permissions (ADO_TOKEN_MODE)
 deploy/azure-entra-sso/03-people.sh  # 3 users, 2 groups, role assignments
 deploy/azure-entra-sso/04-values.sh  # renders values-entra.yaml from .env.local
 ```
@@ -101,6 +101,50 @@ generated output is ever committed:
 `deploy/azure-entra-sso/.gitignore` (this directory's **own** file — the repo
 root `.gitignore` is untouched) excludes `.env.local`, `values-entra.yaml`,
 and `*.secret`. No script ever echoes a secret to stdout.
+
+### Azure DevOps permissions on the app (`ADO_TOKEN_MODE`)
+
+`02-app.sh` puts the Azure DevOps permissions on this same app registration,
+and which ones depends on how the Azure DevOps provider row connects people
+(`docs/AZURE-DEVOPS.md`, "Choosing how people connect"):
+
+| `ADO_TOKEN_MODE` | Adds (delegated, Azure DevOps) | For a row with |
+|---|---|---|
+| `minted_pat` (the default) | `vso.pats`, `vso.pats_manage` | `token_mode: minted_pat`: Wardyn creates a short-lived token for each run |
+| `bearer` | the per-area capability scopes, never the two above | `token_mode: bearer`: the person's Entra token is sent as it is |
+
+Run `ADO_TOKEN_MODE=bearer deploy/azure-entra-sso/02-app.sh` for the second.
+The choice is recorded in `.env.local`, so a re-run keeps it, and a re-run adds
+only the permissions the app does not already hold. A fresh run defaults to
+`minted_pat`. A re-run on an existing app whose `.env.local` predates this setting
+stops and asks you to set `ADO_TOKEN_MODE`, because adding the token permissions to
+an app that serves a `bearer` row stops that row's runs. The script warns when a
+`bearer` app holds the two token permissions, because a `bearer` row refuses
+to inject a token that can create tokens.
+
+For `minted_pat` the app must also be, and the script already makes it:
+
+- **a confidential client**: it creates a client secret, and `04-values.sh`
+  renders it as `WARDYN_OIDC_CLIENT_SECRET`. A row that creates tokens is
+  refused when saved, and left unusable at boot, if the console has no secret;
+- **on the Web platform**: the redirect URIs are registered with
+  `--web-redirect-uris`, not as a single-page or mobile app. A secret sent for
+  a public-client redirect fails with `AADSTS700025`;
+- **the app the row names**: the row's `tenant_id` and `client_id` must be this
+  tenant and `CLIENT_ID` (the console's own sign-in app), or the row is
+  refused.
+
+**Admin consent is required for `minted_pat`.** The script prints the command
+(`az ad app permission admin-consent --id <CLIENT_ID>`); run it as a Cloud
+Application Administrator, Application Administrator, AI Administrator,
+Privileged Role Administrator, or a role that can grant permissions to
+applications. Then enable the row, sign in to Wardyn, and run **Check
+organisation settings** on it, in that order: the check uses your own
+connection, which is captured at sign-in and only for a row that is on. The
+Azure DevOps side (an allow list if "Restrict personal access token (PAT)
+creation" is on, and the maximum token lifespan policy) is in
+`docs/AZURE-DEVOPS.md`. If the tenant has no Azure DevOps organisation
+connected yet, the script skips this step and says so.
 
 `02-app.sh` also writes `.env.local`'s `HTTP_PORT` (default `8480`) — the
 port baked into the app registration's redirect URI. It must equal the
@@ -284,9 +328,9 @@ observation) as you go.
    **launch a run** — the assertion here is that the run **launches** (`201`,
    pod scheduled), proving the member path works end to end, not just
    authenticates. It won't necessarily *complete*: an actual agent turn needs
-   a model credential this runbook doesn't provision (`wardyn secret set
-   anthropic-api-key` in the console's Secrets step, per-user, gives it one
-   if you want to watch a full run).
+   a model credential this runbook doesn't provision (an admin adds a model
+   provider under Settings → Model providers, and the member connects their
+   own credential for it, if you want to watch a full run).
 4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group
    and no App Role assignment (`03-people.sh`). Use a fresh browser profile /
    incognito window, or sign out of Entra first, for **both** sign-ins below
@@ -322,6 +366,35 @@ observation) as you go.
    jsonpath='{.data.admin-token}' | base64 -d`) and confirm Wardyn still
    functions without it — `email` is best-effort here (Context above), never
    load-bearing for anything this runbook proves.
+
+## Pre-creating a person by object id
+
+On an Entra ID issuer, a person who has never signed in is set up by their
+tenant id and object id, not their `sub` (Entra's `sub` is per app
+registration and unknown until that first sign-in). See
+[docs/OPERATIONS.md](../../docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in)
+for the keying rule. Both ids are GUIDs; read them from any of these:
+
+| Where | Tenant id | Object id |
+|---|---|---|
+| Microsoft Entra admin center | **Entra ID → Overview → Tenant ID** | **Entra ID → Users → All users →** the user **→ Overview → Object ID** |
+| Microsoft Graph | `GET https://graph.microsoft.com/v1.0/organization?$select=id` → `id` | `GET https://graph.microsoft.com/v1.0/users/{userPrincipalName}?$select=id` → `id` |
+| Azure CLI | `az account show --query tenantId -o tsv` | `az ad user show --id <upn> --query id -o tsv` |
+| This runbook | `TENANT_ID` in `.env.local` | `WARDYN_ADMIN_OID` / `WARDYN_MEMBER_OID` in `.env.local` (`03-people.sh`) |
+
+The object id is the user's `id` in Graph, the value the id_token's `oid`
+claim carries. Do not use the app's service principal or the app registration's
+object id. Then, signed in as an admin or `security_admin`, call
+`POST /api/v1/people` with
+
+```json
+{"tenant_id":"<tenant id>","object_id":"<object id>","email":"<their email>"}
+```
+
+which answers `201` with `"principal":"entra:<tenant id>:<object id>"`.
+Mint their token with `POST /api/v1/people/entra:<tenant id>:<object id>/tokens`.
+Their first sign-in becomes that principal and writes a `person.attach` audit
+row naming the pairwise `sub` it arrived with.
 
 ## Playwright — what's automated vs. what this runbook is for
 

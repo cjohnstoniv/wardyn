@@ -36,16 +36,20 @@ func newVetoRedirectServer(secretName string) (*Server, *recRecorder) {
 	return s, rec
 }
 
-// TestPlanArtifactRedirect_ToGatewayRefused: a redirect whose To names the
-// configured internal model gateway is refused — a colliding row would swap
+// TestPlanArtifactRedirect_ToGatewayRefused: a redirect whose To names a
+// model provider's own gateway host is refused — a colliding row would swap
 // an artifact token onto model traffic via buildInjector's last-write-wins
 // byHost map.
 func TestPlanArtifactRedirect_ToGatewayRefused(t *testing.T) {
 	s, rec := newVetoRedirectServer("corp-token")
-	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}
-	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
-		{From: "registry.example.com", To: "llm-gateway.corp.internal", TokenSecretRef: "corp-token"},
-	}}
+	sc := types.SiteConfig{
+		ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{{
+			ID: "corp-gw", UID: "uid-gw", Kind: types.ModelProviderCustomEndpoint, BaseURL: "https://llm-gateway.corp.internal",
+		}}},
+		EgressRedirects: []types.EgressRedirect{
+			{From: "registry.example.com", To: "llm-gateway.corp.internal", TokenSecretRef: "corp-token"},
+		},
+	}
 	run := types.AgentRun{ID: uuid.New()}
 	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"})
 	if len(plan.injections) != 0 {
@@ -76,11 +80,11 @@ func TestPlanArtifactRedirect_ToPublicProviderRefused(t *testing.T) {
 // TestPlanArtifactRedirect_ToBedrockHostRefused pins B1, the reject-direction
 // sibling of the accept-direction check: this veto is a REJECT test, but it consulted the
 // anthropic/openai-only isModelProviderHost, so a redirect whose To named the
-// Bedrock lane's data/control host (or a WARDYN_BEDROCK_BASE_URL endpoint) was
+// Bedrock lane's data/control host (or a provider's bedrock.base_url) was
 // still allowed to author an artifact-token injection — and buildInjector's
 // byHost map is last-write-wins, so that row could swap the artifact token onto
-// the run's Bedrock traffic, which resolveBedrockAuth's preferred bearer mode
-// injects proxy-side.
+// the run's Bedrock traffic, which a Bedrock provider's bearer lane
+// (authorBedrockBearerInjection) injects proxy-side.
 //
 // RED on the base tree: the two bedrock rows plan an injection. The
 // Bedrock-disabled row is here so a fix that simply refused every amazonaws.com
@@ -88,7 +92,7 @@ func TestPlanArtifactRedirect_ToPublicProviderRefused(t *testing.T) {
 func TestPlanArtifactRedirect_ToBedrockHostRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		bedrockRegion string
+		bedrockRegion string // "" = no Bedrock provider
 		bedrockBase   string
 		to            string
 		refused       bool
@@ -96,7 +100,7 @@ func TestPlanArtifactRedirect_ToBedrockHostRefused(t *testing.T) {
 		{"bedrock data plane", "us-east-1", "", "bedrock-runtime.us-east-1.amazonaws.com", true},
 		{"bedrock control plane", "us-east-1", "", "bedrock.us-east-1.amazonaws.com", true},
 		{
-			"WARDYN_BEDROCK_BASE_URL override host", "us-east-1",
+			"provider bedrock.base_url override host", "us-east-1",
 			"https://vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com",
 			"vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com", true,
 		},
@@ -104,11 +108,15 @@ func TestPlanArtifactRedirect_ToBedrockHostRefused(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, rec := newVetoRedirectServer("corp-token")
-			s.cfg.BedrockRegion = tc.bedrockRegion
-			s.cfg.BedrockBaseURL = tc.bedrockBase
 			sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 				{From: "registry.example.com", To: tc.to, TokenSecretRef: "corp-token"},
 			}}
+			if tc.bedrockRegion != "" {
+				sc.ModelProviders = &types.ModelProviders{Providers: []types.ModelProvider{{
+					ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
+					Bedrock: &types.BedrockSettings{Region: tc.bedrockRegion, BaseURL: tc.bedrockBase},
+				}}}
+			}
 			run := types.AgentRun{ID: uuid.New()}
 			plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"})
 			if tc.refused {

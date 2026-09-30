@@ -553,7 +553,7 @@ func TestPutSiteConfig_StripsIntegrations(t *testing.T) {
 	captured := types.SiteConfig{
 		ScmHosts: []string{"github.example.com"},
 		Integrations: []types.Integration{
-			{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey},
+			{ID: "acme-github", Kind: types.IntegrationKindGitHubApp},
 		},
 	}
 	if _, _, _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {
@@ -705,6 +705,37 @@ func TestRunFiles_409Surfaces(t *testing.T) {
 	apiErr := assertAPIError(t, err, http.StatusConflict)
 	if !strings.Contains(apiErr.Error(), "run has no sandbox to read") {
 		t.Errorf("Error() = %q, want the server's message", apiErr.Error())
+	}
+}
+
+// TestRunOutput_PathTailAndDecode pins the wire contract: ?tail= only when
+// asked for, and the three fields decode.
+func TestRunOutput_PathTailAndDecode(t *testing.T) {
+	runID := uuid.New()
+	var gotQuery []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/runs/"+runID.String()+"/output" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		checkAuth(t, r)
+		gotQuery = append(gotQuery, r.URL.RawQuery)
+		writeJSON(w, http.StatusOK, client.RunOutput{Output: "ok\n", Truncated: true, Complete: true})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	got, err := c.RunOutput(context.Background(), runID, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Output != "ok\n" || !got.Truncated || !got.Complete {
+		t.Errorf("got %+v, want output=ok truncated complete", got)
+	}
+	if _, err := c.RunOutput(context.Background(), runID, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotQuery) != 2 || gotQuery[0] != "tail=100" || gotQuery[1] != "" {
+		t.Errorf("queries = %q, want [tail=100, \"\"]", gotQuery)
 	}
 }
 

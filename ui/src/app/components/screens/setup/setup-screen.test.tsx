@@ -466,10 +466,6 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
     );
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
-    // The rail badge counts off status.integrations (setup-screen.tsx's own
-    // integrationsCount); the embedded IntegrationsScreen renders off its own
-    // independent GET /integrations read — give both the same one row so the
-    // two agree, exactly as the real server-derived set would.
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
 
@@ -483,11 +479,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(
       await screen.findByRole("heading", { name: /^secrets$/i }),
     ).toBeInTheDocument();
-    // The SHARED Settings model-provider card, not the deleted /integrations
-    // catalog. (connection-cards.test.tsx owns its own behaviour; this
-    // asserts the orchestrator mounts it.) GitHostCard is retired — its git
-    // credential lanes live in the `providers` step / /providers.
-    expect(await screen.findByRole("radiogroup", { name: /model provider/i })).toBeInTheDocument();
+    // Neither the deleted /integrations catalog nor the retired Model
+    // provider card.
+    expect(screen.queryByRole("heading", { name: "Model provider" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/set up as model providers/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: /git host/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
     // Both PhaseRail landmarks share the "Setup steps" accessible name

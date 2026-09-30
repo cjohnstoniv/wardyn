@@ -833,6 +833,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
+	if p.refuseADOTunnel(w, r, host, port) {
+		return
+	}
 
 	if p.isLLMHost(host) {
 		// TLS-MITM-eligible host (Anthropic/OpenAI). Terminate TLS only when MITM of

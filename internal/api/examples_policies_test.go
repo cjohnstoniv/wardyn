@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	yaml "gopkg.in/yaml.v3"
@@ -27,11 +28,6 @@ func TestExamplePoliciesValidate(t *testing.T) {
 	for _, f := range files {
 		switch filepath.Ext(f) {
 		case ".json":
-			// The subscription TEMPLATE carries a __comment key and
-			// placeholder mount paths — it is generated, never loaded.
-			if filepath.Base(f) == "claude-subscription.template.json" {
-				continue
-			}
 			if _, err := LoadPolicySpec(f); err != nil {
 				t.Errorf("%s: %v", f, err)
 			}
@@ -69,8 +65,9 @@ func TestExamplePoliciesValidate(t *testing.T) {
 // — deny_with_review instead of always_deny, a requires_approval:true grant,
 // and an unbounded (0) auto_stop_after_sec — so it must not be the pointer.
 // examples/policies/ci-claude-llm.json is ci.json's CI baseline plus exactly
-// the api.anthropic.com egress entry and api_key grant model access needs — a
-// copy-paste-safe CI example, not a dev ceiling.
+// the api.anthropic.com egress entry model access needs — a copy-paste-safe CI
+// example, not a dev ceiling. The credential is the run's model provider's
+// (the CI principal's own), so the policy names no model key.
 func TestCIClaudeLLMExample_MeetsCINonNegotiables(t *testing.T) {
 	spec, err := LoadPolicySpec("../../examples/policies/ci-claude-llm.json")
 	if err != nil {
@@ -82,24 +79,16 @@ func TestCIClaudeLLMExample_MeetsCINonNegotiables(t *testing.T) {
 	if spec.AutoStopAfterSec <= 0 {
 		t.Errorf("auto_stop_after_sec = %d, want a positive bound (CI non-negotiable: bound the run)", spec.AutoStopAfterSec)
 	}
-	foundAPIKey := false
 	for _, g := range spec.EligibleGrants {
 		if g.RequiresApproval {
 			t.Errorf("grant %+v requires approval — CI non-negotiable: no requires_approval:true grants (a human is never there to decide)", g)
 		}
-		if g.Kind != types.GrantAPIKey {
-			continue
-		}
 		var scope struct {
-			Host       string `json:"host"`
 			SecretName string `json:"secret_name"`
 		}
-		if err := json.Unmarshal(g.Scope, &scope); err == nil && scope.Host == "api.anthropic.com" && scope.SecretName == "anthropic-api-key" {
-			foundAPIKey = true
+		if err := json.Unmarshal(g.Scope, &scope); err == nil && slices.Contains(retiredModelCredentialNames, scope.SecretName) {
+			t.Errorf("grant %+v names the retired model credential %q — model access is the run's model provider's", g, scope.SecretName)
 		}
-	}
-	if !foundAPIKey {
-		t.Errorf("eligible_grants = %+v, want a no-approval api_key grant for api.anthropic.com/anthropic-api-key", spec.EligibleGrants)
 	}
 	found := false
 	for _, d := range spec.AllowedDomains {

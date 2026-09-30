@@ -4,73 +4,49 @@
 package api
 
 import (
-	"context"
 	"fmt"
-	"net/http"
 	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Model-access lifecycle — WHOSE credential, and what state it is in.
 //
-// Two things live here because they are the same question asked twice. An
-// AgentProviders row says whether a deployment's model credential is ONE
-// credential for everyone (`shared`, today) or one per person (`per_user`,
-// captured by that person's own AWS SSO sign-in), and every lane that reads or
-// writes a captured AWS SSO session has to resolve that before it touches the
-// secret store — a member served the admin's session is the exact failure
-// per_user exists to prevent. That resolution is awsSSOScope.
+// Two things live here because they are the same question asked twice. Every
+// lane that reads or writes a captured AWS SSO session has to resolve whose it
+// is before it touches the secret store — a person served somebody else's
+// session is the failure a per-person credential exists to prevent. That
+// resolution is awsSSOScope.
 //
-// The other half is the probe. Before this, an expiring credential was
-// reportable only as `Expired` (a boolean, after the fact) and the member's
-// console read `llm_ready` — a DEPLOYMENT fact — for a per-principal question,
-// so a member whose own session had lapsed read a green chip. One vocabulary of
-// five states, computed once, is what stops the admin's checklist row and the
-// member's chip from disagreeing about the same credential.
+// The other half is the grading: one vocabulary of states, computed once, so
+// the provider_access rows (provider_access.go) and the refusals dispatch gives
+// for the same credential cannot disagree.
 
-// modelAccessAgent is the agent whose model-access lane the per-principal probe
-// reports on. bedrock_sso is claude-code's lane alone (resolveBedrockAuth is
-// not-ready for any other agent, runs_bedrock.go), so there is exactly one row
-// to read and no per-agent fan-out to design.
-const modelAccessAgent = "claude-code"
-
-// awsSSOScope names WHOSE captured AWS SSO credential a lane may read or write.
+// awsSSOScope names WHOSE captured AWS SSO credential a lane may read or write:
+// a model provider's (provider, its UID) for one person (owner), always
+// perUser. The zero value is the operator namespace, which no model credential
+// is served from any more; it survives only as the namespace the retired
+// operator-wide sign-in blob lives in until it is deleted.
 //
-// The zero value is the operator namespace — today's behaviour, and what a
-// `shared` row (or legacy open mode, where there is no roster at all) resolves
-// to. Every call site that has nothing to say about per-principal credentials
-// therefore keeps reading exactly the row it read before.
+// Under perUser the ONLY admissible credential is owner's OWN row, and
+// Store.For(owner).Get FALLS BACK to the operator's ("", name) row
+// (internal/secretstore/pg), so the naive owner-scoped read would serve the
+// admin's session to a person with no capture of their own. The read here uses
+// For(owner).List() first and only Gets a name that list contains.
 //
-// Under perUser the ONLY admissible credential is owner's OWN row. That is
-// stricter than it sounds, and both halves are load-bearing:
-//
-//   - Store.For(owner).Get FALLS BACK to the operator's ("", name) row
-//     (internal/secretstore/pg), so the naive owner-scoped read would serve the
-//     admin's session to a member with no capture of their own. The read here
-//     uses For(owner).List() first and only Gets a name that list contains.
-//   - resolveBedrockAuth's ~/.aws-mount / static-key arms are bare
-//     operator-namespace reads, so they are SKIPPED under perUser as well — a
-//     credential must never silently change source.
-//
-// Under perUser the row also names ONE of the two lanes a member can hold as
-// their own — their captured AWS SSO session or their own stored bearer — and
-// bearer records which. A resolve reads only that lane: a member holding both
-// must not have the other one fire instead and be refused for it.
+// bearer records which of the two lanes a Bedrock provider's kind names — the
+// person's captured AWS SSO session or their own stored bearer — and a resolve
+// reads only that lane.
 //
 // An EMPTY owner under perUser is a credential nobody owns: it resolves as
 // not-configured, never as the operator's.
 type awsSSOScope struct {
 	perUser bool
 	owner   string
-	// bearer: the per_user row declares bedrock_bearer, not bedrock_sso. Zero
-	// is the SSO lane, which is what per_user meant before a member could store
-	// a bearer. Meaningless under shared, where both are operator reads.
+	// bearer: the provider is bedrock_bearer, not bedrock_sso.
 	bearer bool
 	// provider is the UID of the model provider whose credential this is (always
-	// perUser): its session lives under wardyn-provider-<uid>-sso rather than the
-	// harness name. "" on every roster-derived scope.
+	// perUser): its session lives under wardyn-provider-<uid>-sso.
 	provider string
 }
 
@@ -97,32 +73,15 @@ func (sc awsSSOScope) rowOwner() string {
 	return ""
 }
 
-// readsBearer / readsSSO report whether a resolve under sc may select the
-// stored bearer / the captured AWS SSO session: always under shared (one
-// precedence chain), and under per_user only the lane the row declares.
-func (sc awsSSOScope) readsBearer() bool { return !sc.perUser || sc.bearer }
-func (sc awsSSOScope) readsSSO() bool    { return !sc.perUser || !sc.bearer }
-
-// awsSSOScopeIsMechanism reports whether sc names the shared admin bearer
-// token under a per_user row — a MECHANISM, not a person: no credential of
-// its own to grade, no sign-in it could complete. LocalMode's own seat
-// resolves to a real person-shaped namespace (runIdentitySubject prefers it
-// over adminTokenPrincipal, e.g. "local:operator") and is deliberately NOT
-// this — the whole reason per_user exists is that a real person signs in for
-// themselves, and LocalMode's operator is exactly that person.
-func awsSSOScopeIsMechanism(sc awsSSOScope) bool {
-	return sc.perUser && sc.owner == adminTokenPrincipal
-}
-
 // AdminTokenPrincipal exports adminTokenPrincipal for cmd/wardynd's boot-time
-// validation: a -local-operator value equal to it would collide with
-// this mechanism principal, refusing the SAME operator seat at harness-login
+// validation: a -local-operator value equal to it would collide with this
+// mechanism principal, refusing the SAME operator seat at a provider sign-in
 // that boot just accepted.
 func AdminTokenPrincipal() string { return adminTokenPrincipal }
 
-// awsSSOCredentialSourceLabel is the scope as the audit trail names it — the
-// same two wire values the admin wrote on the row, so a row and a log line are
-// searchable by one string.
+// awsSSOCredentialSourceLabel is the scope as the audit trail and the re-auth
+// hold's scope name it: per_user for a person's own credential, shared for the
+// operator namespace.
 func awsSSOCredentialSourceLabel(sc awsSSOScope) string {
 	if sc.perUser {
 		return string(types.CredentialSourcePerUser)
@@ -130,70 +89,7 @@ func awsSSOCredentialSourceLabel(sc awsSSOScope) string {
 	return string(types.CredentialSourceShared)
 }
 
-// awsSSOScopeFor resolves the scope from the org's roster: the principal's own
-// namespace under an enabled `per_user` row for this agent, the operator
-// namespace otherwise (a `shared` row, a disabled row, no row, or no roster).
-//
-// "No roster" here means a site config that was read and carries no row — never
-// one that could not be read. The two are indistinguishable in the VALUE (both
-// are the zero SiteConfig), which is exactly why the distinction is made by the
-// CALLER and not here: dispatch retries the read once (siteConfigForDispatch)
-// and then refuses outright rather than resolve a scope from a read that failed
-// (enforceReadableRosterForCredential), and /setup/status fails closed to the
-// caller's own namespace (setupStatusSSOScope below). This function is pure over
-// the value it is handed and has no way to tell those apart, so it must never be
-// handed a value nobody proved they read.
-//
-// Pure over the site config, so the three call sites that already hold one
-// (dispatch, the create-time mechanism gate) spend no extra read.
-func awsSSOScopeFor(sc types.SiteConfig, agentID, subject string) awsSSOScope {
-	row, ok := agentProviderFor(sc, agentID)
-	if !ok || row.Disabled || row.CredentialSource != types.CredentialSourcePerUser {
-		return awsSSOScope{}
-	}
-	return awsSSOScope{perUser: true, owner: subject, bearer: row.Mechanism == types.AgentMechanismBedrockBearer}
-}
-
-// setupStatusSSOScope is the AWS SSO namespace a /setup/status READ answers
-// for: the roster's, except that a roster read which FAILED resolves FAIL-
-// CLOSED to the caller's own per-user namespace. awsSSOScopeFor's "no
-// row" fallback is the OPERATOR namespace — right at a WRITE door, where an
-// unreadable roster must not silently re-point a credential; on this read it
-// handed every caller, a member included, the admin's harness row and
-// model_access for the duration of a store blip, the one window in which a
-// forged capture marker in a member's own login sandbox is corroborated by a
-// session that is not theirs. readAWSSSOBlob answers a per-user scope
-// it cannot name with "nothing". storeConfigured keeps a NIL store on the old
-// path: that is an install with no roster, not a blip.
-func setupStatusSSOScope(sc types.SiteConfig, scOK, storeConfigured bool, subject string) awsSSOScope {
-	if storeConfigured && !scOK {
-		return awsSSOScope{perUser: true, owner: subject}
-	}
-	return awsSSOScopeFor(sc, modelAccessAgent, subject)
-}
-
-// awsSSOScopeForAgent is awsSSOScopeFor for a caller that does NOT already hold
-// a site config. ok=false means the roster could not be read, and the scope
-// returned with it is the old legacy-open answer (the operator namespace) —
-// never a scope a caller may write or delete under.
-//
-// The (scope, ok) pair, rather than a bare scope, because
-// dropping ok is a fail-OPEN at every door that decides WHERE a credential
-// lands: a store blip read as "no per_user row" sent a member's capture, and a
-// Disconnect's Delete, to the deployment-wide row every run inherits. A read door may still ignore ok — dispatch does, deliberately — but
-// it now has to say so.
-func (s *Server) awsSSOScopeForAgent(ctx context.Context, agentID, subject string) (awsSSOScope, bool) {
-	if s.cfg.Store == nil {
-		return awsSSOScope{}, true // no store, no roster: an install with no per-user estate, not a blip
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return awsSSOScope{}, false
-	}
-	return awsSSOScopeFor(sc, agentID, subject), true
-}
-
-// The six model-access states — ONE vocabulary, ordered REGISTRATION-first.
+// The model-access states — ONE vocabulary, ordered REGISTRATION-first.
 //
 // The ordering is the whole design. The SSO access token lives one hour on the
 // estate this came from, so a probe keyed on it would make "expiring" the
@@ -215,16 +111,12 @@ const (
 	// modelAccessExpiredSignin: nothing can heal it — no refresh token, a spent
 	// one, or a lapsed registration. The person signs in again.
 	modelAccessExpiredSignin = "expired_signin"
-	// modelAccessNotConfigured: a per_user deployment where this principal has
-	// never captured a session. NOT an error — it is the first-run state.
+	// modelAccessNotConfigured: this principal has never captured a session.
+	// NOT an error — it is the first-run state.
 	modelAccessNotConfigured = "not_configured"
-	// modelAccessSharedExpired: a `shared` deployment whose ONE credential is
-	// dead (or was never captured). There is nothing the member can do, so the
-	// action names the admin rather than offering a button that would fail.
-	modelAccessSharedExpired = "shared_expired"
 	// modelAccessNotApplicable: the caller is a MECHANISM, not a person — the
-	// shared admin bearer token under a per_user row; no credential to grade, no
-	// sign-in it could complete, NO action.
+	// shared admin bearer token; no credential to grade, no sign-in it could
+	// complete, NO action.
 	modelAccessNotApplicable = "not_applicable"
 )
 
@@ -235,16 +127,12 @@ const modelAccessExpiringWindow = 24 * time.Hour
 
 // The action lines the states ship. DRAFT (M2 canon pending) — the frozen copy
 // is docs/design/workspace-providers-prompt.md §7.7
-// (MODEL_ACCESS_EXPIRING_ACTION, SIGN_IN_AWS,
-// MODEL_ACCESS_SHARED_EXPIRED_ACTION), reproduced BYTE-EXACT here because the
-// console renders a server action line verbatim; the chip LABELS are the
-// console's own copy module.
+// (MODEL_ACCESS_EXPIRING_ACTION, SIGN_IN_AWS), reproduced BYTE-EXACT here
+// because the console renders a server action line verbatim.
 const (
 	modelAccessExpiringAction = "Sign in again before %s"
 	// DRAFT (M2 canon pending)
 	modelAccessSignInAction = "Sign in to AWS"
-	// DRAFT (M2 canon pending)
-	modelAccessSharedExpiredAction = "Your admin's model credential expired — ask them to reconnect it"
 	// modelAccessPinContradictedAction replaces "Sign in to AWS" for the one
 	// expired_signin the timestamp says nothing about: the session is live, and
 	// it is the wrong IDENTITY. It names both pairs because the person reading
@@ -253,157 +141,10 @@ const (
 	// deployment rule they are now on the wrong side of. %s = the stored
 	// account, role; then the allowed account, role.
 	modelAccessPinContradictedAction = "Your stored AWS session is for account %s / role %s; this row now allows %s / %s — sign in again."
-	// harnessCredentialAWSPinMismatchDetail is the OPERATOR's half of the same
-	// fact, on the harness_credential_aws checklist row (members never see the
-	// checklist — redactSetupStatusForUser empties it). It exists because the
-	// expired_signin arm it shares says "expired at <ts> and cannot be renewed",
-	// which of this credential is simply false.
-	harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
-	// harnessCredentialAWSRenewalSpentDetail is the operator's checklist-row
-	// text for `expiring` reached via Cause == causeRenewalSpent: AWS itself
-	// retired the refresh token behind this session (a renewal already saw
-	// invalid_grant or a sibling code), so the existing "stops being renewable
-	// at <deadline>" sentence would say the wrong thing — that one describes a
-	// registration lapsing on its own schedule, not a grant AWS has already
-	// killed. %s is ma.Deadline (ExpiresAt − awsSSORefreshSkew).
-	harnessCredentialAWSRenewalSpentDetail = "Your captured AWS SSO session's refresh token was retired by AWS (a renewal attempt was refused) — " +
-		"it cannot be renewed and stops answering Bedrock calls at %s. Sign in again before then."
 )
 
-// harnessLoginMechanismPrincipalRefusal (M2 canon pending) — DRAFT
-// (docs/design/workspace-providers-prompt.md §7 shape: a lowercase-opening
-// clause naming what was refused, rendered verbatim by the console).
-const harnessLoginMechanismPrincipalRefusal = "this deployment gives each person their own AWS sign-in, and the admin token is a shared credential rather than a person — every capture made with it would land in one namespace and overwrite the last. Sign in to the console, or use your own wdn_ API token, and start the sign-in from there"
-
-// refuseHarnessLoginMechanismPrincipal writes the 422 refusal for a per_user
-// row reached by the shared admin-bearer-token principal, audits it — the
-// SIBLING refusals in this same function, refuse/
-// denyUserCapability, both audit — this is the one refusal on the
-// credential-capture route an operator's own CI job hits with no error
-// budget, and a row is how they find out it stopped capturing — and returns
-// false so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w, r)`.
-func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter, r *http.Request) bool {
-	s.refuse(w, r, authz.Deny(authz.ReasonHarnessLoginMechanismPrincipal, "setup.harness_login", harnessLoginMechanismPrincipalRefusal))
-	return false
-}
-
-// SetupModelAccess is THIS PRINCIPAL's model-access answer: which state their
-// own credential is in, the lane it is on, and the one thing to do about it.
-//
-// It is the field the member's chip reads INSTEAD of llm_ready, which stays a
-// deployment fact (does SOME model path exist on this install) and cannot answer
-// a per-person question. Redaction-safe by construction: a state name, a wire
-// mechanism value and a member-facing sentence — no secret names, no topology,
-// no AWS access portal URL. redactSetupStatusForUser therefore KEEPS it.
-//
-// Absent (a zero State) when there is nothing per-principal to say: no roster
-// declares a lane for this agent AND no captured session exists. The console
-// then renders today's chip, which is exactly what an install that never touched
-// this feature should see.
-type SetupModelAccess struct {
-	State     string `json:"state"`
-	Mechanism string `json:"mechanism,omitempty"`
-	// Action is the one thing to do, already composed by the server ("" when
-	// there is nothing).
-	Action string `json:"action,omitempty"`
-	// Deadline is the instant Action names — the registration's lapse, or the
-	// access token's expiry for a blob that cannot be renewed. It serves the
-	// admin's checklist row, which prints the same one the member's action line
-	// does, and it is on the wire.
-	//
-	// Localisation is why: `expiring`
-	// rides a strip on every screen for the whole 24-hour window, and the
-	// sentence carries an RFC3339 UTC stamp, which a reader in another timezone
-	// misreads every time they see it. The console re-composes that ONE line
-	// through the same frozen template (AGENTS.MODEL_ACCESS_EXPIRING_ACTION) on
-	// the reader's own clock, and relativeTime in the strip; it needs the
-	// instant to do either.
-	//
-	// Safe for a member only because userModelAccess builds a FRESH struct
-	// that drops it — the leak that function exists to close was this same
-	// instant republished one field over. Pinned:
-	// TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember.
-	Deadline string `json:"deadline,omitempty"`
-	// PinMismatch says this answer's `expired_signin` is a CONTRADICTED identity
-	// rather than a lapsed session. IN-PROCESS only (json:"-"): the console
-	// renders Action verbatim and needs no second copy of what it says — this
-	// exists so the admin-facing checklist row (awsSSOCredentialRow) does not
-	// tell an operator their live session "expired at <ts> and cannot be
-	// renewed", which of this one credential is simply false.
-	PinMismatch bool `json:"-"`
-	// PerUser says whether this answer is about a credential this principal
-	// owns. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
-	// is what userModelAccess needs to decide whether a member may be told a
-	// deadline or offered a sign-in at all. False is `shared` AND legacy open
-	// mode — in both, the graded blob is the OPERATOR's.
-	PerUser bool `json:"-"`
-	// Cause is WHICH fact put this answer into `expiring` — "" for every other
-	// state. IN-PROCESS only (json:"-"): the six WIRE states are the vocabulary
-	// the console renders and stay unchanged; Cause exists only so grading and
-	// the admin checklist row (awsSSOCredentialRow) can tell apart two different
-	// facts that happen to want the same door — a refresh token AWS has already
-	// retired (causeRenewalSpent) is not the same story as a registration or an
-	// unrenewable access token approaching ITS OWN lapse on schedule.
-	Cause string `json:"-"`
-}
-
-// The three reasons awsSSOCredentialState can land on `expiring` — see
-// awsSSOCredentialCause, which mirrors the branches that produce them.
-const (
-	// causeRenewalSpent: AWS itself retired the refresh token (an earlier
-	// CreateToken call returned invalid_grant et al.); the access token in hand
-	// still answers Bedrock calls until it crosses the refresh skew.
-	causeRenewalSpent = "renewal_spent"
-	// causeRegistrationLapsing: the credential is still renewable, but the OIDC
-	// client registration behind the refresh token lapses inside the window.
-	causeRegistrationLapsing = "registration_lapsing"
-	// causeTokenExpiring: no working refresh token (none captured, or the
-	// registration already lapsed) and the access token itself is running out.
-	causeTokenExpiring = "token_expiring"
-)
-
-// userModelAccess is the member-facing projection of a model-access answer,
-// applied by redactSetupStatusForUser.
-//
-// Under `shared` (and legacy open mode) a member owns nothing here. The blob
-// setupModelAccess graded is the OPERATOR's, so every state that asks the
-// reader to act on their own credential — `expiring` with the admin's lapse
-// timestamp, `expired_signin`/`not_configured` with "Sign in to AWS" — is both
-// a disclosure of the operator's credential lifecycle and an instruction the
-// server then refuses (harnessLoginNotPerUserRefusal). Redaction stripped
-// SetupHarness.ExpiresAt and then republished an equivalent timestamp one field
-// over, which is the exact contradiction the redaction comment calls out about
-// secret names.
-//
-// So for a member under `shared` there are only two things that can be true:
-// the admin's credential works (`live` — including while it is expiring, which
-// is the admin's problem and is still on the admin's OWN setup row with its
-// timestamp), or it does not (`shared_expired`, whose action names the admin
-// and carries no timestamp). A deadline or a sign-in action is reserved for a
-// principal who owns the credential: the operator, or a member under `per_user`
-// (PerUser, untouched here).
-func userModelAccess(ma SetupModelAccess) SetupModelAccess {
-	// Fail-safe, not a reachable path today (a real human is never the
-	// mechanism principal): without this early return the default arm below
-	// would rewrite an unknown state to `live`, which is a worse lie than
-	// leaving it alone.
-	if ma.State == "" || ma.State == modelAccessNotApplicable || ma.PerUser {
-		return ma
-	}
-	out := SetupModelAccess{State: modelAccessLive, Mechanism: ma.Mechanism}
-	switch ma.State {
-	case modelAccessSharedExpired, modelAccessExpiredSignin, modelAccessNotConfigured:
-		out.State = modelAccessSharedExpired
-		// "" for ts: shared_expired's sentence interpolates nothing, and passing
-		// the deadline here would be the leak this function exists to close.
-		out.Action = modelAccessAction(modelAccessSharedExpired, "")
-	}
-	return out
-}
-
-// awsSSOCredentialState grades one captured AWS SSO session into the vocabulary
-// above. perUser decides ONLY which of the two dead states applies: the person
-// can repair their own session, nobody but the admin can repair the shared one.
+// awsSSOCredentialState grades one person's captured AWS SSO session into the
+// vocabulary above.
 //
 // A blob with NO refresh token and MORE than a day of access token left reads
 // `live` for the same reason expired_renewable does: there is nothing for the
@@ -418,19 +159,11 @@ func userModelAccess(ma SetupModelAccess) SetupModelAccess {
 // the person cannot make; outside it the access token still signs
 // requests, so `expiring` (not `live`) is what tells the person while there is
 // still time to act.
-func awsSSOCredentialState(blob awsSSOBlob, found, perUser, spent bool, now time.Time) string {
+func awsSSOCredentialState(blob awsSSOBlob, found, spent bool, now time.Time) string {
 	if !found {
-		if perUser {
-			return modelAccessNotConfigured
-		}
-		// Shared with nothing captured is, from a member's seat, the same fact as
-		// shared-and-dead: the one credential everybody's runs use is not there.
-		return modelAccessSharedExpired
+		return modelAccessNotConfigured
 	}
-	dead := modelAccessSharedExpired
-	if perUser {
-		dead = modelAccessExpiredSignin
-	}
+	dead := modelAccessExpiredSignin
 	if spent {
 		if blob.needsRefresh(now) {
 			return dead
@@ -452,20 +185,6 @@ func awsSSOCredentialState(blob awsSSOBlob, found, perUser, spent bool, now time
 	}
 }
 
-// awsSSOCredentialCause names WHICH fact put a blob into `expiring`, mirroring
-// the branches above that can reach it. Only meaningful when the state IS
-// `expiring` — callers elsewhere (dead, live, not_configured, …) never call it.
-func awsSSOCredentialCause(blob awsSSOBlob, spent bool, now time.Time) string {
-	switch {
-	case spent:
-		return causeRenewalSpent
-	case blob.renewable(now):
-		return causeRegistrationLapsing
-	default:
-		return causeTokenExpiring
-	}
-}
-
 // modelAccessAction is the one thing to do about a state, "" when there is
 // nothing. ts is the deadline the expiring line names (the registration's lapse,
 // or the access token's expiry for a blob that cannot be renewed).
@@ -475,8 +194,6 @@ func modelAccessAction(state, ts string) string {
 		return fmt.Sprintf(modelAccessExpiringAction, ts)
 	case modelAccessExpiredSignin, modelAccessNotConfigured:
 		return modelAccessSignInAction
-	case modelAccessSharedExpired:
-		return modelAccessSharedExpiredAction
 	default:
 		return ""
 	}
@@ -504,178 +221,10 @@ func modelAccessDeadline(blob awsSSOBlob, found, spent bool, now time.Time) stri
 	}
 }
 
-// setupModelAccess grades the caller's own captured AWS SSO session against the
-// org's declared lane. blob/found are the read setupHarnessCreds already made in
-// the caller's own namespace — passed in rather than re-read, so the probe and
-// the harness row can never be about two different credentials.
-//
-// oidcConfigured gates the mechanism arm below: with no OIDC, the
-// admin token IS the only working per_user capture path (there is no console
-// sign-in or wdn_ token to redirect to instead — see
-// harnessLoginMechanismPrincipalRefusal), so a no-OIDC deployment must keep
-// grading it exactly like any other per_user principal.
-//
-// Returns the zero value when there is nothing per-principal to report: no
-// bedrock_sso row and no captured session (see SetupModelAccess).
-//
-// spent is whether THIS blob's refresh token is already known dead — read by
-// the one caller (setupHarnessCreds) from the in-memory ssoRefreshSpent map
-// the control-plane refresher owns (awssso_refresh.go). Threaded as a plain
-// parameter, not read here, so this stays pure over its arguments like the
-// rest of the file.
-func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found, spent bool, scope awsSSOScope, oidcConfigured bool, now time.Time) SetupModelAccess {
-	row, declared := agentProviderFor(sc, modelAccessAgent)
-	ssoLane := declared && !row.Disabled && row.Mechanism == types.AgentMechanismBedrockSSO
-	// The caller is the shared admin bearer token, not a person: no sign-in it
-	// could complete for a new session. It is NOT an unreadable namespace —
-	// "admin-token" is a non-empty owner, read and written like any other
-	// (readAWSSSOBlob only refuses an EMPTY owner) — so a session already
-	// captured there is real and dispatch still serves it to admin-token-
-	// created runs; grade that like any other blob (!found below) rather than
-	// hiding it behind a state that claims there is nothing to grade.
-	if awsSSOScopeIsMechanism(scope) && !found && oidcConfigured {
-		return SetupModelAccess{State: modelAccessNotApplicable, Mechanism: string(types.AgentMechanismBedrockSSO)}
-	}
-	if !ssoLane && !found {
-		return SetupModelAccess{}
-	}
-	state := awsSSOCredentialState(blob, found, scope.perUser, spent, now)
-	deadline := modelAccessDeadline(blob, found, spent, now)
-	out := SetupModelAccess{State: state, Deadline: deadline, Action: modelAccessAction(state, deadline), PerUser: scope.perUser}
-	if state == modelAccessExpiring {
-		out.Cause = awsSSOCredentialCause(blob, spent, now)
-	}
-	// A stored session the roster no longer allows grades expired_signin, which
-	// is the one thing that matters here: MODEL_ACCESS_ACTIONABLE
-	// (workspace-providers-copy.ts) is what decides whether the console offers
-	// "Sign in to AWS" at all, and this session grades `live` on expiry alone —
-	// so dispatch and create refuse the person's runs while the button that
-	// would repair it is hidden and they are stranded. Signing in again IS the
-	// repair: a new login run stamps the CURRENT pin and its capture overwrites
-	// the blob, with no server-side invalidation anywhere.
-	//
-	// An EXISTING state, deliberately: it is already in the actionable set,
-	// already renders SIGN_IN_AWS, and already drives the warn arm of
-	// awsSSOCredentialRow, so the per-principal checklist row, the Getting
-	// Started chip and the button all move with one switch arm — and nothing on
-	// the wire or in the TS mirror changes.
-	if found {
-		if stored, pinned, mismatch := awsSSOPinContradiction(sc,
-			awsSSOPin{AccountID: blob.AccountID, RoleName: blob.RoleName}); mismatch {
-			out.State = modelAccessExpiredSignin
-			out.Action = fmt.Sprintf(modelAccessPinContradictedAction,
-				stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName)
-			out.PinMismatch = true
-		}
-	}
-	if ssoLane {
-		out.Mechanism = string(row.Mechanism)
-	} else {
-		// A captured session with no declaration IS the bedrock_sso lane — legacy
-		// open mode simply never wrote the row down.
-		out.Mechanism = string(types.AgentMechanismBedrockSSO)
-	}
-	return out
-}
-
-// harnessCredentialCheck is the readiness row for a Wardyn-managed subscription
-// token — the compose-mode analogue of claudeSubscriptionStagingCheck. It fires
-// only when a credential is captured (no capture => the llm_provider check
-// already says "connect a model"). Pure: the blob read is done by the caller.
-//
-// The AWS row reads its status off the SAME five-state grading the member's chip
-// does (ma, computed from the same blob by setupModelAccess), so the two
-// surfaces cannot disagree about one credential. Only the COPY differs, and it
-// has to: an admin can reconnect a shared credential, which is exactly what the
-// member's `shared_expired` action line says nobody but they can do.
-func harnessCredentialCheck(h SetupHarness, ma SetupModelAccess) (SetupCheck, bool) {
-	if !h.Captured {
-		return SetupCheck{}, false
-	}
-	// AWS SSO carries a real expiry, so it gets a truthful row rather than the
-	// age heuristic below (which exists only because setup-tokens expose none).
-	if h.Provider == awsSSOProvider {
-		return awsSSOCredentialRow(h, ma), true
-	}
-	if h.Aging {
-		return SetupCheck{
-			ID: "harness_credential", Label: "Managed Claude subscription", Status: "warn",
-			Detail: "Your Wardyn-managed Claude subscription token was captured a long time ago (setup-token lives ~1 year). " +
-				"It may be close to expiring; a run will fail if Anthropic has revoked it.",
-			Fix: "Reconnect via container login on the provider step (Connect via container login → `claude setup-token` → paste).",
-		}, true
-	}
-	return SetupCheck{
-		ID: "harness_credential", Label: "Managed Claude subscription", Status: "ok",
-		Detail: "A Wardyn-managed Claude subscription token is connected and injected proxy-side into every run — the " +
-			"sandbox holds only an inert sentinel. Works in compose mode with no host ~/.claude.",
-	}, true
-}
-
-// awsSSOCredentialRow is the captured-AWS-SSO checklist row, one arm per state.
-//
-// `live` covers expired-but-RENEWABLE: the credential renews itself at dispatch
-// while its refresh token lives (awssso_refresh.go), so there is nothing for the
-// operator to do and a warn row would ask for an hourly re-login the product no
-// longer needs. Re-login is the answer only where renewal CANNOT happen.
-func awsSSOCredentialRow(h SetupHarness, ma SetupModelAccess) SetupCheck {
-	row := SetupCheck{ID: "harness_credential_aws", Label: "AWS SSO session", Status: "ok"}
-	switch ma.State {
-	case modelAccessExpiring:
-		// ma.Deadline, NOT h.ExpiresAt. The access token lives about an hour and
-		// the control plane renews it unattended; what actually runs out is the
-		// OIDC client registration behind the refresh token (or, for a blob with
-		// no refresh token, the access token — for which the two are the same
-		// instant). Printing h.ExpiresAt here made this row disagree with the
-		// member's own action line about one credential, and say something false:
-		// the session keeps renewing past that timestamp.
-		row.Status = "warn"
-		if ma.Cause == causeRenewalSpent {
-			// AWS retired the grant, not a registration lapsing on schedule — the
-			// sentence below would tell the operator something false about why.
-			row.Detail = fmt.Sprintf(harnessCredentialAWSRenewalSpentDetail, ma.Deadline)
-		} else {
-			row.Detail = "Your captured AWS SSO session stops being renewable at " + ma.Deadline +
-				" — after that a Bedrock run using it fails until someone signs in again."
-		}
-		row.Fix = "Re-run the containerized AWS SSO login on the provider step."
-	case modelAccessExpiredSignin, modelAccessSharedExpired, modelAccessNotConfigured:
-		row.Status = "warn"
-		if ma.PinMismatch {
-			// NOT "expired … and cannot be renewed": this session is live and
-			// renewable, and the row would be saying something false about the one
-			// credential it is describing. The member's own action line already
-			// names both pairs; the row says the same fact in the operator's words.
-			row.Detail = harnessCredentialAWSPinMismatchDetail
-			row.Fix = ma.Action
-			return row
-		}
-		row.Detail = "Your captured AWS SSO session expired at " + h.ExpiresAt +
-			" and cannot be renewed (no refresh token, or its client registration lapsed), so Bedrock runs using it will fail."
-		row.Fix = "Re-run the containerized AWS SSO login on the provider step."
-	case modelAccessLive:
-		if h.Expired {
-			row.Detail = fmt.Sprintf(harnessCredentialAWSRenewingDetail, h.ExpiresAt)
-			row.Fix = harnessCredentialAWSRenewingFix
-			return row
-		}
-		row.Detail = "A captured AWS SSO session is connected (expires " + h.ExpiresAt +
-			"). Bedrock runs exchange it for short-lived role credentials — no host ~/.aws mount and no static keys."
-	default:
-		// No grading reached this row (a blob the probe could not see). Say the
-		// honest thing rather than claiming either direction.
-		row.Detail = "A captured AWS SSO session is connected (expires " + h.ExpiresAt + ")."
-	}
-	return row
-}
-
-// awsSSOTokenSpentFor is setupHarnessCreds' one call site's "is this blob's
-// refresh token already known dead" read. Living here (not inline in
-// setupHarnessCreds, setup.go) keeps that call site's edit net-zero —
-// setup.go is AT its allowlisted line-count cap. Guarded on RefreshToken !=
-// "": the spent map is keyed by a fingerprint of the refresh token, and
-// fingerprinting "" would mark every refresh-token-less blob spent the moment
-// ANY one of them was.
+// awsSSOTokenSpentFor is the "is this blob's refresh token already known dead"
+// read the grading consults. Guarded on RefreshToken != "": the spent map is
+// keyed by a fingerprint of the refresh token, and fingerprinting "" would mark
+// every refresh-token-less blob spent the moment ANY one of them was.
 func (s *Server) awsSSOTokenSpentFor(blob awsSSOBlob) bool {
 	if blob.RefreshToken == "" {
 		return false

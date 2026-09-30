@@ -78,6 +78,7 @@ func TestAutonomyGradesGrantOpenedLanesItDispatches(t *testing.T) {
 			srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
 			srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{tc.grant}
 			st.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}}
+			ownGovCorpSecret(srv, "sub-rv") // an Azure DevOps git_pat reads the member's own row (#1429)
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-rv", []string{"eng"}, false), tc.body)
 			if w.Code != http.StatusCreated {
 				t.Fatalf("create = %d: %s", w.Code, w.Body.String())

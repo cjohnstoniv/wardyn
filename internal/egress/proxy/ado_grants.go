@@ -12,6 +12,10 @@ import (
 // ADOGrantConfig is the run's per-person Azure DevOps grant as dispatch writes
 // it into this sidecar's configuration. The sidecar is a separate process, so
 // this — not a live call — is how the REST gate learns what to hold requests to.
+//
+// For an Azure DevOps Server row, Hosts are the row's Server host(s) and
+// Organization is the collection's path as the row's base URL spells it,
+// "tfs/DefaultCollection" or "DefaultCollection" (adoServerCollection).
 type ADOGrantConfig struct {
 	Organization string                `json:"organization"`
 	Capabilities []adoscope.Capability `json:"capabilities"`

@@ -36,7 +36,7 @@ import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
 import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../../wardyn/model-access-context";
-import { useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
+import { useOperatorResolved } from "../../wardyn/operator-context";
 import { OpenInUserView, useConsoleMode } from "../../wardyn/console-view";
 import { CONNECTIONS } from "../../wardyn/copy/door";
 import { resolveDoor, type DoorTarget } from "../../../lib/model-access";
@@ -182,52 +182,16 @@ export function RunFailureBlock({
   run,
   audit,
   onGoAudit,
-  adminView = false,
 }: {
   run: AgentRun;
   /** The trail the run page already fetched. */
   audit: AuditEvent[];
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
-  /** M-7 (admin-member-modes-design.md §4.6): the admin monitor carries no
-   *  credential door, even on the admin's own run — this block's failure
-   *  sentence stays, but its sign-in button never renders there; on the
-   *  admin's own per-user lane the switch link back to it does instead
-   *  (QM-7). Defaults false: the user cockpit. */
-  adminView?: boolean;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
   const door = useModelAccessDoor();
-  const principal = usePrincipal();
   const credential = ending?.kind === "credential";
-  // EVERY term is load-bearing, and each rules out a door that would repair
-  // nothing:
-  //  - the ending's own lane, not the viewer's: `reason` covers every declared
-  //    mechanism (an OpenAI row's refusal included) while model_access grades
-  //    Claude Code alone (Codex #14);
-  //  - the roster TODAY: a sign-in repairs nothing for an agent that has since
-  //    moved off bedrock_sso, and a captured session keeps grading after such a
-  //    move;
-  //  - `actionable`: a member under a shared credential, and a refusal whose
-  //    renewal merely did not complete ("launch again in a moment", which
-  //    grades live), both get the sentence and no button;
-  //  - the VIEWER owns the run: the door is this person's own credential, so an
-  //    admin reading a member's failed run must not be offered a sign-in that
-  //    repairs nothing for that run (round-2 general S5). An empty principal is
-  //    /me unresolved or a deployment with no OIDC — never matched against an
-  //    equally empty created_by.
-  //  - a provider run's refusal names its provider (#532): ProviderDoor below
-  //    answers it instead, keyed by that provider alone (#543).
-  const ownSignIn =
-    credential && !ending.provider && ending.mechanism === "bedrock_sso" && !!principal && run.created_by === principal;
-  const showDoor = !adminView && ownSignIn && door.bedrockSSO && door.actionable;
-  // The admin view's stand-in on the admin's own run: the switch link, on the
-  // per-user lane only (the shared lane's sign-in is the admin's own control,
-  // and never a User-view door).
-  const showSwitch = adminView && ownSignIn && door.perUser;
-  // One primary recovery action per state per screen: while this block carries
-  // the button the shell strip keeps its sentence and drops its own.
-  useClaimModelAccessDoor(showDoor);
   // The context's status can be up to five minutes old, and a just-refused run
   // is exactly when the credential's state changed — so read it again, ONCE per
   // mount (the trail arrives after the first paint, so this fires when the
@@ -302,24 +266,8 @@ export function RunFailureBlock({
         </>
       )}
 
-      {showDoor && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {/* The page's one primary action, so the one `default` Button on this
-              surface (CONSOLE-RULES §6) — the sentence above it is the server's
-              and names no control. */}
-          <Button size="sm" aria-label={MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA} onClick={(e) => door.openDoor({ returnTo: e.currentTarget })}>
-            {AGENTS.SIGN_IN_AWS}
-          </Button>
-          <span className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOTE}</span>
-        </div>
-      )}
       {credential && ending.provider && <ProviderDoor run={run} provider={ending.provider} />}
 
-      {showSwitch && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <OpenInUserView runId={run.id} />
-        </div>
-      )}
 
       <div className="mt-3 flex items-center gap-3">
         <Button variant="outline" size="sm" onClick={onGoAudit}>

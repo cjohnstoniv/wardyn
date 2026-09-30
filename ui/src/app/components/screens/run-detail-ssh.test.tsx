@@ -132,6 +132,28 @@ describe("ConnectSSHCard — visibility", () => {
   });
 });
 
+// The card lives in a fixed-height canvas tile that clips (overflow-hidden), so
+// its body — not the tile — must be the scroll container, or the bottom lanes
+// are cut off with no way to reach them. jsdom does no layout, so this pins the
+// classes that make the body scroll inside a height-bounded card; the e2e
+// (runs-cockpit.spec.ts) proves the real scrollHeight > clientHeight.
+describe("ConnectSSHCard — the body scrolls inside its tile", () => {
+  it("bounds the card and makes its body a scroll container", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    listKeysMock.mockResolvedValue([]);
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    const card = screen.getByRole("heading", { name: "Attach from your terminal" }).closest("section");
+    expect(card).not.toBeNull();
+    expect(card).toHaveClass("flex", "flex-col", "min-h-0", "overflow-hidden");
+    const body = card!.lastElementChild;
+    expect(body).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+    // Every lane is inside that body, so none can sit below the scrolling edge.
+    expect(body).toContainElement(screen.getByText("Wardyn CLI"));
+    expect(body).toContainElement(screen.getByText("UI apps"));
+  });
+});
+
 // ponytail: "external:" is a bare description-string prefix (run-detail-ssh.tsx),
 // not a typed field — these two cases are its whole contract.
 describe("ConnectSSHCard — external-tool notice", () => {

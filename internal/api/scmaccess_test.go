@@ -94,7 +94,7 @@ const scmTestRowID = "ado-row-1"
 // scopes of the default (read) profile.
 func scmTestBaseline(t *testing.T) []string {
 	t.Helper()
-	scopes, err := adoscope.ScopesFor(adoscope.ProfileRead())
+	scopes, err := adoscope.ScopesFor(adoscope.ProfileDefault())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	// ceiling rides the answer; a row with no entra block carries none.
 	t.Run("per-user row: carries the row's capability_ceiling, read-only", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
-		ceiling := []adoscope.Capability{adoscope.CapRead, adoscope.CapPolicyAdmin}
+		ceiling := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPolicyAdmin}
 		sc.WorkspaceProviders.Git[0].Entra = &types.ADOEntraConfig{CapabilityCeiling: ceiling}
 		s := newSCMTestServer(t, sc, true)
 		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
@@ -240,7 +240,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 			t.Fatalf("got %+v, want the row's ceiling %v", rows, ceiling)
 		}
 		rows[0].CapabilityCeiling[0] = adoscope.CapPolicyBypass
-		if sc.WorkspaceProviders.Git[0].Entra.CapabilityCeiling[0] != adoscope.CapRead {
+		if sc.WorkspaceProviders.Git[0].Entra.CapabilityCeiling[0] != adoscope.CapCodeRead {
 			t.Fatal("the answer aliases the row's own ceiling")
 		}
 		if rows := scmAccessRows(t, s, context.Background(), adoTestSiteConfig(false), "alice"); len(rows) != 1 || rows[0].CapabilityCeiling != nil {

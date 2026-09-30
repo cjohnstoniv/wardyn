@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -445,6 +446,76 @@ func TestRunResources_DiskUsedBytes_Absent(t *testing.T) {
 			_, body := getResourcesOK(t, srv, id)
 			if strings.Contains(body, `"disk_used_bytes"`) || strings.Contains(body, `"disk_cap_bytes"`) {
 				t.Errorf("disk fields present with nothing reported; body=%s", body)
+			}
+		})
+	}
+}
+
+// TestRunResources_SandboxGoneBeforeStateFlips: the pod is removed while the run
+// still reads RUNNING (a finishing run), and the exec fails at launch or on the
+// stream. Both are the finished-run 409, never a 500, and write no failure row.
+func TestRunResources_SandboxGoneBeforeStateFlips(t *testing.T) {
+	for name, execFn := range map[string]func(runner.ExecSpec) (*runner.ExecSession, error){
+		"launch": func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, errGonePod },
+		"stream": func(runner.ExecSpec) (*runner.ExecSession, error) {
+			return &runner.ExecSession{Stdout: errReader{errGonePod}}, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, ast, h := newResourcesHarness(t, execFn)
+			id := seedResourcesRun(ast, "alice")
+			w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
+			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunInspectTerminal) {
+				t.Fatalf("code = %d body %s, want 409 %s", w.Code, w.Body.String(), reasonRunInspectTerminal)
+			}
+			if n := len(h.audit.events); n != 0 {
+				t.Errorf("wrote %d audit events for a gone sandbox", n)
+			}
+		})
+	}
+}
+
+// TestRunResources_RootWalkIsCached: with no cap enforced, the root walk (`du -x /`,
+// seconds of CPU on a big sandbox) runs on the first poll and is reused for
+// runDiskRootTTL, so an open run page (a poll every 4 s) is not a walk every 4 s.
+// A walk that read nothing is remembered too. After the TTL the next poll walks.
+func TestRunResources_RootWalkIsCached(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		walkKB string // the walk's output line; "" is a walk that timed out
+		want   bool
+	}{{"measured", "disk_root_used_kb=300\n", true}, {"timed out", "", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var arms []string
+			srv, ast, _ := newResourcesHarness(t, func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+				arms = append(arms, spec.Argv[4])
+				if spec.Argv[4] == "skip" {
+					return kvExecSession("proc_count=2\n"), nil
+				}
+				return kvExecSession("proc_count=2\n" + tc.walkKB), nil
+			})
+			now := time.Now()
+			srv.cfg.Now = func() time.Time { return now }
+			id := seedResourcesRun(ast, "alice")
+
+			for i := range 3 {
+				got, _ := getResourcesOK(t, srv, id)
+				if has := got.DiskUsedBytes != nil; has != tc.want {
+					t.Fatalf("poll %d: DiskUsedBytes present = %v, want %v", i, has, tc.want)
+				}
+				if tc.want && *got.DiskUsedBytes != 300<<10 {
+					t.Fatalf("poll %d: DiskUsedBytes = %d, want %d", i, *got.DiskUsedBytes, 300<<10)
+				}
+				now = now.Add(4 * time.Second)
+			}
+			if got := strings.Join(arms, ","); got != ",skip,skip" {
+				t.Fatalf("script arms = %q, want one walk then the cache", got)
+			}
+
+			now = now.Add(runDiskRootTTL)
+			getResourcesOK(t, srv, id)
+			if arms[len(arms)-1] != "" {
+				t.Errorf("after the TTL the poll used arm %q, want a fresh walk", arms[len(arms)-1])
 			}
 		})
 	}

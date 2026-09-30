@@ -77,8 +77,7 @@ func (s *subStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, hint string
 }
 
 // subHarness is a secrets-enabled harness on a subStore whose run is alice's,
-// on provider p, with the Claude sign-in image pinned, the shared-subscription
-// posture OFF (a multi-user install), and the operator's, alice's and bob's
+// on provider p, with the Claude sign-in image pinned, and the operator's, alice's and bob's
 // rows for p's sentinel all seeded.
 func subHarness(t *testing.T, p types.ModelProvider) (*harness, *subStore, *memSecrets) {
 	t.Helper()
@@ -89,8 +88,6 @@ func subHarness(t *testing.T, p types.ModelProvider) (*harness, *subStore, *memS
 	}
 	h.srv.cfg.Store = st
 	h.srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
-	h.srv.cfg.SubscriptionPostureOK = false
-	h.srv.cfg.SubscriptionPostureReason = "OIDC/SSO is configured"
 	name := providerSecretName(p.UID, providerOAuthPart)
 	sec.m[name] = subBlob(subOperatorToken)
 	_ = sec.For(subOwner).Put(context.Background(), name, subBlob(subOwnerToken))
@@ -226,7 +223,7 @@ func TestProviderSubscriptionSink(t *testing.T) {
 		return h, st, sec
 	}
 
-	t.Run("resolves the owner's own sign-in, and the shared-subscription posture does not apply", func(t *testing.T) {
+	t.Run("resolves the owner's own sign-in", func(t *testing.T) {
 		h, st, _ := authored(t, subProvider("claude"))
 		code, body := resolveSub(t, h, st, "api.anthropic.com")
 		var resp injectionResponse
@@ -236,12 +233,13 @@ func TestProviderSubscriptionSink(t *testing.T) {
 		}
 	})
 
-	t.Run("the legacy shared sentinels keep the posture 403", func(t *testing.T) {
+	t.Run("the retired shared sentinels never resolve", func(t *testing.T) {
 		h, st, _ := authored(t, subProvider("claude"))
-		h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: "j", Injection: sentinelInjection(types.ManagedOAuthSecret)}
+		h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: "j", Injection: &egress.InjectionRule{
+			Host: "api.anthropic.com", Header: "Authorization", Format: "Bearer %s", SecretName: types.ManagedOAuthSecret}}
 		rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), h.mintRunToken(t, st.run.ID), "")
 		if rr.Code != http.StatusForbidden {
-			t.Fatalf("legacy sentinel off-posture = %d, want 403", rr.Code)
+			t.Fatalf("retired sentinel = %d, want 403", rr.Code)
 		}
 	})
 

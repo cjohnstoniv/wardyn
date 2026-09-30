@@ -155,30 +155,13 @@ export interface AgentProviders {
 }
 
 // One agent row. `disabled` is negative-sense so the zero value is ENABLED, and
-// a disabled row is rendered disabled with a reason, never hidden.
+// a disabled row is rendered disabled with a reason, never hidden. Since 0.8 a
+// row carries no model credential: model access is a model provider.
 export interface AgentProvider {
   // A harness-catalog id ("claude-code", "codex-cli", "none") or a
   // WARDYN_AGENT_IMAGES key — the server admits both and refuses anything else.
   id: string;
   disabled?: boolean;
-  // Closed set, server-validated: "anthropic_subscription" | "anthropic_api_key"
-  // | "openai_api_key" | "bedrock_bearer" | "bedrock_sso" | "bedrock_env" |
-  // "bedrock_aws_dir" | "none". The ONE lane this agent's runs may use; there is
-  // no cross-mechanism fallback once it is declared.
-  mechanism: string;
-  // Closed set, server-validated: "shared" | "per_user". Absent reads as
-  // "shared" — today's behaviour. "per_user" is available for "bedrock_sso"
-  // only in 0.7.2.
-  credential_source?: string;
-  // The AWS access portal every principal signs in against — required when
-  // mechanism is "bedrock_sso" and credential_source is "per_user", refused
-  // otherwise. ADMIN-OWNED: a member's sign-in never chooses another.
-  sso_start_url?: string;
-  // Pin WHICH AWS account and role a sign-in for this row may capture.
-  // Optional, set together, permitted only where sso_start_url is
-  // (bedrock_sso + per_user). ADMIN-OWNED for the same reason sso_start_url is.
-  sso_account_id?: string;
-  sso_role_name?: string;
   // The model provider (model_providers[].id) a new run of this agent uses
   // unless the person chooses another. Must name a provider enabled for this
   // agent; that provider may be turned off, which makes this default's runs
@@ -306,10 +289,11 @@ export interface GitProvider {
 // Whose credential a provider row's lanes use.
 export type CredentialSource = "shared" | "per_user";
 
-// How an Entra-lane run presents itself to Azure DevOps. Absent reads as
-// "bearer", the only accepted mode: the server refuses "minted_pat" because
-// Azure DevOps mints personal access tokens only for Microsoft's own clients.
-export type ADOTokenMode = "bearer";
+// How a run presents itself to Azure DevOps on an Entra-lane row (types.ADOTokenMode).
+// Absent reads as "bearer". "minted_pat" (Wardyn creates a token for each run)
+// is named but the server still refuses it: it is not yet available.
+// "own_pat" is a token the person pastes in, and needs no tenant or client.
+export type ADOTokenMode = "bearer" | "minted_pat" | "own_pat";
 
 // The Entra lane's configuration (types.ADOEntraConfig). The capability
 // strings are the classifier's vocabulary (internal/adoscope) — the console
@@ -317,13 +301,17 @@ export type ADOTokenMode = "bearer";
 export interface ADOEntraConfig {
   tenant_id: string;
   client_id: string;
-  // The widest access a run on this row may ever hold. Non-empty, and it must
-  // include "read".
+  // The widest access a run on this row may ever hold. Non-empty.
   capability_ceiling?: string[];
-  // What a run gets when it asks for nothing. Empty reads as ["read"], and it
-  // must sit inside capability_ceiling.
+  // What a run gets when it asks for nothing. Empty reads as
+  // ["project_read", "code_read"] (ADO_DEFAULT_PROFILE), and it must sit
+  // inside capability_ceiling.
   default_profile?: string[];
   token_mode?: ADOTokenMode;
+  // The longest a minted_pat run's token lives, 1 to 168. Absent reads as 8.
+  pat_max_hours?: number;
+  // The furthest expiry an own_pat token may carry, 1 to 90. Absent reads as 30.
+  pat_max_days?: number;
   // Whether REST calls are brokered on this lane. ABSENT MEANS TRUE, which is
   // why it is optional rather than a plain boolean the console might write as
   // false by omission.

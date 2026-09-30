@@ -29,7 +29,7 @@ flowchart LR
 | --- | --- |
 | ⛔ No BYOI or devcontainer builds | A `wardyn-byoi/`-prefixed image ref is refused before any pod is created — ephemeral containers can't honor the selftest-then-task double-exec BYOI needs (`internal/runner/k8s/errors.go`'s `errBYOIUnsupported`, `internal/runner/k8s/exec.go`). `WARDYN_ENVBUILD` devcontainer builds are Docker-only for the same reason, unaffected by `k8s.enabled` |
 | ⛔ No `local_dir` / host-path workspace mounts | A policy with any `WorkspaceMounts` entry fails the run closed with a clear error (`internal/runner/k8s/sandbox.go`'s `errMountsUnsupported`) — a k8s pod has no path back to an arbitrary directory on wardynd's own host. Git-clone workspaces (`WorkspaceRepos`) are unaffected; only a *local directory* source is refused |
-| ⛔ No `~/.aws` / `~/.claude` host staging | The same `errMountsUnsupported` refusal covers the RESIDENT-COPY credential path — there's no host filesystem to stage from. Use proxy-side injection instead: managed-subscription OAuth injection and the Bedrock AWS SSO exchange are substrate-agnostic (they happen at `wardyn-proxy`), so they work unchanged on k8s |
+| ⛔ No host-directory staging | The same `errMountsUnsupported` refusal covers any host-path mount — there's no host filesystem to stage from. A model provider's credential injection and the Bedrock AWS SSO exchange are substrate-agnostic (they happen at `wardyn-proxy`), so they work unchanged on k8s |
 | 🟡 No in-sandbox DNS | Every sandbox pod is `DNSPolicy: DNSNone` with a single nameserver, `127.0.0.1` — nothing listens there, so a DNS query fails FAST (connection refused) rather than a real timeout (`internal/runner/k8s/sandbox.go`). Only the pinned `wardyn-proxy` sidecar resolves hostnames, matching the Compose substrate's proxy-only egress posture — parity, not a new gap, but the mechanism is k8s-specific |
 | 🟡 No per-pod PIDs limit | Kubernetes has no per-container "pids" resource the way Docker's `--pids-limit` does — a run's `ResourceLimits.PidsLimit` is accepted but not enforced, and wardynd logs a warning naming the run id each time. **Recommendation:** set the node-level kubelet `podPidsLimit` (or your distribution's `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb backstop |
 | ⛔ No revive or restart with current limits | The substrate implements no `runner.ProxyReviver`: the agent pod pins the proxy pod's IP, so a new proxy pod could not be reached. `POST /runs/{id}/revive` is refused with 409, and `POST /admin/runs/restart` answers 200 with each run `ok: false`; both carry reason `revive_unsupported` (`runner.ErrReviveUnsupported`), and nothing changes. A run whose proxy is out of date, including one dispatched before 0.7.12, is stopped and a new run started instead ([run lifetime](run-lifetime.md)) |
@@ -80,9 +80,8 @@ to finish will be evicted with its in-flight work lost.
 | Other paths | `/opt/rust`; any authored `workspace_repos` or ephemeral-source target outside `/home/agent/work` — an authored target may legally sit at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed target prefixes) |
 
 Nothing is mounted at `/home/agent` itself: a volume there would shadow
-each image's baked `.bashrc`, swallow the reserved drive target
-`/home/agent/drive`, and hide the read-only `~/.claude` bind the
-subscription path mounts.
+each image's baked `.bashrc` and swallow the reserved drive target
+`/home/agent/drive`.
 
 **The cache volume starts cold:** an `emptyDir` at `/home/agent/.cache`
 shadows the full image's pre-created `/home/agent/.cache/go-build`

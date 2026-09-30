@@ -271,8 +271,10 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 }
 
 // revokeRunBroker is revokeRunCascade's broker half alone, for the end: a kept
-// run keeps its run identity so a revive can mint a fresh token under it.
+// run keeps its run identity so a revive can mint a fresh token under it. Its
+// Azure DevOps personal access tokens go too; a revive's resolve creates one.
 func (s *Server) revokeRunBroker(ctx context.Context, runID uuid.UUID) {
+	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
 	if s.cfg.Broker == nil {
 		return
 	}

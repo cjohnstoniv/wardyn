@@ -50,7 +50,7 @@ func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
 		h := newHarness(t)
 		st := &countingSiteStore{integStore: &integStore{
 			govEscapeStore: newGovEscapeStore(&capStore{}),
-			site:           agentRoster(perUserAWSRow()),
+			site:           awsSSOTestSite(),
 		}}
 		cfg := baseTestConfig(h, st)
 		cfg.OIDC = &oidc.Authenticator{}

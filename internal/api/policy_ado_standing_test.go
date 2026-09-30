@@ -66,7 +66,7 @@ func adoStandingLaunch(t *testing.T, c adoStandingCase, defaults, ceiling []ados
 	if denied {
 		t.Fatalf("create denied: %d %s", w.Code, w.Body.String())
 	}
-	resolved, _, _, ok := srv.resolveRunPolicy(ctx, w, r, req, false)
+	resolved, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r, req, false)
 	if !ok {
 		t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 	}
@@ -116,7 +116,7 @@ var adoStandingSources = []string{"inline", "saved", "saved-unassigned"}
 // deny_with_review. With a governance list of [read pr] the admin granted PR,
 // so it stands.
 func TestADOStanding_MemberStandsOnlyWhatAnAdminGranted(t *testing.T) {
-	r, pr := adoscope.CapRead, adoscope.CapPR
+	r, pr := adoscope.CapCodeRead, adoscope.CapPR
 	both := []adoscope.Capability{r, pr}
 	for _, source := range adoStandingSources {
 		t.Run(source+"/no governance list, always_deny", func(t *testing.T) {
@@ -147,7 +147,7 @@ func TestADOStanding_MemberStandsOnlyWhatAnAdminGranted(t *testing.T) {
 // and an explicit list that meets nothing permitted refuses the launch rather
 // than falling back to the default.
 func TestADOStanding_ExplicitChoiceIsNeverWidened(t *testing.T) {
-	r, cw, pr := adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR
+	r, cw, pr := adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR
 	for name, gov := range map[string][]adoscope.Capability{"unset": nil, "disjoint": {cw}} {
 		for _, source := range adoStandingSources {
 			t.Run(source+"/governance "+name, func(t *testing.T) {
@@ -168,7 +168,7 @@ func TestADOStanding_ExplicitChoiceIsNeverWidened(t *testing.T) {
 			if len(rows) != 1 {
 				t.Fatalf("run.create audit rows = %d, want one refusal", len(rows))
 			}
-			for _, want := range []string{`"reason":"ado_capabilities_none_permitted"`, "Can't launch with this policy. It asks for “Open pull requests”"} {
+			for _, want := range []string{`"reason":"ado_capabilities_none_permitted"`, "Can't launch with this policy. It asks for “Contribute to pull requests”"} {
 				if !strings.Contains(string(rows[0].Data), want) {
 					t.Errorf("refusal %s does not say %q", rows[0].Data, want)
 				}
@@ -181,7 +181,7 @@ func TestADOStanding_ExplicitChoiceIsNeverWidened(t *testing.T) {
 // stands inside the ceiling, clamped by nothing else; the row ceiling refuses
 // at dispatch; a tightened live ceiling refuses at resolve.
 func TestADOStanding_Controls(t *testing.T) {
-	r, pr := adoscope.CapRead, adoscope.CapPR
+	r, pr := adoscope.CapCodeRead, adoscope.CapPR
 	both := []adoscope.Capability{r, pr}
 	t.Run("member, no policy keeps the default", func(t *testing.T) {
 		f, lane, ok := adoStandingLaunch(t, adoStandingCase{source: "none", governance: both}, []adoscope.Capability{r}, both)
@@ -229,4 +229,21 @@ func TestADOStanding_Controls(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A member bound ACROSS the split: the row's default reads code, the
+// governance list grants the Boards read and edit, and the policy also asks for
+// the High-risk Boards admin. The reads and the edit stand; work_admin, which
+// no admin granted, does not.
+func TestADOStanding_MemberBoundAcrossTheSplit(t *testing.T) {
+	cr, pr := adoscope.CapCodeRead, adoscope.CapProjectRead
+	wr, ww, wa := adoscope.CapWorkRead, adoscope.CapWorkWrite, adoscope.CapWorkAdmin
+	ceiling := []adoscope.Capability{pr, cr, wr, ww, wa}
+	for _, source := range adoStandingSources {
+		t.Run(source, func(t *testing.T) {
+			f, lane, ok := adoStandingLaunch(t, adoStandingCase{source: source, picked: []adoscope.Capability{cr, wr, ww, wa},
+				governance: []adoscope.Capability{wr, ww}}, []adoscope.Capability{pr, cr}, ceiling)
+			assertStanding(t, f, lane, ok, []adoscope.Capability{cr, wr, ww})
+		})
+	}
 }

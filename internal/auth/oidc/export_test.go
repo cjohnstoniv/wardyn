@@ -132,3 +132,7 @@ func SetLoginGrantTimeoutForTest(a *Authenticator, d time.Duration) {
 	defer a.grants.mu.Unlock()
 	a.grants.timeout = d
 }
+
+// SetEntraForTest marks a test IdP's Authenticator as Entra ID, so the
+// person-keying step (resolvePerson) runs against a plain httptest issuer.
+func SetEntraForTest(a *Authenticator) { a.entra = true }

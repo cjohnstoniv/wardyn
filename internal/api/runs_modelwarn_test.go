@@ -4,8 +4,6 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -37,68 +35,39 @@ func TestRunNeedsModelWarning(t *testing.T) {
 	}
 }
 
-// TestResolveRunLLMAccess_ManagedSubDoesNotCoverCodex is the AGT4-2 case: a
-// codex-cli run whose ONLY model access is a Wardyn-managed Claude subscription is
-// NOT provisioned — managed inject is hard-gated to claude-code, so codex needs its
-// own OpenAI credential and would boot then 404 on its first model call.
-func TestResolveRunLLMAccess_ManagedSubDoesNotCoverCodex(t *testing.T) {
-	s := &Server{cfg: Config{
-		Secrets:      &memSecrets{m: map[string][]byte{}}, // no openai-api-key stored
-		ManagedToken: fakeSubToken{},                      // a managed Claude subscription IS connected
-	}}
+// TestRunLLMAccess_OnlyAChosenProviderProvisions: a model run's access is its
+// chosen model provider and nothing else — no stored convention key, no
+// managed subscription — so a codex-cli run with no provider is not
+// provisioned and one that chose an OpenAI key provider is.
+func TestRunLLMAccess_OnlyAChosenProviderProvisions(t *testing.T) {
 	req := createRunRequest{Agent: "codex-cli"}
-	spec := types.RunPolicySpec{AllowAllEgress: true} // egress open, but no OpenAI key/grant
-	la := s.resolveRunLLMAccess(context.Background(), req, spec, map[string]bool{}, nil, "", runProviderChoice{})
-	if la == nil || la.Provisioned {
-		t.Fatalf("codex-cli with only a managed Claude sub: got %+v, want non-nil !Provisioned", la)
+	if la := runLLMAccess(req, runProviderChoice{}); la == nil || la.Provisioned {
+		t.Fatalf("codex-cli with no model provider: got %+v, want non-nil !Provisioned", la)
+	}
+	chosen := runProviderChoice{chosen: true, provider: types.ModelProvider{ID: "openai", Kind: types.ModelProviderOpenAIAPIKey}}
+	if la := runLLMAccess(req, chosen); la == nil || !la.Provisioned {
+		t.Fatalf("codex-cli that chose an OpenAI key provider: got %+v, want Provisioned", la)
+	}
+	if la := runLLMAccess(createRunRequest{Agent: "oracle"}, runProviderChoice{}); la != nil {
+		t.Fatalf("a non-LLM agent: got %+v, want nil", la)
 	}
 }
 
-// TestResolveRunLLMAccess_OpenAIKeyProvisionsCodex is the no-false-warning
-// direction: a codex-cli run with a stored openai-api-key, an auto-mint grant, and
-// matching egress IS provisioned, so the create path must NOT warn.
-func TestResolveRunLLMAccess_OpenAIKeyProvisionsCodex(t *testing.T) {
-	s := &Server{cfg: Config{Secrets: &memSecrets{m: map[string][]byte{}}}}
-	scope, _ := json.Marshal(map[string]string{"host": "api.openai.com", "secret_name": "openai-api-key"})
-	req := createRunRequest{Agent: "codex-cli"}
-	spec := types.RunPolicySpec{
-		AllowedDomains: []string{"api.openai.com"},
-		EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope}},
-	}
-	la := s.resolveRunLLMAccess(context.Background(), req, spec, map[string]bool{"openai-api-key": true}, nil, "", runProviderChoice{})
-	if la == nil || !la.Provisioned {
-		t.Fatalf("codex-cli with a stored OpenAI key + grant + egress: got %+v, want Provisioned", la)
-	}
-}
-
-// TestNoModelAccessWarning_Copy: the advisory always names the provider host + the
-// convention secret; the managed-Claude caveat appears ONLY on a non-claude agent
-// when a managed sub is connected (steering to --agent claude-code).
+// TestNoModelAccessWarning_Copy: the advisory names the agent and sends the
+// person to Settings → Model providers — never to an integration or a stored
+// convention secret, since neither credentials a run (#547).
 func TestNoModelAccessWarning_Copy(t *testing.T) {
-	codex, _ := agentLLMProvider("codex-cli")
-	claude, _ := agentLLMProvider("claude-code")
-
-	withManaged := noModelAccessWarning("codex-cli", codex, true)
-	for _, want := range []string{"codex-cli", "api.openai.com", "Settings → Model providers", "claude-code only", "--agent claude-code"} {
-		if !strings.Contains(withManaged, want) {
-			t.Errorf("codex+managed warning missing %q; got: %s", want, withManaged)
+	for _, agent := range []string{"codex-cli", "claude-code"} {
+		got := strings.Join(noModelAccessWarning(createRunRequest{Agent: agent}, runProviderChoice{}), "\n")
+		for _, want := range []string{agent, "Settings → Model providers"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s warning missing %q; got: %s", agent, want, got)
+			}
 		}
-	}
-	noManaged := noModelAccessWarning("codex-cli", codex, false)
-	if strings.Contains(noManaged, "claude-code only") {
-		t.Errorf("codex warning with NO managed sub must not mention the managed caveat; got: %s", noManaged)
-	}
-	// A claude-code agent must never be told to "use --agent claude-code" even when a
-	// managed sub is present (it would be nonsensical self-reference).
-	claudeMsg := noModelAccessWarning("claude-code", claude, true)
-	// #547: an integration or a stored convention secret no longer credentials
-	// a run, so the advice must not send anyone to either.
-	for _, gone := range []string{"integration", "anthropic-api-key"} {
-		if strings.Contains(claudeMsg, gone) {
-			t.Errorf("claude-code warning still names %q; got: %s", gone, claudeMsg)
+		for _, gone := range []string{"integration", "anthropic-api-key", "openai-api-key"} {
+			if strings.Contains(got, gone) {
+				t.Errorf("%s warning still names %q; got: %s", agent, gone, got)
+			}
 		}
-	}
-	if strings.Contains(claudeMsg, "--agent claude-code") {
-		t.Errorf("claude-code warning must not steer to itself; got: %s", claudeMsg)
 	}
 }

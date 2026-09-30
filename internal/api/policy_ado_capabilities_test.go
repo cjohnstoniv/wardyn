@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -52,8 +54,8 @@ func grantSnapshotCaps(t *testing.T, st *adoTestStore) [][]adoscope.Capability {
 // in every grant snapshot the resolver reads — and can narrow below it.
 func TestADOEntraLane_PolicyCapabilitiesReplaceDefaultProfile(t *testing.T) {
 	for name, want := range map[string][]adoscope.Capability{
-		"narrower than the default": {adoscope.CapRead},
-		"wider than the default":    {adoscope.CapRead, adoscope.CapPR},
+		"narrower than the default": {adoscope.CapCodeRead},
+		"wider than the default":    {adoscope.CapCodeRead, adoscope.CapPR},
 	} {
 		lane, ok, st, _ := adoLaneWithPolicy(t, want)
 		if !ok || lane.gate == nil {
@@ -77,7 +79,7 @@ func TestADOEntraLane_PolicyCapabilitiesReplaceDefaultProfile(t *testing.T) {
 // Absent is today's behaviour: the row's default_profile, byte for byte.
 func TestADOEntraLane_NoPolicyCapabilitiesKeepsDefaultProfile(t *testing.T) {
 	lane, ok, st, _ := adoLaneWithPolicy(t, nil)
-	want := []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
+	want := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
 	if !ok || lane.gate == nil || !slices.Equal(lane.gate.Capabilities, want) {
 		t.Fatalf("ok=%v gate=%+v, want the default profile %v", ok, lane.gate, want)
 	}
@@ -92,7 +94,7 @@ func TestADOEntraLane_NoPolicyCapabilitiesKeepsDefaultProfile(t *testing.T) {
 // with nothing authored and a sentence naming the policy as the source — never
 // silently granted, never silently narrowed.
 func TestADOEntraLane_PolicyCapabilityOutsideCeilingIsRefused(t *testing.T) {
-	lane, ok, st, audit := adoLaneWithPolicy(t, []adoscope.Capability{adoscope.CapRead, adoscope.CapPolicyAdmin})
+	lane, ok, st, audit := adoLaneWithPolicy(t, []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPolicyAdmin})
 	if ok || lane.gate != nil || len(st.grants) != 0 {
 		t.Fatalf("ok=%v gate=%+v grants=%d, want a refusal with nothing authored", ok, lane.gate, len(st.grants))
 	}
@@ -105,7 +107,7 @@ func TestADOEntraLane_PolicyCapabilityOutsideCeilingIsRefused(t *testing.T) {
 	}
 	data := string(rows[0].Data)
 	for _, want := range []string{`"reason":"capability_ceiling"`,
-		"Can't launch with this policy. It grants “Change branch policies” for Azure DevOps, which is outside what your administrator allows on this provider."} {
+		"Can't launch with this policy. It grants “Edit branch policies” for Azure DevOps, which is outside what your administrator allows on this provider."} {
 		if !strings.Contains(data, want) {
 			t.Errorf("refusal %s does not say %q", data, want)
 		}
@@ -113,10 +115,11 @@ func TestADOEntraLane_PolicyCapabilityOutsideCeilingIsRefused(t *testing.T) {
 }
 
 // An unknown capability never reaches dispatch: the policy door refuses it with
-// its own reason, not the bucket.
+// its own reason, not the bucket. The pre-split "read" is one: the per-area
+// split is a clean break with no alias.
 func TestCreatePolicy_UnknownADOCapabilityIsItsOwnReason(t *testing.T) {
 	body := `{"name":"x","spec":{"min_confinement_class":"CC2","allowed_domains":[],"first_use_approval":"always_deny",` +
-		`"azure_devops_capabilities":["read","admin"]}}`
+		`"azure_devops_capabilities":["code_read","read"]}}`
 	w := httptest.NewRecorder()
 	(&Server{}).handleCreatePolicy(w, httptest.NewRequest(http.MethodPost, "/api/v1/policies", strings.NewReader(body)))
 	var got struct {
@@ -125,7 +128,7 @@ func TestCreatePolicy_UnknownADOCapabilityIsItsOwnReason(t *testing.T) {
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
 	if w.Code != http.StatusBadRequest || got.Reason != reasonADOCapabilityUnknown ||
-		!strings.Contains(got.Error, `azure_devops_capabilities[1]: "admin"`) {
+		!strings.Contains(got.Error, `azure_devops_capabilities[1]: "read"`) {
 		t.Fatalf("status=%d body=%s, want 400 %s naming the entry", w.Code, w.Body.String(), reasonADOCapabilityUnknown)
 	}
 }
@@ -134,15 +137,15 @@ func TestValidatePolicySpec_ADOCapabilities(t *testing.T) {
 	spec := func(caps ...adoscope.Capability) types.RunPolicySpec {
 		return types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: caps}
 	}
-	for _, ok := range []types.RunPolicySpec{spec(), spec(adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR),
-		spec(adoscope.CapRead, adoscope.CapPolicyAdmin)} {
+	for _, ok := range []types.RunPolicySpec{spec(), spec(adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR),
+		spec(adoscope.CapCodeRead, adoscope.CapPolicyAdmin)} {
 		if err := validatePolicySpec(ok); err != nil {
 			t.Errorf("%v refused: %v", ok.AzureDevOpsCapabilities, err)
 		}
 	}
 	// A refused catalogue value is a Capability too, and still not grantable.
 	for _, bad := range []adoscope.Capability{"admin", "", adoscope.CapDeniedTokens, adoscope.CapUnclassifiedWrite} {
-		if err := validatePolicySpec(spec(adoscope.CapRead, bad)); err == nil ||
+		if err := validatePolicySpec(spec(adoscope.CapCodeRead, bad)); err == nil ||
 			specRefusalReason(err, reasonPolicyRequestInvalid) != reasonADOCapabilityUnknown {
 			t.Errorf("%q: err=%v, want a refusal carrying %s", bad, err, reasonADOCapabilityUnknown)
 		}
@@ -158,7 +161,7 @@ func TestValidatePolicySpec_ADOCapabilities(t *testing.T) {
 // keep is the difference between an explicit list and none at all, so dispatch
 // never reads a narrowed-to-nothing choice as "use the default".
 func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.T) {
-	r, pr, pa := adoscope.CapRead, adoscope.CapPR, adoscope.CapPolicyAdmin
+	r, pr, pa := adoscope.CapCodeRead, adoscope.CapPR, adoscope.CapPolicyAdmin
 	profile := func(caps ...adoscope.Capability) *types.GovernanceProfile {
 		return &types.GovernanceProfile{ID: uuid.New(), Name: "ado",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: caps}}
@@ -188,7 +191,7 @@ func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil).WithContext(ctx)
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: tc.inline}
 			w := httptest.NewRecorder()
-			got, _, _, ok := srv.resolveRunPolicy(ctx, w, req, &createRunRequest{Agent: "claude-code", InlinePolicy: &spec}, true)
+			got, _, _, _, ok := srv.resolveRunPolicy(ctx, w, req, &createRunRequest{Agent: "claude-code", InlinePolicy: &spec}, true)
 			if !ok {
 				t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 			}
@@ -206,7 +209,7 @@ func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.
 // the launch instead of falling back to the default.
 func TestMemberADOCapabilities_CeilingListIsNeverInherited(t *testing.T) {
 	prof := &types.GovernanceProfile{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
-		MinConfinementClass: types.CC2, AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapRead, adoscope.CapPR}}}
+		MinConfinementClass: types.CC2, AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}}}
 	inline := func(caps ...adoscope.Capability) *types.RunPolicySpec {
 		return &types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: caps}
 	}
@@ -226,7 +229,7 @@ func TestMemberADOCapabilities_CeilingListIsNeverInherited(t *testing.T) {
 			ctx := operatorCtx("sub-ado", "ado@corp.example", oidc.RoleUser)
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 			w := httptest.NewRecorder()
-			spec, _, _, ok := srv.resolveRunPolicy(ctx, w, r, tc.req, true)
+			spec, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r, tc.req, true)
 			if !ok {
 				t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 			}
@@ -244,7 +247,7 @@ func TestMemberADOCapabilities_CeilingListIsNeverInherited(t *testing.T) {
 				}
 				return
 			}
-			want := []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite}
+			want := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}
 			if !ok || lane.gate == nil || !slices.Equal(lane.gate.Capabilities, want) {
 				t.Errorf("dispatched gate = %+v (ok %v), want the row's default_profile %v", lane.gate, ok, want)
 			}
@@ -281,7 +284,26 @@ func TestADOPolicyPastCeiling_NamesEachCapability(t *testing.T) {
 		t.Errorf("one:\n got %q\nwant %q", one, want)
 	}
 	three := adoPolicyPastCeiling([]adoscope.Capability{adoscope.CapWikiWrite, adoscope.CapPolicyAdmin, adoscope.CapProjectAdmin})
-	if !strings.Contains(three, "It grants “Wiki”, “Change branch policies” and “Manage projects” for Azure DevOps") {
+	if !strings.Contains(three, "It grants “Edit wikis”, “Edit branch policies” and “Manage projects & teams” for Azure DevOps") {
 		t.Errorf("three: %q", three)
+	}
+}
+
+// The pre-split "read" is refused at the two policy-shaped doors that are not a
+// policy write: a governance profile's ceiling, and the WARDYN_DEFAULT_POLICY
+// file, which refuses to boot the daemon rather than load an alias.
+func TestPreSplitReadIsRefusedAtGovernanceAndBoot(t *testing.T) {
+	body := `{"name":"p","ceiling":{"min_confinement_class":"CC2","azure_devops_capabilities":["read"]}}`
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(body))
+	if _, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r); !strings.Contains(msg, `"read" is not a grantable Azure DevOps capability`) {
+		t.Errorf("governance ceiling naming read: msg = %q, want the unknown-capability refusal", msg)
+	}
+
+	path := filepath.Join(t.TempDir(), "default.json")
+	if err := os.WriteFile(path, []byte(`{"min_confinement_class":"CC2","azure_devops_capabilities":["read"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicySpec(path); err == nil || !strings.Contains(err.Error(), `"read" is not a grantable Azure DevOps capability`) {
+		t.Errorf("LoadPolicySpec(default policy naming read) error = %v, want the unknown-capability refusal", err)
 	}
 }

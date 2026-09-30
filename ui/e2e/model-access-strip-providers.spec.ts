@@ -6,8 +6,8 @@
 // #540 (design §5.5, packet MP-D): the shell strip's PROVIDER-mode states —
 // graded by providerAttention() and rendered by ModelAccessBanner's
 // providerStripLine/BANNER table — carried no e2e pin before this file.
-// model-access-banner.spec.ts is the LEGACY (no model-provider block) strip
-// only; refusal-doors.spec.ts's withProviders() grades every provider
+// model-access-banner.spec.ts pins where the strip rides (every screen, focus
+// mode, never Getting Started); refusal-doors.spec.ts's withProviders() grades every provider
 // `not_configured` with no provider named anyone's default, which never
 // satisfies providerAttention's `missing` arm, so B1/B3/B4/B5/B8 never render
 // in either suite. Pinned here, against the real console, with only
@@ -78,8 +78,8 @@ test.describe("the shell strip under a provider block (design §5.5, #540)", () 
 
     await page.getByRole("button", { name: "Not now" }).click();
     await expect(page.getByText(line)).toHaveCount(0);
-    // …and it stays cleared across a navigation, not just this render (mirrors
-    // model-access-banner.spec.ts's legacy "Not now" test, packet MP-D QD-3).
+    // …and it stays cleared across a navigation, not just this render (packet
+    // MP-D QD-3).
     await navToRoute(page, "/workspaces");
     await expect(page.getByText(line)).toHaveCount(0);
   });

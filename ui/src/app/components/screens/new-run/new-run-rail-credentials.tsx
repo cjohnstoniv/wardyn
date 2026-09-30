@@ -10,7 +10,7 @@
 // and renders; it owns no screen state.
 
 import * as React from "react";
-import type { ModelCredential, SetupHarnessTool, SetupModelProvider, SetupProviderAccess } from "../../../lib/types";
+import type { ModelCredential, SetupModelProvider, SetupProviderAccess } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Chip } from "../../wardyn/primitives";
@@ -29,41 +29,15 @@ import {
 // "Credentials" as a heading over "never written into the sandbox" was a
 // universal claim only the model credential ever supported.
 //
-// The precedence, and why it is only two rungs. A current preflight verdict
-// describes the exact body about to be launched, resolved lane and all, so it
-// wins and everything below is read off it. Otherwise the only claim available
-// is the one the roster row settles by itself — a per-user Bedrock SSO row,
-// resident whatever the run carries — and that row is also the one case whose
-// precise answer cannot be fetched, since Preflight 422s a member who has not
-// signed in. Anything else is unresolved, and says so: there is no third rung
-// that guesses.
-export function CredentialFacts({
-  cred,
-  agentRow,
-  preflightRun,
-}: {
-  cred?: ModelCredential;
-  agentRow?: SetupHarnessTool;
-  /** Whether a current preflight verdict is on screen. */
-  preflightRun: boolean;
-}) {
+// A current preflight verdict describes the exact body about to be launched,
+// its chosen provider and all, so it wins; otherwise the answer is unresolved,
+// and says so: there is no rung that guesses.
+export function CredentialFacts({ cred, preflightRun }: { cred?: ModelCredential; /** Whether a current preflight verdict is on screen. */ preflightRun: boolean }) {
   if (cred) {
-    // Keyed on the resolved mechanism, never on the row's declared one.
-    const bedrock = cred.residency === "sandbox" && cred.mechanism !== "anthropic_subscription";
     return (
       <>
         <CredentialLine>{credentialSentence(cred)}</CredentialLine>
-        {bedrock && <AWSSignInChip perUser={cred.credential_source === "per_user"} />}
-      </>
-    );
-  }
-  if (agentRow?.credential_residency === "sandbox") {
-    // The row-fixed case. per_user by construction — it is the only shape the
-    // server publishes this field for.
-    return (
-      <>
-        <CredentialLine>{RAIL_CREDENTIAL.SANDBOX_BEDROCK}</CredentialLine>
-        <AWSSignInChip perUser />
+        {cred.residency === "sandbox" && <AWSSignInChip />}
       </>
     );
   }
@@ -71,9 +45,8 @@ export function CredentialFacts({
     <>
       <CredentialLine>{RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH}</CredentialLine>
       {/* …and the way to find out, only while there is nothing to find it
-          in. A current verdict that carries no `model_credential` — always so
-          against a 0.7.4 daemon, and on 0.7.5 whenever the roster read failed or
-          there is no store — puts this hint beside the result of pressing it: a
+          in. A current verdict that carries no `model_credential` (a run no
+          provider serves) puts this hint beside the result of pressing it: a
           promise that is false the moment it is followed. */}
       {!preflightRun && <CredentialLine>{RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT}</CredentialLine>}
     </>
@@ -84,16 +57,12 @@ function CredentialLine({ children }: { children: React.ReactNode }) {
   return <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground first:mt-0">{children}</p>;
 }
 
-// Whose AWS sign-in is resident — the difference between "my own session is in
-// there" and "the admin's is", in the Barrier chip + tagline shape.
-function AWSSignInChip({ perUser }: { perUser: boolean }) {
+// Whose AWS sign-in is resident — the person's own; since 0.8 every provider
+// credential is (D3 — no shared credential exists to contrast it with).
+function AWSSignInChip() {
   return (
     <div className="mt-1.5">
-      <Chip tone="neutral">
-        {perUser
-          ? RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER
-          : RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_SHARED}
-      </Chip>
+      <Chip tone="neutral">{RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER}</Chip>
     </div>
   );
 }
@@ -102,15 +71,10 @@ function AWSSignInChip({ perUser }: { perUser: boolean }) {
 function credentialSentence(cred: ModelCredential): string {
   switch (cred.residency) {
     case "proxy":
-      return cred.staged_placeholder ? RAIL_CREDENTIAL.PROXY_STAGED : RAIL_CREDENTIAL.PROXY;
+      return RAIL_CREDENTIAL.PROXY;
     case "sandbox":
-      // The only two families that ever grade `sandbox`: every SigV4 Bedrock
-      // lane, and the ~/.claude mount with proxy-side injection off.
-      return cred.mechanism === "anthropic_subscription"
-        ? RAIL_CREDENTIAL.SANDBOX_SUBSCRIPTION
-        : RAIL_CREDENTIAL.SANDBOX_BEDROCK;
-    case "image":
-      return RAIL_CREDENTIAL.IMAGE;
+      // The only kind that grades `sandbox`: a Bedrock AWS sign-in.
+      return RAIL_CREDENTIAL.SANDBOX_BEDROCK;
     default:
       return RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH;
   }
@@ -127,7 +91,7 @@ function ProviderResidencyLine({ provider }: { provider: SetupModelProvider }) {
     return (
       <>
         <CredentialLine>{RAIL_CREDENTIAL.SANDBOX_BEDROCK}</CredentialLine>
-        <AWSSignInChip perUser />
+        <AWSSignInChip />
       </>
     );
   }

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -381,12 +383,12 @@ func uiCookiePolicy(raw string) api.UICookiePolicy {
 	return p
 }
 
-// validateBootPosture runs the flag-only posture refusals (UI-sandbox gateway,
-// hybrid org control plane) — neither depends on anything db.Migrate, secrets,
-// identity, the broker or the runner resolve — in one call, right beside
-// validateConfig in run() and before connectAndMigrate. Other flag-only checks
-// (validateModelEndpoints, validateOIDCRedirectURL, the demo-video URL) still
-// run after migration. Folded into one function, not one `if err != nil` branch
+// validateBootPosture runs the flag-only posture refusals (the retired model
+// variables, UI-sandbox gateway, hybrid org control plane) — none depends on
+// anything db.Migrate, secrets, identity, the broker or the runner resolve — in
+// one call, right beside validateConfig in run() and before connectAndMigrate.
+// Other flag-only checks (the AWS SSO endpoint hatch, validateOIDCRedirectURL,
+// the demo-video URL) still run after migration. Folded into one function, not one `if err != nil` branch
 // per validator, for the same reason the deleted checkMemberAndHybridBootPosture
 // wrapper existed: run()'s gocyclo budget (.golangci.yml) is already at its
 // ceiling, and a misconfigured posture belongs at the FIRST validation step,
@@ -398,70 +400,89 @@ func uiCookiePolicy(raw string) api.UICookiePolicy {
 // failed OIDC discovery leaves nil), and neither exists this early in boot.
 // It is still called directly, at its own later point in run().
 func validateBootPosture(f *bootFlags, posture tlsPosture) error {
+	if err := refuseRetiredModelEnv(os.Environ()); err != nil {
+		return err
+	}
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}
-	return validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen)
+	if err := validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	for _, w := range bootPostureWarnings(f, posture) {
+		slog.Warn(w)
+	}
+	return nil
 }
 
-// subscriptionInjectPosture decides whether this deployment may resolve a SHARED
-// subscription credential into an agent run at all.
-//
-// Wardyn's subscription lanes inject ONE operator's live Anthropic OAuth token,
-// proxy-side, from a server-global provider. On a single-user desktop that is the
-// operator using their own subscription on their own machine. In a multi-user
-// deployment it is that operator's subscription serving OTHER people's runs —
-// which Anthropic's conditions for running Claude Code in agent infrastructure
-// prohibit (each end user must authenticate with their own credential; customers
-// may not intermediate Claude usage on their end users' behalf). The enterprise
-// running Wardyn inherits that breach, and Wardyn's own audit trail records it.
-//
-// Three clauses, and LocalMode ALONE is not enough for any of them:
-//
-//  1. Not the k8s substrate. The Helm chart carries no WARDYN_LOCAL_MODE key, but
-//     templates/deployment.yaml renders .Values.env VERBATIM, so
-//     `--set env.WARDYN_LOCAL_MODE=true` boots a cluster into local mode, and
-//     resolveLocalMode only refuses a SPECIFIC globally-routable bind (a pod's
-//     unspecified :8080 warns). "k8s can't reach LocalMode" is therefore false,
-//     and this clause is NOT waivable by the override below.
-//  2. No OIDC issuer configured. WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC exists
-//     precisely to permit local mode alongside a configured issuer — a multi-user
-//     SSO deployment with auth bypassed. Gating on LocalMode alone would re-enable
-//     sharing for the exact configuration this refusal exists to forbid. Also NOT
-//     waivable.
-//  3. Local mode, OR the explicit shared-subscription override. Compose is NOT
-//     local mode by default (demo-admin-token, WARDYN_LOCAL_MODE=false), so
-//     without the second disjunct the demo stack would break and the operator's
-//     obvious "fix" would be to set WARDYN_LOCAL_MODE=true — turning authentication
-//     off entirely. A safety gate must never create an incentive to weaken auth.
-//
-// The override is a PROMISE, not an enforcement: nothing stops someone setting it
-// in values.env. That is exactly why clauses 1 and 2 sit inside the predicate
-// where it cannot reach them.
-//
-// Returns the reason on refusal so the status surfaces can say WHY rather than
-// rendering identically to "the operator never logged in".
-func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, allowShared bool) (bool, string) {
-	if runnerTarget == "k8s" {
-		return false, "the Kubernetes runner is a multi-user deployment: a shared subscription credential would " +
-			"serve other people's runs, which the harness vendor's terms prohibit. " +
-			"Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
+// bootPostureWarnings are the flag-only postures that boot permits but says
+// so loudly about, returned rather than logged so a test can pin each one.
+func bootPostureWarnings(f *bootFlags, posture tlsPosture) []string {
+	var out []string
+	out = append(out, plaintextIssuerWarnings(*f.oidcIssuer, *f.oidcInternalIss, posture)...)
+	if w := uiGatewaySharesConsoleHostWarning(*f.uiListen, *f.uiAdvertise, *f.uiOriginTemplate, *f.oidcRedirectURL, posture); w != "" {
+		out = append(out, w)
 	}
-	if oidcConfigured {
-		return false, "OIDC/SSO is configured, which declares that more than one human uses this deployment: " +
-			"a shared subscription credential would serve other people's runs, which the harness vendor's terms prohibit. " +
-			"Give each user their own API key (wardyn secret set anthropic-api-key) or use Bedrock"
+	return out
+}
+
+// plaintextIssuerWarnings names each OIDC issuer URL that is http:// on a host
+// that is not loopback (#156). The Compose demo is exempt: it serves the
+// console without TLS (no secure cookies) and reaches its bundled Dex at
+// http://dex:5556. Any deployment with a TLS posture is not the demo, and
+// its discovery document, JWKS and token exchange would cross the network in
+// the clear — or, for the public issuer, send the browser's sign-in there.
+// A warning, not a refusal: an in-cluster IdP behind a mesh is a real setup.
+func plaintextIssuerWarnings(issuer, internalIssuer string, posture tlsPosture) []string {
+	if !posture.secureCookies || strings.TrimSpace(issuer) == "" {
+		return nil // OIDC is configured by the public issuer; an internal one alone is dead config
 	}
-	if localMode || allowShared {
-		return true, ""
+	var out []string
+	for _, c := range []struct{ env, raw string }{
+		{"WARDYN_OIDC_ISSUER", issuer}, {"WARDYN_OIDC_INTERNAL_ISSUER", internalIssuer},
+	} {
+		if u, err := url.Parse(strings.TrimSpace(c.raw)); err == nil && strings.EqualFold(u.Scheme, "http") && !urlHostIsLoopback(u.Hostname()) {
+			out = append(out, fmt.Sprintf("wardynd: %s %q is plain http:// on a host that is not loopback while the console is served over TLS — "+
+				"sign-in discovery, keys and the token exchange cross the network unencrypted; use an https:// issuer "+
+				"(plain http:// is for the Compose demo's bundled Dex only)", c.env, c.raw))
+		}
 	}
-	return false, "subscription injection is limited to a single-user desktop/local deployment " +
-		"(WARDYN_LOCAL_MODE). This daemon serves an authenticated multi-user API, so a shared " +
-		"subscription credential would serve other people's runs. Use an API key or Bedrock — or, " +
-		"for a demo box that is genuinely single-user, set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true"
+	return out
+}
+
+// urlHostIsLoopback reports whether a URL's hostname is "localhost" or a
+// loopback IP literal. Deliberately no DNS lookup: an issuer named by hostname
+// is not vetted by what it resolves to today.
+func urlHostIsLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// uiGatewaySharesConsoleHostWarning is #1269: under secure cookies the console's
+// cookies are __Host- cookies, which a sibling host cannot plant, but cookies
+// ignore ports — so a path-mode gateway advertised on the console's own
+// hostname serves sandbox-authored pages that can set a host-only
+// __Host-wardyn_session for that hostname. The console's host is the host of
+// WARDYN_OIDC_REDIRECT_URL. Host mode (an origin template) gives each run its
+// own host and is never flagged.
+func uiGatewaySharesConsoleHostWarning(uiListen, advertise, originTemplate, redirectURL string, posture tlsPosture) string {
+	if uiListen == "" || originTemplate != "" || !posture.secureCookies {
+		return ""
+	}
+	a, aerr := url.Parse(strings.TrimSpace(advertise))
+	c, cerr := url.Parse(strings.TrimSpace(redirectURL))
+	if aerr != nil || cerr != nil || a.Hostname() == "" || !strings.EqualFold(a.Hostname(), c.Hostname()) {
+		return ""
+	}
+	return fmt.Sprintf("wardynd: WARDYN_UI_SANDBOX_ADVERTISE host %q is the console's own host (from WARDYN_OIDC_REDIRECT_URL) and cookies ignore ports — "+
+		"a sandboxed app's page served there can set a host-only __Host-wardyn_session for the console; "+
+		"give the UI gateway its own hostname (e.g. a wardyn-ui.<domain> name) or set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE for per-run hosts", a.Hostname())
 }
 
 // parseMountCeilings parses the TWO operator/MDM-set mount ceilings at boot and

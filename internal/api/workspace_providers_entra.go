@@ -32,10 +32,12 @@ const (
 	providers400EntraGUID = "git[%d].entra.%s: %q is not a GUID — a tenant and a client are named by GUID, never by an alias"
 	providers400EntraCap  = "git[%d].entra.%s[%d]: %q is not a capability — want one of: %s"
 	providers400EntraCeil = "git[%d].entra.capability_ceiling: name at least one capability — an empty ceiling has no reading that is not a guess"
-	providers400EntraRead = "git[%d].entra.capability_ceiling: name %q — every profile starts from reads, so a ceiling without it can serve nothing"
 	providers400EntraShar = "git[%d].credential_source: the %q lane needs per_user — there is no such thing as a shared Entra sign-in"
 	providers400EntraProf = "git[%d].entra.default_profile: %q is outside capability_ceiling"
-	providers400EntraMint = "git[%d].entra.token_mode: minted_pat is not available — Azure DevOps only lets Microsoft's own clients mint personal access tokens, so Wardyn cannot mint one per run; use bearer"
+	providers400EntraS1   = "git[%d].entra.token_mode: Per-run tokens need this row to use Wardyn's own sign-in app, and that app to have a client secret. Name Wardyn's app here and set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect."
+	providers400EntraApp  = "git[%d].entra.client_id: git[%d] creates per-run tokens with this app registration, so Entra sign-in can't use it: its tokens would let a run create tokens. Name another app, or keep Wardyn creating a token for each run."
+	providers400EntraHrs  = "git[%d].entra.pat_max_hours: Enter 1 to %d hours."
+	providers400EntraDays = "git[%d].entra.pat_max_days: Enter 1 to %d days."
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
@@ -67,7 +69,9 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 			return fmt.Errorf(providers400Source, i, string(src),
 				strings.Join(types.ClosedCredentialSourceList(), ", "))
 		}
-		if src == types.CredentialSourcePerUser && !hasLane {
+		// A Server row has no Entra sign-in: its person-owned lane is pat.
+		adoServerPAT := row.Kind == types.GitProviderAzureDevOps && slices.Contains(row.Lanes, types.GitLanePAT)
+		if src == types.CredentialSourcePerUser && !hasLane && !adoServerPAT {
 			return fmt.Errorf(providers400PerUser, i, string(types.GitLaneEntra))
 		}
 	}
@@ -104,7 +108,10 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 func validateOneEntraRow(rows []types.GitProvider) error {
 	first := -1
 	for i, row := range rows {
-		if row.Disabled || !slices.Contains(row.Lanes, types.GitLaneEntra) {
+		// An own_pat row has no sign-in to serve, so it never competes for the
+		// one; each organisation's own-token row can be on at once.
+		if row.Disabled || !slices.Contains(row.Lanes, types.GitLaneEntra) ||
+			(row.Entra != nil && row.Entra.TokenMode == types.ADOTokenModeOwnPAT) {
 			continue
 		}
 		if first >= 0 {
@@ -131,14 +138,20 @@ func entraLaneHosts(i int, row types.GitProvider) error {
 	return nil
 }
 
-// validateEntraBlock holds the block's own fields: two GUIDs, a non-empty
-// ceiling of grantable capabilities, a default profile inside that ceiling,
-// and a known token mode.
+// validateEntraBlock holds the block's own fields: two GUIDs (unless the mode
+// is own_pat, where nothing signs in), a non-empty ceiling of grantable
+// capabilities, a default profile inside that ceiling, a known token mode and
+// the two token lifetimes in range.
 func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
-	if !entraGUID.MatchString(cfg.TenantID) {
+	// own_pat pastes a token, so it names no tenant or client; one that does is
+	// still held to the GUID shape rather than stored as an alias. Such a row
+	// has no sign-in, so the login and dispatch row pickers must skip it (L1,
+	// #1428); until they do it is stored but not yet usable.
+	signsIn := cfg.TokenMode != types.ADOTokenModeOwnPAT
+	if (signsIn || cfg.TenantID != "") && !entraGUID.MatchString(cfg.TenantID) {
 		return fmt.Errorf(providers400EntraGUID, i, "tenant_id", cfg.TenantID)
 	}
-	if !entraGUID.MatchString(cfg.ClientID) {
+	if (signsIn || cfg.ClientID != "") && !entraGUID.MatchString(cfg.ClientID) {
 		return fmt.Errorf(providers400EntraGUID, i, "client_id", cfg.ClientID)
 	}
 	if len(cfg.CapabilityCeiling) == 0 {
@@ -147,33 +160,29 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	if err := grantableCapabilities(i, "capability_ceiling", cfg.CapabilityCeiling); err != nil {
 		return err
 	}
-	// The ceiling must admit READS. Every profile starts from them — the
-	// default one IS them — so a ceiling without read describes a lane that
-	// would refuse the first request a run makes, and the contradiction is
-	// cheaper to catch at the write than to debug at the forge.
-	if !slices.Contains(cfg.CapabilityCeiling, adoscope.CapRead) {
-		return fmt.Errorf(providers400EntraRead, i, string(adoscope.CapRead))
-	}
 	if err := grantableCapabilities(i, "default_profile", cfg.DefaultProfile); err != nil {
 		return err
 	}
 	// cfg.Profile() and not cfg.DefaultProfile: an empty profile reads as the
-	// catalogue's read-only one, so the ceiling has to admit THAT — a ceiling
-	// without `read` and a row that named no profile would otherwise store as
-	// valid and refuse every request the row exists to serve.
+	// catalogue's default one, so the ceiling has to admit THAT — a ceiling
+	// without its reads and a row that named no profile would otherwise store
+	// as valid and refuse every request the row exists to serve.
 	for _, c := range cfg.Profile() {
 		if !slices.Contains(cfg.CapabilityCeiling, c) {
 			return fmt.Errorf(providers400EntraProf, i, string(c))
 		}
 	}
-	// minted_pat is refused BY NAME, ahead of the generic closed-set check, so
-	// the admin reads why rather than "not a token mode".
-	if cfg.TokenMode == types.ADOTokenModeMintedPAT {
-		return fmt.Errorf(providers400EntraMint, i)
-	}
 	if cfg.TokenMode != "" && !cfg.TokenMode.Valid() {
 		return fmt.Errorf(providers400EntraMode, i, string(cfg.TokenMode),
 			strings.Join(types.ClosedADOTokenModeList(), ", "))
+	}
+	if cfg.PATMaxHours < 0 || cfg.PATMaxHours > types.ADOPATMaxHoursLimit {
+		//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
+		return fmt.Errorf(providers400EntraHrs, i, types.ADOPATMaxHoursLimit)
+	}
+	if cfg.PATMaxDays < 0 || cfg.PATMaxDays > types.ADOPATMaxDaysLimit {
+		//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
+		return fmt.Errorf(providers400EntraDays, i, types.ADOPATMaxDaysLimit)
 	}
 	return nil
 }
@@ -186,6 +195,51 @@ func grantableCapabilities(i int, field string, caps []adoscope.Capability) erro
 		if !c.Grantable() {
 			return fmt.Errorf(providers400EntraCap, i, field, j, string(c),
 				adoscope.GrantableCapabilityList())
+		}
+	}
+	return nil
+}
+
+// validateADOTokenModes holds a block's Azure DevOps token modes to the two
+// rules that need more than the rows. Both doors run it beside
+// validateWorkspaceProviders, whose rules are pure.
+//
+//   - S1: a minted_pat row creates tokens with the stored sign-in of the
+//     console's own app, and that app must hold a secret, so a stolen store
+//     alone cannot create tokens. The console's secret is sent to no other app,
+//     so the row must name the console's tenant and client. With no OIDC
+//     sign-in there is no such app, and minted_pat is refused.
+//   - A bearer row may not name the app a minted_pat row creates tokens with:
+//     that app holds the token permissions, and Entra hands every bearer it
+//     issues all of them.
+func (s *Server) validateADOTokenModes(p *types.WorkspaceProviders) error {
+	if p == nil {
+		return nil
+	}
+	var loginClient, loginTenant string
+	var hasSecret bool
+	if s.cfg.ADOLoginFacts != nil {
+		loginClient, loginTenant, hasSecret = s.cfg.ADOLoginFacts()
+	}
+	minted := map[string]int{}
+	for i, row := range p.Git {
+		if row.Entra == nil || row.Entra.TokenMode != types.ADOTokenModeMintedPAT {
+			continue
+		}
+		if !hasSecret || loginClient == "" || !strings.EqualFold(row.Entra.ClientID, loginClient) ||
+			!strings.EqualFold(row.Entra.TenantID, loginTenant) {
+			//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
+			return fmt.Errorf(providers400EntraS1, i)
+		}
+		minted[strings.ToLower(row.Entra.ClientID)] = i
+	}
+	for i, row := range p.Git {
+		if row.Entra == nil || cmpTokenMode(row.Entra.TokenMode) != types.ADOTokenModeBearer {
+			continue
+		}
+		if j, ok := minted[strings.ToLower(row.Entra.ClientID)]; ok {
+			//lint:ignore ST1005 the sentence the admin reads, as written in the approved copy; it ends as a sentence does
+			return fmt.Errorf(providers400EntraApp, i, j)
 		}
 	}
 	return nil

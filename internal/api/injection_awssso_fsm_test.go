@@ -70,7 +70,7 @@ func evCapture(offset time.Duration, owner string) fsmEvent {
 			fresh.SourceRunID = run.ID.String()
 			f.putBlob(t, owner, fresh)
 			f.srv.resolvePendingReauth(context.Background(),
-				awsSSOScope{perUser: true, owner: owner}, owner, run)
+				reauthScope(owner), owner, run)
 		},
 		want: func(*testing.T, *reauthFixture) {},
 	}
@@ -274,9 +274,9 @@ func TestCredentialReauth_TokenIsInNoSink(t *testing.T) {
 	f.brk.setHost("evil.example.com")
 	bodies = append(bodies, f.resolve(t).Body.String())
 	f.brk.setHost(reauthPortal)
-	f.st.site = reauthRosterRow(false)
+	f.st.site = types.SiteConfig{}
 	bodies = append(bodies, f.resolve(t).Body.String())
-	f.st.site = reauthRosterRow(true)
+	f.st.site = reauthProviderSite(reauthProvider())
 	f.putBlob(t, "alice@example.com", deadSSOBlob())
 	bodies = append(bodies, f.resolve(t).Body.String())
 

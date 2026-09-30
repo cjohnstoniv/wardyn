@@ -21,6 +21,9 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 export interface GovernanceLimits extends RunLimits {
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
+  // types.GovernanceLimits.DenyUIApps (#1391). The editor has no row for it
+  // yet; it rides the limits object it saves back unchanged.
+  deny_ui_apps?: boolean;
   // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
   // profile editor's third LimitRow writes. A run under this profile mounts no
   // user drive even when one is allocated to the person; denyUserDrive's 403

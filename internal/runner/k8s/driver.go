@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -119,6 +120,12 @@ type Driver struct {
 	// the apiserver over HTTP and can't run against a fake clientset) with a
 	// caller-supplied remotecommand.Executor. Nil in production.
 	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
+
+	// execOutputs maps a sandbox ref to its SandboxSpec.ExecOutput (an
+	// io.Writer), which Exec streams the agent container's log into. The one
+	// in-memory state here: the buffer it feeds is in memory too, so a
+	// restarted wardynd has neither.
+	execOutputs sync.Map
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
