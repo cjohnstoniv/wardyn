@@ -204,6 +204,9 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   it.each([
     ["BaseImageEntry", "internal/types/workspace_contract.go", "BaseImageEntry", "ui/src/app/lib/types/workspaces.ts"],
     ["availabilityView", "internal/api/permissions_availability.go", "AvailabilityView", "ui/src/app/lib/types/permissions.ts"],
+    // #1428: the Azure DevOps row's `entra` block, which now carries the token
+    // lifetimes (pat_max_hours, pat_max_days) the console writes.
+    ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(4);

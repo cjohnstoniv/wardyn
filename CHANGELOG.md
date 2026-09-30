@@ -31,6 +31,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
   Migration `0101_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
   with no token value in it.
+- **The console draws how people connect to Azure DevOps (#1428, #1430).** An Azure DevOps row
+  offers three choices under "How people connect to Azure DevOps": a short-lived token Wardyn creates
+  for each run (with its longest life and a "Check organisation settings" button), each person's
+  Entra sign-in, or a token each person adds themselves (with its longest expiry). The person's
+  Settings card shows the state that choice leaves them in: connect, disconnect, sign in again,
+  blocked by the organisation, or add, replace, expiring and expired. New Run says what the run's
+  token carries and asks to connect before launching. The run page lists each token the run held,
+  oldest first, and an approval says it adds the access to the run's token. A row the upgrade
+  switched off says why and turns on with "Save and turn on". The token choice is shown once the
+  server lanes that create the tokens ship; the own-token choice saves today.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
