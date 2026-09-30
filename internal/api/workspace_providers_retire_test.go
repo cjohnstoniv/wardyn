@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -130,16 +129,11 @@ func TestPerPersonADORowsAreAcceptedAtBothWriteDoors(t *testing.T) {
 	}
 }
 
-// TestRetiredADORowsAreWhatMigration0102Writes: the rows migration 0102 writes
+// TestRetiredADORowsAreWhatMigration0103Writes: the rows migration 0103 writes
 // must save through both doors, or the admin who turns one on is refused by the
 // state the upgrade left them in. The JSON is the migration's output verbatim
-// (internal/db's TestPG_RetireADOShared_* pin the same values), and it names
-// the capabilities the per-area catalogue (#1409) calls project_read and
-// code_read, so it runs once that catalogue is in.
-func TestRetiredADORowsAreWhatMigration0102Writes(t *testing.T) {
-	if !adoscope.Capability("project_read").Grantable() || !adoscope.Capability("code_read").Grantable() {
-		t.Skip("migration 0102 writes the per-area catalogue's capability names (#1409); this catalogue predates them")
-	}
+// (internal/db's TestPG_RetireADOShared_* pin the same values).
+func TestRetiredADORowsAreWhatMigration0103Writes(t *testing.T) {
 	services := `{"id":"ado","kind":"azure_devops","disabled":true,"base_urls":["https://dev.azure.com/acme"],"lanes":["entra"],"credential_source":"per_user","entra":{"token_mode":"own_pat","capability_ceiling":["project_read","code_read"],"default_profile":[]}}`
 	server := `{"id":"ados","kind":"azure_devops","disabled":true,"base_urls":["https://tfs.corp.example/acme"],"lanes":["pat"],"credential_source":"per_user"}`
 	block := `{"git":[` + services + `,` + server + `]}`

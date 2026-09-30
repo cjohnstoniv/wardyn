@@ -107,7 +107,10 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 func validateOneEntraRow(rows []types.GitProvider) error {
 	first := -1
 	for i, row := range rows {
-		if row.Disabled || !slices.Contains(row.Lanes, types.GitLaneEntra) {
+		// An own_pat row has no sign-in to serve, so it never competes for the
+		// one; each organisation's own-token row can be on at once.
+		if row.Disabled || !slices.Contains(row.Lanes, types.GitLaneEntra) ||
+			(row.Entra != nil && row.Entra.TokenMode == types.ADOTokenModeOwnPAT) {
 			continue
 		}
 		if first >= 0 {

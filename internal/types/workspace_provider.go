@@ -116,7 +116,7 @@ var ClosedGitLanes = map[GitLane]bool{
 // written, frozen forever so growing the closed set never silently opts a
 // stored row into a new lane. It never applies to an Azure DevOps row: an
 // empty list there is refused at the write boundary (the shared pat and ssh
-// lanes it would expand to are retired), and migration 0102 rewrote every
+// lanes it would expand to are retired), and migration 0103 rewrote every
 // stored one.
 var LegacyGitLanes = []GitLane{GitLaneApp, GitLanePAT, GitLaneSSH}
 

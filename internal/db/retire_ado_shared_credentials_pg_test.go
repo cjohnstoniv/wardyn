@@ -266,3 +266,36 @@ func TestPG_RetireADOShared_NoProviderBlock(t *testing.T) {
 		})
 	}
 }
+
+// TestPG_RetireADOShared_WritesTheSweepMarker (#1429 review F2): the migration
+// leaves the boot sweep's marker pending — the sweep runs while done_at is null
+// — and a second run of the migration neither duplicates it nor clears one the
+// sweep has set.
+func TestPG_RetireADOShared_WritesTheSweepMarker(t *testing.T) {
+	name := retireADOMigration(t)
+	pool, _ := partialSchemaPool(t, name)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	pending := func() (n int, doneAtNull bool) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT count(*), COALESCE(bool_and(done_at IS NULL), false) FROM boot_once
+			WHERE name = 'ado_shared_credential_retire'`).Scan(&n, &doneAtNull); err != nil {
+			t.Fatalf("read the marker: %v", err)
+		}
+		return n, doneAtNull
+	}
+	if n, null := pending(); n != 1 || !null {
+		t.Fatalf("after the migration: %d marker rows, done_at null = %v; want one, pending", n, null)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE boot_once SET done_at = now() WHERE name = 'ado_shared_credential_retire'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, readMigration(t, name)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if n, null := pending(); n != 1 || null {
+		t.Fatalf("after a second run: %d marker rows, done_at null = %v; want one, still done", n, null)
+	}
+}

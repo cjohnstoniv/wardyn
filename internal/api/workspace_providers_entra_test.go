@@ -294,7 +294,7 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 // row keeps exactly the three lanes it had, and reaches the entra lane only by
 // NAMING it.
 func TestEmptyLanesDoesNotAdmitEntra(t *testing.T) {
-	stored := adoRow("ado", false, "https://dev.azure.com/acme") // no Lanes: the 0.7.9 shape
+	stored := githubRow("gh", false, "https://github.com/acme") // no Lanes: the 0.7.9 shape
 	for _, lane := range types.LegacyGitLanes {
 		if !laneAllowed(stored, lane) {
 			t.Errorf("laneAllowed(empty, %q) = false — an empty list must keep admitting the legacy lanes", lane)
