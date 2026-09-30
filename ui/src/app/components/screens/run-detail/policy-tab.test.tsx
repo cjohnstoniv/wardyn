@@ -359,6 +359,19 @@ describe("PolicyTab — changes grouped by cause", () => {
     }
   });
 
+  it("a change to wait_for_review names the policy's own hold time, not the default", async () => {
+    show(
+      view({
+        spec: { ...SPEC, first_use_approval: "wait_for_review", first_use_hold_seconds: 45 },
+        changes: [change({ cause: "limits", field: "first_use_approval", added: ["wait_for_review"] })],
+      }),
+    );
+    await ready();
+    const g = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
+    expect(within(g).getByText("Held for up to 45 seconds while someone decides")).toBeInTheDocument();
+    expect(within(g).queryByText(/30 seconds/)).not.toBeInTheDocument();
+  });
+
   it("flags a changed entry in the Summary too", async () => {
     show(view({ changes: [change({ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] })] }));
     await ready();

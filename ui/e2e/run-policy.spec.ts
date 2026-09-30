@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
+import { randomUUID } from "node:crypto";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navTo, navToRoute, sql } from "./fixtures";
 import { CHANGE_HEADING, POLICY_TAB } from "../src/app/components/screens/run-detail/policy-tab-copy";
 import type { Page } from "@playwright/test";
 
@@ -120,57 +121,99 @@ async function openFixture(page: Page, task: string): Promise<void> {
 }
 
 test.describe("Run detail — the Policy tab (#1425)", () => {
-  test("shows what the run got after its saved policy changed, and Copy YAML puts exactly that on the clipboard", async ({
+  // The real flow, with no splice on the policy read: a saved policy, a run
+  // launched from it (its run.create row carries a real policy_source), the
+  // envelope dispatch would write (the `none` runner never dispatches, so
+  // it goes in with sql() exactly as scripts/e2e-backend.sh seeds ui_apps),
+  // and then an edit of the saved policy. The tab must still show what the run
+  // got, with the server's own "changed" verdict.
+  test("shows what the run got after its saved policy was edited, and Copy YAML puts exactly that on the clipboard", async ({
     page,
     context,
+    request,
   }) => {
     // Chromium refuses navigator.clipboard.writeText without this (providers.spec.ts).
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    const policy = await spliceRunPolicy(page, RECORDED);
-    await openFixture(page, "e2e fixture 2");
+    const stamp = randomUUID().slice(0, 8);
+    const name = `e2e-run-policy-${stamp}`;
+    const task = `run policy view ${stamp}`;
+    const spec = {
+      allowed_domains: ["api.anthropic.com", "e2e-policy.example"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC1",
+    };
+    const created = await request.post("/api/v1/policies", { headers: auth, data: { name, spec } });
+    expect(created.status(), await created.text()).toBe(201);
+    const policyId = ((await created.json()) as { id: string }).id;
+    try {
+      const launched = await request.post("/api/v1/runs", {
+        headers: auth,
+        data: { agent: "claude-code", repo: "acme/widgets", task, policy_id: policyId },
+      });
+      expect(launched.status(), await launched.text()).toBe(201);
+      const runId = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
 
-    // The tab is between Approvals and Audit, and nothing was read yet.
-    await expect(page.getByRole("tab", { name: POLICY_TAB.tab })).toBeVisible();
-    const tabs = await page.getByRole("tab").allTextContents();
-    expect(tabs.map((t) => t.trim()).slice(1, 4)).toEqual(["Approvals", POLICY_TAB.tab, "Audit"]);
-    expect(policy.reads()).toBe(0);
+      const resolved = JSON.stringify({
+        ...spec,
+        allowed_domains: [...spec.allowed_domains, "registry.npmjs.org"],
+      });
+      const workspaceAdd = JSON.stringify({ kind: "workspace", added_domains: ["registry.npmjs.org"] });
+      sql(
+        `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data) VALUES ` +
+          `(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.egress.add', '${runId}', 'success', '${workspaceAdd}'::jsonb), ` +
+          `(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '${resolved}'::jsonb)`,
+      );
+      const edited = await request.put(`/api/v1/policies/${policyId}`, {
+        headers: auth,
+        data: { name, spec: { ...spec, allowed_domains: ["api.anthropic.com"] } },
+      });
+      expect(edited.status(), await edited.text()).toBe(200);
 
-    // The identity rail's Policy row is a View link that opens the tab.
-    await page.getByRole("button", { name: "View", exact: true }).click();
-    await expect(page.getByRole("tab", { name: POLICY_TAB.tab })).toHaveAttribute("data-state", "active");
-    const tab = page.getByTestId("run-policy-tab");
-    await expect(tab).toBeVisible();
-    expect(policy.reads()).toBe(1);
+      await gotoConsole(page);
+      await navToRoute(page, `/runs/${runId}`);
 
-    await expect(tab.getByText(POLICY_TAB.sourceStored(SAVED))).toBeVisible();
-    await expect(page.getByTestId("policy-since-banner")).toHaveText(POLICY_TAB.changedSince(SAVED));
+      // The tab is between Approvals and Audit, and nothing was read yet.
+      await expect(page.getByRole("tab", { name: POLICY_TAB.tab })).toBeVisible();
+      const tabs = await page.getByRole("tab").allTextContents();
+      expect(tabs.map((t) => t.trim()).slice(1, 4)).toEqual(["Approvals", POLICY_TAB.tab, "Audit"]);
+      let reads = 0;
+      page.on("request", (r) => {
+        if (/\/runs\/[^/]+\/policy$/.test(r.url())) reads++;
+      });
+      expect(reads).toBe(0);
 
-    // The workspace's host sits under its own heading, marked as added, and the
-    // host the saved policy has since lost is still what this run got.
-    const group = page.getByRole("heading", { name: CHANGE_HEADING.workspace }).locator("..");
-    await expect(group.getByText("registry.npmjs.org")).toBeVisible();
-    await expect(group).toContainText(POLICY_TAB.chipAdded);
-    await expect(tab.getByText("e2e-policy.example")).toBeVisible();
-    await expect(tab.getByText(POLICY_TAB.scope)).toBeVisible();
+      // The identity rail's Policy row is a View link that opens the tab.
+      await page.getByRole("button", { name: "View", exact: true }).click();
+      await expect(page.getByRole("tab", { name: POLICY_TAB.tab })).toHaveAttribute("data-state", "active");
+      const tab = page.getByTestId("run-policy-tab");
+      await expect(tab).toBeVisible();
 
-    await tab.getByRole("button", { name: POLICY_TAB.viewYaml, exact: true }).click();
-    const block = tab.locator("pre");
-    await expect(block).toContainText("e2e-policy.example");
-    await expect(block).toContainText("registry.npmjs.org");
+      await expect(tab.getByText(POLICY_TAB.sourceStored(name))).toBeVisible();
+      await expect(page.getByTestId("policy-since-banner")).toHaveText(POLICY_TAB.changedSince(name));
 
-    await tab.getByRole("button", { name: POLICY_TAB.copyYaml, exact: true }).click();
-    await expect(tab.getByText("Copied")).toBeAttached();
-    const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied).toBe(
-      [
-        "allowed_domains:",
-        "  - api.anthropic.com",
-        "  - e2e-policy.example",
-        "  - registry.npmjs.org",
-        "first_use_approval: deny_with_review",
-        "min_confinement_class: CC1",
-      ].join("\n"),
-    );
+      // The host the workspace added sits under its own heading, marked as
+      // added; the host the saved policy has since lost is still what this run got.
+      const group = page.getByRole("heading", { name: CHANGE_HEADING.workspace }).locator("..");
+      await expect(group.getByText("registry.npmjs.org")).toBeVisible();
+      await expect(group).toContainText(POLICY_TAB.chipAdded);
+      await expect(tab.getByText("e2e-policy.example")).toBeVisible();
+      await expect(tab.getByText(POLICY_TAB.scope)).toBeVisible();
+      expect(reads).toBe(1);
+
+      await tab.getByRole("button", { name: POLICY_TAB.viewYaml, exact: true }).click();
+      const block = tab.locator("pre");
+      await expect(block).toContainText("e2e-policy.example");
+      await expect(block).toContainText("registry.npmjs.org");
+
+      await tab.getByRole("button", { name: POLICY_TAB.copyYaml, exact: true }).click();
+      await expect(tab.getByText("Copied")).toBeAttached();
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      const shown = (await block.locator("code > div").allTextContents()).join("\n");
+      expect(copied).toBe(shown);
+      expect(copied).toMatch(/^allowed_domains:\n {2}- api\.anthropic\.com\n {2}- e2e-policy\.example\n {2}- registry\.npmjs\.org\n/);
+    } finally {
+      expect((await request.delete(`/api/v1/policies/${policyId}`, { headers: auth })).ok()).toBe(true);
+    }
   });
 
   test("a run that stopped before its sandbox was set up says no policy was applied", async ({ page }) => {
