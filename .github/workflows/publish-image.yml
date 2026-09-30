@@ -87,9 +87,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-          # Only the triggering branch's runs: a release fast-forwards the same
-          # commit onto release/X.Y, whose run may still be going. Empty on a
-          # dispatch against a tag ref, which counts every branch's runs.
+          # Only the triggering branch's runs, so a run of the same commit on
+          # another branch (feature/**, master) never decides main's :latest.
+          # ci.yml no longer runs on release/** pushes (#1461): a release is
+          # judged by tree in release.yml, not here. Empty on a dispatch against
+          # a tag ref, which counts every branch's runs.
           BRANCH: ${{ github.event.workflow_run.head_branch || (github.ref_type == 'branch' && github.ref_name) || '' }}
         run: |
           rc=0

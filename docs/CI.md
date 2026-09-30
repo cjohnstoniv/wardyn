@@ -376,10 +376,10 @@ runner-minutes as well as minutes.
 `pull_request:` carries no `branches:` filter — that field matches the PR's
 *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>`
 branches (#90), not on `main`, so a filtered trigger gave a stacked PR no
-checks at all. `push:` stays narrow to `main`, `master`, `release/**` and
-`feature/**`, since every other commit already gets a run from its own PR.
-`release/**` stays until `release.yml` accepts a run by tree (#1461 R6); until
-then a release branch's merge commit needs its own push run for the preflight.
+checks at all. `push:` stays narrow to `main`, `master` and `feature/**`, since
+every other commit already gets a run from its own PR. It has no `release/**`:
+`release.yml` accepts CI by tree (#1461), so a release branch's fast-forward
+needs no push run of its own.
 
 **Before and after #211**, measured from the GitHub Actions API: job times over
 the 60 most recent completed `ci.yml` runs as of 2026-09-21 05:00Z (a "green run" is one

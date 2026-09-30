@@ -5,7 +5,8 @@
 # test-dco.sh — pins `make dco` (Makefile:1111-1136): every commit in
 # DCO_RANGE, merges included, must carry a well-formed Signed-off-by
 # trailer, with exactly one exemption — a 2+-parent merge commit whose
-# committer is EXACTLY GitHub <noreply@github.com>, and only when the
+# committer is EXACTLY GitHub <noreply@github.com> AND that carries GitHub's
+# web-flow signature (key id B5690EEEBB952194), and only when the
 # caller opts in with DCO_ALLOW_GITHUB_MERGES=1. That exemption models
 # push/merge_group only, where GitHub itself makes such merges — PR ranges
 # end at the PR head and never pass this flag, so every commit in a PR's
@@ -23,8 +24,11 @@
 # Cases:
 #   1. signed commits plus a signed human merge                -> 0
 #   2. an unsigned human merge                                  -> non-zero
-#   3. an unsigned merge committed as GitHub <noreply@github.com>:
-#        DCO_ALLOW_GITHUB_MERGES=0 -> non-zero, =1 -> 0
+#   3. an unsigned merge committed as GitHub <noreply@github.com>, which is
+#      all a local `GIT_COMMITTER_EMAIL=` forges:
+#        ALLOW=0 -> non-zero, ALLOW=1 -> non-zero (no web-flow signature)
+#      the same merge carrying the web-flow signature block:
+#        ALLOW=0 -> non-zero, ALLOW=1 -> 0
 #   4. an unsigned NON-merge commit committed as GitHub, ALLOW=1 -> non-zero
 #      (the exemption covers merges only)
 #   5. ALLOW=1 exempts an exact committer match ONLY, not "any merge":
@@ -60,6 +64,42 @@ run_dco() {
 	out=$(cd "$repo" && make -f "$ROOT/Makefile" dco DCO_RANGE="$base..HEAD" "$@" 2>&1) || rc=$?
 	[ "$rc" -eq 0 ] || printf '%s\n' "$out" >&2
 	return "$rc"
+}
+
+# A real signature block from a GitHub-made merge commit (PR #1341). webflow_sign
+# copies it onto another commit: git reads the key id from the block without
+# the key, which is all the exemption checks, so the copy stands in for a
+# genuine GitHub merge. It needs gpg, as the dco recipe does.
+WEBFLOW_SIG='-----BEGIN PGP SIGNATURE-----
+
+wsFcBAABCAAQBQJquqhZCRC1aQ7uu5UhlAAAnyMQAGBpg5XEFBqPqoamyDQRlHef
+cerQnLtXIOq8i6ZAmqwFcvJ/C+eHx7Aa9j1+jmv0FyDn9VNaMyYPqwJbjqG47bg6
+KGt6bhJ6qbtOWVb82g2AQZsN4MwPx0m8Ridg5MzsmldK0F9QX54Ub0SOA2CGmoyA
+KRnLXA1MugFaACPkSePKVL6zdm3NAAI2zrno2IVSiGbY5D0jSjnAxAsONAiwGNK+
+/k3DyRqYyZoSlEe3gUM+alUBDj+ekrcir/+ysG7IOz3AiomQVRn/sOttDFXkWmN+
+6fPZmuHpwaxNUT+/QSvh83KEqpq/kg8vKfu/WeDK32crjtcm2JsfbCipe1zAcydq
+WM59GnQBMW1xNqyRRslRy2NQ37nHVJE9aGNu6CBjdNC1v1kSjtvHSQoqlenxDksW
+kO8yW39GDP8jgxbsAbyEN8KFP6tYvCXJcR/6RumRuMx4s0ZXed9DLTeNWwEb1Y+S
+utAgods0M+j7/QJK3a2f7Viyo52k+S+Domz+cWC67Nqjo17cIYnyoJKChw8V4Q3D
+oor/BFG8DTbYTyxVjWyfFLZpmwfhFrWuGjtIhUqcVSJdWBnz86r3sfM09l1wMY1O
+UAtcEKH1c+e2wjCvaHqo1uaaHPAju7eeoH/CTol4WQWXemlNEjLY+JN66rWKVBqW
+3IPbeKXjT5QHecALbVl3
+=gEak
+-----END PGP SIGNATURE-----'
+
+# webflow_sign <repo-dir> — re-seal HEAD (on branch main) with the signature
+# block above, keeping every other byte of the commit.
+webflow_sign() {
+	local repo="$1" raw new
+	raw="$(git -C "$repo" cat-file commit HEAD)"
+	new="$({
+		printf '%s\n' "$raw" | sed '/^$/q' | sed '$d'
+		printf 'gpgsig %s\n' "$(printf '%s\n' "$WEBFLOW_SIG" | sed '2,$s/^/ /')"
+		printf '\n%s\n' "$(printf '%s\n' "$raw" | sed '1,/^$/d')"
+	} | git -C "$repo" hash-object -t commit -w --stdin)"
+	git -C "$repo" update-ref refs/heads/main "$new"
+	[ "$(git -C "$repo" log -1 --format=%GK)" = "B5690EEEBB952194" ] \
+		|| fail "webflow_sign: git does not read the web-flow key id from the re-sealed commit (is gpg installed?)"
 }
 
 # mkrepo <dir> — a fresh repo with local identity and one base commit,
@@ -124,8 +164,15 @@ GIT_COMMITTER_NAME="GitHub" GIT_COMMITTER_EMAIL="noreply@github.com" \
 if run_dco "$r3" "$base3" DCO_ALLOW_GITHUB_MERGES=0; then
 	fail "case 3 (GitHub merge, ALLOW=0) expected non-zero exit, got 0"
 fi
+if run_dco "$r3" "$base3" DCO_ALLOW_GITHUB_MERGES=1 2>/dev/null; then
+	fail "case 3 (merge committed as GitHub but carrying no web-flow signature, ALLOW=1) expected non-zero exit, got 0"
+fi
+webflow_sign "$r3"
+if run_dco "$r3" "$base3" DCO_ALLOW_GITHUB_MERGES=0 2>/dev/null; then
+	fail "case 3 (web-flow signed merge, ALLOW=0) expected non-zero exit, got 0"
+fi
 if ! run_dco "$r3" "$base3" DCO_ALLOW_GITHUB_MERGES=1; then
-	fail "case 3 (GitHub merge, ALLOW=1) expected exit 0, got non-zero"
+	fail "case 3 (web-flow signed merge, ALLOW=1) expected exit 0, got non-zero"
 fi
 
 # ── case 4: unsigned NON-merge commit committed as GitHub, ALLOW=1 ─────────

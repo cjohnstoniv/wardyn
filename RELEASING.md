@@ -28,34 +28,43 @@ document is that process, written down.
   passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
   triggered by step 5's tag push itself, so it cannot be a prerequisite of
   tagging).
-- **Before tagging, dispatch `nightly.yml` on the exact commit you are about to
-  tag, and wait for it to complete.** `gh workflow run nightly.yml --ref
-  release/X.Y` (or `main`, if that is the commit), run against whichever ref
-  currently points at that exact commit. `preflight-green` (below) matches
-  the nightly run's commit SHA exactly — a nightly from an earlier commit,
-  even one this commit descends from, does not count, and neither does a run
-  dispatched on some other branch. The multi-arch build is part of this same
-  nightly run: it is
-  `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`), not a
-  `ci.yml` job, so a pull request never runs it, and it is the only build of
-  the arm64 half before `release.yml` publishes it.
-  A scheduled nightly that lands on the tag's sha after your dispatch can shadow
-  it in `preflight-green`, because it reads only the newest run on that sha and a
-  scheduled run skips the staging jobs. If that happens, re-dispatch the nightly
-  before tagging.
+- **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for
+  it to complete.** `gh workflow run nightly.yml --ref release/X.Y` (or `main`,
+  if that is the commit). Evidence is keyed by the tag's **tree**, not its
+  commit: any commit with the identical tree counts, so a nightly dispatched on
+  the candidate branch still counts after a merge gives `release/X.Y` a
+  different sha. The tree must be identical. A nightly on an ancestor, which has
+  a different tree, does not count, and neither does a run from a fork. Only a
+  `workflow_dispatch` nightly counts: a scheduled run never qualifies a tree,
+  because it skips the staging jobs and GitHub may report its skipped
+  `multi-arch build` matrix as one row named `multi-arch build (${{ matrix.name }})`
+  with conclusion `skipped`. The multi-arch build is part of this same nightly
+  run: it is `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`),
+  not a `ci.yml` job, so a pull request never runs it, and it is the only build
+  of the arm64 half before `release.yml` publishes it. A scheduled nightly that
+  lands later shadows nothing; it is ignored.
 - `release.yml`'s own `preflight-green` job (T-06, #666) checks the two bullets
   above again, automatically, on the tag commit itself, the moment step 5
-  pushes the tag: every required status check green on that exact SHA, plus
-  the completed `nightly.yml` run for that EXACT SHA (no ancestor, no other
-  branch) having every watched job green. If no nightly ran on that exact
-  commit, `preflight-green` fails loudly naming the dispatch command above —
-  it never falls back to an older or unrelated run. It is belt-and-suspenders,
-  not a replacement for reading CI yourself first — a red preflight fails
-  every downstream release job, so catching it before pushing the tag is
-  still cheaper than a failed release run.
+  pushes the tag, by running `scripts/green-by-tree.sh` on the tag's sha. You can
+  run the same command first (`GITHUB_REPOSITORY=owner/name
+  WATCHED="<the watched= line in release.yml>" scripts/green-by-tree.sh <sha>`);
+  it exits 0 and prints the tree, the CI run and the nightly it accepted. It
+  needs both: a `ci.yml` run that tested the tag's tree, found through the
+  `ci-full-tree-<tree>` artifact that run uploads, in this repository, finished
+  with `success`, whose head commit has that tree (a pull request's run counts
+  only when its merge left the tree equal to its head, and otherwise fails
+  closed), with every required status check green in it; plus a dispatched
+  `nightly.yml` run on that tree with every watched job green. `ci.yml` no longer
+  runs on pushes to `release/**`: a release branch fast-forwards to a tree its
+  own pull request tested, and that run is the evidence. If no run qualifies,
+  `preflight-green` fails loudly naming what is missing. It never falls back to
+  an older or unrelated run. It is belt-and-suspenders, not a replacement for
+  reading CI yourself first — a red preflight fails every downstream release
+  job, so catching it before pushing the tag is still cheaper than a failed
+  release run.
 - **Nightly coverage is not a reliable signal until it has run green for 7
   consecutive nights.** `preflight-green` only proves the latest nightly on
-  the tag commit was green, not that the lane it ran is stable — a lane that
+  the tag's tree was green, not that the lane it ran is stable — a lane that
   just started passing after weeks red (see `docs/CI.md`'s nightly section)
   can still be one flake away from red again. Until a lane has 7 consecutive
   green nightlies, a 0.8 issue whose DONE WHEN cites "nightly coverage" for
