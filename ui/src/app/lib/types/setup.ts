@@ -327,6 +327,11 @@ export interface SetupStatus {
     // under the ephemeral-scratch fields, via DRIVES.ENFORCEMENT_*. Absent on an
     // older daemon or on Docker with no runner detected; empty reads as "none".
     ephemeral_disk_enforcement?: StorageEnforcement;
+    // The runner is the Kubernetes driver — the ONE substrate fact kept in a
+    // member's redacted body (internal/api/setup.go, SetupRunner.Kubernetes),
+    // because `driver` is blanked for them and the Vault remedy differs by
+    // substrate. Absent on an older daemon or off Kubernetes.
+    kubernetes?: boolean;
   };
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };

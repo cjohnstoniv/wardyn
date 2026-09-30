@@ -587,3 +587,68 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		t.Error("redaction mutated its input")
 	}
 }
+
+// TestSetupStatus_MemberRunnerCarriesOnlyTheKubernetesBit is #1238: a member's
+// redacted runner used to carry the confinement classes alone, so their
+// console could not tell a Kubernetes install from a Docker host and named the
+// /dev/kvm remedy for Vault. The substrate bit survives the member view — and
+// it is the ONLY thing added: the driver name, the disk-enforcement word and
+// the per-class substrates stay operator-only.
+func TestSetupStatus_MemberRunnerCarriesOnlyTheKubernetesBit(t *testing.T) {
+	h := newHarness(t)
+	for _, tc := range []struct {
+		name string
+		rn   runner.Runner
+		want bool
+	}{
+		{"kubernetes", k8sRunner{}, true},
+		{"docker", &fakeRunner{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
+			cfg.Runner = tc.rn
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.OIDC = &oidc.Authenticator{}
+			srv := New(cfg)
+
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("member: code = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var raw struct {
+				Runner map[string]json.RawMessage `json:"runner"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+			}
+			// "driver" is always serialized (no omitempty) — redaction blanks its value.
+			for k, v := range raw.Runner {
+				switch k {
+				case "confinement_classes", "kubernetes":
+				case "driver":
+					if string(v) != `""` {
+						t.Errorf("member runner.driver = %s, want the redacted empty string", v)
+					}
+				default:
+					t.Errorf("member runner carries %q — only confinement_classes and the kubernetes bit may reach a member", k)
+				}
+			}
+			var st SetupStatus
+			if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if st.Runner.Kubernetes != tc.want {
+				t.Errorf("member runner.kubernetes = %v, want %v", st.Runner.Kubernetes, tc.want)
+			}
+			if st.Runner.Driver != "" || st.Runner.EphemeralDiskEnforcement != "" || st.Runner.ConfinementSubstrates != nil {
+				t.Errorf("member runner leaked operator detail: %+v", st.Runner)
+			}
+
+			// The admin view carries the same bit, so the two never disagree.
+			_, adminSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
+			if adminSt.Runner.Kubernetes != tc.want {
+				t.Errorf("admin runner.kubernetes = %v, want %v", adminSt.Runner.Kubernetes, tc.want)
+			}
+		})
+	}
+}

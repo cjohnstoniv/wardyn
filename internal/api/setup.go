@@ -163,10 +163,16 @@ type SetupRunner struct {
 	// admin setting a number can see whether anything will hold it.
 	//
 	// Operator-only: redactSetupStatusForUser rebuilds this struct with
-	// ConfinementClasses alone, so the word never reaches a member. It is
-	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
-	// field by field.
+	// ConfinementClasses and Kubernetes alone, so the word never reaches a
+	// member. It is deliberately absent from the ANONYMOUS /healthz, which
+	// composes its own body field by field.
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
+	// Kubernetes is the ONE substrate bit a member may read: the runner is the
+	// Kubernetes driver. Driver itself stays operator-only, so without this a
+	// member's console cannot tell a Kubernetes install apart and would hand
+	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
+	// not the driver name or anything a substrate reports about itself.
+	Kubernetes bool `json:"kubernetes,omitempty"`
 }
 
 // SetupProvider is a coding-agent CLI (claude|codex) detected on the wardynd
@@ -433,10 +439,12 @@ func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
 // button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
 // for every member regardless of the real runner state. Only Driver and the
 // per-class ConfinementSubstrates map — genuine diagnostic detail — are
-// dropped — and so is EphemeralDiskEnforcement: which word binds a
-// run's disk_mib is an operator's sizing answer, actionable only on the
-// providers/setup surfaces a member has no route to. The strip is structural
-// (the SetupRunner below is rebuilt from ConfinementClasses alone, so a field
+// dropped. So is EphemeralDiskEnforcement: which word binds a run's disk_mib
+// is an operator's sizing answer, actionable only on the providers/setup
+// surfaces a member has no route to. Kubernetes survives as a bare boolean
+// (#1238) — the anonymous /healthz already names the runner, so it discloses
+// nothing new. The strip is structural
+// (the SetupRunner below is rebuilt from ConfinementClasses and the Kubernetes bit alone, so a field
 // added later is dropped by default rather than by a line somebody remembered
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
 // Secrets.Present keeps demoSecretNames' presence bits (#850): those are the
@@ -454,7 +462,7 @@ func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
@@ -546,6 +554,7 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		return out, ""
 	}
 	out.Driver = rn.Name()
+	out.Kubernetes = out.Driver == "k8s"
 	c, err := rn.Capabilities(ctx)
 	if err != nil {
 		return out, ""

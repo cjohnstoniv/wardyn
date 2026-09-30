@@ -229,15 +229,25 @@ export function NewRunScreen() {
         setModelProviders(resolvedModelProviders(st));
         setProviderAccess(st.unreachable ? undefined : st.provider_access);
         setAdoCeiling(st.unreachable ? undefined : st.scm_access?.capability_ceiling);
-        if (st.unreachable) return;
-        setVaultReason(vaultRequirementReason(st.runner.driver, st.platform));
+        // Every path that leaves the class list unread still SETTLES the probe:
+        // that is what draws the unknown-barrier line (probeSettled with no
+        // availableClasses). Setting it only beside a real list made that
+        // state unreachable.
+        if (st.unreachable) {
+          setProbeSettled(true);
+          return;
+        }
+        setVaultReason(vaultRequirementReason(st.runner.driver, st.platform, st.runner.kubernetes));
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
         // No runner AT ALL (environment-step.tsx's own noDriver fold — a
         // member's redacted Driver:"" WITH classes is a withheld NAME, not
         // no-driver) is UNKNOWN here, not "nothing installed": the capability
         // gate (runs_create.go) is skipped entirely with no runner configured.
         const noDriver = st.runner.driver === "none" || (st.runner.driver === "" && classes.length === 0);
-        if (noDriver) return;
+        if (noDriver) {
+          setProbeSettled(true);
+          return;
+        }
         setAvailableClasses(classes);
         setProbeSettled(true);
         // B4b: a CLONE's barrier is the SOURCE RUN's — kept explicit
@@ -253,6 +263,7 @@ export function NewRunScreen() {
       .catch(() => {
         /* unknown stays unknown — never claim a missing model path, or a
            confirmed-absent barrier, on a blip */
+        if (alive) setProbeSettled(true);
       });
     return () => {
       alive = false;
@@ -326,10 +337,24 @@ export function NewRunScreen() {
     probeSettled,
     governanceProfile,
     govFloor,
-    operator,
+    // Fail CLOSED to member until /me has answered (or if it never does): the
+    // default `operator` is a fail-open TRUE, which would skip the governance
+    // floor and offer a tier the server then refuses.
+    operator: operator && operatorResolved,
     workspaces,
     pristineCc,
   });
+
+  // The up-clamp only ever RAISES the pick. While /me is unresolved the
+  // governance floor binds (fail closed), so an admin's untouched pick can be
+  // raised to a tier this host lacks; once the floor lifts, re-seed it to the
+  // strongest tier that now qualifies.
+  React.useEffect(() => {
+    if (ccTouched || !policy.qualifying?.length || policy.qualifying.includes(cc)) return;
+    const next = policy.qualifying[policy.qualifying.length - 1];
+    pristineCc.current = next;
+    patch({ confinementClass: next });
+  }, [ccTouched, policy.qualifying, cc, patch]);
 
   // #542 — this agent's own model-provider candidates (access-filtered
   // server-side, #1015). `undefined` modelProviders means "unknown" — no
@@ -588,8 +613,14 @@ export function NewRunScreen() {
               }}
               decidedLine={policy.governanceBinding ? undefined : () => RUN.BARRIER_ONLY_QUALIFIER}
               pickOneNote={TIER_PICKER.PICK_ONE_PER_RUN}
+              readiness={!probeSettled ? "checking" : availableClasses ? "ready" : "unverified"}
               requirementNote={
-                policy.qualifying && policy.qualifying.length === 0 && policy.effectiveFloor
+                // A host with no barrier at all (noBarrierOnHost) is not "the
+                // floor needs a tier this host lacks": every fresh form carries
+                // the default CC1 floor, so that line would name Fence as the
+                // missing piece. The picker's own no-runner title stands, and
+                // the rail beside Launch gives the reason.
+                !policy.noBarrierOnHost && policy.qualifying && policy.qualifying.length === 0 && policy.effectiveFloor
                   ? (policy.governanceBinding ? TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE : TIER_PICKER.REQUIREMENT_LINE)(
                       CC_META[policy.effectiveFloor].label,
                       barrierRequirementReason(policy.effectiveFloor, policy.unavailable, policy.belowFloor, vaultReason),
