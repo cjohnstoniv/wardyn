@@ -312,9 +312,19 @@ from that connection." Their state
 `/me/scm-access`, and a launch is refused with the sentence for the state they are in. Every sign-in
 that captures a connection on a `minted_pat` row is audited as `ado_pat.connect`.
 
+**Disconnecting revokes the tokens of the person's runs in progress**, and those runs lose Azure
+DevOps access. The Settings card asks first: "Disconnecting revokes the tokens of any of your runs in
+progress. They lose Azure DevOps access." `DELETE /api/v1/scm/azure-devops/connection` revokes every live
+token created in the person's name (each audited `ado_pat.revoke`, reason `disconnect`), then deletes
+their stored sign-in, writes `ado_pat.disconnect` and answers `204`, also when nothing was stored. A
+connection captured at console sign-in is captured again at the person's next sign-in.
+
 **Offboarding revokes the person's live tokens first.** `DELETE /people/{principal}/credentials`
 revokes every live token created in their name (each audited `ado_pat.revoke`, reason `offboarding`),
 then deletes the stored grant.
+
+`/me/scm-access` adds, on a row that creates tokens, `token_mode: minted_pat`, `last_token` (when the
+newest token was created and, once its record is closed, when that was) and `default_profile`.
 
 That has two consequences worth knowing before you hit them:
 
@@ -376,8 +386,8 @@ than the newest.
   new one is created when the run resumes."
 - **Every live token is revoked** when the run completes, fails or is cancelled, on kill, when the run's
   lease is lost, when Wardyn reconciles a run after a restart, on the sandbox sweeps and the idle stop,
-  when the row's access changes under a running run so the run's request is refused (`drift`), and when
-  an admin erases the person's credentials. A sweep at boot and every five minutes revokes any token
+  when the row's access changes under a running run so the run's request is refused (`drift`), when
+  the person disconnects, and when an admin erases the person's credentials. A sweep at boot and every five minutes revokes any token
   a crash left behind, and closes the records of tokens past their expiry without a revoke call.
 - **If a revoke fails**, Wardyn records `ado_pat.revoke.failed`. A revoke that could not complete stays
   recorded, and the sweep retries it until the token expires. One that Azure DevOps refused for good,
@@ -385,6 +395,11 @@ than the newest.
   `pat_max_hours` after it was created. An Azure DevOps Project Collection Administrator can revoke it
   earlier through the Token Administration API, which can take up to an hour to apply. Revoking a PAT
   does not guarantee that a connection already open ends.
+- **The run page lists the tokens a run held**, oldest first (`GET /api/v1/runs/{id}/ado-tokens`): when
+  each was created and expires and, once its record is closed, when and why (`run_end`, `kill`, `pause`,
+  `drift`, `disconnect`, `offboarding`, `upstream_401`, `sweep`, or `expired` for a token that reached
+  its expiry, and whether its revoke failed). It never carries a token value or an authorization id. The
+  run's owner and admins read it; anyone else gets the run's own `404`.
 
 ## Check organisation settings
 
@@ -411,6 +426,7 @@ It uses the administrator's own connection, so it follows the [setup order](#for
      Microsoft Entra."
    - **unknown**, on any other answer (`invalidValidTo` included), never read as on: "Wardyn couldn't
      tell whether your organisation's maximum token lifespan is on. Azure DevOps answered: {error}."
+     The answer carries `lifespan_error`, Azure DevOps' own error name or `HTTP <status>`.
 
 Wardyn cannot read the organisation's policies directly. The check infers them from what Azure DevOps
 accepts, and costs the administrator two token-created emails. Both canaries are revoked at once, on a
@@ -424,7 +440,11 @@ If "Restrict personal access token (PAT) creation" is on and the person is not o
 launch is refused with a reason that names the policy, the person's Settings card reads "Blocked by
 your organisation", and each refusal is audited as `ado_pat.mint.denied`. The card keeps that state
 until a token is created or fifteen minutes pass; after that a launch goes through and the run's own
-create checks again. The simplest fix is the allow list: one Project Collection
+create checks again. When the administrator's own **Check organisation settings** is refused by the
+policy, the row shows a banner naming them ("Azure DevOps refused to create a token for {person}: your
+organisation restricts who can create personal access tokens. Add the people who use Wardyn to that
+policy's allow list, or switch to Entra sign-in.") with a button that switches the row to Entra sign-in.
+The simplest fix is the allow list: one Project Collection
 Administrator action, adding the people who use Wardyn or their group. Switching the row to `bearer` is
 the alternative, and it needs the Entra changes above (the app must drop the token permissions), which
 is why the allow list comes first. Nothing falls back silently to another credential.
@@ -522,8 +542,11 @@ In order:
    turn the row on.
 
 After the upgrade, a run reads a stored git token for an Azure DevOps host from its owner's own row
-only, an `ssh_key` grant for one is dropped with a warning, and the operator can no longer store a secret
-under a retired shared name (`PUT /secrets` answers `400`). GitHub and GitLab rows are unchanged.
+only (a person with no token of their own is refused at launch, for every `dev.azure.com` and
+`*.visualstudio.com` address whether or not a row names it), an `ssh_key` grant for one is dropped with a
+warning, and the operator can no longer store a secret under a retired shared name (`PUT /secrets`
+answers `400`, also for the name of any `<org>.visualstudio.com` address no row names). GitHub and GitLab
+rows are unchanged.
 
 ## Audit
 
@@ -532,9 +555,10 @@ Every row below is recorded without the token value.
 | Action | When |
 |---|---|
 | `ado_pat.connect` | A person's sign-in on a `minted_pat` row was captured, so it can now create tokens in their name |
+| `ado_pat.disconnect` | A person disconnected: their live tokens were revoked first, then their stored sign-in deleted |
 | `ado_pat.mint` | A run's PAT is created; the reason is dispatch, renewal, widen, upstream_401, resume or restart |
 | `ado_pat.mint.denied` | A create was refused; the row carries the refusal reason |
-| `ado_pat.revoke` | A PAT is revoked; the reason is run_end, kill, pause, drift, upstream_401, offboarding or sweep |
+| `ado_pat.revoke` | A PAT is revoked; the reason is run_end, kill, pause, drift, upstream_401, disconnect, offboarding or sweep |
 | `ado_pat.revoke.failed` | A revoke failed, so the PAT stands until it expires (or a canary must be revoked by hand) |
 | `ado_pat.org_check` | The organisation-settings check ran |
 | `ado_bearer.refused_mint_scopes` | A `bearer` row refused to inject a token that carries a token permission, or that reported no granted scope |
@@ -782,7 +806,7 @@ holding the credential.
   to a year if that policy is off.
 - **Connecting is signing in.** After admin consent, every person who signs in to the console has a
   refresh token captured that can create tokens, whether or not they ever launch on Azure DevOps.
-  Offboarding a person removes it.
+  Disconnecting removes it until the person's next sign-in captures it again; offboarding removes it.
 - **One secret guards both sign-in and token creation.** `WARDYN_DIRECTORY_CLIENT_SECRET` defaults to
   it, so a leak of the secret plus the store yields token creation. Rotate it and keep it in a secret
   manager. If your security review wants sign-in and token creation behind different secrets, that

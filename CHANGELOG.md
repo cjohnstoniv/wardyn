@@ -92,8 +92,15 @@ none of the steps above, and its app must **not** hold `vso.pats` or `vso.pats_m
   (`POST /workspace-providers/git/{id}/org-check`, admin only) verifies that the app holds both token
   permissions, that a token of the row's longest life is accepted, and whether the organisation's
   maximum token lifespan is on, off or unknown, using two canary tokens (the second lives 364 days)
-  that are revoked at once. The console asks how people connect, draws each person's state in Settings,
-  says what the run's token carries on New Run and asks to connect before launching. **Upgrading:** add
+  that are revoked at once (the answer adds `lifespan_error` when the policy is unknown). A person can
+  disconnect (`DELETE /api/v1/scm/azure-devops/connection`), which revokes the tokens of their runs in
+  progress, forgets their sign-in and writes `ado_pat.disconnect`; `GET /api/v1/runs/{id}/ado-tokens`
+  lists every token a run held (never a value or an id) for its owner or an admin, and `/me/scm-access`
+  adds `token_mode`, `last_token` and `default_profile`. Migration `0104_ado_run_pats_owner_idx` indexes
+  `ado_run_pats` by owner. The console asks how people connect, draws each person's state in Settings,
+  lists a run's tokens on the run page, says what the run's token carries on New Run and asks to connect
+  before launching; an admin's own check that the creation policy refuses raises a banner with a button
+  to switch the row to Entra sign-in. **Upgrading:** add
   `vso.pats` and `vso.pats_manage` (Azure DevOps, delegated) to Wardyn's app registration and grant admin
   consent; a `minted_pat` row must name Wardyn's own sign-in app, and per-run tokens need
   `WARDYN_OIDC_CLIENT_SECRET` (a row that breaks either rule is refused when saved and left unusable at
@@ -223,9 +230,11 @@ none of the steps above, and its app must **not** hold `vso.pats` or `vso.pats_m
   hosted row that already has the `entra` lane keeps it and stays as it was. A turned-off row still claims
   its hosts, so **clones from those organisations fail with a reason until an admin chooses how people
   connect and turns the row on**, and `/setup/status` carries a non-blocking `ado_rows_off` warning until
-  they do. Runs read a stored git token for an Azure DevOps host from the run owner's own row only, an
-  `ssh_key` grant for one is dropped with a warning, and the operator can no longer store a secret under
-  a retired shared name (`PUT /secrets` answers `400`). **Upgrading:** at the **first start after the
+  they do. Runs read a stored git token for an Azure DevOps host from the run owner's own row only (a
+  person with no token of their own is refused at launch, for every `dev.azure.com` and
+  `*.visualstudio.com` address whether or not a row names it), an `ssh_key` grant for one is dropped
+  with a warning, and the operator can no longer store a secret under a retired shared name (`PUT
+  /secrets` answers `400`). **Upgrading:** at the **first start after the
   upgrade** (once; never again) Wardyn **deletes, irreversibly**, these stored secrets for every Azure
   DevOps host it can name (`dev.azure.com`, `ssh.dev.azure.com`, `vs-ssh.visualstudio.com`, every host an
   Azure DevOps provider row names, and every `*.visualstudio.com` entry in `scm_hosts`), in the

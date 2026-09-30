@@ -2392,13 +2392,14 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **Connecting is signing in.** After admin consent, every console sign-in
       captures a refresh token able to create tokens, including for people who
       never launch on Azure DevOps. Capturing only for people who may launch on
-      the row is a follow-up. Offboarding removes it.
+      the row is a follow-up. Disconnecting removes it until the person's next
+      sign-in captures it again; offboarding removes it.
     - **A run can hold several live PATs until each one's `validTo`.** The
       proxy keeps one header per Azure DevOps host and wardynd cannot reach it,
       so a token a host may still hold is never revoked early: renewal and
       widening leave the older PAT in place. Each is no wider than the newest,
-      and all are revoked on pause, at the end, on drift and when the person is
-      offboarded.
+      and all are revoked on pause, at the end, on drift, when the person
+      disconnects and when they are offboarded.
     - **"Restrict full-scoped PAT creation" does not bound custom scopes.** It
       requires new PATs to name "a specific, custom-defined set of scopes",
       and that set may name every scope, so the policy is not a bound on a
