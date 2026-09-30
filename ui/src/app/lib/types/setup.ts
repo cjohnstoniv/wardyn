@@ -231,6 +231,8 @@ export interface SCMAccess {
   token_scopes?: string[];
   /** An Azure DevOps Server row: its token carries git and nothing else. */
   git_only?: boolean;
+  /** RFC 3339: Azure DevOps refused the token before its expiry. Informational; `state` is unchanged. */
+  refused_at?: string;
 }
 
 // One model provider as THIS PRINCIPAL sees it (internal/api.SetupModelProvider)

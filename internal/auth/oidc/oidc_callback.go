@@ -14,6 +14,7 @@ import (
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 )
 
 // CallbackHandler handles the IdP redirect. It:
@@ -407,6 +408,13 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	}
 	if sub != subj.Sub {
 		sess.attached = &subj
+	}
+	// Only an Entra token's oid is an object id, and only a well-formed one is
+	// kept: the cookie carries one short field, never a claim of any length.
+	if a.entra {
+		if id, err := uuid.Parse(cc.oid); err == nil {
+			sess.ObjectID = id.String()
+		}
 	}
 	return sess, ""
 }

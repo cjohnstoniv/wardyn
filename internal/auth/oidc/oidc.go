@@ -129,9 +129,14 @@ type Session struct {
 	Email string `json:"email"`
 	// Name is the IdP's display-name claim, for the console header ONLY — gates nothing, keys
 	// nothing, never logged. omitempty: an absent key falls back to email (fail-safe).
-	Name   string    `json:"name,omitempty"`
-	Role   string    `json:"role"`
-	Expiry time.Time `json:"expiry"`
+	Name string `json:"name,omitempty"`
+	// ObjectID is the Entra object id (`oid`) the ID token named, stamped only on an Entra sign-in.
+	// It is an identity INPUT (ObjectIDFromContext: an own Azure DevOps token is bound to the person
+	// by it), never logged and never echoed. omitempty: a cookie without it is still a session and
+	// the reader falls back to the person row or the email, so its absence is never a refusal.
+	ObjectID string    `json:"oid,omitempty"`
+	Role     string    `json:"role"`
+	Expiry   time.Time `json:"expiry"`
 	// UserType is stamped beside the tier at sign-in; everyone carries "standard" until the role
 	// map names custom ones.
 	UserType string `json:"ut"`
