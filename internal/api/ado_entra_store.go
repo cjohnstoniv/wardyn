@@ -198,6 +198,10 @@ type adoEntraBlob struct {
 	// DeadReason is the class that set DeadAt (dead_credential or
 	// interaction_required).
 	DeadReason ADOEntraFailure `json:"dead_reason,omitempty"`
+	// MintBlockedAt is when Azure DevOps last refused to create a token for
+	// this person on policy grounds (mintADOPAT); the next token created
+	// clears it.
+	MintBlockedAt time.Time `json:"mint_blocked_at,omitzero"`
 }
 
 // signInEnded reports whether the last renewal found this sign-in unusable
