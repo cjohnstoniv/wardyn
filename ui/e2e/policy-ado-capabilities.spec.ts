@@ -16,7 +16,15 @@ import type { Locator, Page } from "@playwright/test";
 // the one field the editor reads it from; everything else is the daemon's own.
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-const CEILING = ["read", "code_write", "pr", "policy_admin"];
+// The per-area packet's row (Member · State 3), as its locks show it.
+const CEILING = [
+  "code_read", "code_write", "pr", "policy_admin", "work_read", "work_write", "wiki_read",
+  "build_read", "packaging_read", "project_read",
+];
+const TWELVE_READS = [
+  "code_read", "work_read", "wiki_read", "build_read", "release_read", "serviceendpoint_read",
+  "library_read", "packaging_read", "test_read", "project_read", "identity_read", "analytics_read",
+];
 
 async function mockCeiling(page: Page): Promise<void> {
   let cached: Record<string, unknown> | null = null;
@@ -62,12 +70,12 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   const locked = capBox(dialog, "Manage service connections");
   await expect(locked).toBeDisabled();
   await expect(dialog.getByTitle(ADO_ACCESS.LOCKED).filter({ hasText: "Manage service connections" })).toBeVisible();
-  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(14 - CEILING.length);
-  await expect(capBox(dialog, "Change branch policies")).toBeEnabled();
+  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(29 - CEILING.length);
+  await expect(capBox(dialog, "Edit branch policies")).toBeEnabled();
 
-  await dialog.getByLabel("Name").fill(name);
-  await capBox(dialog, "Read").click();
-  await capBox(dialog, "Change branch policies").click();
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
+  await capBox(dialog, "Read code").click();
+  await capBox(dialog, "Edit branch policies").click();
   await expect(dialog.getByLabel("Spec (JSON)")).toHaveValue(/"azure_devops_capabilities"/);
 
   const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
@@ -76,23 +84,23 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   expect(res.status()).toBe(201);
   const stored = (await res.json()) as { id: string; spec: RunPolicySpec };
   try {
-    expect(stored.spec.azure_devops_capabilities).toEqual(["read", "policy_admin"]);
+    expect(stored.spec.azure_devops_capabilities).toEqual(["code_read", "policy_admin"]);
     await expect(dialog).toBeHidden();
 
-    // The list names what it grants (the mock's second example policy).
+    // The list names what it grants (the per-area packet's third example policy).
     const summary = policyRow(page, name).getByTestId("ado-access-summary");
-    await expect(summary).toHaveText(/^Azure DevOps: Read · Change branch policies\s*High risk$/);
+    await expect(summary).toHaveText(/^Azure DevOps: Read code · Edit branch policies\s*High risk$/);
 
     // Read back what the server stored, then reopen it in the editor.
     const got = await request.get(`/api/v1/policies/${stored.id}`, { headers: auth });
-    expect(((await got.json()) as { spec: RunPolicySpec }).spec.azure_devops_capabilities).toEqual(["read", "policy_admin"]);
+    expect(((await got.json()) as { spec: RunPolicySpec }).spec.azure_devops_capabilities).toEqual(["code_read", "policy_admin"]);
     await policyRow(page, name).click();
     const sheet = page.getByRole("dialog").filter({ hasText: name });
     await sheet.getByRole("button", { name: "Edit policy" }).click();
     const edit = editorDialog(page, "Edit policy");
     await expect(edit).toBeVisible();
-    await expect(capBox(edit, "Change branch policies")).toBeChecked();
-    await expect(capBox(edit, "Read")).toBeChecked();
+    await expect(capBox(edit, "Edit branch policies")).toBeChecked();
+    await expect(capBox(edit, "Read code")).toBeChecked();
     await expect(capBox(edit, "Push to the run's own branch")).not.toBeChecked();
     await edit.getByRole("button", { name: "Cancel" }).click();
     await expect(edit).toBeHidden();
@@ -104,11 +112,17 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
 test("New Run summarises the picked saved policy's Azure DevOps access", async ({ page, request }) => {
   const stamp = Date.now().toString(36);
   const ids: string[] = [];
+  // The per-area packet's four saved policies (Member · State 4), with the line each reads as.
+  const policies: [string, string[], string | RegExp][] = [
+    [`ADO contributor ${stamp}`, [...TWELVE_READS, "code_write", "pr"], "Azure DevOps: Read (every area) · Repos"],
+    [`ADO ticket triage ${stamp}`, ["code_read", "work_read", "work_write", "project_read"],
+      "Azure DevOps: Read code · Boards · View projects & teams"],
+    [`ADO repo-policy admin ${stamp}`, ["code_read", "policy_admin"], /^Azure DevOps: Read code · Edit branch policies\s*High risk$/],
+    [`ADO backlog cleanup ${stamp}`, ["work_read", "work_write", "work_admin"],
+      /^Azure DevOps: Boards · Delete work items & manage work tracking\s*High risk$/],
+  ];
   try {
-    for (const [name, caps] of [
-      [`ADO contributor ${stamp}`, ["read", "code_write", "pr"]],
-      [`ADO repo-policy admin ${stamp}`, ["read", "policy_admin"]],
-    ] as const) {
+    for (const [name, caps] of policies) {
       const res = await request.post("/api/v1/policies", {
         headers: auth,
         data: { name, spec: { ...SPEC, azure_devops_capabilities: caps } },
@@ -122,15 +136,22 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     const summary = page.getByTestId("ado-access-summary");
 
-    await page.getByRole("combobox", { name: "Saved policy" }).click();
-    await page.getByRole("option", { name: `ADO contributor ${stamp}` }).click();
-    await expect(summary).toHaveText("Azure DevOps: Read · Contribute");
-
-    await page.getByRole("combobox", { name: "Saved policy" }).click();
-    await page.getByRole("option", { name: `ADO repo-policy admin ${stamp}` }).click();
-    await expect(summary).toHaveText(/^Azure DevOps: Read · Change branch policies\s*High risk$/);
+    for (const [name, , line] of policies) {
+      await page.getByRole("combobox", { name: "Saved policy" }).click();
+      await page.getByRole("option", { name }).click();
+      await expect(summary).toHaveText(line);
+    }
     await expect(summary.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();
   } finally {
     for (const id of ids) expect((await request.delete(`/api/v1/policies/${id}`, { headers: auth })).ok()).toBe(true);
   }
+});
+
+test("the pre-split read id is refused at the policy door", async ({ request }) => {
+  const res = await request.post("/api/v1/policies", {
+    headers: auth,
+    data: { name: `ado-pre-split-${Date.now().toString(36)}`, spec: { ...SPEC, azure_devops_capabilities: ["read"] } },
+  });
+  expect(res.status()).toBe(400);
+  expect(((await res.json()) as { reason: string }).reason).toBe("ado_capability_unknown");
 });

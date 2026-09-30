@@ -68,7 +68,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	}
 
 	var body io.Reader = r.Body
-	need := adoscope.CapRead
+	need := adoscope.CapCodeRead
 	var push *adoGitPush
 	if verb == "git-receive-pack" {
 		head, pp, msg := readADOGitPush(r)

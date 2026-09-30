@@ -201,7 +201,7 @@ describe("ADO_CAP_COPY — one name and consequence per grantable capability", (
     const consts = new Map<string, string>();
     for (const m of src.matchAll(/^\s*(Cap\w+)\s+Capability = "([^"]+)"/gm)) consts.set(m[1], m[2]);
     const grantable = [...block![1].matchAll(/(Cap\w+):\s*true/g)].map((m) => consts.get(m[1]));
-    expect(grantable).toHaveLength(14);
+    expect(grantable).toHaveLength(29);
     expect(Object.keys(ADO_CAP_COPY).sort()).toEqual([...grantable].sort());
   });
 

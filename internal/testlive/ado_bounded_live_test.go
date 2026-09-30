@@ -93,7 +93,7 @@ echo "above-ceiling=$code"; test "$code" = 403 || exit 17
 	run := created.AgentRun
 
 	// Approve the code_write request "for this run" once it appears. Any other
-	// capability being raised is a failure: read is dispatched, and repo_admin
+	// capability being raised is a failure: code_read is dispatched, and repo_admin
 	// is above the ceiling, so it must be refused without a request.
 	approved := false
 	for !run.State.IsTerminal() {

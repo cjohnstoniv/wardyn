@@ -32,7 +32,6 @@ const (
 	providers400EntraGUID = "git[%d].entra.%s: %q is not a GUID — a tenant and a client are named by GUID, never by an alias"
 	providers400EntraCap  = "git[%d].entra.%s[%d]: %q is not a capability — want one of: %s"
 	providers400EntraCeil = "git[%d].entra.capability_ceiling: name at least one capability — an empty ceiling has no reading that is not a guess"
-	providers400EntraRead = "git[%d].entra.capability_ceiling: name %q — every profile starts from reads, so a ceiling without it can serve nothing"
 	providers400EntraShar = "git[%d].credential_source: the %q lane needs per_user — there is no such thing as a shared Entra sign-in"
 	providers400EntraProf = "git[%d].entra.default_profile: %q is outside capability_ceiling"
 	providers400EntraMint = "git[%d].entra.token_mode: minted_pat is not yet available; use one of: bearer, own_pat"
@@ -157,20 +156,13 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	if err := grantableCapabilities(i, "capability_ceiling", cfg.CapabilityCeiling); err != nil {
 		return err
 	}
-	// The ceiling must admit READS. Every profile starts from them — the
-	// default one IS them — so a ceiling without read describes a lane that
-	// would refuse the first request a run makes, and the contradiction is
-	// cheaper to catch at the write than to debug at the forge.
-	if !slices.Contains(cfg.CapabilityCeiling, adoscope.CapRead) {
-		return fmt.Errorf(providers400EntraRead, i, string(adoscope.CapRead))
-	}
 	if err := grantableCapabilities(i, "default_profile", cfg.DefaultProfile); err != nil {
 		return err
 	}
 	// cfg.Profile() and not cfg.DefaultProfile: an empty profile reads as the
-	// catalogue's read-only one, so the ceiling has to admit THAT — a ceiling
-	// without `read` and a row that named no profile would otherwise store as
-	// valid and refuse every request the row exists to serve.
+	// catalogue's default one, so the ceiling has to admit THAT — a ceiling
+	// without its reads and a row that named no profile would otherwise store
+	// as valid and refuse every request the row exists to serve.
 	for _, c := range cfg.Profile() {
 		if !slices.Contains(cfg.CapabilityCeiling, c) {
 			return fmt.Errorf(providers400EntraProf, i, string(c))

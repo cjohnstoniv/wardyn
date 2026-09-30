@@ -10,7 +10,7 @@ import (
 )
 
 // TestPG_RunPATs runs the RunPATStore contract against Postgres (migration
-// 0101), on a throwaway database so the listings start empty. Guarded by
+// 0102), on a throwaway database so the listings start empty. Guarded by
 // WARDYN_TEST_PG; skipped cleanly when unset.
 func TestPG_RunPATs(t *testing.T) {
 	runPATContract(t, store.NewPG(runsPGPoolIsolated(t)))

@@ -224,7 +224,7 @@ func mustBeGitRefusal(t *testing.T, out string, err error, want string) {
 // lands on the same broker path; and the bearer is mask-registered by the
 // broker itself before anything can log it.
 func TestADOGitBroker_CloneCarriesTheBearer(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	row := []byte(`{"rule_source":"brokered:ado-git","error":"` + h.bearer + `"}`)
 	if !bytes.Contains(maskDecisionBytes(row), []byte(h.bearer)) {
 		t.Fatal("precondition: the bearer is masked before the broker ever used it")
@@ -252,14 +252,14 @@ func TestADOGitBroker_CloneCarriesTheBearer(t *testing.T) {
 // The legacy <org>.visualstudio.com spelling routes through the same broker,
 // pinned by its host label.
 func TestADOGitBroker_LegacyHostClone(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	h.clone(t, "https://acme.visualstudio.com/DefaultCollection/proj/_git/app")
 	h.finish(t)
 }
 
 // A push on the run's own branch succeeds with code_write.
 func TestADOGitBroker_PushWithCodeWrite(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	h.commit(t, dir, h.runBranch())
 	if out, err := h.git(t, "-C", dir, "push", "origin", h.runBranch()); err != nil {
@@ -274,7 +274,7 @@ func TestADOGitBroker_PushWithCodeWrite(t *testing.T) {
 // WITHOUT code_write THE PUSH IS REFUSED ON THE PACK POST — the advertisement
 // is a read and goes through — and git prints why, not a credential prompt.
 func TestADOGitBroker_PushWithoutCodeWriteIsRefusedInGitsTerms(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	h.commit(t, dir, h.runBranch())
 	out, err := h.git(t, "-C", dir, "push", "origin", h.runBranch())
@@ -323,7 +323,7 @@ func TestADOGitBroker_NonRunRefPushIsRefusedWhateverTheCapabilities(t *testing.T
 // code_write it is still refused, as code_write.
 func TestADOGitBroker_AnyBranchPushNeedsCodeWrite(t *testing.T) {
 	anyBranch := func(p *Proxy, _ string) { p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true}) }
-	h := newADOGitHarnessWith(t, anyBranch, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOGitHarnessWith(t, anyBranch, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	if out, err := h.push(t, dir, "main"); err != nil {
 		t.Fatalf("any-branch push to main under code_write: %v\n%s", err, out)
@@ -337,7 +337,7 @@ func TestADOGitBroker_AnyBranchPushNeedsCodeWrite(t *testing.T) {
 		t.Errorf("the any-branch push has no %s row:\n%s", ruleSourceGitNSOff, log)
 	}
 
-	h = newADOGitHarnessWith(t, anyBranch, adoscope.CapRead)
+	h = newADOGitHarnessWith(t, anyBranch, adoscope.CapCodeRead)
 	dir = h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
 	out, err := h.push(t, dir, "main")
 	mustBeGitRefusal(t, out, err, "("+string(adoscope.CapCodeWrite)+")")
@@ -347,7 +347,7 @@ func TestADOGitBroker_AnyBranchPushNeedsCodeWrite(t *testing.T) {
 // Another organisation is refused before anything reaches Azure DevOps — the
 // bearer carries no organisation claim, so the URL pin is the whole binding.
 func TestADOGitBroker_AnotherOrganisationIsRefused(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	out, err := h.git(t, "clone", "https://dev.azure.com/evil/loot/_git/app", "loot")
 	mustBeGitRefusal(t, out, err, `granted the "acme" Azure DevOps organisation only`)
 	if n := len(h.fake.Requests()); n != 0 {
@@ -359,7 +359,7 @@ func TestADOGitBroker_AnotherOrganisationIsRefused(t *testing.T) {
 // AZURE DEVOPS' OWN 401 NEVER REACHES git AS ONE: relayed, git would prompt for
 // a username and the person would never learn their sign-in was refused.
 func TestADOGitBroker_UpstreamUnauthorizedIsNotACredentialPrompt(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	h.fake.RegisterToken(h.bearer) // the token now carries no scope at all
 	out, err := h.git(t, "clone", "https://dev.azure.com/acme/proj/_git/app", "app")
 	mustBeGitRefusal(t, out, err, "refused this run's Azure DevOps sign-in")
@@ -371,7 +371,7 @@ func TestADOGitBroker_UpstreamUnauthorizedIsNotACredentialPrompt(t *testing.T) {
 func TestADOGitBroker_StoredPATLaneUnchanged(t *testing.T) {
 	up := newPATBrokerUpstream(t, "T", "oauth2")
 	p, _ := newPATBrokerProxy(t, map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
-	p.adoGrants = adoGrantsByHost{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}}
+	p.adoGrants = adoGrantsByHost{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}}}
 
 	rec := httptest.NewRecorder()
 	req := mustLocalReq(t, http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil)
@@ -421,7 +421,7 @@ func (h *adoGitHarness) countEndpoint(e adofake.Endpoint, q string) int {
 // push: the advertisement is a read and asks nothing, the pack upload asks and
 // spends it. The next push asks again.
 func TestADOGitBroker_HeldPushApprovedOnceThenAsksAgain(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	cp := newCapControlPlane(t)
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -450,7 +450,7 @@ func TestADOGitBroker_HeldPushApprovedOnceThenAsksAgain(t *testing.T) {
 
 // A denied push is refused in git's receive-pack terms and git exits non-zero.
 func TestADOGitBroker_HeldPushDenied(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	cp := newCapControlPlane(t)
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalDenied)})
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -468,7 +468,7 @@ func TestADOGitBroker_HeldPushDenied(t *testing.T) {
 
 // Approved for the run: later pushes go through with no new approval.
 func TestADOGitBroker_HeldPushApprovedForTheRun(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	cp := newCapControlPlane(t)
 	cp.forRun = true
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
@@ -489,7 +489,7 @@ func TestADOGitBroker_HeldPushApprovedForTheRun(t *testing.T) {
 // off; with it on, a run without code_write is asked for code_write, and the
 // ask says the ref lies outside the run's own branch.
 func TestADOGitBroker_HeldNonRunRef(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	cp := newCapControlPlane(t)
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalDenied)})
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -501,7 +501,7 @@ func TestADOGitBroker_HeldNonRunRef(t *testing.T) {
 	h.finish(t)
 
 	anyBranch := func(p *Proxy, _ string) { p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true}) }
-	h = newADOGitHarnessWith(t, anyBranch, adoscope.CapRead)
+	h = newADOGitHarnessWith(t, anyBranch, adoscope.CapCodeRead)
 	cp = newCapControlPlane(t)
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalDenied)})
 	dir = h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -519,7 +519,7 @@ func TestADOGitBroker_HeldNonRunRef(t *testing.T) {
 // moves no ref, so it neither asks nor spends: one approval still covers the
 // push.
 func TestADOGitBroker_HeldLargePushProbeDoesNotSpend(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	cp := newCapControlPlane(t)
 	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -551,7 +551,7 @@ func TestADOGitBroker_HeldLargePushProbeDoesNotSpend(t *testing.T) {
 // DevOps, in receive-pack terms: "<old> <new> refs/heads/wardyn/<run>/x\0
 // refs/heads/main" on line 2 must not pass as the run's own ref.
 func TestADOGitBroker_NULOnALaterCommandIsRefused(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	h := newADOGitHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
 	run := BranchNSPrefix(h.runID)
 	section := pkt(someOID+" "+otherOID+" "+run+"a"+firstCaps) +
 		pkt(someOID+" "+otherOID+" "+run+"b\x00refs/heads/main\n") + "0000"
@@ -568,6 +568,30 @@ func TestADOGitBroker_NULOnALaterCommandIsRefused(t *testing.T) {
 	}
 	if n := len(h.fake.Requests()); n != 0 {
 		t.Errorf("Azure DevOps saw %d requests, want 0", n)
+	}
+	h.finish(t)
+}
+
+// A CLONE needs code_read: a run holding only another area's read is held, and
+// the ask names code_read.
+func TestADOGitBroker_CloneWithoutCodeReadIsHeldAsCodeRead(t *testing.T) {
+	cp := newCapControlPlane(t)
+	cp.forRun = true
+	fastPolls(t, 5*time.Millisecond)
+	// The hold is wired before the server serves: the clone is the first
+	// request, and git reaches the proxy from a subprocess the race detector
+	// cannot order after a later write.
+	h := newADOGitHarnessWith(t, func(p *Proxy, _ string) {
+		tok := &tokenSource{}
+		tok.Set("run-token")
+		inj := p.inject
+		inj.base, inj.token, inj.client = cp.srv.URL, tok, cp.srv.Client()
+		inj.reauth, inj.approvals = newReauthCoordinator(), &fakeApprovalReader{steps: steps(types.ApprovalApproved)}
+		t.Cleanup(inj.reauth.stop)
+	}, adoscope.CapWorkRead)
+	h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+	if asks, raised := cp.snapshot(); len(raised) != 1 || asks[0].Get("capability") != string(adoscope.CapCodeRead) {
+		t.Fatalf("control plane saw %v, want one ask for code_read", asks)
 	}
 	h.finish(t)
 }
