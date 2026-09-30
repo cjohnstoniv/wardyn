@@ -753,16 +753,16 @@ func TestCapabilityAgentKind(t *testing.T) {
 	})
 }
 
-// TestWorkspaceLLMCred_IntegrationRefRefused pins #547 on the workspace doors:
-// an integration no longer chooses a model credential, so a pin to one is
-// refused on create and on PUT /workspaces/{id}/llm-cred alike, never stored
-// inert.
-func TestWorkspaceLLMCred_IntegrationRefRefused(t *testing.T) {
+// TestWorkspaceLLMCred_IntegrationRefIsUnknown pins #548's clean break on the
+// workspace doors: llm_cred carries provider_ref only, so an integration_ref
+// is an unknown field refused on create and on PUT /workspaces/{id}/llm-cred
+// alike — no alias window reads it into a pin.
+func TestWorkspaceLLMCred_IntegrationRefIsUnknown(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admin, `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), llmCred400IntegrationRef) {
-		t.Fatalf("create with integration_ref = %d %s, want 400 %q", w.Code, w.Body.String(), llmCred400IntegrationRef)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "integration_ref") {
+		t.Fatalf("create with integration_ref = %d %s, want 400 naming the field", w.Code, w.Body.String())
 	}
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admin, `{"name":"mine"}`)
 	if w.Code != http.StatusCreated {
@@ -773,15 +773,13 @@ func TestWorkspaceLLMCred_IntegrationRefRefused(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	w = doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+ws.ID.String()+"/llm-cred", admin, `{"integration_ref":"corp-openai"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), llmCred400IntegrationRef) {
-		t.Fatalf("PUT llm-cred with integration_ref = %d %s, want 400 %q", w.Code, w.Body.String(), llmCred400IntegrationRef)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "integration_ref") {
+		t.Fatalf("PUT llm-cred with integration_ref = %d %s, want 400 naming the field", w.Code, w.Body.String())
 	}
-	if got, _ := st.GetWorkspace(context.Background(), ws.ID); got.LLMCred != nil && got.LLMCred.IntegrationRef != "" {
-		t.Errorf("stored llm_cred = %+v, want no integration pin", got.LLMCred)
+	if got, _ := st.GetWorkspace(context.Background(), ws.ID); got.LLMCred != nil {
+		t.Errorf("stored llm_cred = %+v, want none", got.LLMCred)
 	}
 }
-
-// an AI-kind integration grants no model credential
 
 // integStore is govEscapeStore plus the one read the integration tiers need:
 // the site config that holds the deployment's integration rows.
@@ -815,73 +813,6 @@ func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []ty
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg), audit
-}
-
-// TestAIKindIntegration_GrantsNoModelCredential pins #547: an AI-kind
-// integration no longer credentials a run by any of the three ways it once
-// did — naming it (integration_id), a workspace's pin (LLMCred.IntegrationRef)
-// or the site default (DefaultFor agent_runs). Each reached the OPERATOR's
-// stored key and handed it to the run proxy-side; a model credential now comes
-// only from the run's model provider, which is the run owner's own.
-func TestAIKindIntegration_GrantsNoModelCredential(t *testing.T) {
-	const integID = "corp-anthropic"
-	row := types.Integration{
-		ID: integID, Kind: types.IntegrationKindAnthropicAPIKey, DefaultFor: []string{"agent_runs"},
-		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: govCorpSecret,
-			Delivery: types.AIKeyDelivery(types.IntegrationKindAnthropicAPIKey)}},
-	}
-	member := func(t *testing.T) *http.Cookie { return govSession(t, govMemberSub, []string{"eng"}, false) }
-
-	t.Run("naming it is refused, not ignored", func(t *testing.T) {
-		srv, _ := integFixture(t, &capStore{}, []types.Integration{row}, nil)
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
-			`{"agent":"claude-code","task":"t","integration_id":"`+integID+`"}`)
-		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), mpRunNoIntegration) {
-			t.Fatalf("create = %d %s, want 422 %q", w.Code, w.Body.String(), mpRunNoIntegration)
-		}
-		if got := errorReason(w); got != reasonIntegrationIDRetired {
-			t.Errorf("reason = %q, want %q", got, reasonIntegrationIDRetired)
-		}
-	})
-
-	t.Run("a workspace pin and the site default inject nothing", func(t *testing.T) {
-		ws := types.Workspace{
-			ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
-			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
-			LLMCred: &types.WorkspaceLLMCred{IntegrationRef: integID},
-		}
-		srv, audit := integFixture(t, &capStore{}, []types.Integration{row}, []types.Workspace{ws})
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
-			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",`+
-				`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"`+govWorkspaceRepo+`"}]}}`)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
-		}
-		var run types.AgentRun
-		if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
-			t.Fatalf("decode run: %v", err)
-		}
-		waitFor(t, "run to settle", func() bool {
-			got, err := srv.cfg.Store.GetRun(context.Background(), run.ID)
-			return err == nil && got.State != types.RunPending && got.State != types.RunStarting
-		})
-		fr := srv.cfg.Runner.(*fakeRunner)
-		fr.mu.Lock()
-		defer fr.mu.Unlock()
-		if fr.createCalls == 0 {
-			t.Fatal("the run never reached CreateSandbox, so its injections prove nothing")
-		}
-		for _, g := range fr.lastSpec.ProxyConfig.Injection {
-			if g.Rule.Host == "api.anthropic.com" {
-				t.Fatalf("the operator's key was injected on %s via the AI integration: %+v", g.Rule.Host, g)
-			}
-		}
-		for _, ev := range audit.snapshot() {
-			if ev.Action == "run.workspace_cred.resolve" {
-				t.Fatalf("an AI integration folded into the run: %s", ev.Data)
-			}
-		}
-	})
 }
 
 // G5: the concurrent-run quota (PF-36)

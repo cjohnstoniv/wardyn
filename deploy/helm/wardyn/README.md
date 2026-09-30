@@ -553,7 +553,8 @@ RBAC ships least-privilege: the namespaced Role covers exactly the verbs the
 substrate issues (pods create/get/list/delete/deletecollection;
 `pods/ephemeralcontainers` update; `pods/exec` get+create — the exec
 subresource's websocket transport issues GET, SPDY issues POST, and the
-driver tries websocket first; secrets create/delete/deletecollection and
+driver tries websocket first; `pods/log` get, which streams an exec run's
+output into its tail for `GET /runs/{id}/output`; secrets create/delete/deletecollection and
 networkpolicies create/list/delete/deletecollection — deliberately **no**
 `get`, `list` or `watch` on `secrets`: every one of those returns the object's
 body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
@@ -658,9 +659,9 @@ Day-2 detail — backup, offboarding, the per-drive storage class — is in
 The k8s substrate is not yet at parity with the Docker Compose one. Fails
 closed with a clear error: **no BYOI/devcontainer image builds**, **no
 `local_dir`/host-path workspace mounts** (git-clone workspaces are fine —
-only a local-directory source is refused), and therefore **no `~/.aws` /
-`~/.claude` host staging** either (use proxy-side subscription/Bedrock
-credential injection instead — substrate-agnostic, works unchanged here).
+only a local-directory source is refused), and therefore no host-directory
+staging either (a model provider's proxy-side credential injection is
+substrate-agnostic and works unchanged here).
 Accepted but not enforced, with a logged warning naming the run: **no per-pod
 PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide
 backstop). That one is not a missing feature and will not close: the Pod API
@@ -704,9 +705,8 @@ writes anywhere else stays on the ephemeral container's unmetered layer. That is
 any authored `workspace_repos` or ephemeral-source target outside `/home/agent/work` (a target may
 legally sit at `/work`, `/workspace` or elsewhere under `/home/agent`). Nothing is mounted at
 `/home/agent` itself on purpose: a
-volume there would shadow the baked `.bashrc` every agent image ships, swallow the reserved drive
-mount point `/home/agent/drive`, and hide the read-only `~/.claude` bind the subscription path
-uses. `readOnlyRootFilesystem` would close the residual and is deliberately not set, because the
+volume there would shadow the baked `.bashrc` every agent image ships and swallow the reserved drive
+mount point `/home/agent/drive`. `readOnlyRootFilesystem` would close the residual and is deliberately not set, because the
 agent legitimately writes those paths.
 
 **The cache volume starts cold:** an `emptyDir` mounted at `/home/agent/.cache` shadows the full

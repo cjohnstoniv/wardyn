@@ -29,21 +29,9 @@ import (
 // operator-only group — split from routes() at the funlen gate, and a real
 // seam: these are the calls the Getting Started funnel makes on the
 // operator's behalf, as opposed to the read-only status the whole console
-// polls. The harness-credential trio needs a secret store to write into;
-// the onboarding mark writes site config and mounts unconditionally.
-//
-// ONE of them is not operator-only any more. The container LOGIN launch sits on
-// the signed-in-human group with its predicate inside the handler
-// (authorizeHarnessLogin, harnesscred.go), because under a per_user roster row
-// the credential it captures is the CALLER'S OWN and a member with no route to
-// this endpoint has no route to model access at all. The token PASTE and the
-// DISCONNECT stay operator-only: both write the deployment's shared credential.
-func (s *Server) mountSetupMutationRoutes(humanOrAdmin, operatorOnly chi.Router) {
-	if s.cfg.Secrets != nil {
-		humanOrAdmin.Post("/setup/harness-login", s.handleHarnessLogin)
-		operatorOnly.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
-		operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
-	}
+// polls. Every person signs in to a model provider through that provider's own
+// door (POST /model-providers/{id}/sign-in, provider_signin.go).
+func (s *Server) mountSetupMutationRoutes(operatorOnly chi.Router) {
 	// Install-side onboarding mark — why it exists is on the handler below.
 	operatorOnly.Post("/setup/onboarding-complete", s.handleSetupOnboardingComplete)
 }

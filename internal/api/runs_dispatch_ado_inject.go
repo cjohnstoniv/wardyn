@@ -62,7 +62,8 @@ const (
 	// adoEntraInjectHeader / adoEntraInjectFormat are the ONE wire shape an
 	// Azure DevOps Entra access token has: an Authorization bearer. Both the
 	// REST surface and git's smart-HTTP surface accept it, measured, with no
-	// separate code path for the two.
+	// separate code path for the two. A minted_pat run's token rides the same
+	// header as Basic (adoRunPATInjectFormat).
 	adoEntraInjectHeader = "Authorization"
 	adoEntraInjectFormat = "Bearer %s"
 	// adoEntraGrantTTLSeconds matches the captured-AWS-SSO precedent. It bounds
@@ -144,6 +145,12 @@ type adoEntraRun struct {
 	// snapshot — the resolver reads the LIVE ceiling — but a profile already
 	// outside it is refused here rather than authored and refused on first use.
 	ceiling []adoscope.Capability
+	// patHours is the row's longest token life, for a minted_pat run's first
+	// token; later ones read the live row.
+	patHours int
+	// serverHost is set on an Azure DevOps Server run (ado_own_pat_server.go):
+	// the one host its credential rides to, git only.
+	serverHost string
 }
 
 // snapshot renders the run's resolution as the immutable grant scope.
@@ -306,6 +313,9 @@ func resolveADOEntraRun(sc types.SiteConfig, repos []string, owner string) (adoE
 // adoEntraRunForRepo is resolveADOEntraRun's per-repository half.
 func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, bool) {
 	row, admitted := providerFor(sc, repo)
+	if admitted && !row.Disabled && isADOServerOwnPATRow(row) {
+		return adoServerRunForRepo(row, repo, owner)
+	}
 	switch {
 	case !admitted || row.ID == "" || row.Disabled:
 		return adoEntraRun{}, false
@@ -325,6 +335,7 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 		tenantID: row.Entra.TenantID, clientID: row.Entra.ClientID,
 		tokenMode: cmpTokenMode(row.Entra.TokenMode), credentialSource: row.CredentialSource,
 		caps: row.Entra.Profile(), ceiling: slices.Clone(row.Entra.CapabilityCeiling),
+		patHours: row.Entra.PATHours(),
 	}, true
 }
 
@@ -509,6 +520,8 @@ type adoEntraGrade struct {
 	// lane" — the case the security review reproduced.
 	rowID string
 	org   string
+	// tokenMode is the row's presentation, for the posture grants' format.
+	tokenMode types.ADOTokenMode
 }
 
 // adoEntraUngraded is the answer for a dispatch lane that runs no autonomy
@@ -524,7 +537,7 @@ func adoEntraGradedAs(ado adoEntraRun, on bool) adoEntraGrade {
 	if !on {
 		return adoEntraGrade{graded: true}
 	}
-	return adoEntraGrade{graded: true, rowID: ado.rowID, org: ado.org}
+	return adoEntraGrade{graded: true, rowID: ado.rowID, org: ado.org, tokenMode: ado.tokenMode}
 }
 
 // adoEntraGradeHolds refuses a dispatch that would author a lane the autonomy
@@ -583,7 +596,7 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	}
 	ado, permitted := ado.withPolicyCapabilities(policy.AzureDevOpsCapabilities, standing)
 	if !permitted {
-		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, "ado_capabilities_none_permitted",
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, reasonADOCapabilitiesNonePermitted,
 			adoNonePermitted(policy.AzureDevOpsCapabilities))
 	}
 	if ado.capsFromPolicy {
@@ -595,7 +608,7 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 		return adoEntraLane{injections: injections}, false
 	}
 	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: &proxy.ADOGrantConfig{
-		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: adoEntraHosts(ado.org),
+		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: ado.laneHosts(),
 	}}, true
 }
 
@@ -603,11 +616,11 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 //
 // The three refusals in front of it are the ones that must not be degradations:
 //
-//  1. TOKEN MODE. `minted_pat` is a row asking for a short-lived personal access
-//     token minted on the control plane, and measured against a real tenant that
-//     mint is refused for any delegated token — only a first-party client can
-//     make one. There is no mint to make, so a run on such a row is refused
-//     rather than quietly credentialed with the bearer the row did not ask for.
+//  1. TOKEN MODE. This lane serves `bearer` and `minted_pat`; a run on a row
+//     asking for anything else is refused rather than quietly credentialed
+//     with a presentation the row did not ask for. A `minted_pat` run's first
+//     token is created here (dispatchRunPAT), so a person who has not
+//     connected is refused at launch.
 //  2. CAPABILITIES. A ceiling or profile naming something the catalogue cannot
 //     grant (an unclassified write, a denied area) has no scopes, and an empty
 //     scope set is inside every set — so a caller comparing scopes would read
@@ -622,11 +635,13 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	caCertPEM, caKeyPEM string, policy *types.RunPolicySpec, sandboxEnv map[string]string,
 	injections []runner.InjectionGrant,
 ) ([]runner.InjectionGrant, []string, bool) {
-	if ado.tokenMode != types.ADOTokenModeBearer {
+	// own_pat authors the same lane; its grants resolve from the person's own
+	// token (resolveADOOwnPATInjection).
+	if ado.tokenMode != types.ADOTokenModeBearer && ado.tokenMode != types.ADOTokenModeMintedPAT &&
+		ado.tokenMode != types.ADOTokenModeOwnPAT {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "token_mode",
-			fmt.Sprintf("This run's Azure DevOps provider row asks for token_mode %q, which Wardyn cannot issue: "+
-				"minting a personal access token is refused for every delegated token by Azure DevOps itself. "+
-				"Set the row to bearer, or launch without the Azure DevOps lane.", ado.tokenMode))
+			fmt.Sprintf("This run's Azure DevOps provider row asks for token_mode %q, which this lane cannot issue. "+
+				"Set the row to minted_pat, own_pat or bearer, or launch without the Azure DevOps lane.", ado.tokenMode))
 	}
 	if _, err := adoscope.ScopesFor(ado.caps); err != nil {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_not_grantable",
@@ -650,13 +665,26 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 				"so the credential, the capability check and the organisation pin would all be skipped.")
 	}
 
+	if ado.tokenMode == types.ADOTokenModeMintedPAT && !s.dispatchRunPAT(ctx, run, ado) {
+		return injections, nil, false
+	}
+
 	snapshot := ado.snapshot()
-	hosts := adoEntraHosts(ado.org)
-	grants, ok := s.createADOEntraGrants(ctx, run, snapshot, hosts)
+	grants, ok := s.createADOEntraGrants(ctx, run, snapshot, ado.laneHosts())
 	if !ok {
 		return injections, nil, false
 	}
 	injections = append(injections, grants...)
+	// SERVER IS GIT ONLY: the broker is its one door, so no TLS interception
+	// and no placeholder for a REST tool. The host is allowlisted, port-exact,
+	// for the broker's upstream leg; the proxy refuses a tunnel to it.
+	if ado.serverHost != "" {
+		policy.AllowedDomains = append(policy.AllowedDomains, net.JoinHostPort(ado.serverHost, adoEntraHostPort))
+		if sandboxEnv != nil {
+			addGitBrokerHosts(sandboxEnv, ado.serverHost)
+		}
+		return injections, nil, true
+	}
 
 	// EGRESS, port-qualified and exact, appended to the run's own allowlist.
 	// Placed before the governance ceiling's re-assertion in dispatchRun so an
@@ -697,7 +725,7 @@ func (s *Server) createADOEntraGrants(ctx context.Context, run types.AgentRun,
 		scope, merr := json.Marshal(map[string]any{
 			"host":        host,
 			"header":      adoEntraInjectHeader,
-			"format":      adoEntraInjectFormat,
+			"format":      adoInjectFormat(types.ADOTokenMode(snapshot.TokenMode)),
 			"secret_name": types.ADOEntraAccessTokenSecret,
 			// THE FLAG THIS LANE CANNOT SHIP WITHOUT. Without it the proxy's
 			// plain forward lane credentials a bare `http://dev.azure.com/...`

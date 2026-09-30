@@ -143,7 +143,7 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 // launch, and handleCreateRun on the 201, because the console launches without
 // preflighting and a silent narrowing is a run that quietly is not the run the
 // member asked for.
-func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
+func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, bool) {
 	// The caller's OWN secret names, resolved at most once for this whole
 	// resolution rather than once per eligible_grant at each of the three sites
 	// that ask (filterUserGrants' 6c arm, narrowUserInlinePolicy's ownership
@@ -157,7 +157,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyXOR, "specify either policy_id or inline_policy, not both")
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
 
 	// This principal's ceiling — resolved BEFORE either branch, because both
@@ -167,7 +167,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	ceiling, ceilErr := s.effectiveCeiling(ctx)
 	if ceilErr != nil {
 		writeCeilingError(w, r, ceilErr)
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
 
 	// Inline path: validate structurally (same validator as a stored policy) then
@@ -188,8 +188,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// afterwards bounds the stored policy and not the request.
 		if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
+		// The policy as authored, recorded BEFORE the env-secret posture and the
+		// member clamp change it (policySourceRecord stamps it redacted).
+		source := newPolicySourceRecord(policyKindInline, nil, "", nil, !ceiling.Operator, spec)
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must
@@ -214,23 +217,24 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			var bounded bool
 			spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid inline_policy: ", dryRun)
 			if !bounded {
-				return types.RunPolicySpec{}, nil, nil, false
+				return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 			}
 			clampWarnings = append(clampWarnings, warns...)
 		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 			writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		// The size half for the inline arm, the same helper the stored arm calls
 		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
 		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
 		// preview at all without this. A no-op on launch (see the helper).
 		clampWarnings = append(clampWarnings, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
 		// secret.* admin events); the subsequent run.create event records
@@ -244,22 +248,25 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 					"eligible_grants":       len(spec.EligibleGrants),
 				})))
 		}
-		return spec, nil, clampWarnings, true
+		return spec, nil, clampWarnings, source, true
 	}
 
 	// Stored/default path: resolve, then validate secret references the SAME way
 	// the inline branch does (one call, no duplicated logic). The no-policy
 	// default is now the CALLER's ceiling rather than the deployment's
 	// (resolvePolicy), and a member-SELECTED stored row is bounded below.
-	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
+	spec, policyID, origin, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErrorReason(w, http.StatusBadRequest, reasonPolicyIDNotFound, "policy_id not found")
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		writeServerError(w, r, "resolve policy", err)
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
+	// The starting policy, before the env-secret posture and the member clamp
+	// below change it: a stored row, or the caller's own ceiling.
+	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)
 	storedWarns := append([]string(nil), ceiling.Warnings...)
 	// Same unconditional env_secret posture the inline branch applies, in the
 	// same position, and it is the half the scoped clamp below CANNOT carry: the
@@ -311,7 +318,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		var bounded bool
 		spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)
 		if !bounded {
-			return types.RunPolicySpec{}, nil, nil, false
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 		}
 		storedWarns = append(storedWarns, warns...)
 	}
@@ -323,11 +330,12 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// their run does not get, and a dispatch-side log line is not a disclosure to
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
 	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
-		return types.RunPolicySpec{}, nil, nil, false
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
 	}
-	return spec, policyID, storedWarns, true
+	return spec, policyID, storedWarns, source, true
 }
 
 // capEphemeralDiskPreview bounds spec's disk_mib by the profile's
@@ -548,12 +556,6 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			keptGrants = append(keptGrants, g) // github_token, cloud_sts name no stored secret
 			continue
 		}
-		if g.Kind == types.GrantAPIKey {
-			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
-				keptGrants = append(keptGrants, g) // a live OAuth token, not a stored secret
-				continue
-			}
-		}
 		// Both refs, because an ssh_key grant's known_hosts_secret_ref resolves
 		// a stored secret whose raw value the broker hands back (see
 		// storedSecretPairingInCeiling) — gating only the key would leave the
@@ -725,10 +727,6 @@ func (s *Server) filterUserGrants(ctx context.Context, owner string, allowedDoma
 			continue
 		}
 		if g.Kind == types.GrantAPIKey {
-			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
-				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs
-				continue
-			}
 			// 6c own-key arm: a member's OWN api_key secret, paired with a
 			// model-provider host (isModelProviderHost — the gateway counts
 			// too) that the run's own already-clamped egress allows, is
@@ -867,6 +865,7 @@ type neededSecret struct {
 	name      string
 	kind      types.GrantKind
 	ownerOnly bool
+	host      string // a git_pat grant's host, for the Azure DevOps owner_only rule
 }
 
 // secretRefsOf is validateInlineSecretRefs' shape half: the secret names a
@@ -892,27 +891,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if sinkReservedSecret(rule.SecretName) {
 				return nil, fmt.Errorf("api_key grant references reserved secret name %q", rule.SecretName)
 			}
-			// The subscription/managed OAuth sentinels are NOT stored secrets — they
-			// resolve live at inject time (resident ~/.claude, or the Wardyn-managed
-			// captured setup-token). Don't require them in the secret store (that's the
-			// "references unknown secret" bug for a subscription/managed-recorded
-			// profile); just require the matching provider to be wired.
-			if provider, source, isSentinel := s.oauthProviderForSentinel(rule.SecretName); isSentinel {
-				if provider == nil {
-					return nil, fmt.Errorf("policy uses %s LLM auth, but no %s token provider is configured", source, source)
-				}
-				// Host pin (write-time defense): the sentinel resolves to a LIVE
-				// OAuth token and may only ever target Anthropic (or the operator's
-				// own configured gateway). Reject an authored grant that points it
-				// elsewhere (the inject sink also enforces this, fail-closed).
-				if !s.subscriptionInjectionHostAllowed(rule.Host) {
-					return nil, fmt.Errorf("%s LLM auth may only target %s, not %q", source, s.subscriptionInjectionHostDesc(), rule.Host)
-				}
-				continue
-			}
-			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly})
+			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly, ""})
 		case types.GrantGitPAT:
-			_, secretName, _, derr := gitPATScopeFields(g.Scope)
+			patHost, secretName, _, derr := gitPATScopeFields(g.Scope)
 			if derr != nil {
 				return nil, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
@@ -923,7 +904,7 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if nameSinkReservedSecret(secretName) {
 				return nil, fmt.Errorf("git_pat grant references reserved secret name %q", secretName)
 			}
-			needed = append(needed, neededSecret{secretName, types.GrantGitPAT, g.OwnerOnly})
+			needed = append(needed, neededSecret{secretName, types.GrantGitPAT, g.OwnerOnly, patHost})
 		case types.GrantSSHKey:
 			_, keyRef, _, khRef, derr := sshKeyScopeFields(g.Scope)
 			if derr != nil {
@@ -934,9 +915,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if nameSinkReservedSecret(keyRef) || nameSinkReservedSecret(khRef) {
 				return nil, errors.New("ssh_key grant references a reserved secret name")
 			}
-			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly})
+			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly, ""})
 			if khRef != "" {
-				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly})
+				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly, ""})
 			}
 		default:
 			continue
@@ -974,6 +955,15 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 	known := make(map[string]bool, len(have))
 	for _, n := range have {
 		known[n] = true
+	}
+	// A git token for an Azure DevOps host is owner_only whatever the policy
+	// said (persistRunGrants forces it, #1429), so it is checked as one: a
+	// person with no token of their own is refused here, with the reason,
+	// rather than started into a clone that fails inside the sandbox (adoGitGrants
+	// drops the grant where the row takes each person's own token instead).
+	needed, code, err := s.adoGitGrants(ctx, subject, needed, spec)
+	if err != nil {
+		return code, err
 	}
 	for _, n := range needed {
 		// A person's owner_only grant never reads the operator namespace (#1106):

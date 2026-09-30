@@ -9,9 +9,6 @@
 // sign-in is stored by the sandbox's own helper upload (ssotoken.go, bound to
 // the provider as it read at launch); a Claude sign-in by PUT on the same path,
 // with the setup-token the sandbox printed, bound to that sign-in's own run.
-//
-// The doors answer only while the model-provider block exists, and POST
-// /setup/harness-login only while it does not: the two never both apply.
 package api
 
 import (
@@ -31,15 +28,13 @@ import (
 
 // DRAFT (M2 canon pending).
 const (
-	mpsNoBlock     = "this install has no model providers yet, so sign in from Setup instead"
-	mpsLegacyDoor  = "this install signs in to each model provider on its own — sign in from Getting started in the console"
+	mpsNoBlock     = "this install has no model providers yet — ask your admin to add one under Settings → Model providers"
 	mpsTyped       = "%q is connected with your own key or token, not by signing in"
 	mpsOff         = "model provider %q is turned off, so there is nothing to sign in to"
-	mpsNotGranted  = "you are not granted model provider %q — ask an admin to grant it before signing in to it"
 	mpsNoPortal    = "model provider %q has no AWS access portal or region set — ask your admin to set them before you sign in"
 	mpsAccounts    = "model provider %q serves models in more than one AWS account and pins none — ask your admin to pin the account and role before you sign in"
 	mpsNoImage     = "signing in to Claude needs the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
-	mpsPreview     = "Exit member mode to sign in — the capture would land on your own identity."
+	mpsPreview     = "Exit the user view to sign in — the capture would land on your own identity."
 	mpsUnreadable  = "Wardyn couldn't read its model providers just now — nothing was started. Try again in a moment."
 	mpsCaptureBody = `body must be {"run_id":"<your sign-in run>","token":"<the claude setup-token output>"}`
 	mpsAWSByHelper = "%q stores your AWS sign-in itself when you finish it in the sign-in sandbox — there is nothing to paste"
@@ -102,13 +97,10 @@ func withModelProvider(data map[string]any, id string) map[string]any {
 }
 
 // reauthScopeForRun is the scope whose stored session answers run's AWS
-// sign-in holds: the chosen provider's own name for a provider run, the
-// roster's otherwise. ok=false: the run's provider is gone or no longer an AWS
-// sign-in, so nothing can answer.
+// sign-in holds: the chosen provider's own name. ok=false: the run chose no
+// provider, or its provider is gone or no longer an AWS sign-in, so nothing can
+// answer.
 func reauthScopeForRun(sc types.SiteConfig, run types.AgentRun, owner string) (awsSSOScope, bool) {
-	if run.ModelProviderID == "" {
-		return awsSSOScopeFor(sc, run.Agent, owner), true
-	}
 	p, ok := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
 	if !ok || p.Kind != types.ModelProviderBedrockSSO {
 		return awsSSOScope{}, false
@@ -150,7 +142,8 @@ func (s *Server) mountProviderSignInRoutes(r chi.Router) {
 // signInProvider reads the provider {id} names as this caller may sign in to
 // it, from sc: the block must exist; the provider must serve an agent the
 // caller may launch (capAgent — the /setup/status projection's own rule, so a
-// provider the caller cannot see is a 404) and be granted by capModelProvider;
+// provider the caller cannot see is a 404) and be granted by capModelProvider
+// (a 404 too, denyProviderAsMissing);
 // and it must be on and a sign-in kind. Returns its login convention and the
 // harnesses on it the caller may launch. ok=false: the refusal is written.
 func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types.SiteConfig) (types.ModelProvider, harnessLogin, []string, bool) {
@@ -172,7 +165,7 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 		writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, fmt.Sprintf(mpcNotFound, id))
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
-	if s.denyUserCapability(w, r, capModelProvider, p.ID, "model_provider.sign_in", fmt.Sprintf(mpsNotGranted, p.ID)) {
+	if s.denyProviderAsMissing(w, r, p.ID, "model_provider.sign_in") {
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	login := map[types.ModelProviderKind]string{
@@ -197,7 +190,7 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 // No body: everything the sandbox is seeded with comes from the provider
 // record (an AWS start URL, region and pin are admin-owned), and the capture
 // is stamped for the caller's own namespace under the provider's UID. Answers
-// with the run id as soon as the run exists, like POST /setup/harness-login.
+// with the run id as soon as the run exists (harnesscred_launch.go).
 func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	owner := s.credentialOwner(w, r)
 	if owner == "" {
@@ -212,8 +205,8 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// After the authorization, as on the legacy door: a capture here would
-	// land on the previewing admin's own namespace.
+	// After the authorization: a capture here would land on the previewing
+	// admin's own namespace.
 	if previewHidesOwnCredential(r.Context()) {
 		writeErrorReason(w, http.StatusConflict, reasonProviderSignInPreviewBlocked, mpsPreview)
 		return
@@ -245,11 +238,20 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
+		if errors.Is(err, errSignInBusy) {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal)
+			return
+		}
 		writeServerError(w, r, "launch login sandbox", err)
 		return
 	}
+	// Answer first, then finish the launch. WithoutCancel keeps the request's
+	// values while dropping the deadline that dies with this response;
+	// goBackground, not a bare `go`, so an orderly shutdown waits for it
+	// instead of cutting it off mid-dispatch.
 	writeJSON(w, http.StatusOK, harnessLoginResponse{RunID: run.ID.String(), State: string(run.State)})
-	go s.finishHarnessLoginLaunch(context.WithoutCancel(r.Context()), run, dispatch)
+	ctx := context.WithoutCancel(r.Context())
+	s.goBackground(func() { s.finishHarnessLoginLaunch(ctx, run, dispatch) })
 }
 
 type providerSignInCapture struct {

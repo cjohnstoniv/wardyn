@@ -4,7 +4,7 @@
 # scripts/lib/common.sh — small shell helpers shared across scripts/*.sh.
 #
 # wait_healthy/wait_down cover the plain "poll /healthz in a loop" shape used
-# by e2e-backend.sh, run-e2e-subscription.sh and run-e2e-live.sh.
+# by e2e-backend.sh and run-e2e-live.sh.
 # Scripts with extra gating on top of the plain poll (up.sh's docker-inspect
 # container health, demo.sh's compose-health check, test-drive.sh's stack
 # health) keep their own bespoke loop — those are not the same shape.

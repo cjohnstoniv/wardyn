@@ -41,8 +41,9 @@ describe("ADO_CAP_COPY names — the same names Go's launch refusal uses", () =>
 describe("ADO capability copy — no branch policy Wardyn never read", () => {
   it("pins the owner-approved names and consequence lines", () => {
     expect(ADO_CAP_COPY.policy_bypass).toEqual({
-      name: "Bypass branch policies",
+      name: "Bypass policies when completing pull requests",
       consequence: "Complete a pull request without its required reviewers or checks.",
+      ado: "ADO: vso.code_write — Bypass policies when completing pull requests",
     });
     expect(ADO_CAP_COPY.code_write.name).toBe("Push to the run's own branch");
     expect(ADO_CAP_COPY.code_write.consequence).toContain("outside this run's own branch");

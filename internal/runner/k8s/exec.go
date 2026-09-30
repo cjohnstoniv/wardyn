@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -125,7 +127,57 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	if _, err := d.clientset.CoreV1().Pods(ns).UpdateEphemeralContainers(ctx, ref, podCopy, metav1.UpdateOptions{}); err != nil {
 		return "", fmt.Errorf("k8s: exec: add ephemeral container: %w", err)
 	}
+	if w, ok := d.execOutputs.Load(ref); ok {
+		go d.followExecOutput(ref, w.(io.Writer))
+	}
 	return execContainerName, nil
+}
+
+// followExecOutput streams the agent exec container's log into w (the run's
+// output tail) once the kubelet has started it, until it exits or the pod is
+// deleted. Best-effort: a container that never starts, a pod that vanishes or
+// a refused log read leaves the tail as far as it got. The log read needs
+// `get` on pods/log in the runs namespace.
+func (d *Driver) followExecOutput(ref string, w io.Writer) {
+	ctx := context.Background()
+	pods := d.clientset.CoreV1().Pods(d.cfg.Namespace)
+	for errs := 0; ; time.Sleep(execWaitPollInterval) {
+		pod, err := pods.Get(ctx, ref, metav1.GetOptions{})
+		if err != nil {
+			if isNotFound(err) {
+				return
+			}
+			if errs++; errs >= execWaitMaxProbeErrors {
+				return
+			}
+			continue
+		}
+		errs = 0
+		if !execContainerStarted(pod) {
+			continue
+		}
+		rc, err := pods.GetLogs(ref, &corev1.PodLogOptions{Container: execContainerName, Follow: true}).Stream(ctx)
+		if err != nil {
+			slog.Warn("wardynd: exec output tail: could not follow the agent's log", slog.String("ref", ref), slog.Any("err", err))
+			return
+		}
+		defer rc.Close()
+		_, _ = io.Copy(w, rc)
+		return
+	}
+}
+
+// execContainerStarted reports whether the agent exec container has a log to
+// read: it is running or has terminated. A Waiting reason that never resolves
+// (execNeverStartedReasons) keeps it false; followExecOutput then polls until
+// teardown deletes the pod.
+func execContainerStarted(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.EphemeralContainerStatuses {
+		if cs.Name == execContainerName {
+			return cs.State.Running != nil || cs.State.Terminated != nil
+		}
+	}
+	return false
 }
 
 // findContainer returns the container named name, if present.

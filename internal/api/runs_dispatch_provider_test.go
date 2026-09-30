@@ -61,8 +61,6 @@ func mpHarness(t *testing.T, st *bearerGuardStore, p types.ModelProvider) *harne
 	if err := sec.For(mpOwner).Put(context.Background(), name, []byte(mpOwnerKey)); err != nil {
 		t.Fatal(err)
 	}
-	// A boot gateway that must reach no provider run.
-	h.srv.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://boot-gw.corp.example"}
 	return h
 }
 
@@ -97,7 +95,7 @@ func TestProviderDispatch_KeyLaneServesTheOwnersKeyOnly(t *testing.T) {
 	legacy := []runner.InjectionGrant{
 		mpInjection("api.anthropic.com", "anthropic-api-key"),
 		mpInjection("api.anthropic.com", types.SubscriptionOAuthSecret),
-		mpInjection("boot-gw.corp.example", "anthropic-api-key"),
+		mpInjection("gw.corp.example", "anthropic-api-key"), // a retired name, on any host
 		mpInjection("evil.example", providerSecretName("uid-a", providerKeyPart)),
 	}
 	policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/home/op/.claude", Target: claudeCredTarget}}}
@@ -121,7 +119,7 @@ func TestProviderDispatch_KeyLaneServesTheOwnersKeyOnly(t *testing.T) {
 		t.Errorf("allowlist %v mounts %v, want the exact vendor host and no ~/.claude mount", policy.AllowedDomains, policy.WorkspaceMounts)
 	}
 	if plan.llmUpstreams != nil {
-		t.Errorf("upstreams = %v, want none — the boot gateway reaches no provider run", plan.llmUpstreams)
+		t.Errorf("upstreams = %v, want none for a key provider with no route-through", plan.llmUpstreams)
 	}
 	if env["ANTHROPIC_API_KEY"] != "wardyn-proxy-injected" || env["ANTHROPIC_MODEL"] != "claude-opus-test" {
 		t.Errorf("env = %v, want the placeholder and the provider's model", env)
@@ -312,9 +310,9 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 			if tc.credential {
 				wantReason = llmRefusalAuditReason
 			}
-			if data.Provider != tc.provider || data.Kind != string(tc.wantKind) || data.Mechanism != string(tc.wantKind) || data.Reason != wantReason {
-				t.Errorf("run.create provider/kind/mechanism/reason = %q/%q/%q/%q, want %q/%q/%q/%q",
-					data.Provider, data.Kind, data.Mechanism, data.Reason, tc.provider, tc.wantKind, tc.wantKind, wantReason)
+			if data.Provider != tc.provider || data.Kind != string(tc.wantKind) || data.Mechanism != "" || data.Reason != wantReason {
+				t.Errorf("run.create provider/kind/mechanism/reason = %q/%q/%q/%q, want %q/%q/\"\"/%q (no mechanism since #548)",
+					data.Provider, data.Kind, data.Mechanism, data.Reason, tc.provider, tc.wantKind, wantReason)
 			}
 		})
 	}
@@ -358,9 +356,11 @@ func TestProviderDispatch_NoServingProviderGetsNoLegacyCredential(t *testing.T) 
 	}
 }
 
-// TestLegacyDispatch_DropsUnauthoredProviderKeyInjection: with no provider
-// block, a policy grant naming a provider key never reaches the proxy.
-func TestLegacyDispatch_DropsUnauthoredProviderKeyInjection(t *testing.T) {
+// TestNoBlockDispatch_DropsUnauthoredProviderKeyInjection: with no provider
+// block, a policy grant naming a provider key never reaches the proxy — the
+// one strip (dropLegacyModelInjections) takes it like any model credential no
+// provider authored.
+func TestNoBlockDispatch_DropsUnauthoredProviderKeyInjection(t *testing.T) {
 	st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: mpOwner}}
 	h, _ := bearerGuardHarness(t, st)
 	stale := mpInjection("evil.example", providerSecretName("uid-a", providerKeyPart))
@@ -368,7 +368,7 @@ func TestLegacyDispatch_DropsUnauthoredProviderKeyInjection(t *testing.T) {
 	if !ok || slices.ContainsFunc(plan.injections, func(ig runner.InjectionGrant) bool { return ig.GrantID == stale.GrantID }) {
 		t.Fatalf("ok=%v injections=%v, want the unauthored provider key dropped", ok, plan.injections)
 	}
-	if !strings.Contains(auditDatums(h, "run.injection.drop"), "model_provider_not_dispatch_authored") {
+	if !strings.Contains(auditDatums(h, "run.injection.drop"), "model_credential_not_provider_authored") {
 		t.Error("the drop was not audited")
 	}
 }
@@ -423,8 +423,7 @@ func TestProviderKeySink_RefusesAnythingButTheOwnersRecordedGrant(t *testing.T) 
 
 // TestLaunchRecordRun_ChoosesAModelProvider: a record session under a
 // provider block chooses one like any model run — freezing it on the row and
-// authoring only the owner's provider grant, never the operator default
-// integration's — and is refused before anything launches when the
+// authoring only the owner's provider grant, never an operator key — and is refused before anything launches when the
 // launcher's own key is absent.
 func TestLaunchRecordRun_ChoosesAModelProvider(t *testing.T) {
 	p := mpKeyProvider("anthropic", "uid-a", types.ModelProviderAnthropicAPIKey, types.ProviderHarness{Harness: "claude-code"})
@@ -434,8 +433,6 @@ func TestLaunchRecordRun_ChoosesAModelProvider(t *testing.T) {
 		fake := newRecordLLMModeStore(ws)
 		fake.sc = types.SiteConfig{
 			ModelProviders: providerBlock(p),
-			Integrations: []types.Integration{{ID: "corp-default", Kind: types.IntegrationKindAnthropicAPIKey,
-				DefaultFor: []string{"agent_runs"}, Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}}}},
 		}
 		fr := &fakeRunner{}
 		cfg := baseTestConfig(h, fake)

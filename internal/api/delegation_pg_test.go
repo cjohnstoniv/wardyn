@@ -449,6 +449,29 @@ func TestDelegation_PortalCredentialAndRevocation(t *testing.T) {
 	}
 }
 
+// TestDelegation_RegisterRefusesTheDeploymentsOwnClientID pins the registry's
+// own refusal of a portal under Wardyn's OIDC client id (#1234), in any case
+// or as its api:// App ID URI: a subject token issued to Wardyn would then
+// pass the audience check for that portal.
+// The exchange's verifier refuses it too; this is the first layer.
+func TestDelegation_RegisterRefusesTheDeploymentsOwnClientID(t *testing.T) {
+	e := newDelegationPG(t)
+	own := e.h.srv.cfg.OIDC.ClientID()
+	for _, id := range []string{own, " " + own + " ", strings.ToUpper(own), "api://" + own, "API://" + strings.ToUpper(own)} {
+		w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/admin/delegates", e.admin,
+			`{"name":"front end","idp_client_id":"`+id+`","group":"`+delegGroup+`"}`)
+		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonDelegateClientIDIsPortal {
+			t.Fatalf("register under %q: %d %s, want 422 %s", id, w.Code, w.Body.String(), reasonDelegateClientIDIsPortal)
+		}
+	}
+	if rows := e.rows("delegate.create"); len(rows) != 0 {
+		t.Fatalf("delegate.create rows = %+v, want none", rows)
+	}
+	if list, err := e.st.ListDelegates(context.Background()); err != nil || len(list) != 0 {
+		t.Fatalf("delegates = %+v (%v), want none registered", list, err)
+	}
+}
+
 // TestDelegation_BadSubjectTokenMintsNothing is acceptance test 3: a subject
 // token issued to another client, expired, from another issuer, alg=none, or
 // badly signed is invalid_grant, and none of them mints a token.

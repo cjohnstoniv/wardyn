@@ -61,10 +61,10 @@ compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
 # branch now picks default.json purely for its wider allowed-domains list.
 # WANTS_LLM="1" (the operator has opted into a real model path — see
 # wants_llm) upgrades to claude-llm.json, the shipped ceiling that admits the
-# api_key grant + LLM egress an AGENT run needs. Without it BOTH demo.json and
-# default.json carry only a github_token grant, so clampGrants strips the run's
-# model grant and a first agent run boots, "completes", and 404s on its first
-# model call. Kept off by default so a pure-Fence trial keeps the tight
+# LLM egress an AGENT run needs (the model credential itself is the run's model
+# provider's, not a policy grant). Without it demo.json carries no model API
+# egress, so a first agent run boots, "completes", and fails on its first model
+# call. Kept off by default so a pure-Fence trial keeps the tight
 # github-token-only ceiling.
 pick_policy() {
   if [ "${2:-}" = "1" ]; then
@@ -94,13 +94,12 @@ host_llm_key_present() {
 }
 
 # llm_ready_from_status STATUS_JSON -> "1" | ""
-# W1-S1-3: host_llm_key_present is blind to a managed subscription connected in a
-# PRIOR `up` (no token re-supplied this run) and to a key added through the
-# UI — neither ever touches this process's env. cmd_up instead asks the
+# W1-S1-3: host_llm_key_present is blind to a model provider connected in a
+# PRIOR `up` and to a key added through the UI — neither ever touches this
+# process's env. cmd_up instead asks the
 # already-running daemon's own GET /api/v1/setup/status, whose llm_ready
-# aggregates every lane (subscription, composer backend, secret-name
-# heuristic, Bedrock, an AI-provider Integration) for the Getting-started
-# readiness banner. Split out as a pure string check (matching
+# aggregates every model provider (and the AI-provider Integration) for the
+# Getting-started readiness banner. Split out as a pure string check (matching
 # host_llm_key_present's own case-pattern style) so test-up-policy.sh can pin
 # the match on a canned body with no docker/network.
 llm_ready_from_status() {
@@ -138,7 +137,7 @@ llm_ready_from_probe() {
 # spoken) so a later plain `up` won't auto-pick over it. Otherwise ENV_FILE's
 # own value is kept UNLESS it is unset or still carries the marker (meaning WE
 # chose it last time, not the operator) — in which case pick_policy re-runs.
-# That re-pick is what lets a managed subscription or an exported API key
+# That re-pick is what lets a model provider or an exported API key
 # added AFTER the first `make setup` actually take effect on the next `up`:
 # the old "only decide when .env has nothing" rule froze the pure-Fence
 # demo.json/default.json ceiling forever once written, and a composed run kept
@@ -671,43 +670,6 @@ cmd_up() {
     unset _ai_json _ai_img
   fi
 
-  # Bedrock auto-wire (container path): persist operator-provided Bedrock config
-  # into .env so the compose wardynd reads it at boot — closing the gap where the
-  # container path (unlike host-mode setup.sh) required hand-editing .env. Triggers
-  # only on an EXPLICIT Bedrock signal (CLAUDE_CODE_USE_BEDROCK, or region+model in
-  # env); never guesses from a bare ~/.aws (many machines have one for unrelated AWS
-  # work). Idempotent: never overwrites a key already in .env. Credentials are NOT
-  # imported here — they're added in the UI after launch (the wizard now surfaces
-  # the bearer/session-token/static-key options) or via 'wardyn secret set'.
-  _br_on=0
-  case "${CLAUDE_CODE_USE_BEDROCK:-}" in 1|true|TRUE|yes) _br_on=1 ;; esac
-  [ -n "${WARDYN_BEDROCK_REGION:-}" ] && [ -n "${WARDYN_BEDROCK_MODEL:-}" ] && _br_on=1
-  if [ "${_br_on}" = 1 ]; then
-    _br_region="${WARDYN_BEDROCK_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-}}}"
-    if [ -n "${_br_region}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_REGION)" ]; then
-      env_set "${ENV_FILE}" WARDYN_BEDROCK_REGION "${_br_region}"
-      log "Bedrock: wired region ${_br_region} into ${ENV_FILE}."
-    fi
-    if [ -n "${WARDYN_BEDROCK_MODEL:-}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_MODEL)" ]; then
-      env_set "${ENV_FILE}" WARDYN_BEDROCK_MODEL "${WARDYN_BEDROCK_MODEL}"
-    fi
-    [ -n "${WARDYN_BEDROCK_AWS_PROFILE:-}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_PROFILE)" ] \
-      && env_set "${ENV_FILE}" WARDYN_BEDROCK_AWS_PROFILE "${WARDYN_BEDROCK_AWS_PROFILE}"
-    # SSO/temp-cred safe path: bind the operator's ~/.aws read-only (nothing stored,
-    # SSO auto-rotates). Only when it exists and no dir was preset.
-    if [ -z "$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR)" ]; then
-      if [ -n "${WARDYN_BEDROCK_AWS_DIR:-}" ]; then
-        env_set "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR "${WARDYN_BEDROCK_AWS_DIR}"
-      elif [ -d "${HOME}/.aws" ]; then
-        env_set "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR "${HOME}/.aws"
-        log "Bedrock: wired ~/.aws read-only mount (SSO auto-rotates; nothing stored)."
-        [ "$(id -u)" = "1000" ] || warn "Bedrock ~/.aws mount: host uid $(id -u) != sandbox agent uid 1000. If a run can't read your 0600 AWS files, grant the sandbox uid: setfacl -R -m u:1000:rX \"${HOME}/.aws\"."
-      fi
-    fi
-    log "Bedrock: add the API key (preferred, never resident), a session token, or static keys in the UI after launch."
-  fi
-  unset _br_on _br_region
-
   # Must precede `compose up`: the seed is read from the wardynd container's env
   # at boot (docker-compose.yaml WARDYN_HOST_PROXY_B64).
   seed_host_proxy
@@ -743,28 +705,9 @@ cmd_up() {
   done
   log "wardynd is healthy"
 
-  # Headless model-access seed: a Claude subscription token supplied via env is
-  # connected through the IN-CONTAINER CLI (loopback → local-mode no-auth, so a
-  # host→bridge non-loopback peer never hits the auth gate). Piped on stdin so it
-  # never lands in argv/ps, deploy/compose/.env, or the wardynd container env — it
-  # lives ONLY in the age-encrypted store. Interactive setup uses
-  # `wardyn subscription connect` after launch (or `wardyn setup status`).
-  # Connecting a shared subscription from an env var during `up` is the
-  # pre-provisioning path the posture rule exists to remove: the daemon only
-  # resolves such a credential in a single-user posture, and this stack runs a
-  # shared admin token. Say so instead of connecting something that will not
-  # resolve — a silent no-op reads as "model access is configured" until the
-  # first run fails.
-  if [ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]; then
-    warn "WARDYN_SUBSCRIPTION_TOKEN is ignored: a shared subscription credential is limited to single-user desktop deployments."
-    warn "  Connect it in the console instead (Settings -> Model provider -> Claude subscription), or use an API key / Bedrock."
-    warn "  Genuinely a single-user box? Set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true in deploy/compose/.env and re-run."
-  fi
-
   # W1-S1-3: the pick above ran BEFORE wardynd existed — host_llm_key_present can
   # only see THIS process's env (*_API_KEY), never a
-  # managed subscription (just connected above, OR left over from a PRIOR `up`
-  # with no token re-supplied this time) or a key added through the UI in a
+  # model provider connected in a PRIOR `up` or a key added through the UI in a
   # browser session up.sh never sees. Ask the daemon itself instead, reachable
   # the same way the local-mode gate smoke below already proves: an in-network
   # peer under WARDYN_LOCAL_TRUST_FORWARDER, no token needed in local mode.
@@ -787,7 +730,7 @@ cmd_up() {
     _status_raw=$(wardynd_probe "${ENV_FILE}" /api/v1/setup/status)
     _status_code=$(printf '%s' "${_status_raw}" | tail -n1)
     [ "${_status_code}" = "200" ] \
-      || warn "post-boot LLM-ready probe got HTTP ${_status_code} from /api/v1/setup/status — skipping the policy re-pick this run (a managed subscription or UI-added key won't take effect until the next \`up\`); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'."
+      || warn "post-boot LLM-ready probe got HTTP ${_status_code} from /api/v1/setup/status — skipping the policy re-pick this run (a model provider or UI-added key won't take effect until the next \`up\`); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'."
     _llm_ready=$(llm_ready_from_probe "${_status_raw}")
     unset _status_raw _status_code
     if [ -n "${_llm_ready}" ]; then
@@ -865,7 +808,7 @@ cmd_up() {
     log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
     log "  Prove the sandbox boundary from the CLI (keyless):"
     log "    ${_cli} run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
-    log "  Give it a real Claude:  ${_cli} subscription connect   (then run with sandbox-claude.yaml)"
+    log "  Give it a real model:  connect one under Settings -> Model providers (then run with sandbox-claude.yaml)"
     log "  Or open Getting Started in the UI — the demo steps live there."
   fi
   [ "${_cli}" = "wardyn" ] && log "  (bin/wardyn wasn't extracted — build one: go install github.com/cjohnstoniv/wardyn/cmd/wardyn@latest)"

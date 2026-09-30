@@ -91,8 +91,8 @@ func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 // through the proxy's handlePlain, never a CONNECT, so its 80 default narrows
 // that MITM entry to a port no CONNECT arrives on rather than widening anything.
 // A spelled-but-unusable port is refused at PUT (validateSiteConfig), so the
-// scheme default also covers an older row, fail-safe. The Bedrock data-plane
-// authority (WARDYN_BEDROCK_BASE_URL) uses this too, so both MITM-authoring
+// scheme default also covers an older row, fail-safe. A Bedrock provider's
+// data-plane authority (bedrock.base_url) uses this too, so both MITM-authoring
 // lanes derive their port by the SAME rule.
 func redirectPort(rawURL string) int {
 	if p, spelled, ok := redirectEndpointPort(rawURL); ok && spelled {
@@ -251,11 +251,11 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		if host == "" || seenHost[host] {
 			continue
 		}
-		// Veto a To that is the configured model gateway or a public model-provider
+		// Veto a To that is a model provider's host or a public model-provider
 		// host: proxy.buildInjector's byHost map is last-write-wins, so a colliding
-		// row would swap an artifact token onto model traffic. isModelProviderRejectHost,
-		// NOT isModelProviderHost: the Bedrock hosts (and WARDYN_BEDROCK_BASE_URL)
-		// carry proxy-side bearer injection too (resolveBedrockAuth), so they are the
+		// row would swap an artifact token onto model traffic. modelServingHosts,
+		// NOT isModelProviderHost: a Bedrock provider's hosts (and its
+		// bedrock.base_url) carry proxy-side bearer injection too (authorBedrockBearerInjection), so they are the
 		// SAME collision, as is every model provider row's own host
 		// (modelServingHosts).
 		if s.modelServingHosts(sc)(host) {

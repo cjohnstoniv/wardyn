@@ -9,9 +9,7 @@
 // Agents tab, Getting started, the rail, the failure block, a held approval —
 // opens it through the context; none mounts a pane of its own.
 //
-// Three shapes, one dialog:
-//  · legacy — today's door (/setup/harness-*), unchanged: the only door on an
-//    install with no model providers, and in the Admin view.
+// Two shapes, one dialog:
 //  · signin — a bedrock_sso or anthropic_subscription provider's sign-in
 //    (/model-providers/{id}/sign-in), framed as packet E draws it.
 //  · key — a typed key or token for a provider (/model-providers/{id}/credential).
@@ -83,16 +81,7 @@ export function doorToast(t: DoorTarget): string {
   return t.login === "aws" ? MODEL_ACCESS_BANNER.SIGNED_IN_TOAST : CLAUDE_DOOR.SIGNED_IN_TOAST;
 }
 
-function SignInHeader({ target }: { target: DoorTarget & { kind: "legacy" | "signin" } }) {
-  if (target.kind === "legacy") {
-    // Today's door, as it was: the title alone, the description for a screen
-    // reader before the terminal starts writing.
-    return (
-      <DialogDescription className="sr-only">
-        {target.login === "aws" ? MODEL_ACCESS_BANNER.DIALOG_DESCRIPTION : CLAUDE_DOOR.DESCRIPTION}
-      </DialogDescription>
-    );
-  }
+function SignInHeader({ target }: { target: DoorTarget & { kind: "signin" } }) {
   const forLine = DOOR.FOR(providerName(target.provider));
   return (
     <div className="space-y-1 text-body text-muted-foreground">
@@ -291,7 +280,6 @@ function removeConfirmBody(storage: SetupStatus["credential_storage"]): string {
  */
 export function DoorDialog({
   target,
-  perUser,
   credentialStorage,
   focusSeq,
   onCancel,
@@ -300,9 +288,6 @@ export function DoorDialog({
   onCloseAutoFocus,
 }: {
   target: DoorTarget | null;
-  /** Today's AWS door only: the org's access portal is stored (a per_user
-   *  claude-code row), so the pane asks for none. */
-  perUser: boolean;
   /** /setup/status's credential_storage (design F-3) — the key door's
    *  store-mode notice line and remove-confirm retention line key off it.
    *  Undefined reads as local, the same default credNoticeLine2 takes. */
@@ -399,11 +384,7 @@ export function DoorDialog({
             >
               <HarnessLoginPane
                 provider={signIn.login}
-                modelProvider={signIn.kind === "signin" ? signIn.provider.id : undefined}
-                // A provider's portal is on the provider; today's door knows
-                // the org's only under a per_user row (the rule agents-tab.tsx
-                // and connection-cards.tsx followed when each mounted a pane).
-                startURLManaged={signIn.kind === "signin" || perUser}
+                modelProvider={signIn.provider.id}
                 paneRef={paneRef}
                 onDone={() => onDone(doorToast(signIn))}
                 onCancel={onCancel}

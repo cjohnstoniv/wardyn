@@ -6,8 +6,8 @@ package api
 // awsssofake_e2e_test.go retires risk #2 of the aws-sso-fake validation work
 // (see runs_bedrock.go's awsSSOCacheFileName / awsSSOConfigFileContents doc
 // comments): does the ~/.aws/config + ~/.aws/sso/cache/<hash>.json shape this
-// package SYNTHESIZES for a captured SSO credential (the ssoInject branch of
-// resolveBedrockAuth) actually get accepted by real botocore? A wrong
+// package SYNTHESIZES for a captured SSO credential (bedrockSSOAuth's
+// ssoInject branch) actually get accepted by real botocore? A wrong
 // cache-filename hash convention or a malformed config block is a SILENT
 // failure — the SDK just reports "not logged in", with no pointer back at
 // Wardyn — so this has to be proven against the REAL AWS CLI, not asserted

@@ -4,8 +4,8 @@
  */
 
 // T-69 — Go->TS wire parity for the DTOs the F8 console-e2e audit named that
-// had no source-parity probe yet: SetupStatus, SetupModelAccess (the
-// `model_access` chip state), ApprovalRequest, and the attach-mode control
+// had no source-parity probe yet: SetupStatus, ApprovalRequest, and the
+// attach-mode control
 // frame (attachModeMsg + its nested attachHolderView, `attach_holder.go`
 // 215-263 — the shape ui/e2e/attach-stub.ts hand-builds against). SiteConfig,
 // AgentRun, RunPolicySpec, AuditEvent, SCMAccess, CapabilityGrant and Me
@@ -108,9 +108,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   const root = repoRoot();
   const setupGo = readFileSync(join(root, "internal/api/setup.go"), "utf8");
   const setupChecksGo = readFileSync(join(root, "internal/api/setup_checks.go"), "utf8");
-  const bedrockGo = readFileSync(join(root, "internal/api/runs_bedrock_probe.go"), "utf8");
   const harnessToolGo = readFileSync(join(root, "internal/api/setup_integrations.go"), "utf8");
-  const modelAccessGo = readFileSync(join(root, "internal/api/modelaccess.go"), "utf8");
   const attachGo = readFileSync(join(root, "internal/api/attach_holder.go"), "utf8");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
@@ -138,8 +136,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   it.each([
     ["SetupCheck", setupChecksGo],
     ["SetupProvider", setupGo],
-    ["SetupHarness", setupGo],
-    ["SetupBedrock", bedrockGo],
     ["SetupHarnessTool", harnessToolGo],
   ])("%s: full parity with the TS mirror of the same name", (name, goSrc) => {
     const goTags = goJSONTags(goSrc, name);
@@ -153,18 +149,10 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["SetupSecrets", "secrets"],
     ["SetupAgeKey", "age_key"],
     ["SetupPlatform", "platform"],
-    ["SetupDeployment", "deployment"],
   ])("%s: full parity with SetupStatus.%s's inline TS type", (goName, member) => {
     const goTags = goJSONTags(setupGo, goName);
     expect(goTags.length).toBeGreaterThan(0);
     expect(new Set(tsInlineKeys(setupTs, "SetupStatus", member))).toEqual(new Set(goTags));
-  });
-
-  it("SetupModelAccess (`model_access`): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(modelAccessGo, "SetupModelAccess");
-    expect(goTags.length).toBeGreaterThanOrEqual(4);
-    const tsKeys = tsInterfaceTopKeys(setupTs, "SetupModelAccess");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
   it("SetupProviderAccess (`provider_access`): full parity with the TS mirror", () => {
@@ -216,10 +204,59 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   it.each([
     ["BaseImageEntry", "internal/types/workspace_contract.go", "BaseImageEntry", "ui/src/app/lib/types/workspaces.ts"],
     ["availabilityView", "internal/api/permissions_availability.go", "AvailabilityView", "ui/src/app/lib/types/permissions.ts"],
+    // #1428: the Azure DevOps row's `entra` block, which now carries the token
+    // lifetimes (pat_max_hours, pat_max_days) the console writes.
+    ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
+    // #1428: the per-person token console's reads.
+    ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
+    ["adoRunToken", "internal/api/ado_pat_console.go", "ADORunToken", "ui/src/app/lib/types/ado-pat.ts"],
+    ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
-    expect(goTags.length).toBeGreaterThanOrEqual(4);
+    expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard (ADOPATAccess has two tags)
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, tsFile), "utf8"), tsName);
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+  // GET /api/v1/runs/{id}/policy (#1425): the SDK's RunPolicyView and its three
+  // nested DTOs, the server struct they are pinned to, and the closed value sets.
+  it.each([
+    ["RunPolicyView", "runPolicyResponse", "RunPolicyView"],
+    ["RunPolicySource", "runPolicySource", "RunPolicySource"],
+    ["RunPolicyChange", "runPolicyChange", "RunPolicyChange"],
+    ["StoredPolicyNow", "storedPolicyNow", "StoredPolicyNow"],
+  ])("%s: full parity between pkg/client, the server struct and the TS mirror", (sdkName, serverName, tsName) => {
+    const sdkGo = readFileSync(join(root, "pkg/client/run_policy.go"), "utf8");
+    const serverGo = readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8");
+    const sdkTags = goJSONTags(sdkGo, sdkName);
+    expect(sdkTags.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(goJSONTags(serverGo, serverName))).toEqual(new Set(sdkTags));
+    expect(new Set(tsInterfaceTopKeys(runsTs, tsName))).toEqual(new Set(sdkTags));
+  });
+
+  it("RunPolicyView value sets: source kinds, causes and stored_policy_now states match the server", () => {
+    const serverGo = readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8");
+    const explainGo = readFileSync(join(root, "internal/api/run_policy_explain.go"), "utf8");
+    const consts = (src: string, prefix: string) =>
+      new Set([...src.matchAll(new RegExp(`\\b${prefix}[A-Za-z]+\\s*=\\s*"([a-z_]+)"`, "g"))].map((m) => m[1]));
+    const tsUnion = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(stripComments(runsTs));
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    expect(tsUnion("RunPolicySourceKind")).toEqual(consts(serverGo, "policyKind"));
+    expect(tsUnion("RunPolicyCause")).toEqual(consts(explainGo, "cause"));
+    expect(tsUnion("RunPolicyState")).toEqual(consts(serverGo, "policyView"));
+    const states = new Set([...serverGo.matchAll(/storedPolicyNow\{State: "([a-z]+)"/g)].map((m) => m[1]));
+    for (const m of serverGo.matchAll(/now\.State = "([a-z]+)"/g)) states.add(m[1]);
+    const tsStates = /state: ([^;]+);/.exec(tsInterfaceBody(runsTs, "StoredPolicyNow"))![1];
+    expect(new Set([...tsStates.matchAll(/"([a-z]+)"/g)].map((m) => m[1]))).toEqual(states);
+  });
+
+  // ADOPATAccess.last_token is an inline object type; adoLastToken is its Go struct.
+  it("adoLastToken: full parity with the TS ADOPATAccess.last_token inline type", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/ado_pat_console.go"), "utf8"), "adoLastToken");
+    expect(goTags.length).toBeGreaterThanOrEqual(2);
+    const adoPatTs = readFileSync(join(root, "ui/src/app/lib/types/ado-pat.ts"), "utf8");
+    expect(new Set(tsInlineKeys(adoPatTs, "ADOPATAccess", "last_token"))).toEqual(new Set(goTags));
   });
 });

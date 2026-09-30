@@ -343,9 +343,16 @@ func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, erro
 // that question for any kind it was handed, and the widening answer is the
 // narrower of the two. A build with no store holds no rows, so it refuses —
 // which is again 0.5.
+//
+// An image ref with a dot segment is never granted (#1018): the write boundary
+// refuses such a value (canonicalGrantValue), and a row stored before that rule
+// is marked inert, so no grant may match it here either.
 func (s *Server) capGranted(ctx context.Context, kind, value string) (bool, error) {
 	if !validCapabilityKind(kind) {
 		return false, fmt.Errorf("api: unknown capability kind %q", kind)
+	}
+	if kind == capImage && !imageRefPathSafe(value) {
+		return false, nil
 	}
 	return s.capBatchFor(ctx).decide(ctx, kind, capWidening, value)
 }

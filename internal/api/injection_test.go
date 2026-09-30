@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -22,7 +20,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -568,194 +565,37 @@ func TestInjectionResolve_OperatorRunUnchanged(t *testing.T) {
 // wired) and changes only the host, so the refusal it asserts can come from the
 // host pin and nothing else.
 
-// liveOAuthProvider is a subscription.Provider that yields a LIVE-shaped token
-// with a machine-readable expiry, so the success path's expiry advertisement and
-// mask registration are both observable.
-type liveOAuthProvider struct {
-	value   string
-	expires time.Time
-}
-
-func (p liveOAuthProvider) Current(context.Context) (subscription.Token, error) {
-	return subscription.Token{Value: p.value, ExpiresAt: p.expires}, nil
-}
-func (p liveOAuthProvider) Peek() (subscription.Token, error) {
-	return subscription.Token{Value: p.value, ExpiresAt: p.expires}, nil
-}
-
-// sentinelHarness wires a harness whose sentinel resolve WOULD succeed: posture
-// ok, both providers live, no provider block, a mask registry to observe. Only
-// the injection rule differs per case.
-func sentinelHarness(t *testing.T, tok liveOAuthProvider) *harness {
-	t.Helper()
-	h, _ := newSecretsHarness(t)
-	h.srv.cfg.Store = &bearerGuardStore{}
-	h.srv.router = h.srv.routes()
-	h.srv.cfg.SubscriptionPostureOK = true
-	h.srv.cfg.SubscriptionPostureReason = ""
-	h.srv.cfg.SubscriptionToken = tok
-	h.srv.cfg.ManagedToken = tok
-	h.srv.cfg.MaskRegistry = secretmask.NewRegistry()
-	return h
-}
-
-// TestInternalInjection_RefusesSentinelForNonAnthropicHost is the SINK half of
-// the H2 host pin: a grant (authored, inline, or RECORDED before the write-time
-// guard existed) that points a sentinel at any other host would exfiltrate the
-// operator's live OAuth token, in cleartext on a plain-HTTP allowlist entry.
-func TestInternalInjection_RefusesSentinelForNonAnthropicHost(t *testing.T) {
-	const live = "oauth-live-token-value"
+// TestInternalInjection_RetiredSentinelsNeverResolve: the two sentinels of the
+// retired shared-subscription lanes resolve to nothing in 0.8.2. A grant naming
+// one — a stored policy, a recorded profile, a proxy config from before the
+// upgrade — is refused at the sink as a reserved name, on the one host it could
+// ever have targeted, with no successful secret.read; and a policy naming one
+// is refused at write time.
+func TestInternalInjection_RetiredSentinelsNeverResolve(t *testing.T) {
 	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
-		for _, host := range []string{"evil.attacker.example", "api.anthropic.com.evil.example", "localhost"} {
-			h := sentinelHarness(t, liveOAuthProvider{value: live})
-			runID := uuid.New()
-			token := h.mintRunToken(t, runID)
-			h.broker.minted = broker.Minted{
-				Kind: types.GrantAPIKey, JTI: "jti-host-pin",
-				Injection: &egress.InjectionRule{
-					Host: host, Header: "Authorization",
-					SecretName: sentinel, Format: "Bearer %s",
-				},
+		t.Run(sentinel, func(t *testing.T) {
+			h, sec := newSecretsHarness(t)
+			sec.m[sentinel] = []byte("a-value-planted-under-the-sentinel-name")
+			h.broker.minted = broker.Minted{Kind: types.GrantAPIKey, JTI: "j-retired", Injection: &egress.InjectionRule{
+				Host: "api.anthropic.com", Header: "Authorization", Format: "Bearer %s", SecretName: sentinel}}
+			rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), h.mintRunToken(t, uuid.New()), "")
+			if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), reasonInjectionReservedSecretName) {
+				t.Fatalf("sink = %d %s, want 403 %s", rr.Code, rr.Body.String(), reasonInjectionReservedSecretName)
 			}
-
-			rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
-			if rr.Code != http.StatusForbidden {
-				t.Fatalf("%s -> host %q: status = %d, want 403; body=%s", sentinel, host, rr.Code, rr.Body.String())
-			}
-			if strings.Contains(rr.Body.String(), live) {
-				t.Fatalf("%s -> host %q: the refusal body leaked the live token: %s", sentinel, host, rr.Body.String())
+			if strings.Contains(rr.Body.String(), "planted") {
+				t.Fatalf("the refusal leaked the stored value: %s", rr.Body.String())
 			}
 			for _, ev := range h.audit.events {
 				if ev.Action == "secret.read" && ev.Outcome == "success" {
-					t.Fatalf("%s -> host %q: a successful secret.read was recorded for a refused injection", sentinel, host)
+					t.Fatalf("a successful secret.read was recorded for a retired sentinel: %s", ev.Data)
 				}
 			}
-			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth_host_not_anthropic") {
-				t.Fatalf("%s -> host %q: audit data = %s, want the oauth_host_not_anthropic reason", sentinel, host, ev.Data)
+			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{{
+				Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": "api.anthropic.com", "secret_name": sentinel}),
+			}}}
+			if code, err := h.srv.validateInlineSecretRefs(context.Background(), "", "", spec); err == nil || code != http.StatusUnprocessableEntity {
+				t.Fatalf("write-time: code=%d err=%v, want (422,err)", code, err)
 			}
-			// The token must not have been resolved (provider.Current rotates the
-			// operator's own resident credentials) nor registered for masking.
-			for _, v := range h.srv.cfg.MaskRegistry.Snapshot(runID) {
-				if bytes.Contains(v, []byte(live)) {
-					t.Fatalf("%s -> host %q: the live token was resolved and mask-registered despite the refusal", sentinel, host)
-				}
-			}
-		}
-	}
-}
-
-// TestValidateInlineSecretRefs_SentinelHostPin is the WRITE-TIME half: the same
-// comparison in validateInlineSecretRefs, which rejects a mis-authored grant
-// before it is ever stored.
-func TestValidateInlineSecretRefs_SentinelHostPin(t *testing.T) {
-	h, _ := newSecretsHarness(t)
-	h.srv.cfg.SubscriptionToken = fakeSubToken{}
-	h.srv.cfg.ManagedToken = fakeSubToken{}
-	defer func() { h.srv.cfg.SubscriptionToken, h.srv.cfg.ManagedToken = nil, nil }()
-	ctx := context.Background()
-
-	sentinelAt := func(secretName, host string) types.RunPolicySpec {
-		return types.RunPolicySpec{
-			MinConfinementClass: types.CC2,
-			EligibleGrants: []types.GrantSpec{{
-				Kind:  types.GrantAPIKey,
-				Scope: mustJSON(map[string]any{"host": host, "secret_name": secretName}),
-			}},
-		}
-	}
-
-	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
-		// The control: the pinned host still validates, so a failure below is the
-		// host pin and not the sentinel path breaking wholesale.
-		if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinelAt(sentinel, "api.anthropic.com")); err != nil || code != 0 {
-			t.Fatalf("%s at api.anthropic.com: code=%d err=%v, want (0,nil)", sentinel, code, err)
-		}
-		for _, host := range []string{"evil.attacker.example", "api.anthropic.com.evil.example"} {
-			code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinelAt(sentinel, host))
-			if err == nil || code != http.StatusUnprocessableEntity {
-				t.Fatalf("%s at %q: code=%d err=%v, want (422,err) — a sentinel grant may only target %s",
-					sentinel, host, code, err, subscriptionInjectionHost)
-			}
-			if !strings.Contains(err.Error(), subscriptionInjectionHost) {
-				t.Fatalf("%s at %q: refusal %q should name the only permitted host", sentinel, host, err)
-			}
-		}
-	}
-}
-
-// TestInternalInjection_SentinelSuccessForcesBearerAndMasks covers the sentinel
-// SUCCESS path, which no test reached: every existing sentinel test takes a
-// refusal branch, so the forced Authorization/Bearer clamp (which neutralises a
-// crossed-wire RECORDED grant) and the MaskRegistry.Add of the live OAuth token
-// were both uncovered.
-func TestInternalInjection_SentinelSuccessForcesBearerAndMasks(t *testing.T) {
-	const live = "oauth-live-token-value"
-	// Sooner than the stored-key lease, so it is the one advertised (subscriptionLease).
-	exp := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Millisecond)
-
-	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
-		h := sentinelHarness(t, liveOAuthProvider{value: live, expires: exp})
-		runID := uuid.New()
-		token := h.mintRunToken(t, runID)
-		// A CROSSED-WIRE grant: the wrong header and a bare format, exactly what a
-		// recorded profile can carry. The sink must clamp both.
-		h.broker.minted = broker.Minted{
-			Kind: types.GrantAPIKey, JTI: "jti-sentinel-ok",
-			Injection: &egress.InjectionRule{
-				Host: "api.anthropic.com", Header: "x-api-key",
-				SecretName: sentinel, Format: "%s",
-			},
-		}
-
-		rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
-		if rr.Code != http.StatusOK {
-			t.Fatalf("%s: status = %d, want 200; body=%s", sentinel, rr.Code, rr.Body.String())
-		}
-		var resp injectionResponse
-		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("%s: decode response: %v", sentinel, err)
-		}
-		if resp.Header != "Authorization" {
-			t.Fatalf("%s: header = %q, want Authorization — the grant authored x-api-key and the sink must clamp it", sentinel, resp.Header)
-		}
-		if resp.Value != "Bearer "+live {
-			t.Fatalf("%s: value = %q, want %q — the OAuth token has exactly one correct wire shape", sentinel, resp.Value, "Bearer "+live)
-		}
-		if resp.Host != "api.anthropic.com" {
-			t.Fatalf("%s: host = %q, want api.anthropic.com", sentinel, resp.Host)
-		}
-		if resp.JTI != "jti-sentinel-ok" {
-			t.Fatalf("%s: jti = %q, want the minted jti", sentinel, resp.JTI)
-		}
-		if resp.ExpiresAt != exp.UnixMilli() {
-			t.Fatalf("%s: expires_at = %d, want %d (a provider expiry must be advertised)", sentinel, resp.ExpiresAt, exp.UnixMilli())
-		}
-
-		// BOTH forms are mask-registered: the raw token and the formatted header
-		// value, since a PTY capture can carry either.
-		snap := h.srv.cfg.MaskRegistry.Snapshot(runID)
-		var rawSeen, formattedSeen bool
-		for _, v := range snap {
-			if bytes.Equal(v, []byte(live)) {
-				rawSeen = true
-			}
-			if bytes.Equal(v, []byte("Bearer "+live)) {
-				formattedSeen = true
-			}
-		}
-		if !rawSeen || !formattedSeen {
-			t.Fatalf("%s: mask registry holds raw=%v formatted=%v, want both (%d entries)", sentinel, rawSeen, formattedSeen, len(snap))
-		}
-
-		ev := lastAuditEvent(t, h.audit.events, "secret.read")
-		if ev.Outcome != "success" {
-			t.Fatalf("%s: last secret.read outcome = %q, want success", sentinel, ev.Outcome)
-		}
-		if !strings.Contains(string(ev.Data), "proxy-injection-subscription") || !strings.Contains(string(ev.Data), "jti-sentinel-ok") {
-			t.Fatalf("%s: audit data = %s, want the injection purpose and the jti", sentinel, ev.Data)
-		}
-		if strings.Contains(string(ev.Data), live) {
-			t.Fatalf("%s: the audit event carries the live token value: %s", sentinel, ev.Data)
-		}
+		})
 	}
 }

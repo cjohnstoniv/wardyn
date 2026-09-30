@@ -25,7 +25,7 @@ import (
 // MITM can set the `x-amz-sso_bearer_token` header without the sandbox ever
 // holding the token — exactly the Bedrock BEARER shape one file over
 // (authorBedrockBearerInjection, runs_dispatch_llm.go), which this is a copy of.
-// resolveBedrockAuth stages an inert placeholder in the sandbox's token cache;
+// bedrockSSOAuth stages an inert placeholder in the sandbox's token cache;
 // this file authors the grant and the MITM entry that make the wire work.
 //
 // Everything security-relevant about the lane is decided HERE, at dispatch,
@@ -103,12 +103,11 @@ const awsSSOGrantTTLSeconds = 3600
 // awsSSOScopeSnapshot is the IMMUTABLE credential scope this run was dispatched
 // with — invariant I3, and the fix for a real substitution hole.
 //
-// awsSSOScopeFor derives the owner from the ROSTER ROW at call time. A resolve
-// happens MID-RUN, minutes or hours after dispatch, so an admin who flips the
-// row from per_user to shared (or disables it) while a run is held would have
-// that run's next resolve read the OPERATOR's blob and inject it — a credential
-// silently changing principal under a running agent, with every existing guard
-// green, because every existing guard asks about the run and not about the
+// A resolve happens MID-RUN, minutes or hours after dispatch, so a scope
+// derived from the live configuration at call time could read a different
+// principal's blob than the one dispatch chose — a credential silently
+// changing principal under a running agent, with every existing guard green,
+// because every existing guard asks about the run and not about the
 // credential's identity.
 //
 // So the grant carries this snapshot, authored here, and resolveAWSSSOInjection
@@ -193,7 +192,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		"snapshot": awsSSOScopeSnapshot{
 			OwnerSubject:     sso.owner,
 			CredentialSource: awsSSOCredentialSourceLabel(sso),
-			Mechanism:        string(types.AgentMechanismBedrockSSO),
+			Mechanism:        string(types.ModelProviderBedrockSSO),
 			SSOAccountID:     t.bedrock.ssoAccountID,
 			SSORoleName:      t.bedrock.ssoRoleName,
 			Region:           t.bedrock.ssoRegion,

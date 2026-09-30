@@ -122,7 +122,7 @@ document's scope, since none of the four named surfaces open it.
 | `flow.needsStartUrl && !startURLManaged` (ordinary Settings sign-in — nothing stored) | `prompt` | The numbered "what happens next" list (`login-flows.tsx#LOGIN_FLOWS.aws.expects`) + the AWS access-portal start-URL field. |
 | `startURLManaged` (a `per_user` roster row — the org's portal is already stored) | `intro` | The same expects list, plus `AGENTS.SSO_START_URL_MANAGED` in place of the field. |
 | Start login clicked | `launching` | "Opening the login sandbox…" |
-| `POST /setup/harness-login` resolved with a run id | `starting` | The graded wait — see §4.3. |
+| `POST /setup/harness-login` resolved with a run id (0.8.2: `POST /model-providers/{id}/sign-in`) | `starting` | The graded wait — see §4.3. |
 | Run reaches `RUNNING` | `attached` | The embedded terminal + the AWS device-code note — see §4.4. |
 | The helper's done marker sighted | `saving` | The server-corroboration round trip — see §4.5. |
 | Corroboration confirms | `done` | "Token captured — your AWS SSO session is connected." (`flow.doneLabel`) |

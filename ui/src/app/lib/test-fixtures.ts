@@ -93,7 +93,7 @@ export function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
       confinement_classes: ["CC1", "CC2"],
       confinement_substrates: { CC1: "oci/runc", CC2: "oci/runsc" },
     },
-    providers: [{ tool: "claude", installed: true, logged_in: false }],
+    providers: [{ tool: "claude", installed: true }],
     secrets: { present: [], github_app: false },
     age_key: { durable: false },
     has_runs: false,

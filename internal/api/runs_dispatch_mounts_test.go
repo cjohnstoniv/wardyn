@@ -4,22 +4,17 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBuildRunMountsDropsSubscriptionForNonModelRun: a task-mode=exec (or
-// non-interactive scan) run gets no LLM credential by contract
-// (resolveLLMTransport's modelRun gate), so buildRunMounts must not copy
-// policy.WorkspaceMounts verbatim regardless of modelRun — a resolved policy
-// that happens to carry the resident ~/.claude subscription mount (e.g. an
-// operator's subscription-blessed default/named policy reused for a plain exec
-// task, with no per-run integration consent) would land real OAuth credential
-// files in a sandbox that has no model-call reason to see them, contradicting
-// THREAT-MODEL.md 5.1a's stated "lands only for a resident_host
-// anthropic_subscription run" bound.
-func TestBuildRunMountsDropsSubscriptionForNonModelRun(t *testing.T) {
+// TestBuildRunMounts_DropsTheRetiredClaudeMountForEveryRun: the host
+// ~/.claude subscription mount is retired, so a policy row stored before 0.8.2
+// that still carries it lands in no sandbox, model run or not; every other
+// mount passes through.
+func TestBuildRunMounts_DropsTheRetiredClaudeMountForEveryRun(t *testing.T) {
 	policy := types.RunPolicySpec{
 		WorkspaceMounts: []types.WorkspaceMount{
 			{Source: "/host/repo", Target: "/home/agent/workspace"},
@@ -27,21 +22,22 @@ func TestBuildRunMountsDropsSubscriptionForNonModelRun(t *testing.T) {
 			{Source: "/host/claude.json", Target: claudeCredJSONTarget},
 		},
 	}
+	mounts := buildRunMounts(policy, userMountPosture{})
+	if len(mounts) != 1 || mounts[0].Target != "/home/agent/workspace" {
+		t.Fatalf("mounts = %+v, want only the workspace mount", mounts)
+	}
+}
 
-	t.Run("non-model run: subscription mounts dropped, others kept", func(t *testing.T) {
-		mounts := buildRunMounts(policy, llmTransport{modelRun: false}, userMountPosture{})
-		if len(mounts) != 1 {
-			t.Fatalf("mounts = %+v, want exactly the workspace mount (subscription creds must not reach a non-model run)", mounts)
+// TestValidatePolicySpec_RefusesTheRetiredClaudeMount: a policy (the boot
+// default policy included, through LoadPolicySpec) naming the retired mount
+// target is refused, naming where model access lives now.
+func TestValidatePolicySpec_RefusesTheRetiredClaudeMount(t *testing.T) {
+	for _, target := range []string{claudeCredTarget, claudeCredJSONTarget} {
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2,
+			WorkspaceMounts: []types.WorkspaceMount{{Source: "/home/op/.wardyn/claude-creds/.claude", Target: target}}}
+		err := validatePolicySpec(spec)
+		if err == nil || !strings.Contains(err.Error(), "Settings → Model providers") {
+			t.Errorf("target %s: err = %v, want a refusal naming Settings → Model providers", target, err)
 		}
-		if mounts[0].Target != "/home/agent/workspace" {
-			t.Fatalf("unexpected surviving mount: %+v", mounts[0])
-		}
-	})
-
-	t.Run("model run: every mount, including subscription, is kept", func(t *testing.T) {
-		mounts := buildRunMounts(policy, llmTransport{modelRun: true}, userMountPosture{})
-		if len(mounts) != 3 {
-			t.Fatalf("mounts = %+v, want all 3 (a model run is allowed the resident subscription mount)", mounts)
-		}
-	})
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -29,6 +30,11 @@ import (
 // sign-in is `expired_signin` when a renewal recorded it dead (DeadAt) or it
 // no longer covers the row's default profile; otherwise a valid stored sign-in
 // is `live` and none is `not_configured`.
+//
+// A row where each person adds their own token (token_mode own_pat) is per-user
+// too, with nothing signing in: it is graded from the person's own stored token
+// and the expiry they entered, so it is the one row that can read `expiring`
+// (scmAccessForOwnPAT).
 
 // scmAccessSource says where a person's live per-user connection came from —
 // a second fact the copy renders beside the state (§7.5's Wardyn-sign-in vs
@@ -40,6 +46,9 @@ const (
 	// scmAccessSourceSeparate: the dedicated Connect flow (adoEntraSourceSignIn,
 	// ado_entra.go) — §0.1's fallback path.
 	scmAccessSourceSeparate = "separate"
+	// scmAccessSourceOwn: a token the person pasted in themselves (token_mode
+	// own_pat, ado_own_pat.go).
+	scmAccessSourceOwn = "own"
 )
 
 // `not_configured` carries no cause. The one it used to carry, row_is_newer
@@ -57,7 +66,27 @@ const (
 const (
 	scmAccessCauseEnded         = "ended"
 	scmAccessCauseConsentNeeded = "consent_needed"
+	// scmAccessCauseTokenExpired: an own_pat row's token has reached the expiry
+	// the person entered.
+	scmAccessCauseTokenExpired = "token_expired"
 )
+
+// A minted_pat row's own `expired_signin` causes, each an organisation's fix
+// rather than the person's: the stored sign-in lacks a token permission
+// (admin consent is missing), or Azure DevOps last refused to create a token
+// for this person on policy grounds (mintADOPAT). A row the console cannot
+// redeem with its own secret (S1) carries ReasonADOPATNeedsConsoleApp.
+const (
+	scmAccessCausePermissionsMissing = "permissions_missing"
+	scmAccessCauseBlocked            = "blocked"
+)
+
+// adoMintBlockedFor is how long a policy refusal reads as `blocked`. Only a
+// created token clears it, and a launch refused as blocked never creates one,
+// so without a bound the flag would outlive the admin's allow-list fix. Past
+// it the launch goes through and the run's own mint re-checks: a refusal that
+// still holds is recorded again.
+const adoMintBlockedFor = 15 * time.Minute
 
 // SCMAccess is THIS PRINCIPAL's Azure DevOps access answer for ONE row — the
 // shape the Getting-started chip, the Settings connected panel, the New Run
@@ -93,6 +122,27 @@ type SCMAccess struct {
 	// may hold. The policy editor locks every capability outside it, since a
 	// policy naming one is refused at launch. Read-only here.
 	CapabilityCeiling []adoscope.Capability `json:"capability_ceiling,omitempty"`
+
+	// The fields below are set on a row where each person adds their own token
+	// (token_mode own_pat, or an Azure DevOps Server row) and on no other.
+	//
+	// TokenMode is "own_pat" on both.
+	TokenMode string `json:"token_mode,omitempty"`
+	// ExpiresOn is the date (YYYY-MM-DD) the person said their token expires —
+	// the deadline `expiring` and `expired_signin` name. Absent with no token.
+	ExpiresOn string `json:"expires_on,omitempty"`
+	// MaxDays is the furthest expiry, in days from today, the row's
+	// administrator allows (pat_max_days).
+	MaxDays int `json:"max_days,omitempty"`
+	// TokenScopes is what to tick on Azure DevOps' own token page, in its own
+	// wording ("Code (Read & write)"), derived from the row's ceiling.
+	TokenScopes []string `json:"token_scopes,omitempty"`
+	// GitOnly is set on an Azure DevOps Server row: its token carries git and
+	// nothing else (ado_own_pat_server.go).
+	GitOnly bool `json:"git_only,omitempty"`
+
+	// ADOPATAccess adds the token console's facts (ado_pat_console.go).
+	ADOPATAccess
 }
 
 // adoAccessState grades one PER-USER row's captured sign-in into the
@@ -134,7 +184,12 @@ func (s *Server) adoEntraRowConfig(ctx context.Context, rowID string) (ADOEntraC
 	if !found || cfg.RowID != rowID {
 		return ADOEntraConfig{}, false, nil
 	}
-	if err := cfg.validate(); err != nil || !cfg.isLoginApplication() {
+	// A minted_pat row S1 refuses is still this deployment's per-user row: it
+	// is graded (scmAccessForRow) rather than dropped, so the setup check and
+	// the launch gate say why nobody can connect.
+	if err := cfg.validate(); errors.Is(err, ErrADOMintNeedsSecret) {
+		return cfg, true, nil
+	} else if err != nil || !cfg.isLoginApplication() {
 		return ADOEntraConfig{}, false, nil
 	}
 	return cfg, true, nil
@@ -153,6 +208,10 @@ func (s *Server) perUserADORows(ctx context.Context, sc types.SiteConfig) ([]per
 	var out []perUserADORow
 	for _, row := range gitProviderRows(sc) {
 		if row.Kind != types.GitProviderAzureDevOps || row.Disabled {
+			continue
+		}
+		if isADOOwnTokenRow(row) {
+			out = append(out, perUserADORow{row: row})
 			continue
 		}
 		cfg, ok, err := s.adoEntraRowConfig(ctx, row.ID)
@@ -177,6 +236,11 @@ func (s *Server) perUserADORowsAdmitting(ctx context.Context, sc types.SiteConfi
 	for _, repo := range presentRepos(repos) {
 		for _, row := range admittingRows(sc, repoCloneURL(repo)) {
 			if row.Kind != types.GitProviderAzureDevOps || row.Disabled || seen[row.ID] {
+				continue
+			}
+			if isADOOwnTokenRow(row) {
+				seen[row.ID] = true
+				out = append(out, perUserADORow{row: row})
 				continue
 			}
 			cfg, ok, err := s.adoEntraRowConfig(ctx, row.ID)
@@ -213,10 +277,15 @@ func scmAccessSourceFor(blobSource string) string {
 // sitting there intact.
 func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject string) (SCMAccess, error) {
 	row := pr.row
+	if isADOOwnTokenRow(row) {
+		return s.scmAccessForOwnPAT(ctx, row, subject)
+	}
 	isMechanism := subject == ""
+	minted := cmpTokenMode(pr.cfg.TokenMode) == types.ADOTokenModeMintedPAT
+	unusable := minted && !isMechanism && errors.Is(pr.cfg.validate(), ErrADOMintNeedsSecret)
 	var blob adoEntraBlob
 	var found bool
-	if !isMechanism {
+	if !isMechanism && !unusable {
 		var err error
 		if blob, found, err = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID); err != nil {
 			return SCMAccess{}, err
@@ -226,15 +295,57 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	if row.Entra != nil {
 		out.CapabilityCeiling = slices.Clone(row.Entra.CapabilityCeiling)
 	}
+	s.adoPATAccessFor(ctx, pr, subject, minted, &out)
 	switch {
+	case unusable:
+		out.State, out.Cause = modelAccessExpiredSignin, ReasonADOPATNeedsConsoleApp
 	case out.State != modelAccessLive:
 	case blob.signInEnded():
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded
-	case !adoBlobCoversBaseline(blob, row):
+	case minted && !adoBlobCoversMint(blob):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCausePermissionsMissing
+	case minted && s.cfg.Now().Before(blob.MintBlockedAt.Add(adoMintBlockedFor)):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseBlocked
+	case !minted && !adoBlobCoversBaseline(blob, row):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseConsentNeeded
 	}
 	if out.State == modelAccessLive || out.State == modelAccessExpiredSignin {
 		out.Source = scmAccessSourceFor(blob.Source)
+	}
+	return out, nil
+}
+
+// scmAccessForOwnPAT grades an own_pat row for subject from their own stored
+// token: none is not_configured; past the expiry they entered is
+// expired_signin (token_expired); within adoOwnPATExpiringWindow of it,
+// expiring; otherwise live.
+func (s *Server) scmAccessForOwnPAT(ctx context.Context, row types.GitProvider, subject string) (SCMAccess, error) {
+	out := SCMAccess{
+		State: modelAccessNotConfigured, Org: adoOrgDisplay(row), Kind: string(row.Kind),
+		TokenMode: string(types.ADOTokenModeOwnPAT), MaxDays: row.Entra.PATDays(), // nil-safe: a Server row reads 30
+	}
+	if row.Entra == nil { // Server: git only, no ceiling to read
+		out.CapabilityCeiling, out.TokenScopes, out.GitOnly = slices.Clone(adoServerCapabilities), slices.Clone(adoServerTokenScopes), true
+	} else {
+		out.CapabilityCeiling, out.TokenScopes = slices.Clone(row.Entra.CapabilityCeiling), adoOwnPATTokenScopes(row.Entra.CapabilityCeiling)
+	}
+	if subject == "" {
+		out.State = modelAccessNotApplicable
+		return out, nil
+	}
+	blob, found, err := s.readADOOwnPAT(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, row.ID)
+	if err != nil || !found {
+		return out, err
+	}
+	now := s.cfg.Now()
+	out.Source, out.ExpiresOn = scmAccessSourceOwn, blob.ExpiresOn.Format(time.DateOnly)
+	switch {
+	case blob.expired(now):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseTokenExpired
+	case now.Add(adoOwnPATExpiringWindow).After(blob.ExpiresOn):
+		out.State = modelAccessExpiring
+	default:
+		out.State = modelAccessLive
 	}
 	return out, nil
 }
@@ -246,6 +357,12 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 func adoBlobCoversBaseline(blob adoEntraBlob, row types.GitProvider) bool {
 	need, err := adoscope.ScopesFor(row.Entra.Profile())
 	return err == nil && subsetOf(need, blob.Scopes)
+}
+
+// adoBlobCoversMint reports whether a minted_pat row's stored sign-in was
+// granted both token permissions.
+func adoBlobCoversMint(blob adoEntraBlob) bool {
+	return subsetOf(adoscope.MintScopes(), blob.Scopes)
 }
 
 // adoOrgDisplay is the row's own address, for the {org} the connect/launch
@@ -383,6 +500,20 @@ const (
 	gitCredentialConsentRefusal = "your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
+// gitCredentialOwnPATExpiredRefusal is the approved own-token mock's "Expired"
+// line, refusing a launch whose person's own token has reached its expiry.
+const gitCredentialOwnPATExpiredRefusal = "Your runs can't reach Azure DevOps until you add a new token."
+
+// A minted_pat row's three launch refusals, by cause. Each names the fix that
+// is someone else's: the organisation's allow list (the mock's "Blocked by
+// your organisation" wording), the admin's consent, or the console's secret.
+const (
+	gitCredentialBlockedRefusal = "your organisation doesn't let you create personal access tokens — ask an " +
+		"Azure DevOps administrator to add you to the allow list, then start the run again"
+	gitCredentialPermissionsRefusal = "your Azure DevOps sign-in can't create tokens yet — an administrator must " +
+		"grant the token permissions; then connect and start the run again"
+)
+
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —
 // errRepoNotAdmitted's shape (workspace_admission.go), for the launchers
 // that hold no ResponseWriter (record.go's launchRecordRun). A caller matches it with errors.As, on the concrete
@@ -451,12 +582,20 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 			return fmt.Errorf("%w: %w", errGitCredentialUnreadable, err)
 		}
 		switch {
-		case access.State == modelAccessLive:
+		case access.State == modelAccessLive, access.State == modelAccessExpiring:
 			continue
+		case access.Cause == scmAccessCauseTokenExpired:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialOwnPATExpiredRefusal}
 		case access.Cause == scmAccessCauseEnded:
 			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal}
 		case access.Cause == scmAccessCauseConsentNeeded:
 			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal}
+		case access.Cause == scmAccessCauseBlocked:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal}
+		case access.Cause == scmAccessCausePermissionsMissing:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal}
+		case access.Cause == ReasonADOPATNeedsConsoleApp:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal}
 		}
 		return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialNotConnectedRefusal}
 	}
@@ -486,7 +625,7 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 	}
 	// Not audited under authz.denied: that action's `reason` is a documented
 	// CLOSED enum (docs/OPERATIONS.md), and this create-time 422 follows
-	// writeLLMRefusal's own precedent (runs_dispatch_llm_mechanism.go) — the
+	// writeProviderRefusal's own precedent (run_model_provider.go) — the
 	// sibling model_credential refusal at this same door is likewise
 	// unaudited; only a run that actually DISPATCHES and then fails audits,
 	// under run.create.

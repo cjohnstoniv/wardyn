@@ -56,6 +56,16 @@ regexes = [
     # material.
     '''public_recipient=age1''',
     '''secrets\.allowEphemeralAgeKey=''',
+    # The ADO own-PAT tests' (internal/api/ado_pat_test.go,
+    # cmd/wardynd/ado_entra_source_test.go) stub Entra refresh token: a
+    # 0-9a-f run after an "rt-" label, shaped like generic-api-key. Not a
+    # credential; it recurred across three commits.
+    '''rt-0123456789abcdef''',
+    # internal/api/ado_own_pat_server_test.go passes the on-prem ADO server
+    # collection path ("tfs/defaultcollection", the product's stock default
+    # collection name) as an argument beside a token fixture, so the rule
+    # parses the path as the key. Not a credential.
+    '''"tfs/defaultcollection"''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped

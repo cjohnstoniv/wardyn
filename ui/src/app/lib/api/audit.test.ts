@@ -229,18 +229,18 @@ describe("runEndingFromAudit — the model-credential refusal is its own ending"
   const REFUSAL =
     "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
 
-  it("grades `credential`, and carries the DECLARED lane", () => {
+  it("grades `credential`, and carries the provider the refusal names", () => {
     const ending = runEndingFromAudit("FAILED", [
-      failed({ error: REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" }),
+      failed({ error: REFUSAL, reason: "model_credential", provider: "bedrock-prod", kind: "bedrock_sso" }),
     ]);
     expect(ending?.kind).toBe("credential");
     expect(ending?.action).toBe("run.create");
-    expect(ending?.mechanism).toBe("bedrock_sso");
+    expect(ending?.provider).toBe("bedrock-prod");
   });
 
   it("carries NO detail — data.error is the run's own failure_hint, which the block already renders", () => {
     const ending = runEndingFromAudit("FAILED", [
-      failed({ error: REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" }),
+      failed({ error: REFUSAL, reason: "model_credential", provider: "bedrock-prod", kind: "bedrock_sso" }),
     ]);
     expect(ending?.detail).toBeUndefined();
   });
@@ -261,18 +261,17 @@ describe("runEndingFromAudit — the model-credential refusal is its own ending"
   it("run.build/failure still wins over a later credential refusal", () => {
     const ending = runEndingFromAudit("FAILED", [
       ev({ id: "b", action: "run.build", outcome: "failure", data: { error: "step 4/9: npm ci exited 1" } }),
-      failed({ error: REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" }),
+      failed({ error: REFUSAL, reason: "model_credential", provider: "bedrock-prod", kind: "bedrock_sso" }),
     ]);
     expect(ending?.kind).toBe("image");
   });
 
-  // A refusal with no mechanism key (an older daemon) still grades credential —
-  // the console's door is what checks the lane, and a missing key is simply not
-  // bedrock_sso.
-  it("grades credential without a mechanism key, leaving it undefined", () => {
+  // A refusal naming no provider still grades credential, with no provider to
+  // key a door by.
+  it("grades credential without a provider key, leaving it undefined", () => {
     const ending = runEndingFromAudit("FAILED", [failed({ error: REFUSAL, reason: "model_credential" })]);
     expect(ending?.kind).toBe("credential");
-    expect(ending?.mechanism).toBeUndefined();
+    expect(ending?.provider).toBeUndefined();
   });
 
   it("says nothing about a run that did not fail", () => {

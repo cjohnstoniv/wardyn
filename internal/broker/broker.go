@@ -821,8 +821,9 @@ type gitPATScope struct {
 // wardyn-signing-key / wardyn-session-key (would leak the identity-signing /
 // session-HMAC key as a git password) and the three resident AWS Bedrock SigV4
 // credentials aws-access-key-id / aws-secret-access-key / aws-session-token
-// (resolveBedrockAuth reads them DIRECTLY to sign requests, never via a grant,
-// so a git_pat/ssh_key grant naming one is only an exfil attempt) — PLUS names
+// (the retired static-key Bedrock lane read them DIRECTLY to sign requests,
+// never via a grant, so a git_pat/ssh_key grant naming one is only an exfil
+// attempt) — PLUS names
 // that are safe at the api_key sink (never sandbox-visible: resolved proxy-side
 // by name, or for bedrock-api-key, legitimately injected as a header by the
 // host-pinned Bedrock BEARER grant) but NOT safe as a raw git_pat/ssh_key VALUE:

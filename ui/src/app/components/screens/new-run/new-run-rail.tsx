@@ -35,6 +35,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
+import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
@@ -42,16 +43,9 @@ import { useOperator } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { RailSection } from "./new-run-primitives";
 import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
-import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
 import type { ProviderGate } from "./model-provider-lane";
-import { absoluteTime, relativeTime } from "../../../lib/format";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
-import {
-  useClaimModelAccessDoor,
-  useModelAccessDoor,
-  useShellSetupStatus,
-  type ModelAccessDoorHandle,
-} from "../../wardyn/model-access-context";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 
 interface RunRailProps {
@@ -199,110 +193,22 @@ function gateSentence(modelProvider: RunRailProps["modelProvider"]): string | un
     : RAIL_PROVIDER.DEFAULT_OFF(name, modelProvider.harnessLabel);
 }
 
-// ModelAccessLine — Finding 1: the rail states who (this launcher) needs to
-// sign in, a second and independent fact from showModelWarning above (a
-// deployment with no model path at all). RunRail withholds it entirely unless
-// the selected agent is the one model_access grades and the door needs
-// attention (showModelAccess) — a codex row or a live session renders nothing.
-//
-// `// ponytail:` this reads useModelAccessDoor() itself rather than taking the
-// door as a prop threaded from new-run-screen.tsx: that screen is at its
-// 1000-line file-size gate and gets a zero-line diff (the context exists
-// exactly so a nested surface can reach the door with no prop-drilling).
-function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSignIn: () => void }) {
-  const when = door.deadline ? relativeTime(door.deadline) : "";
-  let sentence = "";
-  let action = "";
-  let title = "";
-  // `expiring` is a state, not an alarm — muted
-  // text, not the warning tint the other three states use.
-  let warning = true;
-  // The server's action only when it carries what the sentence and button
-  // cannot — the pin-contradicted account/role pair — never the button's own
-  // label repeated as prose.
-  const serverAction = door.action && door.action !== AGENTS.SIGN_IN_AWS ? door.action : "";
-  switch (door.state) {
-    case "not_configured":
-      sentence = RAIL_MODEL_ACCESS.NOT_SIGNED_IN;
-      action = serverAction;
-      break;
-    case "expired_signin":
-      sentence = RAIL_MODEL_ACCESS.EXPIRED;
-      action = serverAction;
-      break;
-    case "expiring":
-      warning = false;
-      title = door.deadline ? absoluteTime(door.deadline) : "";
-      // No separate action line — the deadline is in the sentence — except
-      // against a daemon that sends no `deadline`: an older daemon's
-      // `expiring` state would otherwise render nothing at all here while the
-      // rail still claims the door — zero sign-in controls on /runs/new.
-      // Mirrors the strip's own fallback.
-      sentence = when ? RAIL_MODEL_ACCESS.EXPIRING(when) : "";
-      action = when ? "" : door.action;
-      break;
-    case "shared_expired":
-      // The one credential every run rides. Its admin reads their own repair
-      // sentence, never the member's "ask them" line about themselves —
-      // everybody else keeps the server's instruction.
-      sentence = door.operator ? RAIL_MODEL_ACCESS.SHARED_ADMIN_EXPIRED : RAIL_MODEL_ACCESS.SHARED_EXPIRED;
-      action = door.operator ? "" : door.action;
-      break;
-    default:
-      // live, not_applicable, "" — RunRail's showModelAccess gate already
-      // withholds this component for these, but a future daemon state this
-      // console does not know says nothing rather than inventing a sentence.
-      return null;
-  }
-  if (!sentence && !action) return null;
-  return (
-    <p
-      className={
-        "mb-1.5 rounded-md px-2 py-1.5 text-xs " +
-        (warning ? "border border-warning/30 bg-warning-subtle text-foreground" : "text-muted-foreground")
-      }
-      title={title || undefined}
-    >
-      {/* Two separate text nodes (mirrors model-access-banner.tsx's
-          modelAccessStripCopy rendering) — the server's action, when it
-          renders, is a second fact beside ours, never appended into the same
-          sentence. */}
-      {sentence && <span>{sentence}</span>}
-      {action && <span> {action}</span>}
-      {/* The rail's own sign-in, under a distinct accessible name from the
-          strip's/Getting Started's "Sign in to AWS" (U-13's actual rule is two
-          controls with distinct names, not one hidden) — and hidden while the
-          door dialog is open, so there is never a live control pointing at a
-          dialog that is already on screen. Gated on door.actionable, not just
-          needsAttention: a non-operator's shared_expired has nothing this
-          viewer can repair. */}
-      {door.actionable && !door.open && (
-        <>
-          {" "}
-          <Button
-            variant="link"
-            size="sm"
-            className="h-auto p-0 align-baseline text-xs"
-            aria-label={RAIL_MODEL_ACCESS.SIGN_IN_ARIA}
-            onClick={onSignIn}
-          >
-            {AGENTS.SIGN_IN_AWS}
-          </Button>
-        </>
-      )}
-    </p>
-  );
-}
-
 // GitCredentialLine states what the rail knows about THIS caller's Azure
-// DevOps connection before Launch is pressed (§2.4). Mirrors ModelAccessLine's
-// "say nothing rather than invent" default: `live` needs no attention (and
+// DevOps connection before Launch is pressed (§2.4). Its default is "say
+// nothing rather than invent": `live` needs no attention (and
 // this rail has no person NAME to compose PREFLIGHT_LIVE with, so it does not
 // try to), `shared_*`/`not_applicable` are nothing a launch-time line can fix,
 // and `expiring` needs a deadline this deployment cannot compute yet
 // (scmaccess.go's doc comment) — only `not_configured` renders.
+//
+// A row that creates a token per run says its own piece on the Policy section
+// (AdoLaunchNote): its launch is refused rather than prompted, so "you'll be
+// asked to connect" would be wrong here.
+const gitCredentialSpeaks = (cred?: SCMAccess) =>
+  cred?.state === "not_configured" && (cred as SCMAccessPAT).token_mode !== "minted_pat";
+
 function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
-  if (cred?.state !== "not_configured") return null;
+  if (!gitCredentialSpeaks(cred)) return null;
   return (
     <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
       <span>{ADO.PREFLIGHT_MISSING}</span> <span>{ADO.PREFLIGHT_MISSING_SUB}</span>
@@ -351,15 +257,7 @@ export function RunRail({
   const cred = preflight.result?.model_credential;
   const gitCredential = preflight.result?.git_credential; // #386, informational — see GitCredentialLine
   const recordingDisabled = useRecordingDisabled();
-  // Finding 1: model_access grades the claude-code row alone, so a shell
-  // command or a different agent (codex) never reads this line whatever the
-  // door says.
   const door = useModelAccessDoor();
-  const showModelAccess = agentRow?.id === MODEL_ACCESS_AGENT && door.needsAttention;
-  // Door ownership: the rail claims it for exactly as long
-  // as it renders its own sign-in control, so the shell strip drops its
-  // button here — no New Run exception — and keeps its sentence.
-  useClaimModelAccessDoor(showModelAccess && door.actionable);
 
   // Focus returns to Launch, not to #main-content (which would drop the
   // member at the top of the form they were mid-way through), when this
@@ -399,35 +297,22 @@ export function RunRail({
   const onLaunchRef = React.useRef(launch.onLaunch);
   onLaunchRef.current = launch.onLaunch;
   const autoOpened = React.useRef(false);
-  const { status: shellStatus } = useShellSetupStatus();
   const refusedProvider = launch.refusedProvider ?? "";
-  const providerBlock = !!shellStatus?.model_providers;
   React.useEffect(() => {
     if (!launch.credentialRefused || autoOpened.current) return;
     autoOpened.current = true;
     if (door.open) return;
+    // #543 (§5.8): the door of the provider the refusal names — never the
+    // agent or provider selected on screen, which may have moved since the
+    // click (#146's ruling). A provider this person has no door for, or a
+    // refusal naming no provider (a sign-in renewal that did not complete),
+    // opens nothing (resolveDoor's null) and the sentence stands.
     if (refusedProvider) {
-      // #543 (§5.8): the door of the provider the refusal names — never the
-      // agent or provider selected on screen, which may have moved since the
-      // click (#146's ruling). A provider this person has no door for opens
-      // nothing (resolveDoor's null) and the sentence stands.
       door.openDoor({ for: { provider: refusedProvider }, returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
-    } else {
-      // A refusal naming no provider under a provider block (a sign-in renewal
-      // that did not complete) has no door. #725/T-65: door.bedrockSSO grades
-      // the claude-code row ALONE (modelAccessDoor mirrors
-      // internal/api/modelaccess.go's modelAccessAgent) — it says nothing about
-      // which agent THIS run picked, so a codex launch refused for its OWN
-      // model_credential reason must not open "Sign in to AWS". Otherwise the
-      // audience rule modelAccessDoor already states: a sign-in repairs a
-      // bedrock_sso lane for its per_user owner, or for any operator (a shared
-      // row); a member under a shared row keeps the server's sentence, no door.
-      if (providerBlock || agentRow?.id !== MODEL_ACCESS_AGENT || !door.bedrockSSO || !(door.perUser || door.operator)) return;
-      door.openDoor({ returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
     }
-    // The strip and the line above catch up with what the server just said.
+    // The strip catches up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, refusedProvider, providerBlock, agentRow?.id, door]);
+  }, [launch.credentialRefused, refusedProvider, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -437,7 +322,7 @@ export function RunRail({
   // gitCredential (nothing to say, see GitCredentialLine above) must not by
   // itself open an empty heading over a shell run with nothing else to show.
   const showCredentials =
-    hasProviderCandidates || showModelWarning || !!cred || !!agentRow || showModelAccess || gitCredential?.state === "not_configured";
+    hasProviderCandidates || showModelWarning || !!cred || !!agentRow || gitCredentialSpeaks(gitCredential);
   // With no provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint must not sit directly under "No model provider is
   // connected. This run launches; its first model call fails." Nothing
@@ -538,24 +423,6 @@ export function RunRail({
 
         {showCredentials && (
         <RailSection title="Credentials">
-          {/* Finding 1, above CredentialFacts: a per-person fact ("do I have a
-              sign-in at all"), independent of showModelWarning below (a
-              deployment fact — some model path exists at all). */}
-          {showModelAccess && (
-            <ModelAccessLine door={door} onSignIn={() => door.openDoor({ returnTo: launchRef.current })} />
-          )}
-          {/* The per-person line supersedes the deployment one when both would
-              otherwise render: under a per_user row,
-              setupBedrock grades llm_ready through the caller's own AWS
-              scope, so a never-signed-in member reads SSOPresent=false ->
-              Ready=false -> llm_ready=false -> showModelWarning=true on a
-              deployment that unambiguously has a model path — the admin's
-              row exists, this person just has not signed in yet. Stacking
-              "No model provider is connected" under NOT_SIGNED_IN would be a
-              false claim beside a true one. showModelAccess is the more
-              specific fact whenever it applies; the deployment sentence
-              still covers every other no-model-path shape (no per_user row
-              at all, a shared credential nobody set up, a legacy daemon). */}
           {/* #542 — a provider block with a candidate for this agent (R1–R4,
               R6–R8) supersedes the legacy no-provider banner and
               CredentialFacts below entirely; R9 (no candidate at all) keeps
@@ -572,7 +439,7 @@ export function RunRail({
               harnessLabel={modelProvider.harnessLabel}
             />
           )}
-          {!hasProviderCandidates && showModelWarning && !showModelAccess && (
+          {!hasProviderCandidates && showModelWarning && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
@@ -583,7 +450,7 @@ export function RunRail({
             </p>
           )}
           {!hasProviderCandidates && showCredentialFacts && (
-            <CredentialFacts cred={cred} agentRow={agentRow} preflightRun={!!preflight.result} />
+            <CredentialFacts cred={cred} preflightRun={!!preflight.result} />
           )}
           <GitCredentialLine cred={gitCredential} />
         </RailSection>

@@ -4,20 +4,15 @@
 package api
 
 import (
-	"cmp"
 	"context"
-	"encoding/json"
-	"errors"
 	"log/slog"
-	"net/http"
-	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The login launch, split at the run id.
 //
-// POST /setup/harness-login used to run the WHOLE launch inside the request:
+// A sign-in launch used to run the WHOLE launch inside the request:
 // CreateRun, the audit stamp, then dispatchRun — which blocks on CreateSandbox
 // for as long as the substrate needs. On k8s that is canaryWaitTimeout (3 min,
 // canary.go) ON TOP of a cold image pull; the reporting estate measured 131 s.
@@ -68,119 +63,6 @@ const harnessLoginCeilingUnresolved = "this sign-in sandbox was not launched: Wa
 // and where the detail is, since a panic's own text is a stack trace nobody
 // should read off a console banner.
 const harnessLoginInternalError = "This sign-in sandbox hit an internal error while starting — try again; if it repeats, check the daemon log."
-
-// handleHarnessLogin launches a container-login sandbox for a provider:
-//
-//	POST /api/v1/setup/harness-login  {provider}
-//
-// RBAC: the signed-in-human group, with the operator-or-per_user-row predicate
-// INSIDE the handler (authorizeHarnessLogin). It is not operatorOnly any more
-// because under a per_user roster row the whole point is that each person signs
-// in themselves — a member who cannot reach this route has no route to model
-// access at all.
-func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Secrets == nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonHarnessLoginNoSecretStore, "no secret store configured; managed harness login unavailable")
-		return
-	}
-	var req harnessLoginRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
-		return
-	}
-	provider := strings.TrimSpace(req.Provider)
-	if provider == "" {
-		provider = "anthropic"
-	}
-	hl, ok := harnessLoginByProvider(provider)
-	if !ok {
-		writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginProviderUnsupported, "provider does not support container login in this version: "+provider)
-		return
-	}
-	row, scope, allowed := s.authorizeHarnessLogin(w, r, provider)
-	if !allowed {
-		return
-	}
-	// AFTER the authorization, never before: inside the no-credential member
-	// preview an admin is meant to meet what a real member meets, and on a
-	// `shared` deployment that is authorizeHarnessLogin's own
-	// harness_login_not_per_user 403. Refusing first would replace the member's
-	// answer with this one and hide the very state the preview exists to show.
-	//
-	// A capture made here would land on the ADMIN'S OWN namespace — the preview
-	// hides their credential, it does not hand them a second identity — so this
-	// is the one door the preview has to close rather than let fail closed.
-	if previewHidesOwnCredential(r.Context()) {
-		writeErrorReason(w, http.StatusConflict, reasonHarnessLoginPreviewBlocked, userViewPreviewSignInRefusal)
-		return
-	}
-	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
-	// in the sandbox's ~/.aws/config. The region is boot config; the start URL is
-	// the request's ONLY in legacy mode, where the operator is the sole caller and
-	// there is nowhere else to keep it. Refuse up front rather than launching a
-	// sandbox whose auto-typed command is guaranteed to fail.
-	startURL := strings.TrimSpace(req.SSOStartURL)
-	if row.SSOStartURL != "" {
-		// Admin-owned, and it OVERRIDES the request rather than merely defaulting
-		// it. A per_user row means many people sign in, and the capture is bound to
-		// whatever portal the launch was seeded with (ssotoken.go's own check
-		// compares the blob to THIS run's own audit record) — so honouring a
-		// caller-supplied start URL would let anyone bind their capture to an
-		// IdP/account of their choosing and have Wardyn bake it into every later
-		// Bedrock run's ~/.aws/config. It also takes an org URL off the member's
-		// typing surface entirely.
-		startURL = row.SSOStartURL
-	}
-	if hl.regionalSSOEgress {
-		if startURL == "" {
-			writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginNoStartURL,
-				"aws sso login needs your organization's AWS access portal URL (e.g. https://my-org.awsapps.com/start); Wardyn has no stored copy of it")
-			return
-		}
-		if verr := validateSSOStartURL(startURL); verr != nil {
-			writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginBadStartURL, verr.Error())
-			return
-		}
-		if cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) == "" {
-			writeErrorReason(w, http.StatusBadRequest, reasonHarnessLoginNoRegion,
-				"no AWS SSO region is configured; set -bedrock-aws-sso-region (WARDYN_BEDROCK_AWS_SSO_REGION) or -bedrock-region and restart wardynd")
-			return
-		}
-	}
-	_, actor := actorFromRequest(r)
-	// Everything up to the run row and its audit stamp is still synchronous, so
-	// every genuinely PRE-CreateRun refusal keeps the status code it had: no
-	// runner / no capabilities / no confinement class, the governance limit
-	// below, the roster fail-closed arm and the admin-token-under-per_user arm
-	// all answer here, with no run to show for it either way.
-	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, loginTarget{
-		startURL: startURL, region: cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion),
-		pin: awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope: scope,
-	})
-	if err != nil {
-		// A governance limit is the acting principal's own profile refusing, not a
-		// daemon fault — answered the way launchRecordRun's caller answers it
-		// (record.go), with the profile's own sentence and no 500.
-		if errors.Is(err, errRecordCeilingLimit) {
-			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
-			return
-		}
-		if errors.Is(err, errSignInBusy) {
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal)
-			return
-		}
-		writeServerError(w, r, "launch login sandbox", err)
-		return
-	}
-	// Answer first, then finish the launch. WithoutCancel keeps the request's
-	// values — the ceiling memo above all, so the dispatch axis resolves exactly
-	// the ceiling the Limits axis already bound — while dropping the deadline
-	// that dies with this response. goBackground (server.go), not a bare `go`,
-	// so an orderly shutdown waits for this instead of cutting it off mid-dispatch.
-	writeJSON(w, http.StatusOK, harnessLoginResponse{RunID: run.ID.String(), State: string(run.State)})
-	ctx := context.WithoutCancel(r.Context())
-	s.goBackground(func() { s.finishHarnessLoginLaunch(ctx, run, dispatch) })
-}
 
 // finishHarnessLoginLaunch is the part of the launch that can block: resolve the
 // dispatch ceiling, then dispatchRun (CreateSandbox, the STARTING->RUNNING CAS,

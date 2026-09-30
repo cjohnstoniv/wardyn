@@ -55,11 +55,6 @@
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
   },
   {
-    "reason": "capKinds[capAgent].reason",
-    "target": "\"setup.harness_login\"",
-    "sentence": "fmt.Sprintf(harnessLoginAgentRefusal, row.ID)"
-  },
-  {
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.ssh_keys\"",
     "sentence": "sshKeyFeatureRefusal"
@@ -68,16 +63,6 @@
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.tokens\"",
     "sentence": "apiTokenFeatureRefusal"
-  },
-  {
-    "reason": "capKinds[capModelProvider].reason",
-    "target": "\"model_provider.credential\"",
-    "sentence": "fmt.Sprintf(mpcNotGranted, p.ID)"
-  },
-  {
-    "reason": "capKinds[capModelProvider].reason",
-    "target": "\"model_provider.sign_in\"",
-    "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
   },
   {
     "reason": "capKinds[capPolicy].reason",
@@ -115,6 +100,16 @@
     "sentence": "choice.refusal"
   },
   {
+    "reason": "capability_model_provider",
+    "target": "\"runs.model_provider\"",
+    "sentence": "choice.refusal"
+  },
+  {
+    "reason": "capability_model_provider",
+    "target": "target",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "capability_workspace",
     "target": "\"runs.workspace\"",
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
@@ -125,6 +120,16 @@
     "sentence": "delegationRefusal"
   },
   {
+    "reason": "delegation_scope",
+    "target": "r.URL.Path",
+    "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "event_stream_cap",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
+  },
+  {
     "reason": "governance_profile",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), name, level, bound)"
@@ -133,6 +138,11 @@
     "reason": "governance_profile",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.attach\"",
+    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", name)"
   },
   {
     "reason": "governance_profile",
@@ -180,6 +190,11 @@
     "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name)"
   },
   {
+    "reason": "governance_profile",
+    "target": "\"runs.ui_apps\"",
+    "sentence": "fmt.Sprintf(\"UI apps are not allowed under the governance profile %q this run was launched under.\", p.Name)"
+  },
+  {
     "reason": "groups_snapshot_stale",
     "target": "\"governance.ceiling\"",
     "sentence": "(audit only)"
@@ -188,16 +203,6 @@
     "reason": "groups_snapshot_stale",
     "target": "\"runs.drive\"",
     "sentence": "(audit only)"
-  },
-  {
-    "reason": "harness_login_mechanism_principal",
-    "target": "\"setup.harness_login\"",
-    "sentence": "harnessLoginMechanismPrincipalRefusal"
-  },
-  {
-    "reason": "harness_login_not_per_user",
-    "target": "\"setup.harness_login\"",
-    "sentence": "harnessLoginNotPerUserRefusal"
   },
   {
     "reason": "model_provider_unavailable",

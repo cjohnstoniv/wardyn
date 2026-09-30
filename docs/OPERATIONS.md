@@ -85,6 +85,30 @@ disposable derived data. Preserve that recovery state as described below.
 Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are
 transient — regenerated on start.
 
+### Exec run output
+
+wardynd keeps the last 8 KiB of each `task_mode=exec` run's combined
+stdout/stderr in memory, so a caller can read the end of a headless run with
+`GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
+else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none.
+
+- **It is not a recording, and not stored.** It lives outside the recording
+  store and works with `WARDYN_RECORDING_STORE=off`; nothing reaches Postgres or
+  a backup, and a wardynd restart drops every tail. It is dropped
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output.
+- **It can hold secrets, like any log.** Values already in Wardyn's masking registry
+  (brokered credentials, `env_secret` grants) are masked as they are written,
+  the same way a recording is. Anything else a command prints — a token it read
+  from a file, a secret a person pasted into the task — is kept verbatim and
+  served to whoever may read the run.
+- **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
+  does not turn this off; a deployment that disables recordings so terminals are
+  not kept should decide on this one too.
+- **On Kubernetes** the tail is read from the agent container's log: `get` on
+  `pods/log` in the runs namespace, which the chart's k8s-runner Role grants. A
+  Role you write yourself (`k8s.rbac.create=false`) needs it too; without it the
+  log read is refused, wardynd logs a warning, and the run's tail stays empty.
+
 ### Audit fallback recovery
 
 Keep the spool, `<spool>.consumed`, and `<spool>.quarantine` with the database
@@ -745,7 +769,10 @@ A few things that don't fit the grid:
   seat (`local:<os-user>`) stays reserved by its prefix, but a custom
   `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains
   set — unset it, and a person whose `sub` is that name would own the runs
-  local mode created under it. Keep it set.
+  local mode created under it. Keep it set. On an Entra ID issuer a `sub`
+  starting with `entra:`, in any case, is refused the same way: that namespace
+  belongs to people set up by object id (see "Tokens for a person who never
+  signs in").
 - **The same claim values do double duty.** The `roles`/`groups` values a role
   mapping matches are the exact same login-time snapshot a `/permissions`
   capability grant's `subject_type=group` matches against (see "Subjects, and
@@ -805,13 +832,14 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 
 | Surface | Gate |
 |---|---|
-| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; launch preset writes (`PUT`/`DELETE /presets/{name}`), selectable content like a stored policy; the console branding writes (`PUT`/`DELETE /branding/settings`), org-wide presentation every sign-in page shows; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| policy create/update/delete; launch preset writes (`PUT`/`DELETE /presets/{name}`), selectable content like a stored policy; the console branding writes (`PUT`/`DELETE /branding/settings`), org-wide presentation every sign-in page shows; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the operator-topology READS — `GET /site-config`, `GET /sources`, `GET /sources/{id}`, `GET /base-images`: they carry the upstream-proxy secret ref, a `local_dir` source Locator and internal registry refs, so reading them is reading the deployment's own topology | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
 | launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the workspace-provider policy — `GET /workspace-providers` and `PUT /workspace-providers`: which git hosts (and which org paths on them) a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings. Both verbs, because a provider's allowed addresses name the org's forge hosts and org paths — corporate topology, the same reason the `/site-config` reads above are gated. A member is told the provider KIND in a refusal, never the addresses | ⛔ admin only |
-| the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, the AWS access portal every person signs in against, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
+| the Azure DevOps organisation check — `POST /workspace-providers/git/{id}/org-check`: on a `minted_pat` row, it uses the caller's own Azure DevOps connection to create and at once revoke two short tokens, to learn whether the app registration holds the token permissions and whether the organisation's maximum token lifespan is on. Beside the rows it checks, and it creates tokens in the caller's name | ⛔ admin only |
+| the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, whether each is on, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Since 0.8 a row carries no model credential: model access is a model provider. Both verbs, for the sibling row's reason: the block names the org's model-provider choices. A member is served a narrower document instead — the `enabled` field on `GET /setup/status`'s harness rows | ⛔ admin only |
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
@@ -821,7 +849,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
 | `GET /admin/runs/proxy-window` and `POST /admin/runs/restart` — listing the runs whose proxy was started by a release older than wardynd N−1, and giving named runs a new proxy on the current release under each OWNER's current profile denies ("Restart with current limits"). Proxy-only: a run lost to a reboot is reported, never started; its owner revives it. Not the security tier: a restart replaces proxies on runs the caller does not own. The runs are restarted one at a time, each audited as `run.revive`, so when a response is cut off part-way those rows say which were. On Kubernetes every run is refused, nothing changed, with `reason` `revive_unsupported` (`runner.ErrReviveUnsupported`): stop it and start a new run | ⛔ admin only |
-| `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
+| `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the model-provider rows below | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
@@ -841,7 +869,6 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate (`internal/api/user_drives_reclaim.go`) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `drives.reclaim.enabled` is set. There is no console button — API and CLI only |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
-| signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session. Answers only while there is no model-provider block (0.8); once one exists it is 409 and every sign-in goes through the row below | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
 | signing in to a model provider yourself (0.8) — `POST /model-providers/{id}/sign-in` launches the sign-in sandbox for a `bedrock_sso` or `anthropic_subscription` provider, and `PUT /model-providers/{id}/sign-in` stores the Claude setup-token that sandbox printed. Answers only while a model-provider block exists (409 otherwise). The capture lands in the caller's OWN namespace under that provider's name, never anyone else's | 🟡 any signed-in human, admins included, who may launch one of the agents the provider serves (the `agent` capability; otherwise 404, as if it did not exist) AND is granted the provider (the `model_provider` capability; otherwise 403). The admin token under SSO is a mechanism, not a person: 422. The portal, region and pin are the ADMIN'S, from the provider record — a sign-in can never choose another |
 | `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
@@ -857,16 +884,36 @@ a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
 
-On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
-can be set to per-user sign-in instead of one shared PAT — see
-[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the
-row's fields, and what a member sees.
+An Azure DevOps row has no shared credential. Its `workspace_providers` row names how each person
+connects — `token_mode` `minted_pat` (Wardyn creates a short-lived token for each run in the person's
+name), `bearer` (the person's Entra sign-in) or `own_pat` (a token the person adds themselves) — and an
+Azure DevOps Server row is `lanes: ["pat"]` with `credential_source: per_user`, git only. A shared `pat`
+or `ssh` lane, and an empty `lanes` on such a row, is a 400 at both write doors. See
+[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the row's fields, and what a member
+sees.
 
-A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
-Azure DevOps organisation. Both write doors refuse a second enabled one with a 400
-(`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted,
-and enabling it later is refused the same way. A document stored before that rule can still hold
-two; the setup checklist then warns (row `ado_entra_rows`, not blocking) until one is disabled.
+A deployment carries at most **one enabled** row that signs a person in on the `entra` lane
+(`minted_pat` or `bearer`): each person signs in to one Azure DevOps organisation. Both write doors
+refuse a second enabled one with a 400 (`git[N].lanes: git[M] already carries the "entra" lane …`); a
+disabled second row is accepted, and enabling it later is refused the same way. A document stored
+before that rule can still hold two; the setup checklist then warns (row `ado_entra_rows`, not
+blocking) until one is disabled. Rows in `own_pat` mode sign nobody in, so any number of them may be
+enabled at once. A `minted_pat` row must name the console's own OIDC application and the console must
+hold a client secret (`WARDYN_OIDC_CLIENT_SECRET`), or it is refused at write and left unusable at
+boot (an error in the daemon log naming `ado_pat_needs_console_app`).
+
+**The upgrade that retired the shared Azure DevOps credentials (0.8.2).** Migration
+`0103_retire_ado_shared_credentials` rewrites the stored rows (a row left with no per-person lane is
+turned **off**, and the setup checklist warns with `ado_rows_off` until an admin turns it on), and
+`wardynd` deletes the stored shared secrets **once**, at the first start after it:
+`git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in the
+operator's namespace and every person's. The deletion is irreversible and audited per namespace as
+`ado_shared_credential.retire` (`docs/AUDIT-ACTIONS.md`). The `boot_once` row named
+`ado_shared_credential_retire` holds the marker; the sweep runs only while its `done_at` is null. A
+secret store that cannot answer at that first start **refuses boot** rather than leave a retired
+credential in place. A host that a GitHub or other non-Azure DevOps row also names is skipped and
+logged, since the name could be that forge's own credential: remove a shared Azure DevOps credential
+there by hand.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -995,17 +1042,13 @@ migration `0050`)** are the second and third owned nouns after runs.
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
   member). A member's `DELETE` of another principal's row is structurally
   unreachable (`secretstore.Store.For(owner)` never resolves it) and answers the
-  byte-identical 204 a never-set name gets. The three AWS SigV4 names
-  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`) stay
-  refused (403) for every non-operator PUT: SigV4 is always signed out of the
-  operator namespace, so a member row under one of those names would read as
-  configured in setup while dispatch never uses it. `bedrock-api-key` is NOT one
-  of them, so a member may store their own: under a `per_user` agent row the
-  bearer is injected from the run owner's own namespace, under `shared` from the
-  operator's. Dispatch records that choice on the grant it authors, and the
-  injection sink resolves the key from exactly that record
-  (`resolveBedrockBearerInjection`) — a member's own key never stands in for
-  the operator's, nor the operator's for a member's.
+  byte-identical 204 a never-set name gets. The six model-credential
+  names (`anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three
+  AWS SigV4 names `aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`)
+  are refused (403 `secret_name_reserved`) for every caller, the operator
+  included: a model credential is stored on a model provider, by the person it
+  belongs to, and wardynd deletes any left from before 0.8.2 at boot
+  (`model_credential.retire` in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 - **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
   namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
   meaning for an admin — the operator namespace, or one member's own rows with
@@ -1051,9 +1094,12 @@ migration `0050`)** are the second and third owned nouns after runs.
   it never erases the operator namespace. A run already going keeps a static key
   (an `api_key` injection is fetched once and cached for the run) until it ends,
   so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
-  **Wardyn cannot revoke anything upstream**: revoke the person's AWS, Anthropic
-  and Azure DevOps sessions, and any gateway token, where they were issued, and
-  disable them in the identity provider. A refused erase (a blank principal
+  **Wardyn cannot revoke anything upstream**, with one exception: it first
+  revokes the live Azure DevOps tokens it created for the person's runs
+  (`ado_pat.revoke`, reason `offboarding`; one it cannot revoke expires by
+  itself). Revoke the person's AWS, Anthropic and Azure DevOps sessions, any
+  Azure DevOps token they pasted in themselves, and any gateway token, where
+  they were issued, and disable them in the identity provider. A refused erase (a blank principal
   `400`, or one naming nobody or several people `422`) is audited
   `credential.erase` `denied`.
   **The erasure horizon, on the default (local Postgres) store, is your backup
@@ -1088,7 +1134,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their
      user drives (the two-halves order above).
   7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps
-     sessions and any gateway token.
+     sessions, a token they pasted in themselves and any gateway token.
 
   One copy outlives all of this in memory: wardynd keeps an Azure DevOps
   sign-in's refresh token in its process-wide masking set, so output quoting it
@@ -1114,13 +1160,8 @@ migration `0050`)** are the second and third owned nouns after runs.
   ordinary write included) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - **Member model access.** A member's model access is their own credential on a
   model provider; no integration row is derived from anyone's convention-named
-  secret (`anthropic-api-key`/`openai-api-key`) any more. `filterUserGrants` admits the matching hand-authored inline `api_key`
-  grant with no operator eligible-grant pairing when ALL hold: the host is a
-  model-provider host (the anthropic.com/openai.com convention, or a configured
-  internal gateway) that the run's own already-clamped egress allows, and the
-  member OWNS a secret by that exact name (a names-only
-  `Store.For(<member>).List`, never a value read). Every other grant kind, and
-  any pairing failing one of those, stays ceiling-paired exactly as before. See
+  secret, and no inline `api_key` grant naming a model vendor's host is admitted
+  from a member's own secrets. See
   [USERS.md § Your model connections](USERS.md#your-model-connections).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
@@ -1787,7 +1828,7 @@ what a member holds.
 | `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row the repositories a member brings in may come from — the row `admitRepoURL` resolves a derived clone URL to (`internal/api/workspace_providers.go`). **Six doors**, every one a member can reach: `POST /runs` over the resolved spec's repos and over the legacy `repo` field, and `POST`/`PUT /workspaces`, `POST /workspaces/{id}/scan` and `.../build` — the last three re-point or perform a SERVER-SIDE clone. It bounds the PROVIDER, not the repository: admission is URL-prefix matching, not a repo ACL. Inert on a deployment with no provider rows, and on a repository whose host no row CLAIMS (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check) |
-| `model_provider` | exact model provider id | narrows | which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use — the one the request names (`model_provider`, `wardyn run --model-provider`), the one a workspace pins (`llm_cred.provider_ref`), or the agent's default reaching them (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; create and Review alike). **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt. Inert with no model-provider block |
+| `model_provider` | exact model provider id | narrows | which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use — the one the request names (`model_provider`, `wardyn run --model-provider`), the one a workspace pins (`llm_cred.provider_ref`), or the agent's default reaching them (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; create and Review alike). **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt. Such a person never sees that pin's id (0.8.2, #1018): a workspace read (`GET /workspaces`, `GET /workspaces/{id}`, the update response) answers `llm_cred: {"provider_unavailable": true}` in its place, and the launch refusal names no provider. Inert with no model-provider block |
 | `feature` | `ssh_key` or `api_token` | narrows | whether a member may add an SSH key (`POST /me/ssh-keys`) or mint an API token (`POST /me/tokens`) at all — one check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564). Mint only: a key or token that already exists keeps working until it is removed or revoked. Any other value is refused at write time (`400`) |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. Checked before the row is read, so an ungranted id is refused whether or not it exists |
 
@@ -2218,6 +2259,7 @@ never holds a long-lived token for anyone.
 | Call | What |
 |---|---|
 | `POST /api/v1/people` `{"principal":"<sub>","email":"<email>"}` | create the person, or confirm the one already there (`201` / `200`) |
+| `POST /api/v1/people` `{"tenant_id":"<tid>","object_id":"<oid>","email":"<email>"}` | Entra ID only: the same, keyed by the tenant and object id (see below); the principal is `entra:<tid>:<oid>` |
 | `POST /api/v1/people/{principal}/tokens` `{"name":"ci"}` | mint a `wdn_` token owned by that person; the plaintext is in this response only |
 | `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included; revoke one with `DELETE /api/v1/tokens/{id}` |
 
@@ -2232,11 +2274,39 @@ lands on a different principal and reaches none of this person's runs, tokens,
 secrets or drive. The real person signing in under a subject you mistyped also
 attaches to nothing: revoke the orphaned tokens and create the person again.
 
-On an identity provider whose `sub` is an opaque per-application id (Entra ID),
-you cannot know the subject before the person's first sign-in. There, create
-the person from a subject you have already seen, for example the `principal` on
-one of their existing tokens or runs. Setting up an Entra person by email alone
-is not supported.
+**On Entra ID, key a person who has never signed in by object id.** Entra's
+`sub` is pairwise: it is different for every app registration and unknown until
+the person's first sign-in. So on a deployment whose issuer is Entra ID
+(`login.microsoftonline.com`, `.us`, `login.partner.microsoftonline.cn` or
+`sts.windows.net`), create them with `tenant_id` and `object_id` instead of
+`principal`. Both are GUIDs; find them as described in
+[deploy/azure-entra-sso/README.md](../deploy/azure-entra-sso/README.md#pre-creating-a-person-by-object-id).
+Their principal is `entra:<tenant_id>:<object_id>`, which is what you pass as
+`{principal}` to mint or list their tokens. Wardyn records this deployment's
+issuer with them. A sign-in becomes this person only when its issuer, `tid`
+and `oid` claims all equal the recorded ones exactly, and then on every
+sign-in, so re-registering the app does not orphan them. Nothing else attaches
+them: not the email, not the object id under another tenant or issuer, and not
+a `sub` spelling their principal. A sign-in whose `sub` starts with `entra:`,
+in any case, is refused (no real Entra `sub` has a colon). Each such sign-in
+writes a `person.attach` audit row naming the person and the pairwise `sub`.
+
+Set up by object id only someone who has **never signed in**. Someone who has
+already signed in is known under their pairwise `sub`, and an object-id record
+never re-keys them. If you give their email, `POST /people` refuses the record
+with `409`, because the email already names their subject. Without an email
+Wardyn cannot tell at create time (it does not record a sign-in's `oid`), so
+the check happens at sign-in instead. A sign-in that matches the record but
+whose `sub` already names someone here keeps that `sub`: a person record, or an
+API token, SSH key, run, workspace or stored secret they own (a secret includes
+the credential a sign-in captures for them). It does not attach, and it
+writes a `person.attach` row with outcome `denied` and `reason:"sub_known"`
+naming both. The record then stays unused. Confirm such a person by `principal`
+(the `sub` on one of their tokens or runs) instead. Setting up an Entra person by email alone
+is not supported. On an Entra issuer the plain form refuses a `principal` in
+the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in
+can become it. On any other issuer the object-id form is refused `422`, and
+sign-in keys people by `sub` exactly as before.
 
 `POST /people` answers `409` rather than create an ambiguous identity. That
 happens when the email already names another known subject, when the subject is
@@ -2323,12 +2393,15 @@ actor), and a delegated token cannot itself be exchanged.
 | `403 access_denied` | the person is not in the portal's group |
 
 **What a delegated token can do.** Exactly: `POST /runs`, `POST
-/runs/preflight`, `GET /runs`, `GET /runs/{id}`, `PATCH /runs/{id}` (end and
-wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also
+/runs/preflight`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events` (the
+lifecycle stream, at most 32 open per person across every portal and their own
+clients), `PATCH /runs/{id}` (end and wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also
 `/attach/ticket`, and the UI-gateway ticket), and `GET /me`. Every other
 route answers `403` with reason `delegation_scope` and an `authz.denied` row —
 including secrets, API tokens, SSH keys, approving or denying the person's own
-held egress, revive, and every admin route. The person is always treated at
+held egress, revive, and every admin route. Setting a secret and adding an SSH
+key also refuse a delegated request in their own handlers, so a later change to
+the allow-list cannot open them. The person is always treated at
 **user** reach, whatever their own role: an admin acting through a portal
 reaches only their own runs. Ownership, secrets, drives and the governance
 ceiling all resolve on the person.
@@ -2344,8 +2417,10 @@ ticket it minted — has the person as actor and `data.via =
 their next request. `POST /api/v1/sessions/revoke` for the person ends theirs
 the same way and refuses new exchanges of tokens issued before it. A disable
 done only at the identity provider takes effect at the next exchange, so at
-most ten minutes. Runs a portal launched keep running after it is revoked:
-they are the person's runs.
+most ten minutes. An open `GET /runs/{id}/events` stream re-checks its token at
+each keepalive (about every 15 seconds) and ends when the portal has been revoked
+or the token has expired, rather than at its five-minute hold. Runs a portal
+launched keep running after it is revoked: they are the person's runs.
 
 ### Three roles, and who sets the walls
 
@@ -2435,6 +2510,24 @@ for its subjects; deleting one requires unassigning it first (never a silent
 widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
+
+**Limits that reach a running run (0.8.2, #1391, #1392).** Two limits bind past
+create, keyed on the profile the run was created under as it stands now, so a
+limit set later reaches runs already going (a deleted profile binds nothing).
+`deny_interactive` also refuses a terminal attach (`wardyn run attach` and the
+console terminal) and every SSH-gateway connection into any run under the
+profile, exec runs and the run's owner included; the attach is an `authz.denied`
+row (`governance_profile`, target `runs.attach`), the SSH refusal an
+`ssh.authenticate` failure naming the profile. The harness sign-in run is exempt,
+as it is at create. `deny_ui_apps` strips `ui_apps` from a run at create, with a
+`clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI
+gateway refuses a session into a run created under the profile. An empty ceiling
+`ui_apps` is still no opinion, so a profile without the limit behaves as before.
+A super admin is exempt from both at every door, as at create; a security admin
+is bound. A limit set later reaches new sessions but does not sever ones already
+open: a terminal, SSH session or UI-app session opened before the limit was set
+runs until it ends. `deny_ui_apps` does not close an SSH port forward to the app;
+`deny_interactive` does.
 
 **The autonomy rubric (0.8, #77).** A profile may also carry `limits.autonomy_rubric`,
 nine closed fields — three egress postures (`egress_open`, `egress_reviewed`,
@@ -2584,21 +2677,20 @@ admin walking the member path, not an incident.
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, `internal/api/run_owner_authority.go`). The body is the one sentence naming the provider; Review answers the same refusal | ⛔ `403` |
+| `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, `internal/api/run_owner_authority.go`). Review answers the same refusal as create. Since 0.8.2 (#1018) a provider the member NAMED in the request is answered exactly as an id no provider has — the `422` `model_provider_unavailable` "there is no model provider by that name" sentence, whatever the provider's state — because provider ids are guessable; only this row records the true reason. A provider the workspace's pin names, which a workspace read hides from them, is refused `403` with the sentence that names no provider, and the row carries `provider`. The key door (`PUT` and `DELETE /model-providers/{id}/credential`, target `model_provider.credential`; a `DELETE` by a person who still holds a key for the provider is not refused) and the sign-in door (`/model-providers/{id}/sign-in`, target `model_provider.sign_in`) likewise answer the `404` an unknown id gets (`denyProviderAsMissing`, `internal/api/model_provider_credentials.go`). Only the unnamed case — the one provider serving the agent, or none granted — answers `403`, with the one sentence that names no provider (the row carries `provider` when exactly one serves) | ⛔ `403` when no provider was named; otherwise byte-identical to an unknown id (`422` at create and Review, `404` at the key and sign-in doors) |
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
 | `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner (`internal/api/run_owner_authority.go`) | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; `internal/api/governance_run_doors.go`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` (`internal/api/select_by_tier.go`), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 | `model_provider_unavailable` | #987: at create and Review alike (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
-| `harness_login_mechanism_principal` | 0.7.3: `POST /setup/harness-login` under a `per_user` row, reached by the shared admin bearer token WITH OIDC CONFIGURED (`refuseHarnessLoginMechanismPrincipal`) — every capture made with that token would land in one namespace and overwrite the last person's session; a real console sign-in or `wdn_` token is reachable instead. Target `setup.harness_login`. Does not fire with no OIDC configured, where the admin token is the only working capture path — see "AWS SSO per person" | ⛔ `422` |
-| `harness_login_not_per_user` | 0.7.2: `POST /setup/harness-login` by a member when the agent's model credential is NOT a `per_user` row (`authorizeHarnessLogin`, `internal/api/harnesscred.go`) — the deployment's credential is one an admin connects for everyone, so there is no personal sign-in to capture. Target `setup.harness_login`. Emitted since 0.7.2 and missing from this table until 0.8 | ⛔ `403` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
-| `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
+| `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
+| `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -2668,6 +2760,52 @@ classified admin/member/owner/anonymous/internal before it can ship;
 `internal/api/rbac_test.go` then proves the widest admin-gated routes really do
 403 a member. What Wardyn gives up is *breadth* — a deliberate two-tier split, not
 per-user roles or multi-org depth — not the governance itself.
+
+## The policy a run got
+
+`GET /api/v1/runs/{id}/policy`, `wardyn run policy <run-id>` and the SDK's
+`GetRunPolicy` answer "what was this run allowed to do?" after the run has
+started, which the saved policy cannot: it is overwritten in place, and an
+inline or default policy leaves no row at all. The answer comes from what
+dispatch recorded in the append-only audit log, so it is what the sandbox's proxy
+enforces, not a re-derivation:
+
+- **The policy itself** is the `run.policy.resolve` envelope, as a normal policy
+  document, with restart denies (`run.revive` `denied_added`) folded in.
+- **Where it started** is the `policy_source` datum on the run's `run.create`
+  row: the saved policy (id, and its name and content as they read at launch), an
+  inline policy, the default, or the governance profile the run's creator was
+  bound to. It is recorded already redacted, because the run's creator can read
+  that row through `GET /audit`.
+- **What changed at launch** is each difference between the two, given a cause:
+  `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
+  `profile`, `org_disk`, `restart`, `limits` or `launch`. The launch audit rows
+  (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`,
+  `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`,
+  `run.revive`) name the cause first; the rest are derived; anything nothing
+  names is `launch`. `limits` is only ever claimed for a member the governance
+  bound applied to.
+- **Whether the saved policy has moved** (`stored_policy_now`) compares the
+  saved policy today with its recorded launch content. A run from before the
+  record existed can only say the policy was updated after launch, which a rename
+  alone also does.
+
+**Who can read it.** Whoever can read the run (`GET /runs/{id}`): its creator or
+an admin. Anyone else gets the run's own `404` and a `not_owner` audit row. A
+portal's delegated token is refused `403` `delegation_scope`: the route is not on
+the delegation list. Below the security admin tier the policy's mount sources
+read `<redacted>` and grant secret names are dropped (`redacted: true`), the same
+rule as reading a policy; `llm_inspection` secret values are never returned. The
+result is a policy document you can reuse as is only from the security admin tier
+up; below it, fill in the hidden values first.
+
+**What it does not cover:** hosts approved while the run was running (Approvals),
+credentials the run was handed (Credentials), folders added from a workspace or a
+drive, and Azure DevOps access that came from the connection's defaults. A run
+that has not reached sandbox setup answers `state: "not_yet"`, and one that ended
+before it `"never"`; the CLI prints the sentence and exits `1` so a redirect never
+writes an empty file. A run from before `policy_source` existed answers
+`complete: false`: its changes list only what the launch rows state.
 
 ## Run lifetime: lease, extend, revive, ends
 
@@ -2822,7 +2960,12 @@ setting) instead of the domains list.
 regardless, so a **public client** registration (a SPA/native-app client type
 with no secret — some IdPs refuse to issue one for a confidential client) works
 the same as a confidential one. Leave it unset for that shape; nothing else in
-the OIDC config changes.
+the OIDC config changes. **Exception (0.8.2):** an Azure DevOps row with
+`token_mode: minted_pat` needs a confidential app. The row must name Wardyn's own
+sign-in app and this secret must be set, or saving the row is a 400 and the row
+is unusable (`ado_pat_needs_console_app`). On a public-client registration, move
+the console redirect URI to the **Web** platform, add a client secret and set this
+variable; `AADSTS700025` means the redirect is still on a public-client platform.
 
 ## Launch presets
 
@@ -3595,11 +3738,12 @@ such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
 Two topologies, told apart by which hostname the endpoint's TLS certificate
 names. Get it wrong and the handshake fails on an SNI/cert mismatch — the SNI
 presented to the endpoint is the hostname the sandbox dialled (its own
-end-to-end TLS on a resident-credential run, or the proxy's re-dial on a
+end-to-end TLS on a `bedrock_sso` run, or the proxy's re-dial on a
 bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
 
 - **Private DNS enabled — a cert for the *public* host (the common shape).**
-  Leave `WARDYN_BEDROCK_BASE_URL` **unset**. The sandbox keeps dialling
+  Leave the Bedrock provider's `bedrock.base_url` **unset** (Settings → Model
+  providers). The sandbox keeps dialling
   `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the
   cert names; the estate's private resolver answers that name into 100.64.
   Reach it by listing the public host in `upstream_proxy_no_proxy` (skip the
@@ -3609,10 +3753,10 @@ bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
   private address enters the TLS layer.
 - **A cert for the endpoint's own name.** Only when the endpoint's cert
   actually covers its `…vpce.amazonaws.com` name (private DNS disabled, or a
-  cert issued for it) set `WARDYN_BEDROCK_BASE_URL` to that hostname — then SNI
-  and cert agree.
+  cert issued for it) set the provider's `bedrock.base_url` to that hostname — then
+  SNI and cert agree.
 
-Pointing `WARDYN_BEDROCK_BASE_URL` at the `vpce` hostname against a public-host
+Pointing `bedrock.base_url` at the `vpce` hostname against a public-host
 cert is the trap: the sandbox presents the `vpce` name, the endpoint answers
 with the public-host cert, the handshake fails. The composed dispatch test
 proves the env vars propagate, not that TLS validates.
@@ -3626,48 +3770,17 @@ control-plane network below and the per-run network it shares with that run's
 agent. A PrivateLink endpoint that happens to resolve onto either would have
 every model call on the affected run(s) denied there instead, with the SDK
 misreading the proxy's denial page as a malformed Bedrock response — one
-dispatch at a time, never a clean failure. `wardynd` resolves
-`WARDYN_BEDROCK_BASE_URL`'s host ONCE, at **boot**, and checks it against
-whatever it can know this early:
-
-- **docker, the control-plane network**: refuses to start when the resolved
-  address falls inside the control-plane network's subnet
-  (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default — looked up via the
-  Docker API), naming the variable, the resolved address and the subnet. This
-  is the ONE subnet fixed and knowable ahead of any run, which is why it is a
-  refusal and not a WARN.
-- **docker, the per-run network**: each sandbox's own per-run network is a
-  REAL instance of the same failure — it is not exempt just because it is
-  `Internal=true` (gatewayless); the proxy's clamp above covers it exactly
-  like the control-plane network — but its subnet is allocated fresh by the
-  daemon at `CreateSandbox` time, from Docker's default (or
-  operator-configured) address pools, so no boot-time check can predict which
-  run will draw a colliding range. Rather than guess, boot instead WARNs, by
-  name, when the resolved address falls inside Docker's own BUILT-IN default
-  pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16` — the
-  ranges an unconfigured daemon draws from) — the remedy is to set
-  `default-address-pools` in that daemon's `daemon.json` away from the
-  endpoint's range, or to use an endpoint outside those pools. The WARN checks
-  the built-in ranges only, so it keeps printing after the remedy is applied;
-  once `default-address-pools` no longer covers the endpoint, it can be
-  ignored.
-- **Kubernetes**: the per-run proxy pod's CIDR is not reliably known from
-  `wardynd`'s own boot-time view (it depends on the cluster's CNI and is not
-  surfaced to a workload without extra node/API access this daemon is not
-  guaranteed to hold). This is a documented gap, not a guess: boot logs a WARN
-  instead of refusing, and instead of silently passing. If your PrivateLink
-  endpoint's address could fall inside the cluster's pod CIDR, verify that by
-  hand before relying on this variable.
-- A DNS name that does not resolve at boot WARNs and proceeds (never refuses
-  boot over a transient resolution failure). The name is resolved exactly
-  ONCE, at that boot: a later DNS change for the same name is NOT re-checked
-  until `wardynd` next restarts (a PrivateLink ENI's address is stable for the
-  endpoint's life, which is why this is an accepted gap rather than a
-  request-time re-check).
+dispatch at a time, never a clean failure. Nothing checks this at boot: verify
+by hand that a PrivateLink endpoint's address falls inside neither the
+control-plane network's subnet (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by
+default), nor Docker's default address pools (`172.17.0.0/16` through
+`172.31.0.0/16`, and `192.168.0.0/16` — set `default-address-pools` in that
+daemon's `daemon.json` away from the endpoint's range, or use an endpoint
+outside them), nor a Kubernetes cluster's pod CIDR.
 
 **The control plane is a second service.** Profile-id and
 application-inference-profile models call `bedrock.<region>.amazonaws.com`
-(`ListInferenceProfiles`/`GetInferenceProfile`), which `WARDYN_BEDROCK_BASE_URL`
+(`ListInferenceProfiles`/`GetInferenceProfile`), which the provider's `bedrock.base_url`
 deliberately does **not** re-point (a PrivateLink endpoint is per-service). On a
 fully-private estate that host also resolves into 100.64 and needs its **own**
 endpoint plus the same bypass + lift — list `bedrock.<region>.amazonaws.com`
@@ -3680,57 +3793,43 @@ admits a bare IP (an exact `allowed_domains` entry does, per the redirect
 literal-IP note above). Prefer the hostname shape.
 
 **`wardynd`'s own egress is a separate channel.** `upstream_proxy_no_proxy`,
-`internal_hosts` and `WARDYN_BEDROCK_BASE_URL` govern the **sandbox** proxy;
+`internal_hosts` and a provider's `bedrock.base_url` govern the **sandbox** proxy;
 `wardynd`'s own control-plane calls — OIDC discovery, JWKS, the Entra directory
-connector, STS for a SigV4 Bedrock run, and `oidc.<region>.amazonaws.com` to renew
+connector, and `oidc.<region>.amazonaws.com` to renew
 a captured AWS SSO session at dispatch — go out over its process HTTP client,
 which carries no SSRF guard, so a private (100.64) issuer or Graph host is
 dialled directly and boots fine. What that client *does* honour is the
 process's own `HTTPS_PROXY`/`NO_PROXY` (the published images do not set them at
 runtime): if you run `wardynd` behind the corporate proxy, add the private
-issuer/Graph/STS ranges to the process `NO_PROXY`, or the corp proxy — which
+issuer/Graph ranges to the process `NO_PROXY`, or the corp proxy — which
 cannot reach an internal address — fails discovery at boot, and none of the
 site-config fields above can fix it. For a split-horizon issuer (public URL,
 internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
 
 ### AWS SSO per person
 
-By default a deployment keeps ONE model credential: an admin connects it and
-every run inherits it. An agent roster row can say otherwise —
-`credential_source: per_user` on a `bedrock_sso` row means **each person signs in
-to AWS themselves**, and their runs use their own session.
+A `bedrock_sso` model provider (Settings → Model providers) means **each person
+signs in to AWS themselves**, and their runs use their own session. There is no
+shared AWS session: since 0.8 the agent roster carries no model credential, and
+the upgrade converted a `per_user` or `shared` `bedrock_sso` roster row into such
+a provider (migration `0100_model_provider_conversion`; see the CHANGELOG).
 
 **How somebody signs in.** They open Getting Started (or the New Run screen) and
-choose "Sign in to AWS". Wardyn launches the same throwaway container-login
-sandbox an admin uses: default-deny egress pinned to the AWS SSO endpoints, a
-30-minute idle cap, no workspace, no repo, no credential mounts, never recorded.
-The sandbox prints a device code; they finish the sign-in in their own browser.
-The route (`POST /setup/harness-login`) admits them only because the roster
-declared `per_user` AND they hold the `agent` capability for that row's agent —
-an admin always reaches it, and under a `per_user` row captures their own
-session exactly as anyone else does.
+choose the provider's sign-in. Wardyn launches a throwaway container-login
+sandbox: default-deny egress pinned to the AWS SSO endpoints, a 30-minute idle
+cap, no workspace, no repo, no credential mounts, never recorded. The sandbox
+prints a device code; they finish the sign-in in their own browser. The route
+(`POST /model-providers/{id}/sign-in`, no body) admits anyone who may launch an
+agent the provider serves and is granted the provider — admins included, each
+capturing their OWN session.
 
-**Launch with a lapsed session.** `POST /runs` refuses a run whose per-person
-session is missing or spent BEFORE any run exists (`422`; since 0.7.7 the body
-also carries `"reason":"model_credential"`, the failure audit row's own class —
-no other error body changes). Since 0.7.7 the real launch is also the one pass
-at create that REDEEMS an expired session whose refresh token still lives
-(Review's preflight never does): a renewal AWS refuses as spent is refused at
-the click with that class; one AWS does not answer is refused with *"launch
-again in a moment"* and no class — only once the token in hand has itself
-lapsed; a still-valid one carries the run. New Run answers the classed refusal with the sign-in
-dialog itself and launches the same run again once the capture lands, so a
-lapsed session is one dialog, not a trip to Getting Started; a member under a
-shared row reads the sentence and no dialog, because the repair is the admin's.
-Launch is never pre-checked on the console's cached status — the server is the
-gate. The setup funnel does not confiscate the console over that lapse. Since 0.7.8 the
-daemon decides which rows redirect an admin into the funnel — it marks them
-`blocking` on `/setup/status`, and only three are: a dead runner, a confinement
-floor the runner cannot meet, and OIDC with no role mapping. Every row graded
-through the caller's own credential — `llm_provider` and `bedrock_provider`
-under `per_user`, and `harness_credential_aws`, the row an expired AWS SSO
-session actually produces — keeps its grade wherever it renders and never moves
-anyone off the page they are on.
+**Launch with a lapsed session.** `POST /runs` refuses a run whose own session
+for the chosen provider is missing, or expired with no refresh token that could
+renew it, BEFORE any run exists (`422`, with `"reason":"model_credential"`).
+Neither Review nor create spends a one-use refresh token; dispatch renews an
+expired session whose refresh token still lives, and a renewal AWS refuses fails
+the run naming the sign-in. Launch is never pre-checked on the console's cached
+status — the server is the gate.
 
 **What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
 nothing else: no LLM harness, no repo, no mounts. Its run is labelled `harness
@@ -3768,7 +3867,7 @@ pane is now a plain shell."* and hands the pane over as a shell, with the
 scrollback intact for somebody attaching late.
 
 **An unpinned multi-account sign-in asks a question in the pane.** If the
-roster row pins `sso_account_id` and `sso_role_name`, the sign-in is fully
+provider pins `sso_account_id` and `sso_role_name`, the sign-in is fully
 unattended once the browser step is done. If it does NOT, and the person's SSO
 session reaches more than one account (or more than one role in the chosen
 account), the helper asks WHICH ONE in the sign-in terminal and allows three
@@ -3776,7 +3875,7 @@ tries. Anyone with a WRITABLE attach can answer — the console's sign-in pane,
 `wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
 A read-only viewer cannot; the prompt itself has no deadline, so it waits until
 a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
-Pin the account and the role on the roster row and the question never comes up. While the sandbox
+Pin the account and the role on the provider and the question never comes up. While the sandbox
 waits on the answer, the sign-in panel's own copy already narrates the sign-in as done
 (`CAPTURE_HANDOFF`) — the browser step finished — so the person reads "click or tab into the
 terminal, type the number, press Enter" rather than a claim that Wardyn is still waiting on them
@@ -3802,7 +3901,7 @@ console never types and a second sign-in is never started over a running one.
 If you pin agent images, pull the 0.7.6 aws-sso image at the same upgrade.
 
 **The launch answers before the sandbox is up.** Since 0.7.4 `POST
-/setup/harness-login` returns `{run_id, state: "PENDING"}` as soon as the run
+/model-providers/{id}/sign-in` returns `{run_id, state: "PENDING"}` as soon as the run
 row exists and the launch is stamped; the pane then polls the run and attaches
 once it is RUNNING. The reason is that a **first start may need to pull the
 image**: that pull, plus (on Kubernetes) the network-policy canary, can exceed
@@ -3816,165 +3915,72 @@ nothing able to name it. Cancel now kills it from the first second. A launch
 that fails AFTER that answer fails the RUN (a `FAILED` state and a
 `failure_hint` the pane renders), never a silent PENDING.
 
-**The access portal is the admin's, not theirs.** The launch uses the row's
-`sso_start_url` and IGNORES whatever start URL arrives with the request. That is
-a security property, not a convenience: the capture is bound to the portal the
-launch was seeded with, so honouring a caller-supplied URL would let anyone bind
-their capture to an identity provider and account of their choosing and have
-Wardyn bake it into every later Bedrock run. It also takes an org URL off
-everybody's typing surface.
+**The access portal is the admin's, not theirs.** The launch uses the
+provider's `sso_start_url`, region and pin; the sign-in route takes no body.
+That is a security property, not a convenience: the capture is bound to the
+portal the launch was seeded with, so a caller-chosen URL would let anyone bind
+their capture to an identity provider and account of their choosing.
 
 **Which AWS account and role a sign-in may capture — pin it.** A person's SSO
 session commonly reaches more than one AWS account, and `ListAccounts` returns
-them in AWS's order, not yours. Before 0.7.3 the capture helper took the FIRST
-account and its FIRST role, so a cloud team granting an unrelated entitlement
-could insert an element at index 0 and silently re-point the identity every run
-in the deployment signed with — no configuration change, no diff, no warning.
+them in AWS's order, not yours. Set `sso_account_id` and `sso_role_name` on the
+provider, beside `sso_start_url`: **the sign-in proposes, the provider
+disposes.** Both together or neither. The pin is enforced at every door, and
+each fails CLOSED:
 
-Set `sso_account_id` and `sso_role_name` on the `per_user` roster row, beside
-`sso_start_url` and owned the same way: **the sign-in proposes, the roster
-disposes.** Both together or neither (pinning the account alone still leaves the
-role picked for whoever signs in). A new entitlement cannot move a pin.
-
-The pin is enforced at four doors, and each one fails CLOSED:
-
-- **Roster save** — a `sso_account_id` that is not the account your configured
-  `WARDYN_BEDROCK_MODEL` ARN lives in SAVES; the console's `bedrock_provider`
-  row turns to a warning naming both accounts, and the daemon logs one line on
-  every save that disagrees: an explicit pin is your deliberate answer to
-  "which account signs in", and a resource-shared application inference profile
-  legitimately lives in another account. (A bare cross-region profile id such as
-  `us.anthropic.claude-…` names no account, so there is nothing to warn about.)
 - **Sign-in** — the in-sandbox helper verifies the pin against the SSO portal
-  (the account must be one this session reaches, and the role must exist IN THAT
-  ACCOUNT) and prints `wardyn: aws sso credential rejected: …` on the login
-  terminal rather than uploading. It never falls back to the first account.
-- **Capture** — the upload is bound to the pin AS IT READ AT LAUNCH (stamped on
-  the run's own `harness.login.start` row, never re-read from the live roster,
-  so a roster edit mid-sign-in cannot re-point a capture in flight). A blob that
-  disagrees — or, on an UNPINNED launch, that names an account the configured
-  model does not live in — is refused with 400 and a `harness.credential.refuse` audit row carrying a
-  `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
-  Refused, never rewritten: the stored blob is baked verbatim into every later
-  run's `~/.aws/config`, so rewriting it would record a session nobody saw and
-  merely move the IAM 403 back to run time.
-- **Run** — a pin bound at capture time says nothing about a session captured
-  BEFORE the pin existed, so `POST /runs` (422) and dispatch (the run goes
-  FAILED, with no sandbox created and no credential authored) both compare the
-  stored session against the row's CURRENT pin and refuse when they disagree.
-  The refusal names both pairs: the account/role the stored session is for, and
-  the account/role this agent now allows. `shared` rows, unpinned rows, every
-  non-SSO Bedrock lane and a stored session that predates the fields entirely
-  are untouched — on all of them there is nothing to compare, and refusing
-  would take Bedrock away from a deployment that was working.
+  and prints `wardyn: aws sso credential rejected: …` on the login terminal
+  rather than uploading. It never falls back to the first account.
+- **Capture** — the upload is bound to the provider's values AS THEY READ AT
+  LAUNCH (stamped on the run's own `harness.login.start` row), and lands only
+  while the provider is still the one it was launched for. A blob that
+  disagrees — or, on an unpinned launch, that names an account the provider's
+  model ARN does not live in — is refused with 400 and a
+  `harness.credential.refuse` audit row carrying a `reason` from a fixed
+  vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). Refused, never rewritten.
+- **Run** — `POST /runs` (422) and dispatch (the run goes FAILED, no sandbox,
+  no credential authored) compare the stored session against the provider's
+  CURRENT pin and refuse, naming both pairs, when they disagree. Signing in
+  again replaces the stored session.
 
-**A capture that predates a pin: sign in again, and that replaces it.** Setting
-a pin does not reach back into a stored session — Wardyn never rewrites one (see
-above) and, under `per_user`, has no way to enumerate or delete another
-person's. It does not need to: the person clicks **Sign in to AWS** again, which
-launches a NEW login run stamped with the pin as it reads NOW, and that capture
-OVERWRITES the old one. The console says so without being asked — the row's
-`model_access` grades as "sign in again" (so the Getting Started chip and the
-button come back, which an expiry-only grading hid), and the setup checklist's
-**AWS Bedrock** row warns naming both pairs. The member's own chip is less
-precise than the row it comes back with: it is keyed on state alone, so it
-reads "Model access · Signed out" for a session that is actually live and
-renewable — the Action line right beneath it is the one that names the pin
-and tells the truth. **Still open at 0.8:**
-invalidate-on-write, and an admin "revoke this person's captured session" route
-— both still need owner enumeration in the secret store, which does not exist.
+**What an unpinned provider leaves open, stated plainly.** With no pin, the ROLE
+is whatever the sign-in chose — and so is the account, unless the provider's
+model is a full ARN, which constrains the account only. The pin is the fix; both
+halves of it.
 
-**Changing the model's account later does not invalidate an existing pin.** Since
-0.7.3 the disagreement is a warning — the console's Bedrock row, plus a line in
-the journal on every save that disagrees — rather than a refusal, so re-pointing
-`WARDYN_BEDROCK_MODEL` at an ARN in a different account leaves every later roster
-edit working — but a run only succeeds if that model is genuinely shared with the
-pinned account, so read the warning rather than living with it.
-
-**Leave it unset on a single-account tenant.** The pin is optional and a
-one-account deployment never had this problem. Where the session reaches several
-accounts and nothing is pinned, the sign-in asks the person on the login
-terminal; with no terminal to ask on it refuses and names the accounts it
-reaches, so an admin can pin one.
-
-**What an unpinned row leaves open, stated plainly.** With no pin, the ROLE is
-whatever the sign-in chose — and so is the account, unless `WARDYN_BEDROCK_MODEL`
-is a full ARN, which constrains the account only. That choice is made by the
-helper running INSIDE the login sandbox, so it is bounded by the person's own
-entitlements but not by anything Wardyn can check, and the blob it produces is
-baked into every later Bedrock run's `~/.aws/config`. The pin is the fix; both
-halves of it, since pinning the account alone still leaves the role picked for
-whoever signs in. wardynd says so once at boot, and the setup checklist's
-**AWS Bedrock** row warns, when a `per_user` row carries no pin and the
-configured model names no account.
-
-**What the control plane holds.** One age-encrypted blob per person, in that
-person's own secret namespace — the SSO access token, its refresh token, the
-client registration, and the account/role the session mints role credentials
-for. Reads never fall back: a member with no capture of their own resolves as
-*not signed in*, never as the admin's session, and the bearer-key, host
-`~/.aws`-mount and static-key lanes are skipped entirely for them. Wardyn
-renews the access token control-plane side at dispatch while the client
-registration lives (see "wardynd's own egress" above), so a one-hour token does
-not mean an hourly sign-in.
+**What the control plane holds.** One age-encrypted blob per person per
+provider, in that person's own secret namespace under the provider's name — the
+SSO access token, its refresh token, the client registration, and the
+account/role the session mints role credentials for. Reads never fall back: a
+person with no capture of their own resolves as *not signed in*, never as
+anyone else's session. Wardyn renews the access token control-plane side at
+dispatch while the client registration lives (see "wardynd's own egress"
+above), so a one-hour token does not mean an hourly sign-in.
 
 **What it never holds.** Anybody's AWS console password, their MFA, or their
-browser session. A sign-in that Wardyn cannot renew surfaces as "sign in again"
-on their own Getting Started, never as a run that silently borrows somebody
-else's credential — a credential never changes source.
+browser session. A sign-in that Wardyn cannot renew surfaces as "sign in again",
+never as a run that silently borrows somebody else's credential.
 
-**The admin token is not a person — where OIDC says a person is reachable
-instead.** `GET /setup/status`'s `model_access` is scoped to the CALLING
-principal, and the shared `WARDYN_ADMIN_TOKEN` bearer carries no session of
-its own, and from 0.7.3 cannot capture one (a session captured with it
-BEFORE 0.7.3 still exists and is still graded — see below). With OIDC
-configured, a real console sign-in (or a `wdn_` API token, which always
-carries its owner's own human identity) is reachable instead, so a bare-token
-call with NOTHING captured reads `model_access.state: "not_applicable"`
-rather than `"not_configured"` plus a "Sign in to AWS" action nobody holding
-that token could ever complete. `POST /setup/harness-login` draws the same
-line for the same reason: under a `per_user` row, WITH OIDC CONFIGURED, it
-refuses a capture attempted with the admin token (422) — every login made
-with it would land in the SAME namespace (`owner: "admin-token"`) and
-overwrite the last person's session. **Without OIDC configured, neither
-remedy exists, and the admin token stays the only working `per_user` capture
-path** — the refusal does not fire there, and a session already captured
-under the admin token is graded exactly like anyone else's (never hidden
-behind `not_applicable`). A `shared` row is unaffected either way: the admin
-token still connects the one credential everyone inherits. Local host mode
-is unaffected too — wardynd refuses to boot with `-local-operator` (`WARDYN_LOCAL_OPERATOR`)
-set to `admin-token`, so its operator seat is always a real, distinguishable
-person, never this mechanism, and it signs in and reads its own model access
-exactly like any other principal.
+**The admin token is not a person.** With OIDC configured, a sign-in attempted
+with the shared `WARDYN_ADMIN_TOKEN` bearer is refused (422): every capture made
+with it would land in one namespace and overwrite the last one. A real console
+sign-in or a `wdn_` API token, which carries its owner's own identity, is the
+way in.
 
 **Blast radius.** A compromised sandbox reaches THAT person's SSO session and
-the role credentials it mints, not the organisation's. The `harness.credential.capture`
-and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,
-so "whose credential" is answerable from the trail, and `harness.credential.refuse`
-says which captures were turned away and why.
+the role credentials it mints, not the organisation's. The
+`harness.credential.capture` and `harness.credential.refresh` audit rows carry
+`owner` (the capture also names `model_provider`), so "whose credential" is
+answerable from the trail, and `harness.credential.refuse` says which captures were turned away and
+why.
 
-**Revoking a session — what 0.7.2 actually gives you.** Disconnect
-(`DELETE /setup/harness-credential/aws`) is admin-only and deletes the
-**caller's own** stored session: under `per_user` every capture, an admin's
-included, lives in that person's own namespace, so this is the admin revoking
-themselves. There is **no** admin route that deletes a named member's stored
-session, and no member-facing Disconnect — both are still open at 0.8.
-
-What ends a member's session today, honestly:
-
-- **Their next sign-in supersedes it.** A capture replaces the blob in their own
-  namespace; the previous access/refresh pair stops being used.
-- **Revoking the session at the IdP ends it.** IAM Identity Center is the system
-  of record. Terminate their Identity Center session (or remove their
-  account/permission-set assignment) and the refresh token stops redeeming;
-  Wardyn's next renewal fails visibly and their console reads *sign in again*.
-  This is the offboarding step — do it there, not here.
-- **It expires on its own.** The session dies with its OIDC client registration;
-  Wardyn renews the access token while that lives and never past it.
-
-Deprovisioning the person in the IdP is therefore the complete answer, and
-deleting the Wardyn console account does **not** by itself delete the stored
-blob.
+**Revoking a session.** A person removes their own with
+`DELETE /model-providers/{id}/credential`; a security admin erases a named
+person's credentials with `DELETE /people/{principal}/credentials`. Revoking the
+session at the IdP ends it too: IAM Identity Center is the system of record, so
+terminating their Identity Center session (or removing their assignment) stops
+the refresh token redeeming and their console reads *sign in again* — the
+offboarding step. The session also dies with its OIDC client registration.
 
 ### One live sign-in sandbox per person
 
@@ -4057,8 +4063,8 @@ A run sits in `STARTING` for the whole of `CreateSandbox` — there is no sandbo
 returns, so nothing outside the runner could previously be asked what the substrate was doing. Since
 0.7.6 the runner reports it while it waits: every poll of the proxy pod and of the agent pod computes
 one line and, when that line CHANGES, writes it to `agent_runs.status_detail` (migration
-`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row and
-in the sign-in pane (below).
+`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row, in
+the run page's terminal pane while the run is Pending or Starting, and in the sign-in pane (below).
 
 The line is the substrate's own words, in the shape `<component>: <Reason>[: <message>]`:
 
@@ -4068,6 +4074,7 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | `agent: PodInitializing` | as above, init containers | yes |
 | `pod: Unschedulable: <scheduler's message>` | no node will take the pod (a taint, a full cluster, an unbound claim) — read the message | yes, if the cluster changes |
 | `pod: Pending` | the pod exists and nothing has claimed it yet | yes |
+| `image: Building` | the control plane is building this run's sandbox image (a wrapped base image, a devcontainer, a workspace image), up to 30 minutes. Written only when a build actually starts, never on a cache hit, and carries no image or repo reference. Shown while the run is `PENDING` only | yes, up to the 30-minute build bound |
 | `image: Pulling: <ref>` | the image is downloading now. Docker: the host does not have it. Kubernetes (since 0.8, #807): the kubelet's latest Event for the agent container is `Pulling` | yes |
 | `agent: ImagePullBackOff: <registry's message>` | the registry refused or the tag does not exist | **no** |
 | `agent: ErrImagePull: <registry's message>` | as above, first failure | **no** |
@@ -4082,9 +4089,22 @@ changes the cluster or the image. They are the list in `internal/runner/waiting.
 (`TerminalWaitingReasons`), which the Kubernetes poll loops, the control plane's read projection and
 the console's mirror all read from.
 
+`image: Building` is the one line the control plane writes itself rather than a substrate reporting
+it. The build runs before dispatch, so the line is true only while the run is `PENDING`: the API
+shows it there, and blanks it on a `STARTING` run, where a warm Docker start never overwrites it and a
+finished build must not narrate the sandbox start. It is written outside the start-wait accounting, so
+a long build never appears in `wardyn_run_start_wait_seconds`.
+
+After a daemon restart the last stored line stays on the row. A run that was `PENDING` or `STARTING`
+has no `sandbox_ref` yet, and `finalizeUndispatchedRuns` reaps such a run only after
+`undispatchedGrace` (twice the 30-minute image-build bound, so about an hour after the restart). Until then a run
+whose build or start died with the daemon can still read `image: Building` (or the last substrate wait)
+as if it were current. It is not: kill the run and launch it again.
+
 `status_detail` is display-only, never interpreted, and never cleared by a write: the API blanks it
-at READ for any run that is not `STARTING` — except a run that FAILED on one of the terminal reasons,
-where the reason IS the failure. The last reason therefore survives on the row for a `SELECT`
+at READ for any run that is not `STARTING` (for `image: Building`, any run that is not
+`PENDING`) — except a run that FAILED on one of the terminal reasons, where the reason IS the
+failure. The last reason therefore survives on the row for a `SELECT`
 postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
 daemon, or a run that started before this upgrade, simply carries no reason.
 
@@ -4191,7 +4211,7 @@ same pair, the SSO egress allow-list entries, the login flow's own
 `device.sso.<region>` entry, and the dispatch-time `CreateToken` URL. It is
 **refused unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`** is also set, and every
 boot carrying it logs a warning opening `TEST HATCH ACTIVE`. Unset — every real
-deployment — nothing changes. It is not `WARDYN_BEDROCK_BASE_URL` (a different
+deployment — nothing changes. It is not a Bedrock provider's `bedrock.base_url` (a different
 service, and a supported production posture), and it is not the global
 `AWS_ENDPOINT_URL`. Read [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md)
 residual #45 before setting either var anywhere that holds a real credential:
@@ -4199,13 +4219,14 @@ an operator who sets both has pointed a real sign-in at a server that can hand
 back credentials of its choosing, and Wardyn cannot tell that server from AWS.
 
 The same acknowledgement unlocks one more thing: a plain `http://`
-`WARDYN_BEDROCK_BASE_URL`. This is the SigV4 lane — no per-run TLS-MITM
-terminates for it — so without the acknowledgement wardynd refuses a plain one
-on rule 1 (`must be https://`) before the SSO hatch is even reached. That
-relaxation is rule 1 and nothing else: an embedded credential, an empty host, a
-metadata literal, the public host itself, a query or a fragment all still refuse
-boot exactly as they do in production. The walk itself no longer needs it: it
-serves the fake over HTTPS under a throwaway CA it mints each run and installs
+`bedrock.base_url` on a model provider. This is the SigV4 passthrough
+lane of a `bedrock_sso` provider — no per-run TLS-MITM terminates for it — so
+without the acknowledgement the provider save is refused on rule 1 (`must be
+https://`) before the SSO hatch is even reached. That relaxation is rule 1 and nothing else: an embedded
+credential, an empty host, a metadata literal, the public host itself, a query
+or a fragment all still refuse the save exactly as they do in production. The
+walk itself no longer needs it: it serves the fake over HTTPS under a throwaway
+CA it mints each run and installs
 as the chart's `trustedCA`, so wardynd, every run's proxy and every sandbox
 trust the fake the way they would trust a corporate CA.
 
@@ -4488,17 +4509,18 @@ browser bundle or an old CLI, so:
 
 ### Internal model gateway
 
-Point every run's model calls at an internal endpoint instead of
-`api.anthropic.com`/`api.openai.com`. `WARDYN_ANTHROPIC_BASE_URL` /
-`WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point the proxy's own brokered
-`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway for the
-api-key lane, and — for Anthropic — also the subscription and Wardyn-managed
-lanes' `ANTHROPIC_BASE_URL` (dispatch sets it via `(*Server).anthropicBaseURL`,
-`runs_dispatch_llm.go`, and the subscription-injection sink's host allowlist
-widens to match, `injection.go`) — validated once at boot (`https://` only,
-RFC1918/CGNAT literal allowed, loopback/link-local/metadata/multicast/NAT64
-refused, must not equal the public host) and forwarded to the proxy sidecar per
-run. No
+Point a provider's model calls at an internal endpoint instead of
+`api.anthropic.com`/`api.openai.com`: an Anthropic or OpenAI provider's
+`base_url` (Settings → Model providers) re-points the proxy's own brokered
+`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a
+`custom_endpoint` provider is addressed by its `base_url` alone. A Claude
+subscription provider's `base_url` re-points the sign-in token too: every person
+who connects to it has their own Claude OAuth token sent to that gateway on
+every model call, so setting it is a trust decision for the people connecting.
+The address is
+validated when the provider is saved (`https://` only, RFC1918/CGNAT literal
+allowed, loopback/link-local/metadata/multicast/NAT64 refused, must not equal
+the public host) and forwarded to the proxy sidecar per run. No
 `SiteConfig.InternalHosts` declaration is needed for the gateway itself **on that
 brokered route**: only the proxy's own `/wardyn/llm/*` handler resolves and dials
 it, per request, with its own refusal for the same disallowed address kinds
@@ -4516,33 +4538,14 @@ injection happens only on the brokered route).
 
 The operator MUST add the gateway host (exact) to the policy's `allowed_domains`
 — the credential grant the proxy injects still needs an exact egress-allowlist
-entry, exactly as the public host does; wardynd warns at boot when the default
-policy's `allowed_domains` omits a configured gateway's host. **Behind a corporate
+entry, exactly as the public host does. **Behind a corporate
 upstream proxy, the gateway must be reachable FROM that upstream** — with
 `upstream_proxy_url`/`upstream_proxy_secret_ref` also configured, every forward
 dial (the gateway included) is CONNECTed through the corp proxy by the transport,
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address. wardynd also warns at boot when an upstream proxy is
-configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
-host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
-afterwards and either setting can change without a restart.
-
-**A subscription or Wardyn-managed-token run honors a configured Anthropic
-gateway too** — the published `agent-claude-code` image's `agent-run` only
-`unset`s `ANTHROPIC_BASE_URL` when it is still the vendor default, so an
-operator-configured gateway survives the in-image launcher. **This is a trust
-decision**: turning it on sends the operator's live subscription/managed OAuth
-token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
-`api.anthropic.com` today) instead of only ever the public host — see
-[CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
-is exempt and always stays on the public host: that flow mints the OAuth token
-itself and must not be redirected. With a gateway configured, a resident
-subscription credential is mounted only when the run's own policy reaches the
-**gateway** (its host, or a `*.` wildcard covering it, judged as the proxy will
-judge the CONNECT); an `api.anthropic.com` or `*.anthropic.com` entry no longer
-counts, because the run never dials the vendor host.
+other internal address.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`

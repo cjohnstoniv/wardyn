@@ -76,8 +76,8 @@ services:
     # Survive a host reboot (e.g. a MacBook's weekly MDM window) — otherwise only
     # the registry came back and the stack was down until a manual `up` (D18).
     restart: unless-stopped
-    # Loopback-only publish so a HOST-MODE wardynd (run outside compose, e.g. to use
-    # the resident `claude` CLI composer backend) can reach the same database.
+    # Loopback-only publish so a HOST-MODE wardynd (run outside compose) can reach
+    # the same database.
     # Host port parameterized (WARDYN_PG_PORT) so concurrent stacks on a shared host
     # don't collide on 5432; set WARDYN_PG_PORT=0 for an OS-assigned ephemeral port
     # (CI, which reaches postgres only in-network by service name).
@@ -459,8 +459,8 @@ services:
       # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
       # = every authenticated human is an operator (unchanged). Set it to a
       # comma-separated list of full addresses and every other signed-in human
-      # becomes a read-only member on the harness-credential, policy, workspace
-      # and site-config writes. See docs/OPERATIONS.md "Who can change what".
+      # becomes a read-only member on the policy, workspace and site-config
+      # writes. See docs/OPERATIONS.md "Who can change what".
       WARDYN_OIDC_OPERATOR_EMAILS: "${WARDYN_OIDC_OPERATOR_EMAILS:-}"
       # Leaving the list empty WITH OIDC configured refuses to boot
       # (validateOperatorPosture) — every signed-in human would be
@@ -519,58 +519,6 @@ services:
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"base\":\"wardyn/agent-base:local\",\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
-      # Subscription auth mode. Proxy-side OAuth injection needs wardynd to run
-      # where the operator's ~/.claude + `claude` binary live (host mode) so it
-      # can mint/refresh the live token. The COMPOSE wardynd is distroless and
-      # has neither, so injection can only fail-lazily and crash the per-run
-      # proxy when it tries to resolve the subscription-oauth secret. `off`
-      # selects RESIDENT-COPY: a run that mounts ~/.claude uses those creds
-      # directly (stage them fresh with `WARDYN_SUBSCRIPTION_INJECT=off
-      # scripts/stage-claude-creds.sh`). This is the correct default for compose.
-      # ── SHARED SUBSCRIPTION: DEMO BOXES ONLY ────────────────────────────────
-      # Injecting ONE operator's Anthropic subscription into runs is limited to a
-      # single-user posture. This stack authenticates with a shared admin token
-      # rather than WARDYN_LOCAL_MODE, so without this override the daemon refuses
-      # — deliberately: on a stack anyone else can reach, that credential would
-      # serve OTHER people's runs, and the harness vendor requires each end user to
-      # authenticate with their own. Set it ONLY on a box that is genuinely yours
-      # alone. It does NOT waive the refusal on Kubernetes or with SSO configured.
-      # Everyone else: give each person their own key, or use Bedrock.
-      WARDYN_ALLOW_SHARED_SUBSCRIPTION: "${WARDYN_ALLOW_SHARED_SUBSCRIPTION:-false}"
-      WARDYN_SUBSCRIPTION_INJECT: "${WARDYN_SUBSCRIPTION_INJECT:-off}"
-      # AWS Bedrock as a third Claude transport (enterprise: no direct Anthropic
-      # egress, billed via AWS). Set region + a cross-region INFERENCE-PROFILE id
-      # (NOT a bare model id) to enable; Claude runs then use Bedrock automatically
-      # (precedence: subscription > bedrock > api-key). Credentials come from the
-      # SECRET STORE (add via the Setup UI or the secrets API), not env:
-      #   - PREFERRED (never-resident): a `bedrock-api-key` bearer token — proxy-
-      #     injected as Authorization: Bearer into bedrock-runtime, like an api key.
-      #   - or SigV4 access keys `aws-access-key-id` + `aws-secret-access-key`
-      #     (+ optional `aws-session-token`) — these are RESIDENT in the sandbox env
-      #     (SigV4 signs in-process; see threatmodel). Region/model change needs a
-      #     wardynd restart (creds are live-addable).
-      #   - or WARDYN_BEDROCK_AWS_DIR below: bind your host ~/.aws read-only and let the
-      #     AWS SDK resolve creds itself (RESIDENT in the sandbox at /home/agent/.aws).
-      #     SSO/IAM-Identity-Center only auto-refreshes for `sso-session` profiles whose
-      #     CACHED token is still valid at run start — the read-only mount can't write
-      #     back a rotated token, and legacy `sso_start_url` profiles need a periodic
-      #     host `aws sso login`. NOTE: this exposes the ENTIRE host ~/.aws (all
-      #     profiles + cached tokens) to the untrusted sandbox (uid 1000 — you may need
-      #     `setfacl -R -m u:1000:rX ~/.aws`). Point it at ~/.aws only.
-      WARDYN_BEDROCK_REGION: "${WARDYN_BEDROCK_REGION:-}"
-      WARDYN_BEDROCK_MODEL: "${WARDYN_BEDROCK_MODEL:-}"
-      WARDYN_BEDROCK_AWS_DIR: "${WARDYN_BEDROCK_AWS_DIR:-}"
-      WARDYN_BEDROCK_AWS_PROFILE: "${WARDYN_BEDROCK_AWS_PROFILE:-}"
-      WARDYN_BEDROCK_AWS_SSO_REGION: "${WARDYN_BEDROCK_AWS_SSO_REGION:-}"
-      # Standard AWS env, passed through from the operator's shell so a machine
-      # already configured for AWS needs no Wardyn-specific restatement. wardynd
-      # uses these ONLY when the WARDYN_BEDROCK_* above resolve empty. Region
-      # alone can't enable Bedrock (that also needs WARDYN_BEDROCK_MODEL), so an
-      # inherited AWS_REGION cannot silently turn the transport on. No
-      # credentials are forwarded here — only selectors.
-      AWS_REGION: "${AWS_REGION:-}"
-      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-}"
-      AWS_PROFILE: "${AWS_PROFILE:-}"
     volumes:
       # Daemon trust: see the loud note at the top of this file.
       # WARDYN_DOCKER_SOCK selects WHICH daemon wardynd drives. It matters on hosts
@@ -595,7 +543,7 @@ services:
       # a dedicated projects dir, e.g.
       #     WARDYN_WORKSPACES_ROOT=/home/you/projects
       # DO NOT set it to your home directory. wardynd would then be able to read
-      # ~/.ssh, ~/.aws, ~/.claude and the staged ~/.wardyn/claude-creds, and it is
+      # ~/.ssh, ~/.aws and ~/.claude, and it is
       # the process that decides what gets mounted into sandboxes — a needlessly
       # large blast radius for a feature that only needs to read source files.
       # Read-only is sufficient: the scan never writes.
@@ -636,13 +584,6 @@ services:
       # host_path drives simply stay unavailable (the same opt-in posture the
       # workspaces root takes).
       - ${WARDYN_USER_DRIVE_HOST_ROOT:-/var/empty/wardyn-no-user-drive-root}:${WARDYN_USER_DRIVE_HOST_ROOT:-/var/empty/wardyn-no-user-drive-root}:ro
-      # Bedrock ~/.aws (WARDYN_BEDROCK_AWS_DIR) — READ-ONLY, mounted at the SAME path
-      # inside the container so the host path resolves identically on both sides: the
-      # sandbox bind Source is resolved by the HOST dockerd (DooD siblings), and
-      # wardynd's own os.Stat needs the path present in its container. Default is a
-      # harmless empty path (Bedrock ~/.aws stays off until an operator sets the var).
-      # See the WARDYN_BEDROCK_AWS_DIR note in this service's environment above.
-      - ${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:ro
       # MDM-managed directory (WARDYN_MANAGED_DIR) — READ-ONLY, the host dir
       # mounted at the fixed container path /etc/wardyn: the desktop tier's MDM
       # payload (WARDYN_DEFAULT_POLICY there is a HOST path, /etc/wardyn/policy.json,

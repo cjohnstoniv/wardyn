@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,44 +21,27 @@ import (
 // store; with it, one read a minute per wardynd, whatever the number of runs.
 const managedTokenCacheTTL = 60 * time.Second
 
-// managedCredProvider serves the Wardyn-managed captured token through the SAME
-// subscription.Provider interface the resident host token uses, so the injection
-// sink treats them identically. It depends ONLY on the secret store (not the
-// Server), so it can be constructed in main.go BEFORE api.New builds the Server
-// — no construction cycle.
+// managedCredProvider serves a person's own captured Claude sign-in (a
+// managedCredBlob under their wardyn-provider-<uid>-oauth row) through the
+// subscription.Provider interface the injection sink resolves a sentinel with.
+// Built per resolve by ownerSubscriptionToken, over srv's strict read of the
+// owner's own row — never the operator's.
 //
-// No refresh path (v1): setup-token tokens are long-lived and Wardyn is not
-// their owner, so Current never mutates state — it returns the stored token and
-// lets Anthropic reject it on the wire if it has been revoked (fail closed at
-// the sink, surfaced as a run failure + an aging warning in setup status).
+// No refresh path: setup-token tokens are long-lived and Wardyn is not their
+// owner, so Current never mutates state — it returns the stored token and lets
+// Anthropic reject it on the wire if it has been revoked (fail closed at the
+// sink, surfaced as a run failure + an aging warning in setup status).
 //
 // It is the one value cache wardynd keeps for a stored credential, and it
-// caches only a successful read: a failure is never served twice. A capture or
-// a disconnect evicts it (Server.evictManagedToken), so a replaced or deleted
-// token is not served for the rest of the minute on this replica.
+// caches only a successful read: a failure is never served twice.
 type managedCredProvider struct {
-	provider string
-	// store is the boot provider's operator-wide managed credential (the raw,
-	// unscoped store) — not per-principal. Unset on a per-person provider,
-	// which reads its owner's own row name through srv's strict read instead
-	// (ownerSubscriptionToken).
-	store       secretstore.Store
+	provider    string
 	srv         *Server
 	owner, name string
 
-	mu      sync.Mutex // also single-flights the fill
+	mu       sync.Mutex // also single-flights the fill
 	cached   subscription.Token
 	cachedAt time.Time
-}
-
-// NewManagedCredProvider builds a managed subscription provider over store for a
-// provider id (e.g. "anthropic"). Returns nil when store is nil (managed mode
-// simply unavailable).
-func NewManagedCredProvider(store secretstore.Store, provider string) subscription.Provider {
-	if store == nil {
-		return nil
-	}
-	return &managedCredProvider{provider: provider, store: store}
 }
 
 func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, error) {
@@ -77,17 +59,9 @@ func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, err
 	return tok, nil
 }
 
-// get reads the stored blob; found=false is "not connected". The boot
-// provider reads the operator's row, a per-person one its owner's own row.
+// get reads the owner's own stored blob; found=false is "not connected".
 func (p *managedCredProvider) get(ctx context.Context) (raw []byte, found bool, err error) {
-	if p.srv != nil {
-		return p.srv.ownSecret(ctx, p.owner, p.name)
-	}
-	raw, err = p.store.Get(ctx, harnessCredSecretName(p.provider))
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return nil, false, nil
-	}
-	return raw, err == nil, err
+	return p.srv.ownSecret(ctx, p.owner, p.name)
 }
 
 func (p *managedCredProvider) fetch(ctx context.Context) (subscription.Token, error) {
@@ -114,12 +88,6 @@ func (p *managedCredProvider) fetch(ctx context.Context) (subscription.Token, er
 	return subscription.Token{Value: blob.Token}, nil
 }
 
-func (p *managedCredProvider) evict() {
-	p.mu.Lock()
-	p.cached = subscription.Token{}
-	p.mu.Unlock()
-}
-
 // Current returns the managed token (no refresh — see type doc).
 func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
 	return p.read(secretstore.WithPurpose(ctx, secretstore.PurposeManagedToken))
@@ -127,25 +95,8 @@ func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, 
 
 // Peek reads the store like Current (no refresh side effect to avoid), but
 // neither uses nor fills the cache: its callers only ask whether a token is
-// there (managedInjectReady), so its read is recorded as a status read, and
+// there, so its read is recorded as a status read, and
 // the cache only ever holds a token read for injection.
 func (p *managedCredProvider) Peek() (subscription.Token, error) {
 	return p.fetch(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus))
-}
-
-// evictManagedToken drops the managed provider's cached token, so the next
-// resolve reads the store again.
-func (s *Server) evictManagedToken() {
-	if p, ok := s.cfg.ManagedToken.(*managedCredProvider); ok {
-		p.evict()
-	}
-}
-
-// forgetCredential lets go of what wardynd holds in memory for the credential
-// (owner, name) once it is deleted: its process-wide mask copies, which are
-// retired and then swept (secretmask.Registry.EvictGlobal), and the managed
-// token cache.
-func (s *Server) forgetCredential(owner, name string) {
-	s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
-	s.evictManagedToken()
 }

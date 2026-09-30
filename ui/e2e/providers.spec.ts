@@ -14,15 +14,11 @@ import {
   navToRoute,
   sidebarLink,
 } from "./fixtures";
-import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
+import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
+import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
-import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
-// U-15: the door's wait copy is a constant in a CSS-free module — this spec
-// used to re-type it, so a reworded wait could move on screen while the
-// assertion went on passing.
-import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pane-copy";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -155,39 +151,41 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     ]);
   });
 
-  test("enabling Azure DevOps shows `app` disabled with its own reason", async ({ page }) => {
+  // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
+  // console authors the lane its addresses call for and the person-owned choice.
+  test("Add provider authors a valid Azure DevOps row: no lanes to tick, the token choice, saved in the entra lane", async ({ page }) => {
     await gotoProviders(page);
-    // The github row already exists (previous test) as a FULL row — it
-    // renders no "Add provider" button of its own once populated (git-tab.tsx:
-    // that CTA belongs only to the absent-row state). So with the ADO row
-    // still absent, this is the one "Add provider" button left on the
-    // screen — never re-adding github.
+    // The github row already exists (previous test) as a FULL row — it renders
+    // no "Add provider" button of its own once populated. So with the ADO row
+    // still absent, this is the one "Add provider" button left on the screen.
     await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).click();
 
     const row = page.getByTestId("provider-row-azure_devops");
     await expect(row).toBeVisible();
-    // `app` is offered WITH its reason, never hidden (Q3) — the checkbox is
-    // named by LANE_META.app.label via its wrapping <label>, so the reason
-    // line and the disabled state are both pinned to the SAME lane's control.
-    const appCheckbox = row.getByRole("checkbox", { name: "App · brokered" });
-    await expect(appCheckbox).toBeDisabled();
-    await expect(row.getByText(PROVIDERS.LANE_APP_UNAVAILABLE)).toBeVisible();
+    // No Lanes group and no credential lanes: the shared token and key are retired.
+    await expect(row.getByRole("group", { name: PROVIDERS.FIELD_LANES })).toHaveCount(0);
+    await expect(row.getByRole("radiogroup", { name: /credentials/ })).toHaveCount(0);
+    await expect(row.getByText(PROVIDERS.LANE_APP_UNAVAILABLE)).toHaveCount(0);
+    // How people connect is the row's choice, on the recommended one to begin with.
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_MINTED })).toBeChecked();
 
-    // FINDING (git-tab.tsx's addRow default, not fixed here — see this
-    // lane's report): a freshly-added Azure DevOps row defaults its base URL
-    // to "https://dev.azure.com" — ZERO path segments — which the server
-    // refuses outright (workspace_providers_baseurl.go: "dev.azure.com is shared by
-    // every org on the planet, so the organization segment is REQUIRED
-    // there"). Saving the row exactly as "Add provider" leaves it is a
-    // guaranteed 400, with no client-side hint that the default itself is
-    // unsavable. This test's job is the app-lane gate, not the default, so
-    // it supplies a real org path before saving — the way an admin who hit
-    // the refusal above would.
+    // A freshly added row's address names no organisation on purpose: the server
+    // refuses it, and the row says so before that.
+    await expect(row.getByText(PROVIDERS.BASE_URL_INVALID)).toBeVisible();
     await row.locator("textarea").fill("https://dev.azure.com/acme");
+
+    // Each person adds their own token: the choice that needs no app registration.
+    await row.getByRole("radio", { name: ADO_PAT.MODE_OWN }).click();
     await saveProviders(page);
 
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(snap.git.map((g: { kind: string }) => g.kind).sort()).toEqual(["azure_devops", "github"]);
+    const ado = snap.git.find((g: { kind: string }) => g.kind === "azure_devops");
+    expect(ado.lanes).toEqual(["entra"]);
+    expect(ado.credential_source).toBe("per_user");
+    expect(ado.entra).toEqual(
+      expect.objectContaining({ token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"] }),
+    );
   });
 
   test("storing a PAT inside the GitHub row writes the secret, inline", async ({ page }) => {
@@ -447,385 +445,6 @@ test.describe("providers — the door is SUPER's alone", () => {
   });
 });
 
-// Appendix A findings 2 + 5 (console-login lane, 0.7.3) — the Settings Model
-// provider card's AWS Bedrock lane under a per_user roster row. Spliced onto
-// GET /setup/status (this harness has no real per-user AWS SSO session to
-// produce live/expired_signin for real — same reasoning as agents.spec.ts's
-// model_access CASES loop). R8 (fix-first review pass): model_access carries
-// `mechanism` + `action` alongside `state`, like the real payload always does
-// for the states this helper is actually called with (live and the three
-// actionable ones — see MODEL_ACCESS_ACTIONABLE) — the badge does not read
-// either, but the fixture stays honest for whoever extends this. R-03
-// (review): `not_applicable` is the one OTHER state modelAccessAction's own
-// `default:` arm answers with "" (internal/api/modelaccess.go), matching
-// `live` — not the fixture's prior blanket "every non-live state".
-async function spliceBedrockRow(
-  page: Page,
-  credentialSource: "per_user" | "shared",
-  modelAccessState: string | null,
-  // #337: bedrock_bearer's twin call (below) is the ONLY caller that passes
-  // this — every existing call keeps splicing bedrock_sso, unchanged.
-  mechanism: "bedrock_sso" | "bedrock_bearer" = "bedrock_sso",
-): Promise<void> {
-  await page.route("**/api/v1/setup/status*", async (route) => {
-    // /setup/status is POLLED by this screen, so a handler can still be mid
-    // `route.fetch()` when the test ends and the context tears down — Playwright
-    // then disposes the response under it ("Response has been disposed") and the
-    // throw is reported as the test's own failure. A tear-down race is not a
-    // splice failure: let the request through and let the context close.
-    let response: Awaited<ReturnType<typeof route.fetch>>;
-    let json: Record<string, unknown>;
-    try {
-      response = await route.fetch();
-      json = (await response.json()) as Record<string, unknown>;
-    } catch {
-      await route.fallback().catch(() => {});
-      return;
-    }
-    const harnesses: Array<Record<string, unknown>> = Array.isArray(json.harnesses) ? json.harnesses : [];
-    const idx = harnesses.findIndex((h) => h.id === "claude-code");
-    const row = {
-      ...(idx >= 0 ? harnesses[idx] : { id: "claude-code" }),
-      enabled: true,
-      mechanism,
-      credential_source: credentialSource,
-    };
-    if (idx >= 0) harnesses[idx] = row;
-    else harnesses.push(row);
-    json.harnesses = harnesses;
-    if (modelAccessState) {
-      json.model_access = {
-        state: modelAccessState,
-        mechanism,
-        action: modelAccessState === "live" || modelAccessState === "not_applicable" ? "" : "Sign in to AWS",
-      };
-    }
-    await route.fulfill({ response, json }).catch(() => {});
-  });
-}
-
-async function splicePerUserBedrock(page: Page, modelAccessState: string | null): Promise<void> {
-  await spliceBedrockRow(page, "per_user", modelAccessState);
-}
-
-test.describe("providers — Settings Model provider card under a per_user Bedrock row", () => {
-  // F5: the badge follows the CALLER's own model_access, not merely whether
-  // the deployment has a Bedrock lane at all.
-  test("Connected for a live caller", async ({ page }) => {
-    await splicePerUserBedrock(page, "live");
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    await expect(page.locator("#lane-bedrock")).toContainText("Connected");
-  });
-
-  test("not-Connected + Sign in with SSO for an expired caller", async ({ page }) => {
-    await splicePerUserBedrock(page, "expired_signin");
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    const bedrockLane = page.locator("#lane-bedrock");
-    await expect(bedrockLane).not.toContainText("Connected");
-    await bedrockLane.click();
-    await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
-  });
-
-  // U-02: not_applicable (the shared admin-token principal's own answer)
-  // must NOT borrow the deployment-wide "Connected" badge either — it gets
-  // its own honest, never-connected render with a neutral detail line.
-  // Verbatim string, not imported: connection-cards.tsx pulls in
-  // HarnessLoginPane -> AttachTerminal -> xterm's CSS, which Playwright's
-  // Node-side spec collection cannot import (unlike the pure-data copy
-  // modules other e2e specs import from).
-  test("not_applicable: NOT connected, no borrowed badge — neutral per-person detail instead", async ({ page }) => {
-    await splicePerUserBedrock(page, "not_applicable");
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    const bedrockLane = page.locator("#lane-bedrock");
-    await expect(bedrockLane).not.toContainText("Connected");
-    await bedrockLane.click();
-    await expect(
-      page.getByText(
-        "Per person — this caller is a mechanism, not a person, so it has no sign-in of its own. Each person's own AWS session carries their runs.",
-      ),
-    ).toBeVisible();
-  });
-
-  // U2-03 (blind round 2, lens-U2): the badge was honest and the door beside
-  // it was not. `disabled={!operator}` gates nothing here — the admin token IS
-  // operator — so the button was live, and the POST behind it is refused 422
-  // (harnessLoginMechanismPrincipalRefusal). A door that cannot open must not
-  // be on screen.
-  test("not_applicable: the Sign in with SSO door is ABSENT, not merely disabled", async ({ page }) => {
-    await splicePerUserBedrock(page, "not_applicable");
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await expect(page.getByRole("button", { name: "Sign in with SSO" })).toHaveCount(0);
-  });
-
-  // F2: the server throws away a typed start URL under a per_user row
-  // (harnesscred.go:761) — the dialog must never ask for one here.
-  test("opening the dialog shows the managed-portal note, never the dead start-URL prompt", async ({ page }) => {
-    await splicePerUserBedrock(page, "live");
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeVisible();
-    await expect(page.getByTestId("login-start-url-prompt")).toHaveCount(0);
-  });
-
-  // Unspliced negative control: the ordinary Settings sign-in (no per_user
-  // row) is UNCHANGED — it still asks for the org's access portal URL.
-  test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    // U2-01 (blind round 2, lens-U2): this daemon is the finding's own
-    // reproduction — scripts/e2e-backend.sh sets WARDYN_BEDROCK_REGION and
-    // WARDYN_BEDROCK_MODEL and NO credential of any kind (no bearer key, no
-    // SSO session, no host ~/.aws mount, no static keys). Region + model used
-    // to be enough to paint a green Connected chip over that, and this walk
-    // went straight past the badge without looking. It looks now.
-    await expect(page.locator("#lane-bedrock")).not.toContainText("Connected");
-    await page.locator("#lane-bedrock").click();
-    await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
-  });
-
-  // P5 (0.7.3 field report): POST /setup/harness-login answers with the run id
-  // BEFORE the sandbox is up now, so "resolved" no longer means "attachable" —
-  // the pane holds a `starting` phase and keeps the id, which is what makes
-  // Cancel able to kill a sandbox still coming up. Before this, a launch that
-  // outran the console's 60s deadline left an orphan nobody could name.
-  //
-  // Spliced because this daemon runs `-runner none` (scripts/e2e-backend.sh)
-  // and can never reach RUNNING; what is real is the pane's own machine.
-  test("the sign-in pane narrates the wait, and Cancel kills a sandbox still coming up", async ({ page }) => {
-    const loginRunId = "3f1b7c26-0000-4000-8000-00000000f002";
-    await splicePerUserBedrock(page, "live");
-    await page.route("**/api/v1/setup/harness-login", async (route) =>
-      route.fulfill({ json: { run_id: loginRunId, state: "PENDING" } }),
-    );
-    await page.route(`**/api/v1/runs/${loginRunId}`, async (route) =>
-      route.fulfill({ json: { id: loginRunId, task: "harness login", state: "PENDING", interactive: true } }),
-    );
-    let kills = 0;
-    await page.route(`**/api/v1/runs/${loginRunId}/kill`, async (route) => {
-      kills++;
-      await route.fulfill({ status: 202, json: {} });
-    });
-
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    await page.getByRole("button", { name: /start login/i }).click();
-
-    const starting = page.getByTestId("login-sandbox-starting");
-    await expect(starting).toBeVisible();
-    await expect(starting).toContainText(SIGNIN_PROGRESS.STEP_START);
-    await starting.getByRole("button", { name: /cancel/i }).click();
-    await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
-  });
-
-  // Finding 7a's click-side cases — the tab opening, navigating, blocked and
-  // cancelled — moved to signin-door-aws.spec.ts with #628, which opens the
-  // tab from the door's own Open button instead of on Start.
-
-  // Finding 6 (0.7.4 field report): the wait's OTHER end. A first pull of the
-  // aws-sso image measured 131s on the reporting estate — healthy reads
-  // throughout — and the pane narrated it with the same one-line "Starting…"
-  // until its 15-tick budget expired and accused the daemon of being
-  // unreadable. Past a minute the pane now says which wait it is in, and says
-  // nothing about a failure it has no evidence for.
-  //
-  // page.clock, not a real 65-second wait: the pane grades the wait on
-  // Date.now() and usePoll's setInterval, both of which the clock API fakes, so
-  // this stays a sub-second case. `-runner none` keeps the run PENDING forever,
-  // which is exactly the shape being narrated.
-  test("past a minute of healthy reads the sign-in pane says it is slow, never that it failed", async ({ page }) => {
-    const loginRunId = "3f1b7c26-0000-4000-8000-00000000f003";
-    await page.clock.install();
-    await splicePerUserBedrock(page, "live");
-    await page.route("**/api/v1/setup/harness-login", async (route) =>
-      route.fulfill({ json: { run_id: loginRunId, state: "PENDING" } }),
-    );
-    // Every poll answers, and answers PENDING: nothing here is failing.
-    await page.route(`**/api/v1/runs/${loginRunId}`, async (route) =>
-      route.fulfill({ json: { id: loginRunId, task: "harness login", state: "PENDING", interactive: true } }),
-    );
-
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    await page.getByRole("button", { name: /start login/i }).click();
-
-    const starting = page.getByTestId("login-sandbox-starting");
-    await expect(starting).toContainText(SIGNIN_PROGRESS.STEP_START);
-    await expect(starting).not.toContainText(LOGIN_SANDBOX_SLOW_START);
-
-    await page.clock.fastForward("01:10");
-    await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);
-    // The old budget fired at ~30s of ticks; this one must not fire at all
-    // while the run is readable — not now, and not five minutes from now.
-    await expect(page.getByRole("alert")).toHaveCount(0);
-    await page.clock.fastForward("05:00");
-    await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);
-  });
-
-  // R3 (fix-first review pass): a spliced control BESIDE the unspliced one —
-  // an EXPLICIT shared row (credential_source: "shared") behaves exactly
-  // like no row at all, so the credential_source conjunct has a real e2e
-  // negative rather than only the absent-field case above.
-  test("spliced control: an explicit shared row also still prompts for the start URL", async ({ page }) => {
-    await spliceBedrockRow(page, "shared", null);
-    await gotoConsole(page);
-    await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
-  });
-});
-
-// #337: a MEMBER on a per_user Bedrock BEARER row can edit their own bearer
-// field — the console's missing half of #153/#327's server-side write door
-// (member writes to bedrock-api-key are already admitted there).
-//
-// PR #352 review, finding 1: the FIRST version of this block called
-// mockMemberRole (fixtures.ts, splices GET /me's role/operator fields, plus
-// its own redacting **/api/v1/setup/status* route) and then spliceBedrockRow
-// on the SAME status pattern. spliceBedrockRow runs LAST-registered-wins
-// (Playwright routes are LIFO) and its handler calls route.fetch() itself —
-// which hits the network directly rather than falling through to
-// mockMemberRole's handler — so the redaction never ran; the test read the
-// RAW ADMIN body the whole time. That hid the real bug: `st.Bedrock =
-// SetupBedrock{Ready: st.Bedrock.Ready}` (internal/api/setup.go) zeroed
-// BearerPresent for every non-operator unconditionally, so a real member's
-// Save never showed Replace/Disconnect — the field looked stored under the
-// unredacted splice and came back empty under the real one.
-//
-// mockMemberBedrockRowRedacted below is this file's own composed splice
-// instead: ONE **/api/v1/setup/status* handler that mirrors
-// redactSetupStatusForUser's structural drops (the same shape
-// mockMemberSetupStatus, fixtures.ts, mirrors for every OTHER member spec in
-// this repo) AND injects the harnesses row, so nothing here can bypass the
-// redaction the way stacking two routes on the same pattern did.
-async function mockMemberBedrockRowRedacted(
-  page: Page,
-  credentialSource: "per_user" | "shared",
-  mechanism: "bedrock_sso" | "bedrock_bearer",
-  initialBearerPresent: boolean,
-): Promise<void> {
-  await page.route("**/api/v1/me", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.role = "user";
-    json.operator = false;
-    json.security_operator = false;
-    await route.fulfill({ response, json });
-  });
-
-  // Mutable, not cached-once: a member's real Save/Disconnect below hits the
-  // real backend (this harness's bearer token is admin server-side, so the
-  // write itself always succeeds — the point being proven is only that the
-  // CONSOLE re-reads a body shaped the way redaction really answers it, not a
-  // genuine per-member namespaced write, same ceiling as every mockMemberRole
-  // spec in this file). Flipped by the secrets-endpoint splice below so the
-  // NEXT poll reflects it, the way a real member's own redacted read would.
-  let bearerPresent = initialBearerPresent;
-  await page.route("**/api/v1/setup/status*", async (route) => {
-    const body = (await (await route.fetch()).json()) as Record<string, unknown>;
-    // Mirrors redactSetupStatusForUser (internal/api/setup.go) — the same
-    // drop list mockMemberSetupStatus (fixtures.ts) applies for every other
-    // member spec, plus the #337 BearerPresent carve-out that function now
-    // applies under the caller's own per_user bearer row.
-    body.checks = [];
-    body.checks_redacted = true;
-    body.providers = [];
-    body.secrets = { present: [] };
-    const runner = (body.runner ?? {}) as { confinement_classes?: string[] };
-    body.runner = { confinement_classes: runner.confinement_classes ?? [] };
-    const ready = !!(body.bedrock as { ready?: boolean } | undefined)?.ready;
-    body.bedrock = { ready, creds_present: false, bearer_present: bearerPresent };
-    body.scm = {};
-    body.host_proxy = {};
-    body.deployment = {};
-    body.harnesses = [
-      {
-        id: "claude-code",
-        display: "Claude Code",
-        has_gateway: true,
-        has_login: true,
-        enabled: true,
-        mechanism,
-        credential_source: credentialSource,
-      },
-    ];
-    await route.fulfill({ json: body });
-  });
-
-  await page.route("**/api/v1/secrets/bedrock-api-key", async (route) => {
-    const response = await route.fetch();
-    if (response.ok()) {
-      if (route.request().method() === "PUT") bearerPresent = true;
-      if (route.request().method() === "DELETE") bearerPresent = false;
-    }
-    await route.fulfill({ response });
-  });
-}
-
-test.describe("providers — #337: a member's own Bedrock bearer field under a per_user bearer row", () => {
-  test("editable on a per_user bearer row", async ({ page }) => {
-    await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
-    await gotoConsole(page);
-    await navToRoute(page, "/account");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await expect(page.getByLabel("Bedrock bearer key")).toBeEditable();
-  });
-
-  test("still disabled on a shared row", async ({ page }) => {
-    await mockMemberBedrockRowRedacted(page, "shared", "bedrock_bearer", false);
-    await gotoConsole(page);
-    await navToRoute(page, "/account");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-    await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
-  });
-
-  // PR #352 review, finding 1's own live-browser reproduction: a member's
-  // Save must lead to Replace/Disconnect, reading the body the way the
-  // server's redaction really answers it — not the raw admin body the first
-  // version of this block accidentally read (see the block comment above).
-  test("Save leads to Replace and Disconnect for a member, reading the redacted body", async ({ page }) => {
-    await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
-    await gotoConsole(page);
-    await navToRoute(page, "/account");
-    await expandCard(page, "Model provider");
-    await page.locator("#lane-bedrock").click();
-
-    const field = page.getByLabel("Bedrock bearer key");
-    await expect(field).toBeEditable();
-    await field.fill("e2e-member-bearer-token");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-
-    await expect(page.getByText(/Saved bedrock-api-key/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Replace" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
-  });
-});
-
 // UT-7b — the "Available to" control embedded in the git provider row: real
 // writes against /permissions/availability and /permissions/grants, proving
 // the round trip an admin actually performs (not just this file's own
@@ -904,26 +523,31 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
 test.describe("providers — the Azure DevOps Entra section (real writes, real reload)", () => {
   test("setting the ceiling and the default persists across a reload", async ({ page }) => {
     await resetProviders(page);
-    const etag = (await page.request.get("/api/v1/workspace-providers", { headers: auth })).headers()["etag"];
-    const put = await page.request.put("/api/v1/workspace-providers", {
-      headers: etag ? { ...auth, "If-Match": etag } : auth,
-      data: {
-        git: [
-          {
-            id: "azure_devops",
-            kind: "azure_devops",
-            base_urls: ["https://dev.azure.com/wardyn-e2e"],
-            lanes: ["entra"],
-            credential_source: "per_user",
-            entra: {
-              tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
-              client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
-              capability_ceiling: ["read"],
-              default_profile: ["read"],
-            },
+    const seed = (caps: string[]) => ({
+      git: [
+        {
+          id: "azure_devops",
+          kind: "azure_devops",
+          base_urls: ["https://dev.azure.com/wardyn-e2e"],
+          lanes: ["entra"],
+          credential_source: "per_user",
+          entra: {
+            tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
+            client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
+            capability_ceiling: caps,
+            default_profile: caps,
           },
-        ],
-      },
+        },
+      ],
+    });
+    const etag = (await page.request.get("/api/v1/workspace-providers", { headers: auth })).headers()["etag"];
+    const ifMatch = etag ? { ...auth, "If-Match": etag } : auth;
+    // The pre-split "read" is a clean break: refused, never aliased.
+    const old = await page.request.put("/api/v1/workspace-providers", { headers: ifMatch, data: seed(["read"]) });
+    expect(old.status()).toBe(400);
+    const put = await page.request.put("/api/v1/workspace-providers", {
+      headers: ifMatch,
+      data: seed(["code_read", "project_read"]),
     });
     expect(put.status()).toBe(200);
 
@@ -953,11 +577,226 @@ test.describe("providers — the Azure DevOps Entra section (real writes, real r
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(snap.git[0].entra).toEqual(
       expect.objectContaining({
-        capability_ceiling: ["read", "code_write", "policy_admin"],
-        default_profile: ["read", "code_write"],
+        capability_ceiling: ["code_read", "code_write", "policy_admin", "project_read"],
+        default_profile: ["code_read", "code_write", "project_read"],
       }),
     );
 
     await resetProviders(page);
+  });
+});
+
+// #1428: how people connect to Azure DevOps. The own-token choice is a real
+// write on this backend (the row takes it with no tenant or client); the token
+// choice is refused on a daemon that has not lifted it, and the organisation
+// check answers from a lane that builds in parallel, so those are spliced at
+// the route the way approvals-ado.spec.ts splices an escalation.
+const ADO_TENANT = "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f";
+const ADO_CLIENT = "3b241101-e2bb-4255-8caf-4136c566a962";
+
+async function seedAdoRow(page: Page, row: Record<string, unknown>): Promise<void> {
+  await resetProviders(page);
+  const etag = (await page.request.get("/api/v1/workspace-providers", { headers: auth })).headers()["etag"];
+  const put = await page.request.put("/api/v1/workspace-providers", {
+    headers: etag ? { ...auth, "If-Match": etag } : auth,
+    data: { git: [row] },
+  });
+  expect(put.status()).toBe(200);
+}
+
+// Serve one document for GET /workspace-providers, and answer the PUT here.
+async function spliceProviders(page: Page, row: Record<string, unknown>, onPut: (body: { git: Record<string, unknown>[] }) => { status: number; json: unknown }) {
+  await page.route("**/api/v1/workspace-providers", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET") {
+      return route.fulfill({ json: { git: [row] }, headers: { etag: '"e2e-ado-1"' } });
+    }
+    if (req.method() === "PUT") {
+      const { status, json } = onPut(req.postDataJSON() as { git: Record<string, unknown>[] });
+      return route.fulfill({ status, json, headers: { etag: '"e2e-ado-2"' } });
+    }
+    return route.fallback();
+  });
+}
+
+test.describe("providers — how people connect to Azure DevOps (#1428)", () => {
+  test("each person adds their own token: a real write, no tenant or client, and a range that withholds Save", async ({ page }) => {
+    await seedAdoRow(page, {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+    });
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_OWN })).toBeChecked();
+    await expect(row.getByLabel(ADO_ENTRA_EDITOR.FIELD_TENANT)).toHaveCount(0);
+    const days = row.getByLabel(ADO_PAT.OWN_EXPIRY_LABEL);
+    await expect(days).toHaveValue("30");
+
+    await days.fill("91");
+    await expect(row.getByText(ADO_PAT.OWN_EXPIRY_RANGE)).toHaveClass(/text-danger/);
+    await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+
+    await days.fill("45");
+    await saveProviders(page);
+    await page.reload();
+    await expect(page.getByTestId("provider-row-azure_devops").getByLabel(ADO_PAT.OWN_EXPIRY_LABEL)).toHaveValue("45");
+    const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
+    expect(snap.git[0].entra).toEqual(expect.objectContaining({ token_mode: "own_pat", pat_max_days: 45 }));
+    await resetProviders(page);
+  });
+
+  test("the token choice: setup note, the organisation check, a lifespan refusal, the blocked banner, and a refused Save", async ({ page }) => {
+    const minted = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+    };
+    // The write door prefixes its own refusal with the field, as the real server does.
+    await spliceProviders(page, minted, () => ({ status: 400, json: { error: `git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}` } }));
+    const checkedAt = new Date(2000, 8, 29, 9, 12).toISOString();
+    let answer: Record<string, unknown> = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
+    let checks = 0;
+    await page.route("**/api/v1/workspace-providers/git/azure_devops/org-check", async (route) => {
+      checks++;
+      await route.fulfill({ json: answer });
+    });
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_MINTED })).toBeChecked();
+    await expect(row.getByText(ADO_PAT.MINTED_SETUP)).toBeVisible();
+    // The plan review's F5: register the redirect under Web, then add the secret.
+    await expect(row.getByText(ADO_PAT.MINTED_SETUP_REDIRECT)).toBeVisible();
+    await expect(row.getByLabel(ADO_PAT.TOKEN_LIFE_LABEL)).toHaveValue("8");
+
+    // Nothing is drawn until the admin asks: the server keeps no last answer.
+    await expect(row.getByTestId("ado-org-check")).toHaveCount(0);
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    const card = row.getByTestId("ado-org-check");
+    await expect(card.getByText(ADO_PAT.CHECK_PERMS_OK)).toBeVisible();
+    await expect(card.getByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).toBeVisible();
+    expect(checks).toBe(1);
+
+    // A longest life outside 1 to 168 names the range and withholds Save.
+    const hours = row.getByLabel(ADO_PAT.TOKEN_LIFE_LABEL);
+    await hours.fill("400");
+    await expect(row.getByText(ADO_PAT.TOKEN_LIFE_RANGE)).toBeVisible();
+    await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+    await hours.fill("8");
+
+    // The server refuses the Save for want of a client secret: said under the choice.
+    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+    await expect(row.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeVisible();
+
+    // What the organisation refused, as the check now reports it.
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "refused", refusal: "ado_pat_lifespan_policy", lifespan: "on" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByText(ADO_PAT.LIFESPAN_REFUSAL())).toBeVisible();
+
+    // The organisation restricts who may create tokens: the banner names the admin, and one press switches to Entra sign-in.
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "refused", refusal: "ado_pat_policy_blocked", lifespan: "unknown" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByText(/^Azure DevOps refused to create a token for .+: your organisation restricts who can create personal access tokens\./)).toBeVisible();
+    await row.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }).click();
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
+    await row.getByRole("radio", { name: ADO_PAT.MODE_MINTED }).click();
+
+    // Round 2: a lifespan Wardyn could not tell, with what Azure DevOps answered.
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "unknown", lifespan_error: "invalidValidTo" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByText(ADO_PAT.CHECK_LIFESPAN_UNKNOWN("invalidValidTo"))).toBeVisible();
+
+    // Entra sign-in while the app holds the token permissions: refused inline.
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByTestId("ado-org-check")).toBeVisible();
+    await row.getByRole("radio", { name: ADO_PAT.MODE_BEARER }).click();
+    await expect(row.getByText(ADO_PAT.BEARER_WITH_TOKEN_PERMS)).toBeVisible();
+  });
+
+  test("an Azure DevOps Server address makes the row a git-only per-person token row", async ({ page }) => {
+    const services = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"], default_profile: [] },
+    };
+    let sent: { git: Record<string, unknown>[] } | null = null;
+    await spliceProviders(page, services, (body) => {
+      sent = body;
+      return { status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } };
+    });
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    await row.locator("textarea").fill("https://tfs.corp.example/acme");
+    await row.locator("textarea").blur();
+    await expect(row.getByTestId("ado-server-row")).toBeVisible();
+    await expect(row.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeVisible();
+    await expect(row.getByLabel(ADO_ENTRA_EDITOR.FIELD_TENANT)).toHaveCount(0);
+    await saveProviders(page);
+    expect(sent!.git[0]).toEqual(
+      expect.objectContaining({ lanes: ["pat"], credential_source: "per_user", base_urls: ["https://tfs.corp.example/acme"] }),
+    );
+    expect("entra" in sent!.git[0]).toBe(false);
+  });
+
+  test("the row the upgrade switched off says why, and Save and turn on saves it on", async ({ page }) => {
+    const converted = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      disabled: true,
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"], default_profile: [] },
+    };
+    let sent: { git: Record<string, unknown>[] } | null = null;
+    await spliceProviders(page, converted, (body) => {
+      sent = body;
+      return { status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } };
+    });
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    await expect(row.getByText(ADO_PAT.CONVERTED_NOTE)).toBeVisible();
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_OWN })).toBeChecked();
+    await row.getByRole("button", { name: ADO_PAT.CONVERTED_SAVE_ON }).click();
+    await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible();
+    expect(sent!.git[0]).toEqual(expect.objectContaining({ id: "azure_devops", disabled: false }));
+    await expect(row.getByText(ADO_PAT.CONVERTED_NOTE)).toHaveCount(0);
+  });
+
+  test("at 390px the token choice and its check do not scroll sideways", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await spliceProviders(
+      page,
+      {
+        id: "azure_devops",
+        kind: "azure_devops",
+        base_urls: ["https://dev.azure.com/wardyn-e2e"],
+        lanes: ["entra"],
+        credential_source: "per_user",
+        entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+      },
+      () => ({ status: 200, json: { git: [] } }),
+    );
+    await page.route("**/api/v1/workspace-providers/git/azure_devops/org-check", (route) =>
+      route.fulfill({
+        json: { checked_at: new Date(2000, 8, 29, 9, 12).toISOString(), organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "missing", token_life: "accepted", lifespan: "off" },
+      }),
+    );
+    // The sidebar is collapsed at this width, so go straight to the page.
+    await page.goto("/admin/providers");
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await page.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(page.getByTestId("ado-org-check")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 });

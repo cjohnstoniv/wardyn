@@ -76,6 +76,120 @@ type pauseClocks struct {
 	presence map[uuid.UUID]time.Time
 	activity map[uuid.UUID]time.Time
 	cursor   uuid.UUID
+	probes   map[uuid.UUID]*probeState
+	diskRoot map[uuid.UUID]diskRootSample
+}
+
+// probeState is one run's tally of Wardyn's own disk walks in flight and idle
+// CPU samples in progress. The two must never overlap: a walk's CPU inside the
+// sample's window is Wardyn's own probe read as the agent's activity.
+type probeState struct{ walks, samples int }
+
+// diskRootSample is the last root-filesystem walk's result for one run: kb is
+// "" when the walk read nothing (it timed out), which is cached all the same so
+// a sandbox too large to walk in time is not walked again by every poll.
+type diskRootSample struct {
+	kb string
+	at time.Time
+}
+
+// runDiskRootTTL is how long a root walk's result stands in for a new one. The
+// figure is an uncapped, informational one (the walk counts the image too), and
+// a minute is well inside how fast it moves.
+const runDiskRootTTL = time.Minute
+
+// probeWait is how often beginSample looks for the walks it is waiting out.
+const probeWait = 10 * time.Millisecond
+
+// beginWalk reports whether run id's disk walk may start: not while an idle
+// sample is under way. A true return must be paired with endWalk.
+func (c *pauseClocks) beginWalk(id uuid.UUID) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.probe(id)
+	if p.samples > 0 {
+		return false
+	}
+	p.walks++
+	return true
+}
+
+func (c *pauseClocks) endWalk(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.probe(id)
+	p.walks--
+	c.dropIdleProbe(id, p)
+}
+
+// beginSample claims run id's CPU window for an idle sample: no new walk starts
+// from now, and it returns once the ones in flight have ended. False when ctx
+// ended first; a true return must be paired with endSample.
+func (c *pauseClocks) beginSample(ctx context.Context, id uuid.UUID) bool {
+	c.mu.Lock()
+	c.probe(id).samples++
+	c.mu.Unlock()
+	for {
+		c.mu.Lock()
+		drained := c.probe(id).walks == 0
+		c.mu.Unlock()
+		if drained {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			c.endSample(id)
+			return false
+		case <-time.After(probeWait):
+		}
+	}
+}
+
+func (c *pauseClocks) endSample(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.probe(id)
+	p.samples--
+	c.dropIdleProbe(id, p)
+}
+
+// probe returns id's tally, creating it. Callers hold mu.
+func (c *pauseClocks) probe(id uuid.UUID) *probeState {
+	if c.probes == nil {
+		c.probes = map[uuid.UUID]*probeState{}
+	}
+	p, ok := c.probes[id]
+	if !ok {
+		p = &probeState{}
+		c.probes[id] = p
+	}
+	return p
+}
+
+// dropIdleProbe forgets a tally with nothing in it, so the map holds only runs
+// with a walk or a sample in flight. Callers hold mu.
+func (c *pauseClocks) dropIdleProbe(id uuid.UUID, p *probeState) {
+	if p.walks == 0 && p.samples == 0 {
+		delete(c.probes, id)
+	}
+}
+
+// rootSample returns run id's last root walk and whether it is still inside
+// runDiskRootTTL at now.
+func (c *pauseClocks) rootSample(id uuid.UUID, now time.Time) (kb string, fresh bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d, ok := c.diskRoot[id]
+	return d.kb, ok && now.Sub(d.at) < runDiskRootTTL
+}
+
+func (c *pauseClocks) setRootSample(id uuid.UUID, kb string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.diskRoot == nil || len(c.diskRoot) > 4096 {
+		c.diskRoot = map[uuid.UUID]diskRootSample{}
+	}
+	c.diskRoot[id] = diskRootSample{kb: kb, at: now}
 }
 
 // stampDue reports whether id's last stamp is older than presenceStampEvery,
@@ -378,6 +492,17 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 // one core. Anything it cannot read counts as busy: a run is never paused on a
 // reading nobody took.
 func (s *Server) runCPUQuiet(ctx context.Context, run types.AgentRun) bool {
+	// Wardyn's own disk walk (an open run page's Sandbox widget) is CPU in this
+	// window too, and the cgroup cannot tell it from the agent's. So the window
+	// is claimed first: in-flight walks finish before it opens, and none starts
+	// inside it. Not claimed in time reads as busy, like any reading not taken.
+	claim, stop := context.WithTimeout(ctx, runResourcesExecTimeout)
+	ok := s.pause.beginSample(claim, run.ID)
+	stop()
+	if !ok {
+		return false
+	}
+	defer s.pause.endSample(run.ID)
 	ctx, cancel := context.WithTimeout(ctx, runResourcesExecTimeout)
 	defer cancel()
 	// Only the cpu keys are read here; `filesystem` picks the script's disk
@@ -415,6 +540,9 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": reason, "quiet_sec": int64(quiet.Seconds()), "active_at": run.ActiveAt,
 			})))
+		// A paused run holds no Azure DevOps token; its resume creates one.
+		// After the mark, so a resolve racing it sees the pause and creates none.
+		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
 		return
 	}
 	if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {

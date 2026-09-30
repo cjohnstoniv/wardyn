@@ -445,6 +445,13 @@ to force a refresh, just the immediate one that does not wait on either a
 login or the TTL. There is still no in-place "update this key's role"
 endpoint.
 
+**The run's governance profile is a third door.** Even the owner is refused,
+with an `ssh.authenticate` failure naming the profile, when the profile the run
+was created under carries `deny_interactive`; only a super admin key is exempt,
+and a profile that cannot be read refuses too. A limit set later reaches new
+connections and does not end ones already open (see "Limits that reach a running
+run" in [OPERATIONS.md](OPERATIONS.md)).
+
 **A key registered in the user view is capped, for good.** An admin whose
 console session is in the user view (member mode) can register a key; it is
 stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role

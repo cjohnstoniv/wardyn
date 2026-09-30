@@ -5,11 +5,9 @@
 
 // The Agents tab of /providers (§5c.4, design §5.3) — one row per harness-catalog
 // id (+ any custom WARDYN_AGENT_IMAGES rows already stored, preserved unedited):
-// a Switch (enabled), the row's default model provider (packet MP-C's G1–G4),
-// and — on the claude-code row only (SetupStatus.model_access is scoped to it
-// server-side) — the SIGNED-IN ADMIN'S OWN model-access chip (their own
-// credential, C4.2): outline action, never a second teal. The mechanism radio,
-// the credential toggle and the AWS start URL live on the provider now.
+// a Switch (enabled) and the row's default model provider (packet MP-C's
+// G1–G4). The mechanism radio, the credential toggle and the AWS start URL
+// live on the provider now; since 0.8 (#548) a roster row carries none of them.
 //
 // This tab is a SEPARATE resource from the Git/Storage tabs (SiteConfig's
 // agent_providers block, its own GET/PUT), so it fetches and saves itself —
@@ -25,24 +23,16 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { agentProviders as api, type AgentProvider, type AgentProviders } from "../../../lib/api/agent-providers";
 import { modelProviders as providersApi, type ModelProvider } from "../../../lib/api/model-providers";
-import { IMPOSSIBLE, type AiType } from "../../../lib/integrations";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { RAIL_PROVIDER } from "../../wardyn/copy/new-run-rail";
-import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
+import type { SetupHarnessTool } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { useWriteDropped } from "../../../lib/use-write-dropped";
 import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
-import {
-  AGENTS,
-  MODEL_ACCESS_ACTIONABLE,
-  MODEL_ACCESS_CHIP_LABEL,
-  PROVIDERS,
-  PROVIDERS_EXTRA,
-  modelAccessActionLine,
-} from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { AvailabilityControl } from "../../wardyn/availability-control";
@@ -50,12 +40,11 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { useModelAccessDoor } from "../../wardyn/model-access-context";
 
-// The two catalog agents whose declared lane folds to a coarse ai-integration
-// type harness.go's ProviderTypes checks against (harnessCatalog); a
-// no-managed-auth row ("none"/BYOA, or any custom WARDYN_AGENT_IMAGES id) has
-// no capability here — its only valid mechanism is "none" (validateAgentMechanism).
+// The two catalog agents whose model credential folds to a coarse
+// ai-integration type harness.go's ProviderTypes checks against
+// (harnessCatalog); a no-managed-auth row ("none"/BYOA, or any custom
+// WARDYN_AGENT_IMAGES id) has no capability here.
 type AgentCapability = "claude_code" | "codex_cli";
 
 // Exported ONLY for its parity gate (agents-tab.test.tsx): this hand-typed
@@ -68,33 +57,13 @@ export function agentCapabilityFor(id: string): AgentCapability | undefined {
   return undefined;
 }
 
-// The mechanism a freshly enabled catalog row is seeded with: the roster still
-// requires one (validateAgentMechanism's agent400NeedsLane) although the tab no
-// longer offers the choice — the first lane, in this order, that the agent can
-// actually speak (the catalog's impossible pairs, mirrored in IMPOSSIBLE).
-const SEED_MECHANISMS: [string, AiType][] = [
-  ["anthropic_subscription", "anthropic_subscription"],
-  ["anthropic_api_key", "anthropic_api_key"],
-  ["openai_api_key", "openai_api_key"],
-  ["bedrock_bearer", "bedrock"],
-];
-
-function defaultMechanism(harness: SetupHarnessTool): string {
-  if (harness.no_managed_auth) return "none";
-  const cap = agentCapabilityFor(harness.id);
-  return (SEED_MECHANISMS.find(([, t]) => !(cap && IMPOSSIBLE[t]?.[cap])) ?? SEED_MECHANISMS[0])[0];
-}
-
-// The row to EDIT: the stored row if one exists, else a fresh one seeded with a
-// mechanism this agent can actually use — a lanes-catalog row with an empty
-// mechanism 400s at save (validateAgentMechanism's agent400NeedsLane), so the
-// picker never shows a blank, unlaunchable choice.
+// The row to EDIT: the stored row if one exists, else a fresh one.
 //
 // Not the answer to "is this agent enabled" — see rowEnabled. A row this
 // function invents carries no `disabled`, so reading `!row.disabled` off it
 // would render every not-offered agent as ON.
 function resolvedRow(agents: AgentProvider[], harness: SetupHarnessTool): AgentProvider {
-  return agents.find((a) => a.id === harness.id) ?? { id: harness.id, mechanism: defaultMechanism(harness) };
+  return agents.find((a) => a.id === harness.id) ?? { id: harness.id };
 }
 
 // Whether this agent's Switch is ON. THE SERVER'S OWN ANSWER when there is no
@@ -109,84 +78,6 @@ function resolvedRow(agents: AgentProvider[], harness: SetupHarnessTool): AgentP
 function rowEnabled(agents: AgentProvider[], harness: SetupHarnessTool): boolean {
   const stored = agents.find((a) => a.id === harness.id);
   return stored ? !stored.disabled : harness.enabled !== false;
-}
-
-// per_user is captured for an AWS SSO sign-in ONLY (validateAgentCredentialSource).
-// A STORED row pairing it with any other mechanism — OR pairing bedrock_sso with
-// a SHARED credential_source — would be re-PUT verbatim by the next unrelated
-// Save and refused 400, and this tab no longer shows those fields, so the admin
-// could not clear them. All four are dropped ON LOAD whenever credential_source
-// isn't actually "per_user" on a bedrock_sso row. A row that carries none of
-// the four is returned UNTOUCHED, which keeps a custom WARDYN_AGENT_IMAGES row
-// byte-for-byte; a valid per_user bedrock_sso row round-trips unchanged.
-function normalizeAgentRow(a: AgentProvider): AgentProvider {
-  if (a.mechanism === "bedrock_sso" && a.credential_source === "per_user") return a;
-  if (
-    a.credential_source === undefined &&
-    a.sso_start_url === undefined &&
-    a.sso_account_id === undefined &&
-    a.sso_role_name === undefined
-  )
-    return a;
-  return { ...a, credential_source: undefined, sso_start_url: undefined, sso_account_id: undefined, sso_role_name: undefined };
-}
-
-function normalizeAgentProviders(p: AgentProviders): AgentProviders {
-  return p.agents ? { ...p, agents: p.agents.map(normalizeAgentRow) } : p;
-}
-
-const MODEL_ACCESS_TONE: Record<string, "success" | "warning" | "neutral"> = {
-  live: "success",
-  // #158: not_applicable is neither a success nor a warning — it is the
-  // admin-token principal's own answer ("this caller is a mechanism, not a
-  // person"), never a claim that something needs attention.
-  not_applicable: "neutral",
-};
-
-function ModelAccessNote({ access }: { access: SetupModelAccess }) {
-  // NO CHIP for a state outside the six (MODEL_ACCESS_CHIP_LABEL's own doc
-  // comment): the old final `else` painted MODEL_ACCESS_NOT_CONFIGURED over
-  // anything unrecognised, so a daemon reporting `expired_renewable` — a live,
-  // renewable credential — told the admin they were signed out. The server's own
-  // action line still renders: unknown to us is not unknown to it.
-  const label = MODEL_ACCESS_CHIP_LABEL[access.state];
-  return (
-    <div>
-      {label && <Chip tone={MODEL_ACCESS_TONE[access.state] ?? "warning"}>{label}</Chip>}
-      {/* The server's own words, verbatim — never reworded client-side. The one
-          exception is `expiring`'s instant, re-composed through the SAME frozen
-          template on the reader's own clock (modelAccessActionLine): the server
-          formats RFC3339 UTC, and this row is read by people in other
-          timezones. */}
-      {access.action && <p className="mt-1 text-meta text-warning">{modelAccessActionLine(access)}</p>}
-    </div>
-  );
-}
-
-// The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
-// the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
-// CTA, which opens the shell's one door (#544 — this tab mounted its own pane
-// before).
-function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
-  const door = useModelAccessDoor();
-  return (
-    <>
-      <ModelAccessNote access={access} />
-      <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
-      {MODEL_ACCESS_ACTIONABLE.has(access.state) && (
-        // outline, never a second teal — Save is the tab's one default.
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="mt-2"
-          onClick={() => door.openDoor({ for: { login: "aws" } })}
-        >
-          {AGENTS.SIGN_IN_AWS}
-        </Button>
-      )}
-    </>
-  );
 }
 
 // The providers that can serve this agent's runs: turned on, and used by it.
@@ -283,7 +174,6 @@ function Row({
   row,
   enabled,
   providers,
-  modelAccess,
   operator,
   onUpdate,
 }: {
@@ -293,14 +183,9 @@ function Row({
    *  resolvedRow invented. */
   enabled: boolean;
   providers: ModelProvider[];
-  modelAccess?: SetupModelAccess;
   operator: boolean;
   onUpdate: (next: AgentProvider) => void;
 }) {
-  // C4.2 is claude-code only (modelAccess is scoped server-side). #158: it
-  // renders for not_applicable too — MODEL_ACCESS_CHIP_LABEL carries a real,
-  // neutral label for it.
-  const showModelAccess = harness.id === "claude-code" && !!modelAccess;
 
   return (
     <div className="rounded-lg border border-border" data-testid={`agent-row-${harness.id}`}>
@@ -336,11 +221,6 @@ function Row({
       ) : (
         <div className="space-y-4 p-3">
           <DefaultProviderField harness={harness} row={row} providers={providers} operator={operator} onUpdate={onUpdate} />
-          {showModelAccess && (
-            <div className="border-t border-border pt-3">
-              <ModelAccessSignIn access={modelAccess!} />
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -349,7 +229,6 @@ function Row({
 
 export function AgentsTab({
   harnesses,
-  modelAccess,
   operator,
   onRetryRoster,
   onStatusRefresh,
@@ -362,8 +241,6 @@ export function AgentsTab({
    *  the deployment. Unknown renders the same fetch-failed state a failed GET
    *  does: no rows, no Save, nothing to PUT. */
   harnesses?: SetupHarnessTool[];
-  /** The SIGNED-IN caller's own model-access state — claude-code only. */
-  modelAccess?: SetupModelAccess;
   operator: boolean;
   /** Re-fires the PARENT's WHOLE load() — /workspace-providers AND
    *  /setup/status. For the roster-unknown Retry ONLY: there is no draft on
@@ -372,7 +249,7 @@ export function AgentsTab({
   onRetryRoster: () => void;
   /** Re-fires ONLY the parent's /setup/status read (never /workspace-
    *  providers), so a successful agents Save can refresh the stale
-   *  modelAccess/harnesses it just changed without touching the parent's Git/
+   *  harnesses it just changed without touching the parent's Git/
    *  Storage draft, its pending 412 banner, or its own error state. A plain
    *  `onRetryRoster` there was the staleness fix's own regression: it is the
    *  parent's full load(), which resets `draft` (the OTHER two tabs' unsaved
@@ -409,9 +286,8 @@ export function AgentsTab({
     Promise.all([api.getAgentProviders(), providersApi.getModelProviders()])
       .then(([snap, mp]) => {
         setProviders(mp.providers.providers ?? []);
-        const normalized = normalizeAgentProviders(snap.providers);
-        setDraft(normalized);
-        setOriginal(normalized);
+        setDraft(snap.providers);
+        setOriginal(snap.providers);
         setEtag(snap.etag);
         setStatus("ready");
       })
@@ -464,19 +340,18 @@ export function AgentsTab({
       // an invented row would widen the org's roster on an unrelated edit.
       const catalogRows = roster.flatMap((h) => {
         const stored = agents.find((a) => a.id === h.id);
-        if (rowEnabled(agents, h)) return [stored ?? { id: h.id, mechanism: defaultMechanism(h) }];
+        if (rowEnabled(agents, h)) return [stored ?? { id: h.id }];
         return stored ? [{ ...stored, disabled: true }] : [];
       });
       const next: AgentProviders = { agents: [...catalogRows, ...customRows] };
       const result = await api.putAgentProviders(next, etag);
-      const normalized = normalizeAgentProviders(result.providers);
-      setDraft(normalized);
+      setDraft(result.providers);
       // #217 — the new baseline: a save with nothing left unsaved must not
       // still read as dirty to the guard above.
-      setOriginal(normalized);
+      setOriginal(result.providers);
       setEtag(result.etag);
       toast.success(PROVIDERS.SAVED_TOAST);
-      // modelAccess and harnesses are the PARENT's /setup/status read, never
+      // harnesses are the PARENT's /setup/status read, never
       // this tab's own, and a save (a switch, a default) changes what that
       // read reports. Re-fire it on every success —
       // ONLY that read (onStatusRefresh), never the parent's whole
@@ -565,7 +440,6 @@ export function AgentsTab({
             row={resolvedRow(agents, h)}
             enabled={rowEnabled(agents, h)}
             providers={providers}
-            modelAccess={h.id === "claude-code" ? modelAccess : undefined}
             operator={operator}
             onUpdate={(next) => updateRow(h.id, next)}
           />

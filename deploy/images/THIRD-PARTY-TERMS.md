@@ -40,14 +40,11 @@ conditionally. Conditions that fall on **you as the operator**, not on Wardyn:
   Anthropic's names or logos as part of your own product identity or in a way that
   suggests endorsement or partnership.
 
-> **Operator warning — shared subscription credentials.** Wardyn's subscription
-> injection path resolves a single operator credential at the proxy. In a
-> multi-user deployment that means one person's Claude subscription serving other
-> authenticated users' runs, which is precisely what the third condition above
-> prohibits. If you run Wardyn multi-user against a subscription, use per-user
-> credentials or API-key mode. `WARDYN_SUBSCRIPTION_INJECT: "off"` is the compose
-> default for this reason. Compliance with your harness vendor's terms is the
-> operator's responsibility; Wardyn cannot discharge it for you.
+> **Operator note — subscription credentials.** Wardyn holds no operator-wide
+> subscription credential: a Claude subscription is a per-person model-provider
+> sign-in, injected proxy-side into that person's own runs only, which is what
+> the third condition above requires. Compliance with your harness vendor's terms
+> is the operator's responsibility; Wardyn cannot discharge it for you.
 
 ## `agent-codex-cli` — open source
 

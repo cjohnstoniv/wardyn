@@ -1,9 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// provider_access.go generalises the single hardcoded AWS-SSO-only grading in
-// modelaccess.go (SetupModelAccess) to every model provider a person is
-// granted (MP-12). It reuses that file's vocabulary and its Bedrock/subscription
+// provider_access.go grades every model provider a person is granted (MP-12).
+// It reuses modelaccess.go's vocabulary and its Bedrock/subscription
 // dispatch siblings' scope and read helpers (provider_bedrock.go,
 // provider_subscription.go) rather than re-deriving them, so a state here and
 // the refusal dispatch gives for the same credential can never disagree.
@@ -22,7 +21,7 @@ import (
 )
 
 // DRAFT (M2 canon pending): the action sentences provider_access composes for
-// the kinds SetupModelAccess's AWS-only vocabulary does not already cover.
+// the kinds modelaccess.go's AWS-only vocabulary does not already cover.
 const (
 	providerAccessAddKeyAction   = "Add your key"
 	providerAccessAddTokenAction = "Add your token"
@@ -38,12 +37,12 @@ const (
 
 // SetupProviderAccess is one provider's connection state for the caller — the
 // wire shape provider_access: [{provider, state, action, deadline}] the design
-// names: a provider id, one of the five SetupModelAccess states, an
+// names: a provider id, one of modelaccess.go's five states, an
 // already-composed sentence, and (only when the state names one) a deadline
 // instant. No secret name, no start URL, no host. The one place a pinned
 // account and role appear is the pin-mismatch action, which names both pairs
 // to the caller — members included — because they must pick the pinned pair
-// when they sign in again (the same sentence model_access already sends).
+// when they sign in again.
 //
 // SourceRunID is the sign-in run whose capture the caller's stored credential
 // for this provider is (#993): stamped server-side from that run's own token
@@ -254,8 +253,7 @@ func (s *Server) gradeProviderKey(ctx context.Context, row *SetupProviderAccess,
 
 // gradeProviderSubscription grades a per-person Claude subscription: absent ->
 // not_configured, present -> live unless its capture has crossed
-// harnessTokenAging, the same conservative age heuristic SetupHarness.Aging
-// already uses for the compose-mode managed token (no machine-readable expiry
+// harnessTokenAging, a conservative age heuristic (no machine-readable expiry
 // on a setup-token).
 func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
 	raw, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerOAuthPart))
@@ -276,10 +274,10 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 
 // gradeProviderBedrockSSO grades a captured AWS SSO session against a Bedrock
 // SSO provider, reusing awsSSOCredentialState/modelAccessAction/
-// modelAccessDeadline — SetupModelAccess's own vocabulary — over the
+// modelAccessDeadline — modelaccess.go's own vocabulary — over the
 // provider-scoped read providerBedrockRefusal already reads from at dispatch.
 // A session the provider's own account/role pin no longer allows grades
-// expired_signin, mirroring setupModelAccess's roster-pin arm: a live,
+// expired_signin: a live,
 // renewable session for the WRONG identity is not "live" from this person's
 // seat, and dispatch would refuse it (mpBRPinned) the instant they tried.
 func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProviderAccess, p types.ModelProvider, owner string) {
@@ -296,7 +294,7 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 	}
 	now := s.cfg.Now().UTC()
 	spent := s.awsSSOTokenSpentFor(blob)
-	row.State = awsSSOCredentialState(blob, found, true, spent, now)
+	row.State = awsSSOCredentialState(blob, found, spent, now)
 	row.Deadline = modelAccessDeadline(blob, found, spent, now)
 	row.Action = modelAccessAction(row.State, row.Deadline)
 	if !found || p.Bedrock == nil {
@@ -318,10 +316,9 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 	}
 }
 
-// providerPinContradiction is awsSSOPinContradiction's provider-scoped
-// sibling: the pin a bedrock_sso provider names is ON THE PROVIDER RECORD
-// (BedrockSettings.SSOAccountID/SSORoleName), never a roster row, so it
-// cannot reuse that function's site-config lookup.
+// providerPinContradiction reports a stored session whose account/role the
+// provider's pin no longer allows: the pin a bedrock_sso provider names is ON
+// THE PROVIDER RECORD (BedrockSettings.SSOAccountID/SSORoleName).
 func providerPinContradiction(p types.ModelProvider, stored awsSSOPin) (awsSSOPin, awsSSOPin, bool) {
 	if !stored.set() || p.Bedrock == nil {
 		return awsSSOPin{}, awsSSOPin{}, false

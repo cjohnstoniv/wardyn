@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // pat is one minted personal access token.
@@ -66,7 +68,27 @@ const (
 	PatTokenErrorFullScopePolicyViolation PatTokenError = "fullScopePatPolicyViolation"
 	PatTokenErrorAccessDenied             PatTokenError = "accessDenied"
 	PatTokenErrorLifespanPolicyViolation  PatTokenError = "patLifespanPolicyViolation"
+	PatTokenErrorGlobalPolicyViolation    PatTokenError = "globalPatPolicyViolation"
+	PatTokenErrorInvalidValidTo           PatTokenError = "invalidValidTo"
 )
+
+// patLimit is SetPatLifespanLimit's rule: a create whose validTo lies more
+// than max from now answers err.
+type patLimit struct {
+	max time.Duration
+	err PatTokenError
+}
+
+// SetPatLifespanLimit makes a create whose validTo is more than max from now
+// answer err with no token, and any shorter one succeed — the organisation's
+// "Enforce maximum personal access token lifespan" policy with err
+// PatTokenErrorLifespanPolicyViolation, or another refusal of a long validTo.
+// A zero max removes the limit.
+func (s *Server) SetPatLifespanLimit(max time.Duration, err PatTokenError) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.patLimit = patLimit{max: max, err: err}
+}
 
 // SetPatCreateError makes every subsequent PAT-create call answer err instead
 // of minting a token (PatTokenErrorNone, the default, restores normal
@@ -92,7 +114,7 @@ func (s *Server) handlePatsList(w http.ResponseWriter, r *http.Request) {
 // handlePatsCreate answers POST .../_apis/tokens/pats, honouring
 // displayName/scope/validTo/allOrgs from the request body and minting a new
 // authorizationId + token — unless SetPatCreateError has injected a policy
-// violation, in which case it answers exactly as the real service does: a nil
+// violation or the validTo is past SetPatLifespanLimit's max, in which case it answers exactly as the real service does: a nil
 // patToken and the violation's name in patTokenError.
 //
 // The minted token is registered into s.tokens with the scopes it declares
@@ -102,21 +124,24 @@ func (s *Server) handlePatsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePatsCreate(w http.ResponseWriter, r *http.Request) {
 	body := decodeJSONMap(r)
 
-	s.mu.Lock()
-	injected := s.patCreateError
-	s.mu.Unlock()
-	if injected != "" && injected != PatTokenErrorNone {
-		writeJSON(w, http.StatusOK, map[string]any{"patToken": nil, "patTokenError": string(injected)})
-		return
-	}
-
 	displayName, _ := body["displayName"].(string)
 	scope, _ := body["scope"].(string)
 	validTo, _ := body["validTo"].(string)
 	allOrgs, _ := body["allOrgs"].(bool)
 
+	s.mu.Lock()
+	injected, limit := s.patCreateError, s.patLimit
+	s.mu.Unlock()
+	if limit.max > 0 && parseValidTo(validTo).After(time.Now().Add(limit.max)) {
+		injected = limit.err
+	}
+	if injected != "" && injected != PatTokenErrorNone {
+		writeJSON(w, http.StatusOK, map[string]any{"patToken": nil, "patTokenError": string(injected)})
+		return
+	}
+
 	p := &pat{
-		authorizationID: randHex(16),
+		authorizationID: uuid.NewString(), // the real service answers a GUID
 		displayName:     displayName,
 		scope:           scope,
 		validTo:         validTo,

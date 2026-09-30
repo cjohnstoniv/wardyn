@@ -8,11 +8,455 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade: Entra changes (Azure DevOps)
+
+Azure DevOps no longer uses one shared personal access token. For each run, Wardyn now creates a short-lived
+token in the name of the person who started it, with only that run's access, and revokes it when the run
+ends. This needs Wardyn's console to sign in with Microsoft Entra ID, and **no new app registration is needed**:
+you change the one Wardyn already signs in with. (If Wardyn signs in with another identity provider, use Entra
+sign-in for Azure DevOps with an app registration of its own (`bearer`), or let each person add their own token
+(`own_pat`).) In Microsoft Entra, on the app registration Wardyn already signs in with:
+
+1. **API permissions → Add a permission → Azure DevOps → Delegated permissions:** add `vso.pats` and
+   `vso.pats_manage`. (Keep `openid` and `offline_access`.)
+2. **Grant admin consent** for those permissions. This needs a Cloud Application Administrator, an
+   Application Administrator, an AI Administrator, a Privileged Role Administrator, or a custom role that can
+   grant permissions to applications.
+3. **If you did not use Azure DevOps sign-in before:** under Authentication, add the Web redirect URI
+   `https://<your-wardyn-address>/api/v1/scm/azure-devops/callback`.
+4. **If Wardyn runs without `WARDYN_OIDC_CLIENT_SECRET`:** under **Authentication**, make sure Wardyn's
+   console redirect URI is registered under the **Web** platform (not Single-page application or Mobile and
+   desktop). Then add a client secret and set `WARDYN_OIDC_CLIENT_SECRET`. Per-run tokens require a
+   confidential app, and the Azure DevOps row must name this same app. (`AADSTS700025` means the redirect is
+   still on a public-client platform.) Per-run tokens need Wardyn's console to sign in with Microsoft Entra ID
+   (`WARDYN_OIDC_ISSUER` is your tenant's issuer).
+
+In Azure DevOps (**Organization settings**):
+
+5. If **Policies → Restrict personal access token (PAT) creation** is on, add the people who use Wardyn (or
+   their group) to its allow list.
+6. Recommended: **Microsoft Entra → Enforce maximum personal access token lifespan: On.**
+
+After upgrading, open **Settings → Workspace providers → Azure DevOps**, choose how people connect, and turn the
+row on. Then sign in to Wardyn (again, if you were signed in already) and run **Check organisation settings**.
+
+A row that stays on Entra sign-in (`token_mode: bearer`, which is what a row with no `token_mode` reads as) needs
+none of the steps above, and its app must **not** hold `vso.pats` or `vso.pats_manage`.
+
+**This upgrade deletes the stored shared Azure DevOps tokens and SSH keys** (see Upgrading in
+`docs/AZURE-DEVOPS.md`). It can't be undone. If you might roll back, keep your own copy of the token first.
+
+### Added
+
+- **See the policy a run got (#1425).** `GET /api/v1/runs/{id}/policy`, `wardyn run policy
+  <run-id> [--json]` and the SDK's `GetRunPolicy` return the resolved policy as a policy document,
+  where it started from (the saved policy as it read at launch, an inline policy, the default or
+  the governance profile), what launch changed and why (workspace, source control, package
+  mirror, model access, the GitHub connection, the governance profile, disk size, a restart, or
+  the member's limits), and whether the saved policy was edited since. Readable by whoever can
+  read the run (anyone else gets its `404`; a portal's delegated token is refused), with mount
+  sources and secret names hidden below the security admin tier. `run.create` records the
+  starting policy as `policy_source`, already redacted, and a git-broker run writes a new
+  `run.egress.confine` row; no migration. A run from before this reports `complete: false`. The
+  run page has a Policy tab between Approvals and Audit (a Summary/YAML view with Copy YAML; members see
+  `Hidden` for folder sources), and the identity card's Policy row is now a View link to it for every run.
+- **A run shows its startup progress while its sandbox comes up (#1419).** While a run is Pending or
+  Starting, the run page's terminal area shows the sign-in door's step list (Starting the sandbox,
+  Downloading the image, then Opening the terminal, Starting the task or Starting the command)
+  instead of one fixed sentence, drawn by the same shared component. A download says so at once; any
+  other wait speaks once the sandbox has been starting for a minute, counted from when Starting
+  began rather than from launch; a reason waiting cannot fix marks the step failed and shows the
+  substrate's own words. Past the longest a healthy start takes (4 min 30 s in Starting, 30 min in
+  Pending) the list stops claiming a step is in progress and says to kill and relaunch, which also
+  covers a run left mid-start by a daemon restart. The header chip stays; it and the Runs row
+  also read "Building the image" for an `image: Building` line. The server writes that line
+  (`status_detail` `image: Building`, `status_reason` `Building`) immediately before each image build
+  (a BYOI wrap, a devcontainer or a workspace image) and never on a cache hit, so a build no longer
+  reads as a bare "Queued" for up to 30 minutes. It shows on `PENDING` runs only, carries no image or
+  repo reference, and is not counted in `wardyn_run_start_wait_seconds`. No migration and no new
+  route. After a daemon restart the last line can stay on the row until the undispatched-run reaper
+  collects it, about an hour after the restart; see OPERATIONS.md, "What a starting run is waiting on".
+- **Azure DevOps: Wardyn creates a short-lived personal access token for each run, in the person's name
+  (#1428).** On a row with `token_mode: minted_pat` (the console's first choice for a new row) each
+  person connects once, when they sign in to Wardyn, which asks for `vso.pats`, `vso.pats_manage` and
+  `offline_access` only. For each run Wardyn creates a token named `Wardyn run <id>` for one
+  organisation, with only the scopes of the run's capabilities, living at most `pat_max_hours` (1 to
+  168, default 8). The proxy adds it as Basic auth; the sandbox never holds it, and its raw and encoded
+  forms are masked. An approval that widens the run's access creates a new token with the combined
+  scopes, and renewal creates the next one inside ten minutes of expiry; neither revokes the older token
+  early, because the proxy keeps one credential per host that Wardyn cannot reach, so a host that holds
+  a token Azure DevOps refuses drops it, asks again and retries once where the request can be sent
+  again (never a push). Pausing a run revokes every token and a resume creates a new one; run end, kill,
+  lease loss, a restart's reconcile, the sandbox sweeps, the idle stop, a changed row and an admin's
+  erase of the person's credentials revoke them too, and a sweep at boot and every five minutes revokes
+  any a crash left. Each token is recorded before use (`ado_run_pats`, migration `0102_ado_run_pats`;
+  never the value), and every step is audited: `ado_pat.mint`, `ado_pat.mint.denied`, `ado_pat.revoke`,
+  `ado_pat.revoke.failed` and `ado_pat.connect`. **Check organisation settings**
+  (`POST /workspace-providers/git/{id}/org-check`, admin only) verifies that the app holds both token
+  permissions, that a token of the row's longest life is accepted, and whether the organisation's
+  maximum token lifespan is on, off or unknown, using two canary tokens (the second lives 364 days)
+  that are revoked at once (the answer adds `lifespan_error` when the policy is unknown). A person can
+  disconnect (`DELETE /api/v1/scm/azure-devops/connection`), which revokes the tokens of their runs in
+  progress, forgets their sign-in and writes `ado_pat.disconnect`; `GET /api/v1/runs/{id}/ado-tokens`
+  lists every token a run held (never a value or an id) for its owner or an admin, and `/me/scm-access`
+  adds `token_mode`, `last_token` and `default_profile`. Migration `0104_ado_run_pats_owner_idx` indexes
+  `ado_run_pats` by owner. The console asks how people connect, draws each person's state in Settings,
+  lists a run's tokens on the run page, says what the run's token carries on New Run and asks to connect
+  before launching; an admin's own check that the creation policy refuses raises a banner with a button
+  to switch the row to Entra sign-in. **Upgrading:** add
+  `vso.pats` and `vso.pats_manage` (Azure DevOps, delegated) to Wardyn's app registration and grant admin
+  consent; a `minted_pat` row must name Wardyn's own sign-in app, and per-run tokens need
+  `WARDYN_OIDC_CLIENT_SECRET` (a row that breaks either rule is refused when saved and left unusable at
+  boot). See "Before you upgrade: Entra changes" above.
+- **Azure DevOps: each person can add their own personal access token (#1430).** Where Entra sign-in
+  isn't available, a row with `token_mode: own_pat` (which names no tenant or client) or an Azure DevOps
+  Server row takes a token each person creates in Azure DevOps and pastes in
+  (`PUT /api/v1/me/scm/azure-devops/token` with `org`, `token` and `expires_on`; `DELETE` removes
+  Wardyn's copy). Wardyn asks Azure DevOps (`connectionData`) whether it accepts the token for the
+  organisation and whether its account is the caller's sign-in email, and refuses one that belongs to
+  another account (never naming it), one Azure DevOps rejects, and an expiry past the row's `pat_max_days`
+  (1 to 90, default 30). The token is stored sealed in the person's own namespace, added by the proxy as
+  Basic auth, never given to the sandbox, and not used from the start of the day the person entered;
+  Wardyn cannot revoke it. `/me/scm-access` grades it `live`, `expiring` (within 7 days) or
+  `expired_signin` (`cause: token_expired`), a launch with an expired token is refused, and a run whose
+  token expires mid-run is held on the Azure DevOps sign-in request until a new one is added. Audited as
+  `ado_pat.own.store` (a refused token of another account is its failure, `reason: identity_mismatch`)
+  and `ado_pat.own.delete`. **Azure DevOps Server** (`lanes: ["pat"]`, `credential_source: per_user`, no
+  `entra` block, an address naming its collection such as `https://host/Collection`) is git only: its
+  token is matched by the `Account` or `Mail` the server gives its owner, may last up to 30 days, and
+  the run holds `code_read` and `code_write` (a push confined to the run's own branch) through the
+  proxy's git broker, pinned to that collection.
+- **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
+  Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
+  Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
+  principal is `entra:<tid>:<oid>`. A sign-in becomes that person only when its issuer, `tid` and
+  `oid` claims equal the recorded ones exactly — never by email, never by a `sub` in the `entra:`
+  namespace, which a sign-in is refused for — and every such sign-in is audited as `person.attach`
+  naming the person and the pairwise `sub`. A sign-in whose `sub` already names someone here keeps
+  it and does not attach (`person.attach` outcome `denied`, `sub_known`), and a plain `principal` in
+  the `entra:` namespace is refused `422`. Minted tokens keep their unknown-groups stamp until
+  that sign-in. Other issuers are unchanged, and refuse the object-id form. Migration
+  `0099_people_entra_object_id` adds the key columns to `people`.
+- **A recipe for running CI jobs as confined one-shot runs (#1111).** `docs/ci-jobs-as-runs.md` puts
+  the pieces in order: a governance profile for a dedicated CI principal, a pinned image, a runner
+  token delivered as an `env_secret` grant, a sealed run policy, `wardyn run --wait` with the job's
+  exit code, and what the audit trail records. It ends with a worked example of a self-hosted
+  Forgejo runner that registers, takes one job and exits, inside a confined run. Every command in it
+  was run against a compose install.
+- **A run's lifecycle as a live event stream (#1144).** `GET /api/v1/runs/{id}/events` is a
+  `text/event-stream` of a closed vocabulary — `provisioning`, `pulling`, `ready`, `idle_stopped`,
+  `failed` (with a machine `reason`) and a final `ended` carrying the terminal state — readable by
+  whoever may read the run (anyone else gets the same `404` as `GET /runs/{id}`). Event ids are
+  monotonic per run and `Last-Event-ID` resumes without gaps within the daemon's lifetime; the feed
+  is kept in memory, carries no log or secret content, and adds no migration. The Go SDK follows it
+  with `RunEvents`; see `docs/sdk.md`.
+- **A governance profile can forbid UI apps: `deny_ui_apps` (#1391).** A run under a profile with
+  the limit has its `ui_apps` stripped at create, with a `clamp_warnings` sentence and an
+  `authz.denied` `governance_profile` drop at target `runs.ui_apps`, and the UI gateway refuses a
+  session into a run created under the profile. An empty `ui_apps` in a ceiling still means no
+  opinion, so existing profiles behave as before. A super admin is not bound. The console's profile
+  editor does not show the limit yet; set it through the API or `wardyn governance apply`.
+- **A portal can follow its person's runs live (#1407).** A delegated token now reaches
+  `GET /api/v1/runs/{id}/events` for its person's runs, with the same `404` as `GET /runs/{id}` for
+  anyone else's. One principal holds at most 32 open event streams; the next is refused `422` with
+  reason `event_stream_cap` (not audited) until one closes. Revoking the person's sessions still ends
+  a portal's open stream at the next keepalive.
+- **The end of an exec run's output, with or without recordings (#1232).**
+  `GET /api/v1/runs/{id}/output?tail=<bytes>` returns `{output, truncated, complete}` — the last 8 KiB
+  of a `task_mode=exec` run's combined stdout/stderr, kept in wardynd's memory apart from the
+  recording store, so it works with `WARDYN_RECORDING_STORE=off`. Readable by the run's owner or an
+  admin; anyone else gets the same `404` as `GET /runs/{id}`. An interactive run is refused (`409`,
+  `run_output_interactive`). Values in the masking registry are masked as they are written; anything
+  else a command prints is kept like a log line (OPERATIONS.md "Exec run output"). A tail is dropped
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output (`410`,
+  `run_output_expired`) and on a wardynd restart; `WARDYN_EXEC_OUTPUT_TAIL=off` keeps none. On
+  Kubernetes the tail is read from the agent container's log, so the chart's k8s-runner Role now
+  grants `get` on `pods/log` (a Role you write yourself needs it too). The Go SDK reads it with
+  `RunOutput`.
+
+### Changed
+
+- **Azure DevOps capabilities: one read per area, in Azure DevOps' own names (#1409).** The single
+  `read` capability becomes eleven reads, one per Azure DevOps area, and each area's write and admin
+  rows follow Azure DevOps' own read → write → manage ladder. The catalogue now has 28 grantable
+  capabilities, grouped in the console as Repos, Boards, Wiki, Pipelines, Artifacts, Test Plans and
+  Organization, and every row shows the scope Wardyn requests and the permission as Azure DevOps'
+  Project settings shows it. High-risk rows sit inside their area with a red badge and edge.
+  - A read a run does not hold is held for approval like any write: a run holding only `code_read`
+    that fetches a work item is asked for `work_read`.
+  - People consent only to the scopes of the rows on a ceiling, and a row whose `default_profile` is
+    empty now starts from `code_read` and `project_read`. A ceiling no longer has to hold a read.
+  - Azure DevOps' API discovery (`OPTIONS` location discovery, `connectionData`, `resourceAreas`) is
+    allowed to any run holding a capability and needs none of its own.
+  - Deleting or destroying work items and changing areas, iterations, fields and tags is
+    `work_admin`, split from `work_write`. Creating, deploying and deleting classic releases is
+    `release_execute`, split from `build_execute`, and editing release pipelines or answering release
+    approvals is `release_admin`, split from `build_admin`. A work-item `$batch` needs the widest
+    capability among its operations, and one whose method cannot be read is refused.
+  - Deleting a package and creating, changing or deleting a feed is `packaging_manage`
+    (`vso.packaging_manage`). Azure DevOps refused these under the `vso.packaging_write` scope
+    Wardyn requested before, so they never worked.
+  - Only the three documented search resources classify: code, work item and wiki search. Any other
+    `almsearch` resource is refused as an unclassified read.
+  - **This is a clean break.** Migration `0101_ado_capability_split` rewrites every stored list to
+    its exact equivalent, as in the table below: provider ceilings and default profiles, saved
+    policies, governance profiles and launch presets. The scopes each list requests do not change,
+    so nobody consents again. After it, the old `read` id is a `400` at every write door
+    (`PUT /workspace-providers`; policies, inline policies, presets and governance profiles with
+    reason `ado_capability_unknown`), and the daemon refuses to boot on a `WARDYN_DEFAULT_POLICY`
+    file that names it. The migration cancels every pending Azure DevOps capability approval, with
+    one `approval.cancel` audit row per run. Pending consent requests name scopes and stay pending.
+
+    | Stored | Becomes |
+    |---|---|
+    | `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read` |
+    | `work_write` | `work_write`, `work_admin` |
+    | `build_execute` | `build_execute`, `release_execute` |
+    | `build_admin` | `build_admin`, `release_admin` |
+    | an empty `default_profile` | the eleven reads, written out |
+    | every other id | itself |
+
+  - **Upgrading:** upgrade with no Azure DevOps Entra runs in flight. A run dispatched before the
+    upgrade holds the old ids: its next Azure DevOps request is refused (`scope_changed`, drift
+    `capability_ceiling`) and it must be relaunched. Update any `WARDYN_DEFAULT_POLICY` file that
+    names `read` before upgrading.
+- **Breaking: Azure DevOps stops using shared credentials (#1429).** A shared personal access token or
+  SSH key was one account's standing credential, used for every person's runs. From this release an
+  Azure DevOps provider row carries only per-person lanes, and both write doors (`PUT
+  /workspace-providers` and `PUT /site-config`) refuse the retired ones with a `400`: a `pat` lane that is
+  not `per_user` (and any `pat` lane on a row of `dev.azure.com` or `*.visualstudio.com` addresses alone),
+  any `ssh` lane, and a row with no lanes at all, which used to mean the shared `pat` and `ssh` lanes.
+  Migration `0103_retire_ado_shared_credentials` rewrites every stored Azure DevOps row that named a
+  shared lane or none: `pat` and `ssh` leave its lanes, and a row left with no per-person lane is turned
+  off (`disabled`), keeping its id and addresses: a hosted row becomes an `entra` row in `own_pat` mode
+  with a read-only ceiling, and a Server row becomes a `pat` row with `credential_source: per_user`. A
+  hosted row that already has the `entra` lane keeps it and stays as it was. A turned-off row still claims
+  its hosts, so **clones from those organisations fail with a reason until an admin chooses how people
+  connect and turns the row on**, and `/setup/status` carries a non-blocking `ado_rows_off` warning until
+  they do. Runs read a stored git token for an Azure DevOps host from the run owner's own row only (a
+  person with no token of their own is refused at launch, for every `dev.azure.com` and
+  `*.visualstudio.com` address whether or not a row names it), an `ssh_key` grant for one is dropped
+  with a warning, and the operator can no longer store a secret under a retired shared name (`PUT
+  /secrets` answers `400`). **Upgrading:** at the **first start after the
+  upgrade** (once; never again) Wardyn **deletes, irreversibly**, these stored secrets for every Azure
+  DevOps host it can name (`dev.azure.com`, `ssh.dev.azure.com`, `vs-ssh.visualstudio.com`, every host an
+  Azure DevOps provider row names, and every `*.visualstudio.com` entry in `scm_hosts`), in the
+  operator's namespace and in every person's namespace: `git-pat-<host>`, `ssh-key-<host>` and
+  `known-hosts-<host>`, where `<host>` is the host with each run of characters other than letters and
+  digits turned into one `-` (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`,
+  `known-hosts-ssh-dev-azure-com`, `git-pat-tfs-corp-example`). A stored secret is write-only and cannot
+  be exported, so **keep your own copy first if you might roll back.** Each namespace that held any is
+  audited once as `ado_shared_credential.retire`, listing names and no values. **Not deleted:** a
+  shared token, key or known-hosts secret stored under any other name (one a policy's `secret_name`
+  points at, for example), which you remove yourself; and any name whose host a GitHub or other
+  non-Azure DevOps provider row also names (or that slugs to the same name as one, or `github.com`),
+  which is skipped and logged as a warning, since it may be that forge's own credential. Wardyn's own
+  sealed Azure DevOps names and every other forge's secrets are left alone. GitHub and GitLab rows are
+  unchanged.
+- **Azure DevOps: an Entra sign-in row refuses a token that can create tokens (#1428).** A `bearer` row
+  no longer injects an Entra access token whose granted scopes name `vso.pats`, `vso.pats_manage`,
+  `vso.tokens`, `vso.tokenadministration` or `user_impersonation`, or one whose grant reported no scope
+  at all: the run gets no Azure DevOps credential (`mint_scopes` or `scope_unknown`, audited as
+  `ado_bearer.refused_mint_scopes`), and a `bearer` row may not name the app a `minted_pat` row uses.
+  **Upgrading:** an app that serves a `bearer` row must not hold the two token permissions; remove them
+  or move the row to `minted_pat`.
+- **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
+  to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
+  (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
+  warning; the Compose demo is exempt. With secure cookies, a UI gateway advertised on the console's
+  own hostname logs a warning that names the fix, a hostname of its own. Neither refuses boot. A
+  managed laptop's device credential now records a hash of `WARDYN_ORG_URL`: a different URL (case, a
+  default port and trailing slashes do not count) re-enrols with a fresh `WARDYN_ORG_ENROLMENT_TOKEN`
+  minted for that URL, since the spent one is refused there, or refuses to start without one, instead
+  of sending the old bearer to the new host. A credential stored earlier is kept and bound to the URL set at its first boot after
+  the upgrade. `docs/operations/secrets-and-keys.md` notes that a Vault platform policy must cover
+  `<prefix>/platform/*`.
+- **A run's model credential comes only from its model provider; the 0.8.2 upgrade converts 0.7.x
+  and 0.8.0 model configuration and there is no alias window (#548).** Migration `0100_model_provider_conversion`
+  runs once, in one transaction: the AI integration rows (`anthropic_api_key`,
+  `anthropic_subscription`, `openai_api_key`, `bedrock`) become model providers of the same id and
+  are then **dropped from site config**; each agent roster row's model lane joins a provider of that
+  kind (a `bedrock_sso` row's start URL, account and role become the provider's sign-in setup), and
+  the row keeps only `id`, `disabled` and `default_provider`; a workspace's
+  `llm_cred.integration_ref` becomes `provider_ref` (audited `workspace.llm_cred.migrated`); and
+  every pending AWS sign-in hold that names no provider is cancelled (`approval.cancel`, reason
+  `model_provider_conversion`). Whatever is not converted — a subscription on the operator's host
+  `~/.claude`, the `bedrock_env`/`bedrock_aws_dir` lanes, a Bedrock provider with no region, model or
+  start URL (those came from the boot environment, which a migration cannot read) — is audited
+  `model_provider.not_converted` naming it and why, and a provider created that way starts turned
+  off. No stored credential moves: each person signs in or adds their key again on their provider.
+  **Upgrade note:** take a `pg_dump` first (migrations are forward-only), then review Settings →
+  Model providers — turn on any provider the conversion left off once its region, model or start
+  URL is filled in. Removed with no alias: `POST /setup/harness-login` (a sign-in is
+  `POST /model-providers/{id}/sign-in`) and `PUT`/`DELETE /setup/harness-credential/{provider}`;
+  the roster's `mechanism`, `credential_source` and `sso_*` fields (a roster write still carrying
+  one is a `400`); `GET /setup/status`'s `model_access` and `harness` objects and the
+  `mechanism`/`credential_source`/`credential_residency` fields on its `harnesses` rows; a
+  preflight's `model_credential.mechanism`/`credential_source`/`staged_placeholder` (it now names
+  `provider`, `kind` and a `proxy`/`sandbox` residency); a run refusal's `mechanism` datum; the
+  workspace Bedrock reference; and the `harness_login_mechanism_principal` and
+  `harness_login_not_per_user` authz reasons. `llm_ready` now reads true only when an enabled model
+  provider serves a harness. Dispatch drops every model credential a policy carries that its
+  provider did not author, with or without a provider block (`run.injection.drop`, reason
+  `model_credential_not_provider_authored`), and an `env_secret` grant setting a model variable is
+  refused either way. A revive or admin "Restart with current limits" applies the same strip to the
+  run's stored proxy config, so a run dispatched before the upgrade comes back without the
+  operator's model key. The `agent_provider.write` audit datum narrows to `agent_count`, `disabled`
+  and `ids`. The kind AWS SSO walk now seeds a `bedrock_sso` model provider instead of a roster
+  row.
+- **A model provider that isn't available to you answers like one that doesn't exist (#1018).** The
+  key door (`PUT` and `DELETE /model-providers/{id}/credential`) and `/model-providers/{id}/sign-in`
+  now answer a provider its "Available to" list leaves you out of with the same `404`
+  (`model_provider_not_found`) and sentence an unknown id gets, instead of a `403` naming it,
+  because provider ids are guessable. The key door checks this before it says a provider is
+  signed in to rather than keyed, and a `DELETE` of a key you still hold is never refused. At
+  `POST /runs` and `POST /runs/preflight`, a provider you name and are not granted answers the
+  `422` "there is no model provider by that name", whatever its state, instead of the `403`; one
+  your workspace pins, or the one provider serving the agent when you name none, is refused without
+  naming it. A workspace pinned to a provider you are not granted reads as
+  `llm_cred: {"provider_unavailable": true}` instead of the provider's id, and the console still
+  marks it unavailable and preselects no provider for it. The `authz.denied` row still records
+  `capability_model_provider`.
+- **The User view's forced exit is dual-emitted too (#1020).** When `GET /me` finds the viewed user
+  type deleted and drops the session back to the Admin view, it writes `auth.member_mode` beside
+  `auth.user_view.set`, with the same data, as the toggle does through 0.8.x.
+- **The operator-held model credential lanes are retired (#549).** Model access is configured only
+  under Settings → Model providers, and each person connects their own credential there. Boot
+  refuses every `WARDYN_ANTHROPIC_*`, `WARDYN_OPENAI_*` and `WARDYN_BEDROCK_*` variable,
+  `WARDYN_AGENT_ANTHROPIC_MODEL`, `WARDYN_SUBSCRIPTION_INJECT` and
+  `WARDYN_ALLOW_SHARED_SUBSCRIPTION` set to anything but empty, `false` or `off`, naming each;
+  `WARDYN_SUBSCRIPTION_TOKEN` is no longer read. `wardyn subscription` is removed. `PUT
+  /secrets/{name}` (`wardyn secret set`) refuses `anthropic-api-key`, `openai-api-key`,
+  `bedrock-api-key`, `aws-access-key-id`, `aws-secret-access-key` and `aws-session-token` with `403
+  secret_name_reserved`, and every boot deletes those names and the two harness sign-in names
+  (`wardyn-harness-anthropic-oauth`, `wardyn-harness-aws-oauth`) from every namespace, audited once
+  as `model_credential.retire`. The two legacy sentinels `anthropic-subscription-oauth` and
+  `anthropic-managed-oauth` are refused as reserved names, at the injection sink and at policy
+  write. The host `~/.claude` and `~/.aws` mounts, the static SigV4 lane and
+  `scripts/stage-claude-creds.sh` are gone: a policy whose `workspace_mounts` targets
+  `/home/agent/.claude` or `/home/agent/.claude.json` is refused at every policy write and at boot,
+  and dispatch drops such a mount from a stored policy. `GET /setup/status` no longer carries
+  `bedrock`, `auth.shared_subscription_allowed`, `auth.shared_subscription_reason`, `deployment`
+  or `providers[].auth_mode`/`logged_in`/`login_detected_via` (a host CLI sign-in credentials no
+  run), and the `bedrock_provider` check is gone. The Helm chart refuses to render a retired
+  variable set in `env` or `extraEnv`. **Upgrade note:** unset the
+  retired variables before upgrading (on the compose stack they are simply no longer forwarded, so a
+  0.7 `.env` still carrying one boots clean and the value is inert — `make doctor` lists any still in
+  `.env`), then set up Settings → Model providers and have each person
+  connect their own credential (a key, or a Claude or AWS sign-in).
+- **Reviving a live run is bounded to once a minute (#1005).** Each revive of a running run, through
+  `POST /runs/{id}/revive` or the admin "Restart with current limits", removes and recreates its
+  proxy; a second one within a minute of the last that reached the proxy is refused `429`
+  `revive_live_too_soon`. The bound is kept per `wardynd` process, so each replica allows one a
+  minute. A revive of a lost run is never bounded.
+
+### Fixed
+
+- **An open run event stream ends when its portal is revoked or its delegated token expires (#1413).**
+  A portal's delegated token that opened `GET /runs/{id}/events` used to keep streaming after the
+  portal was revoked or the token's ten-minute lifetime passed, until the five-minute hold ended it.
+  The stream now re-checks the token at each keepalive and ends at the next one, failing closed if
+  the check cannot be answered.
+- **The Add workspace dialog no longer offers a member on Kubernetes a local directory (#1416).** The
+  console decided "this install runs on Kubernetes" from `runner.driver`, which `GET /setup/status`
+  blanks for a member; it now also reads the member-safe `runner.kubernetes` bit added for #1238.
+- **The New Run barrier picker no longer claims what the server would contradict (#1238).** A member
+  on Kubernetes is no longer told to bind-mount `/dev/kvm` for Vault: `GET /setup/status` keeps one
+  substrate bit for members, `runner.kubernetes`, beside the confinement classes it already kept and no other runner detail, so the console can
+  tell a Kubernetes install apart. The "couldn't check which barriers this host has" line now appears
+  when the host probe fails or no runner is configured, and each row then reads Unverified instead of
+  Ready (and Checking… until the probe answers). A host with no barrier at all shows the no-runner card instead of a floor requirement naming
+  Fence. Until the console has heard who you are (or if that read fails) it offers the tiers a member
+  may use, not an admin's.
+- **`deny_interactive` now refuses a terminal attach and SSH into a run under the profile
+  (#1392).** It refused an interactive run at create, but the owner of a task or exec run under the
+  profile could still `wardyn run attach` (or open the console terminal) and, with the SSH gateway
+  on, SSH into it. The attach is now refused `403` (`governance_profile`, target `runs.attach`) and
+  the SSH connection is refused and audited as an `ssh.authenticate` failure naming the profile. The
+  limit is read from the profile the run was created under, as it stands now, so setting it also
+  reaches runs already going. A super admin and the harness sign-in run are not bound, as at create.
+- **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
+  it runs (#1082).** The migrator removed a row's old Vault copy after the row had committed and
+  released its lock, so a store-mode save of the same credential in that window re-pointed the row
+  at the same Vault path and the removal deleted the new value, leaving the row pointing at
+  nothing. (Key Vault was exposed only when the re-save landed in the same second as the old
+  version.) The removal now runs under the row's lock again and leaves a value the row has just
+  been re-pointed at alone; a concurrent save waits for it. A failed removal still leaves an
+  orphan the error names.
+- **An aborted boot conversion of legacy secrets now records the rows it read (#1071).** When a
+  legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
+  row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
+  was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **A member whose Azure DevOps list is narrowed by their bound is told when they launch (#1384).**
+  When a run policy's `azure_devops_capabilities` names more than the provider row's default profile
+  and the member's governance profile stand, the launch's `201` carries one sentence naming what was
+  dropped, and the run's Effective policy shows it (it is in the `run.create` row's
+  `clamp_warnings`). Review refuses a list none of which may stand with `422` and reason
+  `ado_capabilities_none_permitted`, the refusal launch already gave at dispatch. The
+  `azure_devops_capabilities` field help now says a member stands only what the provider's default
+  profile or their governance profile grants, and Review's repository-access row names Azure DevOps,
+  not GitHub, for an Azure DevOps workspace.
+- **The run page names a run's model provider, and says "(removed)" only when it is (#996).**
+  `GET /runs/{id}` carries `model_provider_name` and, once the provider is deleted,
+  `model_provider_deleted`. The header chip used the viewer's own setup status, which lists only what
+  their agents use, so a provider that still existed showed as "(removed)" by its id, and a deleted
+  one showed its id in place of its name. The `run.create` row now freezes the provider's name, and the
+  AWS sign-in approval card names the run's provider from that read when its viewer's setup status
+  does not list it.
+- **The Images tab reads user types once (#1016).** Each row's "Available to" control fetched
+  `GET /user-types` on its own, so a tab of N images made N reads; they now share one.
+- **The run page no longer gets a 500 in the moment a finishing run's sandbox is already gone
+  (#1270).** A short run's pod (or container) is removed a moment before its state flips to
+  finished, and in that window the Sandbox and Files widgets read a sandbox that was not there and
+  got `500`, with an error in the server log. `GET /runs/{id}/resources` and `GET /runs/{id}/files`
+  now answer the same `409 run has finished; its sandbox is gone` the flipped state gets a moment
+  later, and record no failure.
+- **An open run page no longer delays an idle pause (#1287).** With no disk cap enforced, the Sandbox
+  widget's every 4-second poll walked the sandbox's root filesystem (`du`), and that CPU landed in the
+  window the idle pause reads to decide whether the agent is quiet. The walk's result is now reused
+  for a minute (a sandbox too big to walk in time is not walked again on every poll), and the idle
+  reading waits out a walk in progress and holds off a new one while it samples, so it reads the
+  agent alone.
+- **A plain user's `POST /me/view` no longer tells them which user types exist (#997).** Their request
+  is ignored, with the same `200` no-op, before the type is looked up, so a known and an unknown
+  `user_type` answer alike. An admin still gets the `400` for an unknown type.
+- **`user_type_unknown` and `groups_snapshot_stale` denials record the request's `method` (#997)**,
+  like every other `authz.denied` row a request produces.
+- **An image grant with an empty, `.` or `..` path segment is no longer honoured (#1018).** Such rows,
+  stored before the grant write refused them, already show as inert; a run naming such an image is
+  now refused (`byoi_user`) even when that grant or a wildcard covers it.
+- **Every row of a portal's attach and UI-gateway session names the portal (#1234).** A session
+  entered with an attach ticket minted through a portal wrote `data.via` on its entry rows only;
+  `session.promote` and the UI gateway's `ui.start`, `ui.open`, `ui.close` and re-check refusal rows
+  now carry it too. `PUT /secrets/{name}` and `POST /me/ssh-keys` also refuse a delegated request
+  themselves (`403` `delegation_scope`), not only through the delegation allow-list.
+- **Reviving, restarting or extending a run whose model provider was deleted or turned off is
+  refused up front (#1081).** The revive used to replace the proxy and answer `200`, and the run's
+  first model call was then refused, or a run from before 0.8.2 came back with no model credential.
+  Such a run is now refused `409` with `model_provider_gone` (the provider was deleted, or
+  re-created under the same id) or `model_provider_disabled` (the provider was turned off),
+  audited as `run.revive` or `run.end.set` denied, before anything changes.
+- **Purging a model provider stops masking its people's sign-in secrets (#1001).** An AWS sign-in's
+  refresh token and client secret stayed in the process-wide output mask until `wardynd` restarted
+  after their provider was deleted or moved; they are now let go one sweep grace later, as for any
+  deleted credential.
+- **A run that fails on model access says so, in the agent's own words (#1280).** On the per-user
+  AWS SSO Bedrock lane the proxy cannot see the model's refusal, so such a run ended `FAILED` with no
+  reason. When a run exits non-zero with no reason of its own and its recording's last lines name a
+  model-access problem, that line is its failure hint, quoted as the agent's output, with a pointer
+  to the recording. Only a reader who can open the recording (the run's owner or a super admin)
+  sees the quoted line; a security admin sees the hint without it.
+- **The "Attach from your terminal" card on the run page scrolls.** Its lanes were taller than the
+  card's tile and the bottom was cut off with no way to reach it; the card body now scrolls inside
+  the tile.
+
+## [0.8.1] — 2026-09-29
+
 ### Fixed
 
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer
-  the chooser.** When the AWS access portal reaches more than one account and the agent row has no
-  pin, the helper asks which account and role. Its single 15-second deadline started before that
+  the chooser.** When the AWS access portal reaches more than one account and the model provider has
+  no pin, the helper asks which account and role. Its single 15-second deadline started before that
   question, so an answer given at human speed found the role lookup already expired, and the helper
   uploaded a blank account and role. The control plane refused it with "sso token blob is missing
   required fields (account_id, role_name)" and nothing was stored. Each portal request now has its

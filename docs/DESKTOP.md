@@ -241,25 +241,20 @@ widens an egress ceiling, binds credential material, or writes the host: those
 `PUT`/`DELETE /secrets/{name}` is self-service for any signed-in human and
 scoped to the caller's OWN namespace — `secretOwnerFromRequest` returns `""` for
 an operator and the caller's own principal for a member, so the developer writes
-their own row and can neither read, overwrite nor delete the operator's. Three
-things stay admin-only inside that: the operator's `""` namespace itself, the
-three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
-`aws-session-token`), which a non-operator `PUT`/`DELETE`
-refuses with a `403` because dispatch always signs with them out of the operator
-namespace, and `?owner=<principal>` — reaching into another namespace — which
+their own row and can neither read, overwrite nor delete the operator's. Two
+things stay admin-only inside that: the operator's `""` namespace itself, and
+`?owner=<principal>` — reaching into another namespace — which
 answers `403 ?owner= is admin-only` to a member (and on a `PUT`, `403` to an admin
 too: a credential is set only by the person it belongs to). A run resolves its own owner's row and
 falls back to the operator's, never to another member's.
 
-The fourth Bedrock name is the exception, and it is one name: a member may store
-their own `bedrock-api-key`. The BEARER is a static `Authorization` header the
-proxy injects per run, so under an agent row marked `per_user` a member's own
-key is a credential their runs really authenticate with rather than a row
-nothing reads — and it is the ONLY bearer their runs see: the operator's does
-not stand in for a member who has stored none. Under a `shared` row the
-operator's key serves every run and a member's own is not read. Which namespace
-a run uses is decided once, at dispatch, and recorded on the run's grant; the
-proxy is handed the key from exactly that namespace.
+The model-credential names — `anthropic-api-key`, `openai-api-key`,
+`bedrock-api-key` and the three AWS SigV4 names (`aws-access-key-id`,
+`aws-secret-access-key`, `aws-session-token`) — are refused for everyone, the
+operator included, with a `403 secret_name_reserved` that names Settings → Model
+providers: a member's model credential lives on a model provider, connected by
+that person for themselves (`PUT /api/v1/model-providers/{id}/credential`), never
+in a secret they name.
 See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.** The one power m′ adds that no other
@@ -309,6 +304,7 @@ unexpired: the organisation spends a token when it accepts it, so an enrolment
 whose answer never reached the laptop, or that failed on the organisation's side
 after that, leaves every later retry refused `401` until an admin mints a new
 token. See `bootHybrid` (`cmd/wardynd/boot_hybrid.go`).
+The stored credential is bound to `WARDYN_ORG_URL`; changing the URL needs a fresh enrolment token, or the boot refuses.
 
 **Forwarding.** Once enrolled, `wardynd` pushes this laptop's own audit rows to
 the organisation's table, 500 at a time, on a 15s tick, from a durable cursor —
@@ -531,57 +527,19 @@ mean once the caller is an admin).
 
 ## Model access on m′
 
-BYOK is no longer a dead end here — per-principal secrets shipped (0.7): a
-member writes their OWN `PUT /secrets/<name>` row (no admin action), and an
-inline `api_key` grant naming a model-provider host (the anthropic.com/
-openai.com convention, or a configured internal gateway) that pairs with a
-secret the member OWNS is admitted with no operator eligible-grant pairing
-at all — see [USERS.md § Your model connections](USERS.md#your-model-connections). The
-secret-exfil guard `filterUserGrants` exists for is unaffected: the arm
-requires PROVABLE ownership (a names-only `Store.For(<member>).List`, never a
-value read, never another member's row) and a model-provider host the run's
-own already-clamped egress allows — an arbitrary stored secret paired with
-an arbitrary host is still dropped exactly as before.
+Model access on m′ is a model provider's, like everywhere else: an admin adds the
+providers (Settings → Model providers, admin-only), and each member connects
+their OWN credential for one — a key, a Claude sign-in or an AWS sign-in — which
+lands in their own namespace and serves only their own runs. See
+[USERS.md § Your model connections](USERS.md#your-model-connections).
 
-What m′'s other two mechanisms still hold:
-
-1. m′ makes **OIDC mandatory**.
-2. With OIDC configured, `wardynd` **refuses subscription injection** — a shared
-   subscription credential would serve other people's runs, which the harness
-   vendor's terms prohibit. BYOK is unaffected by this: it is the api-key
-   lane, never the resident-subscription mount.
-
-**Bedrock is the MDM-managed lane, with one member-held key beside it.**
-A member may store their own `bedrock-api-key` bearer; the three AWS SigV4
-names (`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) are
-still refused for a member's own `PUT /secrets` regardless of ownership, so
-member-supplied SigV4 Bedrock stays a Named gap. For a Bedrock-only fleet, or a
-member running `codex-cli` with no OpenAI key of their own, Bedrock is still the
-daemon-level, MDM-set path that needs no member secret write at all:
-
-| Variable | Set by |
-|---|---|
-| `WARDYN_BEDROCK_MODEL` | the envelope (a cross-region inference-profile id, or a full `inference-profile` / `application-inference-profile` ARN — **not** a bare foundation-model id) |
-| `WARDYN_BEDROCK_REGION` | the envelope |
-| `bedrock-api-key` secret | the **operator**, once, via the admin token |
-
-With those three in place a member's run resolves Bedrock at dispatch. The
-credential is never resident: a Bedrock API key is a static `Authorization`
-header, so the proxy TLS-MITMs `bedrock-runtime` and injects it, and the
-sandbox holds only a placeholder — the same trust parity as the api-key and
-subscription lanes. No member grant, no workspace requirement, and nothing that
-`filterUserGrants` can drop.
-
-**Constraint:** Bedrock resolution is scoped to the `claude-code` agent. A
-member running `codex-cli` on m′ still needs an operator-provided OpenAI
-credential.
-
-**Superseded on the record:** an earlier draft of this page rejected re-running
-the provider-convention model grant after `filterUserGrants` as reopening
-the secret-exfil guard. Per-principal secrets closed that: the own-key arm
-requires PROVABLE ownership of the exact secret name, not merely that it
-matches the convention, so a member still cannot pair an arbitrary stored
-secret with an arbitrary host — only their own key with a model-provider one.
+m′ makes **OIDC mandatory**, so every credential has a person it belongs to.
+Bedrock is a provider like any other (`bedrock_sso` or `bedrock_bearer`); its
+region, model and base URL live on the provider record an admin writes, not in
+the daemon's environment. The credential is never resident for a bearer: the
+proxy TLS-MITMs `bedrock-runtime` and injects it, and the sandbox holds only a
+placeholder. A `bedrock_sso` run holds that person's own short-lived role
+credentials (`threatmodel/THREAT-MODEL.md` §5.1a).
 
 ## Operational hygiene
 
@@ -806,8 +764,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.8.0|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.8.0|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.8.1|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.8.1|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

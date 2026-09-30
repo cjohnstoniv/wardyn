@@ -16,9 +16,9 @@
  *
  *   - a MEMBER, signed in through Dex on a k8s install, can complete the
  *     containerized AWS SSO login FROM THEIR OWN SEAT and reach the terminal;
- *   - the credential that login captured is THEIRS: `/setup/status` reads
- *     model_access `live` for the member and `not_configured` for the admin on
- *     the same install, at the same moment;
+ *   - the credential that login captured is THEIRS: `/setup/status` reads the
+ *     walk provider's access `live` for the member and `not_configured` for the
+ *     admin on the same install, at the same moment;
  *   - the identity real botocore asked the portal to mint is the MEMBER's
  *     PINNED account/role — read from the fake's own `/_seen`, which is the one
  *     observation in this file that is not Wardyn asserting about itself;
@@ -47,13 +47,12 @@
 
 import { expect, test } from "@playwright/test";
 import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view";
-import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
-import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
-// 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
-// constant name from their own canon docs. Both modules are plain constant
-// tables with no CSS import — the rule ui/e2e/walk/helpers.ts states for
-// SELFRUN_MARKER, and what keeps `playwright test --project=walk --list` green.
+import { BANNER, CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
+// Plain constant tables with no CSS import — the rule ui/e2e/walk/helpers.ts
+// states for SELFRUN_MARKER, and what keeps `playwright test --project=walk
+// --list` green.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
+import { RAIL_CREDENTIAL, RAIL_PROVIDER } from "../../src/app/components/wardyn/copy/new-run-rail";
 import { AGENTS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
@@ -68,17 +67,22 @@ import {
   modelAccess,
   openLoginPane,
   openLoginPaneAssertingColdPull,
-  putRoster,
+  putProvider,
   seen,
   signInThroughPane,
+  WALK_PROVIDER_NAME,
 } from "./helpers";
+
+// The shell strip's sentence for a member who has never signed in: claude-code
+// runs use the walk's provider, whose default it is.
+const STRIP_NOT_SIGNED_IN = BANNER.B1("Claude Code", WALK_PROVIDER_NAME);
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
 
 // ── the walk ────────────────────────────────────────────────────────────────
 
-test("the admin declares the per-user Bedrock SSO lane and pins the account", async ({ page, request }) => {
+test("the admin declares the Bedrock SSO provider and pins the account", async ({ page, request }) => {
   expect(ADMIN_TOKEN, "WARDYN_WALK_ADMIN_TOKEN is unset — run this through scripts/kind-sso-walk.sh").not.toBe("");
 
   await dexSignIn(page, ADMIN_EMAIL);
@@ -86,10 +90,10 @@ test("the admin declares the per-user Bedrock SSO lane and pins the account", as
   expect(who.email, "the session Dex handed back is not the admin's").toBe(ADMIN_EMAIL);
   expect(who.operator, "admin@wardyn.local must resolve as an operator (WARDYN_OIDC_ROLE_MAP)").toBe(true);
 
-  await putRoster(request);
+  await putProvider(request);
 
-  // The admin declared the lane; declaring it signs NOBODY in, the admin
-  // included. This is the assertion the whole per_user design rests on.
+  // The admin declared the provider; declaring it signs NOBODY in, the admin
+  // included. This is the assertion the whole per-person design rests on.
   const adminAccess = await modelAccess(page);
   expect(adminAccess.state, "the admin who declared the lane must not inherit a credential").toBe("not_configured");
   await dexSignOut(page);
@@ -108,18 +112,15 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   // AFTER the member's first capture, and nothing in the product deletes a
   // member's stored session — makeMemberActionable() reaches `expired_signin`
   // by contradicting the pin, which is a DIFFERENT sentence
-  // (MODEL_ACCESS_BANNER.EXPIRED). DELETE /setup/harness-credential is
-  // operator-only and scoped to the CALLER's own subject (harnesscred.go's
-  // handleHarnessDisconnect), so not even the walk's admin token can put the
-  // member back. So the first-run strip is asserted HERE, in the four seconds
-  // between the admin declaring the lane and the member signing in, and this
-  // case must stay BEFORE the capture and must not make one.
+  // (an expired sign-in, a DIFFERENT sentence). A member's own credential is
+  // theirs to remove and nobody else's, so not even the walk's admin token can
+  // put the member back. So the first-run strip is asserted HERE, in the four
+  // seconds between the admin declaring the provider and the member signing
+  // in, and this case must stay BEFORE the capture and must not make one.
   //
-  // It is read-only for that reason: the door is opened and DISMISSED. Under
-  // startURLManaged the pane opens in phase `intro` and only "Start login"
-  // sends POST /setup/harness-login (see the recovery file's case F), so
-  // nothing is launched and the member is still `not_configured` for the case
-  // below.
+  // It is read-only for that reason: the door is never OPENED here. The
+  // provider's sign-in pane launches its login sandbox the moment it opens, so
+  // opening it would start the very capture this case must not make.
   await dexSignIn(page, MEMBER_EMAIL);
   expect((await modelAccess(page)).state, "case I must run before the member's first capture").toBe("not_configured");
 
@@ -128,12 +129,7 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   // and the door says nothing at all until /me has resolved the viewer, so this
   // is awaited rather than read on the first frame.
   await page.goto("/runs");
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
-  // EXACT, and that is the finding-1 negative in miniature: the rail's own
-  // control carries the same LABEL under a different accessible name
-  // (RAIL_MODEL_ACCESS.SIGN_IN_ARIA), and Playwright's default name match is a
-  // substring — so a loose locator here would pass for the wrong control on the
-  // New Run screen below.
+  await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
   // The first-run state is the one a person may set aside (it is not an error);
   // never CLICKED here — the dismissal is per browser context and per subject,
@@ -149,63 +145,34 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   await expect(page).toHaveURL(/\/workspaces$/);
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
 
-  // (3) THE DOOR OPENS IN PLACE — the sign-in itself, on the screen they were
-  // on, with no navigation.
-  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
-  await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
-  await expect(page).toHaveURL(/\/workspaces$/);
-  // …and out again, WITHOUT launching. Escape routes through the pane's own
-  // handle (model-access-banner.tsx's onOpenChange), which is a no-op on a pane
-  // that never got a run id.
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
-
-  // (4) NEW RUN — finding 1, in the state the rail was silent for. The rail
-  // CLAIMS the door while it renders its own control, so the strip keeps its
-  // sentence and drops its button: two controls named the same thing on one
-  // screen is the defect U-13 already fixed once.
+  // (3) NEW RUN — the rail names the one provider this run would use and
+  // where its credential lives, with no click; the deployment-wide "No model
+  // provider is connected" is false here (the provider exists) and must not
+  // speak over it. The strip, which the rail does not claim, keeps its button.
   await page.goto("/runs/new");
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
-  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
-  // THE FINDING-1 NEGATIVE, and it is live evidence that came back as a fix.
-  //
-  // Part 1 of this lane could not assert it: `setupBedrock` grades `llm_ready`
-  // through the CALLER's own per-user AWS scope, so a member who has never
-  // signed in reads SSOPresent=false -> Ready=false -> llm_ready=false ->
-  // showModelWarning=true, and the rail stacked "No model provider is
-  // connected" — false on a deployment whose admin row plainly exists — under
-  // the true new sentence. The walk found it, fc8e2860 fixed it (the
-  // per-person line SUPERSEDES the deployment one whenever both would render),
-  // and this is the assertion that keeps it fixed. The deployment sentence
-  // still covers every other no-model-path shape; it simply does not speak
-  // over a more specific true one.
+  await expect(page.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible();
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
+  await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible();
 
   // (5) THE ONE SUPPRESSION A MEMBER GETS, and the one they deliberately do
   // NOT. Getting Started IS the door, so the strip is withheld there — the
   // card below is what says it instead.
   //
-  // #541 fix review: this install has no model-providers block (a pure
-  // per_user roster row), which keeps "Your model key" as Getting Started's
-  // own door until #548 converts every install to a provider block; the
-  // page's own connections-summary chip falls back to legacySummary
-  // (lib/model-connections.ts), reading the SAME not_configured state as the
-  // strip: Needs you.
+  // The provider's connection row reads the SAME not_configured state as the
+  // strip, and the page's own summary chip says Needs you.
   await page.goto("/setup");
-  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
-  // …and on /account a MEMBER keeps it, deliberately: that card's AWS button
-  // is admin-only, so hiding the strip there would strand exactly the person a
-  // refusal sends to the page (the suppression is operator-only —
-  // model-access-banner.tsx's `suppressed`).
+  await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toHaveCount(0);
+  // …and on /account the strip keeps its sentence (the connections card there
+  // claims the door only while it is expanded).
   await page.goto("/account");
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await dexSignOut(page);
 });
 
@@ -223,20 +190,12 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   // The member's own Getting Started carries the CTA (P3 / lane
   // member-cold-load: the member's page must not call an admin-only endpoint).
   //
-  // 0.7.5 BUILD 0(a), lane ui-member-model-key (merged): the "Your model key"
-  // card no longer tells a per_user member their model access is already done.
-  // This is the one live seat that can read the NOT-SIGNED-IN half — it needs a
-  // real second identity under a real per_user roster row, which the lane's own
-  // vitest matrix cannot produce. Asserted THROUGH the merged constants.
+  // The provider's connection row reads the NOT-SIGNED-IN half — the one live
+  // seat that can, with a real second identity — and the page's lede names
+  // the sign-in as the person's own (finding 2b).
   await page.goto("/setup");
-  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_BODY)).toBeVisible();
-  // …and the page's own lede names whose sign-in it is (finding 2b). The old
-  // SETUP_SUMMARY_HELPER — "shared credentials … your runs inherit them" — is
-  // the sentence this deployment contradicts, so its ABSENCE is the assertion
-  // that the branch actually took.
-  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER_PER_USER)).toBeVisible();
-  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER)).toHaveCount(0);
+  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(CONNECTIONS.LEDE)).toBeVisible();
   // P1 + P5: the member must REACH their own sign-in from their own seat, and
   // must not block on a cold image pull.
   //
@@ -260,14 +219,14 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   // THE MEMBER'S OWN STATUS, from the member's own session.
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
-  // …and the card now reads the signed-in half of the same pair of constants.
-  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  // …and the row now reads the signed-in half of the same pair of constants.
+  await expect(page.getByText(CONNECTIONS.SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
 });
 
 test("the capture belongs to the member alone", async ({ page }) => {
   // Same install, same moment, the other principal: still not_configured. A
-  // shared credential would read `live` here, which is exactly the failure
-  // per_user exists to prevent.
+  // shared credential would read `live` here, which is exactly the failure a
+  // per-person provider exists to prevent.
   await dexSignIn(page, ADMIN_EMAIL);
   const adminAccess = await modelAccess(page);
   expect(adminAccess.state, "the admin inherited the member's captured credential").toBe("not_configured");
@@ -308,10 +267,10 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   // P4, lane `sso-pin-dispatch`, merged — flipped from test.fixme in W5.
   //
   // Setting a pin that contradicts a STORED capture must (a) grade the member's
-  // own model access `expired_signin` so the repair button is offered at all
-  // (modelaccess.go's awsSSOPinContradiction arm), (b) REFUSE the run rather
-  // than silently spending the wrong identity, and (c) heal once the roster and
-  // the stored capture agree again.
+  // own access to the provider `expired_signin` so the repair button is offered
+  // at all (providerPinContradiction), (b) REFUSE the run rather than silently
+  // spending the wrong identity, and (c) heal once the provider's pin and the
+  // stored capture agree again.
   //
   // THE CONTRADICTING PIN IS 111111111111/DevPower, NOT AN INVENTED ACCOUNT.
   // It is index 0 of the fake's entitlement fixture
@@ -323,28 +282,21 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   // with P4.
   const CONTRA_ACCOUNT = "111111111111";
   const CONTRA_ROLE = "DevPower";
-  await putRoster(request, CONTRA_ACCOUNT, CONTRA_ROLE);
+  await putProvider(request, CONTRA_ACCOUNT, CONTRA_ROLE);
 
   await dexSignIn(page, MEMBER_EMAIL);
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
   await expect(page.getByRole("button", { name: "Sign in to AWS" }).first()).toBeVisible({ timeout: 60_000 });
 
-  // The refusal is enforceCreateLLMMechanism's 422 (runs_dispatch_llm_mechanism.go:
-  // pinContradictionRefusal, checked BEFORE the mechanism fold), so no run row
-  // is ever created and no sandbox is scheduled — which is why a Terminal run is
-  // enough here and why this assertion is seconds rather than minutes.
-  //
-  // The sentence asserted is llmMechanismPinContradictedSentence's, NOT
-  // ssoTokenAccountPinRefusal's: they are two different refusals with two
-  // different spellings ("this agent NOW PINS AWS sign-ins TO account" vs
-  // "pins AWS sign-ins FOR THIS AGENT TO account"), and the one a launch meets
-  // is the dispatch/create one.
+  // The refusal is the provider's own (providerBedrockRefusal, mpBRPinned):
+  // the run does not spend the wrong identity, and the sentence names both
+  // pairs so the member knows which to pick.
   await page.goto("/runs/new");
   await page.getByRole("combobox", { name: "Title" }).fill("a run under a contradicted pin");
   await page.getByRole("radio", { name: /^Terminal/ }).click();
   await page.getByRole("button", { name: /^Launch/ }).click();
-  await expect(page.getByText(/now pins AWS sign-ins to account/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(new RegExp(`and it pins account ${CONTRA_ACCOUNT}`)).first()).toBeVisible({ timeout: 180_000 });
 
   // ── the heal ──────────────────────────────────────────────────────────────
   // Signing in again IS the repair: a new login run stamps the CURRENT pin and

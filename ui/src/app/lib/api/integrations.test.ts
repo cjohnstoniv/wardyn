@@ -8,7 +8,6 @@ import { baseStatus } from "../../lib/test-fixtures";
 import { T } from "../integrations";
 import { aiServerId, deriveIntegrations } from "./integrations";
 import type { SiteConfig } from "../types";
-import { aheadByHours } from "../test-clock";
 
 // The Add dialog resolves which wire row to adopt/PUT via this helper,
 // BEFORE its first reload can hand it a derived IntegrationRow of its own —
@@ -47,96 +46,6 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.chips.find((c) => c.label === "Claude Code · default")).toBeTruthy();
     expect(row.chips.find((c) => c.label === "Wardyn features · default")).toBeTruthy();
     expect(row.secretNames).toEqual(["anthropic-api-key"]);
-  });
-
-  it("a resident host-CLI subscription renders the impossible pair as '· n/a' and Wardyn features as the OFF-but-fixable '· off' chip, not omitted", () => {
-    const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.hostCli).toBe(true);
-    expect(row.chips.map((c) => c.label)).toEqual([
-      "Claude Code",
-      "Codex CLI · n/a",
-      "Direct API calls · n/a",
-      "Wardyn features · off",
-    ]);
-    const features = row.chips.find((c) => c.label === "Wardyn features · off")!;
-    expect(features.muted).toBe(true);
-    expect(features.tooltip).toBe("Off for this lane — no switch in this console turns it on.");
-    expect(row.residency).toBe("resident_mount");
-  });
-
-  // UI-LIB-3: auth_mode is only ever set once Wardyn PEEKS a real subscription
-  // token — but the server's own llm_provider check counts ANY logged-in CLI
-  // as real access (an api-key session, or a subscription it simply can't
-  // read). Without this row the console read "Needs setup" on a payload the
-  // funnel's own Review step showed as "ok".
-  it("a resident CLI login with no confirmed subscription still renders — real access either way", () => {
-    const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true }] });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.id).toBe("ai:anthropic_cli_login");
-    expect(row.serverId).toBeUndefined();
-    expect(row.hostCli).toBe(true);
-    expect(row.chips.find((c) => c.label === "Claude Code" && !c.muted)).toBeTruthy();
-  });
-
-  // The two rows are mutually exclusive — a CONFIRMED subscription must never
-  // also render the unconfirmed row's honest-but-vaguer name.
-  it("a confirmed subscription (auth_mode: subscription) takes the real row, not the unconfirmed one", () => {
-    const status = baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] });
-    const { ai } = deriveIntegrations(status, null, []);
-    expect(ai).toHaveLength(1);
-    expect(ai[0].id).toBe("ai:anthropic_subscription:host");
-  });
-
-  it("a managed subscription reads Captured Xd ago when fresh, and Reconnect soon when aging", () => {
-    const fresh = baseStatus({ harness: [{ provider: "anthropic", captured: true, captured_at: new Date(Date.now() - 3 * 86400_000).toISOString() }] });
-    const freshRow = deriveIntegrations(fresh, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;
-    expect(freshRow.posture).toEqual({ kind: "captured", ageLabel: "3d ago" });
-
-    const aging = baseStatus({ harness: [{ provider: "anthropic", captured: true, aging: true }] });
-    const agingRow = deriveIntegrations(aging, null, []).ai.find((r) => r.id === "ai:anthropic_subscription:managed")!;
-    expect(agingRow.posture).toEqual({ kind: "reconnect_soon" });
-  });
-
-  it("Bedrock: region/model unset wins over an active lane", () => {
-    const status = baseStatus({ bedrock: { creds_present: true } });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.posture).toEqual({ kind: "region_model_unset" });
-  });
-
-  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured", () => {
-    // ticket: B7-F6 (rider)
-    const [row] = deriveIntegrations(baseStatus({ bedrock: { ready: true, creds_present: false } }), null, []).ai;
-    expect(row.id).toBe("ai:bedrock");
-    expect(row.posture).toEqual({ kind: "configured" });
-    // The member's OWN captured session still drives the SSO posture.
-    const sso = baseStatus({
-      bedrock: { ready: true, creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
-    });
-    expect(deriveIntegrations(sso, null, []).ai[0].posture.kind).toBe("session_expires");
-    // Negative control: ready:false with region/model unset still reads region_model_unset.
-    expect(deriveIntegrations(baseStatus({ bedrock: { ready: false, creds_present: true } }), null, []).ai[0].posture).toEqual({ kind: "region_model_unset" });
-  });
-
-  it("Bedrock: precedence picks bearer over static keys, and residency/secrets follow the active lane", () => {
-    const status = baseStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", bearer_present: true, creds_present: true } });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.bedrockLane).toBe("bearer");
-    expect(row.residency).toBe("proxy_injected");
-    expect(row.secretNames).toEqual(["bedrock-api-key"]);
-  });
-
-  it("Bedrock: an unexpired AWS SSO session reads 'Session expires HH:MM'", () => {
-    const status = baseStatus({
-      bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
-    });
-    const [row] = deriveIntegrations(status, null, []).ai;
-    expect(row.bedrockLane).toBe("sso");
-    expect(row.harnessProvider).toBe("aws");
-    expect(row.posture.kind).toBe("session_expires");
-    expect((row.posture as { when: string }).when).toMatch(/^\d{1,2}:\d{2}/);
   });
 
   // Azure OpenAI is gone as a model provider. It only ever powered Wardyn's own

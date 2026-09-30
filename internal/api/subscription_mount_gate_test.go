@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestIsModelRun_ExcludesExecTaskMode: a task_mode=exec run (the BYOA/CI
@@ -46,31 +44,3 @@ func TestIsModelRun_ExcludesExecTaskMode(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
-
-// TestBuildRunMounts_DropsResidentClaudeCredsOnNonModelRun is the other
-// half: even when the policy declares a workspace_mount
-// onto claudeCredTarget/claudeCredJSONTarget (the normal way an operator
-// stages a host ~/.claude subscription), buildRunMounts must drop it for a
-// non-model-run dispatch — the resident host OAuth session has no business in
-// a sandbox that never invokes the model (e.g. a member's task_mode=exec run
-// under a policy an admin authored for agentic use).
-func TestBuildRunMounts_DropsResidentClaudeCredsOnNonModelRun(t *testing.T) {
-	policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
-		{Source: "/host/.claude", Target: claudeCredTarget},
-		{Source: "/host/.claude.json", Target: claudeCredJSONTarget},
-		{Source: "/host/repo", Target: "/work/repo"},
-	}}
-
-	// Non-model run (e.g. task_mode=exec, or a verify/scan run): the two
-	// resident-credential mounts must be dropped; the unrelated repo mount stays.
-	got := buildRunMounts(policy, llmTransport{modelRun: false}, userMountPosture{})
-	if len(got) != 1 || got[0].Target != "/work/repo" {
-		t.Errorf("non-model run mounts = %+v, want only the /work/repo mount (claudeCredTarget/claudeCredJSONTarget dropped)", got)
-	}
-
-	// Model run: all three mounts pass through unchanged.
-	got = buildRunMounts(policy, llmTransport{modelRun: true}, userMountPosture{})
-	if len(got) != 3 {
-		t.Errorf("model run mounts = %+v, want all 3 policy mounts to pass through", got)
-	}
-}

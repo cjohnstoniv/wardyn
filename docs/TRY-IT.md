@@ -41,8 +41,8 @@ confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault =
 CC3 Kata microVM), whether an LLM path exists, secret-store durability — then
 walks the rail's steps to your first run. Whatever you configure has to pass a live
 probe before that step unlocks; nothing is ambient, so a run reaches an
-integration only when its workspace requires it by name (see
-[operations/integrations.md](operations/integrations.md#model-access-resolves--it-does-not-default-to-none) → "Model access resolves" for the one exception).
+integration only when its workspace requires it by name, and a model only
+through a model provider.
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 
@@ -55,7 +55,7 @@ A couple of config facts before you customize:
   on a runc-only host, `default.json` when gVisor is registered (the two now
   differ only in allowed-domains breadth, not confinement), and
   `claude-llm.json` once a real model path is configured; host mode picks
-  `claude-llm.json` or your staged subscription ceiling. Either way, an
+  `claude-llm.json`. Either way, an
   unspecified run now defaults to the STRONGEST class the host's runner
   actually advertises at or above the policy floor — CC2/CC3 need no policy
   switch, just the runtime installed. The Getting Started **Review** step
@@ -180,18 +180,22 @@ needs-approval, github-push, long-running — each with the exact task text, the
 `wardyn run` command, and its PASS criteria, plus a key-free `probes.sh` you can
 point at any RUNNING sandbox.
 
-## Level 2 — real Claude Code run (bring an Anthropic API key)
+## Level 2 — real Claude Code run (bring your own model credential)
 
 ```sh
-# 1. Store the key (write-only; no API path ever returns it):
-echo "$ANTHROPIC_API_KEY" | wardyn secret set anthropic-api-key
+# 1. An admin adds an Anthropic model provider (Settings → Model providers), then
+#    you connect your own key for it from Getting started (write-only; no API
+#    path ever returns it). The same door over the API:
+curl -sS -X PUT "$WARDYN_URL/api/v1/model-providers/anthropic/credential" \
+  -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"value\":\"$ANTHROPIC_API_KEY\"}"
 
 # 2. Switch the default policy to the LLM-enabled one and restart wardynd:
 WARDYN_DEFAULT_POLICY=/examples/policies/claude-llm.json docker compose \
   -f deploy/compose/docker-compose.yaml up -d wardynd
 
 # 3. Create a real run:
-wardyn run --agent claude-code --repo octocat/Hello-World \
+wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-World \
   --task "Read the repository and write a SUMMARY.md describing it"
 ```
 
@@ -202,9 +206,9 @@ wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel
 `wardyn-proxy-injected`, never your key); Claude Code talks to
 `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the
 proxy injects `x-api-key` and logs every model call as a `brokered:llm`
-decision in the audit trail (an operator can re-point that brokered dial at
-an internal gateway — `WARDYN_ANTHROPIC_BASE_URL`, see OPERATIONS.md — with
-no sandbox-visible change at all). Watch the session live via Attach (`wardyn run attach
+decision in the audit trail (an admin can re-point that brokered dial at
+an internal gateway through the provider's base URL under Settings → Model
+providers, with no sandbox-visible change at all). Watch the session live via Attach (`wardyn run attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the
 captured cast only after the fact, it has no live view.
 
@@ -235,62 +239,46 @@ that ruleset back and gate on it (`WARDYN_GITHUB_REQUIRE_REF_RULESET`,
 opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
 `threatmodel/THREAT-MODEL.md` asset #4 and [ROADMAP.md](../ROADMAP.md).
 
-### Model auth: three ways to give Claude Code its LLM access
+### Model auth: model providers
 
-Wardyn credentials a Claude run one of three ways. Real precedence: host-staged
-subscription mount (host mode's resident `~/.claude`) > managed subscription >
-Bedrock > api-key — **except** that an `api_key` grant the run's policy
-already brokers for `api.anthropic.com` is treated as an explicit operator
-opt-in and suppresses the managed-subscription fallback: `wardyn subscription
-connect` fills in only for a run that has neither a resident mount nor that
-grant, it never silently overrides a run you gave its own key
-(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`).
+As of 0.8 a run's model credential comes only from its **model provider**: an
+admin adds providers under Settings → Model providers (`PUT
+/api/v1/model-providers`), and each person connects their OWN credential for
+a provider — a key, a Claude sign-in or an AWS sign-in — from Getting started.
+Wardyn never substitutes: a run whose provider cannot credential it is refused
+at create, naming the provider and what to fix, and a run with no provider at
+all launches with only a warning. Upgrading converts the old setup once
+(migration `0100_model_provider_conversion`; see the CHANGELOG).
 
-That precedence is what fires when nobody has said otherwise. An admin who
-writes an **agent providers** row (`PUT /api/v1/agent-providers`, or the
-Agents tab) declares the ONE lane an agent's runs may use — and from then on
-Wardyn never substitutes: a run whose declared lane is not the lane that
-resolved is refused at create and at launch, naming the lane and its state,
-rather than quietly billed to whatever else happened to be configured
-(`enforceConfiguredLLMMechanism`). With no row for an agent, nothing changes —
-the precedence above is the whole story, and a run with no model credential at
-all still launches with only a warning. All three keep
-the real credential out of the sandbox *except* the Bedrock access-key path
-(see below):
+The operator-held lanes (a key in the operator's secret store, the managed
+subscription, Bedrock boot configuration) were retired in 0.8.2: `wardyn
+subscription` is gone, `wardyn secret set` refuses the model-credential names,
+and boot refuses the old variables ([ENV.md](ENV.md) lists them). The kinds:
 
-- **API key** (Level 2 above) — `wardyn secret set anthropic-api-key`. The proxy
-  injects `x-api-key` at startup; **never resident**.
-- **Subscription (managed, container-native)** — `claude setup-token | wardyn
-  subscription connect` (headless: `printf '%s' "$TOKEN" | wardyn subscription
-  connect --token-stdin`). **Not** `WARDYN_SUBSCRIPTION_TOKEN` before `make setup`:
-  neither compose path honours that variable despite its name — `scripts/up.sh`
-  warns and ignores it and `scripts/ci-run.sh` exits non-zero, because a shared
-  subscription credential is a single-user desktop setting (see its row in
-  [ENV.md](ENV.md)).
-  The token is captured once, stored **age-encrypted**, and injected proxy-side as
-  `Authorization: Bearer` into every eligible run — the sandbox holds only an inert
-  sentinel (`docker exec … env | grep -i key` is empty). `wardyn subscription
-  status` shows it; `wardyn subscription disconnect` removes it.
+- **API key** (`anthropic_api_key`, `openai_api_key`) — each person stores their
+  own key for the provider. The proxy injects `x-api-key` at startup; **never
+  resident**.
+- **Claude subscription** (`anthropic_subscription`) — each person signs in to
+  the provider from Getting started; a short-lived sign-in sandbox runs `claude
+  setup-token` and the captured token is stored age-encrypted in that person's
+  own namespace, injected proxy-side as `Authorization: Bearer`. The sandbox
+  holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
+  It needs the Claude sign-in image pinned in `WARDYN_AGENT_IMAGES`
+  (`make agent-images-core`).
   > **Security note (honest):** a `claude setup-token` is **long-lived (~1 year)**
   > and does **not** auto-rotate — it sits age-encrypted at rest in the secret
   > store, masked from all streams, host-pinned to `api.anthropic.com`, and never
   > enters the sandbox. Protect `deploy/compose/.env` and the postgres volume, and
-  > revoke the token in the Anthropic console if a host is compromised. (Host mode's
-  > resident path instead injects a short-lived, auto-rotating token.)
-- **AWS Bedrock** — operator-configured (not a per-run choice). Set
-  `WARDYN_BEDROCK_REGION` + `WARDYN_BEDROCK_MODEL` (a cross-region *inference-profile*
-  id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>`
-  or `…:application-inference-profile/<id>`, which is how quota, logging and guardrails
-  attach to the profile; not a bare model id) and add credentials to the secret store:
-  - `bedrock-api-key` (a Bedrock **bearer** token) → proxy-injected as
-    `Authorization: Bearer` into `bedrock-runtime.*`, **never resident** (preferred).
-  - or `aws-access-key-id` + `aws-secret-access-key` (+ optional `aws-session-token`)
-    → AWS SigV4 signs in-process, so these are **resident** in the sandbox env
-    (masked + withheld from scan runs, which never call a model; scope IAM
-    tightly — see
-    `threatmodel/THREAT-MODEL.md` "Bedrock credential residency").
-
-  Configured Claude runs then use Bedrock automatically.
+  > revoke the token in the Anthropic console if a host is compromised.
+- **AWS Bedrock** — a provider of kind `bedrock_sso` (each person signs in with
+  AWS; the region, model and base URL live on the provider record) or
+  `bedrock_bearer` (each person stores a Bedrock bearer token, proxy-injected as
+  `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**). The
+  model is a cross-region *inference-profile* id, or the profile's full ARN —
+  `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or
+  `…:application-inference-profile/<id>` — not a bare model id. A `bedrock_sso`
+  run holds that person's short-lived role credentials in its own sandbox (see
+  `threatmodel/THREAT-MODEL.md` §5.1a).
 
 ## Level 2.5 — record a session, rerun it as a governed profile
 
@@ -383,7 +371,7 @@ is bind-mountable, and skipped outright when that image isn't already local.)
 | `docker ps` shows nothing but the UI works | your shell is on a different daemon than Wardyn's scripts picked | `export DOCKER_HOST=unix:///var/run/wardyn-docker.sock` — the socket `wardyn setup wall` configures and the CLI prints (`/run/...` also works where `/var/run` is a symlink), the tier-capable native daemon they prefer over the default socket |
 | Only Fence/CC1 offered | ditto — that daemon registers no `runsc`/`kata` | same; `make doctor` prints the classes it can actually see |
 | Record/replay hangs forever | host mode under Docker Desktop + WSL2 NAT | use containerized mode (the default) — drop `WARDYN_SETUP_MODE=local` |
-| Run fails "issue with selected model" | no model access configured, or a stale credential | `claude setup-token \| wardyn subscription connect`, then `wardyn setup status` |
+| Run fails "issue with selected model" | no model access configured, or a stale credential | connect your own credential for the run's model provider (Getting started), then `wardyn setup status` |
 | Port 5432 in use | another Postgres | stop it, or set `WARDYN_PG_PORT` |
 
 Honest limits of this demo deployment (see `threatmodel/`): single host,

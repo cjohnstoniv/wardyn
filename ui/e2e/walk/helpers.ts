@@ -29,6 +29,15 @@ export const ADMIN_TOKEN = process.env.WARDYN_WALK_ADMIN_TOKEN || "";
 export const PIN_ACCOUNT = process.env.WARDYN_WALK_PIN_ACCOUNT || "222222222222";
 export const PIN_ROLE = process.env.WARDYN_WALK_PIN_ROLE || "WardynDev";
 export const SSO_START_URL = process.env.WARDYN_WALK_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
+export const SSO_REGION = process.env.WARDYN_WALK_SSO_REGION || "us-east-1";
+/** The model the walk's provider serves claude-code with: an inference-profile
+ *  ARN naming the PINNED account, so the model-account check has both halves. */
+export const BEDROCK_MODEL = process.env.WARDYN_WALK_BEDROCK_MODEL || "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+/** The fake's bedrock-runtime stub; unset, the provider addresses real Bedrock. */
+export const BEDROCK_BASE_URL = process.env.WARDYN_WALK_BEDROCK_BASE_URL || "";
+/** The walk's one model provider — every sign-in and every run goes through it. */
+export const WALK_PROVIDER = "bedrock-sso";
+export const WALK_PROVIDER_NAME = "Amazon Bedrock (AWS sign-in)";
 /** The harness's read-only route to the fake's /_seen — see seen() below. */
 export const SEEN_URL = process.env.WARDYN_WALK_SEEN_URL || "https://127.0.0.1:8390/_seen";
 
@@ -136,34 +145,32 @@ export async function me(page: Page): Promise<{
   });
 }
 
-/** The signed-in session's /setup/status — a MEMBER's own answer, not an admin's. */
+/**
+ * The signed-in session's own access to the walk's provider, off its
+ * /setup/status `provider_access` — a MEMBER's own answer, not an admin's.
+ */
 export async function modelAccess(page: Page): Promise<{ state?: string; action?: string }> {
-  return page.evaluate(async () => {
-    const r = await fetch("/api/v1/setup/status", { credentials: "include" });
-    const body = (await r.json()) as { model_access?: { state?: string; action?: string } };
-    return body.model_access ?? {};
-  });
+  return (await ownAWSRow(page)) as { state?: string; action?: string };
 }
 
 /**
- * The caller's OWN aws harness row off /setup/status.
+ * The caller's OWN `provider_access` row for the walk's provider.
  *
- * `source_run_id` survives redaction on exactly ONE row — the caller's own
- * per-user AWS capture (internal/api/setup.go's ownAWSRow; the fail-closed
- * scoping test pins that a shared/legacy row's id is stripped, because that one
- * is the ADMIN's login run). It is the only way a member can corroborate WHICH
- * of their sign-ins the stored blob came from, which is what makes "the capture
- * moved" assertable at all on a member who was already `live`.
+ * `source_run_id` names the sign-in the caller's stored capture came from. It
+ * is the only way a member can corroborate WHICH of their sign-ins the stored
+ * blob came from, which is what makes "the capture moved" assertable at all on
+ * a member who was already `live`.
  */
 export async function ownAWSRow(page: Page): Promise<{
-  captured?: boolean;
+  state?: string;
+  action?: string;
   source_run_id?: string;
 }> {
-  return page.evaluate(async () => {
+  return page.evaluate(async (provider) => {
     const r = await fetch("/api/v1/setup/status", { credentials: "include" });
-    const body = (await r.json()) as { harness?: Array<Record<string, unknown>> };
-    return ((body.harness ?? []).find((h) => h.provider === "aws") ?? {}) as Record<string, never>;
-  });
+    const body = (await r.json()) as { provider_access?: Array<Record<string, unknown>> };
+    return ((body.provider_access ?? []).find((a) => a.provider === provider) ?? {}) as Record<string, never>;
+  }, WALK_PROVIDER);
 }
 
 /**
@@ -198,7 +205,7 @@ export async function seen(): Promise<{
 
 /**
  * Launch an autonomous claude-code run from the signed-in person's own seat and
- * wait for it to be running. RETURNS THE RUN ID — /runs/:id is addressable, so
+ * wait for it to have left its pre-run states. RETURNS THE RUN ID — /runs/:id is addressable, so
  * the id is simply the last path segment once the launch has navigated, and a
  * caller that needs to scope an API read (approvals, the run row) to THIS run
  * has no other honest source for it.
@@ -224,6 +231,16 @@ export async function seen(): Promise<{
  * governance working, not failure — `api.anthropic.com` is dropped from egress
  * because this deployment is Bedrock, and the member's resources are capped to
  * the operator maximum.
+ *
+ * NOT "the Running chip is visible": the fake answers a streaming model call
+ * with a non-streaming body, so claude makes three calls and exits 1 within
+ * seconds, and the run page only refreshes its state every 4 s
+ * (DETAIL_POLL_MS). A chip wait is therefore a coin flip on where a poll tick
+ * lands inside a window shorter than the tick — when it loses, the page goes
+ * STARTING to FAILED, "Running" never renders, and the wait burns its whole
+ * SANDBOX_UP. The run row's own state is read instead, and any state past
+ * PENDING/STARTING counts as up: every caller's next assertion (the /_seen
+ * counters, the run's approvals) is what proves the agent did its work.
  */
 export async function launchAgentRun(page: Page, title: string): Promise<string> {
   await page.goto("/runs/new");
@@ -232,8 +249,18 @@ export async function launchAgentRun(page: Page, title: string): Promise<string>
   await page.locator("#nr-task").fill("Reply with the single word: ready.");
   await page.getByRole("button", { name: /^Launch/ }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
-  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
-  return runIDFromURL(page);
+  const id = runIDFromURL(page);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async (runID: string) => {
+          const r = await fetch(`/api/v1/runs/${runID}`, { credentials: "include" });
+          return ((await r.json().catch(() => ({}))) as { state?: string }).state ?? "";
+        }, id),
+      { timeout: SANDBOX_UP, message: "the run never left PENDING/STARTING" },
+    )
+    .not.toMatch(/^(|PENDING|STARTING)$/);
+  return id;
 }
 
 /** /runs/:id is addressable; the id is the last path segment. */
@@ -244,57 +271,70 @@ export function runIDFromURL(page: Page): string {
 }
 
 /**
- * The agent roster write: the pin and the per-user lane, in one PUT.
+ * The model providers write: the walk's one bedrock_sso provider and its pin,
+ * in one PUT.
  *
- * The pin is a PARAMETER because the P4 case re-pins the same roster to a
+ * The pin is a PARAMETER because the P4 case re-pins the same provider to a
  * DIFFERENT pair and must send a byte-identical body otherwise — a second
  * hand-written literal is how the two drift and the refusal stops being about
- * the pin. Defaults are the walk's own pinned pair.
+ * the pin. Defaults are the walk's own pinned pair. The same id on every PUT
+ * keeps the provider's server-owned uid, so a re-pin is not a new provider and
+ * the member's stored capture stays theirs to be graded against the new pin.
  */
-export async function putRoster(
+export async function putProvider(
   request: APIRequestContext,
   account: string = PIN_ACCOUNT,
   role: string = PIN_ROLE,
 ): Promise<void> {
-  const res = await request.put("/api/v1/agent-providers", {
+  const res = await request.put("/api/v1/model-providers", {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
-    // `agents` is a LIST whose elements carry `id` (types.AgentProviders), and
-    // handlePutAgentProviders decodes STRICTLY — an object keyed by agent id is
-    // a 400, which on the walk's first assertion means nothing after it runs.
-    // internal/api/agent_providers_walk_shape_test.go pins this body's shape
+    // handlePutModelProviders decodes STRICTLY into types.ModelProviders.
+    // internal/api/model_providers_walk_shape_test.go pins this body's shape
     // from the Go side so the next change reds there, not on a cluster.
     data: {
-      agents: [
+      providers: [
         {
-          id: "claude-code",
-          mechanism: "bedrock_sso",
-          credential_source: "per_user",
-          sso_start_url: SSO_START_URL,
-          sso_account_id: account,
-          sso_role_name: role,
+          id: WALK_PROVIDER,
+          name: WALK_PROVIDER_NAME,
+          kind: "bedrock_sso",
+          bedrock: {
+            region: SSO_REGION,
+            ...(BEDROCK_BASE_URL ? { base_url: BEDROCK_BASE_URL } : {}),
+            sso_start_url: SSO_START_URL,
+            sso_account_id: account,
+            sso_role_name: role,
+          },
+          harnesses: [{ harness: "claude-code", model: BEDROCK_MODEL }],
         },
       ],
     },
   });
-  expect(res.status(), `PUT /agent-providers: ${await res.text()}`).toBe(200);
+  expect(res.status(), `PUT /model-providers: ${await res.text()}`).toBe(200);
+  // …and claude-code's default: the strip and Getting Started speak for a
+  // provider only where it is some agent's default (providerAttention).
+  const roster = await request.put("/api/v1/agent-providers", {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
+    data: { agents: [{ id: "claude-code", default_provider: WALK_PROVIDER }] },
+  });
+  expect(roster.status(), `PUT /agent-providers: ${await roster.text()}`).toBe(200);
 }
 
-/** The roster as the server holds it, read with the walk's admin token. */
-export async function getRoster(request: APIRequestContext): Promise<Array<Record<string, unknown>>> {
-  const res = await request.get("/api/v1/agent-providers", {
+/** The walk's provider as the server holds it, read with the walk's admin token. */
+export async function getProvider(request: APIRequestContext): Promise<Record<string, unknown>> {
+  const res = await request.get("/api/v1/model-providers", {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
   });
-  expect(res.status(), `GET /agent-providers: ${await res.text()}`).toBe(200);
-  const body = (await res.json()) as { agents?: Array<Record<string, unknown>> };
-  return body.agents ?? [];
+  expect(res.status(), `GET /model-providers: ${await res.text()}`).toBe(200);
+  const body = (await res.json()) as { providers?: Array<Record<string, unknown>> };
+  return (body.providers ?? []).find((p) => p.id === WALK_PROVIDER) ?? {};
 }
 
-/** The claude-code row's currently pinned pair, or the fixture default. */
+/** The walk provider's currently pinned pair, or the fixture default. */
 export async function currentPin(request: APIRequestContext): Promise<{ account: string; role: string }> {
-  const row = (await getRoster(request)).find((a) => a.id === "claude-code") ?? {};
+  const bedrock = ((await getProvider(request)).bedrock ?? {}) as Record<string, string>;
   return {
-    account: (row.sso_account_id as string) || PIN_ACCOUNT,
-    role: (row.sso_role_name as string) || PIN_ROLE,
+    account: bedrock.sso_account_id || PIN_ACCOUNT,
+    role: bedrock.sso_role_name || PIN_ROLE,
   };
 }
 
@@ -310,17 +350,15 @@ export async function otherPin(request: APIRequestContext): Promise<{ account: s
  * Put the member back into a state where the "Sign in to AWS" CTA EXISTS.
  *
  * A `live` member has NO such button, and that is not a bug to work around:
- * your-model-key.tsx and the chip row both render it only for
- * MODEL_ACCESS_ACTIONABLE = {not_configured, expired_signin, expiring}
- * (workspace-providers-copy.ts). sso-member.spec.ts leaves the member `live`,
+ * the connection row renders it only for an actionable state
+ * (not_configured, expired_signin, expiring). sso-member.spec.ts leaves the member `live`,
  * so every case in the recovery file that needs to DRIVE a sign-in has to make
  * one legitimately available first.
  *
  * The recipe is the one sso-member.spec.ts's P4 case already proves end to end:
- * flip the roster pin to the fixture's OTHER valid account/role pair, and the
- * stored capture now contradicts the pin, so modelaccess.go's
- * awsSSOPinContradiction arm grades the member `expired_signin` and the CTA
- * comes back. Signing in again under the new pin heals it.
+ * flip the provider's pin to the fixture's OTHER valid account/role pair, and
+ * the stored capture now contradicts the pin, so the member's access grades
+ * `expired_signin` and the CTA comes back. Signing in again under the new pin heals it.
  *
  * WHY THE OTHER *VALID* PAIR and not an invented account: cmd/wardyn-aws-sso can
  * only ever capture a pair the portal actually mints, so an account the fake does
@@ -333,24 +371,19 @@ export async function otherPin(request: APIRequestContext): Promise<{ account: s
  */
 export async function makeMemberActionable(request: APIRequestContext): Promise<{ account: string; role: string }> {
   const next = await otherPin(request);
-  await putRoster(request, next.account, next.role);
+  await putProvider(request, next.account, next.role);
   return next;
 }
 
 /**
  * Open the member's sign-in pane from Getting Started and wait for its terminal.
  *
- * #541 fix review: this walk's fixture is a per_user roster row with NO
- * model-providers block, which keeps "Your model key" as its ONLY door until
- * #548 converts every install to a provider block. The member-getting-started
- * page renders TWO "Sign in to AWS" buttons when the state is actionable (the
- * chip row's and the "Your model key" card's, lane ui-member-model-key's
- * handoff says so in as many words) and BOTH open the same HarnessLoginPane —
- * so `.first()` under Playwright's strict mode, never a bare getByRole.
+ * The walk's provider is the member's one model connection, so Getting
+ * Started renders one "Sign in to AWS" button for it; `.first()` keeps the
+ * locator strict-mode safe should the shell strip offer the same door.
  *
- * The pane launches the login sandbox on open. The start URL is roster-managed
- * here (the admin set sso_start_url), so the pane goes straight to "Start login"
- * rather than asking for one.
+ * The pane launches the login sandbox the moment it opens — the provider
+ * carries the start URL, so there is nothing to ask first.
  *
  * #628: Start opens NO tab any more — the door narrates the start in its own
  * steps, and the provider tab opens only from its Open button, which this walk
@@ -367,19 +400,10 @@ export async function openLoginPane(page: Page): Promise<void> {
   const onPage = (p: Page) => opened.push(p);
   page.context().on("page", onPage);
   try {
-    // The dialog renders either its Start button or, already started, its
-    // steps; wait for one before choosing. isVisible() alone does not wait, and
-    // a dialog still mounting read as "no Start button" and left the sign-in
-    // unstarted (recovery E in nightly 36402346113, sso-concurrency A in
-    // 36418109595).
-    const start = page.getByRole("button", { name: "Start login" });
     const progress = page.getByTestId("signin-progress").first();
-    await expect(start.or(progress).first()).toBeVisible({ timeout: 60_000 });
-    if (await start.isVisible().catch(() => false)) {
-      await start.click();
-    }
+    await expect(progress).toBeVisible({ timeout: 60_000 });
     await expect(progress).toContainText(SIGNIN_PROGRESS.STEP_START);
-    expect(opened.map((p) => p.url()), "Start login opened a tab").toEqual([]);
+    expect(opened.map((p) => p.url()), "the sign-in opened a tab").toEqual([]);
   } finally {
     page.context().off("page", onPage);
   }
@@ -484,7 +508,7 @@ export async function awaitCapture(page: Page, screen: ReturnType<Page["locator"
         // no default timeout, so once the pane has unmounted the terminal this
         // call does not throw — it WAITS, swallowing the entire LOGIN_DONE
         // budget inside a single poll iteration, and the server is never asked.
-        // That is what made this case fail at exactly 300s with model_access
+        // That is what made this case fail at exactly 300s with the provider access
         // sitting at "live" the whole time.
         const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
         if (text.includes(FAIL_MARKER)) {

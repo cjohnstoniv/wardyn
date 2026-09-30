@@ -33,21 +33,13 @@ import (
 // deny-list-validated by runner.ValidateMount at policy-write/inline-validate
 // time (validatePolicySpec); the docker driver re-validates it
 // defense-in-depth at sandbox-create time. runner.ValidateMount is unchanged.
-//
-// Bedrock ~/.aws mount (operator config, not agent-chosen; same trust and the
-// same driver deny-list re-validation as the WorkspaceMounts above). READ-ONLY:
-// the sandbox reads the SSO cache / config but can never write to the operator's
-// host AWS state. Present whenever BedrockAWSConfigDir is set and the dir exists
-// (resolveBedrockAuth) — host mode auto-detects it, the compose stack opts in via
-// the WARDYN_BEDROCK_AWS_DIR bind; it is env-driven with no host/compose branch.
-// A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchRun.
 //
 // member is the run's member-mount posture (userMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
 // driver's bind-time within-roots check keys on. Everything NOT in that set is
 // operator/Wardyn-authored (the blessed credential mounts copied from the
-// ceiling, the Bedrock ~/.aws dir below, an operator-owned workspace's dir) and
+// ceiling, an operator-owned workspace's dir) and
 // lives under no member root by construction, so stamping it would refuse the
 // very credential mounts a member-owned workspace's model run needs. The zero
 // posture (every operator run) stamps nothing.
@@ -61,17 +53,13 @@ func driveTargetReserved(target string) bool {
 	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
 }
 
-func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMountPosture) []runner.Mount {
+func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
-		// The resident ~/.claude subscription mount is a MODEL-RUN-ONLY
-		// credential (THREAT-MODEL.md 5.1a) — a task-mode=exec or non-interactive
-		// scan run makes no model call and must get NO LLM credential, even when
-		// the resolved POLICY still carries the mount (e.g. a subscription-blessed
-		// default/named policy reused for a plain exec task with no per-run
-		// integration consent). Every other injection mode already gates on
-		// llm.modelRun; this is the one path that read the policy verbatim.
-		if !llm.modelRun && (wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget) {
+		// The retired host ~/.claude subscription mount never reaches a sandbox:
+		// validatePolicySpec refuses it on every write, and a policy row stored
+		// before that is dropped here as well as by the provider path's strip.
+		if wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget {
 			continue
 		}
 		// The reserved drive target, re-checked on the stored policy. Every
@@ -113,13 +101,6 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMou
 			// owning workspace by — so a bind is member-authored here exactly when
 			// the run-create gate treated it as member-authored.
 			MemberAuthored: member.Sources[wm.Source],
-		})
-	}
-	if llm.bedrockReady && llm.bedrock.awsMount {
-		mounts = append(mounts, runner.Mount{
-			Source:   llm.bedrock.awsMountSource,
-			Target:   sandboxAWSDir,
-			ReadOnly: true,
 		})
 	}
 	return mounts

@@ -292,6 +292,20 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 			return nil, errors.New("ssh: not authorized for this run")
 		}
 	}
+	// deny_interactive on the profile the run was created under closes SSH
+	// for all but a super admin (a fresh, uncapped admin key), as the terminal
+	// attach does (governance_run_doors.go).
+	if s.sshOverrideRefusal(rec) != "" {
+		name, err := s.interactiveDeniedProfile(ctx, run)
+		if err != nil {
+			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "governance profile unreadable")
+			return nil, errors.New("ssh: not authorized for this run")
+		}
+		if name != "" {
+			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, fmt.Sprintf("governance profile %q denies interactive sessions", name))
+			return nil, errors.New("ssh: not authorized for this run")
+		}
+	}
 
 	// Provisional approval ONLY — no success audit here, see the function doc:
 	// the client has not yet proven it holds the private key for this offer.

@@ -203,7 +203,7 @@ func TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage(t *testing.
 		// No Profile: an unscanned ephemeral-only workspace has none, and the
 		// BaseImage branch must return before ever needing one.
 	}
-	image, ok := srv.resolveWorkspaceImage(context.Background(), runID, ws, nil)
+	image, ok := srv.resolveWorkspaceImage(context.Background(), runID, ws, nil, nil)
 	want := "wardyn-byoi/" + runID.String() + ":latest"
 	if !ok || image != want {
 		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the FinalizeBase-wrapped tag %q (PARITY-4)", image, ok, want)
@@ -225,7 +225,7 @@ func TestResolveWorkspaceImage_BaseImageNoBuilderDrops(t *testing.T) {
 		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
 		BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
 	}
-	if image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); ok || image != "" {
+	if image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil); ok || image != "" {
 		t.Fatalf("resolveWorkspaceImage = (%q, %v), want (\"\", false) with no builder wired", image, ok)
 	}
 }
@@ -305,7 +305,7 @@ func TestResolveWorkspaceImage_AlwaysBakesStandardAgentTool(t *testing.T) {
 			cfg.ImageBuilder = builder
 			srv := New(cfg)
 			ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile), Requirements: tc.reqs}
-			if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); !ok {
+			if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil); !ok {
 				t.Fatal("resolveWorkspaceImage failed")
 			}
 			if len(builder.calls) != 1 {
@@ -346,7 +346,7 @@ func TestResolveWorkspaceImage_RebuildReclaimsSupersededTag(t *testing.T) {
 	ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile),
 		ImageRef: oldRef, BuiltProfileHash: "a-stale-hash-that-will-never-match"}
 
-	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed")
 	}
@@ -380,7 +380,7 @@ func TestResolveWorkspaceImage_CacheHitNeverReclaimsItsOwnTag(t *testing.T) {
 	ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile),
 		ImageRef: cachedRef, BuiltProfileHash: profile.CacheKey()}
 
-	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok || built != cachedRef {
 		t.Fatalf("resolveWorkspaceImage = (%q, %v), want the cache hit (%q, true)", built, ok, cachedRef)
 	}
@@ -416,7 +416,7 @@ func TestResolveWorkspaceImage_CacheKeyInvalidatesPreUnconditionalBake(t *testin
 			ID: uuid.New(), Profile: mustJSON(profile),
 			ImageRef: "wardyn-workspace/cached:abc", BuiltProfileHash: profile.CacheKey(),
 		}
-		image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+		image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 		if !ok || image != "wardyn-workspace/cached:abc" {
 			t.Fatalf("resolveWorkspaceImage = (%q, %v), want the cached image reused", image, ok)
 		}
@@ -437,7 +437,7 @@ func TestResolveWorkspaceImage_CacheKeyInvalidatesPreUnconditionalBake(t *testin
 			// must never be trusted.
 			ImageRef: "wardyn-workspace/stale:abc", BuiltProfileHash: profile.ProfileHash(),
 		}
-		image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+		image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 		if !ok {
 			t.Fatal("resolveWorkspaceImage failed")
 		}
@@ -476,7 +476,7 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 			Profile: mustJSON(profile),
 		}
 
-		built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+		built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 		if !ok {
 			t.Fatal("resolveWorkspaceImage failed")
 		}
@@ -521,7 +521,7 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 		// The image builder cannot clone an SSH source (no minted key in this
 		// lane) — resolveWorkspaceImage falls through to the generator, which
 		// bakes claude-code unconditionally.
-		if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil); !ok {
+		if _, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil); !ok {
 			t.Fatal("resolveWorkspaceImage failed")
 		}
 		if len(builder.repoBuilds) != 0 {
@@ -586,7 +586,7 @@ func TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild(t *testing.T) {
 		ImageRef: "wardyn-workspace/gone:abc", BuiltProfileHash: profile.CacheKey(),
 	}
 
-	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	image, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed")
 	}
@@ -616,7 +616,7 @@ func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
 	cfg.ImageBuilder = &capturingImageBuilder{}
 	srv := New(cfg)
 	ws := types.Workspace{ID: uuid.New(), Profile: mustJSON(profile)}
-	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed")
 	}
@@ -656,7 +656,7 @@ func TestResolveWorkspaceImage_ByoiCachesAcrossSessions(t *testing.T) {
 		},
 	}
 
-	first, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	first, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed (first launch)")
 	}
@@ -671,7 +671,7 @@ func TestResolveWorkspaceImage_ByoiCachesAcrossSessions(t *testing.T) {
 	// workspace row now holds (ImageRef/BuiltProfileHash persisted by the
 	// first launch's SetWorkspaceBuiltImage call).
 	ws.ImageRef, ws.BuiltProfileHash = first, st.builtHash
-	second, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	second, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed (second launch)")
 	}
@@ -685,7 +685,7 @@ func TestResolveWorkspaceImage_ByoiCachesAcrossSessions(t *testing.T) {
 	// Changing the base ref must still rebuild — the cache is per (kind, ref),
 	// not blanket-sticky on the workspace.
 	ws.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:2"}
-	third, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	third, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed (third launch, changed base ref)")
 	}
@@ -732,7 +732,7 @@ func TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions(t *testing.T
 		Profile: mustJSON(profile),
 	}
 
-	first, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	first, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed (first launch)")
 	}
@@ -744,7 +744,7 @@ func TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions(t *testing.T
 	}
 
 	ws.ImageRef, ws.BuiltProfileHash = first, st.builtHash
-	second, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	second, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok {
 		t.Fatal("resolveWorkspaceImage failed (second launch)")
 	}

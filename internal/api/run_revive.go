@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -62,6 +63,12 @@ import (
 
 // reviveBulkMax bounds one admin restart request.
 const reviveBulkMax = 100
+
+// reviveLiveEvery bounds how often a live run's proxy is replaced: each revive
+// of a running run removes and recreates its sidecar, and a run that is lost
+// is never bounded (#1005).
+// ponytail: per process; a stamp on the run row if replicas ever multiply it.
+const reviveLiveEvery = time.Minute
 
 // jtiRevoker is an OPTIONAL identity.Provider capability: revoke a single
 // token by its own jti, without revoking the whole run (O2, least-privilege
@@ -172,8 +179,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
 			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
-	if _, busy := s.reviving.LoadOrStore(run.ID, struct{}{}); busy {
-		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveAlreadyInProgress, "a revive of this run is already in progress")
+	if rerr := s.markReviving(run); rerr != nil {
+		return reviveResult{}, rerr
 	}
 	defer s.reviving.Delete(run.ID)
 
@@ -236,6 +243,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"dropped_broker_lanes":    re.droppedLane,
 		"proxy_release":           version.Version,
 	}
+	s.stampLiveRevive(run)
 	if err := rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -247,6 +255,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			// while its allowlisted egress keeps flowing audit-dark for up to
 			// the lapsed-token sweep's ~1h05m window.
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 				"the run's proxy was not replaced, and the run keeps its current proxy: "+err.Error())
 		}
@@ -329,6 +338,55 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	return cfg, nil
 }
 
+// stripRevivedModelInjections is dispatch's strip (dropLegacyModelInjections)
+// over a stored proxy config (#548). A revive or admin restart replays the
+// config the run was dispatched with, so a run dispatched before 0.8.2 can
+// still carry a model credential no provider authored: a policy's api_key
+// grant reading the operator's key, or a managed or subscription sentinel.
+// Every injection the strip would drop goes, audited as run.injection.drop,
+// unless its grant's snapshot names the UID of the run's own provider as it
+// stands now — the grants the provider arms author. A run left with no model
+// credential revives without one, as dispatch leaves a run no provider serves:
+// never a fallback to the operator's. A site config or grant list that cannot
+// be read refuses the revive.
+func (s *Server) stripRevivedModelInjections(ctx context.Context, run types.AgentRun, cfg *proxy.Config) *reviveError {
+	if len(cfg.Injection) == 0 {
+		return nil
+	}
+	unreadable := func(what string, err error) *reviveError {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			"re-check the run's model credentials: read "+what+": "+err.Error())
+	}
+	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return unreadable("site config", err)
+	}
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		return unreadable("the run's grants", err)
+	}
+	authored := map[uuid.UUID]bool{}
+	if p, ok := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID); ok && run.ModelProviderID != "" && p.UID != "" {
+		for _, g := range grants {
+			var sc struct {
+				Snapshot providerGrantSnapshot `json:"snapshot"`
+			}
+			if json.Unmarshal(g.Spec.Scope, &sc) == nil && sc.Snapshot.ProviderUID == p.UID {
+				authored[g.ID] = true
+			}
+		}
+	}
+	model := s.modelCredentialInjection(nil, s.modelServingHosts(siteCfg))
+	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
+		if authored[in.GrantID] || !model(in.InjectionRule) {
+			return false
+		}
+		s.auditDroppedInjection(ctx, run, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule}, "model_credential_not_provider_authored")
+		return true
+	})
+	return nil
+}
+
 // reviveEligible: a RUNNING run with a sandbox, inside its lease, that is live,
 // lost to an outage, or (startAgent) lost to a reboot, or an interactive run
 // its own end stopped, extended since and still inside its files grace (#1061).
@@ -358,6 +416,35 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 		return reviveRefused(http.StatusConflict, reasonReviveUnknownLostReason, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
 	return nil
+}
+
+// markReviving takes run's reviving mark. It refuses a second revive of the
+// run in flight, and a revive of a live run whose proxy this process started
+// replacing less than reviveLiveEvery ago (#1005). Only an attempt that
+// reaches the proxy is stamped (stampLiveRevive), so a refusal before it
+// changes nothing; the mark keeps the check and the stamp from interleaving
+// with another revive of the same run.
+func (s *Server) markReviving(run types.AgentRun) *reviveError {
+	if _, busy := s.reviving.LoadOrStore(run.ID, struct{}{}); busy {
+		return reviveRefused(http.StatusConflict, reasonReviveAlreadyInProgress, "a revive of this run is already in progress")
+	}
+	if last, ok := s.liveRevived.Load(run.ID); ok && run.LostAt == nil && s.cfg.Now().Before(last.(time.Time).Add(reviveLiveEvery)) {
+		s.reviving.Delete(run.ID)
+		return reviveRefused(http.StatusTooManyRequests, reasonReviveLiveTooSoon,
+			"this run's proxy was replaced less than a minute ago; try again in a minute")
+	}
+	return nil
+}
+
+// stampLiveRevive records that a live run's proxy is being replaced now; the
+// entry drops itself once it has lapsed.
+func (s *Server) stampLiveRevive(run types.AgentRun) {
+	if run.LostAt != nil {
+		return
+	}
+	now := s.cfg.Now()
+	s.liveRevived.Store(run.ID, now)
+	time.AfterFunc(reviveLiveEvery, func() { s.liveRevived.CompareAndDelete(run.ID, now) })
 }
 
 // reviveNeedsAgentStart reports whether a revive must start run's agent

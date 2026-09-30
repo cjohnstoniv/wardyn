@@ -15,7 +15,10 @@
 // No CSS, no component imports, on purpose. The run header, the Runs board, the
 // sign-in pane and ui/e2e's live specs all read these constants; a Playwright
 // spec runs in Node and cannot load `xterm.css`, which is what any import path
-// through the pane drags in. Keep this file dependency-free.
+// through the pane drags in. Keep this file dependency-free: its one import,
+// login-pane-copy.ts, is itself a bare constants file.
+
+import { SIGNIN_PROGRESS } from "./settings/login-pane-copy";
 
 // TERMINAL_STATUS_REASONS mirrors internal/runner/waiting.go's
 // TerminalWaitingReasons — the reasons waiting cannot fix, where only a person
@@ -95,6 +98,43 @@ export const CHIP_IMAGE_PULL_FAILED = "Image pull failed";
 export const CHIP_BAD_IMAGE_REF = "Bad image reference"; // nothing was pulled for InvalidImageName, so "Image pull failed" would be false
 export const CHIP_CONTAINER_WONT_START = "Container won't start";
 
+// The run page's startup view (#1419, the approved run-startup-progress packet).
+// Canon: these strings are the app's strings, pinned character for character in
+// run-startup-copy.test.ts. The step rows, the download hint and the substrate
+// sentences are reused from the sign-in door and the constants above.
+export const RUN_STARTUP = {
+  STEP_BUILD: "Building the image",
+  STEP_START: "Starting the sandbox",
+  STEP_TERMINAL: "Opening the terminal",
+  STEP_TASK: "Starting the task",
+  STEP_COMMAND: "Starting the command",
+  STEP_DOWNLOAD_FAILED: "Downloading the image — failed",
+  STEP_START_FAILED: "Starting the sandbox — failed",
+  BUILD_HINT: "This run needs its own image, so it is built first. This can take several minutes.",
+  SLOW: "Still starting. A first start may need to download the image, which can take a few minutes.",
+  OVERDUE:
+    "This is taking longer than a start usually does. If nothing changes, kill the run and launch it again.",
+} as const;
+
+// The image-build stage line's reason token (`image: Building`), written by the
+// server while a run is PENDING. run-status-detail.test.ts reads the Go constant
+// and fails if the two drift.
+export const STATUS_REASON_BUILDING = "Building";
+
+// When a HEALTHY wait stops being ordinary. The measured cold pull was 131s, so
+// a minute is comfortably inside "this is normal" and comfortably before the
+// point where silence reads as a hang. Lives here, not in login-start-wait.ts,
+// because that module imports the API client and this one must stay importable
+// from Playwright; login-start-wait.ts re-exports it.
+export const RUN_POLL_SLOW_START_MS = 60_000;
+
+// Past the longest a healthy start can take, the startup view stops claiming
+// the substrate's step. STARTING: canaryWaitTimeout + podIPWaitTimeout
+// (internal/runner/k8s/canary.go) = 4 min 30 s. PENDING: imageBuildTimeout
+// (internal/api/runs.go) = 30 min. Each has a parity test against its Go source.
+export const RUN_START_OVERDUE_MS = 270_000;
+export const RUN_PENDING_OVERDUE_MS = 1_800_000;
+
 // Parsing
 
 export type ParsedStatusDetail = {
@@ -154,6 +194,8 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
       return STARTING_CONTAINER_CREATING;
     case "Pulling":
       return STARTING_FIRST_PULL;
+    case STATUS_REASON_BUILDING:
+      return RUN_STARTUP.BUILD_HINT;
     case "Unschedulable":
       return STARTING_UNSCHEDULABLE;
     case "Pending":
@@ -194,6 +236,8 @@ export function statusDetailChip(raw: string | null | undefined, reason?: string
   switch (d.reason) {
     case "Pulling":
       return CHIP_DOWNLOADING;
+    case STATUS_REASON_BUILDING:
+      return RUN_STARTUP.STEP_BUILD;
     case "ContainerCreating":
     case "PodInitializing":
       return CHIP_SETTING_UP;
@@ -216,4 +260,141 @@ export function statusDetailChip(raw: string | null | undefined, reason?: string
       // full sentence either way. An absent reason keeps the general chip.
       return d.reason ? STARTING_RAW_PREFIX + d.reason : CHIP_WAITING_FOR_MACHINE;
   }
+}
+
+// The substrate reasons that mean the IMAGE did not arrive: the download step
+// failed, not the sandbox. InvalidImageName pulls nothing, but it is still this
+// step's failure as the person sees it.
+const IMAGE_PULL_REASONS = ["ImagePullBackOff", "ErrImagePull", "InvalidImageName"];
+
+export function isImagePullFailure(reason: string | null | undefined): boolean {
+  return !!reason && IMAGE_PULL_REASONS.includes(reason);
+}
+
+export type StartupMark = "done" | "active" | "pending" | "failed";
+// `stale`: the row that was active before the run went overdue (drawn without
+// its spinner but in the normal text colour, as the mock's stale row).
+export type StartupRow = {
+  key: "build" | "start" | "download" | "last";
+  label: string;
+  mark: StartupMark;
+  stale?: boolean;
+};
+export type StartupView = {
+  rows: StartupRow[];
+  // "" when there is nothing to say (rendered as a role=status line).
+  hint: string;
+  // "" unless a reason waiting cannot fix stopped the start (rendered as an alert).
+  alert: string;
+};
+export type StartupLastStep = "terminal" | "task" | "command" | null;
+
+// runStartupView derives the run page's startup steps from the run fields the
+// page already polls. null unless the run is PENDING or STARTING, so a caller
+// can render it unconditionally. Pure: the clock and the client-side memory
+// (`sawBuilding`, `lastStep`) come in as arguments.
+//
+// The clock: while PENDING, how long is `now - created_at`; while STARTING it
+// is `now - updated_at`, because SetRunStatusDetail does not stamp updated_at
+// and a state CAS does, so updated_at is when the sandbox start began. That
+// keeps a run that just finished a long build from reading as slow.
+export function runStartupView(
+  run: {
+    state: string;
+    created_at: string;
+    updated_at: string;
+    status_detail?: string | null;
+    status_reason?: string | null;
+  },
+  now: number,
+  opts: { lastStep: StartupLastStep; sawBuilding: boolean },
+): StartupView | null {
+  const starting = run.state === "STARTING";
+  if (!starting && run.state !== "PENDING") return null;
+
+  // The server blanks every reason but Building for PENDING, and Building for
+  // STARTING; ignore whatever else arrives so a stale or foreign line cannot
+  // narrate the wrong stage.
+  const parsed = parseStatusDetail(run.status_detail, run.status_reason);
+  const reason = parsed.reason;
+  const building = !starting && reason === STATUS_REASON_BUILDING;
+  const detail = starting && reason !== STATUS_REASON_BUILDING ? run.status_detail : "";
+  const stepReason = starting && reason !== STATUS_REASON_BUILDING ? reason : "";
+
+  const since = Date.parse(starting ? run.updated_at : run.created_at);
+  const elapsed = Number.isNaN(since) ? 0 : Math.max(0, now - since);
+
+  const last = (mark: StartupMark): StartupRow[] =>
+    opts.lastStep
+      ? [
+          {
+            key: "last",
+            label:
+              opts.lastStep === "terminal"
+                ? RUN_STARTUP.STEP_TERMINAL
+                : opts.lastStep === "command"
+                  ? RUN_STARTUP.STEP_COMMAND
+                  : RUN_STARTUP.STEP_TASK,
+            mark,
+          },
+        ]
+      : [];
+
+  // A reason waiting cannot fix: the list stops at the step that failed.
+  if (isTerminalStatusReason(stepReason)) {
+    const sentence = statusDetailSentence(detail, stepReason);
+    if (isImagePullFailure(stepReason)) {
+      return {
+        rows: [
+          { key: "start", label: RUN_STARTUP.STEP_START, mark: "done" },
+          { key: "download", label: RUN_STARTUP.STEP_DOWNLOAD_FAILED, mark: "failed" },
+        ],
+        hint: "",
+        alert: sentence,
+      };
+    }
+    return {
+      rows: [{ key: "start", label: RUN_STARTUP.STEP_START_FAILED, mark: "failed" }],
+      hint: "",
+      alert: sentence,
+    };
+  }
+
+  const pulling = stepReason === "Pulling";
+  const overdue = elapsed >= (starting ? RUN_START_OVERDUE_MS : RUN_PENDING_OVERDUE_MS);
+  // Past the overdue bound the active row loses its spinner: the substrate's
+  // last word is no longer evidence that anything is happening.
+  const active: StartupMark = overdue ? "pending" : "active";
+
+  const rows: StartupRow[] = [];
+  if (building) {
+    rows.push({ key: "build", label: RUN_STARTUP.STEP_BUILD, mark: active, ...(overdue && { stale: true }) });
+    rows.push({ key: "start", label: RUN_STARTUP.STEP_START, mark: "pending" });
+    rows.push({ key: "download", label: CHIP_DOWNLOADING, mark: "pending" });
+    rows.push(...last("pending"));
+  } else {
+    if (starting && opts.sawBuilding) rows.push({ key: "build", label: RUN_STARTUP.STEP_BUILD, mark: "done" });
+    rows.push({
+      key: "start",
+      label: RUN_STARTUP.STEP_START,
+      mark: pulling ? "done" : active,
+      ...(overdue && !pulling && { stale: true }),
+    });
+    rows.push({
+      key: "download",
+      label: CHIP_DOWNLOADING,
+      mark: pulling ? active : "pending",
+      ...(overdue && pulling && { stale: true }),
+    });
+    rows.push(...last("pending"));
+  }
+
+  // The door's hint rules: a download and a build say so at once; any other
+  // wait speaks only once it is slow. Overdue outranks all of them.
+  let hint = "";
+  if (overdue) hint = RUN_STARTUP.OVERDUE;
+  else if (building) hint = RUN_STARTUP.BUILD_HINT;
+  else if (pulling) hint = SIGNIN_PROGRESS.DOWNLOAD_HINT;
+  else if (elapsed >= RUN_POLL_SLOW_START_MS) hint = statusDetailSentence(detail, stepReason) || RUN_STARTUP.SLOW;
+  return { rows, hint, alert: "" };
 }

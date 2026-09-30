@@ -28,7 +28,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.8.0/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.8.1/install.sh | sh
 ```
 
 Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
@@ -110,12 +110,11 @@ repo — from a clone, the same four keys with their comments are
 `cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
 
 **Want an agent to write the code?** *Then* connect a model — optional, and
-equally first-class at the CLI or in the UI:
+equally first-class at the CLI or in the UI. An admin adds a model provider
+under Settings → Model providers; each person then connects their own
+credential for it (a key, or a Claude or AWS sign-in) from Getting started:
 
 ```sh
-claude setup-token | wardyn subscription connect   # subscription (never resident)
-echo "$KEY"        | wardyn secret set anthropic-api-key   # API key
-# Bedrock: WARDYN_BEDROCK_REGION/MODEL (+ WARDYN_BEDROCK_AWS_DIR for ~/.aws SSO)
 wardyn setup status   # what's configured + the next command per unmet check
 ```
 
@@ -142,7 +141,7 @@ built-in demos need no model either — see
 | Record Mode | Run once open, get the minimal policy, replay confined | [TRY-IT.md](docs/TRY-IT.md) |
 | Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | [OPERATIONS.md](docs/OPERATIONS.md) |
 | Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md) |
-| Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | [TRY-IT.md](docs/TRY-IT.md) |
+| Model access | Each person's own key or Claude/AWS sign-in, injected proxy-side; the sandbox holds an inert sentinel | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | [CI.md](docs/CI.md) |
 | Audit + attach | Three audit streams. The audit log itself is append-only — a Postgres trigger refuses `UPDATE`, `DELETE` and `TRUNCATE` on it. PTY replay is a separate store (upserted per cast, retention-swept), each upload audited. Attach live from browser or SSH | [SSH.md](docs/SSH.md) |
 | UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |

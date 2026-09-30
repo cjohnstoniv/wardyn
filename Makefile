@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -456,20 +456,12 @@ test-e2e-concurrent: ## Two project-scoped stacks up at once: no collision, net 
 # Live TASK e2e: real sandboxes running the test/e2e/tasks corpus, graded on
 # final workspace STATE (did the agent actually do the work?), plus per-tier
 # allow/block confinement, interactive PTY, and recording-replay. The $0 oracle
-# lane runs by default; add WARDYN_E2E_REAL_MODEL=1 (+ staged creds via
-# scripts/stage-claude-creds.sh) for the real claude-code lane. Guarded by
+# lane runs by default; add WARDYN_E2E_REAL_MODEL=1 for the real claude-code lane
+# (needs a model provider connected to the stack under test). Guarded by
 # WARDYN_TEST_DOCKER=1 inside the script.
 test-e2e-live: ## Live TASK e2e: real sandboxes run the corpus, graded on state
 	@echo "Running live TASK e2e (real sandboxes + graders; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-live.sh
-
-# Live SUBSCRIPTION e2e: proves proxy-side OAuth-token injection end-to-end. The
-# driver RESTARTS wardynd with WARDYN_SUBSCRIPTION_INJECT flipped to run both the
-# inject-on attach-walkthrough and the inject-off escape-hatch lane, then restores
-# the safe default. Needs Docker + staged Claude creds (scripts/stage-claude-creds.sh).
-test-e2e-subscription: ## Live SUBSCRIPTION e2e: inject-on attach + inject-off escape hatch
-	@echo "Running live SUBSCRIPTION e2e (inject-on attach + inject-off escape hatch; restarts wardynd)..."
-	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-subscription.sh
 
 # Live BYOI e2e: an operator-supplied base image (stock/harness/hostile/
 # nonexistent) is wrapped with the runner tools and every sandbox control is
@@ -592,6 +584,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/common_clone_present_test.sh
 	./scripts/lib/nightly_ssh_e2e_test.sh
 	./scripts/lib/up_doctor_ports_test.sh
+	./scripts/test-check-managed-settings-drift.sh
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
@@ -979,12 +972,21 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set postgres.dsn.secretRef.name=ext --set secrets.ageKeyFromSecret=true --set-string env.WARDYN_ADMIN_TOKEN= 2>&1 | grep -q "the public API would 401" || { echo "an EMPTY env.WARDYN_ADMIN_TOKEN satisfies the auth refusal again — adminAuth reads an empty token as unconfigured, so the chart would render exactly the 401s-everything control plane the refusal exists to prevent"; exit 1; }
 	@# The one refusal whose subject is an AUTHENTICATION BYPASS, and the only one
 	@# the gate never asserted. WARDYN_LOCAL_MODE turns off public-API auth
-	@# outright; the shared-subscription pair serves one operator's Claude
-	@# subscription to every user's run. Both reach the pod through .Values.env
-	@# (rendered verbatim) and through .Values.extraEnv, so both doors are asserted.
-	@for k in WARDYN_LOCAL_MODE WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC WARDYN_ALLOW_SHARED_SUBSCRIPTION; do \
-		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.$$k=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses env.$$k on Kubernetes — local mode bypasses public-API authentication entirely, and a shared subscription credential serves one person's Claude subscription to every user's run"; exit 1; }; \
+	@# outright. Both reach the pod through .Values.env (rendered verbatim) and
+	@# through .Values.extraEnv, so both doors are asserted.
+	@for k in WARDYN_LOCAL_MODE WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC; do \
+		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.$$k=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses env.$$k on Kubernetes — local mode bypasses public-API authentication entirely"; exit 1; }; \
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set extraEnv[0].name=$$k --set extraEnv[0].value=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses $$k via extraEnv — a refusal that only reads .Values.env leaves the documented secret-bearing door wide open"; exit 1; }; \
+	done
+	@# #549/#672: the retired model variables. A 0.7 values file configuring them
+	@# (cmd/wardynd/testdata/values-0.7.yaml, the same file the boot refusal test
+	@# reads) is refused at render, naming model providers; an inert "false"/"off"
+	@# renders; and no values file the chart ships renders a retired variable.
+	@helm template wardyn ./deploy/helm/wardyn -f cmd/wardynd/testdata/values-0.7.yaml 2>&1 | grep -q "Settings → Model providers" || { echo "chart renders a 0.7 values.yaml that still sets retired model variables — wardynd would crash-loop on it (#549)"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-string env.WARDYN_SUBSCRIPTION_INJECT=off --set-string env.WARDYN_ALLOW_SHARED_SUBSCRIPTION=false >/dev/null || { echo "chart refuses an inert retired value (false/off) that wardynd boots with"; exit 1; }
+	@for args in "--set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true" $$(for v in deploy/helm/wardyn/ci/*.yaml; do echo "-f=$$v"; done); do \
+		out=$$(helm template wardyn ./deploy/helm/wardyn $$args) || { echo "helm template $$args no longer renders"; exit 1; }; \
+		if echo "$$out" | grep -qE 'name: (WARDYN_(ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|WARDYN_AGENT_ANTHROPIC_MODEL|WARDYN_SUBSCRIPTION_INJECT|WARDYN_ALLOW_SHARED_SUBSCRIPTION)$$'; then echo "helm template $$args renders a retired model variable (#549)"; exit 1; fi; \
 	done
 	@# #378: auth.ssoOnly mirrors validateSSOOnlyPosture's boot refusal at render
 	@# time — but a render-time refusal proves the VALUES are consistent, not
@@ -1278,6 +1280,12 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@WARDYN_OIDC_REDIRECT_URL=https://sso.corp.example/auth/callback docker compose -f $(COMPOSE_FILE) config \
 	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
 	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
+	@# #549/#672: neither compose entrypoint renders a retired model variable.
+	@for render in "-f $(COMPOSE_FILE)" "--env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml"; do \
+		out=$$(docker compose $$render config) || { echo "compose: docker compose $$render config failed"; exit 1; }; \
+		if echo "$$out" | grep -qE '^ *(WARDYN_(ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|WARDYN_AGENT_ANTHROPIC_MODEL|WARDYN_SUBSCRIPTION_INJECT|WARDYN_ALLOW_SHARED_SUBSCRIPTION):'; then \
+			echo "compose: docker compose $$render config renders a retired model variable — wardynd refuses to boot on one set to a real value (#549)"; exit 1; fi; \
+	done
 
 # DCO sign-off: every commit, merges included, in DCO_RANGE carries a
 # Signed-off-by. See DCO_ALLOW_GITHUB_MERGES for the one exemption.
@@ -1428,33 +1436,22 @@ record-demo: ## Record the demo video (DESTRUCTIVE: resets the stack; ARGS: --no
 	./scripts/record-demo.sh $(ARGS)
 
 # ONE front door: asks containerized (default, recommended — the compose stack) vs
-# host (advanced escape hatch — wardynd runs as you, using your resident Claude
-# login). Enter / headless = containerized; a packaged one-command multi-user (team)
+# host (advanced escape hatch — wardynd runs as you on this machine). Enter /
+# headless = containerized; a packaged one-command multi-user (team)
 # setup does not exist, but admin/member RBAC + SSO shipped in v0.5 — see
 # docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the admin's recipe,
 # or docs/USERS.md if you're joining a deployment someone else runs. A failed image
 # pull (offline host, a mirror with no pnpm) falls back to building from this checkout
 # automatically — WARDYN_BUILD_LOCAL=1 forces that path; see
 # docs/adoption/make-setup-requires-ui-stage-on-pnpm-less-mirror.md.
-# In host mode a terminal PROMPTS for each credential it can import (AWS, SCM); a
-# headless run (no TTY) skips them unless WARDYN_IMPORT_AWS=1 / WARDYN_IMPORT_SCM=1 /
-# WARDYN_FORCE_RESET=1 are set. Subscription staging is NOT one of those prompts —
-# `make setup` does not stage at all (see stage-claude below). Scripts that must not
-# prompt at all pick the mode up front with WARDYN_SETUP_MODE=local|container.
+# In host mode a terminal PROMPTS for each credential it can import (SCM); a
+# headless run (no TTY) skips them unless WARDYN_IMPORT_SCM=1 / WARDYN_FORCE_RESET=1
+# are set. Model access is never imported: connect it under Settings -> Model
+# providers. Scripts that must not prompt at all pick the mode up front with
+# WARDYN_SETUP_MODE=local|container.
 setup: ## One-command Wardyn: containerized (default) or host; builds, ups, opens the UI
 	@echo "Wardyn setup — asks containerized (default) vs host, then launches + opens the UI..."
 	./scripts/setup.sh
-
-# HOST MODE ONLY, and a DEMO path: the ceiling it writes
-# (~/.wardyn/claude-subscription.json) is read by scripts/run-host.sh, never by the
-# containerized wardynd. `make setup` does not call it — copying a host ~/.claude is
-# a SHARED subscription credential, which the daemon refuses outside a single-user
-# posture, so the script refuses too unless WARDYN_ALLOW_SHARED_SUBSCRIPTION=1 (set
-# below). Idempotent — re-run to refresh the staged copies. Ordinary installs connect
-# a subscription in the console instead (Settings -> Model provider), which signs in
-# inside a sandbox and stores the token age-encrypted.
-stage-claude: ## Stage your Claude login for HOST-mode subscription mounts (restarts the host wardynd)
-	WARDYN_ALLOW_SHARED_SUBSCRIPTION=1 ./scripts/stage-claude-creds.sh
 
 # Stop the background host-mode wardynd started by `make setup`.
 # (Team/compose mode is stopped with `make compose-down`.)

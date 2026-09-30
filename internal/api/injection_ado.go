@@ -63,6 +63,8 @@ const (
 	adoResolveUnavailable       = "Renewing the Azure DevOps sign-in behind this run did not complete; nothing about the credential is known to be wrong"
 	adoResolveStoreRefused      = "The secret store refused the Azure DevOps sign-in behind this run (it was moved or changed at the store, or Wardyn's access to it was revoked) — sign in to Azure DevOps again, or ask an administrator to check the store"
 	adoResolveTokenModeRefusal  = "This run's Azure DevOps token mode cannot be issued by Wardyn"
+	adoResolveBearerMintScopes  = "The Azure DevOps sign-in behind this run could create personal access tokens, so Wardyn will not send it with a run — " +
+		"remove vso.pats and vso.pats_manage from the app registration, or have Wardyn create a token for each run"
 )
 
 // adoEntraAccessReuseMargin is how long before expiry a minted access token
@@ -135,7 +137,15 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok && !fresh {
 		return a, nil
 	}
-	a, err := s.RedeemADOEntraAccess(ctx, cfg, owner, scopes)
+	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
+		return ADOEntraAccess{}, err
+	}
+	// The put is under the redemption lock too, so a disconnect or an erase
+	// (eraseADOSignIn) that deletes the sign-in and forgets the cache under
+	// it cannot be followed by a token cached from the sign-in it deleted.
+	unlock := s.adoEntra.lock(owner, cfg.RowID)
+	defer unlock()
+	a, err := s.redeemADOEntraAccessLocked(ctx, cfg, owner, scopes)
 	if err != nil {
 		return ADOEntraAccess{}, err
 	}
@@ -177,7 +187,9 @@ func (s *Server) adoRequestScopes(ctx context.Context, cfg ADOEntraConfig, owner
 //  4. the host pinned to the snapshot's own organisation's host set;
 //  5. the app registration the redemption would use required to be the one the
 //     snapshot names;
-//  6. redeem, classify any failure, and record the GRANTED scope string.
+//  6. redeem, classify any failure, and record the GRANTED scope string — or,
+//     for a minted_pat run, hand out its personal access token
+//     (resolveADORunPAT).
 func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
 ) bool {
@@ -219,6 +231,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, adoResolveRosterUnreadable, nil)
 	}
 	if drift := snapshot.driftFrom(siteCfg); drift != "" {
+		// A minted_pat run's tokens were created for the configuration that
+		// moved: revoke every one, whichever host holds it.
+		s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
@@ -228,6 +243,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	cfg, status, reason, body := s.adoEntraConfigFor(ctx, snapshot)
 	if status != 0 {
+		if reason == reasonScopeChanged {
+			s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
+		}
 		return fail(status, reason, body, nil)
 	}
 	if _, serr := adoscope.ScopesFor(snapshot.Capabilities); serr != nil {
@@ -249,6 +267,11 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		// Cannot fail: answerADOCapability admits grantable capabilities only.
 		need, _ = adoscope.ScopesFor([]adoscope.Capability{capAsk.capability})
 		responseCaps = capAsk.standing
+	}
+	if types.ADOTokenMode(snapshot.TokenMode) == types.ADOTokenModeMintedPAT {
+		// The person's own personal access token: no Entra consent per
+		// capability, since the token's scope is Wardyn's to choose.
+		return s.resolveADORunPAT(w, r, claims, minted, grantID, snapshot, cfg, siteCfg, capAsk, responseCaps, fail)
 	}
 
 	// REQUEST WHAT THE PERSON CONSENTED TO, inside the row's ceiling
@@ -280,6 +303,14 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		status, body := adoResolveFailureAnswer(class)
 		return fail(status, string(class), body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
+	// S2: a bearer that can create personal access tokens never rides a run's
+	// traffic, and a grant that reported no scope proves nothing (fail closed).
+	if why := adoBearerMintScopeRefusal(access.Scopes); why != "" {
+		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, adoBearerAuditRefusedMint,
+			types.ADOEntraAccessTokenSecret, "denied", mustJSON(map[string]any{"reason": why, "owner": snapshot.OwnerSubject,
+				"provider_row": snapshot.ProviderRowID, "granted_scope": strings.Join(access.Scopes, " ")})))
+		return fail(http.StatusForbidden, why, adoResolveBearerMintScopes, map[string]any{"owner": snapshot.OwnerSubject})
 	}
 	if capAsk.capability != "" && s.settleADOCapability(w, r, claims, snapshot, cfg, grantID, minted.JTI, capAsk, need, access, fail) {
 		return true
@@ -354,7 +385,7 @@ func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 // holds it to the snapshot. status==0 means cfg is usable; otherwise the three
 // strings are the refusal.
 func (s *Server) adoEntraConfigFor(ctx context.Context, sn adoEntraScopeSnapshot) (ADOEntraConfig, int, string, string) {
-	if types.ADOTokenMode(sn.TokenMode) != types.ADOTokenModeBearer {
+	if m := types.ADOTokenMode(sn.TokenMode); m != types.ADOTokenModeBearer && m != types.ADOTokenModeMintedPAT {
 		return ADOEntraConfig{}, http.StatusForbidden, reasonTokenMode, adoResolveTokenModeRefusal
 	}
 	if s.cfg.ADOEntra == nil {

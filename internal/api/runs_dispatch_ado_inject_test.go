@@ -86,8 +86,8 @@ func adoEntraTestRow() types.GitProvider {
 		CredentialSource: types.CredentialSourcePerUser,
 		Entra: &types.ADOEntraConfig{
 			TenantID: adoTestTenant, ClientID: adoTestClient,
-			CapabilityCeiling: []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR},
-			DefaultProfile:    []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite},
+			CapabilityCeiling: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+			DefaultProfile:    []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
 		},
 	}
 }
@@ -115,8 +115,9 @@ func TestResolveADOEntraRun_Golden(t *testing.T) {
 		rowID: "ado-row-1", org: "contoso", owner: adoTestOwner,
 		tenantID: adoTestTenant, clientID: adoTestClient,
 		tokenMode: types.ADOTokenModeBearer, credentialSource: types.CredentialSourcePerUser,
-		caps:    []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite},
-		ceiling: []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite, adoscope.CapPR},
+		caps:     []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
+		ceiling:  []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+		patHours: types.ADOPATMaxHoursDefault,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resolved lane = %+v\nwant %+v", got, want)
@@ -229,7 +230,7 @@ func TestAuthorADOEntraInjection_Golden(t *testing.T) {
 	wantSnap := adoEntraScopeSnapshot{
 		ProviderRowID: "ado-row-1", Organisation: "contoso", OwnerSubject: adoTestOwner,
 		CredentialSource: "per_user", TenantID: adoTestTenant, ClientID: adoTestClient, TokenMode: "bearer",
-		Capabilities: []adoscope.Capability{adoscope.CapRead, adoscope.CapCodeWrite},
+		Capabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
 	}
 	for i, inj := range injections {
 		r := inj.Rule
@@ -274,13 +275,14 @@ func TestAuthorADOEntraInjection_RefusesWithoutCertificateAuthority(t *testing.T
 	}
 }
 
-// minted_pat is not issuable; a ceiling-escaping profile is not authorable.
+// A token_mode this lane does not know is not issuable; a ceiling-escaping
+// profile is not authorable.
 func TestAuthorADOEntraInjection_RefusesUnissuableConfigurations(t *testing.T) {
-	pat := adoTestRun(t)
-	pat.tokenMode = types.ADOTokenModeMintedPAT
+	unknown := adoTestRun(t)
+	unknown.tokenMode = types.ADOTokenMode("shared_pat")
 	escape := adoTestRun(t)
 	escape.caps = append(escape.caps, adoscope.CapPolicyBypass)
-	for name, ado := range map[string]adoEntraRun{"minted_pat": pat, "outside ceiling": escape} {
+	for name, ado := range map[string]adoEntraRun{"unknown token_mode": unknown, "outside ceiling": escape} {
 		st := &adoTestStore{}
 		s, _ := newADODispatchServer(st)
 		policy := types.RunPolicySpec{}

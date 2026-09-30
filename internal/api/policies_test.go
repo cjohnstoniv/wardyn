@@ -70,21 +70,17 @@ func TestCreatePolicyValidation(t *testing.T) {
 	}
 }
 
-// TestCreatePolicy_SecretRefShapeFailsAtAuthorTime: a stored policy's secret
-// references are checked for shape at author time — here an LLM-auth sentinel
-// with no token provider behind it — and the refusal carries the "secret: "
-// prefix, mirroring "workspace: ". Existence is not checked there (#1123): see
-// TestStoredPolicy_SecretRefsResolvePerRunOwner.
-func TestCreatePolicy_SecretRefShapeFailsAtAuthorTime(t *testing.T) {
+// TestCreatePolicy_RetiredSentinelRefused: a retired shared-subscription
+// sentinel is a reserved name, refused before the policy is stored. (It was
+// the one author-time "secret: " refusal validatePolicySpec did not already
+// make — a sentinel with no token provider behind it.)
+func TestCreatePolicy_RetiredSentinelRefused(t *testing.T) {
 	h := newHarness(t)
 	body := `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
 		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"` + types.SubscriptionOAuthSecret + `"}}]}}`
 	w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken, body)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("code = %d, want 422 (a sentinel with no provider must fail at author time); body=%s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "secret: ") {
-		t.Errorf("error must carry the \"secret: \" prefix, mirroring \"workspace: \": %s", w.Body.String())
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "reserved secret name") {
+		t.Fatalf("code = %d body=%s, want 400 naming the reserved secret name", w.Code, w.Body.String())
 	}
 }
 

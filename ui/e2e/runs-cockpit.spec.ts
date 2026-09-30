@@ -5,9 +5,10 @@
 
 import { randomUUID } from "node:crypto";
 import { test, expect, gotoConsole, navTo, sql } from "./fixtures";
-import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { RUN_COCKPIT, UI_APPS_LANE } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
+import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
 import type { Page } from "@playwright/test";
 
 // Split out of runs.spec.ts (#209): the run cockpit's own widget behaviour —
@@ -144,6 +145,57 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
   });
 });
 
+// The card lives in a fixed-height canvas tile that clips. Its content (every
+// lane) is taller than the tile, so the BODY must be the scroll container or
+// the bottom lanes are cut off with no way to reach them. Real layout is the
+// only proof: jsdom has none.
+test.describe("Attach card — its body scrolls inside its tile", () => {
+  test("the last lane is reachable by scrolling the card body", async ({ page }) => {
+    await openRuns(page);
+    // SSH on, so the card carries its full set of lanes and command blocks.
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          ssh: { enabled: true, advertise_addr: "ssh.example.test:2222", host_key_fingerprint: "SHA256:e2eFixture" },
+        }),
+      }),
+    );
+
+    await page.getByText("e2e fixture 2").click(); // RUNNING — the card's gate
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const heading = page.getByRole("heading", { name: "Attach from your terminal" });
+    await expect(heading).toBeVisible();
+
+    const card = heading.locator("xpath=ancestor::section[1]");
+    const body = card.locator("xpath=./*[last()]");
+    // The last thing in the card: the UI-apps lane's closing line.
+    const last = body.getByText(UI_APPS_LANE.offDocPath);
+    await expect(last).toHaveCount(1);
+
+    const m = await body.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      overflowY: getComputedStyle(el).overflowY,
+    }));
+    expect(m.overflowY).toBe("auto");
+    expect(m.scrollHeight).toBeGreaterThan(m.clientHeight);
+
+    // Off the tile's bottom edge until scrolled, inside it after.
+    const inside = async () => {
+      const [l, c] = await Promise.all([last.boundingBox(), card.boundingBox()]);
+      return !!l && !!c && l.y + l.height <= c.y + c.height + 1;
+    };
+    expect(await inside()).toBe(false);
+    await body.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+    await expect.poll(inside).toBe(true);
+
+    await page.unroute("**/healthz");
+  });
+});
+
 // F1-F3 repro (verdict N — NEEDS-REPRO; verified/fixed only if this goes red):
 // focus-mode.tsx's Escape handler and Radix's own AlertDialog dismiss are BOTH
 // capture-phase listeners on `document` — stopPropagation on one does not
@@ -197,21 +249,28 @@ test.describe("Focus mode — Escape inside a Deny confirm", () => {
 
 // ── 0.7.6 Finding 3 — "the failure names a destination instead of being one" ──
 //
-// The dispatch-time model-credential refusal now stamps `reason` and the
-// DECLARED `mechanism` on the run.create/failure row it already wrote; the
-// console grades that ending `credential` and puts the sign-in under the
-// server's own sentence.
+// The dispatch-time model-credential refusal stamps `reason` and the
+// `provider` it is about on the run.create/failure row it already wrote; the
+// console grades that ending `credential` and puts that provider's sign-in
+// under the server's own sentence.
 //
 // Harness ceiling, the same one model-access-banner.spec.ts opens with: the
 // seeded backend authenticates with a bare admin bearer token, has no per-user
 // AWS session to grade and no run that reached dispatch with a dead credential —
-// so the trail row, `model_access` and the viewer's own subject are spliced.
+// so the trail row, the provider access and the viewer's own subject are spliced.
 // What only a browser proves is what is spliced here and asserted below: that
 // this ending reaches the failure block as prose PLUS a door, on the run page,
 // with no second "Sign in to AWS" beside it. The real refusal, from a real
 // per-user AWS session that lapsed, is live case J (lane e2e-sso-path).
-const CREDENTIAL_REFUSAL =
-  "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+const CREDENTIAL_BEDROCK = {
+  id: "bedrock-prod",
+  name: "Bedrock (prod)",
+  kind: "bedrock_sso",
+  harnesses: ["claude-code"],
+  default_for: ["claude-code"],
+  host: "bedrock-runtime.us-east-1.amazonaws.com",
+};
+const CREDENTIAL_REFUSAL = `This run's model provider is ${CREDENTIAL_BEDROCK.name}, and your AWS sign-in for it can no longer be renewed — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.`;
 const CREDENTIAL_VIEWER = "alice@corp.example";
 
 /** The viewer's own subject, so `created_by === principal` can be true of a
@@ -226,20 +285,16 @@ async function mockPrincipal(page: Page, principal: string): Promise<void> {
   });
 }
 
-/** A graded per-user model access + the bedrock_sso roster row, cached and
- *  served (the landing redirect, the shell poll and the block's own refresh all
- *  hit this endpoint). */
+/** A lapsed AWS sign-in for the run's own Bedrock provider, cached and served
+ *  (the landing redirect, the shell poll and the block's own refresh all hit
+ *  this endpoint). */
 async function mockActionableModelAccess(page: Page): Promise<void> {
   let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
     if (!cached) {
       const body = (await (await route.fetch()).json()) as Record<string, unknown>;
-      body.model_access = { state: "expired_signin", action: AGENTS.SIGN_IN_AWS };
-      body.harnesses = ((body.harnesses ?? []) as { id: string }[]).map((h) =>
-        h.id === "claude-code"
-          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-          : h,
-      );
+      body.model_providers = [CREDENTIAL_BEDROCK];
+      body.provider_access = [{ provider: CREDENTIAL_BEDROCK.id, state: "expired_signin", action: AGENTS.SIGN_IN_AWS }];
       cached = body;
     }
     await route.fulfill({ json: cached! });
@@ -277,7 +332,7 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
         action: "run.create",
         target: String(runID),
         outcome: "failure",
-        data: { error: CREDENTIAL_REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" },
+        data: { error: CREDENTIAL_REFUSAL, reason: "model_credential", provider: CREDENTIAL_BEDROCK.id, kind: CREDENTIAL_BEDROCK.kind },
       });
       await route.fulfill({ response, json: rows });
     });
@@ -294,7 +349,7 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
 
     // ONE "Sign in to AWS" on the page: the block owns the door while it has
     // one, so the shell strip keeps its sentence and drops its button.
-    await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED_SHORT)).toBeVisible();
+    await expect(page.getByText(CONNECTIONS.C6_LINE(CREDENTIAL_BEDROCK.name))).toBeVisible();
     await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
 
     // A DOOR, not a signpost: the sign-in opens here, on the run's own page.

@@ -441,10 +441,14 @@ type APIToken struct {
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the
-// identity provider's subject.
+// identity provider's subject — or, on Entra ID, by Issuer, TenantID and ObjectID, all three set
+// or none (#1195).
 type Person struct {
 	Principal       string     `json:"principal"`
 	Email           string     `json:"email,omitempty"`
+	Issuer          string     `json:"issuer,omitempty"`
+	TenantID        string     `json:"tenant_id,omitempty"`
+	ObjectID        string     `json:"object_id,omitempty"`
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`

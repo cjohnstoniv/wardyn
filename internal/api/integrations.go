@@ -260,9 +260,6 @@ func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]b
 	stored := make(map[string]bool, len(sc.Integrations))
 	rows := make([]integrationRow, 0, len(sc.Integrations))
 	for _, in := range sc.Integrations {
-		if types.AIProviderKind(in.Kind) {
-			continue
-		}
 		stored[in.ID] = true
 		rows = append(rows, integrationRow{Integration: in, Source: "stored"})
 	}

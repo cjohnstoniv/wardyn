@@ -272,6 +272,63 @@ jobs:
             ci-artifacts/
             ci-artifacts-negative/
 
+  # CI-mode dogfood, MODEL-RUN variant (T-21, #681): scripts/ci-run.sh in its
+  # "existing control plane" mode (WARDYN_URL + the CI principal's own token +
+  # WARDYN_CI_MODEL_PROVIDER) driving a real harness run whose one model call
+  # lands on test/awsssofake's bedrock-runtime stub, on the plain (no-SSO)
+  # `make kind-quickstart` cluster. Kind rather than compose because only there
+  # can the fake live on the SERVICE CIDR the proxy will dial, exposing nothing
+  # on the host — see scripts/kind-ci-model-run.sh's header.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT (scripts/test-repo-guards.sh),
+  # kept out of notify-new-lanes' needs and release.yml's watched= until it has
+  # gone green on a real scheduled run, the same posture kind-survival-walk has.
+  ci-mode-dogfood-model-fake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: Bring up the kind quickstart cluster
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+        run: make kind-quickstart
+      - name: One-shot governed harness run against the fake (ci-run.sh, WARDYN_URL mode)
+        env:
+          WARDYN_TEST_K8S: "1"
+          # This runner's cluster was just created by the step above and
+          # belongs to nothing else — safe to mutate here.
+          WARDYN_ACK_SHARED_QUICKSTART: "1"
+          WARDYN_KIND_CI_MODEL_EVIDENCE: ${{ github.workspace }}/ci-artifacts-model-fake
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ci-artifacts-model-fake
+          ./scripts/kind-ci-model-run.sh 2>&1 | tee ci-artifacts-model-fake/kind-ci-model-run.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" = "77" ]; then echo "::error::kind-ci-model-run.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the step"; exit 1; fi
+          [ "$code" = "0" ] || { echo "::error::kind-ci-model-run.sh exited $code — see the uploaded log"; exit 1; }
+          grep -q '^kind-ci-model-run: PASS' ci-artifacts-model-fake/kind-ci-model-run.log || { echo "::error::the run never reached its own closing PASS line"; exit 1; }
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-mode-dogfood-model-fake-artifacts
+          path: ci-artifacts-model-fake/
+          if-no-files-found: error
+
   # Real-Docker envbuild/runner smoke test (the "E" / envbuild workstream).
   # The PR-time ci.yml `build` job already runs `make test-report-docker` (via
   # cover-check) with WARDYN_TEST_DOCKER unset, so its real-Docker-gated cases
@@ -398,10 +455,8 @@ jobs:
   #                             maintainer's box (subnet collision) and not
   #                             stood up here; its own §6/§7 arms have never
   #                             been run live.
-  #   make test-e2e-subscription  needs a real vendor subscription credential,
-  #                             which no CI runner has or should have.
   #
-  # A regression in any of those still ships silently.
+  # A regression there still ships silently.
   #
   # `make test-e2e-concurrent` (#697, T-37) is wired below as its own job —
   # it needed no blocker to clear, only a job. It is NOT the ui/e2e/walk
@@ -1223,6 +1278,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
         run: ./scripts/nightly-migration-merge-check.sh
+
+  # Managed-settings drift probe (#1279, from #705). internal/agentpolicy writes
+  # keys into /etc/claude-code/managed-settings.json that only the Claude Code CLI
+  # itself honours; a CLI that stops knowing one ignores it silently. This installs
+  # the EXACT version deploy/images/claude-code/Dockerfile pins (the script reads it
+  # from there and refuses a channel) and fails naming any key absent from that
+  # CLI. It runs no model and needs no credential. NOTIFY_EXEMPT until it has gone
+  # green once: see scripts/test-repo-guards.sh.
+  managed-settings-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false # the probe runs a third-party CLI; keep the token out of .git/config
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24' # the agent image's base is node:24
+      - name: Probe the pinned Claude Code CLI for managed-settings drift
+        run: ./scripts/check-managed-settings-drift.sh
 
   notify-new-lanes:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg]

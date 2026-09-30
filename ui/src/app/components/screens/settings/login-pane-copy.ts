@@ -20,16 +20,6 @@
 export const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
-// U-8: the aws blurb's opening clause under
-// `startURLManaged` (every per_user member). The unmanaged clause asks the
-// reader to give Wardyn their organization's access portal URL — and under a
-// managed row there is no field to give it in, the server ignores a supplied one
-// (harnessLogin uses the row's own sso_start_url), and the intro one line above
-// has just said there is nothing to enter. The rest of the blurb is unchanged:
-// the sandbox, the ~/.aws/config it writes and the command it runs are the same.
-export const AWS_BLURB_MANAGED_OPENING =
-  "Your admin set your organization's AWS access portal; there is nothing to enter.";
-
 // The first line the aws-sso image's sign-in pane
 // prints (deploy/images/aws-sso/login-hint.sh's banner starts with it). The
 // console types the login command only if this never appears; see the pane's

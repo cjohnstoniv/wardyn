@@ -6,9 +6,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -168,6 +170,10 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 		"POST /api/v1/sessions/revoke":            false,
 		"GET /api/v1/runs/{id}/attach":            false,
 		"GET /api/v1/runs/{id}/recording/{runID}": false,
+		"GET /api/v1/runs/{id}/policy":            false,
+		"GET /api/v1/runs/{id}/ado-tokens":        false,
+		// A member's own Azure DevOps disconnect revokes their run tokens.
+		"DELETE /api/v1/scm/azure-devops/connection": false,
 	}
 	var refused, admitted int
 	for key, rc := range routeMatrix {
@@ -339,5 +345,171 @@ func TestDelegation_UIGatewayEntryCarriesVia(t *testing.T) {
 	}
 	if seen != 2 {
 		t.Fatalf("ui.authorize rows = %d, want the success and the refusal", seen)
+	}
+}
+
+// TestDelegation_AttachPromoteAndDetachCarryVia is #1234's attach half: a
+// delegated ticket's session.detach is written on the daemon's context, and a
+// delegated observer's session.promote long after its attach, so the portal
+// must be carried onto both rather than read off the request.
+func TestDelegation_AttachPromoteAndDetachCarryVia(t *testing.T) {
+	rec := &sshTestRecorder{}
+	srv, st, _, run := holderTestServerWithAudit(t, rec)
+	tok, via := seedDelegation(t, st.authzStore.fakeDelegateStore, holderOwner)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	dial := func() *websocket.Conn {
+		t.Helper()
+		w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach-ticket", tok, "")
+		var out struct {
+			Ticket string `json:"ticket"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("delegated attach ticket: %d %s", w.Code, w.Body.String())
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/v1/runs/"+run.ID.String()+"/attach?ticket="+out.Ticket, nil)
+		if err != nil {
+			t.Fatalf("dial attach: %v", err)
+		}
+		t.Cleanup(func() { _ = c.CloseNow() })
+		return c
+	}
+
+	writer := dial()
+	if readAttachMode(t, writer).ReadOnly {
+		t.Fatal("the first delegated attach was admitted read-only")
+	}
+	waitFor(t, "the writer to register", func() bool { return srv.attachHolderFor(run.ID) != nil })
+	observer := dial()
+	if !readAttachMode(t, observer).ReadOnly {
+		t.Fatal("the second delegated attach was admitted writable")
+	}
+	if err := writer.Close(websocket.StatusNormalClosure, "done"); err != nil {
+		t.Fatalf("close the writer: %v", err)
+	}
+	if readNextAttachMode(t, observer).ReadOnly {
+		t.Fatal("the observer was not promoted")
+	}
+	if promo := waitForActorAudit(t, rec, run.ID, "session.promote", holderOwner); viaOf(t, *promo) != via {
+		t.Fatalf("session.promote data = %s, want via %+v", promo.Data, via)
+	}
+	if err := observer.Close(websocket.StatusNormalClosure, "done"); err != nil {
+		t.Fatalf("close the promoted socket: %v", err)
+	}
+	var detaches []types.AuditEvent
+	waitFor(t, "both session.detach rows", func() bool {
+		detaches = detaches[:0]
+		for _, ev := range rec.snapshot() {
+			if ev.Action == "session.detach" && ev.RunID != nil && *ev.RunID == run.ID {
+				detaches = append(detaches, ev)
+			}
+		}
+		return len(detaches) == 2
+	})
+	for _, ev := range detaches {
+		if viaOf(t, ev) != via {
+			t.Fatalf("session.detach data = %s, want via %+v", ev.Data, via)
+		}
+	}
+}
+
+// TestDelegation_UIGatewayRelayRowsCarryVia is #1234's UI-gateway half: the
+// relay audits on the daemon's context, so the session minted from a delegated
+// ticket carries the portal onto ui.start, ui.open, ui.close, a re-assert's
+// ui.authorize refusal and the run.resume its presence thaws a paused run
+// with, not only onto the entry row.
+func TestDelegation_UIGatewayRelayRowsCarryVia(t *testing.T) {
+	h := newUIHarness(t, closingBackend("sandbox app"))
+	h.launcher = 5 // the app was started by this request, so ui.start is written
+	h.srv.cfg.Store = &uiPauseStore{uiMemStore: h.store, pauseMarks: pauseMarks{paused: true}}
+	paused, pausedAt := h.run, h.clock.now()
+	paused.PausedAt, paused.PausedReason = &pausedAt, types.PauseReason("idle")
+	h.store.putRun(paused)
+	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {tok}})
+	var cookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == uiCookieName {
+			cookie = c
+		}
+	}
+	if w.Code != http.StatusFound || cookie == nil {
+		t.Fatalf("enter: %d %s, want a redirect with the relay cookie", w.Code, w.Body.String())
+	}
+	if r := h.relay("/ide", cookie, nil); r.Code != http.StatusOK {
+		t.Fatalf("relay: %d %s", r.Code, r.Body.String())
+	}
+	handedOver := h.run
+	handedOver.CreatedBy = "someone-else"
+	h.store.putRun(handedOver)
+	h.clock.advance(uiReassertInterval)
+	if r := h.relay("/ide", cookie, nil); r.Code != http.StatusForbidden {
+		t.Fatalf("relay on a handed-over run: %d %s, want 403", r.Code, r.Body.String())
+	}
+
+	want := map[string]bool{"run.resume": false, "ui.start": false, "ui.open": false, "ui.close": false, "ui.authorize/denied": false}
+	waitFor(t, "the relay rows", func() bool {
+		h.audit.mu.Lock()
+		defer h.audit.mu.Unlock()
+		for _, ev := range h.audit.events {
+			key := ev.Action
+			if ev.Action == "ui.authorize" {
+				key += "/" + ev.Outcome
+			}
+			if _, ok := want[key]; ok {
+				want[key] = true
+			}
+		}
+		return !slices.Contains(slices.Collect(maps.Values(want)), false)
+	})
+	h.audit.mu.Lock()
+	defer h.audit.mu.Unlock()
+	for _, ev := range h.audit.events {
+		if !strings.HasPrefix(ev.Action, "ui.") && ev.Action != "run.resume" {
+			continue
+		}
+		if viaOf(t, ev) != via {
+			t.Fatalf("%s/%s names %s, want %+v", ev.Action, ev.Outcome, ev.Data, via)
+		}
+	}
+}
+
+// TestDelegation_SecretAndSSHKeyWritesRefuseInTheHandler pins the in-handler
+// refusal on PUT /secrets/{name} and POST /me/ssh-keys, reached directly so the
+// allow-list is not what refuses: a delegated context gets the same 403
+// delegation_scope, with its row, whatever delegationAllowed later says.
+func TestDelegation_SecretAndSSHKeyWritesRefuseInTheHandler(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t)
+	rec := srv.cfg.Audit.(*recRecorder)
+	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+	ctx := withHumanIdentity(context.Background(), "sub-person", "p@corp.example", oidc.RoleUser, types.UserTypeStandard, []string{}, false)
+	ctx = audit.WithDelegation(ctx, via)
+	for name, c := range map[string]struct {
+		path, body string
+		handler    http.HandlerFunc
+	}{
+		"PUT /secrets/{name}": {"/api/v1/secrets/MY_TOKEN", `{"value":"a-long-enough-secret-value"}`, srv.handlePutSecret},
+		"POST /me/ssh-keys":   {"/api/v1/me/ssh-keys", `{"public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGb1ZQ0Tq3cZC0mH7Xp8c9r1c8gZ1lXq3j2a5pZ7a1Zb k"}`, srv.handleAddSSHKey},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := len(rec.snapshot())
+			method, _, _ := strings.Cut(name, " ")
+			r := httptest.NewRequest(method, c.path, strings.NewReader(c.body)).WithContext(ctx)
+			w := httptest.NewRecorder()
+			c.handler(w, r)
+			if w.Code != http.StatusForbidden || errorReason(w) != string(authz.ReasonDelegationScope) {
+				t.Fatalf("delegated %s: %d %s, want 403 delegation_scope", name, w.Code, w.Body.String())
+			}
+			rows := rec.snapshot()[before:]
+			if len(rows) != 1 || rows[0].Action != authz.AuditAction || viaOf(t, rows[0]) != via {
+				t.Fatalf("rows = %+v, want one authz.denied row naming the portal", rows)
+			}
+		})
 	}
 }

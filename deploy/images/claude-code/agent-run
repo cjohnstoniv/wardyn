@@ -52,17 +52,16 @@
 #      detected auth mode below)
 #
 # Anthropic auth modes (detected at task time, just before exec'ing claude):
-#   subscription : ~/.claude holds resident OAuth creds (the wizard mounts the
-#                  host ~/.claude and ~/.claude.json into /home/agent).  Detected
-#                  by /home/agent/.claude/.credentials.json (or credentials.json).
-#                  ANTHROPIC_BASE_URL is UNSET only when dispatch left it at the
-#                  vendor default, so claude talks straight to api.anthropic.com —
-#                  the request CONNECT-tunnels out through HTTPS_PROXY (wardyn-proxy)
-#                  under the run's egress allowlist, and the resident OAuth token is
-#                  used as-is.  When dispatch instead pointed it at an operator-
-#                  configured internal gateway (WARDYN_ANTHROPIC_BASE_URL), it is
-#                  LEFT AS-IS so the CONNECT targets the gateway instead — sending
-#                  the operator's OAuth token there.  No API key is set either way.
+#   subscription : a Claude subscription provider's run: the credentials file
+#                  holds only an inert sentinel (the proxy injects the run owner's
+#                  live token).  Detected by /home/agent/.claude/.credentials.json
+#                  (or credentials.json).  ANTHROPIC_BASE_URL is UNSET only when
+#                  dispatch left it at the vendor default, so claude talks straight
+#                  to api.anthropic.com — the request CONNECT-tunnels out through
+#                  HTTPS_PROXY (wardyn-proxy) under the run's egress allowlist.
+#                  When dispatch instead pointed it at the provider's route-through
+#                  base URL, it is LEFT AS-IS so the CONNECT targets that host.
+#                  No API key is set either way.
 #   bedrock      : CLAUDE_CODE_USE_BEDROCK is set.  ANTHROPIC_BASE_URL is UNSET so
 #                  claude uses the Bedrock endpoint via HTTPS_PROXY + resident AWS
 #                  creds.  No Anthropic API key is set.

@@ -52,6 +52,10 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	st := h.srv.cfg.Store
 	const owner = "sub-pg-owner"
 
+	// The run's model provider itself still exists (a deleted one refuses on its own).
+	if _, err := st.PutSiteConfig(ctx, types.SiteConfig{ModelProviders: providerBlock(keyProvider("pg-provider", "claude-code"))}); err != nil {
+		t.Fatalf("PutSiteConfig: %v", err)
+	}
 	pol, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "pg-selected"})
 	if err != nil {
 		t.Fatalf("CreatePolicy: %v", err)
@@ -74,14 +78,14 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 		t.Fatalf("MarkRunLost: %v %v", ok, err)
 	}
 	g, err := st.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: run.ID,
-		Spec: apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key")})
+		Spec: apiKeyGrantSpec("artifactory.corp.example", "artifactory-token")})
 	if err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
 	cfg, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{
 		RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081",
-		Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}},
-		Injection: []runner.InjectionGrant{{GrantID: g.ID, Rule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}}},
+		Policy:    types.RunPolicySpec{AllowedDomains: []string{"artifactory.corp.example"}},
+		Injection: []runner.InjectionGrant{{GrantID: g.ID, Rule: egress.InjectionRule{Host: "artifactory.corp.example", Header: "x-api-key", Format: "%s"}}},
 	}, runner.ProxyListenPort)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +145,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	if code := revive(true); code != http.StatusConflict || !lost() {
 		t.Fatalf("revive with the model credential erased = %d (lost %v); want 409, still lost", code, lost())
 	}
-	if err := sec.Put(ctx, "anthropic-api-key", []byte("sk-ant-test")); err != nil {
+	if err := sec.Put(ctx, "artifactory-token", []byte("art-test")); err != nil {
 		t.Fatalf("put secret: %v", err)
 	}
 	if code := revive(true); code != http.StatusOK || lost() || rn.replaced != 1 {

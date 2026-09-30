@@ -559,7 +559,7 @@ func TestWorkspaceBuild_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
 		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
 		BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: base},
 	}
-	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil, nil)
 	if !ok || built == "" {
 		t.Fatal("resolveWorkspaceImage failed for a custom base image")
 	}

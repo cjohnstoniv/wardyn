@@ -5,11 +5,8 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"slices"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -18,13 +15,12 @@ import (
 
 // This file pins the SET of SetupCheck.ID values GET /api/v1/setup/status emits
 // across a small matrix of fixtures (see TestSetupCheckIds_Golden). Callers key
-// real behavior off specific ids — most notably `wardyn subscription` (see
-// cmd/wardyn/subscription.go), which decodes the raw JSON and looks for
-// "harness_credential" rather than sharing a Go type with internal/api — so a
-// check silently renamed or dropped is a real break that a full-content diff
-// would bury among prose/detail wording changes. TestSetupCheckIds_Golden exists
-// to make an id rename/drop loud; TestSetupCheckIds_HarnessCredentialContract
-// below is the named assertion for that one CLI-load-bearing id.
+// real behavior off specific ids — the console and `wardyn setup status`
+// decode the raw JSON rather than sharing a Go type with internal/api — so a
+// check silently renamed
+// or dropped is a real break that a full-content diff would bury among
+// prose/detail wording changes. TestSetupCheckIds_Golden exists to make an id
+// rename/drop loud.
 //
 // Regenerate with: WARDYN_UPDATE_GOLDEN=1 go test ./internal/api/ -run 'Golden|CheckIds'
 
@@ -119,15 +115,6 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			}},
 		})),
 
-		"with_bedrock_knobs": setupCheckIds(t, New(Config{
-			AdminToken:    adminToken,
-			BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-			Secrets: &memSecrets{m: map[string][]byte{
-				bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
-				bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
-			}},
-		})),
-
 		"with_github_app_secrets": setupCheckIds(t, New(Config{
 			AdminToken: adminToken,
 			Secrets: &memSecrets{m: map[string][]byte{
@@ -148,28 +135,4 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 		})),
 	}
 	compareOrUpdateGolden(t, "testdata/setup_check_ids_golden.json", got)
-}
-
-// TestSetupCheckIds_HarnessCredentialContract pins that a captured Wardyn-
-// managed Claude subscription (container-login setup-token) makes
-// /setup/status emit a check with id EXACTLY "harness_credential" —
-// cmd/wardyn/subscription.go decodes the raw JSON and looks for that literal
-// string (there is no shared Go type gating this at compile time), so a rename
-// here would silently break `wardyn subscription status` with no build failure
-// to catch it.
-func TestSetupCheckIds_HarnessCredentialContract(t *testing.T) {
-	blob := managedCredBlob{Token: "sk-ant-oat01-test", CapturedAt: time.Now().UTC()}
-	raw, err := json.Marshal(blob)
-	if err != nil {
-		t.Fatalf("marshal managed blob: %v", err)
-	}
-	srv := New(Config{
-		AdminToken: adminToken,
-		Secrets:    &memSecrets{m: map[string][]byte{harnessCredSecretName("anthropic"): raw}},
-	})
-	ids := setupCheckIds(t, srv)
-	if !slices.Contains(ids, "harness_credential") {
-		t.Fatalf("checks = %v, want \"harness_credential\" present when a managed subscription blob is stored "+
-			"(`wardyn subscription status` depends on this exact id)", ids)
-	}
 }

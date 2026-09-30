@@ -18,7 +18,7 @@ import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { waitingReauth } from "../wardyn/model-access-copy";
 import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
-import type { AgentRun, RunState } from "../../lib/types";
+import type { AgentRun, RunDetail, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
 import { RUN_FACTS } from "../wardyn/copy/door";
@@ -563,12 +563,14 @@ describe("SummaryHeader — the autonomy chip beside the barrier chip", () => {
   });
 });
 
-// #543 (design §5.7, decision 5): the run's model provider, a neutral chip in
-// the header's chip bar — named from the shell's /setup/status, and marked
-// removed once the provider is gone from it.
+// #543 (design §5.7, decision 5), #996: the run's model provider, a neutral
+// chip in the header's chip bar — named by the server, which says when the
+// provider is gone. The viewer's own /setup/status is never consulted, so a
+// provider it does not list (an agent this person can't launch) is not
+// "removed".
 describe("SummaryHeader — the run's model provider chip", () => {
   const { gateway } = MODEL_PROVIDERS;
-  function withStatus(status: SetupStatus | null, run: AgentRun) {
+  function withStatus(status: SetupStatus | null, run: RunDetail) {
     renderHeader(
       <ModelAccessProvider status={status} onRefresh={() => {}}>
         <OperatorProvider operator={false}>
@@ -578,17 +580,35 @@ describe("SummaryHeader — the run's model provider chip", () => {
     );
   }
 
-  it("names the provider the run chose", () => {
-    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: gateway.id });
+  it("names the provider the run chose, from the run", () => {
+    withStatus(providerStatus([{ provider: gateway }]), {
+      ...runningInteractive,
+      model_provider_id: gateway.id,
+      model_provider_name: gateway.name,
+    });
     expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.name, false))).toBeInTheDocument();
   });
 
-  it("a provider deleted since: (removed), by the id the run recorded", () => {
-    withStatus(providerStatus([{ provider: gateway }]), { ...runningInteractive, model_provider_id: "old-gateway" });
-    expect(screen.getByText(RUN_FACTS.PROVIDER("old-gateway", true))).toBeInTheDocument();
+  it("names a provider this viewer's setup status does not list, without calling it removed", () => {
+    withStatus(providerStatus([]), {
+      ...runningInteractive,
+      model_provider_id: gateway.id,
+      model_provider_name: gateway.name,
+    });
+    expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.name, false))).toBeInTheDocument();
   });
 
-  it("claims nothing removed before /setup/status answers", () => {
+  it("a provider deleted since: its name, marked removed because the server says so", () => {
+    withStatus(providerStatus([{ provider: gateway }]), {
+      ...runningInteractive,
+      model_provider_id: "old-gateway",
+      model_provider_name: "Old gateway",
+      model_provider_deleted: true,
+    });
+    expect(screen.getByText(RUN_FACTS.PROVIDER("Old gateway", true))).toBeInTheDocument();
+  });
+
+  it("no name to show: the id, and removed only when the server says deleted", () => {
     withStatus(null, { ...runningInteractive, model_provider_id: gateway.id });
     expect(screen.getByText(RUN_FACTS.PROVIDER(gateway.id, false))).toBeInTheDocument();
   });

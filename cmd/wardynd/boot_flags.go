@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,12 +41,6 @@ type bootFlags struct {
 	// (bug-rbac-1) — a configured SSO deployment must not silently lose its
 	// RBAC to one stray env var.
 	allowLocalModeWithOIDC *bool
-	// allowSharedSubscription waives ONLY the local-mode clause of
-	// subscriptionInjectPosture (boot_posture.go) — never the k8s or OIDC clauses.
-	// It exists so the compose demo stack, which runs a shared admin token rather
-	// than local mode, keeps working without anyone being tempted to "fix" a
-	// refusal by setting WARDYN_LOCAL_MODE=true and disabling auth outright.
-	allowSharedSubscription *bool
 	// MEMBER-MODE DESKTOP (W-MEMB, docs/design/member-role-desktop.md). memberMode
 	// asserts the topology in which the human at the keyboard is a MEMBER and the
 	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
@@ -102,6 +95,8 @@ type bootFlags struct {
 	identitySel          *string
 	secretStoreSel       *string
 	recordingSel         *string
+	execOutputTail       *bool
+	execOutputTailTTL    *time.Duration
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
@@ -134,15 +129,6 @@ type bootFlags struct {
 	// once at boot, control-plane-authored only. Mutually exclusive with
 	// daemonProxyURL (bootDaemonProxy refuses boot if both are set).
 	daemonProxySecretFile *string
-	// anthropicBaseURL / openaiBaseURL are WARDYN_ANTHROPIC_BASE_URL /
-	// WARDYN_OPENAI_BASE_URL (see internal/api/llm_gateway.go's
-	// ValidateLLMGateways): an operator-set internal model gateway base URL
-	// re-pointing the api-key lane's brokered upstream. Empty (default) =
-	// every api-key lane dials the public provider host, byte-identical to
-	// today. Control-plane-authored, same posture class as trustedCAFile
-	// above — never a SiteConfig field, never agent-reachable.
-	anthropicBaseURL *string
-	openaiBaseURL    *string
 	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
 	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
 	// operator-run mirror re-pointing the Getting Started demo episodes for
@@ -152,24 +138,10 @@ type bootFlags struct {
 	// control-plane-authored, never a SiteConfig field, never
 	// agent-reachable.
 	demoVideoBaseURL *string
-	// anthropicGatewayHeader / anthropicGatewayFormat (WARDYN_ANTHROPIC_GATEWAY_HEADER
-	// / _FORMAT) and their OpenAI pair below are the injection header name and
-	// value format a gateway configured via anthropicBaseURL/openaiBaseURL wants
-	// instead of the harness catalog's compile-time vendor convention
-	// (harness.go's Gateway field: x-api-key bare / Authorization: Bearer %s).
-	// Each is independent and optional — set the header alone, the format
-	// alone, or neither — validated at boot by api.ValidateLLMGateways
-	// (exactly one %s in the format, a valid HTTP header token) and applied in
-	// (*Server).llmProviderFor. Both empty (default) = the vendor convention,
-	// byte-identical to today.
-	anthropicGatewayHeader *string
-	anthropicGatewayFormat *string
-	openaiGatewayHeader    *string
-	openaiGatewayFormat    *string
-	ageKey                 *string
-	platformKeyFile        *string
-	proxyImage             *string
-	driveProbeImage        *string
+	ageKey           *string
+	platformKeyFile  *string
+	proxyImage       *string
+	driveProbeImage  *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -236,19 +208,10 @@ type bootFlags struct {
 	envbuildRepo *string
 
 	agentImagesJSON    *string
-	agentModel         *string
 	scanAIAdvisor      *bool
 	requireOpSetEgress *bool
 	gitPATBroker       *string
 
-	bedrockRegion *string
-	bedrockModel  *string
-	// bedrockBaseURL is WARDYN_BEDROCK_BASE_URL (see api.ValidateBedrockBaseURL):
-	// the Bedrock DATA-PLANE endpoint override that points a regulated
-	// deployment at its VPC/PrivateLink endpoint. Same posture class as
-	// anthropicBaseURL above — boot-time only, never a SiteConfig field, because
-	// in bearer mode it IS the TLS-MITM and Authorization-injection target.
-	bedrockBaseURL *string
 	// awsSSOEndpointOverride / allowTestEndpoints are the TEST hatch that makes
 	// "a member signs in on Kubernetes and their Bedrock run gets per-user
 	// credentials" provable without a real AWS tenant: one URL re-points BOTH
@@ -264,11 +227,8 @@ type bootFlags struct {
 	// unrecognised value takes the DEFAULT rather than refusing boot — see
 	// api.ResolveAWSSSOProxyInject for why a switch meant to be reached in a
 	// hurry must not be able to crash-loop a daemon.
-	awsSSOProxyInject   *string
-	allowTestEndpoints  *bool
-	bedrockAWSDir       *string
-	bedrockAWSProfile   *string
-	bedrockAWSSSORegion *string
+	awsSSOProxyInject  *string
+	allowTestEndpoints *bool
 
 	// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100) size the sign-in
 	// sandbox itself — see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
@@ -390,48 +350,43 @@ func parseBootFlags() *bootFlags {
 		// the bind is a specific non-loopback interface — see listenBindsSpecificRoutable.
 		// Loopback and the unspecified bind (":8080", the compose topology) are
 		// already warn-only, unaffected by this flag.
-		allowPlaintextListen:    flagBool("allow-plaintext-listen", "WARDYN_LISTEN_ALLOW_PLAINTEXT", false, "allow boot on a specific non-loopback bind serving plain HTTP with no TLS configured, normally refused (default false)"),
-		adminToken:              flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
-		localMode:               flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "bypass public-API auth (no SSO/token) and attribute actions to the local operator; single-developer localhost use only, refused on a publicly-routable bind. Auto-enabled when no auth is configured and the bind is loopback (default false)"),
-		localOperator:           flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default local:<os-user>)"),
-		localTrustFwd:           flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer instead of requiring a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
-		allowLocalModeWithOIDC:  flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
-		allowSharedSubscription: flagBool("allow-shared-subscription", "WARDYN_ALLOW_SHARED_SUBSCRIPTION", false, "allow one operator's Anthropic subscription credential to be injected into runs on a deployment that is not -local-mode, e.g. the compose demo stack. Does not waive the refusals for the k8s runner or a configured OIDC issuer; demo/single-user boxes only (default false)"),
-		memberMode:              flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
-		memberRoots:             flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all; point it at a dedicated projects directory, never $HOME"),
-		memberRootsMap:          flagEnv("member-workspace-roots-map", "WARDYN_USER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email; a listed principal's entry replaces the shared list rather than adding to it`),
-		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
-		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
-		orgURL:                  flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
-		orgEnrolToken:           flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
-		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
-		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
-		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
-		basePath:                flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
-		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate, e.g. "docker" in -tags docker builds`),
-		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name stored objects validate against when -runner is "none" ("docker" or "k8s"); test harnesses only, ignored whenever a runner is configured. Empty (default) refuses every drive backend`),
-		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),
-		secretStoreSel:          flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", "secret store"),
-		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
-		confinementMap:          flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
-		trustDomain:             flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
-		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
-		internalListen:          flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
-		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
-		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
-		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
-		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
-		daemonProxySecretFile:   flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
-		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "internal model gateway base URL (https://) re-pointing Anthropic's brokered upstream instead of api.anthropic.com, for both the api-key lane and subscription runs (the operator's OAuth token then goes to that gateway); the harness-login lane is exempt. Empty (default) uses the public host"),
-		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
-		demoVideoBaseURL:        flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
-		anthropicGatewayHeader:  flagEnv("anthropic-gateway-header", "WARDYN_ANTHROPIC_GATEWAY_HEADER", "", "injection header name -anthropic-base-url's gateway wants instead of x-api-key (default x-api-key)"),
-		anthropicGatewayFormat:  flagEnv("anthropic-gateway-format", "WARDYN_ANTHROPIC_GATEWAY_FORMAT", "", `value format -anthropic-base-url's gateway wants instead of the bare key, e.g. "Bearer %s"; must contain exactly one %s (default: bare key)`),
-		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
-		openaiGatewayFormat:     flagEnv("openai-gateway-format", "WARDYN_OPENAI_GATEWAY_FORMAT", "", `same as -anthropic-gateway-format, for OpenAI's gateway (default "Bearer %s")`),
-		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
-		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/operations/secrets-and-keys.md"),
-		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
+		allowPlaintextListen:   flagBool("allow-plaintext-listen", "WARDYN_LISTEN_ALLOW_PLAINTEXT", false, "allow boot on a specific non-loopback bind serving plain HTTP with no TLS configured, normally refused (default false)"),
+		adminToken:             flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
+		localMode:              flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "bypass public-API auth (no SSO/token) and attribute actions to the local operator; single-developer localhost use only, refused on a publicly-routable bind. Auto-enabled when no auth is configured and the bind is loopback (default false)"),
+		localOperator:          flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default local:<os-user>)"),
+		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer instead of requiring a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
+		allowLocalModeWithOIDC: flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
+		memberMode:             flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
+		memberRoots:            flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all; point it at a dedicated projects directory, never $HOME"),
+		memberRootsMap:         flagEnv("member-workspace-roots-map", "WARDYN_USER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email; a listed principal's entry replaces the shared list rather than adding to it`),
+		memberWritableRoots:    flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
+		memberWritableDeny:     flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
+		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
+		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
+		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
+		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
+		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
+		basePath:               flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
+		runnerSel:              flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate, e.g. "docker" in -tags docker builds`),
+		runnerTargetOverride:   flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name stored objects validate against when -runner is "none" ("docker" or "k8s"); test harnesses only, ignored whenever a runner is configured. Empty (default) refuses every drive backend`),
+		identitySel:            flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),
+		secretStoreSel:         flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", "secret store"),
+		recordingSel:           flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
+		execOutputTail:         flagBool("exec-output-tail", "WARDYN_EXEC_OUTPUT_TAIL", true, `keep the last 8 KiB of each task_mode=exec run's output in memory for GET /runs/{id}/output, independent of the recording store; "off" keeps none`),
+		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long an exec run's output tail is kept after its last output (duration)"),
+		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
+		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
+		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
+		internalListen:         flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
+		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
+		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
+		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
+		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
+		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
+		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
+		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
+		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/operations/secrets-and-keys.md"),
+		proxyImage:             flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		driveProbeImage: flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),
 		recordingDir:    flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store`),
@@ -443,12 +398,12 @@ func parseBootFlags() *bootFlags {
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 
-		oidcIssuer:         flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
-		oidcInternalIss:    flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
-		oidcClientID:       flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
-		oidcClientSecret:   flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
-		oidcRedirectURL:    flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
+		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
+		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
+		oidcClientID:     flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
+		oidcClientSecret: flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
+		oidcRedirectURL:  flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
+		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
 		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
@@ -483,7 +438,6 @@ func parseBootFlags() *bootFlags {
 		// named agents use the specified image instead of the ghcr convention.
 		// Must be valid JSON when non-empty; validated at boot (fail closed).
 		agentImagesJSON: flagEnv("agent-images", "WARDYN_AGENT_IMAGES", "", "JSON map of agent-name -> OCI image ref, overriding the ghcr convention for named agents"),
-		agentModel:      flagEnv("agent-anthropic-model", "WARDYN_AGENT_ANTHROPIC_MODEL", "", `optional model to pin ANTHROPIC_MODEL to inside claude-code sandboxes, e.g. "opus". Empty (default) uses the CLI default`),
 		scanAIAdvisor:   flagBool("scan-ai-advisor", "WARDYN_SCAN_AI_ADVISOR", false, "enable the advisory AI workspace-scan fallback that gap-fills empty profile fields when the deterministic scanner is unsure; advisory-only and fail-open. Requires a resident claude CLI on the host PATH (default false, deterministic-only)"),
 		// #12: the SAME provenance gate applyWorkspaceRequirements already
 		// applies to a scan_seeded SECRET requirement (never auto-grant from
@@ -498,22 +452,12 @@ func parseBootFlags() *bootFlags {
 		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
 		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
 
-		// Bedrock: an enterprise Anthropic transport (no direct Anthropic egress,
-		// billed via AWS). Both must be set to enable it; the AWS credentials
-		// themselves are NOT flags — they come from the secret store
-		// (aws-access-key-id/aws-secret-access-key/aws-session-token), read at
-		// dispatch time since Bedrock's SigV4 request signing can't be
-		// proxy-injected. See internal/api.Config.BedrockRegion/BedrockModel.
-		bedrockRegion:          flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `AWS region for the Amazon Bedrock Anthropic transport, e.g. "us-east-1"; falls back to AWS_REGION / AWS_DEFAULT_REGION. Requires -bedrock-model and the aws-access-key-id/aws-secret-access-key secrets. Empty (default) disables Bedrock`),
-		bedrockModel:           flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", "Bedrock model id for claude-code: a cross-region inference-profile id or its full ARN, passed to the agent verbatim. Requires -bedrock-region"),
-		bedrockBaseURL:         flagEnv("bedrock-base-url", "WARDYN_BEDROCK_BASE_URL", "", "Bedrock data-plane base URL (https://) re-pointing bedrock-runtime at a VPC/PrivateLink endpoint; one per deployment, does not override the control-plane host. Empty (default) uses the regional public host"),
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on" or "off": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox, or write it into the sandbox directly. Applies to new dispatches only; an unrecognised value takes the default`),
-		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and an unencrypted http:// -bedrock-base-url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
-		bedrockAWSDir:          flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", "bind a host ~/.aws directory read-only into each Bedrock run so the AWS SDK resolves credentials itself; exposes the whole directory to the sandbox, so point it at ~/.aws only. Empty (default) uses static aws-* secrets or a bedrock-api-key instead"),
-		bedrockAWSProfile:      flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", "AWS_PROFILE to select from the mounted ~/.aws; falls back to the standard AWS_PROFILE. Only used with -bedrock-aws-dir"),
-		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB. Crammed onto bedrockAWSSSORegion's line (not their own) to hold parseBootFlags under the funlen ratchet.
-		bedrockAWSSSORegion: flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", "AWS SSO region for exchanging an SSO token for role credentials. Defaults to -bedrock-region"), harnessLoginCPUMillis: flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"), harnessLoginMemoryMiB: flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
+		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
+		harnessLoginCPUMillis: flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		harnessLoginMemoryMiB: flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
@@ -586,32 +530,6 @@ func parseBootFlags() *bootFlags {
 // finalizeBootFlags applies the post-parse fallbacks and file-backed secret
 // resolution parseBootFlags itself has no funlen budget left for.
 func finalizeBootFlags(f *bootFlags) {
-	// Standard-AWS fallback. An operator whose environment is already configured
-	// for AWS shouldn't have to restate the same values under a Wardyn-specific
-	// name. WARDYN_BEDROCK_* (and its flag) stay authoritative — these apply only
-	// where it resolved EMPTY.
-	//
-	// Post-parse, NOT as the flagEnv default argument: compose passes
-	// WARDYN_BEDROCK_REGION="" unconditionally (docker-compose.yaml), and the
-	// fallback has to key off what the flag ACTUALLY resolved to — including an
-	// explicit `-bedrock-region=` — not off what the compiled-in default was.
-	// (flagEnv now reads an empty env as "unset, keep the default" like every
-	// other helper in cliutil, so the env half alone would work as a default
-	// argument; the flag half still would not.) Here, alongside parseBootFlags
-	// rather than resolveLocalMode (where the sibling Bedrock auto-detect
-	// lives) because that function returns early when local mode is off —
-	// which is every auth-configured deployment, i.e. exactly the enterprise
-	// Bedrock audience.
-	//
-	// Cannot silently enable Bedrock: that needs region AND model, and there is
-	// no standard env for the model.
-	if *f.bedrockRegion == "" {
-		*f.bedrockRegion = envOr("AWS_REGION", envOr("AWS_DEFAULT_REGION", ""))
-	}
-	if *f.bedrockAWSProfile == "" {
-		*f.bedrockAWSProfile = envOr("AWS_PROFILE", "")
-	}
-
 	// <VAR>_FILE twins resolve here, with the rest of the flag/env reading,
 	// so every caller — -rotate-age-key included — sees one resolved value. A
 	// bad file is a malformed setting like a bad flag, so it exits here the way
@@ -672,11 +590,6 @@ func resolveAWSSSOEndpointOverride(f *bootFlags) (string, error) {
 // loopback; otherwise honor the explicit flag. FAIL CLOSED: never serve a
 // no-auth public API on a publicly-routable IP. The sidecar/run-token path
 // (internalAuth) is unaffected either way.
-//
-// Side effect (host-mode Bedrock auto-detect): when Bedrock is configured with
-// NO credential source, *f.bedrockAWSDir is defaulted to the host ~/.aws so the
-// AWS SDK resolves the operator's creds (SSO auto-refreshes) — see the inline
-// comment. Extracted verbatim from run().
 func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	lm := localModeState{loopback: listenIsLoopback(*f.listen)}
 	// bug-rbac-1: an EXPLICIT -local-mode alongside a configured -oidc-issuer
@@ -781,25 +694,6 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 			slog.String("listen", *f.listen),
 			slog.String("operator", lm.operator),
 		)
-	}
-
-	// Host-mode Bedrock auto-detect: region+model configured but NO credential
-	// source given (no -bedrock-aws-dir, no aws-*/bedrock-api-key secrets) — the
-	// exact "Needs setup" state where the operator already runs Claude on Bedrock
-	// via their host ~/.aws. Default the read-only mount to ~/.aws so the AWS SDK
-	// resolves their creds (SSO auto-refreshes) with nothing to paste. Host-mode
-	// only + fail-safe: only when ~/.aws actually exists, so resolveBedrockAuth
-	// still falls through cleanly otherwise.
-	if *f.bedrockRegion != "" && *f.bedrockModel != "" && *f.bedrockAWSDir == "" {
-		if home, herr := os.UserHomeDir(); herr == nil {
-			awsDir := filepath.Join(home, ".aws")
-			if st, serr := os.Stat(awsDir); serr == nil && st.IsDir() {
-				*f.bedrockAWSDir = awsDir
-				slog.Info("wardynd: host-mode Bedrock — no credential configured; auto-mounting the host AWS dir read-only (the AWS SDK resolves your host creds, SSO auto-refreshes)",
-					slog.String("aws_dir", awsDir),
-				)
-			}
-		}
 	}
 	return lm, nil
 }

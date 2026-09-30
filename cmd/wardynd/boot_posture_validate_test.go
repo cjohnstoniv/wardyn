@@ -25,10 +25,12 @@ func TestValidateBootPosture(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sshListen, originTemplate, enrolToken, allowPlaintext := "", "", "", false
-			oidcIssuer, oidcRedirect, controlURL := "", "", "https://wardynd:8443"
+			oidcIssuer, oidcInternal, oidcRedirect, controlURL, uiAdvertise := "", "", "", "https://wardynd:8443", ""
 			f := &bootFlags{
 				basePath:             &tc.basePath,
 				oidcIssuer:           &oidcIssuer,
+				oidcInternalIss:      &oidcInternal,
+				uiAdvertise:          &uiAdvertise,
 				oidcRedirectURL:      &oidcRedirect,
 				controlURL:           &controlURL,
 				listen:               &tc.listen,

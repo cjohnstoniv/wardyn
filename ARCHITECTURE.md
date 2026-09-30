@@ -28,7 +28,7 @@ everything; CNCF Sandbox is the governance target.
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
 | `wardyn-toolgate` | In-sandbox stdio MCP relay, built into the agent images: exposes one tool (`approve`), wired as claude's `--permission-prompt-tool` on a run dispatched with `tool_approvals=hold`. Each tool call is raised through the proxy's brokered `POST /wardyn/v1/approvals` and blocks until decided; `DENIED`/`EXPIRED` fail closed. Operator-authored `tool_rules` are resolved PROXY-SIDE first (`decideByToolRules`), so an `allow`/`deny` answers without waking anyone. **Cooperative, not a boundary** — an agent that never calls it is not gated; see `threatmodel/THREAT-MODEL.md` B3. |
 | `wardyn-aws-sso` | In-sandbox uploader for the containerized `aws sso login` capture lane: brokers the resulting SSO token cache back to the control plane over `PUT /wardyn/v1/sso-token/{runID}`. Built into the AWS-SSO agent image; the login run itself is a throwaway box that is never recorded. |
-| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill/attach/ssh), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn logs`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy` (list/get/default/set/delete/render — one upsert verb), `wardyn secret` (set/list/delete), `wardyn record`, `wardyn sessions` (revoke/list), `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/set), `wardyn support-bundle`, `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
+| `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill/attach/ssh), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn logs`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy` (list/get/default/set/delete/render — one upsert verb), `wardyn secret` (set/list/delete), `wardyn record`, `wardyn sessions` (revoke/list), `wardyn site-config` (get/set), `wardyn support-bundle`, `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
 
@@ -107,11 +107,11 @@ served header in full.
   (opt-in, `WARDYN_ENVBUILD`) and gates launch on an in-sandbox
   `agent-run --selftest`, fail-closed (`internal/api/runs_dispatch.go`). Operator docs:
   `deploy/images/README.md`, "Bring your own image".
-- **Managed harness credential** — a containerized control plane (no host
-  `~/.claude`) connects a Claude subscription via an interactive login sandbox
-  plus a pasted `claude setup-token` credential, stored age-encrypted and
-  injected proxy-side like the resident-login path
-  (`internal/api/harnesscred.go`, `POST /api/v1/setup/harness-login`).
+- **Model-provider sign-in** — each person signs in to a `bedrock_sso` or
+  `anthropic_subscription` model provider through an interactive login
+  sandbox; the capture is stored age-encrypted in their own namespace and
+  injected proxy-side (`internal/api/provider_signin.go`,
+  `POST /api/v1/model-providers/{id}/sign-in`).
 - **CI mode (BYOA)** — headless one-shot launches from pipelines: `wardyn run
   --wait` maps the run outcome to the CLI exit code (the real task exit code
   rides the `run.complete` audit event), `--image` exposes the BYOI wrap,
@@ -262,8 +262,8 @@ the seams that shape needs (`Decision` is already wire-serializable;
    "complete" is a drift surface, and this one had fallen five rows behind the
    table it pointed at (four printed here against nine there). Read §5.1a. The
    shapes it covers are grant-delivered credentials with no injection seam, the
-   SigV4 modes that sign in-process, the operator's own mounted credential
-   material, and the container-login runs whose whole purpose is to obtain a
+   AWS role credentials a person's own `bedrock_sso` run derives in-process, and
+   the container-login runs whose whole purpose is to obtain a
    credential that does not exist yet.
 
    Secret values are masked on the audit/recording/decision-log streams by
@@ -387,12 +387,14 @@ clone is decided by grant kind and host, and none can cover another's set:
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
 | `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
-| `git_pat` (Azure DevOps / GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — `agent-run` rewrites the granted hosts to `url.<broker>/git/<host>/.insteadOf`, so the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`); the grant ids are withheld from the sandbox env. `WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 in-sandbox **`wardyn-git-helper`** lane, which brokers on `git`'s `get` and writes to stdout | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a). Non-resident is not least-privilege either way — a PAT carries whatever scope the operator issued it with, so the broker's allowlist is per-HOST. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
+| `git_pat` (GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — `agent-run` rewrites the granted hosts to `url.<broker>/git/<host>/.insteadOf`, so the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`); the grant ids are withheld from the sandbox env. `WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 in-sandbox **`wardyn-git-helper`** lane, which brokers on `git`'s `get` and writes to stdout | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a). Non-resident is not least-privilege either way — a PAT carries whatever scope the operator issued it with, so the broker's allowlist is per-HOST. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
 | `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
+
+**Azure DevOps is not a fourth grant kind.** It has no `git_pat` or `ssh_key` lane: a shared token or key is refused on an Azure DevOps row, and the credential a run carries is the person's own, resolved by the control plane from the run's provider row and injected by the proxy, which the sandbox never holds. It is one of a PAT Wardyn creates for the run in the person's name (`minted_pat`), the person's Entra token (`bearer`) or a PAT the person pasted (`own_pat`; an Azure DevOps Server row is git only). Git reaches it through the proxy's own git route, `/wardyn/git/<host>/`, served by `serveADOGit` (`internal/egress/proxy/pat_broker_entra.go`): the request is pinned to the run's organisation (the collection's path on Server), checked against the capability it needs, held to the run's branch and content rules on a push, and sent with the resolved credential on the outbound leg. docs/AZURE-DEVOPS.md has the modes.
 
 The broker is structurally github.com-only and App-token-only: it has no host
 parameter and no username plumbing, and authenticates as
-`x-access-token`. An ADO/GitLab PAT cannot traverse it. Conversely `ssh_key`
+`x-access-token`. A GitLab PAT cannot traverse it. Conversely `ssh_key`
 cannot be proxy-injected at all — git's SSH transport has no credential-helper
 seam. `git_pat` CAN be proxy-injected, but only through its OWN broker (the row
 above): on the default `WARDYN_GIT_PAT_BROKER=on`, `agent-run`'s rewrite REMOVES

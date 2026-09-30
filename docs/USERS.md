@@ -236,12 +236,14 @@ page and this endpoint.
 
 ## Model providers (0.8)
 
-Where your admin has set up one or more model providers (Settings ▸ Model
-providers), your model credential is your own, whatever kind the provider is:
+Your admin sets up one or more model providers (Settings ▸ Model
+providers), and your model credential is your own, whatever kind the provider is:
 an Amazon Bedrock SSO sign-in, a Claude subscription sign-in, a typed
 Anthropic, OpenAI or Bedrock API key, or a token for your admin's own
 gateway. You connect it yourself — nobody else's runs can use it, and you are
-never served an admin's credential in its place.
+never served an admin's credential in its place. If your admin set a base URL on
+a Claude-subscription provider, your sign-in token is sent to that gateway rather
+than to Anthropic.
 
 - **Where you see it.** In the User view only (not on Getting started), a
   banner names a provider that is the default for one of your harnesses and
@@ -257,8 +259,7 @@ never served an admin's credential in its place.
 - **A sign-in kind** (Bedrock SSO, Claude subscription) opens a short-lived
   login sandbox against your admin's own configuration — the access portal,
   region, and (Bedrock) the pinned account and role — and stores what it
-  captures under your own principal, exactly as the AWS sign-in flow below
-  already does for the per-agent roster.
+  captures under your own principal, as the AWS sign-in flow below describes.
 - **A typed key or token** is stored write-only, under your own namespace,
   with `PUT /api/v1/model-providers/{id}/credential` (`DELETE` to remove it) —
   the console's own "Add your key" / "Add your token" door calls the same
@@ -278,51 +279,17 @@ never served an admin's credential in its place.
   AWS role credentials") and [ENV.md](ENV.md)
   (`WARDYN_AWS_SSO_PROXY_INJECT`).
 
-This is a per-deployment choice: an install with no model-provider block
-configured still works the older way described below, under **Your model
-connections** ▸ legacy installs.
-
 ## Your model connections
 
-Which of the two shapes below applies depends on whether your admin has set
-up per-provider model records (#551) — the console tells you which one you
-are in: a "Your model connections" card on Your account means the
-provider-block shape; a "Your model key" card on Getting Started means the
-legacy one. `GET /setup/status`'s `model_providers` is absent under the
-legacy shape and an array (possibly empty, if your admin has started but
-granted you nothing yet) under the provider-block one.
-
-**Provider-block installs (#551).** Add your own credential for a provider
-from Your account ▸ Your model connections in the console — one row per
-provider your admin enabled for your agents, each with its own sign-in or key
-button. There is no `PUT /secrets` step here: the console's own door stores it
-for you, scoped to that provider.
-
-**Legacy installs (today's more common shape, until #548 converts every
-install).** The console's entry point is Getting Started ▸ Your model key.
-Store your own key under the provider-convention name (`anthropic-api-key`
-for Claude, `openai-api-key` for Codex) via `PUT /secrets/<name>` or that
-card. `GET /secrets` shows it under `mine`, never under a name another member
-wrote. Pick it under Model access when you launch a run; your run then uses
-YOUR key, injected proxy-side exactly like an operator's own (the value is
-never resident in the sandbox). Setting your own key needs no operator
-integration or workspace requirement first — an unpaired stored secret still
-needs one of those, but your own key naming the provider convention does not.
-The same rule reaches a workspace's integration requirement: when your
-admin's integration names a credential the admin has not stored, a secret you
-store under that same name is what your run injects — the integration's
-host, header and egress stay the admin's; only the value is yours.
-
-Bounds: this is API-key mode only — the resident Claude-subscription mount
-stays operator-only (see [DESKTOP.md § Model access on
-m′](DESKTOP.md#model-access-on-m)), and the three AWS SigV4 names
-(`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) are refused
-for your own `PUT /secrets` regardless: on THAT door Bedrock stays the
-MDM-managed lane. A `bedrock-api-key` bearer is the exception — you may store
-your own, and under a `per_user` agent row it is the only one your runs use.
-Your own row is visible only to you and to
-your own runs — another member can never read or inject it, even by naming it in
-their own inline policy.
+Add your own credential for a provider from Your account ▸ Your model
+connections in the console — one row per provider your admin enabled for your
+agents, each with its own sign-in or key button. There is no `PUT /secrets`
+step: `PUT /secrets/<name>` refuses the model-credential names
+(`anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three AWS
+SigV4 names `aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`)
+and points you back at Settings → Model providers. Your own row is visible only
+to you and to your own runs — another member can never read or inject it, even
+by naming it in their own inline policy.
 
 **Per-person credentials: `owner_only`.** Any stored secret a grant names —
 an `api_key`, `git_pat`, `ssh_key` or `env_secret` grant — resolves your own row
@@ -339,21 +306,17 @@ stored yet — each person's run checks their own. Ask your admin to mark
 per-person grants `owner_only`; the run's `credential.mint` audit row
 (`secret_scope`: `own` or `operator`) shows which row a mint used.
 
-- **Signing in to AWS yourself.** The `PUT /secrets` bound above is about
-  STORING an AWS key. It is not the only route to Bedrock: if your admin's agent
-  roster marks your agent's row `per_user`, the AWS SSO session a run
-  authenticates with is YOURS, and you sign in for it — the "Sign in to AWS"
+- **Signing in to AWS yourself.** For a Bedrock SSO provider the AWS session a
+  run authenticates with is YOURS, and you sign in for it — the "Sign in to AWS"
   action beside your model-access chip launches a short-lived login sandbox
   against the ADMIN'S access portal (never one you choose), and what it captures
   is stored under your own principal. Nobody else's runs can use it, and you are
-  not served the admin's if you have none. You need the `agent` capability for
-  that row's agent; under a `shared` row, or with no roster written, the
-  credential stays the deployment's and there is nothing for you to sign in to.
+  not served an admin's if you have none.
   Renewal is Wardyn's while the session lasts; once the refresh token is spent or
   your identity provider revokes it, you sign in again. **If your SSO session
-  reaches several AWS accounts, the admin pins which account and role that row
-  may use** — so you are never asked to guess which of your entitlements the
-  agent's model lives in, and a sign-in that cannot reach the pinned pair is
+  reaches several AWS accounts, the admin pins which account and role that
+  provider may use** — so you are never asked to guess which of your entitlements the
+  model lives in, and a sign-in that cannot reach the pinned pair is
   refused on the login terminal (`wardyn: aws sso credential rejected: …`)
   rather than quietly capturing the wrong one; if nothing is pinned and your
   session reaches more than one, the sign-in asks you to choose. This sign-in
@@ -381,20 +344,21 @@ not here — revoke it directly.
 
 ## What to ask your admin for
 
-- **Model access, when you'd rather not store your own key.** An operator
-  integration, or a workspace requirement, re-adds a model grant after your
-  policy is clamped — see [DESKTOP.md § Model access on
-  m′](DESKTOP.md#model-access-on-m). If you'd rather bring your own key, see
-  [Your model connections](#your-model-connections) above — no admin action needed.
+- **Model access.** Ask your admin to add a model provider for your agent
+  (Settings ▸ Model providers); then connect your own credential for it — see
+  [Your model connections](#your-model-connections) above.
 - **A git provider your repo's host is on.** If onboarding a repository or
   launching a run against it is refused because its host is not an enabled git
   provider, only an admin can fix it — by enabling a provider row for that host,
   or by adding the org path your repository sits under to a row that already
   covers it. Give them the repository's full clone URL: the rows are matched by
   host and by URL prefix, so `https://dev.azure.com/acme` and
-  `https://dev.azure.com/acme-labs` are two different answers. On an Azure DevOps organisation
-  backed by Entra ID you may be asked to sign in with your own identity instead of an admin's shared
-  token — see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) for what that looks like. If
+  `https://dev.azure.com/acme-labs` are two different answers. Azure DevOps has no shared
+  administrator token: a run uses your own credential. On an organisation backed by Entra ID you connect
+  once, when you sign in to Wardyn, and Wardyn creates a short-lived token in your name for each run (or,
+  where your admin chose it, uses your Entra sign-in or a token you add yourself under Settings). On
+  Azure DevOps Server you add your own token under Settings, for git only — see
+  [AZURE-DEVOPS.md](AZURE-DEVOPS.md) for what that looks like. If
   instead the refusal says your work may not come from that provider, ask for a
   `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.

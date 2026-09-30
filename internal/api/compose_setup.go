@@ -93,14 +93,14 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	return items
 }
 
-// setupLLMAccessItem reshapes the ALREADY-COMPUTED reconcileLLMAccess verdict
-// (compose.go) into a checklist row — REUSED, never recomputed, so the
+// setupLLMAccessItem reshapes the ALREADY-COMPUTED runLLMAccess verdict
+// (runs.go) into a checklist row — REUSED, never recomputed, so the
 // checklist can never disagree with the review panel's own no-model-access
 // banner. ok=false for a non-LLM/unknown agent (llmAccess is nil): nothing to
 // check, no row.
 //
-// Residency is derived from the SAME mount check reconcileLLMAccess/
-// applyLLMCredMount use (specHasMountTarget on the FINAL spec): a Claude
+// Residency is derived from a mount check (specHasMountTarget on the FINAL
+// spec): a Claude
 // subscription run mounts the operator's resident credential
 // (claudeCredTarget); every other LLM-backed run brokers an api_key that never
 // leaves the proxy.
@@ -382,10 +382,11 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 			} else {
 				detail += " — no repo named in scope (nothing to clone/push against)"
 			}
+			provider := repoCredentialProvider(spec, ghScopeRepos(g.Scope))
 			items = append(items, SetupItem{
 				Kind: "repo_credential", ID: "repo_credential:github_token",
-				Label:      "GitHub repository access",
-				RequiredBy: "cloning/pushing the workspace's GitHub remote",
+				Label:      provider + " repository access",
+				RequiredBy: "cloning/pushing the workspace's " + provider + " remote",
 				Status:     "unverified",
 				Detail:     detail,
 				Residency:  "brokered_mint",
@@ -411,6 +412,24 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 		}
 	}
 	return items
+}
+
+// repoCredentialProvider names the forge a repo_credential row's repositories
+// live on, for its label: "Azure DevOps" when every repository the grant is
+// scoped to and every workspace repository is an Azure DevOps clone URL,
+// "GitHub" otherwise — the row's own default, so an unrecognised host or a mix
+// reads as it always did.
+func repoCredentialProvider(spec types.RunPolicySpec, scoped []string) string {
+	repos := append(slices.Clone(scoped), repoLocatorsOf(spec.WorkspaceRepos)...)
+	if len(repos) == 0 {
+		return "GitHub"
+	}
+	for _, repo := range repos {
+		if _, ok := adoOrganisationOf(repo); !ok {
+			return "GitHub"
+		}
+	}
+	return "Azure DevOps"
 }
 
 // setupEgressWorkspaceItem is informational only: it reports the egress domains

@@ -238,7 +238,7 @@ func TestApplyDefaultsAndValidate_ADOGrantRequiresTheMITMCA(t *testing.T) {
 func TestLoadConfig_OneADOGrantPerSidecar(t *testing.T) {
 	certPEM, keyPEM := genTestCA(t)
 	grant := func(org string) map[string]any {
-		return map[string]any{"organization": org, "capabilities": []string{"read"}, "hosts": []string{"dev.azure.com"}}
+		return map[string]any{"organization": org, "capabilities": []string{"code_read"}, "hosts": []string{"dev.azure.com"}}
 	}
 	load := func(extra map[string]any) (*Config, error) {
 		extra["mitm_ca_cert_pem"], extra["mitm_ca_key_pem"] = string(certPEM), string(keyPEM)

@@ -51,11 +51,11 @@ func TestResolvePolicy_DoesNotAliasDefaultPolicy(t *testing.T) {
 	cfg.DefaultPolicy = defaultPolicyWithSpareCapacity()
 	srv := New(cfg)
 
-	specA, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
+	specA, _, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
 	if err != nil {
 		t.Fatalf("resolvePolicy: %v", err)
 	}
-	specB, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
+	specB, _, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
 	if err != nil {
 		t.Fatalf("resolvePolicy: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestResolvePolicy_ConcurrentUnionNoRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			spec, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
+			spec, _, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
 			if err != nil {
 				return
 			}

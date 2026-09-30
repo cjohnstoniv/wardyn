@@ -61,8 +61,7 @@ type dispatchParams struct {
 	// so wardyn-toolgate's -deadline default and agent-run's MCP_TOOL_TIMEOUT
 	// track the real ceiling instead of their own hardcoded literal (RL-1).
 	ApprovalExpiryAfter time.Duration
-	BedrockRef          *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
-	ExtraEnv            map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
+	ExtraEnv            map[string]string // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
 	// Toolchains is the requirements-driven subset of the toolchain-fidelity
 	// env this run needs (runToolchainNeeds over its workspaces' profiles).
 	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
@@ -103,16 +102,6 @@ type dispatchParams struct {
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
 	Drive *types.DriveMount
-	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
-	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
-	// lane (llm.injectManaged — resolveLLMTransport's MANAGED subscription
-	// section). launchRecordRun's pre-dispatch
-	// llm_mode guess for the session entry is a mount/integration check that
-	// cannot see this lane at all (it resolves only here, inside dispatch,
-	// gated on s.managedInjectReady) — that guess would otherwise say "none"
-	// for a session the managed subscription actually credentialed. nil for
-	// every other caller: a no-op.
-	ResolvedManaged *bool
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -297,9 +286,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
 	// clone/grants/EGRESS/recording/LLM-injection are identical" contract as
-	// scan/verify/exec. resolveLLMTransport below sees an ordinary
-	// (no-WorkspaceID) claude-code run and injects the managed subscription
-	// token proxy-side from the launcher's policy.
+	// scan/verify/exec. resolveLLMInjections below sees an ordinary
+	// (no-WorkspaceID) claude-code run and credentials it from the launcher's
+	// own model provider.
 	for k, v := range p.ExtraEnv {
 		sandboxEnv[k] = v
 	}
@@ -385,6 +374,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.egress.confine",
+			run.ID.String(), "success", mustJSON(map[string]any{"hosts": confined})))
 	}
 
 	// Governance ceiling re-assertion: union the acting principal's assigned
@@ -423,7 +414,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
-	mounts := buildRunMounts(policy, llm, p.UserMounts)
+	mounts := buildRunMounts(policy, p.UserMounts)
 
 	// Operator-wide upstream/corp proxy (site-config → ProxyConfig.UpstreamProxyURL);
 	// fail SAFE to "" (direct egress) with an audit event — see resolveRunUpstreamProxy.
@@ -438,7 +429,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// env_secret grants: stored secret -> sandbox ENV VAR, mask-registered. LAST
 	// in the env composition (after applyDispatchModeEnv, the artifact config,
-	// p.ExtraEnv and resolveLLMTransport's auth vars) so its refusal to overwrite
+	// p.ExtraEnv and the model provider arm's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
@@ -597,7 +588,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
-	spec.OnWaiting = onWaiting
+	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
+	spec.ExecOutput = s.openExecOutput(run.ID, p.TaskMode, p.Interactive)
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
 	if err != nil {
@@ -871,28 +863,6 @@ func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
 	}
 	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
 	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
-}
-
-// hasAnthropicAPIKeyInjection reports whether the run already carries an api_key
-// injection targeting Anthropic's api-key host — i.e. the operator/compose set up
-// the api-key transport for Anthropic. The managed-subscription gate uses it to
-// stay a FALLBACK (fire only when nothing else credentials Anthropic), never a
-// silent override of an explicit api-key choice. Mirrors the drop-loop's host
-// check. Gateway-aware (s.llmProviderFor(agent).host): under a configured
-// WARDYN_ANTHROPIC_BASE_URL the grant targets the gateway host, not
-// api.anthropic.com — comparing against the hardcoded public host would make
-// managed silently fire alongside an explicit api-key choice.
-func (s *Server) hasAnthropicAPIKeyInjection(agent string, injections []runner.InjectionGrant) bool {
-	p, ok := s.llmProviderFor(agent)
-	if !ok {
-		return false
-	}
-	for _, ig := range injections {
-		if strings.EqualFold(strings.TrimSuffix(ig.Rule.Host, "."), p.host) {
-			return true
-		}
-	}
-	return false
 }
 
 // byoiExecLessRefused refuses a BYOI image outright, before it can even

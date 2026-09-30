@@ -24,9 +24,8 @@ import { ErrorBoundary } from "../../wardyn/error-boundary";
 // rail this replaces was explicitly built not to do.
 //
 // :only-child, NOT a bare `section` (R4-F142). Every entry in RUN_WIDGETS that
-// wants this renders ONE root card — a WidgetCard, or the ssh tile's
-// SectionCard — so "the widget's root" and "the slot's only element child" are
-// the same node. The terminal widget is the exception: it returns a FRAGMENT
+// wants this renders ONE root card — a WidgetCard — so "the widget's root" and
+// "the slot's only element child" are the same node. The terminal widget is the exception: it returns a FRAGMENT
 // (failure block, pane, approvals strip), and the bare selector caught the
 // M7(b) failure block — a `shrink-0` <section> written to size to its content
 // above the terminal — and gave it `flex: 1 1 0%`. Measured in Chromium: 271px

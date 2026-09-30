@@ -223,9 +223,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// store call). The fall-through (cookie) lane is unaffected: reaching this
 	// handler via it already proves admin (requireOperator gates it).
 	if ta, tok := ticketActorFromContext(ctx); tok {
-		if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
+		superAdmin := ta.role == oidc.RoleAdmin
+		if !superAdmin && run.CreatedBy != ta.principal {
 			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
 			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+			return
+		}
+		// The fall-through lane is operator-only, and a super admin's ticket
+		// is exempt the same way.
+		if !superAdmin && s.refuseInteractiveAttach(w, r, run) {
 			return
 		}
 	}
@@ -315,6 +321,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// into. Both sends take this mutex and read the mode live inside it, so
 	// whichever lands second is the one that is still true.
 	var modeMu sync.Mutex
+	var via *types.DelegationVia
+	if v, ok := audit.DelegationFrom(ctx); ok {
+		via = &v
+	}
 	holder := &attachHolder{
 		principal: principal,
 		actorType: principalType,
@@ -323,6 +333,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
 		cols:      opts.Cols,
 		rows:      opts.Rows,
+		via:       via,
 		// Promotion: the SAME socket is told it may now type. attach-terminal
 		// .tsx already implements the read_only true->false transition (it
 		// force-refits, because a promoted observer inherits the departed

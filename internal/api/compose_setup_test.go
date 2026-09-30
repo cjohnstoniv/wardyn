@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -279,6 +280,45 @@ func TestDeriveSetupItems_RepoCredentialGitHubTokenUnverified(t *testing.T) {
 	got, ok := findItem(items, "repo_credential:github_token")
 	if !ok || got.Status != "unverified" || got.Fix != nil {
 		t.Errorf("github_token repo_credential = %+v (ok=%v), want unverified with no fix (mint-time brokered)", got, ok)
+	}
+}
+
+// #1384: the github_token row names the forge its repositories live on.
+func TestDeriveSetupItems_RepoCredentialLabelNamesTheProvider(t *testing.T) {
+	srv := newSetupTestServer()
+	run := composer.RunInput{Agent: "claude-code"}
+	grant := func(repo string) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":[` + strconv.Quote(repo) + `]}`)}
+	}
+	for name, tc := range map[string]struct {
+		spec  types.RunPolicySpec
+		label string
+	}{
+		"scoped to an Azure DevOps repo": {
+			spec:  types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant("https://dev.azure.com/contoso/proj/_git/app")}},
+			label: "Azure DevOps repository access",
+		},
+		"no scope, an Azure DevOps workspace repo": {
+			spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitHubToken}},
+				WorkspaceRepos: []types.WorkspaceRepo{{Repo: "https://contoso.visualstudio.com/proj/_git/app", Target: "/work/repo"}}},
+			label: "Azure DevOps repository access",
+		},
+		"scoped to a GitHub repo": {
+			spec:  types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant("octocat/Hello-World")}},
+			label: "GitHub repository access",
+		},
+		"mixed forges keep the default": {
+			spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant("https://dev.azure.com/contoso/proj/_git/app")},
+				WorkspaceRepos: []types.WorkspaceRepo{{Repo: "octocat/Hello-World", Target: "/work/repo"}}},
+			label: "GitHub repository access",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := findItem(srv.deriveSetupItems(context.Background(), "", run, tc.spec, secretsWith(), nil), "repo_credential:github_token")
+			if !ok || got.Label != tc.label || !strings.Contains(got.RequiredBy, strings.TrimSuffix(tc.label, " repository access")) {
+				t.Errorf("row = %+v (ok=%v), want label %q and a matching required_by", got, ok, tc.label)
+			}
+		})
 	}
 }
 

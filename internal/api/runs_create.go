@@ -197,9 +197,8 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // workspace simply is not onboarded.
 //
 // Runs AFTER validateWorkspaceSources (which has already refused every
-// un-onboarded source), so the index lookups below can only miss for a source
-// that gate deliberately let past — a blessed system mount, whose source is the
-// operator's own staged creds dir and belongs to no workspace.
+// un-onboarded source), so the index lookups below always find the owning
+// workspace.
 func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Request, spec types.RunPolicySpec) (int, string, error) {
 	if s.cfg.Store == nil || (len(spec.WorkspaceMounts) == 0 && len(spec.WorkspaceRepos) == 0) {
 		return 0, "", nil
@@ -210,9 +209,6 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	}
 	idx := indexWorkspacesBySource(all)
 	for _, wm := range spec.WorkspaceMounts {
-		if systemMountTargets[wm.Target] {
-			continue // operator-blessed system creds mount — source already vetted against the ceiling
-		}
 		if ws, ok := idx.localDir[wm.Source]; ok && !s.mayLaunchWorkspace(r, ws) {
 			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
@@ -290,12 +286,10 @@ const credentialConfinementBelowFloor = "below_floor"
 // able to launch — adding a refusal here would break every single-class
 // deployment.
 //
-// ssoDelivered is the caller's own answer to "did this run's model credential
-// resolve to the captured-AWS-SSO lane" (selectedMechanism ==
-// types.AgentMechanismBedrockSSO, i.e. resolveBedrockAuth's ssoInject arm) —
-// resolved once by the caller from the SAME lane resolution the
-// model-credential grade already ran (modelCredentialFacts.Mechanism), never
-// re-derived here. Pure, with the same purity contract as enforcedConfinement,
+// ssoDelivered is the caller's own answer to "is this run's model credential
+// the captured-AWS-SSO lane" (the chosen provider's kind is bedrock_sso) —
+// taken once by the caller from the SAME choice the model-credential grade
+// already made (modelCredentialFacts.Kind), never re-derived here. Pure, with the same purity contract as enforcedConfinement,
 // so it is called from both the launch path and the preflight path off the
 // same resolved body — the two can never disagree about whether a run carries
 // the advisory.
@@ -315,10 +309,10 @@ func credentialConfinementAdvisory(spec types.RunPolicySpec, enforced types.Conf
 // around credentialConfinementAdvisory (runs.go's handleCreateRun and
 // preflight.go's handlePreflightRun): append the sentence to warnings when it
 // fires, and report whether it did, since the create path's audit row needs
-// that same answer for credential_confinement. mechanism is the resolved
-// modelCredentialFacts.Mechanism both callers already have in hand.
-func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicySpec, enforced types.ConfinementClass, mechanism string) ([]string, bool) {
-	advisory := credentialConfinementAdvisory(spec, enforced, mechanism == string(types.AgentMechanismBedrockSSO))
+// that same answer for credential_confinement. kind is the chosen provider's
+// modelCredentialFacts.Kind both callers already have in hand.
+func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicySpec, enforced types.ConfinementClass, kind string) ([]string, bool) {
+	advisory := credentialConfinementAdvisory(spec, enforced, kind == string(types.ModelProviderBedrockSSO))
 	if advisory == "" {
 		return warnings, false
 	}
@@ -463,6 +457,14 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 	specRepos := repoLocatorsOf(spec.WorkspaceRepos)
 	for _, g := range spec.EligibleGrants {
 		grantID := uuid.New()
+		// A stored git token for an Azure DevOps host is read from the run
+		// owner's OWN row only (#1429): the shared, operator-namespace token is
+		// retired, and the fallback to it is what would serve it.
+		if g.Kind == types.GrantGitPAT {
+			if host, _, _, derr := gitPATScopeFields(g.Scope); derr == nil && adoGrantHost(sc, host) {
+				g.OwnerOnly = true
+			}
+		}
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID:        grantID,
 			RunID:     runID,
@@ -520,6 +522,12 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 			// validatePolicySpec already vetted the host is a supported SSH-over-443
 			// provider, so sshOver443Endpoint is expected to resolve here.
 			if host, _, _, _, derr := sshKeyScopeFields(g.Scope); derr == nil {
+				// Azure DevOps has no SSH lane (#1429): the grant row stays as an
+				// eligibility record, and nothing is wired, so no key reaches the sandbox.
+				if adoGrantHost(sc, host) {
+					gw.warnings = append(gw.warnings, adoSSHGrantDropped)
+					continue
+				}
 				// The `ssh` lane, vetoed: no WARDYN_SSH_GRANTS entry and no :443
 				// endpoint added — so no private key is ever written into the sandbox
 				// for a clone the admin said must not use one.
@@ -802,6 +810,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// shell or the harness binary).
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil)
 		cancelBuild()
 		if berr != nil {
@@ -816,6 +825,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag, nil)
 		cancelBuild()
 		if berr != nil {
@@ -847,7 +857,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			return "", true
 		}
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
-		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0], nil); ok {
+		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, wsRefs[0], nil, s.announceImageBuild(ctx, runID)); ok {
 			image = built
 		}
 		cancelBuild()

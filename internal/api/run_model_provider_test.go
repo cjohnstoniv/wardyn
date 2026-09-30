@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -57,11 +58,17 @@ func TestChooseModelProvider(t *testing.T) {
 			wantRefusal: refusal("b", mpRunStateOff)},
 		{name: "a requested provider that does not serve the agent", sc: site("", a, codexOnly), requested: "codex", granted: all,
 			wantRefusal: refusal("codex", fmt.Sprintf(mpRunStateNotServing, "claude-code"))},
+		// D-6 (#1018): a named provider the caller is not granted reads as
+		// missing, whatever its state.
 		{name: "a requested provider the caller is not granted", sc: site("", a, b), requested: "b", granted: only("a"),
-			wantRefusal: refusal("b", mpRunStateNotGranted), wantNotGranted: true},
+			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
+		{name: "a requested provider the caller is not granted that is also off", sc: site("", a, off(b)), requested: "b", granted: only("a"),
+			wantRefusal: refusal("b", mpRunStateMissing), wantNotGranted: true},
 		{name: "the pin, with no request", sc: site("a", a, b), pin: "b", granted: all, wantID: "b"},
+		// A pin the caller cannot use is refused naming no provider: they never
+		// named it, and a workspace read hides it from them (#1018).
 		{name: "a pin the caller is not granted is refused, never passed over", sc: site("a", a, b), pin: "b", granted: only("a"),
-			wantRefusal: refusal("b", mpRunStateNotGranted), wantNotGranted: true},
+			wantRefusal: fmt.Sprintf(mpRunNoneGranted, "claude-code"), wantNotGranted: true},
 		{name: "a pin that is off is refused, never passed over", sc: site("a", a, off(b)), pin: "b", granted: all,
 			wantRefusal: refusal("b", mpRunStateOff)},
 		{name: "the default among two candidates", sc: site("b", a, b), granted: all, wantID: "b"},
@@ -71,8 +78,9 @@ func TestChooseModelProvider(t *testing.T) {
 		{name: "the single candidate", sc: site("", a, codexOnly), granted: all, wantID: "a"},
 		{name: "two candidates and no default", sc: site("", a, b), granted: all,
 			wantRefusal: fmt.Sprintf(mpRunChoose, "claude-code")},
+		// Named by nobody, so named in no refusal (D-6, #1018).
 		{name: "one provider serves the agent and the caller is not granted it", sc: site("", a), granted: only(),
-			wantRefusal: refusal("a", mpRunStateNotGranted), wantNotGranted: true},
+			wantRefusal: fmt.Sprintf(mpRunNoneGranted, "claude-code"), wantNotGranted: true},
 		{name: "several serve the agent and the caller is granted none", sc: site("", a, b), granted: only(),
 			wantRefusal: fmt.Sprintf(mpRunNoneGranted, "claude-code"), wantNotGranted: true},
 		{name: "no provider serves the agent: no choice, today's path", sc: site("", codexOnly, off(a)), granted: all},
@@ -97,6 +105,65 @@ func TestChooseModelProvider(t *testing.T) {
 			t.Errorf("err = %v, want the capability read's error", err)
 		}
 	})
+}
+
+// TestRunModelProviderNotGrantedReadsAsMissing (D-6, #1018): at create and
+// Review, a named provider the member is not granted answers byte for byte as
+// an id no provider has; only the audit row tells them apart.
+func TestRunModelProviderNotGrantedReadsAsMissing(t *testing.T) {
+	cs := func() *capStore { return &capStore{enf: map[string]bool{capModelProvider: true}} }
+	withCorp := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider("corp", "claude-code"))}
+	withoutCorp := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"))}
+	const body = `{"agent":"claude-code","task":"t","model_provider":"corp"}`
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		restricted := providerRunFixture(t, withCorp, cs(), nil)
+		w := doSSO(t, restricted, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
+		unknown := doSSO(t, providerRunFixture(t, withoutCorp, cs(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
+		if w.Code != unknown.Code || w.Body.String() != unknown.Body.String() {
+			t.Errorf("%s: not granted = %d %s\nunknown = %d %s", path, w.Code, w.Body.String(), unknown.Code, unknown.Body.String())
+		}
+		if !slices.Contains(auditReasons(t, restricted, "authz.denied"), "capability_model_provider") {
+			t.Errorf("%s: the not-granted refusal wrote no capability_model_provider row", path)
+		}
+	}
+
+	// Named by nobody: the one provider serving the agent is not named in the
+	// refusal, which reads as it does when several serve and none is granted.
+	// The audit row names it.
+	const unnamed = `{"agent":"claude-code","task":"t"}`
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		one := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(keyProvider("corp", "claude-code"))}, cs(), nil)
+		w := doSSO(t, one, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		several := doSSO(t, providerRunFixture(t, withCorp, cs(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		if w.Code != http.StatusForbidden || w.Body.String() != several.Body.String() || strings.Contains(w.Body.String(), "corp") {
+			t.Errorf("%s: one serving = %d %s\nseveral serving = %d %s", path, w.Code, w.Body.String(), several.Code, several.Body.String())
+		}
+		rows := deniedRows(t, one)
+		if len(rows) != 1 || rows[0]["reason"] != "capability_model_provider" || rows[0]["provider"] != "corp" {
+			t.Errorf("%s: authz.denied rows = %v, want one capability_model_provider row naming corp", path, rows)
+		}
+	}
+
+	// Named by nobody: a roster default the member is not granted is passed
+	// over whatever its state, so a disabled one answers as if it did not
+	// exist rather than being refused by name.
+	offDefault := keyProvider("corp-off", "claude-code")
+	offDefault.Disabled = true
+	anthropicOnly := func() *capStore {
+		return &capStore{enf: map[string]bool{capModelProvider: true}, grants: []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}}
+	}
+	withOffDefault := types.SiteConfig{
+		ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), offDefault),
+		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", DefaultProvider: "corp-off"}),
+	}
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		w := doSSO(t, providerRunFixture(t, withOffDefault, anthropicOnly(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		absent := doSSO(t, providerRunFixture(t, withoutCorp, anthropicOnly(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		if w.Code != absent.Code || w.Body.String() != absent.Body.String() || strings.Contains(w.Body.String(), "corp-off") {
+			t.Errorf("%s: disabled default not granted = %d %s\nno such provider = %d %s", path, w.Code, w.Body.String(), absent.Code, absent.Body.String())
+		}
+	}
 }
 
 // providerRunFixture is a create/preflight server whose site config carries
@@ -143,7 +210,7 @@ func TestRunModelProviderDoors(t *testing.T) {
 	bearerCorp.Kind = types.ModelProviderBedrockBearer
 	keyAndBearer := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), bearerCorp)}
 	withIntegration := twoKeys
-	withIntegration.Integrations = []types.Integration{{ID: "corp-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+	withIntegration.Integrations = []types.Integration{{ID: "corp-anthropic", Kind: types.IntegrationKindGitHost,
 		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}}}}
 	pinned := &types.Workspace{
 		ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
@@ -181,15 +248,16 @@ func TestRunModelProviderDoors(t *testing.T) {
 	}{
 		{name: "a requested provider the member is not granted", site: twoKeys, cs: &capStore{enf: enforced},
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateMissing, mpRunRemedy), denied: true,
+			wantProvider: "corp"},
 		{name: "a workspace pin naming a provider the member is not granted", site: twoKeys, ws: pinned,
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
-			body: onPinned, want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+			body: onPinned, want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunNoneGranted, "claude-code"), denied: true},
 		{name: "workspace_id: the pin names a provider the member is not granted", site: twoKeys, ws: pinned,
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
-			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunNoneGranted, "claude-code"), denied: true},
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
 		{name: "workspace_id: a chosen Bedrock provider with no region or model", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
@@ -278,12 +346,14 @@ func TestRunModelProviderDoors(t *testing.T) {
 				wantReason := tc.wantReasonOverride
 				switch {
 				case wantReason != "":
-				case tc.denied:
-					wantReason = string(authz.ReasonCapabilityModelProvider)
 				case tc.credential:
 					wantReason = llmRefusalAuditReason
 				case tc.want == http.StatusUnprocessableEntity:
+					// A not-granted named provider too (D-6): only its audit row
+					// says capability_model_provider.
 					wantReason = string(authz.ReasonModelProviderUnavailable)
+				case tc.denied:
+					wantReason = string(authz.ReasonCapabilityModelProvider)
 				}
 				if body.Reason != wantReason || body.Provider != tc.wantProvider || body.Kind != string(tc.wantKind) {
 					t.Errorf("%s: reason/provider/kind = %q/%q/%q, want %q/%q/%q",
@@ -359,9 +429,7 @@ func (siteErrStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 // run.create audit event's model_provider snapshot ({id, kind} — the kind is
 // NOT on the row; see the field's doc on types.AgentRun).
 func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
-	// The single candidate: no AgentProviders row at all, so the legacy
-	// declared-mechanism gate (enforceCreateLLMMechanism, unrelated to #527)
-	// sees no row for this agent and stays out of the way — exactly what
+	// The single candidate: no AgentProviders row at all — exactly what
 	// TestChooseModelProvider's "the single candidate" case exercises.
 	provider := keyProvider("corp", "claude-code")
 	provider.UID = "uid-corp"

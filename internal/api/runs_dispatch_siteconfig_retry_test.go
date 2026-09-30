@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,39 +68,58 @@ func TestSiteConfigForDispatch_RetriesOnce(t *testing.T) {
 	}
 }
 
-// TestSiteConfigForDispatch_StillFailsClosed is the negative control: a
-// roster that really cannot be read still surfaces as an error, so the refusal
-// downstream is unchanged and a per_user member is never served the
-// deployment-wide session.
+// TestSiteConfigForDispatch_StillFailsClosed is the negative control: a site
+// config that really cannot be read still surfaces as an error, so the
+// refusal downstream is unchanged.
 func TestSiteConfigForDispatch_StillFailsClosed(t *testing.T) {
 	h := newHarness(t)
 	st := &alwaysFailSiteConfigStore{}
 	srv := New(baseTestConfig(h, st))
 
 	if _, err := srv.siteConfigForDispatch(context.Background()); err == nil {
-		t.Fatal("an unreadable roster was reported as readable — the credential scope would fall open to the operator namespace")
+		t.Fatal("an unreadable site config was reported as readable")
 	}
 	if got := st.calls.Load(); got != 2 {
 		t.Errorf("GetSiteConfig calls = %d, want exactly 2 — one retry, never a retry storm inside POST /runs", got)
 	}
 }
 
-// TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv is the
-// serving-door half: when the retry does not help and the run WOULD have been
-// served a Bedrock credential, the dispatch is refused with nothing resident.
-func TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv(t *testing.T) {
+// dispatchFailStore records the refusal path's STARTING -> FAILED CAS
+// (failAndRevoke).
+type dispatchFailStore struct {
+	store.Store
+	failed bool
+}
+
+func (s *dispatchFailStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, _, to types.RunState) (bool, error) {
+	if to == types.RunFailed {
+		s.failed = true
+	}
+	return true, nil
+}
+
+// TestDispatch_UnreadableSiteConfigLeavesNoBedrockCredentialInTheEnv is the
+// serving-door half: when the retry does not help and the run chose a Bedrock
+// provider, the dispatch is refused with nothing resident — the provider the
+// run froze cannot be re-read, so nothing of the owner's is served.
+func TestDispatch_UnreadableSiteConfigLeavesNoBedrockCredentialInTheEnv(t *testing.T) {
 	h := newHarness(t)
-	st := &mechanismGateStore{}
-	cfg := bedrockBearerCfg()
-	cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+	st := &dispatchFailStore{}
+	p := bedrockKeyTestProvider()
+	sec := &memSecrets{m: map[string][]byte{}}
+	if err := sec.For(awsSSOTestOwner).Put(context.Background(), providerSecretName(p.UID, providerKeyPart), []byte("bedrock-bearer-test")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Identity: h.idp, Audit: h.audit, Store: st, Secrets: sec, MaskRegistry: secretmask.NewRegistry()}
 	srv := New(cfg)
-	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", State: types.RunStarting}
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", State: types.RunStarting, CreatedBy: awsSSOTestOwner,
+		ModelProviderID: p.ID}
 	policy := &types.RunPolicySpec{}
 	sandboxEnv := map[string]string{}
 
 	if _, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
 		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false, bedrockCredUngraded()); ok {
-		t.Fatal("dispatch went ahead on an unreadable roster")
+		t.Fatal("dispatch went ahead on an unreadable site config")
 	}
 	for k := range sandboxEnv {
 		t.Errorf("sandbox env carries %s after a refused dispatch; nothing may be resident", k)

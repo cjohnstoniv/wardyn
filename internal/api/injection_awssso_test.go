@@ -29,14 +29,16 @@ import (
 // security contract of Phase B is what this endpoint refuses.
 
 const (
-	reauthRegion = "eu-west-2"
-	reauthPortal = "portal.sso.eu-west-2.amazonaws.com"
-	reauthToken  = "live-sso-access-token-9f2c"
+	reauthRegion      = "eu-west-2"
+	reauthPortal      = "portal.sso.eu-west-2.amazonaws.com"
+	reauthToken       = "live-sso-access-token-9f2c"
+	reauthProviderID  = "bedrock-prod"
+	reauthProviderUID = "u-reauth-bedrock-prod"
 )
 
 // reauthStore is the minimal store the resolve path reads: the run (for its
-// agent and creator), the roster, the run's grants (for the snapshot) and the
-// transactional resolve seam.
+// agent, creator and model provider), the provider block, the run's grants (for
+// the snapshot) and the transactional resolve seam.
 type reauthStore struct {
 	store.Store
 	mu        sync.Mutex
@@ -103,30 +105,33 @@ func (s *reauthStore) ResolveReauthApproval(ctx context.Context, id uuid.UUID, d
 	return out, nil
 }
 
-func reauthRosterRow(perUser bool) types.SiteConfig {
-	src := types.CredentialSourceShared
-	if perUser {
-		src = types.CredentialSourcePerUser
-	}
-	return agentRoster(types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: src, SSOStartURL: "https://acme.awsapps.com/start",
-	})
+// reauthProvider is the bedrock_sso provider every run here chose: its region,
+// portal and account/role pin are what the snapshot records.
+func reauthProvider() types.ModelProvider {
+	return types.ModelProvider{ID: reauthProviderID, UID: reauthProviderUID, Kind: types.ModelProviderBedrockSSO,
+		Bedrock: &types.BedrockSettings{Region: reauthRegion, SSOStartURL: "https://acme.awsapps.com/start",
+			SSOAccountID: "111122223333", SSORoleName: "WardynAgent"},
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}}}
 }
 
-func reauthSnapshotScope(t *testing.T, owner, region string, perUser bool, account, role string) json.RawMessage {
+func reauthProviderSite(p types.ModelProvider) types.SiteConfig {
+	return types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{p}}}
+}
+
+// reauthScope is the scope a capture for the fixture's provider lands in.
+func reauthScope(owner string) awsSSOScope {
+	return awsSSOScope{perUser: true, owner: owner, provider: reauthProviderUID}
+}
+
+func reauthSnapshotScope(t *testing.T, owner, region, account, role string) json.RawMessage {
 	t.Helper()
-	src := string(types.CredentialSourceShared)
-	if perUser {
-		src = string(types.CredentialSourcePerUser)
-	}
 	raw, err := json.Marshal(map[string]any{
 		"host": reauthPortal, "header": awsSSOInjectHeader, "format": "%s",
 		"secret_name": types.AWSSSOAccessTokenSecret,
 		"snapshot": awsSSOScopeSnapshot{
-			OwnerSubject: owner, CredentialSource: src,
-			Mechanism:    string(types.AgentMechanismBedrockSSO),
-			SSOAccountID: account, SSORoleName: role, Region: region,
+			OwnerSubject: owner, CredentialSource: string(types.CredentialSourcePerUser),
+			Mechanism:    string(types.ModelProviderBedrockSSO),
+			SSOAccountID: account, SSORoleName: role, Region: region, ProviderUID: reauthProviderUID,
 		},
 	})
 	if err != nil {
@@ -215,28 +220,26 @@ type reauthFixture struct {
 	grantID uuid.UUID
 }
 
-// newReauthFixture wires a per_user captured-SSO run whose grant carries a
-// truthful snapshot and whose owner has a live stored session.
+// newReauthFixture wires a run that chose a bedrock_sso provider, whose grant
+// carries a truthful snapshot and whose owner has a live stored session.
 func newReauthFixture(t *testing.T, opts func(*reauthFixture)) *reauthFixture {
 	t.Helper()
 	h := newHarness(t)
 	runID, grantID := uuid.New(), uuid.New()
 	f := &reauthFixture{audit: &reauthRecorder{}, runID: runID, grantID: grantID}
 	f.st = &reauthStore{
-		run:       types.AgentRun{ID: runID, Agent: "claude-code", CreatedBy: "alice@example.com"},
-		site:      reauthRosterRow(true),
+		run:       types.AgentRun{ID: runID, Agent: "claude-code", CreatedBy: "alice@example.com", ModelProviderID: reauthProviderID},
+		site:      reauthProviderSite(reauthProvider()),
 		approvals: h.approvals,
 		audit:     f.audit,
 		grants: []types.CredentialGrant{{
 			ID: grantID, RunID: runID,
-			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: reauthSnapshotScope(t, "alice@example.com", reauthRegion, true, "111122223333", "WardynAgent")},
+			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: reauthSnapshotScope(t, "alice@example.com", reauthRegion, "111122223333", "WardynAgent")},
 		}},
 	}
 	// BOTH maps, initialised. memSecrets.For hands back a COPY that shares these
 	// maps, so a nil one means the copy allocates its own and the write is lost —
-	// silently, and only for the OPERATOR namespace (owner ""), which is the one
-	// the shared/legacy lane reads. A putBlob(t, "", …) then looks like a stored
-	// session and resolves as "no session at all".
+	// silently, and only for the OPERATOR namespace (owner "").
 	f.secrets = &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	cfg := baseTestConfig(h, f.st)
 	// An OIDC authenticator so the member tier is reachable in this fixture:
@@ -264,14 +267,14 @@ func newReauthFixture(t *testing.T, opts func(*reauthFixture)) *reauthFixture {
 	return f
 }
 
-// putBlob stores an SSO session in a namespace.
+// putBlob stores an SSO session for the fixture's provider in a namespace.
 func (f *reauthFixture) putBlob(t *testing.T, owner string, b awsSSOBlob) {
 	t.Helper()
 	raw, err := json.Marshal(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.secrets.For(owner).Put(context.Background(), harnessCredSecretName(awsSSOProvider), raw); err != nil {
+	if err := f.secrets.For(owner).Put(context.Background(), providerSecretName(reauthProviderUID, providerSSOPart), raw); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -378,57 +381,49 @@ func TestResolveAWSSSOInjection_HostPinRefusesAnotherHost(t *testing.T) {
 	}
 }
 
-// I3 — the substitution hole. An admin flips the roster row per_user -> shared
-// while the run is working: a resolve-time roster read would hand this run the
-// OPERATOR's blob. It must be a 403, and no blob may be read at all.
-func TestResolveAWSSSOInjection_RosterDriftIsRefusedNotSubstituted(t *testing.T) {
-	f := newReauthFixture(t, nil)
-	f.putBlob(t, "alice@example.com", liveSSOBlob())
-	operatorBlob := liveSSOBlob()
-	operatorBlob.AccessToken = "the-operators-own-session-token"
-	f.putBlob(t, "", operatorBlob)
+// I3 — the substitution hole. The run's provider is turned off, removed or
+// re-kinded while the run is working: a resolve-time read must not hand this
+// run any session at all. It must be a 403, and no token may reach the body.
+func TestResolveAWSSSOInjection_ProviderDriftIsRefusedNotSubstituted(t *testing.T) {
+	off := reauthProvider()
+	off.Disabled = true
+	bearer := reauthProvider()
+	bearer.Kind = types.ModelProviderBedrockBearer
+	for name, site := range map[string]types.SiteConfig{
+		"turned off":          reauthProviderSite(off),
+		"removed":             {},
+		"re-kinded to bearer": reauthProviderSite(bearer),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newReauthFixture(t, nil)
+			f.putBlob(t, "alice@example.com", liveSSOBlob())
+			operatorBlob := liveSSOBlob()
+			operatorBlob.AccessToken = "the-operators-own-session-token"
+			f.putBlob(t, "", operatorBlob)
+			f.st.site = site
 
-	f.st.site = reauthRosterRow(false) // the admin flips it to shared
-
-	w := f.resolve(t)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("resolve: code = %d, want 403; body=%s", w.Code, w.Body.String())
-	}
-	if strings.Contains(w.Body.String(), operatorBlob.AccessToken) || strings.Contains(w.Body.String(), reauthToken) {
-		t.Fatal("a token reached the drift refusal body")
-	}
-	if !f.audit.hasReason("secret.read", "scope_changed") {
-		t.Error("no secret.read failure naming scope_changed")
-	}
-}
-
-// I3 on the declared lane: a per_user row flipped from bedrock_sso to
-// bedrock_bearer mid-run no longer names the session this run was dispatched
-// with, so the resolve refuses — the same rule the bearer sink applies when a
-// per_user row stops declaring the bearer.
-func TestResolveAWSSSOInjection_RowFlippedToTheBearerIsRefused(t *testing.T) {
-	f := newReauthFixture(t, nil)
-	f.putBlob(t, "alice@example.com", liveSSOBlob())
-	f.st.site = agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer,
-		CredentialSource: types.CredentialSourcePerUser})
-
-	w := f.resolve(t)
-	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), reauthToken) {
-		t.Fatalf("resolve: code = %d, want 403 with no token; body=%s", w.Code, w.Body.String())
-	}
-	if !f.audit.hasReason("secret.read", "scope_changed") {
-		t.Error("no secret.read failure naming scope_changed")
+			w := f.resolve(t)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("resolve: code = %d, want 403; body=%s", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), operatorBlob.AccessToken) || strings.Contains(w.Body.String(), reauthToken) {
+				t.Fatal("a token reached the drift refusal body")
+			}
+			if !f.audit.hasReason("secret.read", "scope_changed") {
+				t.Error("no secret.read failure naming scope_changed")
+			}
+		})
 	}
 }
 
-// I3, the other direction: the roster row's account/role PIN is admin-asserted
+// I3, the other direction: the provider's account/role PIN is admin-asserted
 // identity. Re-pinning it mid-run must not silently re-point a held run.
 func TestResolveAWSSSOInjection_AccountPinDriftIsRefused(t *testing.T) {
 	f := newReauthFixture(t, nil)
 	f.putBlob(t, "alice@example.com", liveSSOBlob())
-	row := f.st.site.AgentProviders.Agents[0]
-	row.SSOAccountID = "999988887777"
-	f.st.site.AgentProviders.Agents[0] = row
+	p := reauthProvider()
+	p.Bedrock.SSOAccountID = "999988887777"
+	f.st.site = reauthProviderSite(p)
 
 	if w := f.resolve(t); w.Code != http.StatusForbidden {
 		t.Fatalf("resolve: code = %d, want 403 on an account-pin change; body=%s", w.Code, w.Body.String())
@@ -440,7 +435,7 @@ func TestResolveAWSSSOInjection_AccountPinDriftIsRefused(t *testing.T) {
 func TestResolveAWSSSOInjection_GrantNamingAnotherOwnerIsRefused(t *testing.T) {
 	f := newReauthFixture(t, nil)
 	f.putBlob(t, "bob@corp.example", liveSSOBlob())
-	f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "bob@corp.example", reauthRegion, true, "111122223333", "WardynAgent")
+	f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "bob@corp.example", reauthRegion, "111122223333", "WardynAgent")
 
 	w := f.resolve(t)
 	if w.Code != http.StatusForbidden {
@@ -554,7 +549,7 @@ func TestResolveAWSSSOInjection_CaptureResolvesAndTheRetrySucceeds(t *testing.T)
 	fresh := liveSSOBlob()
 	fresh.AccessToken = "the-freshly-captured-token"
 	f.putBlob(t, "alice@example.com", fresh)
-	f.srv.resolvePendingReauth(context.Background(), awsSSOScope{perUser: true, owner: "alice@example.com"}, "alice@example.com", loginRun)
+	f.srv.resolvePendingReauth(context.Background(), reauthScope("alice@example.com"), "alice@example.com", loginRun)
 
 	got, err := f.srv.cfg.Approvals.Get(context.Background(), ap.ID)
 	if err != nil {
@@ -591,7 +586,7 @@ func TestResolveAWSSSOInjection_StaleCaptureDoesNotResolve(t *testing.T) {
 	ap := onlyReauthRow(t, f.srv)
 
 	old := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com", CreatedAt: ap.RequestedAt.Add(-time.Minute)}
-	f.srv.resolvePendingReauth(context.Background(), awsSSOScope{perUser: true, owner: "alice@example.com"}, "alice@example.com", old)
+	f.srv.resolvePendingReauth(context.Background(), reauthScope("alice@example.com"), "alice@example.com", old)
 
 	got, _ := f.srv.cfg.Approvals.Get(context.Background(), ap.ID)
 	if got.State != types.ApprovalPending {
@@ -609,7 +604,7 @@ func TestResolveAWSSSOInjection_WrongOwnerCaptureDoesNotResolve(t *testing.T) {
 	ap := onlyReauthRow(t, f.srv)
 
 	other := types.AgentRun{ID: uuid.New(), CreatedBy: "bob@corp.example", CreatedAt: time.Now().Add(time.Minute)}
-	f.srv.resolvePendingReauth(context.Background(), awsSSOScope{perUser: true, owner: "bob@corp.example"}, "bob@corp.example", other)
+	f.srv.resolvePendingReauth(context.Background(), reauthScope("bob@corp.example"), "bob@corp.example", other)
 
 	got, _ := f.srv.cfg.Approvals.Get(context.Background(), ap.ID)
 	if got.State != types.ApprovalPending {
@@ -629,7 +624,7 @@ func TestResolveAWSSSOInjection_AuditSinkFailureLeavesItPending(t *testing.T) {
 	f.st.auditFail = true
 
 	loginRun := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com", CreatedAt: time.Now().Add(time.Second)}
-	f.srv.resolvePendingReauth(context.Background(), awsSSOScope{perUser: true, owner: "alice@example.com"}, "alice@example.com", loginRun)
+	f.srv.resolvePendingReauth(context.Background(), reauthScope("alice@example.com"), "alice@example.com", loginRun)
 
 	got, _ := f.srv.cfg.Approvals.Get(context.Background(), ap.ID)
 	if got.State != types.ApprovalPending {
@@ -928,7 +923,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 	defer oidc.Close()
 	f.srv.cfg.AWSSSOEndpointOverride = oidc.URL
 	// The host pin follows the override, so the grant must name that host too.
-	f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "alice@example.com", reauthRegion, true, "111122223333", "WardynAgent")
+	f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "alice@example.com", reauthRegion, "111122223333", "WardynAgent")
 	f.brk.setHost(ssoPortalHost(reauthRegion, oidc.URL))
 
 	if w := f.resolve(t); w.Code != http.StatusLocked {
@@ -951,76 +946,35 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 	t.Fatal("no credential.reauth.request row")
 }
 
-// legacy open mode: no roster
-
-// The two halves, joined. Dispatch and resolve each had thorough tests and they
-// disagreed about the same deployment, because no test ever ran both: every
-// resolver case seeds a roster row (reauthRosterRow) and every no-roster case
-// stops at dispatch.
-//
-// The shape is an upgraded 0.7.5 install that never wrote a roster — legacy open
-// mode, which CHANGELOG and docs/USERS.md both name as supported, and which
-// awsSSOScopeFor answers with the operator namespace. Dispatch authors Phase B
-// for it (TestDispatchWiring_SwitchOnAuthorsThePhaseBLane dispatches with
-// SiteConfig{} and asserts the grant, the MITM entry and the CA). Then every
-// resolve answered 403 scope_changed, because driftFrom read a MISSING roster as
-// a WITHDRAWN row — including the proxy sidecar's BOOT mint, which fails closed.
-// So the run could not launch at all with the switch at its default, and the
-// refusal said "the roster changed" about a deployment where nothing had ever
-// been there to change.
-func TestResolveAWSSSOInjection_LegacyNoRosterResolvesOnTheSharedLane(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		site types.SiteConfig
-	}{
-		{"no roster at all — legacy open mode", types.SiteConfig{}},
-		{"a shared roster row — the control", reauthRosterRow(false)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newReauthFixture(t, func(f *reauthFixture) {
-				f.st.site = tc.site
-				// The SHARED snapshot dispatch authors for this shape: owner "",
-				// credential_source "shared" (awsSSOScope{} → the operator namespace).
-				f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "", reauthRegion, false, "111122223333", "WardynAgent")
-			})
-			// The OPERATOR namespace holds the session, which is what the shared
-			// lane reads.
-			f.putBlob(t, "", liveSSOBlob())
-
-			w := f.resolve(t)
-			if w.Code != http.StatusOK {
-				t.Fatalf("resolve = %d, want 200 — a live operator session on the shared lane. "+
-					"body=%s", w.Code, w.Body.String())
-			}
-			if f.audit.hasReason("secret.read", "scope_changed") {
-				t.Error("audited as scope_changed: a deployment with no roster has nothing to have drifted from")
-			}
-			var got types.ResolvedInjection
-			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-				t.Fatalf("body is not a ResolvedInjection: %v", err)
-			}
-			if got.Value != reauthToken {
-				t.Errorf("resolved value = %q, want the stored session token", got.Value)
-			}
-		})
-	}
-}
-
-// …and legacy open mode does NOT disarm the checks that do not need a roster.
-// The owner/credential-source arms are the substitution hole itself, and they
-// still run: a snapshot claiming the PER-USER lane cannot resolve against a
-// deployment whose scope is shared, roster or no roster.
-func TestResolveAWSSSOInjection_LegacyNoRosterStillRefusesAScopeMismatch(t *testing.T) {
+// A grant naming no model provider — the shape a dispatch before the
+// model-provider conversion authored, on the operator's or a roster namespace —
+// resolves nothing any more: no session serves it, the operator's included.
+func TestResolveAWSSSOInjection_AGrantNamingNoProviderIsRefused(t *testing.T) {
 	f := newReauthFixture(t, func(f *reauthFixture) {
-		f.st.site = types.SiteConfig{}
-		f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "alice@example.com", reauthRegion, true, "111122223333", "WardynAgent")
+		raw, err := json.Marshal(map[string]any{
+			"host": reauthPortal, "header": awsSSOInjectHeader, "format": "%s",
+			"secret_name": types.AWSSSOAccessTokenSecret,
+			"snapshot": awsSSOScopeSnapshot{OwnerSubject: "", CredentialSource: "shared",
+				Mechanism: string(types.ModelProviderBedrockSSO), SSOAccountID: "111122223333",
+				SSORoleName: "WardynAgent", Region: reauthRegion},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.st.grants[0].Spec.Scope = raw
+		f.st.run.ModelProviderID = ""
 	})
-	f.putBlob(t, "", liveSSOBlob())
-	f.putBlob(t, "alice@example.com", liveSSOBlob())
+	operatorBlob := liveSSOBlob()
+	operatorBlob.AccessToken = "the-operators-own-session-token"
+	raw, _ := json.Marshal(operatorBlob)
+	f.secrets.m[harnessCredSecretName(awsSSOProvider)] = raw
 
-	if w := f.resolve(t); w.Code != http.StatusForbidden {
-		t.Fatalf("a per_user snapshot on a no-roster (shared) deployment resolved %d, want 403 — "+
-			"skipping the ROSTER arms must not skip the scope ones. body=%s", w.Code, w.Body.String())
+	w := f.resolve(t)
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), operatorBlob.AccessToken) {
+		t.Fatalf("resolve = %d, want 403 with no token; body=%s", w.Code, w.Body.String())
+	}
+	if !f.audit.hasReason("secret.read", "scope_changed") {
+		t.Error("no secret.read failure naming scope_changed")
 	}
 }
 

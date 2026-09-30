@@ -28,6 +28,7 @@ const (
 	reasonReviveUnsupportedRunner           = "revive_unsupported_runner"
 	reasonReviveBulkCannotStartAgent        = "revive_bulk_cannot_start_agent"        // a bulk restart cannot start a stopped agent; only the run's own page can
 	reasonReviveAlreadyInProgress           = "revive_already_in_progress"            // another revive of this run is already running
+	reasonReviveLiveTooSoon                 = "revive_live_too_soon"                  // a live run's proxy was replaced less than reviveLiveEvery ago
 	reasonReviveMintIdentityFailed          = "revive_mint_identity_failed"           // minting the fresh run token failed
 	reasonReviveEncodeConfigFailed          = "revive_encode_config_failed"           // the rewritten proxy config would not marshal to JSON
 	reasonRevivePullImageFailed             = "revive_pull_image_failed"              // the proxy image could not be pulled
@@ -77,7 +78,8 @@ const (
 	// above, which persistedLaunchDoors cannot produce today.
 	reasonOwnerCapabilityUnknown     = "capability_unknown"
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
-	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential was disabled
+	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential, or the run's model provider, was turned off
+	reasonOwnerModelProviderGone     = "model_provider_gone"     // the model provider that authored this run's credential was deleted (or re-created under a new UID)
 	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
 	// three arms (proxy config unreadable, config does not load, capability
 	// re-check itself failed) that all answer the identical client-facing fact —
@@ -170,6 +172,9 @@ const (
 	// preset's inline_policy: the spec's
 	// azure_devops_capabilities names something the catalogue cannot grant.
 	reasonADOCapabilityUnknown = "ado_capability_unknown"
+	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
+	// that leaves nothing standing (POST /runs/preflight).
+	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
 )
 
 // POST/Review /runs' model-provider door (run_model_provider.go), the 3 field
@@ -197,6 +202,15 @@ const (
 	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
 	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
+)
+
+// GET /runs/{id}/output (run_output.go).
+const (
+	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; only a task_mode=exec run keeps its output
+	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (not exec, or started before a restart)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
 )
 
 // POST /runs/{id}/resume (run_pause.go).
@@ -421,12 +435,9 @@ const reasonRecordCeilingLimit = "record_ceiling_limit"
 // resolve door. Most values here are already the exact strings each site's
 // own secret.read audit row wrote.
 const (
-	reasonInjectionGrantNotAPIKey            = "injection_grant_not_api_key"
-	reasonInjectionReservedSecretName        = "reserved_secret_name"
-	reasonInjectionInvalidHeaderName         = "invalid_header_name"
-	reasonInjectionOAuthHostNotAnthropic     = "oauth_host_not_anthropic"
-	reasonInjectionSharedSubscriptionPosture = "shared_subscription_posture"
-	reasonInjectionNoOAuthProvider           = "no_oauth_provider"
+	reasonInjectionGrantNotAPIKey     = "injection_grant_not_api_key"
+	reasonInjectionReservedSecretName = "reserved_secret_name"
+	reasonInjectionInvalidHeaderName  = "invalid_header_name"
 )
 
 // Record Mode (record.go): per-task recording sandboxes and their promotion
@@ -494,26 +505,6 @@ const (
 	reasonModelProviderCredentialStoreUnavailable = "model_provider_credential_store_unavailable" // the secret store did not answer (transient)
 )
 
-// POST /api/v1/setup/harness-login (harnesscred_launch.go): the managed
-// container sign-in launch door.
-const (
-	reasonHarnessLoginNoSecretStore       = "harness_login_no_secret_store"      // this deployment configures no secret store
-	reasonHarnessLoginProviderUnsupported = "harness_login_provider_unsupported" // this provider does not support container login
-	reasonHarnessLoginPreviewBlocked      = "harness_login_preview_blocked"      // a previewing admin cannot capture into the previewed identity
-	reasonHarnessLoginNoStartURL          = "harness_login_no_start_url"         // AWS SSO needs an access-portal URL Wardyn has no stored copy of
-	reasonHarnessLoginBadStartURL         = "harness_login_bad_start_url"        // the supplied start URL fails validation
-	reasonHarnessLoginNoRegion            = "harness_login_no_region"            // no AWS SSO region is configured
-	// reasonHarnessLoginRosterUnavailable is authorizeHarnessLogin's own
-	// no-roster-read arm (harnesscred.go), shared with
-	// handleHarnessDisconnect's identical roster-read failure.
-	reasonHarnessLoginRosterUnavailable = "harness_login_roster_unavailable"
-	reasonHarnessLoginLegacyDoorClosed  = "harness_login_legacy_door_closed" // a model-providers block exists; sign in through its own door instead
-	// PUT /api/v1/setup/harness-credential/{provider}: the operator-pasted
-	// setup-token door.
-	reasonHarnessCredentialNoSecretStore   = "harness_credential_no_secret_store"
-	reasonHarnessCredentialUnknownProvider = "harness_credential_unknown_provider"
-)
-
 // /api/v1/admin/audit (audit.go): the security tier's audit-log query,
 // export and chain-verification doors.
 const (
@@ -564,7 +555,8 @@ const (
 // /scm/azure-devops/signin and its callback (ado_entra.go): the console's own
 // Azure DevOps per-person sign-in doors, distinct from the ADOEntraFailure
 // enum a REDEMPTION classifies as (ado_entra_store.go, its own documented
-// guard exception).
+// guard exception). DELETE /scm/azure-devops/connection (ado_pat_console.go)
+// reuses the no-session and unconfigured values.
 const (
 	reasonADOSignInUnconfigured = "ado_sign_in_unconfigured"
 	reasonADOSignInForeignApp   = "ado_sign_in_foreign_app"
@@ -575,6 +567,37 @@ const (
 	// after this branch was cut, caught by the merge's own guard re-run
 	// (#656 final review round).
 	reasonADOSignInPromptInvalid = "ado_sign_in_prompt_invalid"
+	// ReasonADOPATNeedsConsoleApp is S1 (ErrADOMintNeedsSecret): a minted_pat
+	// row the console cannot redeem with its own secret. Exported for the boot
+	// log in cmd/wardynd.
+	ReasonADOPATNeedsConsoleApp = "ado_pat_needs_console_app"
+)
+
+// POST /workspace-providers/git/{id}/org-check (ado_pat_orgcheck.go).
+const (
+	reasonADOOrgCheckUnknownRow   = "ado_org_check_unknown_row"  // no such row, or not the row that creates tokens (D-6)
+	reasonADOOrgCheckOrganisation = "ado_org_check_organisation" // the row names no organisation and the request named none it serves
+)
+
+// PUT/DELETE /me/scm/azure-devops/token (ado_own_pat.go): a person adding or
+// removing their own Azure DevOps token. A caller with no session subject is
+// answered with reasonADOSignInNoSession, the same cause at the sign-in door.
+const (
+	reasonADOOwnPATUnknownRow       = "ado_own_pat_unknown_row"       // no own-token row the caller may use has this address
+	reasonADOOwnPATTokenInvalid     = "ado_own_pat_token_invalid"     // the pasted value is empty, too long, or has spaces
+	reasonADOOwnPATExpiryInvalid    = "ado_own_pat_expiry_invalid"    // expires_on is not a date after today
+	reasonADOOwnPATExpiryTooLong    = "ado_own_pat_expiry_too_long"   // expires_on is past the row's pat_max_days
+	reasonADOOwnPATRejected         = "ado_own_pat_rejected"          // Azure DevOps did not accept the token for the organisation
+	reasonADOOwnPATIdentityMismatch = "ado_own_pat_identity_mismatch" // the token belongs to another account (never named)
+	reasonADOOwnPATCheckUnavailable = "ado_own_pat_check_unavailable" // Azure DevOps could not be asked; nothing is known
+)
+
+// The own-token arm of the Azure DevOps injection resolve
+// (runs_dispatch_ado_own_pat.go), beside reasons.go's Azure DevOps resolve set.
+const (
+	reasonADOOwnPATNotAdded = "ado_own_pat_not_added" // the run's owner has no token of their own stored for the row
+	reasonADOOwnPATExpired  = "ado_own_pat_expired"   // the owner's token has reached the expiry they entered
+	reasonADOOwnPATOtherOrg = "ado_own_pat_other_org" // the owner's token is for a different organisation than the run's
 )
 
 // The callback half of the same door (consumeADOCookies, handleADOCallback):

@@ -98,7 +98,7 @@ func TestAuthorBedrockSSOInjection_ScopeCarriesTheDispatchTimeSnapshot(t *testin
 	for k, want := range map[string]string{
 		"owner_subject":     "member@corp.example",
 		"credential_source": string(types.CredentialSourcePerUser),
-		"mechanism":         string(types.AgentMechanismBedrockSSO),
+		"mechanism":         string(types.ModelProviderBedrockSSO),
 		"sso_account_id":    "111122223333",
 		"sso_role_name":     "WardynAgent",
 		"region":            "eu-west-2",

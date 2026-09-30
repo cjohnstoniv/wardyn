@@ -21,17 +21,12 @@ import (
 // guard exists to catch, so an entry is deleted once its const is fixed, not
 // added to.
 var sentenceConstFragments = map[string]string{
-	"credSourceSSODesc":              "a noun phrase inside credSourceDesc's switch (runs_bedrock_probe.go), never a sentence on its own",
-	"llmMechanismRemedyPerUser":      "the %s remedy clause inside llmMechanismDeadSentence / llmMechanismPinContradictedSentence",
-	"llmMechanismRemedySharedFmt":    "the admin's %s remedy clause, same two sentences",
-	"llmMechanismStateNotConfigured": "the %s state clause inside llmMechanismDeadSentence",
-	"llmMechanismStateNotTheLane":    "the other %s state clause, same sentence",
-	"mpSubNotSignedIn":               "the %s state clause inside mpRunRefusal (run_model_provider.go), never shown alone",
-	"mpSubNoStore":                   "the %s state clause inside mpRunRefusal, same sentence",
-	"mpSubNotPerson":                 "the %s state clause inside mpRunRefusal, same sentence",
-	"mpSubNoImage":                   "the %s state clause inside mpRunRefusal, same sentence",
-	"mpRunRemedySignIn":              "the %s remedy clause inside mpRunRefusal, same sentence",
-	"mpRunRemedyPerson":              "the %s remedy clause inside mpRunRefusal, same sentence",
+	"mpSubNotSignedIn":  "the %s state clause inside mpRunRefusal (run_model_provider.go), never shown alone",
+	"mpSubNoStore":      "the %s state clause inside mpRunRefusal, same sentence",
+	"mpSubNotPerson":    "the %s state clause inside mpRunRefusal, same sentence",
+	"mpSubNoImage":      "the %s state clause inside mpRunRefusal, same sentence",
+	"mpRunRemedySignIn": "the %s remedy clause inside mpRunRefusal, same sentence",
+	"mpRunRemedyPerson": "the %s remedy clause inside mpRunRefusal, same sentence",
 }
 
 // sentenceConstNotSentences are named string consts in sentenceConstFiles

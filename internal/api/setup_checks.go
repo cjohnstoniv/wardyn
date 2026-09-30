@@ -241,95 +241,11 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 	}
 }
 
-// Per-principal Bedrock/LLM-access copy — a per_user row reads a per-person
-// credential gap, and the shared admin token reads a mechanism that owns no
-// credential at all; neither is the deployment-wide "nothing configured"
-// story the generic text below tells. DRAFT (M2 canon pending) — verbatim
-// from the plan, byte-checked by TestBedrockProviderCheck_* /
-// TestLLMProviderCheck_*.
+// DRAFT (M2 canon pending) — the fix a mechanism principal's provider row
+// carries.
 const (
-	// DRAFT (M2 canon pending) — the SSO row's wording; unchanged (#320).
-	bedrockPerUserDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you sign in to AWS yourself — this agent's roster row gives each person their own session."
-	// DRAFT (M2 canon pending) — the bearer twin of bedrockPerUserDetail (#153,
-	// #320): under a per_user row whose roster mechanism is bedrock_bearer,
-	// signing in to AWS is not the remedy — storing a bedrock-api-key of their
-	// own is, so this says that instead.
-	bedrockPerUserBearerDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you store your own Bedrock API key — this agent's roster row gives each person their own credential."
-	// DRAFT (M2 canon pending) — the SSO row's wording; unchanged (#320).
-	bedrockPerUserMissingCredential = "a credential — your own AWS sign-in (Settings → Model provider → \"Sign in to AWS\"); this deployment gives each person their own, so a read-only ~/.aws mount, a bedrock-api-key bearer secret and aws-access-key-id + aws-secret-access-key cannot carry your runs"
-	// DRAFT (M2 canon pending) — the bearer twin of bedrockPerUserMissingCredential
-	// (#153, #320). Under a per_user row whose roster mechanism is
-	// bedrock_bearer the bearer is exactly what carries a member's runs, so this
-	// says storing one is the remedy instead of naming it among the things that
-	// cannot — the sentence bedrockPerUserMissingCredential told a bearer caller,
-	// which was backwards.
-	bedrockPerUserMissingCredentialBearer = "a credential — your own Bedrock API key bearer (set it with `wardyn secret set bedrock-api-key`); " +
-		"this deployment gives each person their own, so storing one is what carries your runs — an AWS sign-in, a read-only ~/.aws mount " +
-		"and aws-access-key-id + aws-secret-access-key cannot"
-	// DRAFT (M2 canon pending)
-	bedrockMechanismDetail = "Bedrock is configured for this deployment and model access here is per person. This request arrived on the shared admin token, which is not a person, so this row cannot say whose sign-in is missing."
 	// DRAFT (M2 canon pending)
 	bedrockMechanismFix = "Sign in to the console (or use your own wdn_ API token) to see your own model access."
-	// DRAFT (M2 canon pending)
-	llmProviderPerUserDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person, and yours is not connected yet — agent-harness runs will be refused until you sign in to AWS."
-	// DRAFT (M2 canon pending)
-	llmProviderPerUserFix = "Sign in to AWS on the provider step (Settings → Model provider)."
-	// DRAFT (M2 canon pending) — the bearer twin of llmProviderPerUserDetail
-	// (#153, #320): under a per_user row whose roster mechanism is
-	// bedrock_bearer, signing in to AWS is not the remedy — storing a
-	// bedrock-api-key of their own is, so this says that instead. Same defect
-	// as bedrockPerUserDetail/bedrockPerUserMissingCredential, on the sibling
-	// llm_provider row.
-	llmProviderPerUserBearerDetail = "This deployment reaches models through AWS Bedrock with a bearer credential per person, and yours is not stored yet — agent-harness runs will be refused until you store your own Bedrock API key."
-	// DRAFT (M2 canon pending) — the bearer twin of llmProviderPerUserFix (#153, #320).
-	llmProviderPerUserBearerFix = "Store your own Bedrock API key (set it with `wardyn secret set bedrock-api-key`)."
-	// DRAFT (M2 canon pending)
-	llmProviderMechanismDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person. This request arrived on the shared admin token, which owns no sign-in — a person's own console session answers this row."
-	// bedrockUnenforcedPinDetail/Fix: the residual of the roster pin gap made audible
-	// (BedrockSSOPinUnenforced). Nothing server-side says WHICH account and role
-	// a sign-in may store, so the in-sandbox chooser is the only thing deciding
-	// — and that is code the sandbox controls.
-	//
-	// APPENDED to whichever row this deployment was already showing, never a
-	// replacement for it: it is a fact about the ROSTER, and the row it lands on
-	// is still the only place the console names the live region, model and
-	// credential source.
-	//
-	// DRAFT (M2 canon pending)
-	bedrockUnenforcedPinDetail = "Nothing here says WHICH AWS account and role a sign-in may store, so whatever the sign-in names is what every later run uses."
-	// DRAFT (M2 canon pending)
-	bedrockUnenforcedPinFix = "Optional, and the fix if your people reach more than one account: set sso_account_id + sso_role_name on the agent's roster row (Settings → Agents), or give WARDYN_BEDROCK_MODEL the full model ARN so its account is checked."
-	// bedrockPinModelAccountDetail/Fix: the OTHER roster posture — a pin
-	// the save door now TAKES even though it names an
-	// account the configured model does not live in. Legal (a resource-shared
-	// application inference profile really does live elsewhere), and therefore
-	// exactly the kind of deliberate choice that has to be visible where an
-	// admin looks rather than only in the daemon journal.
-	//
-	// Appended like its sibling, for the same reason: it is a fact about the
-	// ROSTER, and the row it lands on still names the live region and model.
-	//
-	// DRAFT (M2 canon pending)
-	bedrockPinModelAccountDetail = "This agent's roster row pins AWS sign-ins to account %s, but the configured Bedrock model lives in account %s — runs will only work if that model is shared with the pinned account."
-	// DRAFT (M2 canon pending)
-	bedrockPinModelAccountFix = "Deliberate (a model shared across accounts)? Nothing to do — Wardyn takes the pin as written. Otherwise re-point sso_account_id on the agent's roster row (Settings → Agents), or WARDYN_BEDROCK_MODEL at a model in the pinned account."
-	// bedrockPinContradictedDetail/Fix: the THIRD roster posture — a session
-	// captured BEFORE the pin existed, naming an
-	// account/role the row no longer allows. The pin is bound at capture time
-	// and nowhere else, so setting one leaves the stored blob untouched; worse,
-	// the unenforced-pin warning above DISAPPEARS on the save, and the estate
-	// reads MORE correct than it did while every run on that session is now
-	// refused. Appended like its two siblings: a fact about the ROSTER against
-	// what is stored, on a row that still names the live region and model.
-	//
-	// It speaks for the CALLER's own capture (SetupBedrock is resolved through
-	// this caller's own awsSSOScope), which is what makes it useful to the admin
-	// who set the pin and to the member whose session it contradicts alike.
-	//
-	// DRAFT (M2 canon pending)
-	bedrockPinContradictedDetail = "Your captured AWS SSO session is for account %s / role %s, which this agent's roster row no longer allows (it pins %s / %s) — runs on that session are refused before they start."
-	// DRAFT (M2 canon pending)
-	bedrockPinContradictedFix = "Sign in to AWS again (Settings → Model provider) and choose the pinned account and role; the new sign-in replaces the stored one. Wardyn never rewrites a stored session."
 	// internalHostsCheckLabel names internalHostsCheck's dedicated row.
 	// Detail is internalHostsDeclaredSentence
 	// (site_config.go), reused verbatim from the write-time log, so it is
@@ -339,167 +255,19 @@ const (
 	internalHostsCheckLabel = "Internal hosts (SSRF guard override)"
 )
 
-// llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
-// detail, "" when there is none). INFO when there is NO model provider at
-// all — it is OPTIONAL, needed only for agent-harness runs, so "no model" is
-// a deliberate non-blocking state, never a gap the operator must clear. WARN
-// is reserved for the per_user and provider arms below: there a provider IS
-// declared and THIS person's half of it is missing, a real, actionable gap.
-//
-// bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
-// signal always outranks it (unchanged), and the "no provider configured"
-// text below stays byte-for-byte for an install with no Bedrock row at all.
-// A configured-but-not-ready per_user/mechanism Bedrock row is a DIFFERENT
-// fact than "nothing is configured" (a cross-row contradiction:
-// bedrock_provider says Bedrock IS configured two rows down), so it gets its
-// own per-principal sentence instead of the generic optional-provider one.
-// access (provider_access) is read last: granted providers aren't "nothing configured".
-func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProviderAccess) SetupCheck {
-	if llmDetail != "" {
-		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
-	}
-	if bedrock.configured() && bedrock.Mechanism {
-		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "info", Detail: llmProviderMechanismDetail}
-	}
-	if bedrock.configured() && bedrock.PerUser {
-		// PerUserBearer branches this the same way bedrockProviderRow does
-		// (#320): the roster row's own mechanism decides whether the remedy is
-		// signing in to AWS or storing a bearer, and naming the wrong one here
-		// is the same defect that row had.
-		detail, fix := llmProviderPerUserDetail, llmProviderPerUserFix
-		if bedrock.PerUserBearer {
-			detail, fix = llmProviderPerUserBearerDetail, llmProviderPerUserBearerFix
-		}
-		return SetupCheck{
-			ID: "llm_provider", Label: "LLM access", Status: "warn",
-			Detail: detail, Fix: fix,
-		}
-	}
+// llmProviderCheck is the "LLM access" row: the caller's own model-provider
+// access (providerAccessLLMCheck) when a provider is granted, else INFO — a
+// model provider is OPTIONAL, needed only for agent-harness runs, so "no model"
+// is a deliberate non-blocking state, never a gap the operator must clear.
+func llmProviderCheck(access []SetupProviderAccess) SetupCheck {
 	if chk, ok := providerAccessLLMCheck(access); ok {
 		return chk
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
-		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
-		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Settings → Model provider, or the \"Secrets\" setup step), or bind creds to a workspace/container.",
+		Detail: "No model provider serves you (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
+		Fix:    "Optional — an admin adds a model provider under Settings → Model providers, then you connect your own credential for it.",
 	}
-}
-
-// bedrockProviderCheck surfaces a row only once the operator has touched ANY
-// Bedrock knob (ok=false otherwise), so the majority who never use AWS aren't
-// shown an irrelevant row.
-//
-// THREE roster postures ride this row, all derived HERE from the site config
-// the callsite already holds (scOK=false — an unreadable roster — asserts
-// none): BedrockSSOPinUnenforced (nothing constrains the account/role at all),
-// bedrockPinDisagreement (a pin the save door takes although the configured
-// model lives in another account), and awsSSOPinContradiction (a
-// session captured BEFORE the pin, naming an identity the row no longer
-// allows). Each is a posture fact about the
-// ROSTER, not about readiness, so it is
-// folded into WHATEVER row bedrockProviderRow produced rather than nested under
-// the ready arm: nested, the warning arrived only after the first unchecked
-// capture had already been stored, which is exactly the person and the moment
-// it is useless to. Appended, never substituted, so the row keeps naming the
-// live region, model and credential source (or what is still missing).
-func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) (SetupCheck, bool) {
-	chk, ok := bedrockProviderRow(bedrock)
-	if !ok || !scOK {
-		return chk, ok
-	}
-	// Nothing pinned at all, and it returns: the second posture below is about a
-	// pin that disagrees, so the two can never both be true and neither may
-	// append over the other.
-	if BedrockSSOPinUnenforced(sc, bedrock.Model) {
-		chk.Status = "warn"
-		chk.Detail = strings.TrimSpace(chk.Detail + " " + bedrockUnenforcedPinDetail)
-		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockUnenforcedPinFix)
-		return chk, true
-	}
-	// A pin the save door took although the configured model lives in another
-	// account — asked only here, where something is pinned.
-	if pinAccount, modelAccount := bedrockPinDisagreement(sc, bedrock.Model); pinAccount != "" {
-		chk.Status = "warn"
-		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinModelAccountDetail, pinAccount, modelAccount))
-		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinModelAccountFix)
-	}
-	// A stored capture the pin no longer allows. Asked last and appended,
-	// never substituted, so a row already carrying the pin-vs-model posture
-	// keeps it: the two are about different halves (what the roster pins vs the
-	// model's account; what the roster pins vs what is stored) and both can be
-	// true at once.
-	if stored, pinned, mismatch := awsSSOPinContradiction(sc,
-		awsSSOPin{AccountID: bedrock.SSOAccountID, RoleName: bedrock.SSORoleName}); mismatch {
-		chk.Status = "warn"
-		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinContradictedDetail,
-			stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName))
-		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinContradictedFix)
-	}
-	return chk, true
-}
-
-// bedrockProviderRow is the row as it reads on its own, before the roster
-// posture above is folded in. warn = partially configured, a real gap worth
-// fixing — EXCEPT for the mechanism principal (info: the shared admin token
-// has nothing it can fix here, so a warning would be a false alarm forever).
-//
-// Region/Model missing-item detection is unchanged and shared by every arm
-// below; only the CREDENTIAL sentence differs per caller, because that is the
-// one thing per_user resolution actually changes (it "skips the bearer,
-// host-~/.aws-mount and static-key arms outright, because all three are
-// operator reads".
-func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
-	if !bedrock.configured() {
-		return SetupCheck{}, false
-	}
-	if bedrock.ready() {
-		return SetupCheck{
-			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "ok",
-			Detail: fmt.Sprintf("Bedrock is configured (region %s, model %s) for Claude runs via %s.", bedrock.Region, bedrock.Model, bedrock.credSourceDesc()),
-		}, true
-	}
-	if bedrock.Mechanism {
-		return SetupCheck{
-			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "info",
-			Detail: bedrockMechanismDetail, Fix: bedrockMechanismFix,
-		}, true
-	}
-	var missing []string
-	if bedrock.Region == "" {
-		missing = append(missing, "-bedrock-region")
-	}
-	if bedrock.Model == "" {
-		missing = append(missing, "-bedrock-model")
-	}
-	credentialMissing := !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent && !bedrock.SSOPresent
-	if bedrock.PerUser {
-		// PerUserBearer branches BOTH the Detail and the missing-credential
-		// clause: the roster row's own mechanism decides what a member's real
-		// remedy is (sign in to AWS vs store a bearer), and naming the wrong one
-		// is exactly the bug #320 fixes.
-		detail := bedrockPerUserDetail
-		missingCredential := bedrockPerUserMissingCredential
-		if bedrock.PerUserBearer {
-			detail = bedrockPerUserBearerDetail
-			missingCredential = bedrockPerUserMissingCredentialBearer
-		}
-		if credentialMissing {
-			missing = append(missing, missingCredential)
-		}
-		return SetupCheck{
-			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-			Detail: detail,
-			Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
-		}, true
-	}
-	if credentialMissing {
-		missing = append(missing, "a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, a container AWS SSO login, or aws-access-key-id + aws-secret-access-key secrets")
-	}
-	return SetupCheck{
-		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
-		Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
-	}, true
 }
 
 // ageKeyCheck warns when the secret store's age key is EPHEMERAL: a fresh

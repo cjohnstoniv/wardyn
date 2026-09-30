@@ -8,6 +8,7 @@ import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixture
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pane-copy";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
+import { BANNER } from "../src/app/components/wardyn/copy/door";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 
 // The AWS sign-in door (#628, the approved sign-in progress packet), every
@@ -26,6 +27,15 @@ const DEVICE_URL = "https://device.sso.us-east-1.amazonaws.com/?user_code=KHDW-P
 const PULL_FAILED = "agent: ErrImagePull: rpc error: code = NotFound desc = failed to pull and unpack image";
 
 type LoginRun = Record<string, unknown>;
+
+const BEDROCK = {
+  id: "bedrock-prod",
+  name: "Bedrock (prod)",
+  kind: "bedrock_sso",
+  harnesses: ["claude-code"],
+  default_for: ["claude-code"],
+  host: "bedrock-runtime.us-east-1.amazonaws.com",
+};
 
 interface Door {
   /** What the next GET of the login run answers. */
@@ -49,17 +59,15 @@ async function openAwsDoor(page: Page): Promise<Door> {
   // (model-access-banner.spec.ts's own reason).
   await page.route("**/api/v1/setup/status*", async (route) => {
     if (!base) base = (await (await route.fetch()).json()) as Record<string, unknown>;
-    const body: Record<string, unknown> = { ...base };
-    body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: AGENTS.SIGN_IN_AWS };
-    body.harnesses = ((base.harnesses ?? []) as { id: string }[]).map((h) =>
-      h.id === "claude-code" ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" } : h,
-    );
-    if (captured) body.harness = [{ provider: "aws", captured: true, source_run_id: runIds[runIds.length - 1] }];
-    await route.fulfill({ json: body });
+    const access = captured
+      ? { provider: BEDROCK.id, state: "live", source_run_id: runIds[runIds.length - 1] }
+      : { provider: BEDROCK.id, state: "not_configured", action: AGENTS.SIGN_IN_AWS };
+    await route.fulfill({ json: { ...base, model_providers: [BEDROCK], provider_access: [access] } });
   });
 
   const runIds: string[] = [];
-  await page.route("**/api/v1/setup/harness-login", async (route) => {
+  await page.route(`**/api/v1/model-providers/${BEDROCK.id}/sign-in`, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
     const id = `3f1b7c26-0000-4000-8000-${String(runIds.length + 1).padStart(12, "0")}`;
     runIds.push(id);
     await stubAttachTicket(page, id);
@@ -89,7 +97,6 @@ async function openAwsDoor(page: Page): Promise<Door> {
   await navToRoute(page, "/runs");
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).click();
   await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
-  await page.getByRole("button", { name: /start login/i }).click();
 
   return {
     setRun: (r) => (run = r),
@@ -222,7 +229,7 @@ test.describe("the AWS sign-in door (#628)", () => {
 
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
     await expect.poll(() => door.kills.length).toBeGreaterThanOrEqual(1);
-    await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible();
+    await expect(page.getByText(BANNER.B1("Claude Code", BEDROCK.name))).toBeVisible();
     await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeVisible();
     await expect(page.getByRole("button", { name: MODEL_ACCESS_BANNER.NOT_NOW })).toBeVisible();
     expect(door.tabs).toHaveLength(0);
