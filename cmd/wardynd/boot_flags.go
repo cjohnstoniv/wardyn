@@ -95,6 +95,8 @@ type bootFlags struct {
 	identitySel          *string
 	secretStoreSel       *string
 	recordingSel         *string
+	execOutputTail       *bool
+	execOutputTailTTL    *time.Duration
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
@@ -370,6 +372,8 @@ func parseBootFlags() *bootFlags {
 		identitySel:            flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),
 		secretStoreSel:         flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", "secret store"),
 		recordingSel:           flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
+		execOutputTail:         flagBool("exec-output-tail", "WARDYN_EXEC_OUTPUT_TAIL", true, `keep the last 8 KiB of each task_mode=exec run's output in memory for GET /runs/{id}/output, independent of the recording store; "off" keeps none`),
+		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long an exec run's output tail is kept after its last output (duration)"),
 		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),

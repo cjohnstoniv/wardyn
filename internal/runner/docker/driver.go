@@ -144,6 +144,10 @@ type Driver struct {
 	// runAsMainProcess — seeing its mark gone — removes the container it just
 	// made rather than leaving a killed run's agent alive.
 	creating map[string]bool
+	// execOutputs maps a sandbox ref to its SandboxSpec.ExecOutput (an
+	// io.Writer); every agent Exec on the ref tees its output there, the BYOI
+	// selftest included. Dropped at teardown.
+	execOutputs sync.Map
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers

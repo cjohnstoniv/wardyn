@@ -173,12 +173,47 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	}
 	resp := attachRes.HijackedResponse
 	// We do not block on the process; drain in the background so the PTY does
-	// not stall. A real recorder pipeline replaces this drain.
+	// not stall, teeing it into the run's output tail when it keeps one.
+	w := d.execOutput(ref)
 	go func() {
 		defer resp.Close()
-		_, _ = io.Copy(io.Discard, resp.Reader)
+		_, _ = io.Copy(w, resp.Reader)
 	}()
 	return created.ID, nil
+}
+
+// keepExecOutput remembers w (SandboxSpec.ExecOutput) for ref's agent execs.
+func (d *Driver) keepExecOutput(ref string, w io.Writer) {
+	if w != nil {
+		d.execOutputs.Store(ref, w)
+	}
+}
+
+// execOutput is where ref's agent exec output goes: its kept writer, else nowhere.
+func (d *Driver) execOutput(ref string) io.Writer {
+	if w, ok := d.execOutputs.Load(ref); ok {
+		return w.(io.Writer)
+	}
+	return io.Discard
+}
+
+// followMainProcessOutput copies an exec-less agent's output — dockerd's log
+// of its TTY main process, so raw, not stdcopy-framed — into ref's output
+// tail until the container exits or is removed. No-op without one.
+func (d *Driver) followMainProcessOutput(ref string) {
+	w, ok := d.execOutputs.Load(ref)
+	if !ok {
+		return
+	}
+	go func() {
+		rc, err := d.cli.ContainerLogs(context.Background(), ref, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+		if err != nil {
+			slog.Warn("wardynd: exec output tail: could not follow the agent's log", slog.String("ref", ref), slog.Any("err", err))
+			return
+		}
+		defer rc.Close()
+		_, _ = io.Copy(w.(io.Writer), rc)
+	}()
 }
 
 // runAsMainProcess is the exec-less agent-launch path (krun microVMs): it creates
@@ -264,6 +299,7 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 	if startErr != nil {
 		return fmt.Errorf("docker: start main-process agent: %w", startErr)
 	}
+	d.followMainProcessOutput(ref)
 	return nil
 }
 

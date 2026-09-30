@@ -215,6 +215,10 @@ if [ "$rc" -eq 0 ] && launched && printf '%s' "$out" | grep -q 'expiring'; then 
 # 4c-4g: every refusal names the provider or the real cause, and launches nothing.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"not_configured"}]}'
 out="$(run_remote)"; refused "a missing credential is refused, naming the provider and the door" $? "$out" "corp-bedrock.*PUT /model-providers/corp-bedrock/credential"
+# Any state that is not usable (here a lapsed sign-in) is the same refusal: it
+# names the provider and the state, never falls through to a launch.
+status '{"provider_access":[{"provider":"corp-bedrock","state":"expired_signin"}]}'
+out="$(run_remote)"; refused "a credential that is not connected is refused, naming the provider and its state" $? "$out" "corp-bedrock.*not connected.*expired_signin"
 status '{"provider_access":[{"provider":"other","state":"live"}]}'
 out="$(run_remote)"; refused "a provider this identity may not use is refused, naming it" $? "$out" "corp-bedrock.*not one this CI identity may use"
 status '{}'

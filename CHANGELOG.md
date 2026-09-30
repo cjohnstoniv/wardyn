@@ -10,6 +10,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A run shows its startup progress while its sandbox comes up (#1419).** While a run is Pending or
+  Starting, the run page's terminal area shows the sign-in door's step list (Starting the sandbox,
+  Downloading the image, then Opening the terminal, Starting the task or Starting the command)
+  instead of one fixed sentence, drawn by the same shared component. A download says so at once; any
+  other wait speaks once the sandbox has been starting for a minute, counted from when Starting
+  began rather than from launch; a reason waiting cannot fix marks the step failed and shows the
+  substrate's own words. Past the longest a healthy start takes (4 min 30 s in Starting, 30 min in
+  Pending) the list stops claiming a step is in progress and says to kill and relaunch, which also
+  covers a run left mid-start by a daemon restart. The header chip stays; it and the Runs row
+  also read "Building the image" for an `image: Building` line. The server writes that line
+  (`status_detail` `image: Building`, `status_reason` `Building`) immediately before each image build
+  (a BYOI wrap, a devcontainer or a workspace image) and never on a cache hit, so a build no longer
+  reads as a bare "Queued" for up to 30 minutes. It shows on `PENDING` runs only, carries no image or
+  repo reference, and is not counted in `wardyn_run_start_wait_seconds`. No migration and no new
+  route. After a daemon restart the last line can stay on the row until the undispatched-run reaper
+  collects it, about an hour after the restart; see OPERATIONS.md, "What a starting run is waiting on".
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
@@ -45,6 +61,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   anyone else's. One principal holds at most 32 open event streams; the next is refused `422` with
   reason `event_stream_cap` (not audited) until one closes. Revoking the person's sessions still ends
   a portal's open stream at the next keepalive.
+- **The end of an exec run's output, with or without recordings (#1232).**
+  `GET /api/v1/runs/{id}/output?tail=<bytes>` returns `{output, truncated, complete}` — the last 8 KiB
+  of a `task_mode=exec` run's combined stdout/stderr, kept in wardynd's memory apart from the
+  recording store, so it works with `WARDYN_RECORDING_STORE=off`. Readable by the run's owner or an
+  admin; anyone else gets the same `404` as `GET /runs/{id}`. An interactive run is refused (`409`,
+  `run_output_interactive`). Values in the masking registry are masked as they are written; anything
+  else a command prints is kept like a log line (OPERATIONS.md "Exec run output"). A tail is dropped
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output (`410`,
+  `run_output_expired`) and on a wardynd restart; `WARDYN_EXEC_OUTPUT_TAIL=off` keeps none. On
+  Kubernetes the tail is read from the agent container's log, so the chart's k8s-runner Role now
+  grants `get` on `pods/log` (a Role you write yourself needs it too). The Go SDK reads it with
+  `RunOutput`.
 
 ### Changed
 
@@ -184,6 +212,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The New Run barrier picker no longer claims what the server would contradict (#1238).** A member
+  on Kubernetes is no longer told to bind-mount `/dev/kvm` for Vault: `GET /setup/status` keeps one
+  substrate bit for members, `runner.kubernetes`, beside the confinement classes it already kept and no other runner detail, so the console can
+  tell a Kubernetes install apart. The "couldn't check which barriers this host has" line now appears
+  when the host probe fails or no runner is configured, and each row then reads Unverified instead of
+  Ready (and Checking… until the probe answers). A host with no barrier at all shows the no-runner card instead of a floor requirement naming
+  Fence. Until the console has heard who you are (or if that read fails) it offers the tiers a member
+  may use, not an admin's.
 - **`deny_interactive` now refuses a terminal attach and SSH into a run under the profile
   (#1392).** It refused an interactive run at create, but the owner of a task or exec run under the
   profile could still `wardyn run attach` (or open the console terminal) and, with the SSH gateway

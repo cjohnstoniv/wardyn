@@ -39,9 +39,9 @@ export const RUN_MODE: Record<RunMode, { label: string; blurb: string }> = {
 // "incompatible" = this HARDWARE/host can never run it (no install fixes it —
 // always carries the concrete why); "unavailable" = not launchable right now,
 // cause unstated (the wizard's launch-time truth). "Needs setup" = fixable here.
-// "unverified" (compose setup-checklist items only): v1 doesn't live-probe a
-// credential/workspace — it can only say "declared present" or "known absent".
-// Neutral tone on purpose — it is neither a pass nor a fail.
+// "unverified": neither a pass nor a fail — a compose setup-checklist item v1
+// can't live-probe, or a TierPicker row whose host probe never answered (#1238).
+// Neutral tone on purpose.
 export type StatusKind =
   | "ready"
   | "needs-setup"

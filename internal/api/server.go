@@ -378,6 +378,13 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
+	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no task_mode=exec run
+	// keeps an output tail for GET /runs/{id}/output (run_output.go).
+	ExecOutputTailOff bool
+	// ExecOutputTailTTL is WARDYN_EXEC_OUTPUT_TAIL_TTL: how long a run's output
+	// tail is kept after its last output. Zero defaults to
+	// defaultExecOutputTailTTL in New.
+	ExecOutputTailTTL time.Duration
 	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
 	// sign-in runs against (see ado_entra.go). Nil — the default — means this
 	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
@@ -675,6 +682,8 @@ type Server struct {
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
 	creates   inflightCreates
 	runEvents runEventHub // each run's lifecycle event ring (run_events.go)
+	// execOutputs holds each task_mode=exec run's output tail (run_output.go).
+	execOutputs execOutputTails
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
 	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
@@ -779,6 +788,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
+	}
+	if cfg.ExecOutputTailTTL <= 0 {
+		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()

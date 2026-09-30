@@ -168,6 +168,24 @@ lifetime. After a restart a live run's stream carries only what happens next,
 and a run that had already ended answers `ended` alone. The repository clone
 happens inside the sandbox after `ready`, so it is not a separate event.
 
+## Reading an exec run's output
+
+`GET /api/v1/runs/{id}/output?tail=<bytes>` returns the end of a
+`task_mode=exec` run's combined stdout/stderr — at most 8 KiB, kept in
+wardynd's memory whether or not recordings are on. `RunOutput` reads it; pass
+`0` for the whole tail:
+
+```go
+out, err := c.RunOutput(ctx, created.ID, 0)
+fmt.Println(out.Output, out.Truncated, out.Complete)
+```
+
+`truncated` says the output does not start at the run's first byte; `complete`
+says the run has finished; bytes it printed in its last moments can land a
+moment later, so read once more after `complete` if the end matters. The same `404` as
+`GET /runs/{id}` answers anyone who may not read the run; the other refusals
+carry a `run_output_*` reason (below).
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:
@@ -314,6 +332,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`' model-provider choice (`run_model_provider.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
 | `run_title_store_unavailable` | `PATCH /runs/{id}/title` (`run_title.go`): this store cannot rename a run. |
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. |
+| `run_output_tail_invalid` / `run_output_interactive` / `run_output_off` / `run_output_not_kept` / `run_output_expired` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive, and only a `task_mode=exec` run keeps its output (`409`); this deployment keeps none (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no tail is held for the run — not an exec run, or started before wardynd last restarted (`409`); the tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL` (`410`). |
 | `run_resume_not_running` / `run_resume_failed` | `POST /runs/{id}/resume` (`run_pause.go`): the run is not in a resumable state, or thawing it for exec failed. |
 | `internal_decision_log_invalid` / `groundtruth_batch_invalid` / `groundtruth_batch_too_large` / `groundtruth_action_not_kernel` / `groundtruth_write_failed` / `internal_approval_request_invalid` / `unsupported_internal_approval_kind` / `missing_requested_scope` / `reserved_scope_key` / `internal_approval_count_unavailable` / `internal_approval_cap_reached` / `broker_not_configured` / `mint_grant_id_required` / `brokered_forge_single_lane` / `brokered_forge_single_lane_unverifiable` / `grant_run_mismatch` / `grant_not_found` / `grant_requires_spire` / `run_renew_store_unavailable` / `run_renew_read_failed` / `run_renew_stamp_failed` / `internal_liveness_read_failed` | `POST /internal/*` (`internal.go`, `internal_live_run.go`): the sidecar/proxy surface, not the member-facing API. Most values are already the exact strings each route's own audit row wrote before #656 slice 3 put them on the wire too; `internal_liveness_read_failed` is the shared `/internal/*` liveness gate every sidecar door runs through. |
 | `store_unavailable` / `not_found` / `refused` / `resolve_failed` / `store_refused` | The credential-injection sinks' own closed set (`injection.go`'s `storeReadRefusal` and its callers across `injection_provider_key.go`, `injection_awssso.go`, `provider_subscription.go`, `internal.go`): the credential store did not answer, the named secret is not in the store, the secret exists but the store refused to serve it, resolving a subscription/managed token failed for a reason other than an unreachable store, or (`store_refused`, a person's own model-provider credential specifically) the store refused it. |

@@ -334,7 +334,7 @@ export function MemberGettingStarted() {
                   requirementNote={TIER_PICKER.GOVERNANCE_REQUIREMENT_LINE(
                     CC_META[govFloor ?? "CC1"].label,
                     // Review R2-5 — the same Vault reason New Run names.
-                    (govFloor === "CC3" && status && vaultRequirementReason(status.runner.driver, status.platform)) ||
+                    (govFloor === "CC3" && status && vaultRequirementReason(status.runner.driver, status.platform, status.runner.kubernetes)) ||
                       `${CC_META[govFloor ?? "CC1"].label} isn't installed on this host.`,
                   )}
                 />
