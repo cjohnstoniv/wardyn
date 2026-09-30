@@ -658,7 +658,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
       credential_source: "per_user",
       entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
     };
-    await // The write door prefixes its own refusal with the field, as the real server does.
+    // The write door prefixes its own refusal with the field, as the real server does.
     await spliceProviders(page, minted, () => ({ status: 400, json: { error: `git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}` } }));
     const checkedAt = new Date(2026, 8, 29, 9, 12).toISOString();
     let answer: Record<string, unknown> = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
@@ -698,6 +698,14 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "refused", refusal: "ado_pat_lifespan_policy", lifespan: "on" };
     await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
     await expect(row.getByText(ADO_PAT.LIFESPAN_REFUSAL())).toBeVisible();
+
+    // The organisation restricts who may create tokens: the banner names the admin, and one press switches to Entra sign-in.
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "refused", refusal: "ado_pat_policy_blocked", lifespan: "unknown" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByText(/^Azure DevOps refused to create a token for .+: your organisation restricts who can create personal access tokens\./)).toBeVisible();
+    await row.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }).click();
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
+    await row.getByRole("radio", { name: ADO_PAT.MODE_MINTED }).click();
 
     // Round 2: a lifespan Wardyn could not tell, with what Azure DevOps answered.
     answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "unknown", lifespan_error: "invalidValidTo" };

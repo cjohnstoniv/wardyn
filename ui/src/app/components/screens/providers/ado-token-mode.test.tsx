@@ -218,7 +218,7 @@ describe("state 3: setup errors", () => {
   });
 });
 
-describe("state 8: the organisation blocks token creation (8d; 8c is descoped)", () => {
+describe("state 8: the organisation blocks token creation", () => {
   const blocked: ADOOrgCheck = {
     checked_at: at(9, 12),
     organisation: "o",
@@ -229,13 +229,27 @@ describe("state 8: the organisation blocks token creation (8d; 8c is descoped)",
     lifespan: "unknown",
   };
 
-  it("a check the policy refused draws no admin banner: 8c is descoped to 0.8.3", async () => {
+  it("8c: a check the policy refused raises the banner naming the admin who ran it, and Switch to Entra sign-in", async () => {
     orgCheckMock.mockResolvedValue(blocked);
+    let latest: GitProvider | undefined;
+    render(<Harness initial={row({ token_mode: "minted_pat" })} onLatest={(r) => (latest = r)} />);
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
+    // The check runs with the admin's own connection, so the person is the signed-in principal.
+    expect(await screen.findByText(ADO_PAT.POLICY_BANNER("wardyn-admin"))).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }));
+    expect(latest?.entra?.token_mode).toBeUndefined();
+    expect(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
+    // Already on the Entra sign-in: nothing left to switch to.
+    expect(screen.queryByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("a check that was not refused on the policy raises no banner", async () => {
+    orgCheckMock.mockResolvedValue({ ...blocked, token_life: "accepted", refusal: undefined, lifespan: "on" });
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
     await screen.findByTestId("ado-org-check");
     expect(screen.queryByText(/refused to create a token for/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Switch to Entra sign-in/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON })).not.toBeInTheDocument();
   });
 
   it("8d: choosing the Entra sign-in while the app holds the token permissions is refused inline", async () => {

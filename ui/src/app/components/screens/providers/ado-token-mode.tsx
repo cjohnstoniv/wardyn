@@ -19,6 +19,7 @@ import { adoCapName } from "../../../lib/ado-access-copy";
 import { adoTokenMode, formatClock, orgCheckView, patDaysOk, patHoursOk } from "../../../lib/ado-pat-display";
 import { useAdoOrgCheck } from "../../../lib/hooks/use-ado-org-check";
 import type { ADOOrgCheck } from "../../../lib/types/ado-pat";
+import { usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -115,7 +116,8 @@ function CheckLine({ tone, children }: { tone: "ok" | "bad" | "warn" | "unknown"
 }
 
 // The organisation check's answer as the mock's card. A lifespan the check saw
-// refused is the row's own alert (below), not a line here.
+// refused, and a refusal on the create policy, are the row's own alerts (below),
+// not lines here.
 function OrgCheckCard({ result }: { result: ADOOrgCheck }) {
   const v = orgCheckView(result);
   const clean = v.permissions === "granted" && v.lifespan?.state === "on";
@@ -166,6 +168,8 @@ export function AdoTokenMode({
   onCheck: () => void;
 }) {
   const uid = React.useId();
+  // The check runs with the admin's own connection, so "the person" is the admin.
+  const person = usePrincipal();
   const { refusal } = React.useContext(AdoRowsContext);
   const cfg: ADOEntraConfig = row.entra ?? { tenant_id: "", client_id: "" };
   const mode = adoTokenMode(row);
@@ -182,6 +186,18 @@ export function AdoTokenMode({
   return (
     <div data-testid="ado-token-mode">
       <h4 className="text-sm font-medium text-foreground">{ADO_PAT.SECTION_TITLE}</h4>
+      {view?.blocked && (
+        <Alert>
+          <span>{ADO_PAT.POLICY_BANNER(person)}</span>
+          {operator && mode !== "bearer" && (
+            <div className="mt-2">
+              <Button size="sm" variant="outline" onClick={() => pick("bearer")}>
+                {ADO_PAT.POLICY_BANNER_BUTTON}
+              </Button>
+            </div>
+          )}
+        </Alert>
+      )}
       <RadioGroup
         className="mt-2 gap-2"
         value={mode}

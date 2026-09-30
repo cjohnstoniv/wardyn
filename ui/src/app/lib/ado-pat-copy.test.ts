@@ -36,8 +36,7 @@ describe("ADO_PAT copy canon", () => {
     expect(ADO_PAT.CHECK_PERMS_MISSING).toBe("Your app registration doesn't have the Azure DevOps token permissions yet. Add vso.pats and vso.pats_manage and grant admin consent.");
     expect(ADO_PAT.CHECK_LIFESPAN_OFF).toBe("Maximum token lifespan is off in Azure DevOps. A stolen connection could create tokens that last up to a year. Turn it on under Organization settings → Microsoft Entra.");
     expect(ADO_PAT.NO_CLIENT_SECRET).toBe("Per-run tokens need this row to use Wardyn's own sign-in app, and that app to have a client secret. Name Wardyn's app here and set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.");
-    // State 8c (the admin banner after a member's refused launch) is descoped to 0.8.3.
-    expect("POLICY_BANNER_BUTTON" in ADO_PAT || "POLICY_BANNER" in ADO_PAT).toBe(false);
+    expect(ADO_PAT.POLICY_BANNER_BUTTON).toBe("Switch to Entra sign-in");
     expect(ADO_PAT.BEARER_WITH_TOKEN_PERMS).toBe("Your app registration holds the Azure DevOps token permissions, so Entra sign-in can't be used for runs: its tokens would let a run create tokens. Remove vso.pats and vso.pats_manage from the app first, or keep Wardyn creating a token for each run.");
     expect(ADO_PAT.MEMBER_NOT_CONNECTED).toBe("Connect once so Wardyn can create a short-lived token for each of your runs. Each token has only that run's access and is revoked when the run ends.");
     expect(ADO_PAT.MEMBER_CONNECT).toBe("Connect Azure DevOps");
@@ -85,10 +84,9 @@ describe("ADO_PAT copy canon", () => {
     expect(ADO_PAT.CHECK_LIFESPAN_ON(8)).toBe("Maximum token lifespan is on, and tokens of 8 hours are allowed.");
     expect(ADO_PAT.LIFESPAN_REFUSAL(24)).toBe("Longest token life is above your organisation's maximum token lifespan. Lower it to 24 hours or less.");
     expect(ADO_PAT.LIFESPAN_REFUSAL(undefined)).toBe("Longest token life is above your organisation's maximum token lifespan. Lower it.");
+    expect(ADO_PAT.POLICY_BANNER("Priya Shah")).toBe("Azure DevOps refused to create a token for Priya Shah: your organisation restricts who can create personal access tokens. Add the people who use Wardyn to that policy's allow list, or switch to Entra sign-in.");
     expect(ADO_PAT.CHECK_LIFESPAN_UNKNOWN("invalidValidTo")).toBe("Wardyn couldn't tell whether your organisation's maximum token lifespan is on. Azure DevOps answered: invalidValidTo.");
-    // Owner-approved after the mock.
     expect(ADO_PAT.MEMBER_NEEDS_ADMIN).toBe("Your administrator needs to finish setting up Azure DevOps before runs can use it.");
-    // DRAFT, not in the approved mock: owner approval pending.
     expect(ADO_PAT.RUN_TOKEN_LINE_NOTE("09:02", "17:02", "renewed")).toBe("Azure DevOps token: created 09:02 · expires 17:02 (renewed)");
     expect(ADO_PAT.MEMBER_LAST_TOKEN("09:02", "09:41")).toBe("Last token: created 09:02, revoked 09:41.");
     expect(ADO_PAT.RUN_TOKEN_LINE("09:02", "17:02")).toBe("Azure DevOps token: created 09:02 · expires 17:02");
@@ -111,7 +109,6 @@ describe("ADO_PAT copy canon", () => {
       drift: "access changed",
       disconnect: "disconnected",
       sweep: "cleaned up after a restart",
-      // DRAFT: not in the approved mock.
       upstream_401: "rejected by Azure DevOps",
       offboarding: "person removed",
     });

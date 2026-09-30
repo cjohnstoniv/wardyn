@@ -172,10 +172,11 @@ describe("orgCheckView: the check's answer as the mock's lines and alerts", () =
       permissions: "granted",
       lifespan: { state: "on", hours: 8 },
       tooLong: false,
+      blocked: false,
     });
   });
   it("permissions missing stops at that line", () => {
-    expect(orgCheckView({ ...base, permissions: "missing" })).toEqual({ permissions: "missing", lifespan: null, tooLong: false });
+    expect(orgCheckView({ ...base, permissions: "missing" })).toEqual({ permissions: "missing", lifespan: null, tooLong: false, blocked: false });
   });
   it("the lifespan limit off is its own line", () => {
     expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "off" }).lifespan).toEqual({ state: "off" });
@@ -192,10 +193,14 @@ describe("orgCheckView: the check's answer as the mock's lines and alerts", () =
     expect(v.tooLong).toBe(true);
     expect(v.lifespan).toBeNull();
   });
-  it("a create refused on the organisation's policy draws no admin banner (8c is descoped to 0.8.3)", () => {
+  it("a create refused on the organisation's policy is the blocked banner", () => {
     const v = orgCheckView({ ...base, token_life: "refused", refusal: "ado_pat_policy_blocked", lifespan: "unknown" });
+    expect(v.blocked).toBe(true);
     expect(v.tooLong).toBe(false);
-    expect("blocked" in v).toBe(false);
+  });
+  it("a token life refused for the lifespan policy is too long, not blocked", () => {
+    const v = orgCheckView({ ...base, token_life: "refused", refusal: "ado_pat_lifespan_policy", lifespan: "on" });
+    expect(v.blocked).toBe(false);
   });
 });
 

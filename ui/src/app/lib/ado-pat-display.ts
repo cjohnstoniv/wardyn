@@ -172,18 +172,21 @@ export interface OrgCheckView {
   lifespan: { state: "on"; hours: number } | { state: "off" } | { state: "unknown"; error: string } | null;
   /** The row's longest life is above the organisation's maximum. */
   tooLong: boolean;
+  /** Azure DevOps refused the check's own token on the organisation's create policy. */
+  blocked: boolean;
 }
 
-/** What the check's answer says, in the mock's lines and the too-long alert. An
+/** What the check's answer says, in the mock's lines and the two alerts. An
  *  "unknown" lifespan draws the "couldn't tell" line, but only once the server
  *  names what Azure DevOps answered: the line has no honest form without it. */
 export function orgCheckView(r: ADOOrgCheck): OrgCheckView {
   const tooLong = r.token_life === "refused" && r.refusal === ADO_PAT_REASON.LIFESPAN_POLICY;
+  const blocked = r.token_life === "refused" && r.refusal === ADO_PAT_REASON.POLICY_BLOCKED;
   let lifespan: OrgCheckView["lifespan"] = null;
   if (r.lifespan === "off") lifespan = { state: "off" };
   else if (r.lifespan === "on" && r.token_life === "accepted") lifespan = { state: "on", hours: r.pat_max_hours };
   else if (r.lifespan === "unknown" && r.lifespan_error) lifespan = { state: "unknown", error: r.lifespan_error };
-  return { permissions: r.permissions, lifespan, tooLong };
+  return { permissions: r.permissions, lifespan, tooLong, blocked };
 }
 
 // ---- New Run ----
