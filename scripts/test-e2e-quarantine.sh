@@ -68,6 +68,13 @@ got="$(quarantine_classify "${tmp}/results.json" other.spec.ts "${tmp}/q.txt")"
 [[ "${got}" == "other.spec.ts${tab}${flaky_title}${tab}new" ]] || fail "entry for another spec must not match: got ${got@Q}"
 ok "classify: an entry for a different spec file does not quarantine"
 
+# Titles compare as strings: awk would otherwise read "01" and "1.0" as equal numbers.
+printf '{"suites":[{"title":"n.spec.ts","specs":[{"title":"1.0","tests":[{"projectName":"chromium","status":"flaky"}]}]}]}\n' > "${tmp}/num.json"
+printf 'n.spec.ts | 01 | #12 | @octo | 2026-10-05\n' > "${tmp}/num.txt"
+got="$(quarantine_classify "${tmp}/num.json" n.spec.ts "${tmp}/num.txt")"
+[[ "${got}" == "n.spec.ts${tab}1.0${tab}new" ]] || fail "numeric-looking titles must match exactly: got ${got@Q}"
+ok "classify: an entry titled 01 does not quarantine a test titled 1.0"
+
 # --- validate ---------------------------------------------------------------
 good="${tmp}/good.txt"
 printf '# comment\n\nruns.spec.ts | A › b | #12 | @octo | 2026-10-05\nruns.spec.ts | C | #13 | @o-ctO_9 | 2026-10-14\n' > "${good}"

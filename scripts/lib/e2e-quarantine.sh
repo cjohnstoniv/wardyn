@@ -67,7 +67,7 @@ quarantine_classify() {
     if Q_SPEC="${spec}" Q_TITLE="${title}" awk -F' [|] ' '
         $0 !~ /^[ \t]*#/ && NF == 5 {
           gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2)
-          if ($1 == ENVIRON["Q_SPEC"] && $2 == ENVIRON["Q_TITLE"]) found = 1
+          if (($1 "") == ENVIRON["Q_SPEC"] "" && ($2 "") == ENVIRON["Q_TITLE"] "") found = 1
         }
         END { exit !found }' "${file}" 2>/dev/null; then
       verdict=quarantined

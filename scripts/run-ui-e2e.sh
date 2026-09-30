@@ -444,7 +444,7 @@ for spec in "${specs[@]}"; do
       [[ "${q_verdict}" == quarantined ]] || continue
       q_meta="$(Q_SPEC="${q_spec}" Q_TITLE="${q_title}" awk -F' [|] ' '
         function trim(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); return v }
-        NF == 5 && trim($1) == ENVIRON["Q_SPEC"] && trim($2) == ENVIRON["Q_TITLE"] {
+        NF == 5 && (trim($1) "") == ENVIRON["Q_SPEC"] "" && (trim($2) "") == ENVIRON["Q_TITLE"] "" {
           print trim($3) ", " trim($4) ", until " trim($5); exit }' ui/e2e/quarantine.txt)"
       if [[ -n "${CI:-}" ]]; then
         echo "::warning title=Quarantined flaky test::${q_spec} › ${q_title} (${q_meta})"
