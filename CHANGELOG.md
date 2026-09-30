@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The run page has a Policy tab showing the policy the run got (#1425).**
+  Between Approvals and Audit: where the policy started from, what Wardyn changed when the run
+  started and why, a note when the saved policy has changed since, and a Summary/YAML view with
+  Copy YAML. Members see `Hidden` for folder sources and secret names. The identity card's Policy
+  row is now a View link that opens the tab, for every run.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
