@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -233,7 +234,10 @@ func TestWorkspaceAvailableToCaller(t *testing.T) {
 // refused — the server's launch gate still enforces the pin; the console's
 // own client-side arm (workspaceModelProviderUnavailable, isAgent-gated,
 // wizard-types.ts) is what has to show that refusal for an agent run, since
-// available_to_you was never meant to.
+// available_to_you was never meant to. Since #1018 the console reads that arm
+// from llm_cred.provider_unavailable, which a workspace read sets in place of
+// the pin's id for a caller not granted the provider (pinStamper); it no
+// longer compares a visible pin against the caller's provider list.
 func TestWorkspaceAvailableToCaller_ModelProviderArmStaysClientSide(t *testing.T) {
 	site := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"))}
 	ws := &types.Workspace{
@@ -321,5 +325,70 @@ func TestListWorkspaces_AvailableToYouPerRow(t *testing.T) {
 	}
 	if cs.restrictReads != 1 {
 		t.Errorf("ListCapabilityRestrictions read %d times, want 1", cs.restrictReads)
+	}
+}
+
+// TestWorkspacePinHiddenFromACallerNotGrantedIt (#1018, D-6): a member whose
+// "Available to" excludes the provider a workspace pins reads the pin as
+// provider_unavailable, never its id, on the list and the detail;
+// a launch on the workspace is refused without naming it; a member granted it
+// and an operator still read the id; and no write may set the read-only bit.
+func TestWorkspacePinHiddenFromACallerNotGrantedIt(t *testing.T) {
+	const hidden = "secret-gw"
+	site := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider(hidden, "claude-code"))}
+	ws := &types.Workspace{
+		ID: uuid.New(), Name: "pinned", Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
+		LLMCred: &types.WorkspaceLLMCred{ProviderRef: hidden},
+	}
+	restricted := func(allow bool) *capStore {
+		cs := &capStore{restricted: restrictedOne(capModelProvider, hidden)}
+		if allow {
+			cs.grants = []types.CapabilityGrant{grant(types.CapabilitySubjectUser, govMemberSub, capModelProvider, hidden, types.CapabilityAllow)}
+		}
+		return cs
+	}
+	member := govSession(t, govMemberSub, []string{"eng"}, false)
+	detail := "/api/v1/workspaces/" + ws.ID.String()
+
+	srv := providerRunFixture(t, site, restricted(false), ws)
+	for _, path := range []string{"/api/v1/workspaces", detail} {
+		w := doSSO(t, srv, http.MethodGet, path, member, "")
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), hidden) || !strings.Contains(w.Body.String(), `"llm_cred":{"provider_unavailable":true}`) {
+			t.Errorf("member GET %s = %d %s, want provider_unavailable and no %q", path, w.Code, w.Body.String(), hidden)
+		}
+	}
+	body := fmt.Sprintf(`{"agent":"claude-code","task":"t","workspace_id":%q}`, ws.ID)
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		w := doSSO(t, srv, http.MethodPost, path, member, body)
+		if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), hidden) {
+			t.Errorf("member launch %s = %d %s, want a 403 that does not name %q", path, w.Code, w.Body.String(), hidden)
+		}
+	}
+
+	granted := providerRunFixture(t, site, restricted(true), ws)
+	if w := doSSO(t, granted, http.MethodGet, detail, member, ""); !strings.Contains(w.Body.String(), `"provider_ref":"`+hidden+`"`) {
+		t.Errorf("a member granted %q reads %s, want the pin", hidden, w.Body.String())
+	}
+	if w := do(t, srv, http.MethodGet, detail, providerAdminToken(srv, "sub-pin-admin"), ""); !strings.Contains(w.Body.String(), `"provider_ref":"`+hidden+`"`) ||
+		strings.Contains(w.Body.String(), "provider_unavailable") {
+		t.Errorf("an operator reads %s, want the pin unchanged", w.Body.String())
+	}
+	if w := do(t, srv, http.MethodPut, detail+"/llm-cred", providerAdminToken(srv, "sub-pin-admin"), `{"provider_unavailable":true}`); w.Code != http.StatusBadRequest {
+		t.Errorf("PUT llm-cred with provider_unavailable = %d %s, want 400", w.Code, w.Body.String())
+	}
+
+	// A dangling pin under enforcement: the member has no allow row, so the
+	// read hides it and the launch refuses it without naming it, as for any
+	// pin they are not granted.
+	gone := *ws
+	gone.LLMCred = &types.WorkspaceLLMCred{ProviderRef: "gone-gw"}
+	dangling := providerRunFixture(t, site, &capStore{enf: map[string]bool{capModelProvider: true}}, &gone)
+	if w := doSSO(t, dangling, http.MethodGet, detail, member, ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "gone-gw") ||
+		!strings.Contains(w.Body.String(), `"llm_cred":{"provider_unavailable":true}`) {
+		t.Errorf("member GET of a dangling pin = %d %s, want provider_unavailable and no id", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, dangling, http.MethodPost, "/api/v1/runs/preflight", member, body); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "gone-gw") {
+		t.Errorf("member preflight on a dangling pin = %d %s, want a 403 that names no provider", w.Code, w.Body.String())
 	}
 }

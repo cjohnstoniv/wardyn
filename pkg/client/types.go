@@ -87,7 +87,9 @@ type (
 
 	// WorkspaceLLMCred is the operator-owned model binding carried in
 	// WorkspaceRequest.LLMCred: ProviderRef pins the workspace's runs to one
-	// model provider. "" (or a nil WorkspaceLLMCred) means no pin.
+	// model provider. "" (or a nil WorkspaceLLMCred) means no pin. On a read,
+	// ProviderUnavailable in place of ProviderRef means the workspace is pinned
+	// to a provider the caller is not granted; a write never sets it.
 	WorkspaceLLMCred = types.WorkspaceLLMCred
 
 	// Source is one tier-1 library entry: a repo/dir configured once (its own

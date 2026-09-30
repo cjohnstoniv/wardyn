@@ -221,6 +221,15 @@ describe("WorkspacesScreen — a workspace is pinned to an unavailable model pro
     expect(text.textContent).not.toContain("bloomberg-gateway");
   });
 
+  // #1018: the server hid the pin (the caller isn't granted its provider) —
+  // the same consequence, and the Model column names no provider.
+  it("renders the consequence for a pin the server hid", async () => {
+    const w = ws({}, { llm_cred: { provider_unavailable: true } });
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderWithStatus([{ id: "corp-gateway", kind: "anthropic_api_key", harnesses: [], host: "api.anthropic.com" }]);
+    expect(await screen.findByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+  });
+
   it("says nothing when the pin IS in the caller's own filtered list", async () => {
     const w = ws({}, { llm_cred: { provider_ref: "corp-gateway" } });
     listWorkspacesMock.mockResolvedValue([w]);

@@ -328,10 +328,14 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// Owner-or-admin, re-checked against the just-loaded run: this lane never
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
-	if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
+	superAdmin := ta.role == oidc.RoleAdmin
+	if !superAdmin && run.CreatedBy != ta.principal {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "not the run owner"}))
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
+		return
+	}
+	if !superAdmin && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {

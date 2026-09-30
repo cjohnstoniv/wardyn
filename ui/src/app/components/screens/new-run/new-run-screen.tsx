@@ -70,6 +70,7 @@ import {
   primaryWorkspaceId,
   resolvedModelProviders,
   titleFromTask,
+  workspacePin,
   type RunPrefill,
   type WizardState,
 } from "./wizard-types";
@@ -355,7 +356,9 @@ export function NewRunScreen() {
   // (wizard-types.ts's primaryWorkspaceId), so this rail can never pin a
   // different workspace's credential than the run actually inherits.
   const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
-  const pin = workspaces.find((w) => w.id === primaryWsId)?.llm_cred?.provider_ref;
+  // A pin the server hid (#1018) still pins: workspacePin makes it one no
+  // candidate matches, so nothing is preselected and nothing substituted.
+  const pin = workspacePin(workspaces.find((w) => w.id === primaryWsId));
 
   // #1052 — this agent's own providers_ungranted fact, off the same
   // `harnesses` state as agentRow below: serving > 0 && granted == 0.

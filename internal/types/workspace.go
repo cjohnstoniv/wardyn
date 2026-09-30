@@ -39,6 +39,11 @@ type WorkspaceLLMCred struct {
 	// ineligible pin refuses the run rather than falling through to another
 	// provider.
 	ProviderRef string `json:"provider_ref,omitempty"`
+	// ProviderUnavailable is set by the server on a READ only, in place of
+	// ProviderRef, for a caller "Available to" does not admit to the pinned
+	// provider: the workspace is pinned, to a provider they cannot use, and
+	// its id is not theirs to learn (#1018). A write carrying it is refused.
+	ProviderUnavailable bool `json:"provider_unavailable,omitempty"`
 }
 
 // WorkspaceStatus is the onboarding/scan lifecycle of a Workspace: not-yet-

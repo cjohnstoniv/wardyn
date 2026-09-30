@@ -207,6 +207,13 @@ func TestUnknownUserTypeIsOneDenialPerRequest(t *testing.T) {
 	if n := userTypeUnknownDenials(rec); n != 1 {
 		t.Errorf("authz.denied user_type_unknown rows = %d, want 1 per request", n)
 	}
+	// The row carries the request's method, like every row a request produced
+	// (#997), though the resolver saw only a ctx.
+	for _, ev := range rec.snapshot() {
+		if ev.Action == "authz.denied" && !strings.Contains(string(ev.Data), `"method":"POST"`) {
+			t.Errorf("authz.denied %s carries no method POST", ev.Data)
+		}
+	}
 }
 
 // utResolveStore records the user type the ceiling and drive resolvers are

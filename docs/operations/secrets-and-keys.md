@@ -600,6 +600,15 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and
   platform policy can sit with fewer people.
 - The second role needs Kubernetes auth.
 
+**Policies that name paths instead of `platform/*`.** The platform role's
+policy must cover the whole of `<prefix>/platform/*`, not the boot keys it
+listed when you wrote it. A laptop enrolled into an organisation control
+plane (`WARDYN_ORG_URL`) keeps its device credential there too, as the row
+`wardyn-org-device-credential`. A policy that lists individual names refuses
+that write, the boot step that stores the credential fails, and wardynd
+refuses to start. It fails closed and names the path Vault denied; widen the
+policy to `<prefix>/platform/*`.
+
 **Authentication.** There is no Vault token in an environment variable, by
 design.
 

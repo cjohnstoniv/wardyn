@@ -17,6 +17,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,9 @@ type sshMemStore struct {
 	mu   sync.Mutex
 	runs map[uuid.UUID]types.AgentRun
 	keys map[string]types.SSHPublicKey // by fingerprint
+	// profiles answers ListGovernanceProfiles: the limits of the profile a
+	// run was created under (governance_run_doors_test.go).
+	profiles []types.GovernanceProfile
 }
 
 func newSSHMemStore() *sshMemStore {
@@ -74,6 +78,12 @@ func (s *sshMemStore) putRun(r types.AgentRun) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[r.ID] = r
+}
+
+func (s *sshMemStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.profiles), nil
 }
 
 func (s *sshMemStore) putKey(k types.SSHPublicKey) {

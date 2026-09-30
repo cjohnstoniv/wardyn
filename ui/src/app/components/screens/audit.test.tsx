@@ -274,16 +274,29 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     listAuditMock.mockResolvedValue([
       ev({ id: "e1", action: "source.scan", target: "src-1" }),
       ev({ id: "e2", action: "base_image.write", target: "img-1" }),
-      ev({ id: "e3", action: "integration.adopt", target: "anthropic_subscription:managed" }),
+      ev({ id: "e3", action: "integration.delete", target: "corp-anthropic" }),
       ev({ id: "e4", action: "workspace.requirement.write", target: "ws-1" }),
     ]);
     renderScreen();
 
     expect(await screen.findByText(/Scanned a source — src-1/)).toBeInTheDocument();
     expect(screen.getByText(/Added a base image — img-1/)).toBeInTheDocument();
-    expect(screen.getByText(/Adopted an integration — anthropic_subscription:managed/)).toBeInTheDocument();
+    expect(screen.getByText(/Deleted an integration — corp-anthropic/)).toBeInTheDocument();
     expect(screen.getByText(/Added a workspace requirement — ws-1/)).toBeInTheDocument();
     expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
+  });
+
+  // #1020: no Go code emits these four, so they carry no verb row and render
+  // as the raw action, like any action the table does not know.
+  it("has no verb rows for actions the server never emits", async () => {
+    const dead = ["integration.adopt", "run.compose", "run.compose.assist", "run.compose.clarify"];
+    listAuditMock.mockResolvedValue(dead.map((action, i) => ev({ id: `d${i}`, action, target: "" })));
+    renderScreen();
+
+    for (const action of dead) {
+      expect((await screen.findAllByText(action)).length).toBeGreaterThan(0);
+    }
+    expect(screen.queryByText(/Adopted an integration|Produced a run proposal|clarifying question|composer question/)).not.toBeInTheDocument();
   });
 
   // DEADCODE-4: an integration IS credential material by reference — it

@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -70,9 +71,6 @@ const (
 	mpcBody     = `body must be {"value":"<your key or token>"}`
 	mpcTooShort = "your key or token must be at least %d characters"
 	mpcNoStore  = "no secret store configured"
-	// mpcNotGranted is the capModelProvider refusal at the key door, worded as
-	// its sign-in twin (mpsNotGranted).
-	mpcNotGranted = "you are not granted model provider %q — ask an admin to grant it before adding your key or token to it"
 )
 
 // keyDoorSaveUnavailable (design packet F, canon KEY_DOOR.SAVE_UNAVAILABLE) is
@@ -144,12 +142,15 @@ func (s *Server) credentialOwner(w http.ResponseWriter, r *http.Request) string 
 
 // providerForCredential reads the provider {id} names as this caller may see
 // it. granted requires it to serve an agent the caller may launch (the
-// /setup/status projection's own rule); a delete does not, so a person whose
-// grant was withdrawn can still remove their key. A provider the caller cannot
+// /setup/status projection's own rule) and to be available to them
+// (denyProviderAsMissing). A delete requires neither, so a person whose grant
+// was withdrawn can still remove their key — but one who holds no key for it
+// is answered as a PUT would be answered on availability, or DELETE would tell
+// a restricted provider from an unknown id (D-6). A provider the caller cannot
 // see, or one whose credential is a sign-in, is refused here. The caller holds
 // siteConfigMu, so the UID read here is still the provider's when the write
 // lands — rule 8's purge runs under the same lock.
-func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, granted bool) (types.ModelProvider, bool) {
+func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, owner string, granted bool) (types.ModelProvider, bool) {
 	id := chi.URLParam(r, "id")
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
@@ -164,11 +165,36 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, g
 		writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, fmt.Sprintf(mpcNotFound, id))
 		return types.ModelProvider{}, false
 	}
+	// Ahead of the kind check, whose 422 would tell a provider apart from an
+	// unknown id.
+	holdsKey := !granted && s.ownsSecretMemoized(r.Context(), owner, providerSecretName(p.UID, providerKeyPart))
+	if !holdsKey && s.denyProviderAsMissing(w, r, id, "model_provider.credential") {
+		return types.ModelProvider{}, false
+	}
 	if !providerTypedKinds[p.Kind] {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderCredentialIsSignIn, fmt.Sprintf(mpcSignIn, id))
 		return types.ModelProvider{}, false
 	}
 	return p, true
+}
+
+// denyProviderAsMissing refuses a provider "Available to" (capModelProvider)
+// does not admit the caller to, answering exactly as an unknown id does — the
+// same 404, reason and sentence — because provider ids are guessable slugs
+// (D-6, #1018). The authz.denied row still records the true reason. It returns
+// true when it answered.
+func (s *Server) denyProviderAsMissing(w http.ResponseWriter, r *http.Request, id, target string) bool {
+	allowed, err := s.capSeamAllowed(r.Context(), capModelProvider, id)
+	if err != nil {
+		writeServerError(w, r, "resolve capability", err)
+		return true
+	}
+	if allowed {
+		return false
+	}
+	s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonCapabilityModelProvider, target, ""))
+	writeErrorReason(w, http.StatusNotFound, reasonModelProviderNotFoundEntity, fmt.Sprintf(mpcNotFound, id))
+	return true
 }
 
 // handlePutProviderCredential stores the caller's own key or token for one
@@ -198,14 +224,8 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	}
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
-	p, ok := s.providerForCredential(w, r, true)
+	p, ok := s.providerForCredential(w, r, owner, true)
 	if !ok {
-		return
-	}
-	// "Available to" (capModelProvider), the launch door's own check: a person
-	// the provider is not granted to stores nothing for it. A delete is not
-	// gated, so a withdrawn grant can still be cleaned up.
-	if s.denyUserCapability(w, r, capModelProvider, p.ID, "model_provider.credential", fmt.Sprintf(mpcNotGranted, p.ID)) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {
@@ -235,7 +255,7 @@ func (s *Server) handleDeleteProviderCredential(w http.ResponseWriter, r *http.R
 	}
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
-	p, ok := s.providerForCredential(w, r, false)
+	p, ok := s.providerForCredential(w, r, owner, false)
 	if !ok {
 		return
 	}
