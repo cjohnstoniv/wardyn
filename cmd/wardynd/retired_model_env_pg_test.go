@@ -5,11 +5,13 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"slices"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestPG_SweepRetiredModelCredentials: boot deletes every retired
@@ -92,5 +94,44 @@ func TestPG_SweepRetiredModelCredentials(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPG_OpenSecretStoreSweepsRetiredModelCredentials pins the WIRING, not the
+// sweep: the store a serving boot opens (openSecretStore, over the boot
+// flags) has already deleted the retired credentials from every namespace and
+// written the model_credential.retire row by the time boot reads a secret.
+func TestPG_OpenSecretStoreSweepsRetiredModelCredentials(t *testing.T) {
+	pool := envelopeDB(t)
+	ageKey := mustAgeIdentity(t).String()
+	seedStore, err := buildSecretStore(t.Context(), pool, ageKey, nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for owner, name := range map[string]string{"": "anthropic-api-key", "alice@example.com": "wardyn-harness-aws-oauth"} {
+		if err := seedStore.For(owner).Put(t.Context(), name, []byte("synthetic-credential-value")); err != nil {
+			t.Fatalf("seed %s/%s: %v", owner, name, err)
+		}
+	}
+
+	t.Setenv("WARDYN_AGE_KEY", ageKey)
+	resetFlags(t)
+	oldArgs := os.Args
+	os.Args = []string{"wardynd-test"}
+	t.Cleanup(func() { os.Args = oldArgs })
+	rec := &capturingRecorder{}
+	st, err := openSecretStore(t.Context(), pool, parseBootFlags(), rec)
+	if err != nil {
+		t.Fatalf("openSecretStore: %v", err)
+	}
+	holders, err := st.Holders(t.Context(), []string{"anthropic-api-key", "wardyn-harness-aws-oauth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(holders) != 0 {
+		t.Fatalf("after the boot open, retired credentials are still held: %v", holders)
+	}
+	if !slices.ContainsFunc(rec.got, func(ev types.AuditEvent) bool { return ev.Action == "model_credential.retire" }) {
+		t.Fatalf("the boot open wrote no model_credential.retire row: %+v", rec.got)
 	}
 }

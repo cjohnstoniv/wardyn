@@ -44,7 +44,7 @@
 #      images-ui-sandbox, release-assets) all depend on preflight-green,
 #      directly or transitively, and preflight-green has no `|| true` /
 #      `continue-on-error` escape hatch (T-06, #666).
-#  14. no script that boots a wardynd (the e2e backend, the kind SSO walk,
+#  15. no script that boots a wardynd (the e2e backend, the kind SSO walk,
 #      ci-run.sh, the Entra kind deploy, the survival walk and its compose
 #      override) sets a model variable 0.8.2 retired — wardynd refuses to boot
 #      on one (#549, #672). The compose files and Helm values are rendered by
@@ -456,7 +456,7 @@ else
     if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
-# ── 14. no wardynd-booting script sets a retired model variable ─────────────
+# ── 15. no wardynd-booting script sets a retired model variable ─────────────
 retired_re='(WARDYN_(ANTHROPIC|OPENAI|BEDROCK)_[A-Z_]+|WARDYN_AGENT_ANTHROPIC_MODEL|WARDYN_SUBSCRIPTION_INJECT|WARDYN_ALLOW_SHARED_SUBSCRIPTION)'
 retired_fail=0
 for f in scripts/e2e-backend.sh scripts/kind-sso-walk.sh scripts/ci-run.sh scripts/survival-walk.sh \

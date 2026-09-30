@@ -241,7 +241,9 @@ providers), and your model credential is your own, whatever kind the provider is
 an Amazon Bedrock SSO sign-in, a Claude subscription sign-in, a typed
 Anthropic, OpenAI or Bedrock API key, or a token for your admin's own
 gateway. You connect it yourself — nobody else's runs can use it, and you are
-never served an admin's credential in its place.
+never served an admin's credential in its place. If your admin set a base URL on
+a Claude-subscription provider, your sign-in token is sent to that gateway rather
+than to Anthropic.
 
 - **Where you see it.** In the User view only (not on Getting started), a
   banner names a provider that is the default for one of your harnesses and

@@ -4378,7 +4378,11 @@ Point a provider's model calls at an internal endpoint instead of
 `api.anthropic.com`/`api.openai.com`: an Anthropic or OpenAI provider's
 `base_url` (Settings → Model providers) re-points the proxy's own brokered
 `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a
-`custom_endpoint` provider is addressed by its `base_url` alone. The address is
+`custom_endpoint` provider is addressed by its `base_url` alone. A Claude
+subscription provider's `base_url` re-points the sign-in token too: every person
+who connects to it has their own Claude OAuth token sent to that gateway on
+every model call, so setting it is a trust decision for the people connecting.
+The address is
 validated when the provider is saved (`https://` only, RFC1918/CGNAT literal
 allowed, loopback/link-local/metadata/multicast/NAT64 refused, must not equal
 the public host) and forwarded to the proxy sidecar per run. No

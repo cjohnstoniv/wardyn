@@ -83,7 +83,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   or `providers[].auth_mode`/`logged_in`/`login_detected_via` (a host CLI sign-in credentials no
   run), and the `bedrock_provider` check is gone. The Helm chart refuses to render a retired
   variable set in `env` or `extraEnv`. **Upgrade note:** unset the
-  retired variables before upgrading, then set up Settings → Model providers and have each person
+  retired variables before upgrading (on the compose stack they are simply no longer forwarded, so a
+  0.7 `.env` still carrying one boots clean and the value is inert — `make doctor` lists any still in
+  `.env`), then set up Settings → Model providers and have each person
   connect their own credential (a key, or a Claude or AWS sign-in).
 - **Reviving a live run is bounded to once a minute (#1005).** Each revive of a running run, through
   `POST /runs/{id}/revive` or the admin "Restart with current limits", removes and recreates its

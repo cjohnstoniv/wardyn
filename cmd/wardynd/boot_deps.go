@@ -441,7 +441,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
 			slog.Info("wardynd: NOTE a first-class packaged team deployment (SAML/SCIM, per-user tokens) does not exist yet, but admin/member RBAC does. "+
 				"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are MEMBERS (unless a WARDYN_OIDC_ROLE_MAP entry raises them to admin) — owner-scoped: they launch/kill runs and "+
-				"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment (harness-credential, "+
+				"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment ("+
 				"policy, workspace, site-config writes), on secret writes/deletes, and on admin-only credential/tool_call approvals (a member may still "+
 				"decide egress_domain approvals on their own runs). admin/member is the only role tier — everything else, incl. the admin token, is always admin",
 				slog.Int("operator_emails", len(ops)))
