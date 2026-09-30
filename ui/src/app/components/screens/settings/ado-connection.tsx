@@ -105,7 +105,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
         tabIndex={-1}
         open={open}
         onOpenChange={setOpen}
-        className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
+        className={`outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]${patView.refused ? " border-danger" : ""}`}
       >
         <AdoPatBody
           access={access as SCMAccessPAT}

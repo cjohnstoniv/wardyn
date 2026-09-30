@@ -78,6 +78,9 @@ export interface PatCardView {
   action: "connect" | "add_token" | "replace_token" | null;
   /** Whether a connected minted card offers Disconnect. */
   disconnect: boolean;
+  /** Azure DevOps refused the own token before it expires (#1445): the card is
+   *  drawn with a danger border and its Replace button is the primary action. */
+  refused?: boolean;
 }
 
 /** Whether this access answer belongs to a per-person token row, and which. */
@@ -143,6 +146,13 @@ function ownCard(access: SCMAccessPAT, title: string, now: number): PatCardView 
   const org = adoOrgLabel(access.org ?? "");
   const expiryLine = access.expires_on ? ADO_PAT.OWN_EXPIRING_LINE(org, formatDay(access.expires_on)) : null;
   const serverNote = server ? [ADO_PAT.OWN_SERVER_NOTE] : [];
+  // refused_at rides on a live or expiring row (the state is unchanged) and
+  // replaces the expiry line, which it already names. An expired row ignores it:
+  // the token is gone either way, and expired says what to do.
+  if (access.refused_at && access.expires_on && (access.state === "live" || access.state === "expiring")) {
+    const line = ADO_PAT.OWN_REFUSED_LINE(formatDay(access.refused_at), formatDay(access.expires_on));
+    return { title: cardTitle, chip: { label: ADO_PAT.OWN_CHIP_REFUSED, tone: "danger" }, body: [...serverNote, line], action: "replace_token", disconnect: false, refused: true };
+  }
   switch (access.state) {
     case "not_configured":
       return { title: cardTitle, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: serverNote, action: "add_token", disconnect: false };
