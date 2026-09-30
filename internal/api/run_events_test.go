@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -406,5 +407,169 @@ func TestRunEvents_RevokedSessionEndsTheStreamAtTheNextKeepalive(t *testing.T) {
 	}
 	if ctx.Err() != nil {
 		t.Fatal("stream outlived the revoked session")
+	}
+}
+
+// openEventsAs opens GET /runs/{id}/events with bearer and returns the
+// response whatever its status; the stream is closed when ctx ends.
+func openEventsAs(t *testing.T, ctx context.Context, base string, runID uuid.UUID, bearer string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/runs/"+runID.String()+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET events: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+// TestRunEvents_DelegatedTokenReadsItsPersonsRun (#1407): a portal's delegated
+// token streams its person's run like the person would; the same token on
+// another person's run gets GET /runs/{id}'s byte-identical 404, and the
+// not_owner row names the person with data.via naming the portal.
+func TestRunEvents_DelegatedTokenReadsItsPersonsRun(t *testing.T) {
+	srv, ast, _, _ := newAuthzMatrixServer(t)
+	rec := srv.cfg.Audit.(*recRecorder)
+	const person = "sub-person"
+	tok, via := seedDelegation(t, ast.fakeDelegateStore, person)
+	seed := func(owner string) uuid.UUID {
+		id := uuid.New()
+		ast.mu.Lock()
+		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunCompleted, Agent: "claude-code"}
+		ast.mu.Unlock()
+		return id
+	}
+	own, foreign := seed(person), seed("sub-someone-else")
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+own.String()+"/events", tok, "")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/event-stream" ||
+		!strings.Contains(w.Body.String(), `"type":"ended"`) {
+		t.Fatalf("own run: status %d type %q body %q, want 200 text/event-stream carrying ended",
+			w.Code, w.Header().Get("Content-Type"), w.Body)
+	}
+
+	before := len(rec.snapshot())
+	events := do(t, srv, http.MethodGet, "/api/v1/runs/"+foreign.String()+"/events", tok, "")
+	rows := rec.snapshot()[before:]
+	get := do(t, srv, http.MethodGet, "/api/v1/runs/"+foreign.String(), tok, "")
+	if events.Code != http.StatusNotFound || get.Code != http.StatusNotFound || events.Body.String() != get.Body.String() {
+		t.Fatalf("another person's run: events %d %q, GET run %d %q; want the same 404 for both",
+			events.Code, events.Body, get.Code, get.Body)
+	}
+	if len(rows) != 1 || rows[0].Action != authz.AuditAction || rows[0].Actor != person ||
+		!strings.Contains(string(rows[0].Data), `"reason":"not_owner"`) ||
+		!strings.Contains(string(rows[0].Data), `"delegate":"`+via.Delegate.String()+`"`) {
+		t.Fatalf("refusal rows = %+v, want one not_owner row naming the person and the portal", rows)
+	}
+}
+
+// TestRunEvents_StreamCapPerPrincipal (#1407): one principal holds at most
+// maxRunEventStreams streams; the next is refused 422 event_stream_cap, another
+// principal is unaffected, and a disconnect frees its slot.
+func TestRunEvents_StreamCapPerPrincipal(t *testing.T) {
+	srv, ast, _, _ := newAuthzMatrixServer(t)
+	srv.runEvents.hold = 0 // hold the streams open
+	const person = "sub-person"
+	tok, _ := seedDelegation(t, ast.fakeDelegateStore, person)
+	id := uuid.New()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: person, State: types.RunRunning, Agent: "claude-code"}
+	ast.mu.Unlock()
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+
+	cancels := make([]context.CancelFunc, 0, maxRunEventStreams)
+	for i := range maxRunEventStreams {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		cancels = append(cancels, cancel)
+		if resp := openEventsAs(t, ctx, ts.URL, id, tok); resp.StatusCode != http.StatusOK {
+			t.Fatalf("stream %d of %d: status %d, want 200", i+1, maxRunEventStreams, resp.StatusCode)
+		}
+	}
+
+	over := openEventsAs(t, context.Background(), ts.URL, id, tok)
+	var body errorBody
+	_ = json.NewDecoder(over.Body).Decode(&body)
+	if over.StatusCode != http.StatusUnprocessableEntity || body.Reason != string(authz.ReasonEventStreamCap) {
+		t.Fatalf("stream %d: status %d reason %q, want 422 event_stream_cap", maxRunEventStreams+1, over.StatusCode, body.Reason)
+	}
+
+	// The cap is per principal: the admin token still streams the same run.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if resp := openEventsAs(t, ctx, ts.URL, id, adminToken); resp.StatusCode != http.StatusOK {
+		t.Fatalf("another principal at the person's cap: status %d, want 200", resp.StatusCode)
+	}
+
+	// A disconnect frees a slot.
+	cancels[0]()
+	who := runEventStreamer{types.ActorHuman, person}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		srv.runEvents.mu.Lock()
+		n := srv.runEvents.streams[who]
+		srv.runEvents.mu.Unlock()
+		if n < maxRunEventStreams {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a closed stream never released its slot")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if resp := openEventsAs(t, ctx, ts.URL, id, tok); resp.StatusCode != http.StatusOK {
+		t.Fatalf("after a disconnect: status %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestRunEvents_RevokedPersonEndsTheDelegatedStream (#1407): revoking the
+// person's sessions ends a portal's open stream at the next keepalive, as it
+// does the person's own.
+func TestRunEvents_RevokedPersonEndsTheDelegatedStream(t *testing.T) {
+	revs := &flippableRevocations{}
+	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) { c.SessionRevocations = revs })
+	srv.runEvents.hold, srv.runEvents.beat = 0, 10*time.Millisecond
+	const person = "sub-person"
+	tok, _ := seedDelegation(t, ast.fakeDelegateStore, person)
+	id := uuid.New()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: person, State: types.RunRunning, Agent: "claude-code"}
+	ast.mu.Unlock()
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp := openEventsAs(t, ctx, ts.URL, id, tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open: status %d", resp.StatusCode)
+	}
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	for beats := 0; beats < 3; {
+		if l, ok := <-lines; !ok {
+			t.Fatal("delegated stream closed while the person's session was live")
+		} else if l == ": keepalive" {
+			beats++
+		}
+	}
+	revs.revoked.Store(true)
+	for range lines {
+		// drain until the server closes the stream
+	}
+	if ctx.Err() != nil {
+		t.Fatal("delegated stream outlived the person's revoked sessions")
 	}
 }

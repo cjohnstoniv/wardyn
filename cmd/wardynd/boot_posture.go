@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -408,7 +409,80 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}
-	return validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen)
+	if err := validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	for _, w := range bootPostureWarnings(f, posture) {
+		slog.Warn(w)
+	}
+	return nil
+}
+
+// bootPostureWarnings are the flag-only postures that boot permits but says
+// so loudly about, returned rather than logged so a test can pin each one.
+func bootPostureWarnings(f *bootFlags, posture tlsPosture) []string {
+	var out []string
+	out = append(out, plaintextIssuerWarnings(*f.oidcIssuer, *f.oidcInternalIss, posture)...)
+	if w := uiGatewaySharesConsoleHostWarning(*f.uiListen, *f.uiAdvertise, *f.uiOriginTemplate, *f.oidcRedirectURL, posture); w != "" {
+		out = append(out, w)
+	}
+	return out
+}
+
+// plaintextIssuerWarnings names each OIDC issuer URL that is http:// on a host
+// that is not loopback (#156). The Compose demo is exempt: it serves the
+// console without TLS (no secure cookies) and reaches its bundled Dex at
+// http://dex:5556. Any deployment with a TLS posture is not the demo, and
+// its discovery document, JWKS and token exchange would cross the network in
+// the clear — or, for the public issuer, send the browser's sign-in there.
+// A warning, not a refusal: an in-cluster IdP behind a mesh is a real setup.
+func plaintextIssuerWarnings(issuer, internalIssuer string, posture tlsPosture) []string {
+	if !posture.secureCookies || strings.TrimSpace(issuer) == "" {
+		return nil // OIDC is configured by the public issuer; an internal one alone is dead config
+	}
+	var out []string
+	for _, c := range []struct{ env, raw string }{
+		{"WARDYN_OIDC_ISSUER", issuer}, {"WARDYN_OIDC_INTERNAL_ISSUER", internalIssuer},
+	} {
+		if u, err := url.Parse(strings.TrimSpace(c.raw)); err == nil && strings.EqualFold(u.Scheme, "http") && !urlHostIsLoopback(u.Hostname()) {
+			out = append(out, fmt.Sprintf("wardynd: %s %q is plain http:// on a host that is not loopback while the console is served over TLS — "+
+				"sign-in discovery, keys and the token exchange cross the network unencrypted; use an https:// issuer "+
+				"(plain http:// is for the Compose demo's bundled Dex only)", c.env, c.raw))
+		}
+	}
+	return out
+}
+
+// urlHostIsLoopback reports whether a URL's hostname is "localhost" or a
+// loopback IP literal. Deliberately no DNS lookup: an issuer named by hostname
+// is not vetted by what it resolves to today.
+func urlHostIsLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// uiGatewaySharesConsoleHostWarning is #1269: under secure cookies the console's
+// cookies are __Host- cookies, which a sibling host cannot plant, but cookies
+// ignore ports — so a path-mode gateway advertised on the console's own
+// hostname serves sandbox-authored pages that can set a host-only
+// __Host-wardyn_session for that hostname. The console's host is the host of
+// WARDYN_OIDC_REDIRECT_URL. Host mode (an origin template) gives each run its
+// own host and is never flagged.
+func uiGatewaySharesConsoleHostWarning(uiListen, advertise, originTemplate, redirectURL string, posture tlsPosture) string {
+	if uiListen == "" || originTemplate != "" || !posture.secureCookies {
+		return ""
+	}
+	a, aerr := url.Parse(strings.TrimSpace(advertise))
+	c, cerr := url.Parse(strings.TrimSpace(redirectURL))
+	if aerr != nil || cerr != nil || a.Hostname() == "" || !strings.EqualFold(a.Hostname(), c.Hostname()) {
+		return ""
+	}
+	return fmt.Sprintf("wardynd: WARDYN_UI_SANDBOX_ADVERTISE host %q is the console's own host (from WARDYN_OIDC_REDIRECT_URL) and cookies ignore ports — "+
+		"a sandboxed app's page served there can set a host-only __Host-wardyn_session for the console; "+
+		"give the UI gateway its own hostname (e.g. a wardyn-ui.<domain> name) or set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE for per-run hosts", a.Hostname())
 }
 
 // parseMountCeilings parses the TWO operator/MDM-set mount ceilings at boot and

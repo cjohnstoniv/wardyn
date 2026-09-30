@@ -25,6 +25,8 @@ import (
 //     tool_rules ceiling binds it.
 //   - DenyInteractive: an interactive run refuses tool_approvals=hold by
 //     design, so tool_rules can't express "supervised" there either.
+//   - DenyUIApps: a UI app is relay access into the sandbox that no
+//     tool_rules ceiling sees.
 //   - DenyUserDrive: a drive OUTLIVES the run, so no tool_rules ceiling
 //     describes the escape — the storage itself is the escape.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
@@ -43,8 +45,15 @@ type GovernanceLimits struct {
 	// DenyInteractive refuses an interactive run under this profile.
 	// Evaluated against POST-COERCION interactivity, since omitting the
 	// task coerces to interactive later — a raw "did the caller ask" check
-	// would be evaded by leaving the field out.
+	// would be evaded by leaving the field out. It also refuses the terminal
+	// attach and SSH into a run created under this profile, since a task or
+	// exec run still has a sandbox to open a shell in (#1392).
 	DenyInteractive bool `json:"deny_interactive,omitempty"`
+	// DenyUIApps strips ui_apps from a run under this profile at create, and
+	// the UI gateway refuses a session into a run created under it. A limit
+	// rather than an empty ceiling ui_apps, which stays "no opinion" so
+	// existing profiles keep their behaviour (#1391).
+	DenyUIApps bool `json:"deny_ui_apps,omitempty"`
 	// MaxConcurrentRuns caps how many NON-TERMINAL runs a member under this
 	// profile may hold at once. 0 is unlimited.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty"`

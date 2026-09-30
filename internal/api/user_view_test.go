@@ -290,6 +290,47 @@ func TestUserViewSwitchValidatesAndRemembersTheType(t *testing.T) {
 	}
 }
 
+// TestUserViewRealUserIsIgnoredBeforeTheTypeLookup (#997): a real user's
+// POST /me/view answers the same no-op 200 whether the type it names exists
+// or not, so it cannot probe which type ids exist.
+func TestUserViewRealUserIsIgnoredBeforeTheTypeLookup(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	user := uvSession(t, "sub-uv-user", oidc.RoleUser, types.UserTypeStandard, "")
+	var bodies []string
+	for _, id := range []string{utPM, "no-such-type"} {
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", user, `{"view":"user","user_type":"`+id+`"}`)
+		if w.Code != http.StatusOK || len(w.Result().Cookies()) != 0 {
+			t.Fatalf("real user asking for %q = %d %s, cookies %v, want the no-op 200", id, w.Code, w.Body.String(), w.Result().Cookies())
+		}
+		bodies = append(bodies, w.Body.String())
+	}
+	if bodies[0] != bodies[1] {
+		t.Errorf("a known and an unknown type answer differently:\n%s\n%s", bodies[0], bodies[1])
+	}
+	// The admin still gets the 400: the lookup is only skipped for a real user.
+	admin := uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","user_type":"no-such-type"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("admin asking for an unknown type = %d %s, want 400", w.Code, w.Body.String())
+	}
+}
+
+// TestUserViewForcedExitDualEmits (#1020): the forced exit GET /me takes when
+// the viewed type is gone writes auth.member_mode beside auth.user_view.set,
+// with identical data, like the toggle.
+func TestUserViewForcedExitDualEmits(t *testing.T) {
+	srv, _, h := uvServer(t)
+	uvGetMe(t, srv, uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "contractor"))
+	set := lastAuditEvent(t, h.audit.events, "auth.user_view.set")
+	compat := lastAuditEvent(t, h.audit.events, "auth.member_mode")
+	if string(set.Data) != string(compat.Data) || set.Actor != compat.Actor || set.Target != compat.Target {
+		t.Fatalf("auth.member_mode = %s by %q at %q, want auth.user_view.set's %s by %q at %q",
+			compat.Data, compat.Actor, compat.Target, set.Data, set.Actor, set.Target)
+	}
+	if !strings.Contains(string(set.Data), `"reason":"user_type_deleted"`) {
+		t.Fatalf("forced exit datum = %s", set.Data)
+	}
+}
+
 // TestRunCreateCarriesTheViewedType: the type a run is frozen with, and the
 // run.create datum, follow the viewed type.
 func TestRunCreateCarriesTheViewedType(t *testing.T) {
