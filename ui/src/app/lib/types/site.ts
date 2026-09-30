@@ -104,6 +104,13 @@ export interface SiteConfig {
   // characters; the URL is http(s) only. Edited on the People step.
   sign_in_help_text?: string;
   sign_in_help_url?: string;
+  // #1215 — the part of the console branding a site config carries: the logo,
+  // as a file wardynd reads when this document is applied
+  // (types.SiteConfig.Branding). Delivered by `wardyn site-config set` or the
+  // MDM file; no console surface writes it, and it is stripped from every
+  // GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) so a Network-step save never
+  // re-applies — or fails on — a file it did not mean to touch.
+  branding?: SiteBranding;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -122,6 +129,12 @@ export interface SiteConfig {
   // precisely so health.putSiteConfig can strip it — an untyped key rides
   // invisibly through the GET-spread idiom every writer uses.
   readonly onboarding_completed_at?: string;
+}
+
+// types.SiteBranding (internal/types/site_config.go), the json tags verbatim.
+export interface SiteBranding {
+  // Absolute path, as wardynd sees it, to an SVG or PNG (at most 512 KB).
+  logo_path?: string;
 }
 
 // The keys GET /site-config returns that PUT /site-config REFUSES: each one is
@@ -144,6 +157,7 @@ export const SERVER_OWNED_SITE_CONFIG_KEYS = [
   "workspace_providers",
   "agent_providers",
   "model_providers",
+  "branding",
   "effective_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
 
