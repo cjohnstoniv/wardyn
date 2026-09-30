@@ -37,6 +37,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
+  to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
+  (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
+  warning; the Compose demo is exempt. With secure cookies, a UI gateway advertised on the console's
+  own hostname logs a warning that names the fix, a hostname of its own. Neither refuses boot. A
+  managed laptop's device credential now records a hash of `WARDYN_ORG_URL`: a different URL re-enrols
+  with `WARDYN_ORG_ENROLMENT_TOKEN`, or refuses to start without one, instead of sending the old bearer
+  to the new host. A credential stored earlier is kept and bound to the URL set at its first boot after
+  the upgrade. `docs/operations/secrets-and-keys.md` notes that a Vault platform policy must cover
+  `<prefix>/platform/*`.
 - **A run's model credential comes only from its model provider; the 0.8.2 upgrade converts 0.7.x
   and 0.8.0 model configuration and there is no alias window (#548).** Migration `0100_model_provider_conversion`
   runs once, in one transaction: the AI integration rows (`anthropic_api_key`,

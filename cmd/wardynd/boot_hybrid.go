@@ -47,18 +47,33 @@ const secretOrgDeviceCredential = "wardyn-org-device-credential"
 // is pushed again. Re-enrolment is the ONLY thing that clears that mark: a
 // laptop the organisation revoked comes back up still refusing new runs, the
 // organisation reachable or not.
+//
+// The stored credential is also bound to the WARDYN_ORG_URL it was enrolled at
+// (Credential.OrgURLSHA256): pointed at another URL it is not used, so the wdd_
+// bearer never goes to a host the enrolment did not name, and the laptop
+// re-enrols there with the enrolment token or refuses to start. A credential
+// stored before that field existed has no hash; it is adopted, not refused —
+// the URL configured at this boot is recorded on it, since refusing would
+// strand every enrolled laptop whose spent token cannot enrol again.
 func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets bootKeyStore, st federation.Store, rec audit.Recorder) (*federation.Forwarder, error) {
 	if orgURL == "" {
 		return nil, nil
 	}
 	client := federation.NewClient(orgURL)
+	orgHash := federation.OrgURLSHA256(orgURL)
+	boundElsewhere := false
 	raw, err := loadOrCreateSecret(ctx, secrets, secretOrgDeviceCredential,
 		func(b []byte) bool {
 			c, ok := parseOrgCredential(b)
-			return ok && (enrolToken == "" || c.EnrolmentTokenSHA256 == federation.TokenSHA256(enrolToken))
+			boundElsewhere = ok && c.OrgURLSHA256 != "" && c.OrgURLSHA256 != orgHash
+			return ok && !boundElsewhere && (enrolToken == "" || c.EnrolmentTokenSHA256 == federation.TokenSHA256(enrolToken))
 		},
 		func() ([]byte, error) {
 			if enrolToken == "" {
+				if boundElsewhere {
+					return nil, errors.New("refusing to start: the stored org credential was enrolled at a different WARDYN_ORG_URL " +
+						"and WARDYN_ORG_ENROLMENT_TOKEN is unset — restore the original URL, or deliver an enrolment token the new organisation minted")
+				}
 				return nil, errors.New("refusing to start: WARDYN_ORG_URL is set but this device holds no org credential " +
 					"and WARDYN_ORG_ENROLMENT_TOKEN is unset — deliver an enrolment token an org admin minted")
 			}
@@ -67,12 +82,26 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 				return nil, fmt.Errorf("refusing to start: enrolment at WARDYN_ORG_URL failed: %w", err)
 			}
 			return json.Marshal(federation.Credential{DeviceID: resp.DeviceID, Token: resp.Token,
-				EnrolmentTokenSHA256: federation.TokenSHA256(enrolToken), ResetPending: true, Name: resp.Name})
+				EnrolmentTokenSHA256: federation.TokenSHA256(enrolToken), OrgURLSHA256: orgHash, ResetPending: true, Name: resp.Name})
 		})
 	if err != nil {
 		return nil, err
 	}
 	cred, _ := parseOrgCredential(raw)
+	if cred.OrgURLSHA256 == "" {
+		// Stored before the org URL was recorded: adopt this boot's URL. A
+		// pending reset persists it in its own Put below.
+		cred.OrgURLSHA256 = orgHash
+		if !cred.ResetPending {
+			adopted, merr := json.Marshal(cred)
+			if merr != nil {
+				return nil, fmt.Errorf("marshal device credential: %w", merr)
+			}
+			if err := secrets.Put(ctx, secretOrgDeviceCredential, adopted); err != nil {
+				return nil, fmt.Errorf("refusing to start: bind device credential to WARDYN_ORG_URL: %w", err)
+			}
+		}
+	}
 	// ResetPending is durable in the credential itself (set true only by a
 	// fresh generate, above), so this resumes on the next boot even if the
 	// process died between the Put that stored it and finishing the steps

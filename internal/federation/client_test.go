@@ -1,0 +1,25 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package federation
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+// TestOrgURLSHA256 pins what counts as the same organisation URL (the client
+// drops surrounding space and trailing slashes, so the hash must too) and that
+// a credential stored before the field existed decodes with an empty hash.
+func TestOrgURLSHA256(t *testing.T) {
+	if OrgURLSHA256(" https://org.example.com// ") != OrgURLSHA256("https://org.example.com") {
+		t.Error("trailing slashes and space changed the hash")
+	}
+	if OrgURLSHA256("https://org.example.com") == OrgURLSHA256("https://other.example.com") {
+		t.Error("different hosts hash alike")
+	}
+	var old Credential
+	if err := json.Unmarshal([]byte(`{"device_id":"6f1c2c1e-0d0c-4b52-9a4e-5b1f0c8f2a11","token":"wdd_x","enrolment_token_sha256":"ab"}`), &old); err != nil || old.OrgURLSHA256 != "" {
+		t.Errorf("legacy credential: err=%v hash=%q, want empty", err, old.OrgURLSHA256)
+	}
+}

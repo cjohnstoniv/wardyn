@@ -33,12 +33,23 @@ const requestTimeout = 60 * time.Second
 // token from the spent one MDM leaves behind). ResetPending, persisted true
 // only on a fresh credential, makes the post-enrolment reset resumable across
 // a crash without re-spending the token or clearing a later, genuine revocation.
+// OrgURLSHA256 binds the credential to the WARDYN_ORG_URL it was enrolled at, so
+// the bearer is never sent to a different host; empty on a credential stored
+// before that field existed (bootHybrid adopts the configured URL for it).
 type Credential struct {
 	DeviceID             uuid.UUID `json:"device_id"`
 	Token                string    `json:"token"`
 	EnrolmentTokenSHA256 string    `json:"enrolment_token_sha256"`
+	OrgURLSHA256         string    `json:"org_url_sha256,omitempty"`
 	ResetPending         bool      `json:"reset_pending,omitempty"`
 	Name                 string    `json:"name,omitempty"`
+}
+
+// OrgURLSHA256 is hex(sha256(url)) of the organisation URL as NewClient reads
+// it (surrounding space and trailing slashes dropped), the form Credential records.
+func OrgURLSHA256(orgURL string) string {
+	sum := sha256.Sum256([]byte(strings.TrimRight(strings.TrimSpace(orgURL), "/")))
+	return hex.EncodeToString(sum[:])
 }
 
 // TokenSHA256 is hex(sha256(token)), the form Credential records.
