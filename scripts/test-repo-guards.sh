@@ -87,10 +87,8 @@ ok()  { echo "ok: $*"; }
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
-# managed-settings-drift (#1279): new, never run on a hosted runner — a first run
-# that fails for an environment reason (npm registry, runner disk for the ~300 MB
-# CLI package) must not block a release. Add it to notify-new-lanes' needs (and
-# to release.yml's watched=) once it has gone green on a real nightly.
+# managed-settings-drift (#1279, #1395) went green on hosted run 36786358051 and is now in
+# notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 # ci-mode-dogfood-model-fake (#681, T-21): new, never run on a hosted runner — a
 # kind cluster plus the fake's image and a model-provider seed, any of which can
 # fail for an environment reason on the first run. Same promotion rule as above.
@@ -99,7 +97,7 @@ ok()  { echo "ok: $*"; }
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk managed-settings-drift ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"

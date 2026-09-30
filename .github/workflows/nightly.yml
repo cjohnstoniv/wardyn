@@ -1284,8 +1284,12 @@ jobs:
   # itself honours; a CLI that stops knowing one ignores it silently. This installs
   # the EXACT version deploy/images/claude-code/Dockerfile pins (the script reads it
   # from there and refuses a channel) and fails naming any key absent from that
-  # CLI. It runs no model and needs no credential. NOTIFY_EXEMPT until it has gone
-  # green once: see scripts/test-repo-guards.sh.
+  # CLI, on amd64 and arm64 (the arm64 package is read, not run, and must be the
+  # same release), then starts the amd64 CLI in the agent image's base container
+  # with each frozen managed-settings document and asserts the permission mode it
+  # reports. It runs no model and needs no credential. Green on hosted run
+  # 36786358051, so it is in notify-new-lanes.needs and release.yml's watched= like the
+  # other lanes.
   managed-settings-drift:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1394,7 +1398,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1416,7 +1420,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind or provider-subscription-docker-pg." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg or managed-settings-drift." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
