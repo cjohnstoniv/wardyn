@@ -8,13 +8,9 @@
 // The operator has two concrete questions here: what runs my agent, and how
 // do you clone my private repos — not an abstract "which integration kind?".
 //
-// Renders the SAME card as /settings (connection-cards.tsx): one component in
-// both places so they can't drift. Since 0.8 that card only says where model
-// access is set up — model providers, each person's own credential.
-//
 // Git credentials live in a provider row (`/providers`'s Git tab) via the
 // funnel's own `providers` step (steps.ts, phase "Your work", before
-// `workspaces`), not here — this step keeps ModelProviderCard only, and its
+// `workspaces`), not here — this step is its lede only, and its
 // own id/label stay `integrations`/"Secrets" (renaming the id breaks
 // demo-videos.ts's episodesFor; Q5).
 //
@@ -22,7 +18,6 @@
 // connected; clicking Next past this step with nothing set marks it Skipped
 // (setup-screen.tsx's selectStep).
 import { Link } from "react-router-dom";
-import { ModelProviderCard } from "../settings/connection-cards";
 
 // The lede names "the Secrets page" and must actually link there (renaming
 // this step is out: its id must stay `integrations`, demo-videos.ts's
@@ -45,7 +40,6 @@ export function IntegrationsStep() {
         </Link>
         {STEP_LEDE_SUFFIX}
       </p>
-      <ModelProviderCard />
     </div>
   );
 }

@@ -29,7 +29,7 @@ export function RunDetailCommandBar({
         className,
       )}
     >
-      <div className="flex min-w-0 items-center gap-0.5">{tabs}</div>
+      <div className="scroll-thin flex min-w-0 items-center gap-0.5 overflow-x-auto">{tabs}</div>
     </div>
   );
 }

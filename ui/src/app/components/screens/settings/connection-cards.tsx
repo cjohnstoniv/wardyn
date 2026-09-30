@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Model provider card, plus the Lane/SecretLane/HostSummary primitives the
-// Workspace Providers Git tab reuses for ITS credential lanes
-// (screens/providers/git-tab.tsx).
+// The Lane/SecretLane/HostSummary primitives the Workspace Providers Git tab
+// reuses for ITS credential lanes (screens/providers/git-tab.tsx).
 //
 // This file also used to carry GitHostCard, the Git host card: its free-text
 // Host field could store a git-pat-<slug> for a host no provider admitted, a
@@ -13,12 +12,10 @@
 // provider row on /providers instead; this file keeps the shared shell
 // (Lane/SecretLane/HostSummary) EXPORTED rather than re-typed there.
 //
-// The Model provider card rendered in THREE places (/settings, /account and
-// the Getting Started "Secrets" step) and held the deployment's own model
-// credentials: a Claude subscription sign-in, API keys and a Bedrock bearer
-// key or SSO sign-in. Since 0.8 (#548) none of those credential a run — model
-// access is a model provider, each person's own — so the card says where that
-// is set up instead of offering fields whose values no run reads.
+// The Model provider card that used to live here held the deployment's own
+// model credentials; since 0.8 (#548) none of those credential a run, and
+// model access is a model provider (Admin Settings' Model providers list,
+// each person's own connection on Your account), so the card is retired.
 import * as React from "react";
 import { toast } from "sonner";
 import { Check, Loader2 } from "lucide-react";
@@ -29,20 +26,11 @@ import { Input } from "../../ui/input";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
-import { MODEL_LEDE } from "../../../lib/model-providers-copy";
-import { CollapsibleCard } from "../../wardyn/collapsible-card";
 
 // Canon strings, reviewed against the settings mock. Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
 // deleted and shrinks with it.
 export const S = {
-  MODEL_TITLE: "Model provider",
-  MODEL_LEDE,
-  // DRAFT (M2 canon pending) — #548: the card's lanes held the deployment's
-  // own model credentials, and since 0.8 no run reads them. Says where model
-  // access is set up now, for both audiences, without naming a mechanism.
-  MODEL_MOVED:
-    "Model access is set up as model providers: an admin adds them under Model providers, and each person connects their own credential from Your account.",
   // The three lanes differ in WHERE the credential goes, and the footer owns
   // that split so no lane has to overclaim: only the App lane keeps the token
   // outside the sandbox (proxy broker); a PAT or SSH key enters it for the
@@ -53,44 +41,7 @@ export const S = {
     "Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all.",
 } as const;
 
-// Card shell + lane rows.
-
-function Card({
-  title,
-  lede,
-  footer,
-  // #1200 compact cards — Settings' and Your account's ModelProviderCard only.
-  // Getting started's Secrets step mounts the SAME card and must stay fully
-  // open, so the collapse is an opt-in, never this shell's own new default.
-  compact = false,
-  summary,
-  children,
-}: {
-  title: string;
-  lede: string;
-  footer?: string;
-  compact?: boolean;
-  summary?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  if (compact) {
-    return (
-      <CollapsibleCard title={title} summary={summary} testId="model-provider-card">
-        <p className="text-body leading-snug text-muted-foreground">{lede}</p>
-        <div className="mt-3 space-y-2">{children}</div>
-        {footer && <p className="mt-3 text-meta leading-snug text-muted-foreground">{footer}</p>}
-      </CollapsibleCard>
-    );
-  }
-  return (
-    <section className="rounded-xl border border-border bg-card p-4">
-      <h3 className="text-sm font-medium text-foreground">{title}</h3>
-      <p className="mt-0.5 text-body leading-snug text-muted-foreground">{lede}</p>
-      <div className="mt-3 space-y-2">{children}</div>
-      {footer && <p className="mt-3 text-meta leading-snug text-muted-foreground">{footer}</p>}
-    </section>
-  );
-}
+// Lane rows.
 
 // One lane's RADIO button only: it must never also render the expanded form
 // (`children`) INSIDE itself, or a selected lane's Input + Save button ends
@@ -211,7 +162,7 @@ export function SecretLane({
   summary?: React.ReactNode;
   disabled?: boolean;
   /** Save/Save replacement's Button variant. Default "default" (teal) keeps
-   *  today's ModelProviderCard/Secrets-step behaviour unchanged; the
+   *  the original lane look unchanged; the
    *  Workspace Providers Git tab passes "secondary" — that screen's one teal
    *  is its own Save providers button (CONSOLE-RULES §6), so a lane's own
    *  Save must not compete with it. */
@@ -331,22 +282,6 @@ export function HostSummary({ host }: { host: string }) {
     <p className="text-body text-muted-foreground">
       Clones <Mono>{host}</Mono> over an injected credential — the value itself is write-only and never read back.
     </p>
-  );
-}
-
-// Model provider.
-
-export function ModelProviderCard({
-  // #1200 compact cards — Settings' and Your account's opt-in; Getting
-  // started's Secrets step omits it and stays fully open (Card's own comment).
-  compact = false,
-}: {
-  compact?: boolean;
-}) {
-  return (
-    <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} compact={compact}>
-      <p className="text-body text-muted-foreground">{S.MODEL_MOVED}</p>
-    </Card>
   );
 }
 

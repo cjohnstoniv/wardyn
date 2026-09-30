@@ -15,7 +15,6 @@ import type { ModelProviderKind } from "./types/site";
 // lib/integrations.ts's INTEGRATIONS.X_* rows, reused verbatim; its AWS
 // sign-in labels are lib/workspace-providers-copy.ts's AGENTS/AGENTS_EXTRA.
 
-// Reused as the Model provider card's lede (connection-cards.tsx S.MODEL_LEDE).
 export const MODEL_LEDE = "Agent runs need one. Governed commands don't.";
 
 // The provider editor (#537, #538). PROVIDES_CLAUDE is packet B's line; the

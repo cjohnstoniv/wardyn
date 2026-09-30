@@ -190,6 +190,9 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
 
     await page.setViewportSize({ width: 420, height: 720 });
+    // Settled first: measured before the tab strip mounts, the page is still
+    // the reload skeleton and the overflow check below passes vacuously.
+    await expect(page.getByRole("tab", { name: "Recording" })).toBeVisible();
 
     // THE PAGE DOES NOT SCROLL (run-detail.tsx's own invariant) — a residual
     // overflow here would force <main>'s overflow-y:auto into overflow-x too.
@@ -215,6 +218,36 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
 
     // NEVER hidden — the chip may truncate, but it must still be on screen.
     await expect(page.getByTitle(hint)).toBeVisible();
+  });
+
+  // The five-tab strip (Overview, Approvals, Policy, Audit, Recording) is
+  // wider than 390px: it must scroll in place, never widen <main>, and the
+  // last tab must stay reachable.
+  test("the tab strip scrolls in place at 390px and the Recording tab stays reachable", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 6").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+
+    await page.setViewportSize({ width: 390, height: 720 });
+    const recording = page.getByRole("tab", { name: "Recording" });
+    await expect(recording).toBeVisible();
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const main = document.querySelector("main");
+            return (main?.scrollWidth ?? 0) - (main?.clientWidth ?? 0);
+          }),
+        { message: "main scrollWidth minus clientWidth at 390px" },
+      )
+      .toBe(0);
+
+    await recording.scrollIntoViewIfNeeded();
+    const box = await recording.boundingBox();
+    expect(box, "Recording tab boundingBox at 390px").not.toBeNull();
+    expect(box!.x + box!.width, "Recording tab right edge at 390px").toBeLessThanOrEqual(390);
   });
 });
 

@@ -5,11 +5,10 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
-import { S } from "../src/app/components/screens/settings/connection-cards";
 import { CONNECTIONS, KEY_DOOR, REMOVE_CONFIRM } from "../src/app/components/wardyn/copy/door";
 
-// E2E coverage for Settings' Host card and Model provider card
-// (src/app/components/screens/settings/{admin-settings-screen,connection-cards}.tsx)
+// E2E coverage for Settings' Host card and the retired Model provider card
+// (src/app/components/screens/settings/admin-settings-screen.tsx)
 // — X2-F1/F3/F23. corp-network.spec.ts was deleted in b97afcdc "for when
 // Settings gains the Host card"; Settings has had one since. fixtures.ts's
 // mockMemberRole comment used to cite that dead file as the precedent for
@@ -24,10 +23,9 @@ import { CONNECTIONS, KEY_DOOR, REMOVE_CONFIRM } from "../src/app/components/war
 // already do that against a mock); this is what only an e2e can prove: the
 // real wiring, against the real seeded backend.
 //
-// M-5 (#636) split Settings in two: Host and Model provider both stayed in
-// Admin Settings (/admin/settings), so the tests below are unchanged except
-// the one that used to check /account for a member — Host isn't there at all
-// any more.
+// M-5 (#636) split Settings in two: Host stayed in Admin Settings
+// (/admin/settings), so the tests below are unchanged except the one that
+// used to check /account for a member — Host isn't there at all any more.
 //
 // #1200 compact cards: every card here now collapses to a one-line summary by
 // default and expands on click (collapsible-card.tsx) — every test that reads
@@ -142,24 +140,21 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict", () =
   });
 });
 
-// #548: the Settings Model provider card no longer holds a credential — its
-// API-key, subscription and Bedrock lanes held the deployment's own model
-// credentials, which no run reads since 0.8.2. The card now says where model
-// access is set up (S.MODEL_MOVED), and each person's own key lives on Your
+// #548: the Settings Model provider card held the deployment's own model
+// credentials, which no run reads since 0.8.2, and is retired: Model providers
+// is where model access is set up, and each person's own key lives on Your
 // account's "Your model connections". The round-trip this block used to pin
 // against GET /secrets moved there with it, against the provider credential
 // endpoint and the caller's own provider_access.
-test.describe("Settings — Model provider card and Your model connections", () => {
+test.describe("Settings — no Model provider card, and Your model connections", () => {
   // ticket: X2-F3
-  test("the Settings card points at model providers and offers no credential of its own", async ({ page }) => {
+  test("Admin Settings draws no Model provider card", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
-    await expandCard(page, S.MODEL_TITLE);
+    await expect(page.getByRole("heading", { name: "Model providers", level: 3 })).toBeVisible();
 
-    const card = page.getByTestId("model-provider-card");
-    await expect(card.getByText(S.MODEL_MOVED)).toBeVisible();
-    await expect(card.getByRole("radio")).toHaveCount(0);
-    await expect(card.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByTestId("model-provider-card")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Model provider( |$)/ })).toHaveCount(0);
   });
 
   test("a key connect, a replace, and a remove on Your model connections all round-trip against the provider", async ({
