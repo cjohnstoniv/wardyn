@@ -144,7 +144,7 @@ func TestAvailability_RestrictedWorkspaceRepoIsDropped(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := memberRequest(t)
 			req := createRunRequest{Agent: "claude-code", InlinePolicy: &authored}
-			_, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
+			_, _, _, _, ok := h.srv.resolveRunPolicy(r.Context(), w, r, &req, false)
 			if ok {
 				t.Fatalf("resolveRunPolicy: ok = true, want refused")
 			}

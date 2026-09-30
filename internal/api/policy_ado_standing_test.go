@@ -66,7 +66,7 @@ func adoStandingLaunch(t *testing.T, c adoStandingCase, defaults, ceiling []ados
 	if denied {
 		t.Fatalf("create denied: %d %s", w.Code, w.Body.String())
 	}
-	resolved, _, _, ok := srv.resolveRunPolicy(ctx, w, r, req, false)
+	resolved, _, _, _, ok := srv.resolveRunPolicy(ctx, w, r, req, false)
 	if !ok {
 		t.Fatalf("resolve refused: %d %s", w.Code, w.Body.String())
 	}

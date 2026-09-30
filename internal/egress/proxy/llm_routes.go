@@ -187,37 +187,85 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
-	outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), bodyReader)
-	if err != nil {
-		p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
-		p.httpError(w, "build llm request", err, http.StatusBadGateway)
-		return
-	}
-	copyHeader(outReq.Header, r.Header)
-	removeHopByHop(outReq.Header)
-	applyCredential(outReq.Header, ownedHeader, hdr)
-	outReq.Host = hostport
-	outReq.Header.Del("Host")
+	// send forwards one attempt carrying hdr and records its allow. On false it has answered.
+	send := func(body io.Reader, hdr *injectedHeader) (*http.Response, bool) {
+		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
+		if err != nil {
+			p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
+			p.httpError(w, "build llm request", err, http.StatusBadGateway)
+			return nil, false
+		}
+		copyHeader(outReq.Header, r.Header)
+		removeHopByHop(outReq.Header)
+		applyCredential(outReq.Header, ownedHeader, hdr)
+		outReq.Host = hostport
+		outReq.Header.Del("Host")
 
-	// Emitted only AFTER a successful round-trip: a failed dial must NOT
-	// over-report an allow.
-	resp, err := p.roundTripUpstream(outReq)
-	if err != nil {
-		seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
-		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
-			return
+		// Emitted only AFTER a successful round-trip: a failed dial must NOT
+		// over-report an allow.
+		resp, err := p.roundTripUpstream(outReq)
+		if err != nil {
+			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
+			if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
+				return nil, false
+			}
+			if p.sink != nil {
+				p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
+			}
+			// withStage=true: shares its Cause with the decision log above verbatim.
+			p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
+			return nil, false
 		}
-		if p.sink != nil {
-			p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
-		}
-		// withStage=true: shares its Cause with the decision log above verbatim.
-		p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
+		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
+		return resp, true
+	}
+	resp, ok := send(bodyReader, hdr)
+	if !ok {
 		return
 	}
-	p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
 	defer func() { _ = resp.Body.Close() }()
 
+	// Azure DevOps refused the injected header itself: it may be stale (the per-host cache outlived
+	// it). Heal once, before anything is relayed; a second refusal takes the ordinary path below.
+	if ruleSource == ruleSourceADO && hdr != nil && adoCredentialRefused(resp) {
+		replay := adoReplayBody(r)
+		fresh, retry, err := p.healADOHeader(r.Context(), host, *hdr, replay != nil)
+		if err != nil {
+			drainClose(resp)
+			if r.Context().Err() == nil { // a caller that hung up was never refused
+				p.refuseADOCredential(w, r, host, port, err)
+			}
+			return
+		}
+		if retry {
+			drainClose(resp)
+			if p.sink != nil {
+				p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceADOReresolved))
+			}
+			again, ok := send(replay(), &fresh)
+			if !ok {
+				return
+			}
+			resp = again
+		}
+	}
 	p.relayUpstream(w, r, host, port, resp, ruleSource)
+}
+
+// adoReplayBody is how an Azure DevOps REST request's body is sent a second time, or nil when it
+// can't be: only a request with no body, or one whose whole body the gate already buffered
+// (adoPeekBody, at most adoscope.MaxBodyPeek), replays. Nothing is buffered here for a retry.
+func adoReplayBody(r *http.Request) func() io.Reader {
+	switch {
+	case r.GetBody != nil:
+		return func() io.Reader {
+			b, _ := r.GetBody()
+			return b
+		}
+	case r.Body == nil || r.Body == http.NoBody:
+		return func() io.Reader { return http.NoBody }
+	}
+	return nil
 }
 
 // coverageInspectable / coverageOpaque describe whether the LLM transport for

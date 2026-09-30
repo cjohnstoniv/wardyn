@@ -838,6 +838,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
 | launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the workspace-provider policy — `GET /workspace-providers` and `PUT /workspace-providers`: which git hosts (and which org paths on them) a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings. Both verbs, because a provider's allowed addresses name the org's forge hosts and org paths — corporate topology, the same reason the `/site-config` reads above are gated. A member is told the provider KIND in a refusal, never the addresses | ⛔ admin only |
+| the Azure DevOps organisation check — `POST /workspace-providers/git/{id}/org-check`: on a `minted_pat` row, it uses the caller's own Azure DevOps connection to create and at once revoke two short tokens, to learn whether the app registration holds the token permissions and whether the organisation's maximum token lifespan is on. Beside the rows it checks, and it creates tokens in the caller's name | ⛔ admin only |
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, whether each is on, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Since 0.8 a row carries no model credential: model access is a model provider. Both verbs, for the sibling row's reason: the block names the org's model-provider choices. A member is served a narrower document instead — the `enabled` field on `GET /setup/status`'s harness rows | ⛔ admin only |
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
@@ -2736,6 +2737,52 @@ classified admin/member/owner/anonymous/internal before it can ship;
 `internal/api/rbac_test.go` then proves the widest admin-gated routes really do
 403 a member. What Wardyn gives up is *breadth* — a deliberate two-tier split, not
 per-user roles or multi-org depth — not the governance itself.
+
+## The policy a run got
+
+`GET /api/v1/runs/{id}/policy`, `wardyn run policy <run-id>` and the SDK's
+`GetRunPolicy` answer "what was this run allowed to do?" after the run has
+started, which the saved policy cannot: it is overwritten in place, and an
+inline or default policy leaves no row at all. The answer comes from what
+dispatch recorded in the append-only audit log, so it is what the sandbox's proxy
+enforces, not a re-derivation:
+
+- **The policy itself** is the `run.policy.resolve` envelope, as a normal policy
+  document, with restart denies (`run.revive` `denied_added`) folded in.
+- **Where it started** is the `policy_source` datum on the run's `run.create`
+  row: the saved policy (id, and its name and content as they read at launch), an
+  inline policy, the default, or the governance profile the run's creator was
+  bound to. It is recorded already redacted, because the run's creator can read
+  that row through `GET /audit`.
+- **What changed at launch** is each difference between the two, given a cause:
+  `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
+  `profile`, `org_disk`, `restart`, `limits` or `launch`. The launch audit rows
+  (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`,
+  `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`,
+  `run.revive`) name the cause first; the rest are derived; anything nothing
+  names is `launch`. `limits` is only ever claimed for a member the governance
+  bound applied to.
+- **Whether the saved policy has moved** (`stored_policy_now`) compares the
+  saved policy today with its recorded launch content. A run from before the
+  record existed can only say the policy was updated after launch, which a rename
+  alone also does.
+
+**Who can read it.** Whoever can read the run (`GET /runs/{id}`): its creator or
+an admin. Anyone else gets the run's own `404` and a `not_owner` audit row. A
+portal's delegated token is refused `403` `delegation_scope`: the route is not on
+the delegation list. Below the security admin tier the policy's mount sources
+read `<redacted>` and grant secret names are dropped (`redacted: true`), the same
+rule as reading a policy; `llm_inspection` secret values are never returned. The
+result is a policy document you can reuse as is only from the security admin tier
+up; below it, fill in the hidden values first.
+
+**What it does not cover:** hosts approved while the run was running (Approvals),
+credentials the run was handed (Credentials), folders added from a workspace or a
+drive, and Azure DevOps access that came from the connection's defaults. A run
+that has not reached sandbox setup answers `state: "not_yet"`, and one that ended
+before it `"never"`; the CLI prints the sentence and exits `1` so a redirect never
+writes an empty file. A run from before `policy_source` existed answers
+`complete: false`: its changes list only what the launch rows state.
 
 ## Run lifetime: lease, extend, revive, ends
 

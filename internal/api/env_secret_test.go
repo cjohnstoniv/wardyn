@@ -250,7 +250,7 @@ func TestEnvSecretPosture_BindsWithoutAGovernanceAssignment(t *testing.T) {
 			t.Fatalf("unknown route %q", route)
 		}
 		r, ctx := boundMemberRequest(t)
-		spec, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r, req, false)
+		spec, _, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r, req, false)
 		if !ok {
 			t.Fatalf("resolveRunPolicy refused (assigned=%v route=%s)", assigned, route)
 		}
@@ -313,7 +313,7 @@ func TestEnvSecretPosture_BindsWithoutAGovernanceAssignment(t *testing.T) {
 		srv := New(cfg)
 		ctx := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
-		spec, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
+		spec, _, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
 			&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", PolicyID: &policyID}, false)
 		if !ok {
 			t.Fatal("resolveRunPolicy refused an operator")

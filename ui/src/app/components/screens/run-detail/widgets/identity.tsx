@@ -19,8 +19,9 @@ import type { RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
 import { CopyButton } from "../../../wardyn/copy-button";
 import { WidgetCard } from "../../../wardyn/primitives";
+import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
 
-export function IdentityWidget({ run }: { run: RunDetail }) {
+export function IdentityWidget({ run, onGoPolicy }: { run: RunDetail; onGoPolicy: () => void }) {
   // UT-7a: "Ran as {type}" reads the name GET /runs/{id} resolved server-side
   // (RunDetail.user_type_name). Nothing renders for a run with no type or a
   // type since deleted — never the raw id.
@@ -81,14 +82,19 @@ export function IdentityWidget({ run }: { run: RunDetail }) {
           </>
         )}
 
-        {run.policy_id && (
-          <>
-            <dt className="text-muted-foreground">Policy</dt>
-            <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.policy_id}>
-              {run.policy_id}
-            </dd>
-          </>
-        )}
+        {/* Every run has a policy, so the row is unconditional; the value opens
+            the Policy tab, and the saved policy's id stays on the hover title. */}
+        <dt className="text-muted-foreground">Policy</dt>
+        <dd className="min-w-0 truncate text-right">
+          <button
+            type="button"
+            onClick={onGoPolicy}
+            title={run.policy_id}
+            className="font-medium text-primary hover:underline"
+          >
+            {IDENTITY_POLICY_VIEW}
+          </button>
+        </dd>
 
         <dt className="text-muted-foreground">Runner</dt>
         <dd className="min-w-0 truncate text-right font-mono text-foreground">{run.runner_target}</dd>

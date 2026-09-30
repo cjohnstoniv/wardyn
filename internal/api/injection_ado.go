@@ -63,6 +63,8 @@ const (
 	adoResolveUnavailable       = "Renewing the Azure DevOps sign-in behind this run did not complete; nothing about the credential is known to be wrong"
 	adoResolveStoreRefused      = "The secret store refused the Azure DevOps sign-in behind this run (it was moved or changed at the store, or Wardyn's access to it was revoked) — sign in to Azure DevOps again, or ask an administrator to check the store"
 	adoResolveTokenModeRefusal  = "This run's Azure DevOps token mode cannot be issued by Wardyn"
+	adoResolveBearerMintScopes  = "The Azure DevOps sign-in behind this run could create personal access tokens, so Wardyn will not send it with a run — " +
+		"remove vso.pats and vso.pats_manage from the app registration, or have Wardyn create a token for each run"
 )
 
 // adoEntraAccessReuseMargin is how long before expiry a minted access token
@@ -280,6 +282,14 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		status, body := adoResolveFailureAnswer(class)
 		return fail(status, string(class), body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
+	// S2: a bearer that can create personal access tokens never rides a run's
+	// traffic, and a grant that reported no scope proves nothing (fail closed).
+	if why := adoBearerMintScopeRefusal(access.Scopes); why != "" {
+		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, adoBearerAuditRefusedMint,
+			types.ADOEntraAccessTokenSecret, "denied", mustJSON(map[string]any{"reason": why, "owner": snapshot.OwnerSubject,
+				"provider_row": snapshot.ProviderRowID, "granted_scope": strings.Join(access.Scopes, " ")})))
+		return fail(http.StatusForbidden, why, adoResolveBearerMintScopes, map[string]any{"owner": snapshot.OwnerSubject})
 	}
 	if capAsk.capability != "" && s.settleADOCapability(w, r, claims, snapshot, cfg, grantID, minted.JTI, capAsk, need, access, fail) {
 		return true

@@ -110,6 +110,7 @@ var (
     sk  client.SSHPublicKey    // ListSSHKeys / AddSSHKey
     rf  client.RunFiles        // RunFiles
     re  client.RunEvent        // RunEvents
+    rp  client.RunPolicyView   // GetRunPolicy
 )
 
 // Enums and their values are re-exported too:
@@ -130,6 +131,36 @@ spec := client.RunPolicySpec{
 created, _ := c.CreatePolicy(ctx, client.PolicyRequest{Name: "default", Spec: spec})
 _ = created
 ```
+
+## Reading the policy a run got
+
+`GetRunPolicy` returns `GET /api/v1/runs/{id}/policy`: the resolved policy, where
+it started, and what launch changed. It is readable by whoever may read the run
+(anyone else gets the same `404` as `GET /runs/{id}`); a portal's delegated token
+is refused `403` `delegation_scope`.
+
+```go
+v, err := c.GetRunPolicy(ctx, created.ID)
+if err != nil { /* ... */ }
+if v.State == client.RunPolicyViewRecorded {
+    for _, ch := range v.Changes {
+        fmt.Println(ch.Cause, ch.Field, ch.Added, ch.Removed)
+    }
+    _ = v.Spec // a client.RunPolicySpec, ready for PolicyRequest.Spec
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `state` | `recorded`, `not_yet` (the run has not reached sandbox setup) or `never` (it ended before that); `spec` and `recorded_at` are set for `recorded` only |
+| `source` | `kind` is `stored`, `inline`, `default`, `profile` or `unknown`; a saved policy carries `policy_id` and its `name` at launch, and `deleted` once it is gone; `preset` and `preset_version` when the run came from one |
+| `spec` | the policy the sandbox's proxy enforces, restart denies included; `llm_inspection` secret values are never present |
+| `redacted` | true when the reader is below the security admin tier and mount sources or secret names were hidden (`<redacted>`, or dropped); the spec then strict-decodes as a policy but does not validate |
+| `changes` | never `null`; each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`. Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value |
+| `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
+| `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
+
+The CLI is `wardyn run policy <run-id> [--json]`.
 
 ## Following a run's lifecycle
 
@@ -262,6 +293,9 @@ silent gap:
 | `ado_pat_lifespan_policy` | Azure DevOps refused to create a personal access token because its life is above the organisation's maximum token lifespan. Lower the row's `pat_max_hours`. |
 | `ado_pat_consent_needed` | The person's Azure DevOps sign-in cannot create tokens: the app registration lacks the token permissions or consent for them. |
 | `ado_pat_mint_refused` | Azure DevOps refused to create a personal access token for another reason. |
+| `mint_scopes` / `scope_unknown` | S2: the Entra sign-in lane refuses to send a bearer whose granted scopes name a token permission (`vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration`, `user_impersonation`), or whose authority reported no granted scope at all (`resolveADOInjection`). Azure DevOps. |
+| `ado_pat_needs_console_app` | S1: a `minted_pat` row the console cannot redeem with its own client secret — it names another application or tenant, or `WARDYN_OIDC_CLIENT_SECRET` is unset — is unusable: the sign-in door and the organisation check refuse it, and `/me/scm-access` grades it `expired_signin` with this cause. |
+| `ado_org_check_unknown_row` / `ado_org_check_organisation` | `POST /workspace-providers/git/{id}/org-check` (`ado_pat_orgcheck.go`): no such row, or not the deployment's `minted_pat` sign-in row (answered identically, D-6); or the row's address names no organisation and `?organisation=` named none it serves. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
 | `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |
