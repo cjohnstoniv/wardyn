@@ -244,9 +244,11 @@ func TestResolveADOOwnPAT_Expired(t *testing.T) {
 		if again := pendingID(t, f.resolve(t, capSub, "dev.azure.com", ""), reauthPendingState); again != id {
 			t.Fatalf("a second resolve raised %s, want the open %s", again, id)
 		}
-		f.now = time.Now().UTC().Add(time.Minute)
+		// Stored with a clock BEHIND the hold's raise, as when the hold lands
+		// while the identity check is still out: it is answered all the same.
+		f.now = time.Now().UTC().Add(-time.Minute)
 		f.token(t, "bobs-new-pat", "contoso", f.now.AddDate(0, 0, 10))
-		f.srv.resolvePendingADOOwnPATHolds(context.Background(), capSub, ownPATRowID, f.now)
+		f.srv.resolvePendingADOOwnPATHolds(context.Background(), capSub, ownPATRowID)
 		if ap, _ := f.approvals.Get(context.Background(), id); ap.State != types.ApprovalApproved {
 			t.Fatalf("the hold is %s after a new token, want APPROVED", ap.State)
 		}

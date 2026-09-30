@@ -246,7 +246,7 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnStore, row.ID, "success", audit)
-	s.resolvePendingADOOwnPATHolds(ctx, subject, row.ID, now)
+	s.resolvePendingADOOwnPATHolds(ctx, subject, row.ID)
 	access, err := s.scmAccessForOwnPAT(ctx, row, subject)
 	if err != nil {
 		writeServerError(w, r, "read Azure DevOps access", err)
@@ -422,10 +422,13 @@ func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outco
 }
 
 // resolvePendingADOOwnPATHolds answers every PENDING Azure DevOps sign-in
-// request of owner's for this row raised before the token was stored: a run
-// held because its own token expired resumes with the new one. Best-effort; a
-// request left pending ages out, and its run fails with the hold's reason.
-func (s *Server) resolvePendingADOOwnPATHolds(ctx context.Context, owner, rowID string, storedAt time.Time) {
+// request of owner's for this row once a token is stored: a run held because
+// its own token expired resumes with the new one. Every one, whenever it was
+// raised: only an expired token raises it, and the one just stored is not. A
+// request raised while the identity check ran would otherwise be missed.
+// Best-effort; a request left pending ages out, and its run fails with the
+// hold's reason.
+func (s *Server) resolvePendingADOOwnPATHolds(ctx context.Context, owner, rowID string) {
 	resolver, ok := s.cfg.Store.(reauthResolver)
 	if s.cfg.Approvals == nil || !ok {
 		return
@@ -437,7 +440,7 @@ func (s *Server) resolvePendingADOOwnPATHolds(ctx context.Context, owner, rowID 
 	}
 	for _, ap := range rows {
 		sc, ok := adoSignInScope(ap)
-		if !ok || sc.Owner != owner || sc.ProviderID != rowID || !storedAt.After(ap.RequestedAt) {
+		if !ok || sc.Owner != owner || sc.ProviderID != rowID {
 			continue
 		}
 		ev := s.auditEvent(&ap.RunID, types.ActorHuman, owner, "credential.reauth.resolve", ap.ID.String(), "success",
