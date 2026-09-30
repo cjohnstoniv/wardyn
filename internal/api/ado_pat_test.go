@@ -373,6 +373,14 @@ func TestMintADOPAT_BlockedIsRecordedClearedAndBounded(t *testing.T) {
 	if got := mf.srv.scmAccessValue(ctx, mf.site, mf.subject); got.State != modelAccessLive {
 		t.Fatalf("scm access = %+v past adoMintBlockedFor, want live", got)
 	}
+	// A mint refused again after the window re-arms it: a stale stamp must not
+	// keep a still-blocked organisation reading as live.
+	if err := mint(); err == nil {
+		t.Fatal("the refused create succeeded")
+	}
+	if got := mf.srv.scmAccessValue(ctx, mf.site, mf.subject); got.State != modelAccessExpiredSignin || got.Cause != scmAccessCauseBlocked {
+		t.Fatalf("scm access = %+v after a refusal past the window, want expired_signin / blocked", got)
+	}
 	mf.srv.cfg.Now = time.Now
 	mf.ado.SetPatCreateError(adofake.PatTokenErrorNone)
 	if err := mint(); err != nil {

@@ -230,14 +230,14 @@ func (s *Server) revokeADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, or
 	return client.Revoke(ctx, org, access.AccessToken, authorizationID)
 }
 
-// noteADOMintBlocked sets or clears MintBlockedAt on owner's stored sign-in,
+// noteADOMintBlocked sets (re-stamping a stale one) or clears MintBlockedAt on owner's stored sign-in,
 // under the redemption lock and on a fresh read, so it cannot overwrite a
 // rotation. Best-effort: the caller's answer does not depend on it.
 func (s *Server) noteADOMintBlocked(ctx context.Context, rowID, owner string, blocked bool) {
 	unlock := s.adoEntra.lock(owner, rowID)
 	defer unlock()
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, rowID)
-	if err != nil || !found || blocked == !blob.MintBlockedAt.IsZero() {
+	if err != nil || !found || (!blocked && blob.MintBlockedAt.IsZero()) {
 		return
 	}
 	blob.MintBlockedAt = time.Time{}
