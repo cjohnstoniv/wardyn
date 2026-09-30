@@ -189,7 +189,7 @@ describe("TERMINAL_STATUS_REASONS mirrors the Go list", () => {
 
 // ---- #1419: the run page's startup view --------------------------------------
 
-const T0 = Date.parse("2026-09-29T12:00:00Z");
+const T0 = Date.UTC(2000, 0, 1, 12); // fixed reference instant for the mocked clock
 const ago = (ms: number) => new Date(T0 - ms).toISOString();
 const S = 1000;
 const MIN = 60 * S;
