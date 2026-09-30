@@ -137,7 +137,7 @@ function RecordedPolicy({
   const now = view.stored_policy_now;
   const banner =
     now?.state === "changed" ? POLICY_TAB.changedSince : now?.state === "updated" ? POLICY_TAB.updatedSince : null;
-  const groups = groupChanges(view.changes, ownRun, run.created_by);
+  const groups = groupChanges(view.changes, ownRun, run.created_by, spec.first_use_hold_seconds);
   const yaml = React.useMemo(() => toYaml(spec), [spec]);
   return (
     <>
@@ -257,7 +257,7 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
   return { key: "launch", heading: CHANGE_HEADING.launch };
 }
 
-function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: string): Group[] {
+function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: string, holdSeconds?: number): Group[] {
   const groups = new Map<string, Group>();
   for (const c of changes) {
     const { key, heading } = headingFor(c, ownRun, person);
@@ -265,8 +265,8 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
     groups.set(key, g);
     // The heading of a restart or a disk change already says what happened.
     const plain = c.cause === "restart" || c.cause === "org_disk";
-    for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text), mark: plain ? undefined : "added" });
-    for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text), mark: plain ? undefined : "removed" });
+    for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mark: plain ? undefined : "added" });
+    for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mark: plain ? undefined : "removed" });
     g.detail.push(...(c.detail ?? []));
   }
   return [...groups.values()];
@@ -274,13 +274,14 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
 
 // Single-value fields arrive as one-entry sets of the raw value; each reads in the
 // console's own words, as the Summary does, never as a wire code like CC2.
-function entryText(field: string, text: string): string {
+// A first-use change names how long a held connection waits, which is the policy's own number.
+function entryText(field: string, text: string, holdSeconds?: number): string {
   const n = Number(text);
   switch (field) {
     case "min_confinement_class":
       return CC_META[text as ConfinementClass]?.label ?? text;
     case "first_use_approval":
-      return firstUseText(text, 0);
+      return firstUseText(text, holdSeconds);
     case "first_use_hold_seconds":
       return SUMMARY.held(n);
     case "git_push_any_branch":
