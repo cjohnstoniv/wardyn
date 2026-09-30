@@ -10,7 +10,7 @@
 --
 --   read            -> code_read, work_read, wiki_read, build_read, release_read,
 --                      serviceendpoint_read, library_read, packaging_read,
---                      test_read, project_read, identity_read, analytics_read
+--                      test_read, project_read, identity_read
 --   work_write      -> work_write, work_admin
 --   build_execute   -> build_execute, release_execute
 --   build_admin     -> build_admin, release_admin
@@ -19,7 +19,7 @@
 -- What it does, in order:
 --   1. Every Azure DevOps provider row's entra block: capability_ceiling is
 --      split, and default_profile is split — or, when absent or empty (which
---      read as "read" before), written out as the twelve reads.
+--      read as "read" before), written out as the eleven reads.
 --   2. run_policies.spec, governance_profiles.ceiling and
 --      launch_presets.request.inline_policy: azure_devops_capabilities is split
 --      where it is a list.
@@ -46,7 +46,7 @@ LANGUAGE sql IMMUTABLE AS $fn$
             CROSS JOIN LATERAL unnest(CASE old
                 WHEN 'read' THEN ARRAY['code_read', 'work_read', 'wiki_read', 'build_read', 'release_read',
                                        'serviceendpoint_read', 'library_read', 'packaging_read', 'test_read',
-                                       'project_read', 'identity_read', 'analytics_read']
+                                       'project_read', 'identity_read']
                 WHEN 'work_write' THEN ARRAY['work_write', 'work_admin']
                 WHEN 'build_execute' THEN ARRAY['build_execute', 'release_execute']
                 WHEN 'build_admin' THEN ARRAY['build_admin', 'release_admin']

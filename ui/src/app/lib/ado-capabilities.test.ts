@@ -56,7 +56,6 @@ describe("ADO_CAPABILITIES — the console's copy of adoscope's grantable set", 
       "test_read",
       "project_read",
       "identity_read",
-      "analytics_read",
       "project_admin",
       "security_admin",
     ]);
@@ -74,7 +73,7 @@ describe("ADO_CAPABILITIES — the console's copy of adoscope's grantable set", 
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
   });
 
-  it("flags High risk and the twelve reads exactly as the approved mock does", () => {
+  it("flags High risk and the eleven reads exactly as the approved mock does", () => {
     expect(ADO_CAPABILITIES.filter((c) => c.highRisk).map((c) => c.cap)).toEqual([
       "policy_admin",
       "policy_bypass",
@@ -88,7 +87,7 @@ describe("ADO_CAPABILITIES — the console's copy of adoscope's grantable set", 
       "security_admin",
     ]);
     const reads = ADO_CAPABILITIES.filter((c) => c.read).map((c) => c.cap);
-    expect(reads).toHaveLength(12);
+    expect(reads).toHaveLength(11);
     expect(reads.every((c) => c.endsWith("_read"))).toBe(true);
     for (const c of ADO_CAPABILITIES) expect(ADO_CAPABILITY_GROUPS.some((g) => g.id === c.group)).toBe(true);
   });

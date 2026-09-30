@@ -541,12 +541,6 @@ export const ADO_CAP_COPY: Record<string, { name: string; consequence: string; a
     consequence: "Read the organisation's users, groups, memberships and licences, and directory identities.",
     ado: "ADO: vso.graph, vso.identity, vso.memberentitlementmanagement — Identity: Read",
   },
-  analytics_read: {
-    name: "View analytics",
-    consequence:
-      "Query Analytics — reports on work items, pipelines and tests across every project, so it reaches what the Boards, Pipelines and Test Plans reads cover.",
-    ado: "ADO: vso.analytics — View analytics",
-  },
   project_admin: {
     name: "Manage projects & teams",
     consequence: "Create, rename, change or delete a project or a team.",

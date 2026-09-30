@@ -825,6 +825,39 @@ func TestMintedPAT_ThroughTheVsspsClientAgainstAdofake(t *testing.T) {
 	}
 }
 
+// An admin disabling the row is the commonest drift. The enabled-row source no
+// longer serves it, so the revoke looks the row up by id and the token is
+// revoked at Azure DevOps, not abandoned live.
+func TestMintedPAT_DriftOnADisabledRowRevokesTheToken(t *testing.T) {
+	fx := newADOPATFixture(t)
+	first := fx.ok(t, "dev.azure.com", nil)
+	live := fx.srv.cfg.ADOEntra
+	byRow := func(_ context.Context, id string) (ADOEntraConfig, bool, error) {
+		cfg, _, err := live(context.Background())
+		return cfg, id == cfg.RowID, err
+	}
+	fx.srv.cfg.ADOEntra = func(ctx context.Context) (ADOEntraConfig, bool, error) {
+		if fx.st.site.WorkspaceProviders.Git[0].Disabled {
+			return ADOEntraConfig{}, false, nil
+		}
+		return live(ctx)
+	}
+	fx.srv.cfg.ADOEntraByRow = byRow
+	fx.st.site.WorkspaceProviders.Git[0].Disabled = true
+	if w, _ := fx.resolve(t, "dev.azure.com", nil); w.Code != http.StatusForbidden {
+		t.Fatalf("resolve on a disabled row: status %d, want 403", w.Code)
+	}
+	if got := fx.pats.revokedIDs(); !slices.Equal(got, []string{first.JTI}) {
+		t.Fatalf("revoked %v, want the token revoked at Azure DevOps", got)
+	}
+	if live := fx.st.unrevoked(t); len(live) != 0 {
+		t.Fatalf("live rows = %+v, want none", live)
+	}
+	if last := fx.st.marks[len(fx.st.marks)-1]; last.reason != adoPATRevokeDrift || last.lastError != "" {
+		t.Fatalf("closed with %+v, want reason %q and no error", last, adoPATRevokeDrift)
+	}
+}
+
 // A revoke that did not complete keeps its error on the open row; when the
 // sweep later closes that row as expired, the error is kept, not wiped.
 func TestMintedPAT_SweepKeepsAnExpiredRowsLastError(t *testing.T) {

@@ -57,8 +57,6 @@ var readAreas = map[string]readArea{
 	"groupentitlements":  {CapIdentityRead, "vso.memberentitlementmanagement"},
 	"memberentitlements": {CapIdentityRead, "vso.memberentitlementmanagement"},
 
-	"analytics": {CapAnalyticsRead, "vso.analytics"},
-
 	"connectiondata": {CapDiscovery, ""},
 	"resourceareas":  {CapDiscovery, ""},
 }

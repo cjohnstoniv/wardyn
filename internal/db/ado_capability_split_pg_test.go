@@ -17,9 +17,9 @@ import (
 // seeds pre-split lists below it and runs the real Migrate() over them.
 const adoSplitFloor = "0101"
 
-// adoTwelveReads is the old "read", written out in the order the split emits it.
-var adoTwelveReads = []string{"code_read", "work_read", "wiki_read", "build_read", "release_read",
-	"serviceendpoint_read", "library_read", "packaging_read", "test_read", "project_read", "identity_read", "analytics_read"}
+// adoElevenReads is the old "read", written out in the order the split emits it.
+var adoElevenReads = []string{"code_read", "work_read", "wiki_read", "build_read", "release_read",
+	"serviceendpoint_read", "library_read", "packaging_read", "test_read", "project_read", "identity_read"}
 
 // adoSplitSeed is what TestPG_ADOCapabilitySplit stores before the split.
 type adoSplitSeed struct {
@@ -155,12 +155,12 @@ func TestPG_ADOCapabilitySplit(t *testing.T) {
 	if len(rows) != 3 || rows[0].ID != "ado" || rows[1].ID != "ado2" || rows[2].ID != "gh" || doc.Other["kept"] != true {
 		t.Fatalf("site config lost its shape: %s", raw)
 	}
-	wantCeiling := append(slices.Clone(adoTwelveReads), "code_write", "work_write", "work_admin", "build_admin", "release_admin", "packaging_write")
-	if e := rows[0].Entra; e == nil || e.TenantID != "t" || !slices.Equal(e.CapabilityCeiling, wantCeiling) || !slices.Equal(e.DefaultProfile, adoTwelveReads) {
+	wantCeiling := append(slices.Clone(adoElevenReads), "code_write", "work_write", "work_admin", "build_admin", "release_admin", "packaging_write")
+	if e := rows[0].Entra; e == nil || e.TenantID != "t" || !slices.Equal(e.CapabilityCeiling, wantCeiling) || !slices.Equal(e.DefaultProfile, adoElevenReads) {
 		t.Errorf("ado entra = %+v, want ceiling %v and the twelve reads as the default", rows[0].Entra, wantCeiling)
 	}
-	wantCeiling2 := append(append([]string{"pr"}, adoTwelveReads...), "build_execute", "release_execute")
-	wantDefault2 := append(append([]string{"build_execute", "release_execute"}, adoTwelveReads...), "pr")
+	wantCeiling2 := append(append([]string{"pr"}, adoElevenReads...), "build_execute", "release_execute")
+	wantDefault2 := append(append([]string{"build_execute", "release_execute"}, adoElevenReads...), "pr")
 	if e := rows[1].Entra; e == nil || !slices.Equal(e.CapabilityCeiling, wantCeiling2) || !slices.Equal(e.DefaultProfile, wantDefault2) {
 		t.Errorf("ado2 entra = %+v, want ceiling %v default %v", rows[1].Entra, wantCeiling2, wantDefault2)
 	}
@@ -181,7 +181,7 @@ func TestPG_ADOCapabilitySplit(t *testing.T) {
 		return out
 	}
 	if got, want := list(`SELECT spec -> 'azure_devops_capabilities' FROM run_policies WHERE id = $1`, seed.policy),
-		append(append([]string{}, adoTwelveReads...), "pr", "work_write", "work_admin"); !slices.Equal(got, want) {
+		append(append([]string{}, adoElevenReads...), "pr", "work_write", "work_admin"); !slices.Equal(got, want) {
 		t.Errorf("policy = %v, want %v (code_read kept once, where read first put it)", got, want)
 	}
 	var untouched int
@@ -193,7 +193,7 @@ func TestPG_ADOCapabilitySplit(t *testing.T) {
 		t.Errorf("governance = %v, want %v", got, want)
 	}
 	if got, want := list(`SELECT request #> '{inline_policy,azure_devops_capabilities}' FROM launch_presets WHERE name = 'ado'`),
-		append([]string{"build_admin", "release_admin"}, adoTwelveReads...); !slices.Equal(got, want) {
+		append([]string{"build_admin", "release_admin"}, adoElevenReads...); !slices.Equal(got, want) {
 		t.Errorf("preset = %v, want %v", got, want)
 	}
 	var plain []byte

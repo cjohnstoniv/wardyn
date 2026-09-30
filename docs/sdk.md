@@ -504,7 +504,7 @@ capability enum, so no client code changes.
 
 | Old | New | Kind |
 |---|---|---|
-| `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read`, `analytics_read` | Capability id, clean break |
+| `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read` | Capability id, clean break |
 | `work_write` | `work_write`, `work_admin` | Capability id, split |
 | `build_execute` | `build_execute`, `release_execute` | Capability id, split |
 | `build_admin` | `build_admin`, `release_admin` | Capability id, split |

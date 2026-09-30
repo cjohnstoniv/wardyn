@@ -15,7 +15,7 @@ import (
 // from the migration, so the test and the SQL are two statements of one fact.
 var splitMap = map[Capability][]Capability{
 	"read": {CapCodeRead, CapWorkRead, CapWikiRead, CapBuildRead, CapReleaseRead, CapServiceEndpointRead,
-		CapLibraryRead, CapPackagingRead, CapTestRead, CapProjectRead, CapIdentityRead, CapAnalyticsRead},
+		CapLibraryRead, CapPackagingRead, CapTestRead, CapProjectRead, CapIdentityRead},
 	"work_write":            {CapWorkWrite, CapWorkAdmin},
 	"build_execute":         {CapBuildExecute, CapReleaseExecute},
 	"build_admin":           {CapBuildAdmin, CapReleaseAdmin},
@@ -63,9 +63,14 @@ func TestScopesUnchangedUnderMigration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ScopesFor(map(%q)) error = %v", old, err)
 		}
-		q := make([]string, len(want))
-		for i, s := range want {
-			q[i] = ResourceID + "/" + s
+		q := make([]string, 0, len(want))
+		for _, s := range want {
+			// The old "read" also asked for vso.analytics. Analytics is OData on a
+			// host no run reaches and has no capability, so a migrated "read" asks
+			// for one scope fewer, inside what was consented to.
+			if s != "vso.analytics" {
+				q = append(q, ResourceID+"/"+s)
+			}
 		}
 		slices.Sort(q)
 		if !slices.Equal(got, q) {
@@ -111,6 +116,8 @@ var splitExceptions = map[string]string{
 	"feed DELETE":            "packaging_manage",
 	"feed permissions PATCH": "packaging_manage",
 	"feed recycle bin PATCH": "packaging_manage",
+	// Analytics is OData on a host no run reaches and has no capability.
+	"analytics GET": "unclassified_read",
 	// Only the three documented search resources classify.
 	"almsearch undocumented resource POST": "unclassified_read",
 	"almsearch undocumented resource GET":  "unclassified_read",

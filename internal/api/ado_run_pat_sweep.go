@@ -131,7 +131,13 @@ func (s *Server) deleteRunPAT(ctx context.Context, p store.RunPAT) (transient bo
 	if s.cfg.ADOEntra == nil {
 		return false, errADOPATUnavailable
 	}
-	cfg, found, err := s.cfg.ADOEntra(ctx)
+	// The row is looked up by id: the sign-in source serves only an enabled
+	// row, and a disabled one is the most common reason a token is revoked.
+	source := s.cfg.ADOEntra
+	if byRow := s.cfg.ADOEntraByRow; byRow != nil {
+		source = func(ctx context.Context) (ADOEntraConfig, bool, error) { return byRow(ctx, p.ProviderRowID) }
+	}
+	cfg, found, err := source(ctx)
 	switch {
 	case err != nil:
 		return true, fmt.Errorf("read the sign-in configuration: %w", err)

@@ -21,9 +21,9 @@ const CEILING = [
   "code_read", "code_write", "pr", "policy_admin", "work_read", "work_write", "wiki_read",
   "build_read", "packaging_read", "project_read",
 ];
-const TWELVE_READS = [
+const ELEVEN_READS = [
   "code_read", "work_read", "wiki_read", "build_read", "release_read", "serviceendpoint_read",
-  "library_read", "packaging_read", "test_read", "project_read", "identity_read", "analytics_read",
+  "library_read", "packaging_read", "test_read", "project_read", "identity_read",
 ];
 
 async function mockCeiling(page: Page): Promise<void> {
@@ -70,7 +70,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   const locked = capBox(dialog, "Manage service connections");
   await expect(locked).toBeDisabled();
   await expect(dialog.getByTitle(ADO_ACCESS.LOCKED).filter({ hasText: "Manage service connections" })).toBeVisible();
-  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(29 - CEILING.length);
+  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(28 - CEILING.length);
   await expect(capBox(dialog, "Edit branch policies")).toBeEnabled();
 
   await dialog.getByLabel("Name", { exact: true }).fill(name);
@@ -114,7 +114,7 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
   const ids: string[] = [];
   // The per-area packet's four saved policies (Member · State 4), with the line each reads as.
   const policies: [string, string[], string | RegExp][] = [
-    [`ADO contributor ${stamp}`, [...TWELVE_READS, "code_write", "pr"], "Azure DevOps: Read (every area) · Repos"],
+    [`ADO contributor ${stamp}`, [...ELEVEN_READS, "code_write", "pr"], "Azure DevOps: Read (every area) · Repos"],
     [`ADO ticket triage ${stamp}`, ["code_read", "work_read", "work_write", "project_read"],
       "Azure DevOps: Read code · Boards · View projects & teams"],
     [`ADO repo-policy admin ${stamp}`, ["code_read", "policy_admin"], /^Azure DevOps: Read code · Edit branch policies\s*High risk$/],

@@ -270,7 +270,7 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 		}), "Enter 1 to 90 days."},
 		{"the pre-split read id", entraRow(func(r *types.GitProvider) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{"read"}
-		}), `entra.capability_ceiling[0]: "read" is not a capability — want one of: analytics_read, build_admin,`},
+		}), `entra.capability_ceiling[0]: "read" is not a capability — want one of: build_admin,`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{tc.row}}, true)

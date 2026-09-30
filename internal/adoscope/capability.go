@@ -105,9 +105,6 @@ const (
 	// CapIdentityRead is a read of the organisation's users, groups,
 	// entitlements and directory identities.
 	CapIdentityRead Capability = "identity_read"
-	// CapAnalyticsRead is an Analytics query — which reaches the work-item,
-	// pipeline and test data of every project.
-	CapAnalyticsRead Capability = "analytics_read"
 	// CapProjectAdmin is creating, changing or deleting a project.
 	CapProjectAdmin Capability = "project_admin"
 	// CapSecurityAdmin is changing permissions, ACLs or directory identities.
@@ -158,7 +155,7 @@ var grantableCapabilities = map[Capability]bool{
 	CapServiceEndpointRead: true, CapServiceEndpointAdmin: true, CapLibraryRead: true,
 	CapPackagingRead: true, CapPackagingWrite: true, CapPackagingManage: true,
 	CapTestRead:    true,
-	CapProjectRead: true, CapIdentityRead: true, CapAnalyticsRead: true,
+	CapProjectRead: true, CapIdentityRead: true,
 	CapProjectAdmin: true, CapSecurityAdmin: true,
 }
 
@@ -228,7 +225,6 @@ var labels = map[Capability]string{
 	CapTestRead:             "Read test plans, suites, cases, runs and results",
 	CapProjectRead:          "Read projects, teams and your own profile",
 	CapIdentityRead:         "Read the organisation's users, groups, memberships and licences, and directory identities",
-	CapAnalyticsRead:        "Query Analytics — reports on work items, pipelines and tests across every project",
 	CapProjectAdmin:         "Create, change and delete projects",
 	CapSecurityAdmin:        "Change permissions and identities",
 
@@ -274,7 +270,6 @@ var shortLabels = map[Capability]string{
 	CapTestRead:             "View test plans & results",
 	CapProjectRead:          "View projects & teams",
 	CapIdentityRead:         "Read users & groups",
-	CapAnalyticsRead:        "View analytics",
 	CapProjectAdmin:         "Manage projects & teams",
 	CapSecurityAdmin:        "Manage permissions & identities",
 }

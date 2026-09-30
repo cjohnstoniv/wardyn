@@ -29,7 +29,7 @@ export interface ADOCapabilityInfo {
   cap: string;
   group: ADOCapabilityGroup;
   highRisk: boolean;
-  // One of the twelve per-area reads the summary folds into "Read (every area)".
+  // One of the eleven per-area reads the summary folds into "Read (every area)".
   read: boolean;
 }
 
@@ -64,7 +64,6 @@ export const ADO_CAPABILITIES: readonly ADOCapabilityInfo[] = [
   { cap: "test_read", group: "test_plans", highRisk: false, read: true },
   { cap: "project_read", group: "organization", highRisk: false, read: true },
   { cap: "identity_read", group: "organization", highRisk: false, read: true },
-  { cap: "analytics_read", group: "organization", highRisk: false, read: true },
   { cap: "project_admin", group: "organization", highRisk: true, read: false },
   { cap: "security_admin", group: "organization", highRisk: true, read: false },
 ];

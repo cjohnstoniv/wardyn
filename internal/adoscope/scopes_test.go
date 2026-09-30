@@ -38,7 +38,6 @@ func TestScopesForGolden(t *testing.T) {
 		{"identity_read", []Capability{CapIdentityRead}, []string{
 			res + "vso.graph", res + "vso.identity", res + "vso.memberentitlementmanagement",
 		}},
-		{"analytics_read", []Capability{CapAnalyticsRead}, []string{res + "vso.analytics"}},
 		{"code_write", []Capability{CapCodeWrite}, []string{res + "vso.code_write"}},
 		{"pr", []Capability{CapPR}, []string{res + "vso.code_write"}},
 		{"policy_admin", []Capability{CapPolicyAdmin}, []string{res + "vso.code_write"}},
@@ -93,6 +92,9 @@ func TestScopesForRefusesWhatIsNotGrantable(t *testing.T) {
 	for _, c := range []Capability{
 		CapUnclassifiedWrite, CapUnclassifiedRead, CapDeniedTokens, CapDeniedServiceHooks,
 		CapDeniedExtensions, CapDeniedInternal, "invented", "",
+		// Analytics is served only as OData on a host no run reaches, so a token
+		// scoped for it would carry vso.analytics for nothing.
+		"analytics_read",
 	} {
 		got, err := ScopesFor([]Capability{c})
 		if err == nil {
@@ -307,7 +309,7 @@ func TestEveryCapabilityIsLabelledAndClassified(t *testing.T) {
 			t.Errorf("%q is both grantable and denied", c)
 		}
 	}
-	if len(GrantableCapabilities()) != 29 {
+	if len(GrantableCapabilities()) != 28 {
 		t.Fatalf("GrantableCapabilities() has %d entries — the catalogue's grantable set changed; update the profiles and the scope golden with it",
 			len(GrantableCapabilities()))
 	}

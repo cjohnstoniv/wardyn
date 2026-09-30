@@ -134,7 +134,9 @@ var perAreaCases = []perAreaCase{
 	{name: "userentitlements GET", req: onHost("vsaex.dev.azure.com", http.MethodGet, "/acme/_apis/userentitlements", ""), want: "identity_read"},
 	{name: "groupentitlements GET", req: onHost("vsaex.dev.azure.com", http.MethodGet, "/acme/_apis/groupentitlements", ""), want: "identity_read"},
 	{name: "memberentitlements GET", req: onHost("vsaex.dev.azure.com", http.MethodGet, "/acme/_apis/memberentitlements", ""), want: "identity_read"},
-	{name: "analytics GET", req: adoReq(http.MethodGet, "/acme/_apis/analytics/views", ""), want: "analytics_read"},
+	// No Analytics capability exists: the service is OData on its own host, which no
+	// run can reach, so both shapes stay refused rather than classify as a read.
+	{name: "analytics GET", req: adoReq(http.MethodGet, "/acme/_apis/analytics/views", ""), want: "unclassified_read"},
 	{name: "project create POST", req: adoReq(http.MethodPost, "/acme/_apis/projects", `{}`), want: "project_admin"},
 	{name: "graph group POST", req: onHost("vssps.dev.azure.com", http.MethodPost, "/acme/_apis/graph/groups", `{}`), want: "security_admin"},
 	{name: "access control entries POST", req: adoReq(http.MethodPost, "/acme/_apis/accesscontrolentries/ns", `{}`), want: "security_admin"},
@@ -154,6 +156,19 @@ var perAreaCases = []perAreaCase{
 	{name: "contribution POST", req: adoReq(http.MethodPost, "/acme/_apis/contribution/hierarchyquery", `{}`), want: "denied_internal"},
 	{name: "unknown area GET", req: adoReq(http.MethodGet, "/acme/_apis/frobnicate", ""), want: "unclassified_read"},
 	{name: "unknown area POST", req: adoReq(http.MethodPost, "/acme/_apis/frobnicate", `{}`), want: "unclassified_write"},
+}
+
+// TestAnalyticsODataIsRefused: Analytics is OData on its own host and has no
+// capability, so nothing grants a token that could query it.
+func TestAnalyticsODataIsRefused(t *testing.T) {
+	for _, r := range []Request{
+		onHost("analytics.dev.azure.com", http.MethodGet, "/acme/proj/_odata/v4.0-preview/WorkItems", ""),
+		onHost("acme.analytics.visualstudio.com", http.MethodGet, "/proj/_odata/v4.0-preview/WorkItems", ""),
+	} {
+		if got, err := Classify(r); err != nil || got.Capability != CapUnclassifiedRead {
+			t.Errorf("Classify(%s %s) = %q, %v — want %q", r.Host, r.Path, got.Capability, err, CapUnclassifiedRead)
+		}
+	}
 }
 
 // TestClassifyPerArea is the golden: every row of perAreaCases classifies to
