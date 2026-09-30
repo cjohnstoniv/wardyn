@@ -25,27 +25,27 @@ On that app registration, add **delegated permissions** for the Azure DevOps API
 back the capability ceiling you intend to grant (see [Capabilities](#capabilities) below). These tables
 list every scope Wardyn can request, and which capability needs each one.
 
-Every ceiling includes `read`, and `read` requests all of these scopes at once, because a run holding
-`read` may read any area Wardyn classifies as a read. Add all of them:
+There is one read per Azure DevOps area, and each read requests only its own scope. Add the scopes of
+the reads some row's ceiling will hold — or all of them:
 
 | Scope | Needed by | Reads |
 |---|---|---|
-| `vso.analytics` | `read` | Analytics |
-| `vso.build` | `read` | Builds and pipelines |
-| `vso.code` | `read` | Repositories, commits, branches, pull requests, branch policies, and code search |
-| `vso.graph` | `read` | The organisation's groups and users |
-| `vso.identity` | `read` | Directory identities |
-| `vso.memberentitlementmanagement` | `read` | User and group entitlements |
-| `vso.packaging` | `read` | Feeds and packages |
-| `vso.profile` | `read` | The signed-in person's profile and organisation list |
-| `vso.project` | `read` | Projects and project collections |
-| `vso.release` | `read` | Classic releases |
-| `vso.securefiles_read` | `read` | Secure files |
-| `vso.serviceendpoint` | `read` | Service connections |
-| `vso.test` | `read` | Test plans, runs, and results |
-| `vso.variablegroups_read` | `read` | Variable groups |
-| `vso.wiki` | `read` | Wiki pages |
-| `vso.work` | `read` | Work items and boards |
+| `vso.analytics` | `analytics_read` | Analytics |
+| `vso.build` | `build_read` | Builds and pipelines |
+| `vso.code` | `code_read` | Repositories, commits, branches, pull requests, branch policies, and code search |
+| `vso.graph` | `identity_read` | The organisation's groups and users |
+| `vso.identity` | `identity_read` | Directory identities |
+| `vso.memberentitlementmanagement` | `identity_read` | User and group entitlements |
+| `vso.packaging` | `packaging_read` | Feeds and packages |
+| `vso.profile` | `project_read` | The signed-in person's profile and organisation list |
+| `vso.project` | `project_read` | Projects and project collections |
+| `vso.release` | `release_read` | Classic releases |
+| `vso.securefiles_read` | `library_read` | Secure files |
+| `vso.serviceendpoint` | `serviceendpoint_read` | Service connections |
+| `vso.test` | `test_read` | Test plans, runs, and results |
+| `vso.variablegroups_read` | `library_read` | Variable groups |
+| `vso.wiki` | `wiki_read` | Wiki pages |
+| `vso.work` | `work_read` | Work items, boards, and work-item search |
 
 Add these only for the capabilities some row's ceiling will reach:
 
@@ -58,16 +58,17 @@ Add these only for the capabilities some row's ceiling will reach:
 | `vso.identity_manage` | `security_admin` | Change directory identities |
 | `vso.serviceendpoint_manage` | `serviceendpoint_admin` | Create and change service connections |
 | `vso.build_execute` | `build_execute`, `build_admin` | Queue pipeline runs, and edit pipeline definitions |
-| `vso.release_execute` | `build_execute` | Create, deploy, and delete classic releases |
-| `vso.release_manage` | `build_admin` | Edit classic release definitions |
-| `vso.work_write` | `work_write` | Create and update work items |
+| `vso.release_execute` | `release_execute` | Create, deploy, and delete classic releases |
+| `vso.release_manage` | `release_admin` | Edit classic release pipelines and answer release approvals |
+| `vso.work_write` | `work_write`, `work_admin` | Create and update work items; delete them and manage areas, iterations, fields and tags |
 | `vso.wiki_write` | `wiki_write` | Create and update wiki pages |
-| `vso.packaging_write` | `packaging_write` | Publish packages to feeds |
+| `vso.packaging_write` | `packaging_write` | Publish, promote, deprecate, and unlist package versions |
+| `vso.packaging_manage` | `packaging_manage` | Delete package versions, and create, change, and delete feeds |
 | `vso.project_manage` | `project_admin` | Create, change, and delete projects |
 
 Several capabilities share one scope (`code_write`, `pr`, `policy_admin` and `policy_bypass` all need
-`vso.code_write`, because Azure DevOps offers no narrower one), and one capability can need several
-(`security_admin` needs three). The capability, not the scope, is what Wardyn checks on each request.
+`vso.code_write`, and `work_write` and `work_admin` both need `vso.work_write`, because Azure DevOps
+offers no narrower one), and one capability can need several (`security_admin` needs three). The capability, not the scope, is what Wardyn checks on each request.
 
 Also add `openid` and `offline_access` — Wardyn holds a refresh token per person, not a one-time
 code, so it can renew an access token as runs need one without asking anyone to sign in again for every
@@ -115,8 +116,8 @@ An administrator turns this on per git provider row, not globally. The fields th
   "entra": {
     "tenant_id": "<your Entra tenant guid>",
     "client_id": "<the app registration above>",
-    "capability_ceiling": ["read", "code_write", "pr", "policy_admin"],
-    "default_profile": ["read"],                   // what a run starts with, before any escalation
+    "capability_ceiling": ["code_read", "project_read", "work_read", "code_write", "pr", "policy_admin"],
+    "default_profile": ["code_read", "project_read"], // what a run starts with, before any escalation
     "token_mode": "bearer"
   }
 }
@@ -133,13 +134,14 @@ default left outside a narrowed ceiling blocks the save; the server refuses it t
 
 **The ceiling is the hard bound; the default profile is where a run starts.** A run may ask for
 anything up to the ceiling and have it held for approval; it can never reach past the ceiling at all.
-`read` is the recommended default profile — every write, including push, then starts as something a
-run has to ask for rather than something it already has.
+Reads are the recommended default profile — every write, including push, then starts as something a
+run has to ask for rather than something it already has. An empty default profile means `code_read` and
+`project_read`, so the ceiling must hold both when the default is left empty.
 
 **A run policy can choose the run's capabilities instead.** A policy's `azure_devops_capabilities`
 replaces the default profile for the runs it governs, so a saved policy in **Policies** works as a
-saved access profile — for example `["read", "code_write", "pr"]` for a contributor, and
-`["read", "policy_admin"]` for someone who manages branch policies. It chooses only within the
+saved access profile — for example `["code_read", "code_write", "pr", "project_read"]` for a
+contributor, and `["code_read", "policy_admin"]` for someone who manages branch policies. It chooses only within the
 ceiling: a run naming a capability outside it is refused at launch and granted nothing. See
 [POLICIES.md](POLICIES.md).
 
@@ -149,7 +151,7 @@ DevOps list of the governance profile that applies to them (the default policy's
 assigned). That holds whether the list came inline, from a saved policy (assigned to them or not) or
 from a preset. Anything else the list names is not standing access: under `deny_with_review` the run
 asks for it mid-run and a person decides, and under `always_deny` it is refused. A narrower list is
-always honoured, so a member who picks `["read"]` gets exactly `read`. A list that leaves nothing
+always honoured, so a member who picks `["code_read"]` gets exactly `code_read`. A list that leaves nothing
 they may hold refuses the launch with reason `ado_capabilities_none_permitted`; it never falls back
 to the default profile. An admin's own run keeps its policy's list, bounded by the ceiling alone.
 
@@ -172,25 +174,47 @@ That has two consequences worth knowing before you hit them:
 
 ## Capabilities
 
-The capability ceiling is expressed in plain, purpose-shaped terms, not raw `vso.*` scopes — the row
-above grants some subset of these, and a run can never be handed one the ceiling does not list:
+The capability ceiling is expressed in Azure DevOps' own terms — one read per area, then that area's
+write and admin rows, following Azure DevOps' read → write → manage ladder — not raw `vso.*` scopes.
+The row above grants some subset of these, and a run can never be handed one the ceiling does not list.
+**High risk** marks a capability that reaches past the one run: the organisation's rules, other
+people's work, identities, or credentials.
 
-| Capability | What it allows |
-|---|---|
-| `read` | Clone, browse history, view work items, boards, builds, packages, and wiki pages |
-| `code_write` | Push commits, and create or move a ref: push under `refs/heads/wardyn/<run-id>/` (or any branch when the policy sets `git_push_any_branch`) — see [How pushes work](#how-pushes-work). Opening a pull request is `pr`, not this |
-| `pr` | Open, update, comment on, vote on and complete a pull request, without bypassing a policy |
-| `policy_admin` | Create or change branch policies — required reviewers, build validation, merge strategy |
-| `policy_bypass` | Complete a pull request with `bypassPolicy` — without its required reviewers or checks. Nothing else needs it |
-| `repo_admin` | Create, rename, or delete a repository; change its default branch |
-| `security_admin` | Read or change Azure DevOps permission assignments |
-| `serviceendpoint_admin` | Read, create, or change service connections |
-| `build_execute` | Queue a build; update a build's properties |
-| `build_admin` | Create or change a build or release pipeline definition |
-| `work_write` | Read and update work items, queries, and board metadata |
-| `wiki_write` | Read and create wiki pages |
-| `packaging_write` | Read and publish packages and feeds |
-| `project_admin` | Create, read, update, or delete projects and teams |
+| Area | Capability | What it allows |
+|---|---|---|
+| Repos | `code_read` | Clone, fetch and browse repositories, commits, branches, pull requests and branch policies; search code |
+| Repos | `code_write` | Push commits, and create or move a ref: push under `refs/heads/wardyn/<run-id>/` (or any branch when the policy sets `git_push_any_branch`) — see [How pushes work](#how-pushes-work). Opening a pull request is `pr`, not this |
+| Repos | `pr` | Open, update, comment on, vote on and complete a pull request, without bypassing a policy |
+| Repos | `policy_admin` (High risk) | Create, change or delete branch policies — required reviewers, build validation, merge strategy |
+| Repos | `policy_bypass` (High risk) | Complete a pull request with `bypassPolicy` — without its required reviewers or checks. Nothing else needs it |
+| Repos | `repo_admin` (High risk) | Create, rename, import into, or delete a repository |
+| Boards | `work_read` | Read work items, queries, boards, backlogs, areas and iterations; run queries and search work items |
+| Boards | `work_write` | Create and update work items — their fields, comments, links and attachments — and saved queries |
+| Boards | `work_admin` (High risk) | Delete, restore or permanently destroy work items, and change area and iteration paths, fields and tags |
+| Wiki | `wiki_read` | Read wiki pages, their history and attachments; search wikis |
+| Wiki | `wiki_write` | Create, edit and delete wiki pages |
+| Pipelines | `build_read` | Read pipelines, runs, builds, logs and artifacts |
+| Pipelines | `build_execute` | Queue a pipeline run, cancel it, or update a build's properties |
+| Pipelines | `build_admin` (High risk) | Create, change or delete a pipeline definition |
+| Pipelines | `release_read` | Read classic release pipelines, releases and their stages |
+| Pipelines | `release_execute` | Create a release, deploy it to a stage, or delete a release |
+| Pipelines | `release_admin` (High risk) | Create, change or delete a release pipeline, and answer release approvals |
+| Pipelines | `serviceendpoint_read` | Read service connection names, types and settings |
+| Pipelines | `serviceendpoint_admin` (High risk) | Create or change a service connection, including the cloud credential it holds |
+| Pipelines | `library_read` | Read variable groups and secure-file details |
+| Artifacts | `packaging_read` | List feeds, and download or restore packages |
+| Artifacts | `packaging_write` | Publish, promote, deprecate or unlist a package version |
+| Artifacts | `packaging_manage` (High risk) | Delete or unpublish package versions, and create, change or delete feeds, views and their permissions |
+| Test Plans | `test_read` | Read test plans, suites, cases, runs and results |
+| Organization | `project_read` | Read projects, teams and the signed-in person's own profile |
+| Organization | `identity_read` | Read the organisation's users, groups, memberships and licences, and directory identities |
+| Organization | `analytics_read` | Query Analytics — which reaches the work-item, pipeline and test data of every project |
+| Organization | `project_admin` (High risk) | Create, rename, change or delete a project or a team |
+| Organization | `security_admin` (High risk) | Change who can do what across the whole organisation — permissions, groups, directory identities |
+
+**Discovery needs no capability of its own.** Azure DevOps' API discovery — the `OPTIONS` location
+call its SDKs and CLI make first, `connectionData` and `resourceAreas` — returns route templates, not
+organisation data, and is allowed to any run holding at least one capability. No list names it.
 
 A handful of Azure DevOps surfaces are never reachable through this lane at all, ceiling or no
 ceiling: minting or revoking someone else's personal access tokens, managing service hooks, and

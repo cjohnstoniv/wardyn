@@ -19,8 +19,8 @@ import (
 )
 
 // #1384: a member's bounded Azure DevOps list is said at the doors. Row default
-// [read code_write], no governance list: [read pr] keeps [read] and names the
-// dropped "Open pull requests" on the 201 (and the run.create row the run
+// [code_read code_write], no governance list: [code_read pr] keeps [code_read] and names the
+// dropped "Contribute to pull requests" on the 201 (and the run.create row the run
 // detail reads), [pr] alone leaves nothing standing and Review refuses it with
 // the reason dispatch would.
 func TestADOStandingAtTheDoors(t *testing.T) {
@@ -57,9 +57,9 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		t.Helper()
 		return postAs(t, "member", path, caps)
 	}
-	const sentence = "Not included: “Open pull requests”. Your administrator hasn't granted it to you, and it isn't in this provider's default access."
+	const sentence = "Not included: “Contribute to pull requests”. Your administrator hasn't granted it to you, and it isn't in this provider's default access."
 	t.Run("narrowed: the 201 and the run.create row say so", func(t *testing.T) {
-		w, st, audit := post(t, "/api/v1/runs", `["read","pr"]`)
+		w, st, audit := post(t, "/api/v1/runs", `["code_read","pr"]`)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 		}
@@ -85,8 +85,8 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		}
 	})
 	t.Run("several dropped: the plural sentence", func(t *testing.T) {
-		w, _, _ := post(t, "/api/v1/runs", `["read","pr","policy_admin"]`)
-		want := "Not included: “Open pull requests”, “" + adoscope.ShortLabel(adoscope.CapPolicyAdmin) +
+		w, _, _ := post(t, "/api/v1/runs", `["code_read","pr","policy_admin"]`)
+		want := "Not included: “Contribute to pull requests”, “" + adoscope.ShortLabel(adoscope.CapPolicyAdmin) +
 			"”. Your administrator hasn't granted them to you, and they aren't in this provider's default access."
 		var resp createRunResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusCreated || countEqual(resp.Warnings, want) != 1 {
@@ -98,7 +98,7 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 	// User view is bound exactly like a member.
 	for who, want := range map[string]bool{"operator": false, "governed": false, "admin in the User view": true} {
 		t.Run(who+": narrowing "+fmt.Sprint(want), func(t *testing.T) {
-			w, _, _ := postAs(t, who, "/api/v1/runs", `["read","pr"]`)
+			w, _, _ := postAs(t, who, "/api/v1/runs", `["code_read","pr"]`)
 			if w.Code != http.StatusCreated {
 				t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 			}
@@ -111,14 +111,23 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the pre-split read id is a 400 at both doors", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
+			w, _, _ := post(t, path, `["read"]`)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"reason":"`+reasonADOCapabilityUnknown+`"`) ||
+				!strings.Contains(w.Body.String(), `azure_devops_capabilities[0]: \"read\" is not a grantable`) {
+				t.Errorf("%s = %d %s, want 400 %s naming the entry", path, w.Code, w.Body.String(), reasonADOCapabilityUnknown)
+			}
+		}
+	})
 	t.Run("a list the bound keeps whole says nothing", func(t *testing.T) {
-		w, _, _ := post(t, "/api/v1/runs", `["read"]`)
+		w, _, _ := post(t, "/api/v1/runs", `["code_read"]`)
 		if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), "Not included") {
 			t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 		}
 	})
 	t.Run("preflight carries the narrowing", func(t *testing.T) {
-		w, _, _ := post(t, "/api/v1/runs/preflight", `["read","pr"]`)
+		w, _, _ := post(t, "/api/v1/runs/preflight", `["code_read","pr"]`)
 		var resp preflightResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
 			countEqual(resp.Warnings, sentence) != 1 {

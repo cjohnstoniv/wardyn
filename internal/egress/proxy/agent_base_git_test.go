@@ -22,7 +22,7 @@ import (
 // refused. Drives the REAL stub, sourcing the REAL agent-run-lib.sh, with
 // exactly the env dispatch writes, against the real proxy harness.
 func TestAgentBaseStub_ExecLaneGitGoesThroughTheBroker(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
 	_, self, _, _ := runtime.Caller(0)
 	common := filepath.Join(filepath.Dir(self), "..", "..", "..", "deploy", "images", "common")
 	stub, err := os.ReadFile(filepath.Join(common, "agent-run-stub"))

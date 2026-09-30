@@ -300,11 +300,11 @@ export type ADOTokenMode = "bearer";
 export interface ADOEntraConfig {
   tenant_id: string;
   client_id: string;
-  // The widest access a run on this row may ever hold. Non-empty, and it must
-  // include "read".
+  // The widest access a run on this row may ever hold. Non-empty.
   capability_ceiling?: string[];
-  // What a run gets when it asks for nothing. Empty reads as ["read"], and it
-  // must sit inside capability_ceiling.
+  // What a run gets when it asks for nothing. Empty reads as
+  // ["project_read", "code_read"] (ADO_DEFAULT_PROFILE), and it must sit
+  // inside capability_ceiling.
   default_profile?: string[];
   token_mode?: ADOTokenMode;
   // Whether REST calls are brokered on this lane. ABSENT MEANS TRUE, which is

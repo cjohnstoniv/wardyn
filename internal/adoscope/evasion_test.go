@@ -57,7 +57,7 @@ func TestEvasionDotSegments(t *testing.T) {
 		},
 		{
 			name:    "a $batch operation that walks out of the work-item area",
-			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/../hooks/subscriptions"}]`),
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"/_apis/wit/../hooks/subscriptions"}]`),
 			wantErr: true,
 		},
 	})
@@ -118,12 +118,12 @@ func TestEvasionBackslashSeparator(t *testing.T) {
 		},
 		{
 			name:    "a $batch operation that walks out through a backslash",
-			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..\\hooks/subscriptions"}]`),
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"/_apis/wit/..\\hooks/subscriptions"}]`),
 			wantErr: true,
 		},
 		{
 			name:    "a $batch operation with an encoded backslash",
-			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..%5Chooks/subscriptions"}]`),
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"/_apis/wit/..%5Chooks/subscriptions"}]`),
 			wantErr: true,
 		},
 
@@ -134,7 +134,7 @@ func TestEvasionBackslashSeparator(t *testing.T) {
 		{
 			name: "a backslash-delimited read on the pinned organisation",
 			req:  adoReq(http.MethodGet, `/acme\proj\_apis\git\repositories`, ""),
-			want: CapRead,
+			want: CapCodeRead,
 		},
 		{
 			name: "a backslash-delimited denied area is still denied, not refused",
@@ -176,15 +176,15 @@ func TestEvasionMultiplyEncodedStructure(t *testing.T) {
 		},
 		{
 			name:    "a double-encoded separator inside a $batch operation",
-			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..%255Chooks/subscriptions"}]`),
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"/_apis/wit/..%255Chooks/subscriptions"}]`),
 			wantErr: true,
 		},
 
 		// A literal "%" in a name is NOT structure, and must not be refused:
 		// the rule is about what further decoding PRODUCES, not about "%".
-		{name: "a repository whose name holds a literal percent sign", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/100%25", ""), want: CapRead},
-		{name: "a name that decodes again to ordinary letters", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/a%2541", ""), want: CapRead},
-		{name: "a literal percent before non-hex", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/50%25off", ""), want: CapRead},
+		{name: "a repository whose name holds a literal percent sign", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/100%25", ""), want: CapCodeRead},
+		{name: "a name that decodes again to ordinary letters", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/a%2541", ""), want: CapCodeRead},
+		{name: "a literal percent before non-hex", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/50%25off", ""), want: CapCodeRead},
 	})
 }
 
@@ -264,7 +264,7 @@ func TestEvasionResourceNamedRepository(t *testing.T) {
 		{
 			name: "the query endpoint still reads where the route puts it",
 			req:  adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pullrequestquery", `{}`),
-			want: CapRead,
+			want: CapCodeRead,
 		},
 		{
 			name: "the organisation-level pull-request route still classifies",
@@ -283,37 +283,37 @@ func TestEvasionBatchCrossOrg(t *testing.T) {
 	runCases(t, []caseT{
 		{
 			name:    "an operation aimed at another organisation",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"/evil/loot/_apis/wit/workitems/1"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/evil/loot/_apis/wit/workitems/1"}]`),
 			wantErr: true,
 		},
 		{
 			name: "an organisation-qualified operation on the pinned organisation",
-			req:  adoReq(http.MethodPost, batch, `[{"uri":"/acme/proj/_apis/wit/workitems/2"}]`),
+			req:  adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/acme/proj/_apis/wit/workitems/2"}]`),
 			want: CapWorkWrite,
 		},
 		{
 			name: "an organisation-relative operation",
-			req:  adoReq(http.MethodPost, batch, `[{"uri":"/_apis/wit/workitems/1?api-version=7.1"}]`),
+			req:  adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/_apis/wit/workitems/1?api-version=7.1"}]`),
 			want: CapWorkWrite,
 		},
 		{
 			name:    "an operation whose first segment is another organisation, or an unverified project",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"/evil/_apis/wit/workitems/1"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/evil/_apis/wit/workitems/1"}]`),
 			wantErr: true,
 		},
 		{
 			name:    "an operation aimed at another organisation through a backslash",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"/acme\\..\\evil/_apis/wit/workitems/1"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"/acme\\..\\evil/_apis/wit/workitems/1"}]`),
 			wantErr: true,
 		},
 		{
 			name:    "an operation naming another organisation with backslashes throughout",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"\\evil\\loot\\_apis\\wit\\workitems\\1"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"\\evil\\loot\\_apis\\wit\\workitems\\1"}]`),
 			wantErr: true,
 		},
 		{
 			name: "a backslash-delimited operation on the pinned organisation",
-			req:  adoReq(http.MethodPost, batch, `[{"uri":"\\acme\\proj\\_apis\\wit\\workitems\\2"}]`),
+			req:  adoReq(http.MethodPost, batch, `[{"method":"PATCH","uri":"\\acme\\proj\\_apis\\wit\\workitems\\2"}]`),
 			want: CapWorkWrite,
 		},
 	})
@@ -428,11 +428,11 @@ func TestEvasionEdgeWhitespaceAndDots(t *testing.T) {
 		{name: "a trailing space on the organisation", req: adoReq(http.MethodGet, "/acme%20/_apis/projects", ""), wantErr: true},
 		{
 			name:    "a $batch operation walking out through a trailing space",
-			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..%20/hooks/subscriptions"}]`),
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"/_apis/wit/..%20/hooks/subscriptions"}]`),
 			wantErr: true,
 		},
 		// Internal spaces and dots are ordinary name content.
-		{name: "a project name with an internal space", req: adoReq(http.MethodGet, "/acme/My%20Project/_apis/git/repositories", ""), want: CapRead},
+		{name: "a project name with an internal space", req: adoReq(http.MethodGet, "/acme/My%20Project/_apis/git/repositories", ""), want: CapCodeRead},
 		{
 			name: "a package file with internal dots",
 			req: func() Request {
@@ -440,7 +440,7 @@ func TestEvasionEdgeWhitespaceAndDots(t *testing.T) {
 				r.Host = "pkgs.dev.azure.com"
 				return r
 			}(),
-			want: CapRead,
+			want: CapPackagingRead,
 		},
 	})
 }

@@ -67,7 +67,7 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 		if q.Get("approval") == "" {
 			if cp.firstAskOK {
 				_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
-					Header: "Authorization", Value: "Bearer " + adoToken, Capabilities: []string{"read"},
+					Header: "Authorization", Value: "Bearer " + adoToken, Capabilities: []string{"code_read"},
 				})
 				return
 			}
@@ -98,7 +98,7 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 			_ = json.NewEncoder(w).Encode(map[string]string{"state": "reauth_pending", "approval_id": cp.consent.String()})
 			return
 		}
-		caps := []string{"read"}
+		caps := []string{"code_read"}
 		if cp.forRun {
 			caps = append(caps, q.Get("capability"))
 		}
@@ -121,7 +121,7 @@ func (cp *capControlPlane) snapshot() ([]url.Values, []uuid.UUID) {
 func newADOHoldHarness(t *testing.T, cp *capControlPlane, reader approvalReader) *adoHarness {
 	t.Helper()
 	fastPolls(t, 5*time.Millisecond)
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapCodeRead)
 	tok := &tokenSource{}
 	tok.Set("run-token")
 	inj := h.p.inject
@@ -323,7 +323,7 @@ func TestCapabilityHoldBudget_ClampedBelowTheReadTimeout(t *testing.T) {
 
 // With no hold lane the gate refuses exactly as before.
 func TestADOHold_NoHoldLaneRefusesAsBefore(t *testing.T) {
-	h := newADOHarness(t, adoscope.CapRead)
+	h := newADOHarness(t, adoscope.CapCodeRead)
 	h.mustRefuse(t, h.patchWorkItem(t), "this run was not granted it")
 }
 
@@ -462,5 +462,21 @@ func TestADOHold_RefClassIsOutsideRunNamespaceOnlyForARefMoveOutsideIt(t *testin
 	prBypass := func(uuid.UUID) string { return `{"status":"completed","completionOptions":{"bypassPolicy":true}}` }
 	if q := ask(t, true, http.MethodPatch, "/acme/proj/_apis/git/repositories/app/pullrequests/1", prBypass); q.Get("capability") != string(adoscope.CapPolicyBypass) || q.Has("ref_class") {
 		t.Errorf("PR bypass asked %v, want policy_bypass with no ref_class", q)
+	}
+}
+
+// A READ of another area is askable like any write: a run holding only
+// code_read that GETs a work item is held, and the ask names work_read.
+func TestADOHold_ReadOfAnotherAreaAsksForThatRead(t *testing.T) {
+	cp := newCapControlPlane(t)
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
+
+	rec := h.do(t, http.MethodGet, "/acme/proj/_apis/wit/workitems/1?api-version=7.1", "", nil)
+	asks, raised := cp.snapshot()
+	if len(raised) != 1 || asks[0].Get("capability") != string(adoscope.CapWorkRead) || asks[0].Get("method") != http.MethodGet {
+		t.Fatalf("control plane saw %v, want one ask for work_read on the GET", asks)
+	}
+	if log := h.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+		t.Errorf("the approved read was not forwarded (status %d): %s", rec.Code, log)
 	}
 }
