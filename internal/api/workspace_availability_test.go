@@ -377,4 +377,18 @@ func TestWorkspacePinHiddenFromACallerNotGrantedIt(t *testing.T) {
 	if w := do(t, srv, http.MethodPut, detail+"/llm-cred", providerAdminToken(srv, "sub-pin-admin"), `{"provider_unavailable":true}`); w.Code != http.StatusBadRequest {
 		t.Errorf("PUT llm-cred with provider_unavailable = %d %s, want 400", w.Code, w.Body.String())
 	}
+
+	// A dangling pin under enforcement: the member has no allow row, so the
+	// read hides it and the launch refuses it without naming it, as for any
+	// pin they are not granted.
+	gone := *ws
+	gone.LLMCred = &types.WorkspaceLLMCred{ProviderRef: "gone-gw"}
+	dangling := providerRunFixture(t, site, &capStore{enf: map[string]bool{capModelProvider: true}}, &gone)
+	if w := doSSO(t, dangling, http.MethodGet, detail, member, ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "gone-gw") ||
+		!strings.Contains(w.Body.String(), `"llm_cred":{"provider_unavailable":true}`) {
+		t.Errorf("member GET of a dangling pin = %d %s, want provider_unavailable and no id", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, dangling, http.MethodPost, "/api/v1/runs/preflight", member, body); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "gone-gw") {
+		t.Errorf("member preflight on a dangling pin = %d %s, want a 403 that names no provider", w.Code, w.Body.String())
+	}
 }

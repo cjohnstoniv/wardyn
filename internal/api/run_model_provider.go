@@ -82,12 +82,19 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 		return judgeNamedProvider(sc, agent, named, requested == "", granted)
 	}
 	if row, ok := agentProviderFor(sc, agent); ok && row.DefaultProvider != "" {
-		d, _ := modelProviderByID(sc.ModelProviders, row.DefaultProvider)
-		if d.Disabled {
-			return providerRefusal(d.ID, d.Kind, mpRunStateOff), nil
-		}
-		if isCandidate(d.ID) {
-			return runProviderChoice{provider: d, chosen: true}, nil
+		if d, found := modelProviderByID(sc.ModelProviders, row.DefaultProvider); found {
+			// The grant before the state: a disabled default the caller is not
+			// granted is passed over too, never refused naming it (D-6, #1018).
+			ok, err := granted(d.ID)
+			if err != nil {
+				return runProviderChoice{}, err
+			}
+			if ok && d.Disabled {
+				return providerRefusal(d.ID, d.Kind, mpRunStateOff), nil
+			}
+			if ok && isCandidate(d.ID) {
+				return runProviderChoice{provider: d, chosen: true}, nil
+			}
 		}
 	}
 	switch {
@@ -116,16 +123,19 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 // caller never named it, and a workspace read hides it from them
 // (pinStamper), so the refusal must not be where they learn it.
 func judgeNamedProvider(sc types.SiteConfig, agent, id string, fromPin bool, granted func(id string) (bool, error)) (runProviderChoice, error) {
-	p, ok := modelProviderByID(sc.ModelProviders, id)
-	if !ok {
-		return providerRefusal(id, "", mpRunStateMissing), nil
-	}
+	// The grant before existence, so a pin the caller is not granted — even
+	// one naming no provider — is refused exactly as pinStamper hides it.
 	allowed, err := granted(id)
-	switch {
-	case err != nil:
+	if err != nil {
 		return runProviderChoice{}, err
-	case !allowed && fromPin:
+	}
+	if !allowed && fromPin {
 		return runProviderChoice{refusal: fmt.Sprintf(mpRunNoneGranted, agent), notGranted: true, providerID: id}, nil
+	}
+	p, ok := modelProviderByID(sc.ModelProviders, id)
+	switch {
+	case !ok:
+		return providerRefusal(id, "", mpRunStateMissing), nil
 	case !allowed:
 		c := providerRefusal(id, "", mpRunStateMissing)
 		c.notGranted, c.asMissing = true, true

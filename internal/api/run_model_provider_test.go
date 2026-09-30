@@ -143,6 +143,27 @@ func TestRunModelProviderNotGrantedReadsAsMissing(t *testing.T) {
 			t.Errorf("%s: authz.denied rows = %v, want one capability_model_provider row naming corp", path, rows)
 		}
 	}
+
+	// Named by nobody: a roster default the member is not granted is passed
+	// over whatever its state, so a disabled one answers as if it did not
+	// exist rather than being refused by name.
+	offDefault := keyProvider("corp-off", "claude-code")
+	offDefault.Disabled = true
+	anthropicOnly := func() *capStore {
+		return &capStore{enf: map[string]bool{capModelProvider: true}, grants: []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}}
+	}
+	withOffDefault := types.SiteConfig{
+		ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), offDefault),
+		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", DefaultProvider: "corp-off"}),
+	}
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		w := doSSO(t, providerRunFixture(t, withOffDefault, anthropicOnly(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		absent := doSSO(t, providerRunFixture(t, withoutCorp, anthropicOnly(), nil), http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), unnamed)
+		if w.Code != absent.Code || w.Body.String() != absent.Body.String() || strings.Contains(w.Body.String(), "corp-off") {
+			t.Errorf("%s: disabled default not granted = %d %s\nno such provider = %d %s", path, w.Code, w.Body.String(), absent.Code, absent.Body.String())
+		}
+	}
 }
 
 // providerRunFixture is a create/preflight server whose site config carries
