@@ -10,6 +10,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **See the policy a run got (#1425).** `GET /api/v1/runs/{id}/policy`, `wardyn run policy
+  <run-id> [--json]` and the SDK's `GetRunPolicy` return the resolved policy as a policy document,
+  where it started from (the saved policy as it read at launch, an inline policy, the default or
+  the governance profile), what launch changed and why (workspace, source control, package
+  mirror, model access, the GitHub connection, the governance profile, disk size, a restart, or
+  the member's limits), and whether the saved policy was edited since. Readable by whoever can
+  read the run (anyone else gets its `404`; a portal's delegated token is refused), with mount
+  sources and secret names hidden below the security admin tier. `run.create` records the
+  starting policy as `policy_source`, already redacted, and a git-broker run writes a new
+  `run.egress.confine` row; no migration. A run from before this reports `complete: false`. The
+  console's Policy tab follows.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

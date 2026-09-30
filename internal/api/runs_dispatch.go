@@ -374,6 +374,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.egress.confine",
+			run.ID.String(), "success", mustJSON(map[string]any{"hosts": confined})))
 	}
 
 	// Governance ceiling re-assertion: union the acting principal's assigned

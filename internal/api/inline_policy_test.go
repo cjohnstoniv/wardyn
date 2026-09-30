@@ -882,7 +882,7 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 	w := httptest.NewRecorder()
 	// A plain request with no OIDC session reads as operator (isOperator).
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	spec, _, warnings, ok := h.srv.resolveRunPolicy(context.Background(), w, r, &req, false)
+	spec, _, warnings, _, ok := h.srv.resolveRunPolicy(context.Background(), w, r, &req, false)
 	if !ok {
 		t.Fatalf("resolveRunPolicy rejected: %s", w.Body.String())
 	}

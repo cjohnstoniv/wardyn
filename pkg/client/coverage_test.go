@@ -47,6 +47,7 @@ var (
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
 	_ client.RunFiles
+	_ client.RunPolicyView
 	_ []client.Device
 	_ client.DeviceEnrolmentToken
 	_ client.DrivesDocument
@@ -74,7 +75,7 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "GetRunPolicy"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},

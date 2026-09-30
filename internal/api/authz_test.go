@@ -588,6 +588,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1292,9 +1293,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// they replace — both registrations are still classOwner, so the probe
 		// count grows by exactly the three new patterns (20 -> 23); 24 since
 		// #1197 L2 added PATCH /runs/{id}/title; 25 since #572 added POST
-		// /runs/{id}/resume; 26 since #1144 added GET /runs/{id}/events.
-		if probed != 26 {
-			t.Errorf("probed %d classOwner routes, want 26 — a route that left classOwner takes its tier "+
+		// /runs/{id}/resume; 26 since #1144 added GET /runs/{id}/events; 27 since #1425
+		// added GET /runs/{id}/policy.
+		if probed != 27 {
+			t.Errorf("probed %d classOwner routes, want 27 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
