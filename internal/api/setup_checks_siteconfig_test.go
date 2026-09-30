@@ -123,6 +123,11 @@ func TestSetupCheck_ADORowsOff(t *testing.T) {
 			if ok && (c.Status != "warn" || c.Blocking) {
 				t.Errorf("row = %+v, want a non-blocking warn", c)
 			}
+			// The approved mock's State 12a checklist line, verbatim.
+			const sentence = "Azure DevOps no longer uses one shared token. Choose how people connect."
+			if ok && c.Detail != sentence {
+				t.Errorf("detail = %q, want the approved mock's 12a sentence", c.Detail)
+			}
 		})
 	}
 }

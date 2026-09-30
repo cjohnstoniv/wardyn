@@ -959,19 +959,11 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 	// A git token for an Azure DevOps host is owner_only whatever the policy
 	// said (persistRunGrants forces it, #1429), so it is checked as one: a
 	// person with no token of their own is refused here, with the reason,
-	// rather than started into a clone that fails inside the sandbox.
-	var sc types.SiteConfig
-	for i, n := range needed {
-		if n.kind != types.GrantGitPAT || n.ownerOnly || n.host == "" {
-			continue
-		}
-		if s.cfg.Store != nil && sc.WorkspaceProviders == nil {
-			var serr error
-			if sc, serr = s.cfg.Store.GetSiteConfig(ctx); serr != nil {
-				return http.StatusInternalServerError, fmt.Errorf("get site config: %w", serr)
-			}
-		}
-		needed[i].ownerOnly = adoGrantHost(sc, n.host)
+	// rather than started into a clone that fails inside the sandbox (adoGitGrants
+	// drops the grant where the row takes each person's own token instead).
+	needed, err = s.adoGitGrants(ctx, needed, spec)
+	if err != nil {
+		return http.StatusInternalServerError, err
 	}
 	for _, n := range needed {
 		// A person's owner_only grant never reads the operator namespace (#1106):
