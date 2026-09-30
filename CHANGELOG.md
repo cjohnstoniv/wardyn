@@ -34,6 +34,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   monotonic per run and `Last-Event-ID` resumes without gaps within the daemon's lifetime; the feed
   is kept in memory, carries no log or secret content, and adds no migration. The Go SDK follows it
   with `RunEvents`; see `docs/sdk.md`.
+- **A portal can follow its person's runs live (#1407).** A delegated token now reaches
+  `GET /api/v1/runs/{id}/events` for its person's runs, with the same `404` as `GET /runs/{id}` for
+  anyone else's. One principal holds at most 32 open event streams; the next is refused `422` with
+  reason `event_stream_cap` (not audited) until one closes. Revoking the person's sessions still ends
+  a portal's open stream at the next keepalive.
 
 ### Changed
 
