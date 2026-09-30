@@ -68,6 +68,7 @@ describe("ADO_PAT copy canon", () => {
     expect(ADO_PAT.OWN_MISMATCH).toBe("This token belongs to a different Azure DevOps account than yours.");
     expect(ADO_PAT.OWN_REJECTED).toBe("Azure DevOps didn't accept this token.");
     expect(ADO_PAT.OWN_CHIP_EXPIRED).toBe("Expired");
+    expect(ADO_PAT.OWN_CHIP_REFUSED).toBe("Refused");
     expect(ADO_PAT.OWN_REPLACE).toBe("Replace token");
     expect(ADO_PAT.OWN_EXPIRED_BODY).toBe("Your runs can't reach Azure DevOps until you add a new token.");
     expect(ADO_PAT.OWN_SERVER_TITLE).toBe("Azure DevOps Server");
@@ -98,6 +99,7 @@ describe("ADO_PAT copy canon", () => {
     expect(ADO_PAT.OWN_TOO_LONG(30)).toBe("This token expires after the 30-day limit your administrator set.");
     expect(ADO_PAT.OWN_CHIP_EXPIRING(3)).toBe("Expires in 3 days");
     expect(ADO_PAT.OWN_EXPIRING_LINE("wardyn-live-test", "27 October")).toBe("Your token for wardyn-live-test expires on 27 October.");
+    expect(ADO_PAT.OWN_REFUSED_LINE("2 October", "27 October")).toBe("Azure DevOps refused this token on 2 October, before it expires on 27 October. Replace it.");
     expect(ADO_PAT.CONVERTED_CEILING("View projects & teams, Read code")).toBe("Read-only, carried over from the retired token: View projects & teams, Read code.");
   });
 

@@ -149,6 +149,12 @@ describe("patCardView: a row where each person adds their own token (state 10)",
     expect(v.action).toBe("replace_token");
     expect(v.refused).toBe(true);
   });
+  it("an expiring row with refused_at reads Refused, not Expires in N days", () => {
+    const v = patCardView(access({ ...own, state: "expiring", expires_on: "2000-10-27", refused_at: new Date(2000, 9, 22, 9, 30).toISOString() }), "Azure DevOps", now)!;
+    expect(v.chip).toEqual({ label: "Refused", tone: "danger" });
+    expect(v.body).toEqual(["Azure DevOps refused this token on 22 October, before it expires on 27 October. Replace it."]);
+    expect(v.refused).toBe(true);
+  });
   it("an expired row ignores refused_at: the token is gone either way, so expired wins", () => {
     const v = patCardView(access({ ...own, state: "expired_signin", cause: "token_expired", expires_on: "2000-10-01", refused_at: new Date(2000, 8, 20, 9, 30).toISOString() }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Expired", tone: "danger" });
