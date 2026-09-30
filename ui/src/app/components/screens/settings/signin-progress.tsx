@@ -7,25 +7,22 @@
 // sign-in progress packet). Presentational only: the pane owns the login run
 // and decides which step it is on; this draws it. Split from
 // harness-login-pane.tsx to keep that file under the size cap.
-import { Check, ExternalLink, Loader2, TriangleAlert } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { Button } from "../../ui/button";
 import { CopyButton } from "../../wardyn/copy-button";
+import { ProgressSteps, type StepRow } from "../../wardyn/progress-steps";
+import { isImagePullFailure } from "../run-status-detail";
 import { SIGNIN_PROGRESS } from "./login-pane-copy";
 
 // Where the door is. "download-failed" is state 7: the list stops at the step
 // that failed, so "Waiting for …" is not drawn at all.
 export type SignInStep = "start" | "download" | "wait" | "ready" | "download-failed";
 
-type Mark = "done" | "active" | "pending" | "failed";
+type Mark = StepRow["mark"];
 
-// The substrate reasons that mean the sign-in IMAGE did not arrive — the
-// download step failed, not the sandbox. InvalidImageName pulls nothing, but it
-// is still this step's failure as the person sees it.
-const IMAGE_PULL_REASONS = ["ImagePullBackOff", "ErrImagePull", "InvalidImageName"];
-
-export function isImagePullFailure(reason: string | null | undefined): boolean {
-  return !!reason && IMAGE_PULL_REASONS.includes(reason);
-}
+// Moved to run-status-detail.ts (the run page's startup view reads it too);
+// re-exported so the pane's import keeps working.
+export { isImagePullFailure };
 
 // The device code AWS pre-fills on its own page (verificationUriComplete's
 // user_code). "" for a link that carries none — Claude's never does. A regex,
@@ -50,13 +47,6 @@ function marksFor(step: SignInStep): [Mark, Mark, Mark | null] {
   }
 }
 
-function StepMark({ mark }: { mark: Mark }) {
-  if (mark === "done") return <Check className="size-3.5 shrink-0 text-success" aria-hidden />;
-  if (mark === "active") return <Loader2 className="size-3.5 shrink-0 animate-spin text-info" aria-hidden />;
-  if (mark === "failed") return <TriangleAlert className="size-3.5 shrink-0 text-danger" aria-hidden />;
-  return <span className="size-3.5 shrink-0 rounded-full border border-border" aria-hidden />;
-}
-
 export function SignInSteps({ step, provider }: { step: SignInStep; provider: string }) {
   const [start, download, wait] = marksFor(step);
   const downloadLabel =
@@ -65,28 +55,12 @@ export function SignInSteps({ step, provider }: { step: SignInStep; provider: st
       : download === "failed"
         ? SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED
         : SIGNIN_PROGRESS.STEP_DOWNLOAD;
-  const rows: Array<[Mark, string]> = [
-    [start, SIGNIN_PROGRESS.STEP_START],
-    [download, downloadLabel],
+  const rows: StepRow[] = [
+    { key: "start", label: SIGNIN_PROGRESS.STEP_START, mark: start },
+    { key: "download", label: downloadLabel, mark: download },
   ];
-  if (wait) rows.push([wait, SIGNIN_PROGRESS.STEP_WAIT(provider)]);
-  return (
-    <ol className="space-y-1.5" data-testid="signin-progress">
-      {rows.map(([mark, label]) => (
-        <li
-          key={label}
-          data-state={mark}
-          aria-current={mark === "active" ? "step" : undefined}
-          className={
-            "flex items-center gap-2 text-xs " + (mark === "pending" ? "text-muted-foreground" : "text-foreground")
-          }
-        >
-          <StepMark mark={mark} />
-          {label}
-        </li>
-      ))}
-    </ol>
-  );
+  if (wait) rows.push({ key: "wait", label: SIGNIN_PROGRESS.STEP_WAIT(provider), mark: wait });
+  return <ProgressSteps rows={rows} testId="signin-progress" />;
 }
 
 function DeviceCode({ code }: { code: string }) {

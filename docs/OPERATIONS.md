@@ -3959,8 +3959,8 @@ A run sits in `STARTING` for the whole of `CreateSandbox` — there is no sandbo
 returns, so nothing outside the runner could previously be asked what the substrate was doing. Since
 0.7.6 the runner reports it while it waits: every poll of the proxy pod and of the agent pod computes
 one line and, when that line CHANGES, writes it to `agent_runs.status_detail` (migration
-`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row and
-in the sign-in pane (below).
+`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row, in
+the run page's terminal pane while the run is Pending or Starting, and in the sign-in pane (below).
 
 The line is the substrate's own words, in the shape `<component>: <Reason>[: <message>]`:
 
