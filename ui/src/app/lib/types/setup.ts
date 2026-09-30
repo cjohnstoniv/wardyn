@@ -34,37 +34,10 @@ export interface SetupCheck {
   cause?: string;
 }
 
-// A resident coding-agent CLI detected on the wardynd host PATH. logged_in is
-// ADVISORY (a home-dir credential-file heuristic).
+// A coding-agent CLI detected on the wardynd host PATH.
 export interface SetupProvider {
   tool: "claude" | "codex" | (string & {});
   installed: boolean;
-  logged_in: boolean;
-  login_detected_via?: string;
-  // How the CLI authenticates, when detectable: "subscription" (a resident Claude
-  // OAuth token is present — fresh OR expired; freshness lives in the llm_provider
-  // check detail, not here). "api_key" is reserved in the contract but never
-  // inferred for a CLI; codex stays "" (no auth-file parse). Absent => unknown.
-  auth_mode?: "subscription" | "api_key" | (string & {});
-}
-
-// Amazon Bedrock Anthropic-transport readiness (an enterprise "Connect a
-// model" path — no direct Anthropic egress, billed via AWS). region/model are
-// non-secret boot-time operator config, safe to echo; creds_present is a bool
-// derived from secret-name presence (the AWS credential VALUES are never
-// echoed, same as every other secret in this contract).
-export interface SetupBedrock {
-  region?: string;
-  model?: string;
-  creds_present: boolean;
-  // Additional boot-configured credential sources (any one is enough). Since 0.8
-  // no run is credentialed from these — a run's Bedrock credential is its model
-  // provider's. Optional for fixture-compat with an older daemon.
-  aws_mount?: boolean;
-  bearer_present?: boolean;
-  // Server-computed readiness (region+model+any credential source). Prefer this
-  // over re-deriving in the UI so the two gates can't drift.
-  ready?: boolean;
 }
 
 // Host-proxy detection — mirrors internal/setup/detect_proxy.go. Every value is
@@ -184,7 +157,7 @@ export interface WireIntegration {
   // (integrationsWithCapabilities) — not read client-side yet; CAPS in
   // lib/integrations.ts hand-mirrors the same facts as a SECOND derivation,
   // pending consolidation onto this field. Optional for the same
-  // fixture-compat reason as SetupStatus.bedrock below.
+  // fixture-compat reason as SetupStatus.host_proxy below.
   capabilities?: WireCapability[];
 }
 
@@ -290,14 +263,13 @@ export interface SetupProviderAccess {
 
 export interface SetupStatus {
   ready: boolean;
-  // Server-computed "does SOME run/compose LLM access path exist" (resident
-  // CLI login, a resolved composer backend key, an api-key-ish secret,
-  // Bedrock, a managed harness token, or a configured ai_provider
-  // Integration) — computed BEFORE the member redaction pass and left
+  // Server-computed "does SOME run's LLM access path exist": at least one
+  // enabled model provider serves an agent (Go llmPathExists) — computed
+  // BEFORE the member redaction pass and left
   // untouched by it (see the Go SetupStatus.LLMReady doc comment), so a
   // member's console can answer the question the (redacted-away) `checks` /
   // `providers` detail used to answer. Optional for the same fixture-compat
-  // reason as `bedrock` — READY_FALLBACK and older daemons omit it; treat
+  // reason as `host_proxy` — READY_FALLBACK and older daemons omit it; treat
   // absent as "unknown", not "false".
   llm_ready?: boolean;
   // X3-F1 — true on a body the server stripped for this caller's tier
@@ -338,14 +310,6 @@ export interface SetupStatus {
   auth: {
     mode: "local" | "sso" | "token" | "disabled";
     local_loopback: boolean;
-    /** Whether this deployment may inject ONE operator's Anthropic subscription
-     *  into runs. False on Kubernetes and whenever SSO is configured: sharing one
-     *  person's subscription across users breaches the harness vendor's per-user
-     *  authentication terms, and it is the operator who ends up in breach. */
-    shared_subscription_allowed?: boolean;
-    /** Why it is unavailable — rendered instead of the sign-in affordance, so the
-     *  card explains rather than looking like "nobody has connected one yet". */
-    shared_subscription_reason?: string;
   };
   runner: {
     driver: "docker" | "k8s" | "none" | (string & {});
@@ -363,6 +327,11 @@ export interface SetupStatus {
     // under the ephemeral-scratch fields, via DRIVES.ENFORCEMENT_*. Absent on an
     // older daemon or on Docker with no runner detected; empty reads as "none".
     ephemeral_disk_enforcement?: StorageEnforcement;
+    // The runner is the Kubernetes driver — the ONE substrate fact kept in a
+    // member's redacted body (internal/api/setup.go, SetupRunner.Kubernetes),
+    // because `driver` is blanked for them and the Vault remedy differs by
+    // substrate. Absent on an older daemon or off Kubernetes.
+    kubernetes?: boolean;
   };
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };
@@ -374,26 +343,17 @@ export interface SetupStatus {
   credential_storage?: "local" | "key_service" | "vault" | "key_vault";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
-  // Optional: absent on an older/fallback status (e.g. READY_FALLBACK, or a
-  // daemon build that predates this field) rather than a required breaking
-  // change to every existing SetupStatus fixture.
-  bedrock?: SetupBedrock;
   // Masked host-proxy detection (see HostProxyDetection). Optional for the same
-  // fixture-compat reason as `bedrock` — READY_FALLBACK and older daemons omit it.
+  // fixture-compat reason as `llm_ready` — READY_FALLBACK and older daemons omit it.
   host_proxy?: HostProxyDetection;
   // Presence-only host git-credential posture (see SCMPosture) — feeds the
   // scm_provider check's grading and the ScmProviderStep gh-CLI advisory line.
-  // Optional for the same fixture-compat reason as `bedrock`.
+  // Optional for the same fixture-compat reason as `llm_ready`.
   scm?: SCMPosture;
-  // Whether wardynd itself sees a resident Claude login (host mode) vs is blind to
-  // it (compose/container). host_like === false is why the LLM-access check reads
-  // "no login" in compose even when the operator IS logged in on the host. Optional
-  // for the same fixture-compat reason as `bedrock`.
-  deployment?: { host_like: boolean };
   // The EFFECTIVE integration set (stored ∪ legacy-derived) with each row's live
   // capabilities — the server's own answer, as opposed to the rows
   // lib/api/integrations.ts derives client-side for the two legacy categories.
-  // Optional for the same fixture-compat reason as `bedrock`.
+  // Optional for the same fixture-compat reason as `llm_ready`.
   integrations?: WireIntegration[];
   // The STATIC coding-agent harness catalog (harnessCatalog, harness.go) —
   // which tools Wardyn knows how to run and whether it can wire each one a
@@ -401,7 +361,7 @@ export interface SetupStatus {
   // client-side yet (same as `capabilities` above) — new-run's
   // WizardAgent literal union is a hand-maintained copy of the same facts,
   // pending consolidation onto this field. Optional for the same
-  // fixture-compat reason as `bedrock`.
+  // fixture-compat reason as `llm_ready`.
   harnesses?: SetupHarnessTool[];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not

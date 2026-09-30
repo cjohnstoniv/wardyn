@@ -91,10 +91,6 @@ const AI_TYPE_LABEL: Record<string, string> = {
   openai_api_key: "openai · api key",
 };
 
-function subscriptionTypeLabel(hostCli: boolean): string {
-  return hostCli ? "anthropic · host cli login" : "anthropic · managed login";
-}
-
 // The default Name a newly-added row of this type gets (the Add dialog's
 // editable Name field default, and what a freshly-derived row is called until
 // the operator renames it) — ONE naming function so the dialog's preview can
@@ -156,29 +152,8 @@ export function aiResidency(type: AiType, hostCli: boolean | undefined, lane: Be
   return "proxy_injected"; // anthropic_api_key / openai_api_key
 }
 
-// The boot-configured Bedrock lane that is present: bearer > host ~/.aws mount
-// > static access keys. Undefined when only region/model are set — no
-// credential lane is present yet. Since 0.8 none of them credentials a run (a
-// run's Bedrock credential is its model provider's); an AWS sign-in is a
-// provider's, never a row here.
-function activeBedrockLane(status: SetupStatus): BedrockLane | undefined {
-  const b = status.bedrock;
-  if (!b) return undefined;
-  if (b.bearer_present) return "bearer";
-  if (b.aws_mount) return "aws_dir";
-  if (b.creds_present) return "static";
-  return undefined;
-}
-
-function bedrockSecretNames(lane: BedrockLane | undefined, present: string[]): string[] {
-  if (lane === "bearer") return ["bedrock-api-key"];
-  if (lane === "static") return ["aws-access-key-id", "aws-secret-access-key", "aws-session-token"].filter((n) => present.includes(n));
-  return []; // sso is a harness credential; aws_dir is boot config — neither is a secret-store entry
-}
-
-function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] {
+function deriveAiRows(present: string[]): IntegrationRow[] {
   const rows: IntegrationRow[] = [];
-  const claude = status.providers.find((p) => p.tool === "claude");
   if (present.includes("anthropic-api-key")) {
     rows.push({
       id: "ai:anthropic_api_key",
@@ -192,73 +167,6 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
       secretNames: ["anthropic-api-key"],
       aiType: "anthropic_api_key",
       checkIds: ["llm_provider"],
-    });
-  }
-
-  if (claude?.logged_in && claude.auth_mode === "subscription") {
-    rows.push({
-      id: "ai:anthropic_subscription:host",
-      serverId: aiServerId("anthropic_subscription", true),
-      category: "ai_provider",
-      name: aiRowName("anthropic_subscription", true),
-      typeLabel: subscriptionTypeLabel(true),
-      chips: capabilityChips("anthropic_subscription", true),
-      residency: aiResidency("anthropic_subscription", true, undefined),
-      // A resident host login carries no capture timestamp Wardyn can see.
-      posture: { kind: "configured" },
-      secretNames: [],
-      aiType: "anthropic_subscription",
-      hostCli: true,
-      checkIds: ["llm_provider"],
-    });
-  } else if (claude?.logged_in) {
-    // UI-LIB-3: auth_mode is set ONLY once Wardyn PEEKS a real subscription
-    // OAuth token (setup.go's subOK) — but the server's own llm_provider check
-    // (llmProvenance: "A logged-in CLI is real access") counts ANY logged-in
-    // claude CLI as real model access, an api-key session or an unreadable
-    // subscription alike. Without this row the console read "Needs setup" on
-    // the exact payload the funnel's own Review step showed as "ok" (identical
-    // for a codex-only login, but the suggested fix — and the server's own
-    // detail string this mirrors — is scoped to claude). No serverId: this is
-    // a passive detection, not an entity Wardyn could adopt/store.
-    rows.push({
-      id: "ai:anthropic_cli_login",
-      category: "ai_provider",
-      name: "Claude Code CLI (resident login)",
-      typeLabel: "anthropic · cli login detected",
-      chips: capabilityChips("anthropic_subscription", true),
-      residency: aiResidency("anthropic_subscription", true, undefined),
-      posture: { kind: "configured" },
-      secretNames: [],
-      aiType: "anthropic_subscription",
-      hostCli: true,
-      checkIds: ["llm_provider"],
-    });
-  }
-
-  const bedrock = status.bedrock;
-  // RIDER B7-F6: a member's SetupStatus carries bedrock as {ready} ONLY (the
-  // region/model/lane booleans are the operator's host posture, redacted
-  // server-side) — `ready` keeps the row alive for them; it already implies
-  // region+model+a credential source, so it also settles the posture below.
-  const bedrockConfigured = !!(bedrock && (bedrock.ready || bedrock.region || bedrock.model || bedrock.creds_present || bedrock.aws_mount || bedrock.bearer_present));
-  if (bedrockConfigured) {
-    const lane = activeBedrockLane(status);
-    let posture: Posture = { kind: "configured" };
-    if (!bedrock!.ready && (!bedrock!.region || !bedrock!.model)) posture = { kind: "region_model_unset" };
-    rows.push({
-      id: "ai:bedrock",
-      serverId: aiServerId("bedrock"),
-      category: "ai_provider",
-      name: aiRowName("bedrock"),
-      typeLabel: AI_TYPE_LABEL.bedrock,
-      chips: capabilityChips("bedrock"),
-      residency: aiResidency("bedrock", undefined, lane),
-      posture,
-      secretNames: bedrockSecretNames(lane, present),
-      aiType: "bedrock",
-      bedrockLane: lane,
-      checkIds: ["bedrock_provider"],
     });
   }
 
@@ -389,7 +297,7 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
 export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig | null, secretNames: string[]): IntegrationsData {
   const present = secretNames.length ? secretNames : status.secrets.present;
   return {
-    ai: deriveAiRows(status, present),
+    ai: deriveAiRows(present),
     scm: deriveScmRows(status, siteConfig, present),
   };
 }

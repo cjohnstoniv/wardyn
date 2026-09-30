@@ -26,8 +26,8 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
 
 // llmReady is the server's own llm_ready (an enabled model provider serves a
 // harness) and llmLabel names that provider. Since 0.8 (#548) a run's model
-// credential comes only from its model provider, so an operator key, a host
-// CLI login or Bedrock boot config is no LLM path at all.
+// credential comes only from its model provider, so an operator key or a
+// host CLI is no LLM path at all.
 describe("hasLlmPath — the server's llm_ready", () => {
   it("a bare status is no LLM access", () => {
     expect(hasLlmPath(status())).toBe(false);
@@ -38,10 +38,9 @@ describe("hasLlmPath — the server's llm_ready", () => {
     expect(hasLlmPath(status({ checks_redacted: true, llm_ready: true }))).toBe(true);
   });
 
-  it("an operator key, a host CLI login or Bedrock boot config is no LLM path", () => {
+  it("an operator key or a host CLI is no LLM path", () => {
     expect(hasLlmPath(status({ secrets: { present: ["anthropic-api-key", "openai-api-key"], github_app: false } }))).toBe(false);
-    expect(hasLlmPath(status({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }))).toBe(false);
-    expect(hasLlmPath(status({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: true } }))).toBe(false);
+    expect(hasLlmPath(status({ providers: [{ tool: "claude", installed: true }] }))).toBe(false);
   });
 });
 
