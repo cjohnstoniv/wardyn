@@ -134,8 +134,11 @@ _ = created
 ## Following a run's lifecycle
 
 `GET /api/v1/runs/{id}/events` is a `text/event-stream` of the run's lifecycle,
-readable by whoever may read the run (anyone else gets the same `404` as
-`GET /runs/{id}`). `RunEvents` follows it and returns once the run has ended:
+readable by whoever may read the run, including a portal's delegated token for
+the run's person (anyone else gets the same `404` as `GET /runs/{id}`). One
+principal holds at most 32 streams at once; the next is refused `422`
+`event_stream_cap` until one closes. `RunEvents` follows it and returns once the
+run has ended:
 
 ```go
 err := c.RunEvents(ctx, created.ID, 0, func(ev client.RunEvent) error {
@@ -368,6 +371,7 @@ above under a *different* refusal that deliberately shares the same string
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
+| `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
 | `grant_pairing_not_eligible` | The named capability grant is not eligible to pair with the request it was offered against. |
 | `model_provider_unavailable` | `POST /runs`' model-provider choice (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |

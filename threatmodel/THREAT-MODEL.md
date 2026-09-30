@@ -1231,6 +1231,13 @@ hiding them would repeat the failure mode we are designed to avoid.
     hostname. The relay strips and drops every `wardyn_*` cookie, `__Host-`
     spellings included, in both directions, but a page's own script is outside
     the relay's reach. Only a gateway on a hostname of its own closes that.
+    Boot says so: with secure cookies on and a path-mode gateway whose
+    `WARDYN_UI_SANDBOX_ADVERTISE` host equals the console's (the host of
+    `WARDYN_OIDC_REDIRECT_URL`), wardynd logs a warning naming the remedy — give
+    the gateway its own hostname, or set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`
+    (`uiGatewaySharesConsoleHostWarning`, `cmd/wardynd/boot_posture.go`; #1269).
+    It is a warning, not a refusal: the advertised URL is advisory, so boot cannot
+    tell that it is what a browser reaches.
 
 19. **A UI-app session is not recorded — only that it happened.** Session recording
     (tmux, the PTY recorder, `internal/secretmask` masking, the asciicast upload)

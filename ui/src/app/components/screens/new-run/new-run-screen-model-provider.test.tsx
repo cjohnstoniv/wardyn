@@ -60,7 +60,7 @@ vi.mock("../../../lib/capabilities", async () => {
 // launch.credentialRefused/refusedProvider.
 const railProps: Array<{
   modelProvider?: { selectedId?: string; changeNote: string | null };
-  launch: { problem: string | null };
+  launch: { problem: string | null; workspaceUnavailable?: boolean };
 }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
@@ -358,6 +358,36 @@ describe("NewRunScreen — R6 rule (3): a workspace pin silences LAUNCH_HINT", (
     await waitFor(() => expect(railProps.at(-1)?.launch.problem).toBeNull());
     expect(railProps.at(-1)?.modelProvider?.selectedId).toBeUndefined();
     expect(screen.queryByText(RAIL_PROVIDER.LAUNCH_HINT)).toBeNull();
+  });
+});
+
+// #1018: a pin the server hid (llm_cred.provider_unavailable) is still a pin
+// to a provider this person can't use — the rail preselects nothing, never
+// the roster default, so nothing is substituted, and Launch is refused.
+describe("NewRunScreen — #1018: a hidden pin preselects nothing", () => {
+  it("does not adopt the roster default under provider_unavailable", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      providerStatus([
+        { provider: gateway, defaultFor: ["claude-code"], state: "live" },
+        { provider: claude, state: "live" },
+      ]),
+    );
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws1",
+        name: "repo-a",
+        kind: "local_dir",
+        source: "/home/agent/repo-a",
+        status: "scanned",
+        llm_cred: { provider_unavailable: true },
+      },
+    ]);
+    renderScreenWithWorkspace("ws1");
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeInTheDocument());
+    await waitFor(() => expect(railProps.at(-1)?.launch.workspaceUnavailable).toBe(true));
+    expect(railProps.at(-1)?.modelProvider?.selectedId).toBeUndefined();
+    expect(createRunMock).not.toHaveBeenCalled();
   });
 });
 

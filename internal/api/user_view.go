@@ -108,8 +108,13 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonUserViewInvalidField, `The "view" field must be "user" or "admin".`)
 		return
 	}
+	// A real user asking for the view is already in it, and SetUserView writes
+	// nothing for them (below), so their request is ignored before any type is
+	// looked up: an unknown id answering 400 where a known one answers 200
+	// would tell a plain user which type ids exist (#997).
+	realUser := oidcRoleFromContext(ctx) == oidc.RoleUser && !oidc.MemberModeFromContext(ctx)
 	typeID, typeName := "", ""
-	if on {
+	if on && !realUser {
 		var msg string
 		var err error
 		typeID, msg, err = s.userViewType(ctx, sub, req.UserType)
@@ -348,9 +353,13 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 		return nil
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/me" {
+		// Dual-emitted like the toggle (OD-18): a dashboard still on the old
+		// name sees the forced exit too.
+		datum := mustJSON(map[string]any{"enabled": false, "user_type": typeID, "reason": "user_type_deleted"})
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidc.PrincipalFromContext(ctx),
-			"auth.user_view.set", "/api/v1/me", "success",
-			mustJSON(map[string]any{"enabled": false, "user_type": typeID, "reason": "user_type_deleted"})))
+			"auth.user_view.set", "/api/v1/me", "success", datum))
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidc.PrincipalFromContext(ctx),
+			"auth.member_mode", "/api/v1/me", "success", datum))
 		return r.WithContext(dropped)
 	}
 	// Written here rather than through refuse: the gate runs before the api's

@@ -52,6 +52,10 @@ const (
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
+	// ReasonEventStreamCap: the caller already holds the most concurrent run
+	// event streams one principal may (#1407). A limit, not a denial: not
+	// audited, like ReasonRunQuota.
+	ReasonEventStreamCap Reason = "event_stream_cap"
 )
 
 // Refusal is one reason's registry row.
@@ -97,6 +101,7 @@ var refusals = map[Reason]Refusal{
 	ReasonUserViewTypeDeleted:         {Effect: EffectDeny, Audit: true},
 	ReasonAdminView:                   {Effect: EffectConflict},
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
+	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

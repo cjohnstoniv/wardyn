@@ -65,16 +65,6 @@
     "sentence": "apiTokenFeatureRefusal"
   },
   {
-    "reason": "capKinds[capModelProvider].reason",
-    "target": "\"model_provider.credential\"",
-    "sentence": "fmt.Sprintf(mpcNotGranted, p.ID)"
-  },
-  {
-    "reason": "capKinds[capModelProvider].reason",
-    "target": "\"model_provider.sign_in\"",
-    "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
-  },
-  {
     "reason": "capKinds[capPolicy].reason",
     "target": "\"policies.read\"",
     "sentence": "\"Stored policy \" + p.ID.String() + \" isn't available to you. Ask your admin, or launch without policy_id.\""
@@ -110,6 +100,16 @@
     "sentence": "choice.refusal"
   },
   {
+    "reason": "capability_model_provider",
+    "target": "\"runs.model_provider\"",
+    "sentence": "choice.refusal"
+  },
+  {
+    "reason": "capability_model_provider",
+    "target": "target",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "capability_workspace",
     "target": "\"runs.workspace\"",
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
@@ -123,6 +123,11 @@
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "event_stream_cap",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
   },
   {
     "reason": "governance_profile",

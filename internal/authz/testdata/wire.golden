@@ -33,3 +33,4 @@ reason admin_view
 reason model_provider_unavailable
 reason run_kept
 reason delegation_scope
+reason event_stream_cap
