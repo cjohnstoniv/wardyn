@@ -173,6 +173,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   portal was revoked or the token's ten-minute lifetime passed, until the five-minute hold ended it.
   The stream now re-checks the token at each keepalive and ends at the next one, failing closed if
   the check cannot be answered.
+- **The Add workspace dialog no longer offers a member on Kubernetes a local directory (#1416).** The
+  console decided "this install runs on Kubernetes" from `runner.driver`, which `GET /setup/status`
+  blanks for a member; it now also reads the member-safe `runner.kubernetes` bit added for #1238.
 - **The New Run barrier picker no longer claims what the server would contradict (#1238).** A member
   on Kubernetes is no longer told to bind-mount `/dev/kvm` for Vault: `GET /setup/status` keeps one
   substrate bit for members, `runner.kubernetes`, beside the confinement classes it already kept and no other runner detail, so the console can
