@@ -44,12 +44,12 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 		return nil, err
 	}
 	// The Azure DevOps sweep names its hosts from the provider rows, which
-	// migration 0102 has already rewritten (their addresses are kept).
+	// migration 0103 has already rewritten (their addresses are kept).
 	sc, err := store.NewPG(pool).GetSiteConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("refusing to start: read the site config for the Azure DevOps credential sweep: %w", err)
 	}
-	return st, sweepRetiredADOSharedCredentials(ctx, st, sc, rec)
+	return st, sweepRetiredADOSharedCredentials(ctx, pool, st, sc, rec)
 }
 
 // buildStoreClients builds the configured external store client and key

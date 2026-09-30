@@ -29,8 +29,8 @@ function entraRow(entra: Partial<NonNullable<GitProvider["entra"]>> = {}): GitPr
     entra: {
       tenant_id: TENANT,
       client_id: CLIENT,
-      capability_ceiling: ["code_write", "policy_admin", "pr", "read"],
-      default_profile: ["code_write", "pr", "read"],
+      capability_ceiling: ["code_write", "policy_admin", "pr", "code_read", "project_read"],
+      default_profile: ["code_write", "pr", "code_read"],
       token_mode: "bearer",
       ...entra,
     },
@@ -61,31 +61,46 @@ describe("EntraEditor", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("draws each group in the mock's order: High risk leads with Change branch policies", () => {
+  it("draws the seven areas in the per-area mock's order, High-risk rows inside their area", () => {
     render(<Harness initial={entraRow()} />);
     const names = ceiling().getAllByRole("checkbox").map((b) => b.getAttribute("aria-label"));
-    expect(names.slice(3, 5)).toEqual([name("work_write"), name("wiki_write")]);
-    expect(names.slice(7)).toEqual(
-      ["policy_admin", "policy_bypass", "repo_admin", "security_admin", "serviceendpoint_admin", "build_admin", "project_admin"].map(name),
+    expect(names.slice(0, 9)).toEqual(
+      ["code_read", "code_write", "pr", "policy_admin", "policy_bypass", "repo_admin", "work_read", "work_write", "work_admin"].map(name),
     );
+    expect(names).toHaveLength(29);
+    expect(screen.getByTestId("entra-ceiling-policy_admin")).toHaveClass("border-l-danger");
+    expect(screen.getByTestId("entra-ceiling-code_read")).not.toHaveClass("border-l-danger");
+  });
+
+  it("shows each row's Azure DevOps line, the second ceiling lead and the High-risk legend", () => {
+    render(<Harness initial={entraRow()} />);
+    for (const cap of ["code_read", "work_admin", "library_read"]) {
+      expect(screen.getByTestId(`entra-ceiling-${cap}-ado`)).toHaveTextContent(ADO_CAP_COPY[cap].ado);
+    }
+    expect(screen.getByText(E.CEILING_LEAD_ADO)).toBeInTheDocument();
+    expect(within(screen.getByText(E.HIGH_RISK_WARN).closest("p")!).getByText(E.HIGH_RISK_BADGE)).toBeInTheDocument();
+    expect(screen.getByText(E.DEFAULT_EMPTY_HINT)).toBeInTheDocument();
+    // The default section draws names only.
+    expect(screen.queryByTestId("entra-default-code_read-ado")).not.toBeInTheDocument();
   });
 
   // cn() (tailwind-merge) drops text-meta/text-body when a text colour joins
   // them; both the size and the colour must reach the DOM.
   it("keeps both the size and the colour class on names and leads", () => {
     render(<Harness initial={entraRow()} />);
-    expect(screen.getByText(ADO_GROUP_COPY.high_risk.name)).toHaveClass("text-body", "text-danger");
-    expect(screen.getAllByText(ADO_GROUP_COPY.read.name)[0]).toHaveClass("text-body");
-    expect(screen.getByText(ADO_GROUP_COPY.read.lead)).toHaveClass("text-meta", "text-muted-foreground");
-    expect(screen.getByText(ADO_GROUP_COPY.high_risk.lead)).toHaveClass("text-meta", "text-danger");
+    expect(screen.getAllByText(ADO_GROUP_COPY.repos.name)[0]).toHaveClass("text-body");
+    expect(screen.getByText(ADO_GROUP_COPY.repos.lead)).toHaveClass("text-meta", "text-muted-foreground");
+    expect(screen.getByText(E.HIGH_RISK_WARN).closest("p")).toHaveClass("text-meta", "text-danger");
     expect(ceiling().getByText(name("pr"))).toHaveClass("text-body", "text-foreground");
     expect(ceiling().getByText(name("work_write"))).toHaveClass("text-body", "text-muted-foreground");
   });
 
-  it("an empty default profile reads as Read, the server's own reading", () => {
+  it("an empty default profile reads as Read code and View projects & teams, the server's own reading", () => {
     render(<Harness initial={entraRow({ default_profile: [] })} />);
-    expect(defaults().getByRole("checkbox", { name: name("read") })).toBeChecked();
+    expect(defaults().getByRole("checkbox", { name: name("code_read") })).toBeChecked();
+    expect(defaults().getByRole("checkbox", { name: name("project_read") })).toBeChecked();
     expect(defaults().getByRole("checkbox", { name: name("pr") })).not.toBeChecked();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("a default off the ceiling is disabled and locked, with its reason in the tooltip", () => {
@@ -108,7 +123,7 @@ describe("EntraEditor", () => {
 
   it("narrowing the ceiling under a default shows the banner, and the row cannot be saved", async () => {
     let latest: GitProvider | undefined;
-    render(<Harness initial={entraRow({ default_profile: ["policy_admin", "read"] })} onLatest={(r) => (latest = r)} />);
+    render(<Harness initial={entraRow({ default_profile: ["policy_admin", "code_read"] })} onLatest={(r) => (latest = r)} />);
     expect(gitRowInvalid(latest!)).toBe(false);
 
     await userEvent.click(ceiling().getByRole("checkbox", { name: name("policy_admin") }));
@@ -145,8 +160,8 @@ describe("EntraEditor", () => {
       entra: {
         tenant_id: CLIENT,
         client_id: CLIENT,
-        capability_ceiling: ["read", "code_write", "pr", "work_write", "policy_admin"],
-        default_profile: ["read", "code_write", "work_write"],
+        capability_ceiling: ["code_read", "code_write", "pr", "policy_admin", "work_write", "project_read"],
+        default_profile: ["code_read", "code_write", "work_write"],
         token_mode: "bearer",
         rest_api: false,
       },
@@ -161,6 +176,8 @@ describe("EntraEditor", () => {
     expect(screen.getByRole("switch", { name: E.REST_TOGGLE })).toBeDisabled();
     for (const box of screen.getAllByRole("checkbox")) expect(box).toBeDisabled();
     expect(screen.queryByText(E.CEILING_LEAD)).not.toBeInTheDocument();
+    // The Azure DevOps lines stay, so a person who can't edit still sees what each row means there.
+    expect(screen.getByTestId("entra-ceiling-code_read-ado")).toHaveTextContent(ADO_CAP_COPY.code_read.ado);
   });
 });
 

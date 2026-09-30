@@ -73,7 +73,7 @@ test.describe("Available to — a person's git provider (#922)", () => {
     const before = await request.get("/api/v1/workspace-providers", { headers: auth });
     const cur = await before.json();
     const git = (cur.git ?? []).filter((g: { id: string }) => g.id !== PROVIDER_ID);
-    git.push({ id: PROVIDER_ID, kind: "azure_devops", base_urls: [ORG_BASE_URL], lanes: ["entra"], credential_source: "per_user", entra: { token_mode: "own_pat", capability_ceiling: ["read"] } });
+    git.push({ id: PROVIDER_ID, kind: "azure_devops", base_urls: [ORG_BASE_URL], lanes: ["entra"], credential_source: "per_user", entra: { token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"] } });
     const put = await request.put("/api/v1/workspace-providers", {
       headers: { ...auth, "If-Match": before.headers()["etag"] ?? "" },
       data: { git, storage: cur.storage },

@@ -457,6 +457,21 @@ path. The chart key is a clean break, no alias — see
 | Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
 | Helm `userDrives.reclaim.enabled` | Helm `drives.reclaim.enabled` | Chart value, clean break (no alias); never released under the old name |
 
+### Azure DevOps capabilities (#1409)
+
+The Azure DevOps capability ids in `capability_ceiling`, `default_profile` and
+`azure_devops_capabilities` split per area in 0.8.2. It is a clean break with no alias: migration
+`0101_ado_capability_split` rewrites every stored list, and the server refuses the old `read` id
+with a `400` (`ado_capability_unknown` on the policy-shaped doors). The SDK and CLI carry no
+capability enum, so no client code changes.
+
+| Old | New | Kind |
+|---|---|---|
+| `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read`, `analytics_read` | Capability id, clean break |
+| `work_write` | `work_write`, `work_admin` | Capability id, split |
+| `build_execute` | `build_execute`, `release_execute` | Capability id, split |
+| `build_admin` | `build_admin`, `release_admin` | Capability id, split |
+
 ## Local dev: principal override
 
 `X-Wardyn-Principal` overrides the server-side principal attribution:

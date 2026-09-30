@@ -99,8 +99,8 @@ func Classify(req Request) (Verdict, error) {
 		return locationDiscovery(r), nil
 	}
 	if slices.Contains(readMethods, method) || readWrite(r) {
-		if _, ok := readScope(r); ok {
-			return Verdict{Capability: CapRead}, nil
+		if a, ok := readAreaOf(r); ok {
+			return Verdict{Capability: a.cap}, nil
 		}
 		return Verdict{Capability: CapUnclassifiedRead}, nil
 	}
@@ -109,13 +109,13 @@ func Classify(req Request) (Verdict, error) {
 
 // locationDiscovery classifies an OPTIONS request: the SDKs' API
 // location-discovery call. Returns route templates, not data, and needs no
-// scope. Admitted only on discovery shapes (API root, or one area's location
+// scope, so it is CapDiscovery. Admitted only on discovery shapes (API root, or one area's location
 // at org/project level); otherwise an unclassified read. Any area name is
 // accepted, including ones readAreas doesn't list, because OPTIONS can't
 // carry a write — a body and every override header are refused before routing.
 func locationDiscovery(r route) Verdict {
 	if (r.apis == 0 || r.apis == 1) && r.at(2) == "" {
-		return Verdict{Capability: CapRead}
+		return Verdict{Capability: CapDiscovery}
 	}
 	return Verdict{Capability: CapUnclassifiedRead}
 }
@@ -141,48 +141,6 @@ func optionsCarriesNoBody(req Request) error {
 		return fmt.Errorf("adoscope: an OPTIONS request declares a streamed body — discovery sends none")
 	}
 	return nil
-}
-
-// readAreas is EVERY area this catalogue answers CapRead for, with the scope
-// a token must carry to perform that read. An empty scope is an area the
-// service doesn't scope-gate at all. A key "area/resource" is a resource
-// whose read scope differs from its area's. CLOSED table: a read outside it
-// is CapUnclassifiedRead (not grantable) rather than 403ing at the forge.
-var readAreas = map[string]string{
-	"git": "vso.code", "policy": "vso.code", "search": "vso.code",
-	"wit": "vso.work", "work": "vso.work",
-	"build": "vso.build", "pipelines": "vso.build",
-	"release":   "vso.release",
-	"wiki":      "vso.wiki",
-	"packaging": "vso.packaging", "packages": "vso.packaging",
-	"projects": "vso.project", "projectcollections": "vso.project",
-	"serviceendpoint": "vso.serviceendpoint",
-	"graph":           "vso.graph",
-	"identities":      "vso.identity",
-	"test":            "vso.test", "testplan": "vso.test", "testresults": "vso.test",
-	"analytics":        "vso.analytics",
-	"userentitlements": "vso.memberentitlementmanagement", "groupentitlements": "vso.memberentitlementmanagement",
-	"memberentitlements":             "vso.memberentitlementmanagement",
-	"distributedtask/variablegroups": "vso.variablegroups_read",
-	"distributedtask/securefiles":    "vso.securefiles_read",
-	"connectiondata":                 "", "resourceareas": "",
-	// The signed-in person's profile and organisation list.
-	"profile": "vso.profile", "accounts": "vso.profile",
-}
-
-// readScope is the scope a read of r needs, and whether r is a read this
-// catalogue knows at all.
-func readScope(r route) (string, bool) {
-	// A package client's feed route carries no _apis segment, but it is the
-	// packaging area all the same.
-	if packagePublish(r) {
-		return readAreas["packaging"], true
-	}
-	if s, ok := readAreas[r.area+"/"+r.res]; ok {
-		return s, true
-	}
-	s, ok := readAreas[r.area]
-	return s, ok
 }
 
 // effectiveMethod is the method the SERVER will act on, not always the one on
@@ -404,11 +362,11 @@ func readWrite(r route) bool {
 // rather than inheriting whatever the nearest area was granted.
 func classifyWrite(method string, r route, req Request) (Verdict, error) {
 	if packagePublish(r) {
-		return Verdict{Capability: CapPackagingWrite}, nil
+		return Verdict{Capability: packagingWrite(method, r)}, nil
 	}
 	switch r.area {
 	case "wit":
-		return witWrite(r, req)
+		return witWrite(method, r, req)
 	case "git":
 		return gitWrite(method, r, req)
 	case "policy":
@@ -427,7 +385,7 @@ func classifyWrite(method string, r route, req Request) (Verdict, error) {
 	case "wiki":
 		return Verdict{Capability: CapWikiWrite}, nil
 	case "packaging", "packages":
-		return Verdict{Capability: CapPackagingWrite}, nil
+		return Verdict{Capability: packagingWrite(method, r)}, nil
 	case "projects", "projectcollections":
 		return Verdict{Capability: CapProjectAdmin}, nil
 	}
@@ -448,15 +406,56 @@ func packagePublish(r route) bool {
 	return (i == 0 || i == 1) && i+2 < len(r.segs) && slices.Contains(packageProtocols, r.segs[i+2])
 }
 
-// witWrite is the work-item area. The $batch door is the interesting one — see
-// batchIsWorkItemsOnly.
-func witWrite(r route, req Request) (Verdict, error) {
+// witAdminResources are the work-item resources whose every write is
+// CapWorkAdmin: bulk delete, the recycle bin, area and iteration paths, and
+// the organisation's fields and tags.
+var witAdminResources = []string{"workitemsdelete", "recyclebin", "classificationnodes", "fields", "tags"}
+
+// witWrite is the work-item area: CapWorkAdmin for deleting work items and
+// for the organisation-wide resources, CapWorkWrite for everything else. The
+// $batch door is the widest of its operations — see batchCapability.
+func witWrite(method string, r route, req Request) (Verdict, error) {
 	if r.res == "$batch" {
-		if err := batchIsWorkItemsOnly(req); err != nil {
+		c, err := batchCapability(req)
+		if err != nil {
 			return Verdict{}, err
 		}
+		return Verdict{Capability: c}, nil
 	}
-	return Verdict{Capability: CapWorkWrite}, nil
+	return Verdict{Capability: witWriteCapability(method, r.res, r.at(4))}, nil
+}
+
+// witWriteCapability classifies one work-item write by its method, its
+// resource and the segment after the resource's id: a DELETE of a work item
+// itself (one, destroyed, or many by ?ids=) is CapWorkAdmin, a DELETE of a
+// comment on one is not.
+func witWriteCapability(method, res, sub string) Capability {
+	if slices.Contains(witAdminResources, res) || (method == http.MethodDelete && res == "workitems" && sub == "") {
+		return CapWorkAdmin
+	}
+	return CapWorkWrite
+}
+
+// packagingWrite splits the packaging area on Azure DevOps' own scope line:
+// deleting a package or touching a feed object (create, update, delete,
+// permissions, views, retention, the feed recycle bin) needs
+// vso.packaging_manage; publishing and editing a package version needs
+// vso.packaging_write.
+func packagingWrite(method string, r route) Capability {
+	if method == http.MethodDelete {
+		return CapPackagingManage
+	}
+	if r.area == "packaging" {
+		switch r.res {
+		case "feedrecyclebin", "globalpermissions":
+			return CapPackagingManage
+		case "feeds":
+			if r.at(3) == "" || !slices.Contains(packageProtocols, r.at(4)) {
+				return CapPackagingManage
+			}
+		}
+	}
+	return CapPackagingWrite
 }
 
 // gitCodeWriteResources are the git sub-resources that change code without
@@ -543,10 +542,12 @@ func pipelinesWrite(r route) Capability {
 	return CapBuildAdmin
 }
 
-// releaseWrite is the classic-release area, with the same split as build.
+// releaseWrite is the classic-release area, with the same split as build:
+// releases and deployments are CapReleaseExecute, everything else
+// (definitions, approvals, …) CapReleaseAdmin.
 func releaseWrite(r route) Capability {
 	if r.res == "releases" || r.res == "deployments" {
-		return CapBuildExecute
+		return CapReleaseExecute
 	}
-	return CapBuildAdmin
+	return CapReleaseAdmin
 }

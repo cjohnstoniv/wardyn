@@ -86,14 +86,10 @@ func adoEntra(r types.GitProvider) types.GitProvider {
 	return r
 }
 
-// adoTestCeiling is a capability ceiling the current catalogue accepts as a
-// row's widest set: the per-area reads once that catalogue is in (#1409), the
-// one read before it. Spelled as strings so this file builds under either.
+// adoTestCeiling is a capability ceiling the catalogue accepts as a row's
+// widest set: what migration 0103 writes for a hosted row.
 func adoTestCeiling() []adoscope.Capability {
-	if adoscope.Capability("code_read").Grantable() {
-		return []adoscope.Capability{"project_read", "code_read"}
-	}
-	return []adoscope.Capability{"read"}
+	return []adoscope.Capability{"project_read", "code_read"}
 }
 
 func adoServerPAT(r types.GitProvider) types.GitProvider {

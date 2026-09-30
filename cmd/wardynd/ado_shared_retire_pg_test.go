@@ -46,7 +46,7 @@ func adoRetireRows(t *testing.T, rec *capturingRecorder) map[string]map[string]a
 	return out
 }
 
-// TestPG_SweepRetiredADOSharedCredentials: boot deletes every shared Azure
+// TestPG_SweepRetiredADOSharedCredentials: the sweep deletes every shared Azure
 // DevOps token, SSH key and known-hosts secret from every namespace — the
 // operator's and each person's (a person could store their own copy, and the
 // git broker reads the owner's row first), in local sealing and in store mode —
@@ -91,7 +91,7 @@ func TestPG_SweepRetiredADOSharedCredentials(t *testing.T) {
 			}
 
 			rec := &capturingRecorder{}
-			if err := sweepRetiredADOSharedCredentials(t.Context(), st, adoRetireSite(), rec); err != nil {
+			if err := deleteRetiredADOSharedCredentials(t.Context(), st, adoRetireSite(), rec); err != nil {
 				t.Fatalf("sweep: %v", err)
 			}
 			kept := []string{"git-pat-github-com", "npm-token", "wardyn-harness-ado-ado-oauth"}
@@ -157,7 +157,7 @@ func TestPG_SweepRetiredADOSharedCredentials(t *testing.T) {
 			}
 
 			again := &capturingRecorder{}
-			if err := sweepRetiredADOSharedCredentials(t.Context(), open(again), adoRetireSite(), again); err != nil {
+			if err := deleteRetiredADOSharedCredentials(t.Context(), open(again), adoRetireSite(), again); err != nil {
 				t.Fatalf("second boot: %v", err)
 			}
 			if rows := adoRetireRows(t, again); len(rows) != 0 {
@@ -208,5 +208,114 @@ func TestPG_OpenSecretStoreSweepsRetiredADOSharedCredentials(t *testing.T) {
 	}
 	if rows := adoRetireRows(t, rec); len(rows) != 2 {
 		t.Fatalf("the boot open wrote audit rows for %v, want operator and alice", rows)
+	}
+}
+
+// TestPG_SweepRetiredADOSharedCredentials_SparesOtherForges (#1429 review F1):
+// the sweep never deletes another forge's secret. A GHES row on the very host an
+// Azure DevOps row names, and a host that only slugs alike, keep their tokens in
+// every namespace; the Azure DevOps host with no such claim is still swept. Each
+// skipped host is named in a warning.
+func TestPG_SweepRetiredADOSharedCredentials_SparesOtherForges(t *testing.T) {
+	pool := envelopeDB(t)
+	st, err := buildSecretStore(t.Context(), pool, mustAgeIdentity(t).String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{
+		// The same host, once as Azure DevOps Server and once as GHES.
+		{ID: "ados", Kind: types.GitProviderAzureDevOps, Disabled: true, BaseURLs: []string{"https://git.corp.example/tfs"}},
+		{ID: "ghes", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://git.corp.example/org"}},
+		// Two hosts with one slug: tfs.corp.example and tfs-corp.example.
+		{ID: "ados2", Kind: types.GitProviderAzureDevOps, Disabled: true, BaseURLs: []string{"https://tfs.corp.example/acme"}},
+		{ID: "ghes2", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://tfs-corp.example/org"}},
+		// An Azure DevOps host nothing else claims.
+		{ID: "ados3", Kind: types.GitProviderAzureDevOps, Disabled: true, BaseURLs: []string{"https://ado.corp.example/acme"}},
+	}}}
+	const alice = "alice@example.com"
+	spared := []string{"git-pat-git-corp-example", "ssh-key-git-corp-example", "git-pat-tfs-corp-example", "git-pat-github-com"}
+	swept := []string{"git-pat-ado-corp-example", "git-pat-dev-azure-com"}
+	for _, owner := range []string{"", alice} {
+		for _, name := range append(slices.Clone(spared), swept...) {
+			if err := st.For(owner).Put(t.Context(), name, []byte("synthetic-credential-value")); err != nil {
+				t.Fatalf("seed %s/%s: %v", owner, name, err)
+			}
+		}
+	}
+	if err := deleteRetiredADOSharedCredentials(t.Context(), st, sc, &capturingRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	holders, err := st.Holders(t.Context(), append(slices.Clone(spared), swept...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range spared {
+		if !slices.Equal(holders[name], []string{"", alice}) {
+			t.Errorf("%s held by %q after the sweep, want it kept for the operator and alice", name, holders[name])
+		}
+	}
+	for _, name := range swept {
+		if len(holders[name]) != 0 {
+			t.Errorf("%s still held by %q, want it swept", name, holders[name])
+		}
+	}
+}
+
+// TestPG_ADOSharedSweepIsOneShot (#1429 review F2): the sweep runs at the first
+// start after the migration only. A person's own token stored under an enabled
+// per-person Server row's conventional name afterwards survives every later
+// start, and a later start audits nothing.
+func TestPG_ADOSharedSweepIsOneShot(t *testing.T) {
+	pool := envelopeDB(t)
+	ageKey := mustAgeIdentity(t).String()
+	seed, err := buildSecretStore(t.Context(), pool, ageKey, nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO site_config (config) VALUES ($1)`,
+		`{"workspace_providers":{"git":[{"id":"ados","kind":"azure_devops","base_urls":["https://tfs.corp.example/acme"],"lanes":["pat"],"credential_source":"per_user"}]}}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.For("").Put(t.Context(), "git-pat-tfs-corp-example", []byte("synthetic-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("WARDYN_AGE_KEY", ageKey)
+	oldArgs := os.Args
+	os.Args = []string{"wardynd-test"}
+	t.Cleanup(func() { os.Args = oldArgs })
+	boot := func() (secretstore.Store, *capturingRecorder) {
+		t.Helper()
+		resetFlags(t) // parseBootFlags defines its flags on the process-wide set
+		rec := &capturingRecorder{}
+		st, err := openSecretStore(t.Context(), pool, parseBootFlags(), rec)
+		if err != nil {
+			t.Fatalf("openSecretStore: %v", err)
+		}
+		return st, rec
+	}
+
+	st, rec := boot()
+	if rows := adoRetireRows(t, rec); len(rows) != 1 || rows["operator"] == nil {
+		t.Fatalf("the first start audited %v, want the operator's namespace", rows)
+	}
+	const alice = "alice@example.com"
+	if err := st.For(alice).Put(t.Context(), "git-pat-tfs-corp-example", []byte("alices-own-token-value")); err != nil {
+		t.Fatal(err)
+	}
+	st, rec = boot()
+	holders, err := st.Holders(t.Context(), []string{"git-pat-tfs-corp-example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(holders["git-pat-tfs-corp-example"], []string{alice}) {
+		t.Fatalf("after the second start the token is held by %q, want alice's own kept", holders["git-pat-tfs-corp-example"])
+	}
+	if rows := adoRetireRows(t, rec); len(rows) != 0 {
+		t.Fatalf("the second start audited %v, want nothing", rows)
+	}
+	var done bool
+	if err := pool.QueryRow(t.Context(), `SELECT done_at IS NOT NULL FROM boot_once WHERE name = 'ado_shared_credential_retire'`).Scan(&done); err != nil || !done {
+		t.Fatalf("marker done = %v, %v; want it set by the first start", done, err)
 	}
 }

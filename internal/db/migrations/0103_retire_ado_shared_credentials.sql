@@ -24,12 +24,21 @@
 --
 -- Not rewritten: GitHub rows, and every stored secret. SQL cannot delete a
 -- store-mode secret's value, so the stored shared credentials
--- (git-pat-<host>, ssh-key-<host> and its known-hosts-<host>) are deleted at
--- the first boot by wardynd itself, once per namespace, and audited as
--- ado_shared_credential.retire.
+-- (git-pat-<host>, ssh-key-<host> and its known-hosts-<host>) are deleted by
+-- wardynd itself, ONCE, at the first start after this migration, per
+-- namespace, and audited as ado_shared_credential.retire. boot_once holds the
+-- marker that makes it once: the sweep runs only while the row's done_at is
+-- null and sets it when it has finished, so a token a person stores under
+-- the same name afterwards is never swept.
 --
 -- A second run over migrated data changes nothing: a row that already carries
 -- only a per_user pat lane, or the entra lane, is left alone.
+
+CREATE TABLE IF NOT EXISTS boot_once (
+    name    text PRIMARY KEY,
+    done_at timestamptz
+);
+INSERT INTO boot_once (name) VALUES ('ado_shared_credential_retire') ON CONFLICT DO NOTHING;
 
 CREATE OR REPLACE FUNCTION pg_temp.ado_retire_shared(r jsonb) RETURNS jsonb
 LANGUAGE plpgsql IMMUTABLE AS $fn$

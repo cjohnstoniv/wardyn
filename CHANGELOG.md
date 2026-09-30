@@ -29,7 +29,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Groundwork for per-person Azure DevOps personal access tokens (#1428).** A provider row's `entra`
   block now accepts `token_mode: own_pat`, which needs no `tenant_id` or `client_id`, and the lifetimes
   `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
-  Migration `0101_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
+  Migration `0102_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
   with no token value in it.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
@@ -81,32 +81,87 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Azure DevOps capabilities: one read per area, in Azure DevOps' own names (#1409).** The single
+  `read` capability becomes twelve reads, one per Azure DevOps area, and each area's write and admin
+  rows follow Azure DevOps' own read → write → manage ladder. The catalogue now has 29 grantable
+  capabilities, grouped in the console as Repos, Boards, Wiki, Pipelines, Artifacts, Test Plans and
+  Organization, and every row shows the scope Wardyn requests and the permission as Azure DevOps'
+  Project settings shows it. High-risk rows sit inside their area with a red badge and edge.
+  - A read a run does not hold is held for approval like any write: a run holding only `code_read`
+    that fetches a work item is asked for `work_read`.
+  - People consent only to the scopes of the rows on a ceiling, and a row whose `default_profile` is
+    empty now starts from `code_read` and `project_read`. A ceiling no longer has to hold a read.
+  - Azure DevOps' API discovery (`OPTIONS` location discovery, `connectionData`, `resourceAreas`) is
+    allowed to any run holding a capability and needs none of its own.
+  - Deleting or destroying work items and changing areas, iterations, fields and tags is
+    `work_admin`, split from `work_write`. Creating, deploying and deleting classic releases is
+    `release_execute`, split from `build_execute`, and editing release pipelines or answering release
+    approvals is `release_admin`, split from `build_admin`. A work-item `$batch` needs the widest
+    capability among its operations, and one whose method cannot be read is refused.
+  - Deleting a package and creating, changing or deleting a feed is `packaging_manage`
+    (`vso.packaging_manage`). Azure DevOps refused these under the `vso.packaging_write` scope
+    Wardyn requested before, so they never worked.
+  - Only the three documented search resources classify: code, work item and wiki search. Any other
+    `almsearch` resource is refused as an unclassified read.
+  - **This is a clean break.** Migration `0101_ado_capability_split` rewrites every stored list to
+    its exact equivalent, as in the table below: provider ceilings and default profiles, saved
+    policies, governance profiles and launch presets. The scopes each list requests do not change,
+    so nobody consents again. After it, the old `read` id is a `400` at every write door
+    (`PUT /workspace-providers`; policies, inline policies, presets and governance profiles with
+    reason `ado_capability_unknown`), and the daemon refuses to boot on a `WARDYN_DEFAULT_POLICY`
+    file that names it. The migration cancels every pending Azure DevOps capability approval, with
+    one `approval.cancel` audit row per run. Pending consent requests name scopes and stay pending.
+
+    | Stored | Becomes |
+    |---|---|
+    | `read` | `code_read`, `work_read`, `wiki_read`, `build_read`, `release_read`, `serviceendpoint_read`, `library_read`, `packaging_read`, `test_read`, `project_read`, `identity_read`, `analytics_read` |
+    | `work_write` | `work_write`, `work_admin` |
+    | `build_execute` | `build_execute`, `release_execute` |
+    | `build_admin` | `build_admin`, `release_admin` |
+    | an empty `default_profile` | the twelve reads, written out |
+    | every other id | itself |
+
+  - **Upgrading:** upgrade with no Azure DevOps Entra runs in flight. A run dispatched before the
+    upgrade holds the old ids: its next Azure DevOps request is refused (`scope_changed`, drift
+    `capability_ceiling`) and it must be relaunched. Update any `WARDYN_DEFAULT_POLICY` file that
+    names `read` before upgrading.
 - **Breaking: Azure DevOps stops using shared credentials (#1429).** A shared personal access token or
   SSH key was one account's standing credential, used for every person's runs. From this release an
   Azure DevOps provider row carries only per-person lanes, and both write doors (`PUT
   /workspace-providers` and `PUT /site-config`) refuse the retired ones with a `400`: a `pat` lane
   that is not `per_user` (and any `pat` lane on a row of `dev.azure.com` or `*.visualstudio.com`
   addresses alone), any `ssh` lane, and a row with no lanes at all, which used to mean the shared
-  `pat` and `ssh` lanes. An Azure DevOps Server row, which has no Entra sign-in, is now `lanes:
-  ["pat"]` with `credential_source: per_user` and no `entra` block; a hosted row's own token is
-  `lanes: ["entra"]` with `token_mode: own_pat`. Migration `0102_retire_ado_shared_credentials` rewrites
-  every stored Azure DevOps row that named a shared lane or none: pat and ssh leave its lanes, and a
-  row left with no per-person lane is turned off (`disabled`) with those per-person shapes, keeping its
-  id and addresses; a hosted row that already has the `entra` lane keeps it and stays as it was. A
-  turned-off row still claims its hosts, so **clones from those organisations fail with a reason until
-  an admin chooses how people connect and turns the row on**, and `/setup/status` carries a
-  non-blocking `ado_rows_off` warning until they do. **Upgrading:** at the first start after the
-  upgrade Wardyn **deletes, irreversibly**, these stored secrets for every Azure DevOps host it can
-  name (`dev.azure.com`, `ssh.dev.azure.com`, `vs-ssh.visualstudio.com`, every host an Azure DevOps
-  provider row names, and every `*.visualstudio.com` entry in `scm_hosts`), in the operator's
-  namespace and in every person's namespace: `git-pat-<host>`, `ssh-key-<host>` and
-  `known-hosts-<host>`, where `<host>` is the host with each run of characters other than letters and
-  digits turned into one `-` (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`,
-  `known-hosts-ssh-dev-azure-com`, `git-pat-tfs-corp-example`). A stored secret is write-only and
-  cannot be exported, so **keep your own copy first if you might roll back.** Each namespace that held
-  any is audited once as `ado_shared_credential.retire`, listing names and no values. A known-hosts
-  secret you gave a different name is not deleted. Wardyn's own sealed Azure DevOps names and every
-  other forge's secrets are left alone. GitHub and GitLab rows are unchanged.
+  `pat` and `ssh` lanes; an empty lane list on an Azure DevOps row no longer admits any lane at run
+  time either. An Azure DevOps Server row, which has no Entra sign-in, is now `lanes: ["pat"]` with
+  `credential_source: per_user` and no `entra` block; a hosted row's own token is `lanes:
+  ["entra"]` with `token_mode: own_pat`, and any number of enabled `own_pat` rows may coexist (only a
+  row that signs in is limited to one). Migration `0103_retire_ado_shared_credentials` rewrites every
+  stored Azure DevOps row that named a shared lane or none: pat and ssh leave its lanes, and a row left
+  with no per-person lane is turned off (`disabled`) with those per-person shapes, keeping its id and
+  addresses; a hosted row that already has the `entra` lane keeps it and stays as it was. A turned-off
+  row still claims its hosts, so **clones from those organisations fail with a reason until an admin
+  chooses how people connect and turns the row on**, and `/setup/status` carries a non-blocking
+  `ado_rows_off` warning until they do. Runs read a stored git token for an Azure DevOps host from the
+  run owner's own row only (`owner_only` is forced on the grant), an `ssh_key` grant for one is dropped
+  with a warning, the operator can no longer store a secret under a retired shared name (`PUT
+  /secrets` answers `400`), and a `pat` lane is never used for a `dev.azure.com` or
+  `*.visualstudio.com` address, even on a row that also names a Server one. **Upgrading:** at the
+  **first start after the upgrade** (once; never again) Wardyn **deletes, irreversibly**, these stored
+  secrets for every Azure DevOps host it can name (`dev.azure.com`, `ssh.dev.azure.com`,
+  `vs-ssh.visualstudio.com`, every host an Azure DevOps provider row names, and every
+  `*.visualstudio.com` entry in `scm_hosts`), in the operator's namespace and in every person's
+  namespace: `git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>`, where `<host>` is the host
+  with each run of characters other than letters and digits turned into one `-`
+  (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`, `known-hosts-ssh-dev-azure-com`,
+  `git-pat-tfs-corp-example`). A stored secret is write-only and cannot be exported, so **keep your
+  own copy first if you might roll back.** Each namespace that held any is audited once as
+  `ado_shared_credential.retire`, listing names and no values. **Not deleted:** a shared token, key or
+  known-hosts secret stored under any other name (one a policy's `secret_name` points at, for
+  example) — remove it yourself; and any name whose host a GitHub or other non-Azure DevOps provider
+  row also names (or that slugs to the same name as one, or `github.com`), which is skipped and logged
+  as a warning, since it may be that forge's own credential — delete a shared Azure DevOps credential
+  there by hand. Wardyn's own sealed Azure DevOps names and every other forge's secrets are left
+  alone. GitHub and GitLab rows are unchanged.
 - **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
   to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
   (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a
@@ -199,6 +254,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An open run event stream ends when its portal is revoked or its delegated token expires (#1413).**
+  A portal's delegated token that opened `GET /runs/{id}/events` used to keep streaming after the
+  portal was revoked or the token's ten-minute lifetime passed, until the five-minute hold ended it.
+  The stream now re-checks the token at each keepalive and ends at the next one, failing closed if
+  the check cannot be answered.
+- **The Add workspace dialog no longer offers a member on Kubernetes a local directory (#1416).** The
+  console decided "this install runs on Kubernetes" from `runner.driver`, which `GET /setup/status`
+  blanks for a member; it now also reads the member-safe `runner.kubernetes` bit added for #1238.
 - **The New Run barrier picker no longer claims what the server would contradict (#1238).** A member
   on Kubernetes is no longer told to bind-mount `/dev/kvm` for Vault: `GET /setup/status` keeps one
   substrate bit for members, `runner.kubernetes`, beside the confinement classes it already kept and no other runner detail, so the console can

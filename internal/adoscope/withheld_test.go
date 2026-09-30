@@ -42,7 +42,7 @@ func TestClassifyWithheldBodyAsksOnlyWhereTheBodyDecides(t *testing.T) {
 		{withheld(http.MethodPut, "pkgs.dev.azure.com", "/acme/_packaging/feed/npm/registry/pkg"), CapPackagingWrite},
 		{withheld(http.MethodPatch, "dev.azure.com", "/acme/proj/_apis/wit/workitems/1"), CapWorkWrite},
 		{withheld(http.MethodDelete, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/pullrequests/5"), CapPR},
-		{withheld(http.MethodGet, "dev.azure.com", "/acme/_apis/projects"), CapRead},
+		{withheld(http.MethodGet, "dev.azure.com", "/acme/_apis/projects"), CapProjectRead},
 	} {
 		got, err := Classify(tc.req)
 		if err != nil || got.Capability != tc.want {

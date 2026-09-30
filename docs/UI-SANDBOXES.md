@@ -212,9 +212,11 @@ forms is honored per request.
 
 Both forms run the **same** consume-then-re-check path: the ticket is consumed,
 then everything it cannot prove on its own is re-checked against
-freshly-loaded state — owner-or-admin for this run, the run still `RUNNING`
-with a sandbox, and the app actually declared in the run's **effective**
-policy. Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
+freshly-loaded state — owner-or-admin for this run, the governance profile the
+run was created under not carrying `deny_ui_apps` (a super admin is exempt; a
+limit set later stops new sessions but does not end one already open), the run
+still `RUNNING` with a sandbox, and the app actually declared in the run's
+**effective** policy. Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
 `SameSite=Lax`, `Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL`
 (default 8h) — and redirects to `/r/<run-id>/<app><path>` (`303` for `POST`,
 `302` for `GET`, so a `POST` redirect is never silently replayed as a `GET`).

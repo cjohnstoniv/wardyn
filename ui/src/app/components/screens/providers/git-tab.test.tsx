@@ -338,7 +338,7 @@ describe("GitTab", () => {
       entra: {
         tenant_id: "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
         client_id: "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
-        capability_ceiling: ["read", "code_write"],
+        capability_ceiling: ["code_read", "code_write", "project_read"],
       },
     };
 
@@ -709,8 +709,8 @@ describe("GitTab — several rows of one kind", () => {
     entra: {
       tenant_id: "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f",
       client_id: "3b241101-e2bb-4255-8caf-4136c566a962",
-      capability_ceiling: ["read"],
-      default_profile: ["read"],
+      capability_ceiling: ["code_read", "project_read"],
+      default_profile: ["code_read", "project_read"],
     },
   });
 

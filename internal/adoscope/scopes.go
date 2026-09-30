@@ -44,49 +44,53 @@ func IsTokenScope(s string) bool {
 // also be qualified by. Lower case: IsTokenScope compares lower-cased.
 const resourceURI = "https://app.vssps.visualstudio.com/"
 
-// readScopes are the scopes CapRead needs: every non-empty scope in
-// readAreas, sorted. DERIVED, not hand-written, since a hand-written copy of
-// this union is exactly what drifted before.
-var readScopes = func() []string {
-	var out []string
-	for _, s := range readAreas {
-		if s != "" && !slices.Contains(out, s) {
-			out = append(out, s)
+// capabilityScopes is the capability -> Entra scope table, and THE ONE
+// PLACE a capability becomes a scope: consent, the person's token request and
+// any narrower credential all go through ScopesFor. SEVERAL CAPABILITIES SHARE
+// ONE SCOPE (CapCodeWrite/CapPR/CapPolicyAdmin/CapPolicyBypass all resolve to
+// vso.code_write, since ADO has no finer scope — the classifier, not the
+// token, is what distinguishes them). ONE CAPABILITY MAY NEED SEVERAL
+// (CapSecurityAdmin covers three).
+//
+// The READ rows are DERIVED from readAreas, not hand-written, since a
+// hand-written copy of a read's scopes is exactly what drifted before.
+var capabilityScopes = func() map[Capability][]string {
+	m := map[Capability][]string{
+		CapCodeWrite:    {"vso.code_write"},
+		CapPR:           {"vso.code_write"},
+		CapPolicyAdmin:  {"vso.code_write"},
+		CapPolicyBypass: {"vso.code_write"},
+		CapRepoAdmin:    {"vso.code_manage"},
+		// Deleting work items and managing work tracking is served from the
+		// same scope as editing; only the classifier tells them apart.
+		CapWorkWrite: {"vso.work_write"},
+		CapWorkAdmin: {"vso.work_write"},
+		CapWikiWrite: {"vso.wiki_write"},
+		// vso.build is the READ scope; queueing needs vso.build_execute, and
+		// editing a definition is a write Azure DevOps also serves from it —
+		// there is no separate "manage build definitions" scope.
+		CapBuildExecute:         {"vso.build_execute"},
+		CapBuildAdmin:           {"vso.build_execute"},
+		CapReleaseExecute:       {"vso.release_execute"},
+		CapReleaseAdmin:         {"vso.release_manage"},
+		CapServiceEndpointAdmin: {"vso.serviceendpoint_manage"},
+		CapPackagingWrite:       {"vso.packaging_write"},
+		CapPackagingManage:      {"vso.packaging_manage"},
+		CapProjectAdmin:         {"vso.project_manage"},
+		// vso.security_manage does not reach the graph or identity APIs, and a
+		// permission change that has to create a group needs both.
+		CapSecurityAdmin: {"vso.security_manage", "vso.graph_manage", "vso.identity_manage"},
+	}
+	for _, a := range readAreas {
+		if a.scope != "" && a.cap.Grantable() && !slices.Contains(m[a.cap], a.scope) {
+			m[a.cap] = append(m[a.cap], a.scope)
 		}
 	}
-	slices.Sort(out)
-	return out
+	for c := range m {
+		slices.Sort(m[c])
+	}
+	return m
 }()
-
-// capabilityScopes is the capability -> Entra scope table. SEVERAL
-// CAPABILITIES SHARE ONE SCOPE (e.g. CapCodeWrite/CapPR/CapPolicyAdmin/
-// CapPolicyBypass all resolve to vso.code_write, since ADO has no finer
-// scope — the classifier, not the token, is what distinguishes them). ONE
-// CAPABILITY MAY NEED SEVERAL (build covers build + classic-release areas;
-// CapSecurityAdmin covers three).
-var capabilityScopes = map[Capability][]string{
-	CapRead:         readScopes,
-	CapCodeWrite:    {"vso.code_write"},
-	CapPR:           {"vso.code_write"},
-	CapPolicyAdmin:  {"vso.code_write"},
-	CapPolicyBypass: {"vso.code_write"},
-	CapRepoAdmin:    {"vso.code_manage"},
-	// vso.security_manage does not reach the graph or identity APIs, and a
-	// permission change that has to create a group needs both.
-	CapSecurityAdmin:        {"vso.security_manage", "vso.graph_manage", "vso.identity_manage"},
-	CapServiceEndpointAdmin: {"vso.serviceendpoint_manage"},
-	// vso.build is the READ scope; queueing needs vso.build_execute, and the
-	// classic-release equivalent is vso.release_execute.
-	CapBuildExecute: {"vso.build_execute", "vso.release_execute"},
-	// Editing a definition is a WRITE on the build area, which Azure DevOps
-	// also serves from vso.build_execute — there is no separate "manage build
-	// definitions" scope — and vso.release_manage on the release side.
-	CapBuildAdmin:     {"vso.build_execute", "vso.release_manage"},
-	CapWorkWrite:      {"vso.work_write"},
-	CapWikiWrite:      {"vso.wiki_write"},
-	CapPackagingWrite: {"vso.packaging_write"},
-	CapProjectAdmin:   {"vso.project_manage"},
-}
 
 // ScopesFor is the resource-qualified, deduplicated, sorted scope set for
 // caps. SECURITY: a capability that is NOT GRANTABLE is an ERROR, not an
@@ -136,6 +140,13 @@ func PATScope(caps []Capability) (string, error) {
 // spelling of "allowed" this package offers. SECURITY: comparison is over
 // CAPABILITIES, never scopes — a scope comparison would permit essentially
 // everything, since a token carries every scope consented to.
+//
+// DISCOVERY is the one verdict no list names: any run holding at least one
+// grantable capability may make it, since it returns route templates, not
+// organisation data.
 func Permits(granted []Capability, v Verdict) bool {
+	if v.Capability == CapDiscovery {
+		return slices.ContainsFunc(granted, Capability.Grantable)
+	}
 	return v.Capability.Grantable() && slices.Contains(granted, v.Capability)
 }

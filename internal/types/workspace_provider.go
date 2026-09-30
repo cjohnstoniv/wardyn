@@ -116,7 +116,7 @@ var ClosedGitLanes = map[GitLane]bool{
 // written, frozen forever so growing the closed set never silently opts a
 // stored row into a new lane. It never applies to an Azure DevOps row: an
 // empty list there is refused at the write boundary (the shared pat and ssh
-// lanes it would expand to are retired), and migration 0102 rewrote every
+// lanes it would expand to are retired), and migration 0103 rewrote every
 // stored one.
 var LegacyGitLanes = []GitLane{GitLaneApp, GitLanePAT, GitLaneSSH}
 
@@ -196,7 +196,7 @@ type ADOEntraConfig struct {
 	// CapabilityCeiling is the widest capability set a run on this row may
 	// ever hold; required and non-empty when the block is present.
 	CapabilityCeiling []adoscope.Capability `json:"capability_ceiling,omitempty"`
-	DefaultProfile    []adoscope.Capability `json:"default_profile,omitempty"` // what a run gets by default; empty reads as adoscope.ProfileRead
+	DefaultProfile    []adoscope.Capability `json:"default_profile,omitempty"` // what a run gets by default; empty reads as adoscope.ProfileDefault
 	TokenMode         ADOTokenMode          `json:"token_mode,omitempty"`      // empty reads as ADOTokenModeBearer
 	// PATMaxHours is the longest a minted_pat run's token lives (1-168). 0
 	// reads as 8; read via PATHours, never directly.
@@ -232,10 +232,10 @@ func (c *ADOEntraConfig) PATDays() int {
 }
 
 // Profile is the capabilities a run gets when it asks for nothing:
-// DefaultProfile, or adoscope.ProfileRead when that is empty.
+// DefaultProfile, or adoscope.ProfileDefault when that is empty.
 func (c *ADOEntraConfig) Profile() []adoscope.Capability {
 	if c == nil || len(c.DefaultProfile) == 0 {
-		return adoscope.ProfileRead()
+		return adoscope.ProfileDefault()
 	}
 	return slices.Clone(c.DefaultProfile)
 }

@@ -46,7 +46,8 @@ func signInHelpHTTPCheck(sc types.SiteConfig) (SetupCheck, bool) {
 func adoEntraRowsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 	enabled := 0
 	for _, row := range gitProviderRows(sc) {
-		if !row.Disabled && slices.Contains(row.Lanes, types.GitLaneEntra) {
+		if !row.Disabled && slices.Contains(row.Lanes, types.GitLaneEntra) &&
+			(row.Entra == nil || row.Entra.TokenMode != types.ADOTokenModeOwnPAT) {
 			enabled++
 		}
 	}
@@ -60,7 +61,7 @@ func adoEntraRowsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 }
 
 // adoRowsOffCheck asks for a choice when an Azure DevOps row is turned off
-// (#1429). Migration 0102 turns off every Azure DevOps row that used the shared
+// (#1429). Migration 0103 turns off every Azure DevOps row that used the shared
 // token or SSH key, and a disabled row still claims its hosts, so clones from
 // that organisation fail until an admin chooses how people connect and turns it
 // on. Not blocking: nothing else on the checklist depends on it. Unfrozen copy —

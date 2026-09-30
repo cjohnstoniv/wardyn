@@ -99,9 +99,9 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	// The previous proxy knows the grant as ado_grants; its strict decoder
 	// refuses ado_grant rather than running with the Azure DevOps gate off.
 	adoGrant := base
-	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}, Hosts: []string{"dev.azure.com"}}
+	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}, Hosts: []string{"dev.azure.com"}}
 	adoCaps := base
-	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapRead}
+	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 
 	for _, tc := range []struct {
 		name string
