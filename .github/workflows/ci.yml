@@ -967,7 +967,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # Two image builds (one of them a bookworm + node + `npm install -g` layer)
+    # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
     # key-service leg.
     timeout-minutes: 55
@@ -1222,7 +1222,7 @@ jobs:
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
   # the agent image actually ships. agent-claude-code is the scan target
-  # because it is by far the fattest image we publish (bookworm + node + npm +
+  # because it is by far the fattest image we publish (trixie + node + npm +
   # git/ssh/tmux/socat); wardynd and wardyn-proxy are distroless-static, which
   # carries essentially no OS package surface to scan.
   #

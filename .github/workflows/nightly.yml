@@ -580,10 +580,10 @@ jobs:
   #   wardynd          — a $BUILDPLATFORM node UI stage + a cross-compiled Go
   #                      stage + a COPY-only distroless runtime (no emulation
   #                      anywhere). wardyn-proxy is the same shape minus the UI.
-  #   agent-claude-code — a bookworm runtime doing apt-get + `npm install -g`
+  #   agent-claude-code — a trixie runtime doing apt-get + `npm install -g`
   #                      as the TARGET arch, i.e. the emulated path.
   #                      agent-codex-cli is the same shape.
-  #   agent-aws-sso    — a bookworm runtime that SELECTS its download by
+  #   agent-aws-sso    — a trixie runtime that SELECTS its download by
   #                      TARGETARCH (x86_64 vs aarch64 AWS CLI installer, GPG
   #                      verified). Nothing else exercises that branch.
   #
