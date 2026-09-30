@@ -197,6 +197,12 @@ type Session interface {
 // ExecStream when unimplemented, so the conformance suite can skip cleanly.
 var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 
+// ErrSandboxGone is what a Runner/Substrate wraps around an ExecStream failure
+// whose cause is that the sandbox (the pod or container) no longer exists: a
+// finishing run's sandbox is torn down a moment before its state flips, and an
+// exec into it is not a fault of the read.
+var ErrSandboxGone = errors.New("runner: the sandbox is gone")
+
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
 // exec-scoped environment, and whether it runs under a PTY.
 type ExecSpec struct {

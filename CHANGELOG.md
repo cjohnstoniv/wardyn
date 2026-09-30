@@ -88,9 +88,38 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
+  it runs (#1082).** The migrator removed a row's old Vault copy after the row had committed and
+  released its lock, so a store-mode save of the same credential in that window re-pointed the row
+  at the same Vault path and the removal deleted the new value, leaving the row pointing at
+  nothing. (Key Vault was exposed only when the re-save landed in the same second as the old
+  version.) The removal now runs under the row's lock again and leaves a value the row has just
+  been re-pointed at alone; a concurrent save waits for it. A failed removal still leaves an
+  orphan the error names.
+- **An aborted boot conversion of legacy secrets now records the rows it read (#1071).** When a
+  legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
+  row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
+  was recorded nowhere; the abort itself is still in the boot log, naming the row.
+- **The run page no longer gets a 500 in the moment a finishing run's sandbox is already gone
+  (#1270).** A short run's pod (or container) is removed a moment before its state flips to
+  finished, and in that window the Sandbox and Files widgets read a sandbox that was not there and
+  got `500`, with an error in the server log. `GET /runs/{id}/resources` and `GET /runs/{id}/files`
+  now answer the same `409 run has finished; its sandbox is gone` the flipped state gets a moment
+  later, and record no failure.
+- **An open run page no longer delays an idle pause (#1287).** With no disk cap enforced, the Sandbox
+  widget's every 4-second poll walked the sandbox's root filesystem (`du`), and that CPU landed in the
+  window the idle pause reads to decide whether the agent is quiet. The walk's result is now reused
+  for a minute (a sandbox too big to walk in time is not walked again on every poll), and the idle
+  reading waits out a walk in progress and holds off a new one while it samples, so it reads the
+  agent alone.
+
+## [0.8.1] — 2026-09-29
+
+### Fixed
+
 - **The AWS sign-in helper uploads the account and role you chose, however long you take to answer
-  the chooser.** When the AWS access portal reaches more than one account and the agent row has no
-  pin, the helper asks which account and role. Its single 15-second deadline started before that
+  the chooser.** When the AWS access portal reaches more than one account and the model provider has
+  no pin, the helper asks which account and role. Its single 15-second deadline started before that
   question, so an answer given at human speed found the role lookup already expired, and the helper
   uploaded a blank account and role. The control plane refused it with "sso token blob is missing
   required fields (account_id, role_name)" and nothing was stored. Each portal request now has its
@@ -105,18 +134,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   portal's `nextToken`, so an account or role listed after the first page was never offered in the
   chooser and could not be picked or pinned. It now follows `nextToken` until the list is complete,
   and stops after 100 pages, saying so, if a portal never stops returning one.
-- **`wardynd -migrate-secrets -to=local` can no longer destroy a credential that is re-saved while
-  it runs (#1082).** The migrator removed a row's old Vault copy after the row had committed and
-  released its lock, so a store-mode save of the same credential in that window re-pointed the row
-  at the same Vault path and the removal deleted the new value, leaving the row pointing at
-  nothing. (Key Vault was exposed only when the re-save landed in the same second as the old
-  version.) The removal now runs under the row's lock again and leaves a value the row has just
-  been re-pointed at alone; a concurrent save waits for it. A failed removal still leaves an
-  orphan the error names.
-- **An aborted boot conversion of legacy secrets now records the rows it read (#1071).** When a
-  legacy (v0) secret stops boot (it will not decrypt, or its seal, update or commit fails), each
-  row it opened is recorded as a `secret.read` with purpose `boot` and outcome `failure`, where it
-  was recorded nowhere; the abort itself is still in the boot log, naming the row.
 
 ## [0.8.0] — 2026-09-29
 
