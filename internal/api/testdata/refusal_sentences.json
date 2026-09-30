@@ -136,6 +136,11 @@
   },
   {
     "reason": "governance_profile",
+    "target": "\"runs.attach\"",
+    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", name)"
+  },
+  {
+    "reason": "governance_profile",
     "target": "\"runs.drive\"",
     "sentence": "driveDeniedByProfileMsg(profile)"
   },
@@ -178,6 +183,11 @@
     "reason": "governance_profile",
     "target": "\"runs.task_mode\"",
     "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.ui_apps\"",
+    "sentence": "fmt.Sprintf(\"UI apps are not allowed under the governance profile %q this run was launched under.\", p.Name)"
   },
   {
     "reason": "groups_snapshot_stale",

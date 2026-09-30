@@ -231,6 +231,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
 		// preview at all without this. A no-op on launch (see the helper).
 		clampWarnings = append(clampWarnings, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
 		// secret.* admin events); the subsequent run.create event records
@@ -323,6 +324,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// their run does not get, and a dispatch-side log line is not a disclosure to
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
 	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
