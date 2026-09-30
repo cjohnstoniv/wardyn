@@ -11,15 +11,17 @@ package api
 // GIT ONLY. A Server run's token rides one door: the proxy's git broker, which
 // adds it (Basic) on the way out and holds git to the collection pin, the
 // capability check, the run's branch rule and the content rules
-// (serveADOGit). No REST route to the server is opened — no TLS-MITM entry and
-// no egress — and the sandbox holds nothing: not the token, and not a grant it
-// could mint one with, whether or not the PAT broker is on.
+// (serveADOGit). No REST route to the server is opened — no TLS-interception
+// entry, and the proxy refuses a tunnel to a host the grant covers — and the
+// sandbox holds nothing: not the token, and not a grant it could mint one
+// with, whether or not the PAT broker is on.
 //
 // THE COLLECTION IS THE PIN. A Server row's address must name its collection
 // (https://host/Collection, or under a virtual directory
-// https://host/tfs/Collection): the path is the organisation the grant pins git
-// to, and where the identity check asks. A row naming only the host is not
-// served — a pin of the whole server would pin nothing.
+// https://host/tfs/Collection — one or two segments): the path is the
+// organisation the grant pins git to, and where the identity check asks. A row
+// naming only the host, or a deeper path, is not served — a pin of the whole
+// server would pin nothing, and the proxy's pin holds two segments at most.
 
 import (
 	"net/url"
@@ -56,7 +58,13 @@ func adoServerAddress(row types.GitProvider) (host, collection string, ok bool) 
 		return "", "", false
 	}
 	collection = strings.ToLower(strings.Trim(u.Path, "/"))
-	return strings.ToLower(u.Hostname()), collection, collection != ""
+	// A collection is one segment, or two under a virtual directory
+	// (tfs/DefaultCollection); the proxy's pin holds no more than that.
+	segs := strings.Split(collection, "/")
+	if collection == "" || len(segs) > 2 || slices.Contains(segs, "") {
+		return "", "", false
+	}
+	return strings.ToLower(u.Hostname()), collection, true
 }
 
 // isADOServerOwnPATRow reports whether row is a Server row a person adds their

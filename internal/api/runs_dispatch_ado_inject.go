@@ -664,9 +664,11 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 		return injections, nil, false
 	}
 	injections = append(injections, grants...)
-	// SERVER IS GIT ONLY: the broker is its one door, so no egress, no REST
-	// tunnel and no placeholder for a REST tool.
+	// SERVER IS GIT ONLY: the broker is its one door, so no TLS interception
+	// and no placeholder for a REST tool. The host is allowlisted, port-exact,
+	// for the broker's upstream leg; the proxy refuses a tunnel to it.
 	if ado.serverHost != "" {
+		policy.AllowedDomains = append(policy.AllowedDomains, net.JoinHostPort(ado.serverHost, adoEntraHostPort))
 		if sandboxEnv != nil {
 			addGitBrokerHosts(sandboxEnv, ado.serverHost)
 		}

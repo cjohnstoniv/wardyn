@@ -19,6 +19,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
@@ -166,9 +168,10 @@ func TestADOServerOwnPATDelete(t *testing.T) {
 }
 
 // Dispatch authors a Server run's lane on its one host, git only: one grant
-// for the server host pinned to the collection, the host on the git broker's
-// list, and nothing else — no egress, no REST tunnel, no placeholder, no grant
-// id and no token in the sandbox's environment, whatever the PAT broker is.
+// for the server host pinned to the collection, the host allowlisted on 443
+// and on the git broker's list, and nothing else — no TLS interception, no
+// placeholder, no grant id and no token in the sandbox's environment, whatever
+// the PAT broker is.
 func TestAuthorADOEntraInjection_ServerRow(t *testing.T) {
 	f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
 	if len(f.st.grants) != 1 {
@@ -188,8 +191,8 @@ func TestAuthorADOEntraInjection_ServerRow(t *testing.T) {
 		!slices.Equal(sc.Snapshot.Capabilities, adoServerCapabilities) {
 		t.Errorf("grant scope = %+v", sc)
 	}
-	if len(f.policy.AllowedDomains) != 0 {
-		t.Errorf("a Server run opened egress %v", f.policy.AllowedDomains)
+	if !slices.Equal(f.policy.AllowedDomains, []string{adoServerHost + ":443"}) {
+		t.Errorf("a Server run's egress = %v, want only %s:443", f.policy.AllowedDomains, adoServerHost)
 	}
 	if f.env["WARDYN_GIT_PAT_BROKER_HOSTS"] != adoServerHost {
 		t.Errorf("git broker hosts = %q, want %q", f.env["WARDYN_GIT_PAT_BROKER_HOSTS"], adoServerHost)
@@ -213,8 +216,13 @@ func TestAuthorADOEntraInjection_ServerRow(t *testing.T) {
 }
 
 // A Server run is on the lane only for a repository under the row's
-// collection, on its host.
+// collection, on its host; a row whose address is deeper than a collection
+// under one virtual directory is not a lane at all.
 func TestADOServerRunForRepo(t *testing.T) {
+	deep := adoServerTestRow("https://" + adoServerHost + "/tfs/DefaultCollection/proj")
+	if isADOServerOwnPATRow(deep) {
+		t.Error("a three-segment address was taken for a collection")
+	}
 	row := adoServerTestRow("https://" + adoServerHost + "/tfs/DefaultCollection")
 	for repo, want := range map[string]bool{
 		"https://" + adoServerHost + "/tfs/DefaultCollection/proj/_git/app":  true,
@@ -298,5 +306,71 @@ func TestGitCredentialRefusal_ServerOwnPAT(t *testing.T) {
 	if err := srv.gitCredentialRefusalForLauncher(context.Background(), capSub, adoServerRepo); err == nil ||
 		err.Error() != gitCredentialOwnPATExpiredRefusal {
 		t.Fatalf("expired: refusal = %v", err)
+	}
+}
+
+// TestADOServerLane_ProxyContract dispatches a Server own_pat run and reads
+// back the sidecar configuration it builds, as the sidecar loads it: exactly
+// the contract the proxy's Server git door (#1430) is written against — the
+// grant names the collection path and the server host, one TLS-only injection
+// per host, the host allowlisted on 443 and on the git broker's list, and no
+// TLS-interception entry — and the injection resolves to the person's own
+// token as Basic, with its expiry.
+func TestADOServerLane_ProxyContract(t *testing.T) {
+	const collectionURL = "https://" + adoServerHost + "/tfs/DefaultCollection"
+	f := newOwnPATRunOn(t, adoServerTestRow(collectionURL), collectionURL+"/proj/_git/app")
+	f.token(t, adoServerToken, "tfs/defaultcollection", f.now.Add(3*time.Hour))
+
+	caCert, caKey, err := generateRunCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ado, on := resolveADOEntraRun(f.st.site, []string{collectionURL + "/proj/_git/app"}, capSub)
+	policy := types.RunPolicySpec{}
+	env := map[string]string{}
+	lane, ok := f.srv.authorADOEntraLane(context.Background(), types.AgentRun{ID: f.runID}, ado, on, adoEntraUngraded(),
+		adoStandingBound{}, dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, env, nil)
+	if !ok {
+		t.Fatal("dispatch refused a Server run")
+	}
+	raw, err := runner.BuildProxyConfig(f.runID, runner.ProxyConfig{
+		RunToken: "run-token", ControlPlaneURL: "http://127.0.0.1:1", Policy: policy, Injection: lane.injections,
+		MITMCACertPEM: string(caCert), MITMCAKeyPEM: string(caKey), MITMHosts: lane.mitmHosts, ADOGrant: lane.gate,
+	}, 3128)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	if g := cfg.ADOGrant; g == nil || g.Organization != "tfs/defaultcollection" ||
+		!slices.Equal(g.Hosts, []string{adoServerHost}) || !slices.Equal(g.Capabilities, adoServerCapabilities) {
+		t.Fatalf("ado_grant = %+v", cfg.ADOGrant)
+	}
+	if len(cfg.Injection) != 1 || cfg.Injection[0].Host != adoServerHost || !cfg.Injection[0].RequireTLS ||
+		cfg.Injection[0].SecretName != types.ADOEntraAccessTokenSecret {
+		t.Fatalf("injection = %+v, want one TLS-only rule for %s", cfg.Injection, adoServerHost)
+	}
+	if !slices.Contains(cfg.Policy.AllowedDomains, adoServerHost+":443") {
+		t.Errorf("allowlist = %v, want %s:443", cfg.Policy.AllowedDomains, adoServerHost)
+	}
+	if len(cfg.MITMHosts) != 0 {
+		t.Errorf("mitm_hosts = %v, want none", cfg.MITMHosts)
+	}
+	if env["WARDYN_GIT_PAT_BROKER_HOSTS"] != adoServerHost {
+		t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q", env["WARDYN_GIT_PAT_BROKER_HOSTS"])
+	}
+
+	// The injection the sidecar resolves at boot: the person's token as Basic.
+	f.grantID = cfg.Injection[0].GrantID
+	w := f.resolve(t, capSub, adoServerHost, "?phase=boot")
+	var resp types.ResolvedInjection
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("resolve = %d %s", w.Code, w.Body)
+	}
+	if resp.Header != "Authorization" || resp.Value != adoOwnPATHeaderValue(adoServerToken) || resp.ExpiresAt == 0 ||
+		resp.ExpiresAt > f.now.Add(3*time.Hour).UnixMilli() || resp.JTI == "" {
+		t.Errorf("resolved = %+v", resp)
 	}
 }
