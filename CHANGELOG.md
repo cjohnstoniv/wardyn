@@ -45,6 +45,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   anyone else's. One principal holds at most 32 open event streams; the next is refused `422` with
   reason `event_stream_cap` (not audited) until one closes. Revoking the person's sessions still ends
   a portal's open stream at the next keepalive.
+- **The end of an exec run's output, with or without recordings (#1232).**
+  `GET /api/v1/runs/{id}/output?tail=<bytes>` returns `{output, truncated, complete}` — the last 8 KiB
+  of a `task_mode=exec` run's combined stdout/stderr, kept in wardynd's memory apart from the
+  recording store, so it works with `WARDYN_RECORDING_STORE=off`. Readable by the run's owner or an
+  admin; anyone else gets the same `404` as `GET /runs/{id}`. An interactive run is refused (`409`,
+  `run_output_interactive`). Values in the masking registry are masked as they are written; anything
+  else a command prints is kept like a log line (OPERATIONS.md "Exec run output"). A tail is dropped
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output (`410`,
+  `run_output_expired`) and on a wardynd restart; `WARDYN_EXEC_OUTPUT_TAIL=off` keeps none. On
+  Kubernetes the tail is read from the agent container's log, so the chart's k8s-runner Role now
+  grants `get` on `pods/log` (a Role you write yourself needs it too). The Go SDK reads it with
+  `RunOutput`.
 
 ### Changed
 

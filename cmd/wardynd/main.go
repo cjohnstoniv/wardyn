@@ -413,6 +413,8 @@ func run() error {
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
 		MaskRegistry:             maskReg,
+		ExecOutputTailOff:        !*f.execOutputTail,
+		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:            feats.scanAdvisor,
