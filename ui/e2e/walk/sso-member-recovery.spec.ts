@@ -100,6 +100,7 @@ import {
   me,
   modelAccess,
   openLoginPane,
+  openModelConnections,
   ownAWSRow,
   runIDFromURL,
   seen,
@@ -356,8 +357,9 @@ test("B: a member's connection row names their OWN AWS sign-in", async ({ page }
   expect((await modelAccess(page)).state, "sso-member.spec.ts must leave the member live").toBe("live");
 
   await page.goto("/setup");
+  await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible({ timeout: 60_000 });
+  await openModelConnections(page);
   await expect(page.getByText(CONNECTIONS.SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
   // …and the page lede names whose sign-in it is.
   await expect(page.getByText(CONNECTIONS.LEDE)).toBeVisible();
   await dexSignOut(page);
@@ -448,7 +450,7 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   // flip has made them actionable, and the server says which pair to pick.
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
   expect((await modelAccess(page)).action ?? "", "the lapse names the pinned pair").toContain(pin.account);
-  await page.goto("/setup");
+  await openModelConnections(page);
   await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first()).toBeVisible({ timeout: 60_000 });
   // Not opened: the pane launches its login sandbox the moment it opens, and
   // case C opens its own — a second live device code would be the one thing
@@ -1104,8 +1106,9 @@ test("F (member-preview): an admin previews the state a member is in before they
   // per-principal credential lookup still finds the admin's own session.
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("not_configured");
-  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
+  await openModelConnections(page);
+  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
 
   // …and the one door that could WRITE inside the preview is refused, because a
   // capture made here would land on the admin's own identity and overwrite

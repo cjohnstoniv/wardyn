@@ -66,6 +66,7 @@ import {
   me,
   modelAccess,
   openLoginPane,
+  openModelConnections,
   openLoginPaneAssertingColdPull,
   putProvider,
   seen,
@@ -165,14 +166,17 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   //
   // The provider's connection row reads the SAME not_configured state as the
   // strip, and the page's own summary chip says Needs you.
+  // Getting Started keeps only the summary chip (packet MP-D, #548); the row
+  // itself is on Your account.
   await page.goto("/setup");
-  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toHaveCount(0);
   // …and on /account the strip keeps its sentence (the connections card there
-  // claims the door only while it is expanded).
+  // claims the door only while it is expanded); opened, the row reads it too.
   await page.goto("/account");
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  await openModelConnections(page);
+  await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await dexSignOut(page);
 });
 
@@ -193,7 +197,7 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   // The provider's connection row reads the NOT-SIGNED-IN half — the one live
   // seat that can, with a real second identity — and the page's lede names
   // the sign-in as the person's own (finding 2b).
-  await page.goto("/setup");
+  await openModelConnections(page);
   await expect(page.getByText(CONNECTIONS.NOT_SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.LEDE)).toBeVisible();
   // P1 + P5: the member must REACH their own sign-in from their own seat, and
@@ -217,7 +221,7 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   await signInThroughPane(page, openLoginPaneAssertingColdPull);
 
   // THE MEMBER'S OWN STATUS, from the member's own session.
-  await page.goto("/setup");
+  await openModelConnections(page);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
   // …and the row now reads the signed-in half of the same pair of constants.
   await expect(page.getByText(CONNECTIONS.SIGNED_IN).first()).toBeVisible({ timeout: 60_000 });
@@ -285,7 +289,7 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   await putProvider(request, CONTRA_ACCOUNT, CONTRA_ROLE);
 
   await dexSignIn(page, MEMBER_EMAIL);
-  await page.goto("/setup");
+  await openModelConnections(page);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
   await expect(page.getByRole("button", { name: "Sign in to AWS" }).first()).toBeVisible({ timeout: 60_000 });
 
@@ -309,7 +313,7 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   // double-running. Same helper as the second test, for the same reason.
   await signInThroughPane(page, openLoginPane);
 
-  await page.goto("/setup");
+  await openModelConnections(page);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
   // …and the healed capture is genuinely the NEW pin's, proven the only way it
