@@ -118,6 +118,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"org":                       "DELETE /me/scm/azure-devops/token: the address of a row the caller may use (adoOwnPATRowFor); it removes the caller's own token only",
 	"offset":                    "page window (parseListPage)",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
