@@ -106,10 +106,10 @@ type SCMAccess struct {
 	// policy naming one is refused at launch. Read-only here.
 	CapabilityCeiling []adoscope.Capability `json:"capability_ceiling,omitempty"`
 
-	// The four below are set on a row where each person adds their own token
-	// (token_mode own_pat) and on no other.
+	// The fields below are set on a row where each person adds their own token
+	// (token_mode own_pat, or an Azure DevOps Server row) and on no other.
 	//
-	// TokenMode is "own_pat".
+	// TokenMode is "own_pat" on both.
 	TokenMode string `json:"token_mode,omitempty"`
 	// ExpiresOn is the date (YYYY-MM-DD) the person said their token expires —
 	// the deadline `expiring` and `expired_signin` name. Absent with no token.
@@ -120,6 +120,9 @@ type SCMAccess struct {
 	// TokenScopes is what to tick on Azure DevOps' own token page, in its own
 	// wording ("Code (Read & write)"), derived from the row's ceiling.
 	TokenScopes []string `json:"token_scopes,omitempty"`
+	// GitOnly is set on an Azure DevOps Server row: its token carries git and
+	// nothing else (ado_own_pat_server.go).
+	GitOnly bool `json:"git_only,omitempty"`
 }
 
 // adoAccessState grades one PER-USER row's captured sign-in into the
@@ -182,7 +185,7 @@ func (s *Server) perUserADORows(ctx context.Context, sc types.SiteConfig) ([]per
 		if row.Kind != types.GitProviderAzureDevOps || row.Disabled {
 			continue
 		}
-		if isADOOwnPATRow(row) {
+		if isADOOwnTokenRow(row) {
 			out = append(out, perUserADORow{row: row})
 			continue
 		}
@@ -210,7 +213,7 @@ func (s *Server) perUserADORowsAdmitting(ctx context.Context, sc types.SiteConfi
 			if row.Kind != types.GitProviderAzureDevOps || row.Disabled || seen[row.ID] {
 				continue
 			}
-			if isADOOwnPATRow(row) {
+			if isADOOwnTokenRow(row) {
 				seen[row.ID] = true
 				out = append(out, perUserADORow{row: row})
 				continue
@@ -249,7 +252,7 @@ func scmAccessSourceFor(blobSource string) string {
 // sitting there intact.
 func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject string) (SCMAccess, error) {
 	row := pr.row
-	if isADOOwnPATRow(row) {
+	if isADOOwnTokenRow(row) {
 		return s.scmAccessForOwnPAT(ctx, row, subject)
 	}
 	isMechanism := subject == ""
@@ -285,9 +288,12 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 func (s *Server) scmAccessForOwnPAT(ctx context.Context, row types.GitProvider, subject string) (SCMAccess, error) {
 	out := SCMAccess{
 		State: modelAccessNotConfigured, Org: adoOrgDisplay(row), Kind: string(row.Kind),
-		CapabilityCeiling: slices.Clone(row.Entra.CapabilityCeiling),
-		TokenMode:         string(types.ADOTokenModeOwnPAT), MaxDays: row.Entra.PATDays(),
-		TokenScopes: adoOwnPATTokenScopes(row.Entra.CapabilityCeiling),
+		TokenMode: string(types.ADOTokenModeOwnPAT), MaxDays: row.Entra.PATDays(), // nil-safe: a Server row reads 30
+	}
+	if row.Entra == nil { // Server: git only, no ceiling to read
+		out.CapabilityCeiling, out.TokenScopes, out.GitOnly = slices.Clone(adoServerCapabilities), slices.Clone(adoServerTokenScopes), true
+	} else {
+		out.CapabilityCeiling, out.TokenScopes = slices.Clone(row.Entra.CapabilityCeiling), adoOwnPATTokenScopes(row.Entra.CapabilityCeiling)
 	}
 	if subject == "" {
 		out.State = modelAccessNotApplicable

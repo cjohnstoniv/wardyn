@@ -901,3 +901,32 @@ func TestConnectionDataNamesTheTokensOwner(t *testing.T) {
 		t.Errorf("a token with no identity names %q, want no Account", got)
 	}
 }
+
+// TestConnectionDataNamesAServerAccountsMail: a Server-style identity carries
+// its DOMAIN\user Account and its Mail, under a collection path.
+func TestConnectionDataNamesAServerAccountsMail(t *testing.T) {
+	s := New()
+	defer s.Close()
+	s.RegisterToken("server-pat", ScopeProjectRead)
+	s.RegisterServerIdentity("server-pat", `CORP\alice`, "alice@corp.example")
+	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/DefaultCollection/_apis/connectionData", nil)
+	req.SetBasicAuth("", "server-pat")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		AuthenticatedUser struct {
+			Properties map[string]struct {
+				Value string `json:"$value"`
+			} `json:"properties"`
+		} `json:"authenticatedUser"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d err %v", resp.StatusCode, err)
+	}
+	if p := body.AuthenticatedUser.Properties; p["Account"].Value != `CORP\alice` || p["Mail"].Value != "alice@corp.example" {
+		t.Errorf("properties = %+v", p)
+	}
+}

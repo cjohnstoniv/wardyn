@@ -1,0 +1,299 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/adofake"
+)
+
+const (
+	adoServerHost   = "tfs.corp.example"
+	adoServerOrgKey = "https://" + adoServerHost + "/DefaultCollection"
+	adoServerRepo   = adoServerOrgKey + "/proj/_git/app"
+	// adoServerToken is the caller's (capEmail's) own Server token: its
+	// Account is a DOMAIN\user name, and its Mail is the caller's email.
+	adoServerToken = "bobs-server-pat-0003"
+)
+
+// adoServerTestRow is an Azure DevOps Server row as #1429 shapes one: the pat
+// lane, per_user, no entra block, an address naming the collection.
+func adoServerTestRow(address string) types.GitProvider {
+	return types.GitProvider{
+		ID: ownPATRowID, Kind: types.GitProviderAzureDevOps, BaseURLs: []string{address},
+		Lanes: []types.GitLane{types.GitLanePAT}, CredentialSource: types.CredentialSourcePerUser,
+	}
+}
+
+// newServerOwnPATDoor is newOwnPATDoor over a Server row, with the identity
+// check reaching a TLS fake Azure DevOps Server by its own host name.
+func newServerOwnPATDoor(t *testing.T, address string) *ownPATDoor {
+	t.Helper()
+	fake, h := adofake.NewHandler()
+	ts := httptest.NewTLSServer(h)
+	t.Cleanup(ts.Close)
+	fake.RegisterToken(adoServerToken, adofake.ScopeProjectRead)
+	fake.RegisterServerIdentity(adoServerToken, `CORP\bob`, capEmail)
+	fake.RegisterToken(ownPATOtherToken, adofake.ScopeProjectRead)
+	fake.RegisterServerIdentity(ownPATOtherToken, `CORP\carol`, ownPATOtherEmail)
+	pool := x509.NewCertPool()
+	pool.AddCert(ts.Certificate())
+	prev := adoOwnPATTransport
+	adoOwnPATTransport = &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "example.com", MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr != adoServerHost+":443" {
+				t.Errorf("the identity check dialled %s, want %s:443", addr, adoServerHost)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, ts.Listener.Addr().String())
+		},
+	}
+	t.Cleanup(func() { adoOwnPATTransport = prev })
+
+	hs := newHarness(t)
+	secrets := &memSecrets{m: map[string][]byte{}}
+	cfg := baseTestConfig(hs, &capStore{Store: r3IntegStore{}, site: adoSite(adoServerTestRow(address))})
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Secrets = secrets
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	cfg.Now = func() time.Time { return ownPATNow }
+	return &ownPATDoor{srv: New(cfg), fake: fake, audit: hs.audit, secrets: secrets}
+}
+
+// A Server person's own token is checked against the collection's
+// connectionData — no api-version, since a Server answers without one — and
+// matched by its Mail, the only email a DOMAIN\user account carries. It is
+// stored for the collection, and the row reads git only, 30 days at most.
+func TestADOServerOwnPATPut_StoresTheCallersOwnToken(t *testing.T) {
+	d := newServerOwnPATDoor(t, adoServerOrgKey)
+	code, body := d.put(t, adoServerOrgKey, adoServerToken, days(30))
+	if code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", code, body)
+	}
+	var access SCMAccess
+	if err := json.Unmarshal([]byte(body), &access); err != nil {
+		t.Fatal(err)
+	}
+	if access.State != modelAccessLive || !access.GitOnly || access.MaxDays != 30 || access.TokenMode != "own_pat" ||
+		!slices.Equal(access.TokenScopes, []string{"Code (Read & write)"}) {
+		t.Errorf("answer = %+v, want live, git only, 30 days, Code (Read & write)", access)
+	}
+	blob, found := d.stored(t)
+	if !found || blob.Token != adoServerToken || blob.Org != "defaultcollection" {
+		t.Fatalf("stored = %+v (found %v)", blob, found)
+	}
+	var asked bool
+	for _, rr := range d.fake.Requests() {
+		if rr.Endpoint == adofake.EndpointConnectionData && rr.Path == "/DefaultCollection/_apis/connectionData" &&
+			rr.Token == adoServerToken && rr.APIVersion == "" {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Error("the identity check never asked the collection's connectionData with the token and no api-version")
+	}
+}
+
+// SECURITY: on Server as on Services — another account's token, a token the
+// server rejects, and an expiry past 30 days are each refused and not stored,
+// and the other account is never named.
+func TestADOServerOwnPATPut_Refusals(t *testing.T) {
+	d := newServerOwnPATDoor(t, adoServerOrgKey)
+	if code, body := d.put(t, adoServerOrgKey, ownPATOtherToken, days(10)); code != http.StatusForbidden ||
+		!strings.Contains(body, reasonADOOwnPATIdentityMismatch) || strings.Contains(strings.ToLower(body), "carol") {
+		t.Errorf("another account's token = %d %s", code, body)
+	}
+	if code, body := d.put(t, adoServerOrgKey, "never-issued", days(10)); code != http.StatusUnprocessableEntity ||
+		!strings.Contains(body, reasonADOOwnPATRejected) {
+		t.Errorf("a rejected token = %d %s", code, body)
+	}
+	if code, body := d.put(t, adoServerOrgKey, adoServerToken, days(31)); code != http.StatusBadRequest ||
+		!strings.Contains(body, "30-day limit") {
+		t.Errorf("31 days = %d %s", code, body)
+	}
+	if _, found := d.stored(t); found {
+		t.Fatal("a refused token was stored")
+	}
+	if rows := d.auditRows(adoPATAuditOwnMismatch); len(rows) != 1 || strings.Contains(strings.ToLower(string(rows[0].Data)), "carol") {
+		t.Errorf("identity_mismatch rows = %+v", rows)
+	}
+}
+
+// SECURITY: a Server row whose address names no collection is not an
+// own-token row — its pin would be the whole server — so both doors answer as
+// for no row, and the token is never sent anywhere.
+func TestADOServerOwnPATDoors_RowWithoutCollectionIsNotServed(t *testing.T) {
+	d := newServerOwnPATDoor(t, "https://"+adoServerHost)
+	if code, body := d.put(t, "https://"+adoServerHost, adoServerToken, days(10)); code != http.StatusNotFound ||
+		!strings.Contains(body, reasonADOOwnPATUnknownRow) {
+		t.Errorf("PUT = %d %s, want the unknown-row 404", code, body)
+	}
+	if n := d.fake.Count(adofake.EndpointConnectionData); n != 0 {
+		t.Errorf("the token was sent to the server %d times", n)
+	}
+}
+
+// DELETE removes a Server person's own token.
+func TestADOServerOwnPATDelete(t *testing.T) {
+	d := newServerOwnPATDoor(t, adoServerOrgKey)
+	if code, body := d.put(t, adoServerOrgKey, adoServerToken, days(10)); code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", code, body)
+	}
+	w := doSSO(t, d.srv, http.MethodDelete, "/api/v1/me/scm/azure-devops/token?org="+url.QueryEscape(adoServerOrgKey), memberCookie(t), "")
+	if _, found := d.stored(t); w.Code != http.StatusNoContent || found {
+		t.Fatalf("DELETE = %d, still stored %v", w.Code, found)
+	}
+}
+
+// Dispatch authors a Server run's lane on its one host, git only: one grant
+// for the server host pinned to the collection, the host on the git broker's
+// list, and nothing else — no egress, no REST tunnel, no placeholder, no grant
+// id and no token in the sandbox's environment, whatever the PAT broker is.
+func TestAuthorADOEntraInjection_ServerRow(t *testing.T) {
+	f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
+	if len(f.st.grants) != 1 {
+		t.Fatalf("%d grants, want one, for %s", len(f.st.grants), adoServerHost)
+	}
+	var sc struct {
+		Host       string                `json:"host"`
+		SecretName string                `json:"secret_name"`
+		RequireTLS bool                  `json:"require_tls"`
+		Snapshot   adoEntraScopeSnapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(f.st.grants[0].Spec.Scope, &sc); err != nil {
+		t.Fatal(err)
+	}
+	if sc.Host != adoServerHost || sc.SecretName != types.ADOEntraAccessTokenSecret || !sc.RequireTLS ||
+		sc.Snapshot.TokenMode != "own_pat" || sc.Snapshot.Organisation != "defaultcollection" || sc.Snapshot.OwnerSubject != capSub ||
+		!slices.Equal(sc.Snapshot.Capabilities, adoServerCapabilities) {
+		t.Errorf("grant scope = %+v", sc)
+	}
+	if len(f.policy.AllowedDomains) != 0 {
+		t.Errorf("a Server run opened egress %v", f.policy.AllowedDomains)
+	}
+	if f.env["WARDYN_GIT_PAT_BROKER_HOSTS"] != adoServerHost {
+		t.Errorf("git broker hosts = %q, want %q", f.env["WARDYN_GIT_PAT_BROKER_HOSTS"], adoServerHost)
+	}
+	for k, v := range f.env {
+		if k == adoEntraPlaceholderEnv || k == "WARDYN_GIT_PAT_GRANTS" || strings.Contains(v, f.grantID.String()) {
+			t.Errorf("the sandbox env carries %s=%q", k, v)
+		}
+	}
+
+	// The proxy's gate: the one host, the collection, the git lane's set.
+	st := &adoTestStore{site: adoSite(adoServerTestRow("https://" + adoServerHost + "/tfs/DefaultCollection"))}
+	srv := &Server{cfg: Config{Store: st, Audit: &memAudit{}, Now: time.Now}}
+	ado, on := resolveADOEntraRun(st.site, []string{"https://" + adoServerHost + "/tfs/DefaultCollection/proj/_git/app"}, capSub)
+	lane, ok := srv.authorADOEntraLane(context.Background(), types.AgentRun{ID: f.runID}, ado, on, adoEntraUngraded(),
+		adoStandingBound{}, dispatchLLMPlan{mitmCACertPEM: "CERT", mitmCAKeyPEM: "KEY"}, &types.RunPolicySpec{}, map[string]string{}, nil)
+	if !ok || lane.gate == nil || lane.gate.Organization != "tfs/defaultcollection" ||
+		!slices.Equal(lane.gate.Hosts, []string{adoServerHost}) || len(lane.mitmHosts) != 0 {
+		t.Fatalf("lane = %+v gate = %+v", lane, lane.gate)
+	}
+}
+
+// A Server run is on the lane only for a repository under the row's
+// collection, on its host.
+func TestADOServerRunForRepo(t *testing.T) {
+	row := adoServerTestRow("https://" + adoServerHost + "/tfs/DefaultCollection")
+	for repo, want := range map[string]bool{
+		"https://" + adoServerHost + "/tfs/DefaultCollection/proj/_git/app":  true,
+		"https://" + adoServerHost + "/tfs/defaultcollection/proj/_git/app":  true,
+		"https://" + adoServerHost + "/tfs/OtherCollection/proj/_git/app":    false,
+		"https://" + adoServerHost + "/tfs/DefaultCollectionX/proj/_git/app": false,
+		"https://elsewhere.example/tfs/DefaultCollection/proj/_git/app":      false,
+	} {
+		if _, got := adoServerRunForRepo(row, repo, capSub); got != want {
+			t.Errorf("%s: on the lane = %v, want %v", repo, got, want)
+		}
+	}
+}
+
+// The resolve injects a Server person's own token as Basic, only on the
+// server's host, until the expiry they entered.
+func TestResolveADOOwnPAT_ServerInjectsBasicOnItsHostOnly(t *testing.T) {
+	f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
+	exp := f.now.Add(2 * time.Hour)
+	f.token(t, adoServerToken, "defaultcollection", exp)
+	w := f.resolve(t, capSub, adoServerHost, "")
+	var resp types.ResolvedInjection
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if w.Code != http.StatusOK || resp.Header != "Authorization" || resp.Value != adoOwnPATHeaderValue(adoServerToken) ||
+		resp.ExpiresAt == 0 || resp.ExpiresAt > exp.UnixMilli() || strings.Join(resp.Capabilities, ",") != "read,code_write" {
+		t.Fatalf("resolve = %d %s", w.Code, w.Body)
+	}
+	for _, host := range []string{"dev.azure.com", "elsewhere.example"} {
+		wantRefused(t, f.resolve(t, capSub, host, ""), http.StatusForbidden, reasonHostNotOrganisation)
+	}
+}
+
+// SECURITY: a Server run's resolve refuses a capability ask (nothing widens
+// the git lane's set), a token stored for another collection, an expired
+// token, and a row that moved or was turned off.
+func TestResolveADOOwnPAT_ServerRefusals(t *testing.T) {
+	t.Run("capability ask", func(t *testing.T) {
+		f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
+		f.token(t, adoServerToken, "defaultcollection", f.now.Add(time.Hour))
+		wantRefused(t, f.resolve(t, capSub, adoServerHost, "?capability="+string(adoscope.CapPR)+"&first_use=wait_for_review"),
+			http.StatusForbidden, reasonCapabilityAboveCeiling)
+	})
+	t.Run("token for another collection", func(t *testing.T) {
+		f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
+		f.token(t, adoServerToken, "othercollection", f.now.Add(time.Hour))
+		wantRefused(t, f.resolve(t, capSub, adoServerHost, ""), http.StatusForbidden, reasonADOOwnPATOtherOrg)
+	})
+	t.Run("expired", func(t *testing.T) {
+		f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
+		f.token(t, adoServerToken, "defaultcollection", f.now.Add(-time.Minute))
+		wantRefused(t, f.resolve(t, capSub, adoServerHost, "?phase=boot"), http.StatusForbidden, reasonADOOwnPATExpired)
+	})
+	for name, change := range map[string]func(*types.GitProvider){
+		"row turned off":       func(r *types.GitProvider) { r.Disabled = true },
+		"collection moved":     func(r *types.GitProvider) { r.BaseURLs = []string{"https://" + adoServerHost + "/OtherCollection"} },
+		"shared again":         func(r *types.GitProvider) { r.CredentialSource = types.CredentialSourceShared },
+		"address lost its pin": func(r *types.GitProvider) { r.BaseURLs = []string{"https://" + adoServerHost} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newOwnPATRunOn(t, adoServerTestRow(adoServerOrgKey), adoServerRepo)
+			f.token(t, adoServerToken, "defaultcollection", f.now.Add(time.Hour))
+			row := adoServerTestRow(adoServerOrgKey)
+			change(&row)
+			f.st.site = adoSite(row)
+			wantRefused(t, f.resolve(t, capSub, adoServerHost, ""), http.StatusForbidden, reasonScopeChanged)
+		})
+	}
+}
+
+// The launch gate grades a Server row from the person's own token, as on
+// Services: an expired one is refused.
+func TestGitCredentialRefusal_ServerOwnPAT(t *testing.T) {
+	srv := newSCMTestServer(t, adoSite(adoServerTestRow(adoServerOrgKey)), false)
+	srv.cfg.Now = func() time.Time { return ownPATNow }
+	if err := srv.gitCredentialRefusalForLauncher(context.Background(), capSub, adoServerRepo); err == nil ||
+		err.Error() != gitCredentialNotConnectedRefusal {
+		t.Fatalf("no token: refusal = %v", err)
+	}
+	f := &ownPATRun{srv: srv, now: ownPATNow}
+	f.token(t, adoServerToken, "defaultcollection", ownPATNow.Add(-time.Minute))
+	if err := srv.gitCredentialRefusalForLauncher(context.Background(), capSub, adoServerRepo); err == nil ||
+		err.Error() != gitCredentialOwnPATExpiredRefusal {
+		t.Fatalf("expired: refusal = %v", err)
+	}
+}

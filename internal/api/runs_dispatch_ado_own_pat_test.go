@@ -41,7 +41,13 @@ type ownPATRun struct {
 
 func newOwnPATRun(t *testing.T) *ownPATRun {
 	t.Helper()
-	base := &adoTestStore{site: adoSite(ownPATTestRow())}
+	return newOwnPATRunOn(t, ownPATTestRow(), adoTestRepo)
+}
+
+// newOwnPATRunOn is newOwnPATRun on row, for a run of repo.
+func newOwnPATRunOn(t *testing.T, row types.GitProvider, repo string) *ownPATRun {
+	t.Helper()
+	base := &adoTestStore{site: adoSite(row)}
 	fa := newFakeApprovals()
 	f := &ownPATRun{audit: &memAudit{}, approvals: fa, runID: uuid.New(), env: map[string]string{}, now: time.Now().UTC()}
 	f.st = &adoSignInStore{adoCapStore: &adoCapStore{adoTestStore: base, approvals: fa},
@@ -50,7 +56,7 @@ func newOwnPATRun(t *testing.T) *ownPATRun {
 		Store: f.st, Secrets: &memSecrets{m: map[string][]byte{}}, MaskRegistry: secretmask.NewRegistry(),
 		Now: func() time.Time { return f.now }, Audit: f.audit, Approvals: fa,
 	}}
-	ado, ok := resolveADOEntraRun(base.site, []string{adoTestRepo}, capSub)
+	ado, ok := resolveADOEntraRun(base.site, []string{repo}, capSub)
 	if !ok {
 		t.Fatal("the own-token row resolved no lane")
 	}

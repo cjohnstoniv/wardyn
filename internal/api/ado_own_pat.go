@@ -29,7 +29,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -54,9 +53,13 @@ const adoOwnPATExpiringWindow = 7 * 24 * time.Hour
 // dozen characters; this only stops an unbounded paste reaching a header.
 const adoOwnPATMaxTokenLen = 512
 
-// adoOwnPATAPIBase is where the identity check calls Azure DevOps. A variable
-// only so the tests can point it at the fake.
+// adoOwnPATAPIBase is where the identity check calls Azure DevOps Services.
+// A variable only so the tests can point it at the fake.
 var adoOwnPATAPIBase = "https://dev.azure.com"
+
+// adoOwnPATTransport carries the identity check. A variable only so the tests
+// can reach a fake Azure DevOps Server by its host name.
+var adoOwnPATTransport = http.DefaultTransport
 
 // The door's refusals. The canon ones are the approved mock's (own-token
 // errors); the rest name what the caller can do.
@@ -150,7 +153,7 @@ func (s *Server) adoOwnPATRowFor(ctx context.Context, org string) (types.GitProv
 	}
 	var rows []types.GitProvider
 	for _, row := range gitProviderRows(sc) {
-		if !row.Disabled && isADOOwnPATRow(row) && adoEntraValidRowID(row.ID) && adoOrgDisplay(row) == org {
+		if !row.Disabled && isADOOwnTokenRow(row) && adoEntraValidRowID(row.ID) && adoOrgDisplay(row) == org {
 			rows = append(rows, row)
 		}
 	}
@@ -193,7 +196,7 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	row, org, ok := s.adoOwnPATDoorRow(w, r, req.Org)
+	row, org, identityURL, ok := s.adoOwnPATDoorRow(w, r, req.Org)
 	if !ok {
 		return
 	}
@@ -208,7 +211,7 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit := map[string]any{"provider_row": row.ID, "organisation": org, "expires_on": expiresOn.Format(time.DateOnly)}
-	account, err := s.adoOwnPATAccount(ctx, org, token)
+	names, err := s.adoOwnPATOwner(ctx, identityURL, token)
 	switch {
 	case errors.Is(err, errADOOwnPATRejected):
 		audit["reason"] = reasonADOOwnPATRejected
@@ -220,7 +223,7 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonADOOwnPATCheckUnavailable, adoOwnPATUnavailableRefusal)
 		return
 	}
-	if basis := adoOwnPATMismatch(account, oidcEmailFromContext(ctx)); basis != "" {
+	if basis := adoOwnPATMismatch(names, oidcEmailFromContext(ctx)); basis != "" {
 		// Never the account the token named: the refusal and the audit row say
 		// only that it is not the caller's.
 		audit["basis"] = basis
@@ -254,7 +257,7 @@ func (s *Server) handleDeleteADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
-	row, org, ok := s.adoOwnPATDoorRow(w, r, r.URL.Query().Get("org"))
+	row, org, _, ok := s.adoOwnPATDoorRow(w, r, r.URL.Query().Get("org"))
 	if !ok {
 		return
 	}
@@ -274,25 +277,26 @@ func (s *Server) handleDeleteADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// adoOwnPATDoorRow resolves the row both doors act on and its organisation.
-// Unknown, disabled, not own-token, or not the caller's to use all answer the
-// same 404.
-func (s *Server) adoOwnPATDoorRow(w http.ResponseWriter, r *http.Request, orgKey string) (types.GitProvider, string, bool) {
+// adoOwnPATDoorRow resolves the row both doors act on, its organisation (a
+// Services organisation or a Server collection) and where its identity check
+// asks. Unknown, disabled, not own-token, or not the caller's to use all answer
+// the same 404.
+func (s *Server) adoOwnPATDoorRow(w http.ResponseWriter, r *http.Request, orgKey string) (types.GitProvider, string, string, bool) {
 	if s.cfg.Store == nil || s.cfg.Secrets == nil {
 		writeErrorReason(w, http.StatusNotFound, reasonADOOwnPATUnknownRow, adoOwnPATUnknownRowRefusal)
-		return types.GitProvider{}, "", false
+		return types.GitProvider{}, "", "", false
 	}
 	row, found, err := s.adoOwnPATRowFor(r.Context(), orgKey)
 	if err != nil {
 		writeServerError(w, r, "read site config", err)
-		return types.GitProvider{}, "", false
+		return types.GitProvider{}, "", "", false
 	}
-	org, orgOK := adoOrganisationOf(orgKey)
-	if !found || !orgOK {
+	identityURL, org, ok := adoOwnPATTarget(row)
+	if !found || !ok {
 		writeErrorReason(w, http.StatusNotFound, reasonADOOwnPATUnknownRow, adoOwnPATUnknownRowRefusal)
-		return types.GitProvider{}, "", false
+		return types.GitProvider{}, "", "", false
 	}
-	return row, org, true
+	return row, org, identityURL, true
 }
 
 // adoOwnPATExpiry parses the date the person entered and holds it to (today,
@@ -325,35 +329,37 @@ var (
 	errADOOwnPATUnavailable = errors.New("the azure devops token check did not complete")
 )
 
-// adoOwnPATAccount asks Azure DevOps, with the token itself, which account it
-// authenticates as in org: connectionData's authenticatedUser, whose Account
-// property is the sign-in name. Any answer but a 200 naming an account is a
-// refusal, except a 429 or a 5xx, which say nothing about the token.
-func (s *Server) adoOwnPATAccount(ctx context.Context, org, token string) (string, error) {
-	u := adoOwnPATAPIBase + "/" + url.PathEscape(org) + "/_apis/connectionData?api-version=7.1"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// adoOwnPATOwner asks Azure DevOps, with the token itself, who it
+// authenticates as, at identityURL (adoOwnPATTarget): connectionData's
+// authenticatedUser, whose properties name the owner — Account, the sign-in
+// name (an email on Services, DOMAIN\user on Server), and Mail, the account's
+// email where the directory has one. It returns the ones present. Any answer
+// but a 200 naming at least one is a refusal, except a 429 or a 5xx, which say
+// nothing about the token.
+func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, identityURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
 	}
 	req.Header.Set("Authorization", adoOwnPATHeaderValue(token))
 	req.Header.Set("Accept", "application/json")
 	// No redirect is followed: the request carries the token, and Azure DevOps
 	// answers a token it does not accept with a redirect to its sign-in page.
 	client := &http.Client{
-		Transport:     http.DefaultTransport,
+		Transport:     adoOwnPATTransport,
 		Timeout:       adoEntraRedeemTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		return "", fmt.Errorf("%w: HTTP %d", errADOOwnPATUnavailable, resp.StatusCode)
+		return nil, fmt.Errorf("%w: HTTP %d", errADOOwnPATUnavailable, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: HTTP %d", errADOOwnPATRejected, resp.StatusCode)
+		return nil, fmt.Errorf("%w: HTTP %d", errADOOwnPATRejected, resp.StatusCode)
 	}
 	var body struct {
 		AuthenticatedUser struct {
@@ -364,28 +370,33 @@ func (s *Server) adoOwnPATAccount(ctx context.Context, org, token string) (strin
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<18))
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return "", fmt.Errorf("%w: unparseable connectionData", errADOOwnPATRejected)
+		return nil, fmt.Errorf("%w: unparseable connectionData", errADOOwnPATRejected)
 	}
-	account := strings.TrimSpace(body.AuthenticatedUser.Properties["Account"].Value)
-	if account == "" {
-		return "", fmt.Errorf("%w: connectionData named no account", errADOOwnPATRejected)
+	var names []string
+	for _, key := range []string{"Account", "Mail"} {
+		if v := strings.TrimSpace(body.AuthenticatedUser.Properties[key].Value); v != "" {
+			names = append(names, v)
+		}
 	}
-	return account, nil
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%w: connectionData named no account", errADOOwnPATRejected)
+	}
+	return names, nil
 }
 
-// adoOwnPATMismatch reports why a token's account is not the caller's, or ""
-// when it is. The account must equal the email of the caller's verified
-// sign-in, case aside. A caller whose sign-in carries no email cannot be
-// matched, so is refused ("no_email") rather than trusted.
-func adoOwnPATMismatch(account, email string) string {
+// adoOwnPATMismatch reports why a token's owner is not the caller, or "" when
+// it is: one of the names connectionData gave its owner must equal the email of
+// the caller's verified sign-in, case aside. A caller whose sign-in carries no
+// email cannot be matched, so is refused ("no_email") rather than trusted.
+func adoOwnPATMismatch(names []string, email string) string {
 	email = strings.TrimSpace(email)
 	switch {
 	case email == "":
 		return "no_email"
-	case !strings.EqualFold(account, email):
+	case !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(n, email) }):
 		return "account"
 	}
 	return ""
