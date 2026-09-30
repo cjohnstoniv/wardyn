@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
 
 const adoDisconnectPath = "/api/v1/scm/azure-devops/connection"
@@ -309,5 +311,100 @@ func TestRunADOTokens_ForeignReaderGetsTheRunsOwn404(t *testing.T) {
 	}
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/ado-tokens", pvSecurity(t).cookie, ""); w.Code != http.StatusOK {
 		t.Errorf("security admin read = %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+// A disconnect or an erase that lands while a redeem of the same sign-in is
+// in flight (a renewal, a capability ask, a revoke) waits for it: the
+// redeem's rotated refresh token is not stored again after the delete, and
+// no access token it minted is served afterwards.
+func TestADODisconnect_WinsOverAnInFlightRedeem(t *testing.T) {
+	for name, end := range map[string]func(fx *adoPATFixture) int{
+		"disconnect": func(fx *adoPATFixture) int {
+			if code := fx.disconnect(t, fx.subject).Code; code != http.StatusNoContent {
+				return code
+			}
+			return http.StatusOK
+		},
+		"erase": func(fx *adoPATFixture) int {
+			r := httptest.NewRequest(http.MethodDelete, "/api/v1/people/"+fx.subject+"/credentials", nil)
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("principal", fx.subject)
+			w := httptest.NewRecorder()
+			fx.srv.handleErasePersonCredentials(w, r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx)))
+			return w.Code
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newADOConsoleLane(t, false)
+			ctx := context.Background()
+			var once sync.Once
+			done := make(chan int, 1)
+			fx.fake.OnIssue(func(entrafake.IssuedToken) {
+				once.Do(func() {
+					go func() { done <- end(fx) }()
+					// Give an unlocked end the time to finish inside the redeem.
+					select {
+					case code := <-done:
+						done <- code
+					case <-time.After(200 * time.Millisecond):
+					}
+				})
+			})
+			if _, err := fx.srv.mintAccess(ctx, fx.cfg, fx.subject); err != nil {
+				t.Fatalf("mintAccess (the in-flight redeem): %v", err)
+			}
+			if code := <-done; code != http.StatusOK {
+				t.Fatalf("%s = %d, want success", name, code)
+			}
+			if _, found := fx.stored(t, fx.subject); found {
+				t.Error("the in-flight redeem stored the sign-in again after it was deleted")
+			}
+			if _, err := fx.srv.mintAccess(ctx, fx.cfg, fx.subject); err == nil {
+				t.Error("an access token is still served after the sign-in was deleted")
+			}
+			if got := string(fx.scmAccessJSON(t)["state"]); got != `"`+modelAccessNotConfigured+`"` {
+				t.Errorf("scm access state = %s, want %q", got, modelAccessNotConfigured)
+			}
+		})
+	}
+}
+
+// createHookPATs runs onCreate before each create, so a test can land a
+// disconnect between a mint's redeem and its record.
+type createHookPATs struct {
+	*fakeADOPATs
+	onCreate func()
+}
+
+func (c createHookPATs) Create(ctx context.Context, org, accessToken string, req adoPATRequest) (adoPAT, error) {
+	c.onCreate()
+	return c.fakeADOPATs.Create(ctx, org, accessToken, req)
+}
+
+// A token whose create overlaps a disconnect is recorded after the
+// disconnect listed the person's tokens: the mint revokes it itself, with
+// the access token it holds, and the run gets no token.
+func TestADODisconnect_RevokesATokenMintedDuringIt(t *testing.T) {
+	fx := newADOConsoleLane(t, false)
+	var once sync.Once
+	fx.srv.adoPATs = createHookPATs{fx.pats, func() {
+		once.Do(func() {
+			if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNoContent {
+				t.Errorf("disconnect = %d %s, want 204", w.Code, w.Body.String())
+			}
+		})
+	}}
+	if fx.dispatch(t) {
+		t.Error("dispatch handed out a token created while its owner disconnected")
+	}
+	if fx.pats.createCount() != 1 || len(fx.pats.revokedIDs()) != 1 {
+		t.Fatalf("creates %d, revoked %v: want the one token created revoked", fx.pats.createCount(), fx.pats.revokedIDs())
+	}
+	if left := fx.st.unrevoked(t); len(left) != 0 {
+		t.Errorf("live rows = %+v, want none", left)
+	}
+	if got := fx.auditReasons(adoPATAuditRevoke); !slices.Equal(got, []string{adoPATRevokeDisconnect}) {
+		t.Errorf("ado_pat.revoke reasons = %v, want [disconnect]", got)
 	}
 }
