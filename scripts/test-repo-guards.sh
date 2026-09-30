@@ -54,7 +54,9 @@
 #  16. nightly.yml's staged images are release.yml's publish set: every
 #      published image has a staged row with the same name and Dockerfile, every
 #      staged row is published, and the `images` rows' build-args are byte-equal.
-#      A local-only image (claude-code, oracle, full) can never be staged.
+#      A local-only image (claude-code, oracle, full) can never be staged. The
+#      build step is pinned too: same context, file, platforms and provenance,
+#      build-args from the matrix, and no target or cache on either side.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -544,7 +546,37 @@ else
         [ "$rel_args" = "$stage_args" ] \
             || { bad "$NIGHTLY: '$n' build-args differ from $REL's images row — release: [$rel_args] vs nightly: [$stage_args]"; stage_fail=1; }
     done
-    if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows match release.yml's publish set (names, dockerfiles, build-args), and no local-only image is staged"; fi
+    # The build STEP decides what a digest is, so it is compared too: a staged
+    # image equals a release.yml build only if context, file, platforms,
+    # provenance and build-args agree, and neither side carries a target,
+    # cache-from, cache-to or any other key the other lacks.
+    bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
+    with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
+    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox"; do
+        set -- $pair
+        rel_job="$1"; ngt_job="$2"
+        for jf in "$rel_job $REL" "$ngt_job $NIGHTLY"; do
+            set -- $jf
+            [ "$(yq -r ".jobs[\"$1\"] | [$bps] | length" "$2")" = 1 ] \
+                || { bad "$2: job '$1' must have exactly one docker/build-push-action step — guard 16 cannot compare the build step"; stage_fail=1; }
+        done
+        rel_with="$(yq -o=json -I=0 ".jobs[\"$rel_job\"] | $with_norm" "$REL")"
+        ngt_with="$(yq -o=json -I=0 ".jobs[\"$ngt_job\"] | $with_norm" "$NIGHTLY")"
+        [ "$rel_with" = "$ngt_with" ] \
+            || { bad "$NIGHTLY: $ngt_job's build step differs from $REL's $rel_job (push, tags and labels aside) — release: $rel_with vs nightly: $ngt_with. A staged digest must be built exactly as release.yml builds it: same platforms and provenance, no target or cache."; stage_fail=1; }
+    done
+    want_args='${{ matrix.build-args }}'
+    got_args="$(yq -r ".jobs[\"buildx-smoke\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
+    [ "$got_args" = "$want_args" ] \
+        || { bad "$NIGHTLY: buildx-smoke's build step must take build-args from the matrix row ('$want_args'), not '$got_args' — a hardcoded value would stage wardynd without RELEASE_BUILD=true"; stage_fail=1; }
+    want_base='BASE_IMAGE=${{ steps.base.outputs.ref }}'
+    got_base="$(yq -r ".jobs[\"buildx-smoke-ui-sandbox\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
+    [ "$got_base" = "$want_base" ] \
+        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's build-args must be exactly '$want_base' (the staged agent-base digest), not '$got_base'"; stage_fail=1; }
+    base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
+    printf '%s' "$base_run" | grep -qF '@sha256:[0-9a-f]{64}$' \
+        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
