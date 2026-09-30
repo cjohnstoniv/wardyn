@@ -258,6 +258,10 @@ silent gap:
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO. |
 | `store_error` | The credential store operation failed. AWS SSO (a read); also the Azure DevOps sign-in callback's own captured-credential write (`ado_entra.go`) — the identical "a store errored" fact, not a second name for it. |
 | `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). Azure DevOps. |
+| `ado_pat_policy_blocked` | Azure DevOps refused to create a personal access token for the person: the organisation restricts who may create them. The organisation's allow list is the fix. |
+| `ado_pat_lifespan_policy` | Azure DevOps refused to create a personal access token because its life is above the organisation's maximum token lifespan. Lower the row's `pat_max_hours`. |
+| `ado_pat_consent_needed` | The person's Azure DevOps sign-in cannot create tokens: the app registration lacks the token permissions or consent for them. |
+| `ado_pat_mint_refused` | Azure DevOps refused to create a personal access token for another reason. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
 | `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |

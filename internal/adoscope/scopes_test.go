@@ -165,7 +165,8 @@ func TestScopesForNeverRequestsTheTokenScopes(t *testing.T) {
 
 // TestPATScope pins the personal access token's scope string: unqualified,
 // sorted, deduplicated, space-joined. The rows use capabilities whose scopes
-// #1409's re-cut of the read catalogue does not touch.
+// are the same before and after #1409, which moves the release scopes onto
+// capabilities of their own.
 func TestPATScope(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -176,10 +177,12 @@ func TestPATScope(t *testing.T) {
 		{"the four that share a scope collapse to it",
 			[]Capability{CapPolicyBypass, CapCodeWrite, CapPR, CapPolicyAdmin}, "vso.code_write"},
 		{"several scopes are sorted and space-joined",
-			[]Capability{CapBuildExecute, CapCodeWrite}, "vso.build_execute vso.code_write vso.release_execute"},
+			[]Capability{CapWorkWrite, CapCodeWrite}, "vso.code_write vso.work_write"},
 		{"input order does not matter",
-			[]Capability{CapWorkWrite, CapRepoAdmin, CapBuildAdmin},
-			"vso.build_execute vso.code_manage vso.release_manage vso.work_write"},
+			[]Capability{CapWikiWrite, CapRepoAdmin, CapProjectAdmin},
+			"vso.code_manage vso.project_manage vso.wiki_write"},
+		{"one capability, three scopes",
+			[]Capability{CapSecurityAdmin}, "vso.graph_manage vso.identity_manage vso.security_manage"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := PATScope(tc.caps)
@@ -264,7 +267,8 @@ func TestMintScopes(t *testing.T) {
 // or not, in any case; and nothing a capability needs.
 func TestIsTokenScope(t *testing.T) {
 	for _, s := range []string{"vso.pats", "vso.pats_manage", "vso.tokens", "vso.tokenadministration", "user_impersonation"} {
-		for _, form := range []string{s, ResourceID + "/" + s, strings.ToUpper(s), strings.ToUpper(ResourceID) + "/" + s} {
+		for _, form := range []string{s, ResourceID + "/" + s, strings.ToUpper(s), strings.ToUpper(ResourceID) + "/" + s,
+			"https://app.vssps.visualstudio.com/" + s, "HTTPS://APP.VSSPS.VISUALSTUDIO.COM/" + s} {
 			if !IsTokenScope(form) {
 				t.Errorf("IsTokenScope(%q) = false, want true", form)
 			}
@@ -274,7 +278,7 @@ func TestIsTokenScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScopesFor(every grantable capability) error = %v", err)
 	}
-	for _, s := range append(all, "vso.code", "vso.code_write", "openid", "offline_access", "", "vso.pats_extra", "other/vso.pats") {
+	for _, s := range append(all, "vso.code", "vso.code_write", "openid", "offline_access", "", "vso.pats_extra", "other/vso.pats", "https://example.com/vso.pats") {
 		if IsTokenScope(s) {
 			t.Errorf("IsTokenScope(%q) = true, want false", s)
 		}
