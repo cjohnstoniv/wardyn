@@ -315,6 +315,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// into. Both sends take this mutex and read the mode live inside it, so
 	// whichever lands second is the one that is still true.
 	var modeMu sync.Mutex
+	var via *types.DelegationVia
+	if v, ok := audit.DelegationFrom(ctx); ok {
+		via = &v
+	}
 	holder := &attachHolder{
 		principal: principal,
 		actorType: principalType,
@@ -323,6 +327,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
 		cols:      opts.Cols,
 		rows:      opts.Rows,
+		via:       via,
 		// Promotion: the SAME socket is told it may now type. attach-terminal
 		// .tsx already implements the read_only true->false transition (it
 		// force-refits, because a promoted observer inherits the departed

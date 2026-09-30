@@ -206,6 +206,9 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 // runs would use under their name. DELETE and the name list keep it — an admin
 // may still remove a person's credentials, never set them.
 func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
+	if s.refuseDelegated(w, r) {
+		return
+	}
 	name := chi.URLParam(r, "name")
 	if r.URL.Query().Has("owner") {
 		if !s.isOperator(r.Context()) {
