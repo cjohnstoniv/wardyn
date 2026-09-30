@@ -175,11 +175,14 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
 });
 
 test.describe("New Run, a row that creates a token for each run", () => {
-  async function openNewRun(page: Page): Promise<void> {
+  // `saved`: the token line sits under the saved-policy picker, so the tests
+  // that read it open that; a launch needs the ordinary form, where Launch is
+  // enabled without picking a policy.
+  async function openNewRun(page: Page, saved = true): Promise<void> {
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
+    if (saved) await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
   }
 
   test("the run's token line names the row's default access, and not connected says to connect first", async ({ page, context }) => {
@@ -206,7 +209,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: ADO_PAT.LAUNCH_POLICY_REFUSED, reason: "ado_pat_policy_blocked" } });
     });
-    await openNewRun(page);
+    await openNewRun(page, false);
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
     await page.getByLabel("Title").fill("e2e ado token policy");
     await page.getByRole("button", { name: "Launch run" }).click();
@@ -219,7 +222,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 403, json: { error: "cannot create a token", reason: "ado_pat_consent_needed" } });
     });
-    await openNewRun(page);
+    await openNewRun(page, false);
     await page.getByLabel("Title").fill("e2e ado consent");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
@@ -311,7 +314,9 @@ test.describe("no horizontal scroll at 390px", () => {
         json: [{ created_at: new Date(2026, 8, 29, 9, 2).toISOString(), valid_to: new Date(2026, 8, 29, 17, 2).toISOString(), renewal_failed: true }],
       }),
     );
-    await openAccountCard(page);
+    // The sidebar is collapsed at this width, so go straight to each page.
+    await page.goto("/account");
+    await expandCard(page, "Azure DevOps");
     expect(await noHorizontalScroll(page)).toBe(true);
     await page.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }).click();
     await expect(page.getByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeVisible();
