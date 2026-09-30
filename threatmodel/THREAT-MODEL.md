@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.8.1)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.8.2)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -2355,22 +2355,24 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 62. **Azure DevOps per-run tokens put a token-CREATING credential in the store,
     and what bounds it is a secret, a policy and a revocation — not a scope
-    (#1428) [0.8.2].** On an Azure DevOps row in `minted_pat` mode (the default)
-    Wardyn holds each connected person's Entra refresh token, obtained with
-    only `vso.pats` and `vso.pats_manage` on Wardyn's own sign-in app, and uses
-    it to create one organisation-scoped PAT per run in that person's name,
-    scoped to the run's capabilities, at most `pat_max_hours` long (default 8,
-    at most 168). The PAT is held in wardynd memory, crosses the pinned hop to
-    the run's proxy, and is injected there as Basic; it is mask-registered in
-    both its raw and base64 forms and never enters the sandbox. It is replaced
-    on renewal and on widening, revoked on pause and on every end path, and
-    swept after a restart. The token APIs are a denied area in the request
-    classifier (`deniedAreas` in `internal/adoscope/classify.go`), refused to
-    every sandbox whatever credential rides, and a `bearer` row refuses to inject a
-    token whose grant names `vso.pats`, `vso.pats_manage`, `vso.tokens`,
-    `vso.tokenadministration` or `user_impersonation`, so no token able to
-    create PATs ever rides a sandbox's traffic. What this does NOT do, stated
-    as residuals:
+    (#1428) [0.8.2].** On an Azure DevOps row in `minted_pat` mode (the mode the
+    console recommends and starts a new row on; a stored row with no
+    `token_mode` still reads as `bearer`) Wardyn holds each connected person's
+    Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on
+    Wardyn's own sign-in app, and uses it to create one organisation-scoped PAT
+    per run in that person's name, scoped to the run's capabilities, at most
+    `pat_max_hours` long (default 8, at most 168). The PAT is held in wardynd
+    memory, crosses the pinned hop to the run's proxy, and is injected there as
+    Basic; it is mask-registered in its raw, base64 and header forms and never
+    enters the sandbox. Renewal and widening create a newer PAT and leave the
+    older to its own expiry; pause and every end path revoke them all, and a
+    sweep at boot and every five minutes revokes what a crash left. The token
+    APIs are a denied area in the request classifier (`deniedAreas` in
+    `internal/adoscope/classify.go`), refused to every sandbox whatever
+    credential rides, and a `bearer` row refuses to inject a token whose grant
+    names `vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration`
+    or `user_impersonation`, so no token able to create PATs ever rides a
+    sandbox's traffic. What this does NOT do, stated as residuals:
     - **Breadth.** A token that may create PATs can create one naming ANY
       `vso.*` scope the person holds. Wardyn's own create refuses scopes
       outside the row's ceiling, and that binds Wardyn, not an attacker holding
@@ -2378,13 +2380,25 @@ hiding them would repeat the failure mode we are designed to avoid.
       secret yields one token-creating credential per connected person, each
       bounded only by that person's own permissions and the organisation's
       lifespan policy (a year if it is off), until revoked. The bounds are the
-      client secret (minted mode is refused unless the app is confidential, at
-      the write door and at boot), the tenant's "Enforce maximum PAT lifespan"
-      policy (which the admin-triggered organisation-settings check verifies
-      by creating and revoking two canary PATs in the admin's name), and the
-      refresh token's revocability. This is the same breadth as the `bearer`
-      lane (one credential per connected person) with far less depth than the
-      shared PAT it replaces (one broad account, a year, no secret needed).
+      client secret (a `minted_pat` row must name the console's own app and that
+      app must hold a secret: refused when the row is saved, left unusable with
+      a logged error at boot, and refused again at the redemption), the tenant's
+      "Enforce maximum PAT lifespan" policy (which the admin-triggered
+      organisation-settings check verifies by creating and revoking up to two
+      canary PATs in the admin's name), and the refresh token's revocability.
+      This is the same breadth as the `bearer` lane (one credential per
+      connected person) with far less depth than the shared PAT it replaces
+      (one broad account, a year, no secret needed).
+    - **Connecting is signing in.** After admin consent, every console sign-in
+      captures a refresh token able to create tokens, including for people who
+      never launch on Azure DevOps. Capturing only for people who may launch on
+      the row is a follow-up. Offboarding removes it.
+    - **A run can hold several live PATs until each one's `validTo`.** The
+      proxy keeps one header per Azure DevOps host and wardynd cannot reach it,
+      so a token a host may still hold is never revoked early: renewal and
+      widening leave the older PAT in place. Each is no wider than the newest,
+      and all are revoked on pause, at the end, on drift and when the person is
+      offboarded.
     - **"Restrict full-scoped PAT creation" does not bound custom scopes.** It
       requires new PATs to name "a specific, custom-defined set of scopes",
       and that set may name every scope, so the policy is not a bound on a
@@ -2395,10 +2409,17 @@ hiding them would repeat the failure mode we are designed to avoid.
       be. Entra's sign-in logs do not separate a minting redemption from a
       sign-in, since it is the same app. Rotate it and hold it in a secret
       manager; a separate token app is the escape hatch and is not built.
+    - **The `bearer` refusal depends on Entra reporting the granted scopes.**
+      The check reads the token response's optional `scope` field, so an empty
+      one is refused (`scope_unknown`) rather than trusted, and one naming a
+      token permission is refused (`mint_scopes`); both are audited as
+      `ado_bearer.refused_mint_scopes`. A tenant that stops reporting scopes
+      turns every `bearer` run into a refusal, never into a bearer that may
+      create PATs.
     - **A PAT can outlive a failed revoke by at most `pat_max_hours`.** Rows
       are written before first use and swept at boot and every five minutes,
       but with a dead refresh token Wardyn cannot revoke; the PAT expires on
-      its own, the setup check lists it, and a Project Collection
+      its own, `ado_pat.revoke.failed` records it, and a Project Collection
       Administrator can revoke it through the Token Administration API, which
       can take up to an hour. Revocation does not guarantee that a connection
       already open ends.
@@ -2406,16 +2427,24 @@ hiding them would repeat the failure mode we are designed to avoid.
       new PAT with the union of the scopes, so a one-time approval widens the
       run's token for the rest of the run, never past the row's ceiling. The
       approval card says so.
-    - **A pasted PAT (`own_pat`) cannot be revoked by Wardyn.** Only the
-      person can, in Azure DevOps. It is sealed, readable by its owner alone,
-      identity-checked as the person's own, and capped at 90 days; its blast
-      radius is whatever scopes the person gave it.
+    - **A pasted PAT (`own_pat`, and every Azure DevOps Server row) cannot be
+      revoked by Wardyn.** Only the person can, in Azure DevOps. It is sealed,
+      readable by its owner alone, identity-checked as the person's own (the
+      sign-in email against the account's sign-in name or mail; Active
+      Directory does not enforce mail uniqueness, so on Server two accounts can
+      share one), and capped at 90 days on Services (30 on Server); its blast
+      radius is whatever scopes the person gave it. On Server it reaches git
+      only, as `code_read` and `code_write`, the push confined to the run's own
+      branch unless its policy allows any branch.
     - **The upgrade's deletion of the shared credentials is irreversible.**
-      First start deletes `git-pat-<host>`, `ssh-key-<host>` and its
-      known-hosts secret for every Azure DevOps host, in the operator's
-      namespace and in every person's namespace, because a person's own copy
-      is read before the operator's. Typed secrets are write-only, so nothing
-      can be exported first; the sweep is audited per namespace.
+      The first start after migration `0103` deletes `git-pat-<host>`,
+      `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in
+      the operator's namespace and in every person's namespace, because a
+      person's own copy is read before the operator's. It runs once, and a
+      host a GitHub or other non-Azure DevOps row also names is skipped and
+      logged rather than risk another forge's credential. Typed secrets are
+      write-only, so nothing can be exported first; the sweep is audited per
+      namespace as `ado_shared_credential.retire`.
 
     Offboarding a person revokes their live PATs before their stored grant is
     deleted. None of the audit rows for this lane carries a token value.
@@ -2609,9 +2638,11 @@ against the RAW stored `decision_scope`, never `ApprovalScope.Normalize()`d, so
 no approval decided before v0.6 leases anything. The lease does not change the
 unauthenticated-mint-route residual above. Wardyn holds an operator-provisioned
 PAT and can only forward it — no GitLab token-minting integration exists, and
-that is this kind's honesty ceiling. Azure DevOps Services is the exception
-[0.8.2]: its rows no longer take a shared `git_pat`, and Wardyn creates a
-short-lived PAT for each run in the person's name (residual #62).
+that is this kind's honesty ceiling. Azure DevOps is the exception [0.8.2]:
+its rows no longer take a shared `git_pat`, and a run carries the person's own
+credential instead: a PAT Wardyn creates for the run in the person's name
+(`minted_pat`), the person's Entra token (`bearer`), or a PAT the person pasted
+(`own_pat`, and every Azure DevOps Server row) (residual #62).
 
 **The GitHub contrast** the ADO design targets: a granted repo's git traffic is
 rewritten (`insteadOf`) to the proxy-side git broker, which mints the App

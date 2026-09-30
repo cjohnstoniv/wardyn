@@ -884,16 +884,36 @@ a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
 
-On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
-can be set to per-user sign-in instead of one shared PAT — see
-[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the
-row's fields, and what a member sees.
+An Azure DevOps row has no shared credential. Its `workspace_providers` row names how each person
+connects — `token_mode` `minted_pat` (Wardyn creates a short-lived token for each run in the person's
+name), `bearer` (the person's Entra sign-in) or `own_pat` (a token the person adds themselves) — and an
+Azure DevOps Server row is `lanes: ["pat"]` with `credential_source: per_user`, git only. A shared `pat`
+or `ssh` lane, and an empty `lanes` on such a row, is a 400 at both write doors. See
+[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the row's fields, and what a member
+sees.
 
-A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
-Azure DevOps organisation. Both write doors refuse a second enabled one with a 400
-(`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted,
-and enabling it later is refused the same way. A document stored before that rule can still hold
-two; the setup checklist then warns (row `ado_entra_rows`, not blocking) until one is disabled.
+A deployment carries at most **one enabled** row that signs a person in on the `entra` lane
+(`minted_pat` or `bearer`): each person signs in to one Azure DevOps organisation. Both write doors
+refuse a second enabled one with a 400 (`git[N].lanes: git[M] already carries the "entra" lane …`); a
+disabled second row is accepted, and enabling it later is refused the same way. A document stored
+before that rule can still hold two; the setup checklist then warns (row `ado_entra_rows`, not
+blocking) until one is disabled. Rows in `own_pat` mode sign nobody in, so any number of them may be
+enabled at once. A `minted_pat` row must name the console's own OIDC application and the console must
+hold a client secret (`WARDYN_OIDC_CLIENT_SECRET`), or it is refused at write and left unusable at
+boot (an error in the daemon log naming `ado_pat_needs_console_app`).
+
+**The upgrade that retired the shared Azure DevOps credentials (0.8.2).** Migration
+`0103_retire_ado_shared_credentials` rewrites the stored rows (a row left with no per-person lane is
+turned **off**, and the setup checklist warns with `ado_rows_off` until an admin turns it on), and
+`wardynd` deletes the stored shared secrets **once**, at the first start after it:
+`git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in the
+operator's namespace and every person's. The deletion is irreversible and audited per namespace as
+`ado_shared_credential.retire` (`docs/AUDIT-ACTIONS.md`). The `boot_once` row named
+`ado_shared_credential_retire` holds the marker; the sweep runs only while its `done_at` is null. A
+secret store that cannot answer at that first start **refuses boot** rather than leave a retired
+credential in place. A host that a GitHub or other non-Azure DevOps row also names is skipped and
+logged, since the name could be that forge's own credential: remove a shared Azure DevOps credential
+there by hand.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -1074,9 +1094,12 @@ migration `0050`)** are the second and third owned nouns after runs.
   it never erases the operator namespace. A run already going keeps a static key
   (an `api_key` injection is fetched once and cached for the run) until it ends,
   so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
-  **Wardyn cannot revoke anything upstream**: revoke the person's AWS, Anthropic
-  and Azure DevOps sessions, and any gateway token, where they were issued, and
-  disable them in the identity provider. A refused erase (a blank principal
+  **Wardyn cannot revoke anything upstream**, with one exception: it first
+  revokes the live Azure DevOps tokens it created for the person's runs
+  (`ado_pat.revoke`, reason `offboarding`; one it cannot revoke expires by
+  itself). Revoke the person's AWS, Anthropic and Azure DevOps sessions, any
+  Azure DevOps token they pasted in themselves, and any gateway token, where
+  they were issued, and disable them in the identity provider. A refused erase (a blank principal
   `400`, or one naming nobody or several people `422`) is audited
   `credential.erase` `denied`.
   **The erasure horizon, on the default (local Postgres) store, is your backup
@@ -1111,7 +1134,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their
      user drives (the two-halves order above).
   7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps
-     sessions and any gateway token.
+     sessions, a token they pasted in themselves and any gateway token.
 
   One copy outlives all of this in memory: wardynd keeps an Azure DevOps
   sign-in's refresh token in its process-wide masking set, so output quoting it

@@ -353,9 +353,12 @@ not here — revoke it directly.
   or by adding the org path your repository sits under to a row that already
   covers it. Give them the repository's full clone URL: the rows are matched by
   host and by URL prefix, so `https://dev.azure.com/acme` and
-  `https://dev.azure.com/acme-labs` are two different answers. On an Azure DevOps organisation
-  backed by Entra ID you may be asked to sign in with your own identity instead of an admin's shared
-  token — see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) for what that looks like. If
+  `https://dev.azure.com/acme-labs` are two different answers. Azure DevOps has no shared
+  administrator token: a run uses your own credential. On an organisation backed by Entra ID you connect
+  once, when you sign in to Wardyn, and Wardyn creates a short-lived token in your name for each run (or,
+  where your admin chose it, uses your Entra sign-in or a token you add yourself under Settings). On
+  Azure DevOps Server you add your own token under Settings, for git only — see
+  [AZURE-DEVOPS.md](AZURE-DEVOPS.md) for what that looks like. If
   instead the refusal says your work may not come from that provider, ask for a
   `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.

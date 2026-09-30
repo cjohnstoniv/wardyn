@@ -18,11 +18,15 @@ signs in with:
 1. **API permissions → Add a permission → Azure DevOps → Delegated permissions:** add `vso.pats` and
    `vso.pats_manage`. (Keep `openid` and `offline_access`.)
 2. **Grant admin consent** for those permissions. This needs a Cloud Application Administrator, an
-   Application Administrator or a Privileged Role Administrator.
+   Application Administrator, an AI Administrator, a Privileged Role Administrator, or a custom role that can
+   grant permissions to applications.
 3. **If you did not use Azure DevOps sign-in before:** under Authentication, add the Web redirect URI
    `https://<your-wardyn-address>/api/v1/scm/azure-devops/callback`.
-4. **If Wardyn runs without `WARDYN_OIDC_CLIENT_SECRET`:** add a client secret to the app and set it. Per-run
-   tokens require a confidential app.
+4. **If Wardyn runs without `WARDYN_OIDC_CLIENT_SECRET`:** under **Authentication**, make sure Wardyn's
+   console redirect URI is registered under the **Web** platform (not Single-page application or Mobile and
+   desktop). Then add a client secret and set `WARDYN_OIDC_CLIENT_SECRET`. Per-run tokens require a
+   confidential app, and the Azure DevOps row must name this same app. (`AADSTS700025` means the redirect is
+   still on a public-client platform.)
 
 In Azure DevOps (**Organization settings**):
 
@@ -30,11 +34,14 @@ In Azure DevOps (**Organization settings**):
    their group) to its allow list.
 6. Recommended: **Microsoft Entra → Enforce maximum personal access token lifespan: On.**
 
-After upgrading, open **Settings → Workspace providers → Azure DevOps**, choose how people connect, run
-**Check organisation settings**, and turn the row on.
+After upgrading, open **Settings → Workspace providers → Azure DevOps**, choose how people connect, and turn the
+row on. Then sign in to Wardyn (again, if you were signed in already) and run **Check organisation settings**.
 
-**This upgrade deletes the stored shared Azure DevOps tokens and SSH keys** (see Upgrading in `docs/AZURE-DEVOPS.md`). It can't be
-undone. If you might roll back, keep your own copy of the token first.
+A row that stays on Entra sign-in (`token_mode: bearer`, which is what a row with no `token_mode` reads as) needs
+none of the steps above, and its app must **not** hold `vso.pats` or `vso.pats_manage`.
+
+**This upgrade deletes the stored shared Azure DevOps tokens and SSH keys** (see Upgrading in
+`docs/AZURE-DEVOPS.md`). It can't be undone. If you might roll back, keep your own copy of the token first.
 
 ### Added
 
@@ -66,11 +73,49 @@ undone. If you might roll back, keep your own copy of the token first.
   repo reference, and is not counted in `wardyn_run_start_wait_seconds`. No migration and no new
   route. After a daemon restart the last line can stay on the row until the undispatched-run reaper
   collects it, about an hour after the restart; see OPERATIONS.md, "What a starting run is waiting on".
-- **Groundwork for per-person Azure DevOps personal access tokens (#1428).** A provider row's `entra`
-  block now accepts `token_mode: own_pat`, which needs no `tenant_id` or `client_id`, and the lifetimes
-  `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
-  Migration `0102_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
-  with no token value in it.
+- **Azure DevOps: Wardyn creates a short-lived personal access token for each run, in the person's name
+  (#1428).** On a row with `token_mode: minted_pat` (the console's first choice for a new row) each
+  person connects once, when they sign in to Wardyn, which asks for `vso.pats`, `vso.pats_manage` and
+  `offline_access` only. For each run Wardyn creates a token named `Wardyn run <id>` for one
+  organisation, with only the scopes of the run's capabilities, living at most `pat_max_hours` (1 to
+  168, default 8). The proxy adds it as Basic auth; the sandbox never holds it, and its raw and encoded
+  forms are masked. An approval that widens the run's access creates a new token with the combined
+  scopes, and renewal creates the next one inside ten minutes of expiry; neither revokes the older token
+  early, because the proxy keeps one credential per host that Wardyn cannot reach, so a host that holds
+  a token Azure DevOps refuses drops it, asks again and retries once where the request can be sent
+  again (never a push). Pausing a run revokes every token and a resume creates a new one; run end, kill,
+  lease loss, a restart's reconcile, the sandbox sweeps, the idle stop, a changed row and an admin's
+  erase of the person's credentials revoke them too, and a sweep at boot and every five minutes revokes
+  any a crash left. Each token is recorded before use (`ado_run_pats`, migration `0102_ado_run_pats`;
+  never the value), and every step is audited: `ado_pat.mint`, `ado_pat.mint.denied`, `ado_pat.revoke`,
+  `ado_pat.revoke.failed` and `ado_pat.connect`. **Check organisation settings**
+  (`POST /workspace-providers/git/{id}/org-check`, admin only) verifies that the app holds both token
+  permissions, that a token of the row's longest life is accepted, and whether the organisation's
+  maximum token lifespan is on, off or unknown, using two canary tokens (the second lives 364 days)
+  that are revoked at once. The console asks how people connect, draws each person's state in Settings,
+  says what the run's token carries on New Run and asks to connect before launching. **Upgrading:** add
+  `vso.pats` and `vso.pats_manage` (Azure DevOps, delegated) to Wardyn's app registration and grant admin
+  consent; a `minted_pat` row must name Wardyn's own sign-in app, and per-run tokens need
+  `WARDYN_OIDC_CLIENT_SECRET` (a row that breaks either rule is refused when saved and left unusable at
+  boot). See "Before you upgrade: Entra changes" above.
+- **Azure DevOps: each person can add their own personal access token (#1430).** Where Entra sign-in
+  isn't available, a row with `token_mode: own_pat` (which names no tenant or client) or an Azure DevOps
+  Server row takes a token each person creates in Azure DevOps and pastes in
+  (`PUT /api/v1/me/scm/azure-devops/token` with `org`, `token` and `expires_on`; `DELETE` removes
+  Wardyn's copy). Wardyn asks Azure DevOps (`connectionData`) whether it accepts the token for the
+  organisation and whether its account is the caller's sign-in email, and refuses one that belongs to
+  another account (never naming it), one Azure DevOps rejects, and an expiry past the row's `pat_max_days`
+  (1 to 90, default 30). The token is stored sealed in the person's own namespace, added by the proxy as
+  Basic auth, never given to the sandbox, and not used from the start of the day the person entered;
+  Wardyn cannot revoke it. `/me/scm-access` grades it `live`, `expiring` (within 7 days) or
+  `expired_signin` (`cause: token_expired`), a launch with an expired token is refused, and a run whose
+  token expires mid-run is held on the Azure DevOps sign-in request until a new one is added. Audited as
+  `ado_pat.own.store` (a refused token of another account is its failure, `reason: identity_mismatch`)
+  and `ado_pat.own.delete`. **Azure DevOps Server** (`lanes: ["pat"]`, `credential_source: per_user`, no
+  `entra` block, an address naming its collection such as `https://host/Collection`) is git only: its
+  token is matched by the `Account` or `Mail` the server gives its owner, may last up to 30 days, and
+  the run holds `code_read` and `code_write` (a push confined to the run's own branch) through the
+  proxy's git broker, pinned to that collection.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's
@@ -165,6 +210,44 @@ undone. If you might roll back, keep your own copy of the token first.
     upgrade holds the old ids: its next Azure DevOps request is refused (`scope_changed`, drift
     `capability_ceiling`) and it must be relaunched. Update any `WARDYN_DEFAULT_POLICY` file that
     names `read` before upgrading.
+- **Breaking: Azure DevOps stops using shared credentials (#1429).** A shared personal access token or
+  SSH key was one account's standing credential, used for every person's runs. From this release an
+  Azure DevOps provider row carries only per-person lanes, and both write doors (`PUT
+  /workspace-providers` and `PUT /site-config`) refuse the retired ones with a `400`: a `pat` lane that is
+  not `per_user` (and any `pat` lane on a row of `dev.azure.com` or `*.visualstudio.com` addresses alone),
+  any `ssh` lane, and a row with no lanes at all, which used to mean the shared `pat` and `ssh` lanes.
+  Migration `0103_retire_ado_shared_credentials` rewrites every stored Azure DevOps row that named a
+  shared lane or none: `pat` and `ssh` leave its lanes, and a row left with no per-person lane is turned
+  off (`disabled`), keeping its id and addresses: a hosted row becomes an `entra` row in `own_pat` mode
+  with a read-only ceiling, and a Server row becomes a `pat` row with `credential_source: per_user`. A
+  hosted row that already has the `entra` lane keeps it and stays as it was. A turned-off row still claims
+  its hosts, so **clones from those organisations fail with a reason until an admin chooses how people
+  connect and turns the row on**, and `/setup/status` carries a non-blocking `ado_rows_off` warning until
+  they do. Runs read a stored git token for an Azure DevOps host from the run owner's own row only, an
+  `ssh_key` grant for one is dropped with a warning, and the operator can no longer store a secret under
+  a retired shared name (`PUT /secrets` answers `400`). **Upgrading:** at the **first start after the
+  upgrade** (once; never again) Wardyn **deletes, irreversibly**, these stored secrets for every Azure
+  DevOps host it can name (`dev.azure.com`, `ssh.dev.azure.com`, `vs-ssh.visualstudio.com`, every host an
+  Azure DevOps provider row names, and every `*.visualstudio.com` entry in `scm_hosts`), in the
+  operator's namespace and in every person's namespace: `git-pat-<host>`, `ssh-key-<host>` and
+  `known-hosts-<host>`, where `<host>` is the host with each run of characters other than letters and
+  digits turned into one `-` (`git-pat-dev-azure-com`, `ssh-key-ssh-dev-azure-com`,
+  `known-hosts-ssh-dev-azure-com`, `git-pat-tfs-corp-example`). A stored secret is write-only and cannot
+  be exported, so **keep your own copy first if you might roll back.** Each namespace that held any is
+  audited once as `ado_shared_credential.retire`, listing names and no values. **Not deleted:** a
+  shared token, key or known-hosts secret stored under any other name (one a policy's `secret_name`
+  points at, for example), which you remove yourself; and any name whose host a GitHub or other
+  non-Azure DevOps provider row also names (or that slugs to the same name as one, or `github.com`),
+  which is skipped and logged as a warning, since it may be that forge's own credential. Wardyn's own
+  sealed Azure DevOps names and every other forge's secrets are left alone. GitHub and GitLab rows are
+  unchanged.
+- **Azure DevOps: an Entra sign-in row refuses a token that can create tokens (#1428).** A `bearer` row
+  no longer injects an Entra access token whose granted scopes name `vso.pats`, `vso.pats_manage`,
+  `vso.tokens`, `vso.tokenadministration` or `user_impersonation`, or one whose grant reported no scope
+  at all: the run gets no Azure DevOps credential (`mint_scopes` or `scope_unknown`, audited as
+  `ado_bearer.refused_mint_scopes`), and a `bearer` row may not name the app a `minted_pat` row uses.
+  **Upgrading:** an app that serves a `bearer` row must not hold the two token permissions; remove them
+  or move the row to `minted_pat`.
 - **Boot warns about two postures it used to accept in silence, and a laptop's org credential is bound
   to its org URL (#156, #1269, #1004).** With a TLS posture, an `http://` OIDC issuer
   (`WARDYN_OIDC_ISSUER` or `WARDYN_OIDC_INTERNAL_ISSUER`) on a host that is not loopback logs a

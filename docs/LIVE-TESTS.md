@@ -19,7 +19,7 @@ only.
 | LL1 roles | Each identity signs in by redirect through Entra. The admin sees the admin nav, a member does not, and an identity with no Wardyn role is refused | Playwright | `WARDYN_LIVE_ENTRA=1` |
 | LL2 Azure DevOps | A member who signed in once, with the credential captured, launches a run that does an Azure DevOps REST read and `git ls-remote` | Go | `WARDYN_LIVE_ADO=1` |
 | LL2b Azure DevOps, bounded | A run that starts with `code_read` reads, has its push refused and raised for approval, pushes once the harness approves `code_write` for the run, and gets 403 with no request raised for `repo_admin`, which is above the ceiling | Go | `WARDYN_LIVE_ADO_WRITE=1` |
-| LL2c personal access token probe | Whether a third-party app registration can mint a personal access token through the token lifecycle API. It logs a verdict either way and revokes anything it mints | Go | `WARDYN_LIVE_ADO_PAT_PROBE=1` |
+| LL2c personal access token probe | Whether an app registration holding only `vso.pats` and `vso.pats_manage` can, as the signed-in person, create a multi-scope personal access token, use it over Basic and revoke it. It logs a verdict either way and revokes anything it mints | Go | `WARDYN_LIVE_ADO_PAT_PROBE=1` |
 | LL3 Bedrock | One Claude Haiku 4.5 call on Identity Center role credentials in the capped member account, and the reply is checked | Go | `WARDYN_LIVE_BEDROCK=1` |
 | LL3w Bedrock through Wardyn | A governed claude-code run whose model credential is Wardyn's own per-user AWS SSO capture (not the test process's own credentials) completes on the per-user SSO lane, on an allow-listed model, with a minted credential, attributed to the member, reply in the transcript; a second run on the bearer lane pointed at a denied model surfaces an `AccessDeniedException` sentence on `failure_hint` | Go | `WARDYN_LIVE_BEDROCK_WARDYN=1` |
 | LL4 AWS SSO through Entra | The per-user AWS SSO device sign-in URL, taken through the console's own extractor, lands on an Entra sign-in page | Playwright | `WARDYN_LIVE_AWS_SSO=1` |
@@ -171,25 +171,69 @@ If it fails, the message maps the run's exit code to the step that went wrong.
 
 ### Personal access token probe (LL2c)
 
-Wardyn dropped its minted-token mode because a measurement said Azure DevOps
-mints personal access tokens only for Microsoft's own clients. Microsoft's
-documentation says a user-delegated Entra token with `vso.pats` may mint.
-LL2c re-measures it on your tenant.
+LL2c is the measurement Wardyn's per-run tokens (`minted_pat`) rest on: can an application that is not a
+Microsoft client, holding a user-delegated Entra token that carries **only** `vso.pats` and
+`vso.pats_manage`, list, create, use and revoke a personal access token through the token lifecycle
+API? An earlier measurement (2026-09-22) said no, with an app that held `vso.pats` and `vso.tokens`. It
+was a scope problem, not a limit of the API.
 
-It must not use Wardyn's app registration: consent decides a token's scopes,
-so `vso.pats` consented there would ride along in every run's token. Register
-a separate public-client app for it, and delete it afterwards:
+The probe uses a separate, throwaway public-client app registration, not Wardyn's own, so the
+measurement does not depend on Wardyn's sign-in app (which holds these permissions only in `minted_pat`
+mode, and is confidential). Register it, and delete it afterwards. Record first what type the tenant
+publishes for the two scopes (`User` or `Admin`); it decides whether a person's connect needs admin
+consent:
 
 ```bash
-az ad app create --display-name wardyn-pat-probe --public-client-redirect-uris http://localhost \
-  --query appId -o tsv            # -> WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID
+az login --tenant "$TENANT_ID" --allow-no-subscriptions
+ADO=499b84ac-1321-427f-aa17-267ca6975798        # the Azure DevOps API resource
+az ad sp show --id $ADO --query "oauth2PermissionScopes[?starts_with(value,'vso.pat')].{scope:value,id:id,type:type}" -o table
+APP=$(az ad app create --display-name wardyn-pat-probe --public-client-redirect-uris http://localhost \
+  --query appId -o tsv)                          # -> WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID
+az ad sp create --id $APP
+sleep 60                                          # let the service principal replicate before the grant
+az ad app permission add --id $APP --api $ADO --api-permissions <id of vso.pats>=Scope <id of vso.pats_manage>=Scope
+az ad app permission grant --id $APP --api $ADO --scope "vso.pats vso.pats_manage"
 ```
 
-Run it with `-v`. It logs a sign-in URL: open it in a browser, sign in as the
-member and consent. The verdict line reads `MINT WORKS` or `MINT REFUSED`,
-with Azure DevOps' own error. To measure the full-access scope as well, run it
-again with
-`WARDYN_LIVE_ADO_PAT_PROBE_SCOPE=499b84ac-1321-427f-aa17-267ca6975798/user_impersonation`.
+Run it with `-v`, asking for both scopes:
+
+```bash
+WARDYN_LIVE_ADO_PAT_PROBE=1 WARDYN_LIVE_ADO_ORG=<org> \
+WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID=<tenant> WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID=$APP \
+WARDYN_LIVE_ADO_PAT_PROBE_SCOPE="$ADO/vso.pats $ADO/vso.pats_manage" \
+go test -tags live -count=1 -v -timeout 10m -run TestLiveADOPATMintProbe ./internal/testlive/
+```
+
+It logs a sign-in URL: open it in a browser, sign in as the person to measure, and consent. It lists
+the person's tokens, creates one scoped by `WARDYN_LIVE_ADO_PAT_PROBE_PAT_SCOPE` (default
+`vso.code vso.project`, scopes separated by a single space), reads
+`https://dev.azure.com/<org>/_apis/projects` with it over Basic, and revokes it, whatever the read
+answered. The verdict line reads:
+
+- `VERDICT: MINT WORKS; use HTTP <n>; revoked HTTP <n>`: the revoke answered 200 or 204;
+- `VERDICT: MINT WORKS, REVOKE FAILED (HTTP <n>)`, and the test fails: revoke the token by hand under
+  **Personal access tokens**;
+- `VERDICT: MINT REFUSED …`, with Azure DevOps' own error.
+
+If both scopes are refused, run it once more with
+`WARDYN_LIVE_ADO_PAT_PROBE_SCOPE=$ADO/user_impersonation` as the control. A sign-in that fails with
+`AADSTS65001` (consent), `AADSTS650053` (unknown scope), `AADSTS50011` (redirect),
+`AADSTS7000218` (allow public client flows on the app), `AADSTS700016` (app not found) or `AADSTS700025`
+(a secret presented by a public client) is an inconclusive run, not a verdict.
+
+Results, on a test organisation, 2026-09-30. "Restrict personal access token (PAT) creation" was off,
+and the tenant's full-scope and lifespan policies were left as they were:
+
+| Signed in as | Granted scopes | Result |
+|---|---|---|
+| The tenant's administrator account (about 02:25 UTC) | `vso.pats`, `vso.pats_manage` | List 200. `MINT WORKS`. Revoke 204 |
+| The tenant's member account (about 03:33 UTC) | `vso.pats`, `vso.pats_manage` | Created `vso.code vso.project` (a single space between scopes). Basic use `GET _apis/projects` 200. Revoke 204 |
+
+So a token carrying only the two token permissions creates a PAT of any other scope, the PAT works over
+Basic with several scopes, and a member account can do all of it. Not measured by these runs: whether
+the organisation policy "Restrict personal access token (PAT) creation" blocks creation through the API
+and in what shape, and what the lifespan policy answers to a 364-day request. The `type` (`User` or
+`Admin`) the tenant publishes for the two scopes is not recorded here.
 
 ### AWS (LL3, LL4)
 
