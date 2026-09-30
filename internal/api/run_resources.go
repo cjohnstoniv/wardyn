@@ -53,7 +53,7 @@ const runResourcesMaxOutput = 64 << 10
 // key, never a line claiming a zero it isn't in a position to attest to.
 //
 // Tooling kept to awk/grep/cat/ls/wc/sleep/df/du/timeout — present on both
-// coreutils (node:*-bookworm-slim, the shipped agent images) and busybox (the
+// coreutils (node:*-trixie-slim, the shipped agent images) and busybox (the
 // conformance-agent image, and any BYOI image). Deliberately NOT used:
 // `nproc` (absent on some minimal images; /proc/cpuinfo's `processor` lines
 // are the same count via a tool every image has) and `date +%s%N`

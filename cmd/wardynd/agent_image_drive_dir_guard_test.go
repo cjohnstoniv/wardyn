@@ -377,7 +377,7 @@ func TestDockerfileStages_ABuilderStageDoesNotCountForTheRuntimeStage(t *testing
 FROM wardyn/agent-base:local AS tools
 RUN mkdir -p /home/agent/work /home/agent/drive \
  && chown -R agent:agent /home/agent
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 COPY --from=tools /usr/local/bin/thing /usr/local/bin/thing
 RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent
 `
@@ -389,7 +389,7 @@ RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent
 		t.Errorf("builder stage = %+v, want base wardyn/agent-base:local AS tools", stages[0])
 	}
 	final := stages[len(stages)-1]
-	if final.base != "debian:bookworm-slim" {
+	if final.base != "debian:trixie-slim" {
 		t.Errorf("final stage base = %q, want the EXTERNAL base — the last `FROM wardyn/agent-…` is not the final stage", final.base)
 	}
 	if mk := driveMkdirInstruction(final.instrs); mk != "" {
