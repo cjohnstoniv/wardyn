@@ -32,7 +32,7 @@ const (
 )
 
 // ownPATNow is the doors' clock: tokens are dated relative to it.
-var ownPATNow = time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
+var ownPATNow = time.Now().UTC()
 
 // ownPATTestRow is an own-token row on organisation contoso, 30 days at most.
 func ownPATTestRow() types.GitProvider {
