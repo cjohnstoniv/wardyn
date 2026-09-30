@@ -426,21 +426,45 @@ func adoOwnPATGet(ctx context.Context, target, token string) (*http.Response, er
 	return client.Do(req)
 }
 
+// oidcObjectIDCtxKey carries the Entra object id of the verified SSO session
+// ("" on another issuer, or a session written before the field). humanOrAdminAuth
+// publishes it beside the display name, outside withHumanIdentity: the token
+// lane, which shares that function, has none to publish. An identity input for
+// the bind below; nothing logs it, audits it or echoes it.
+type oidcObjectIDCtxKey struct{}
+
+func withOIDCObjectID(ctx context.Context, oid string) context.Context {
+	return context.WithValue(ctx, oidcObjectIDCtxKey{}, oid)
+}
+
+func oidcObjectIDFromContext(ctx context.Context) string {
+	o, _ := ctx.Value(oidcObjectIDCtxKey{}).(string)
+	return o
+}
+
 // adoOwnPATBoundByObjectID reports whether the token's owner is the caller by
 // Entra object id, the identity an email change or a UPN that differs from
-// mail cannot move. The caller's object id is the one their person row holds
-// (a person set up by object id, #1195); with none it answers false without
-// calling Azure DevOps. Azure DevOps' Graph API, asked with the token itself,
-// gives the owner's originId. Any failure — no descriptor, a 401 or 403 (the
-// token lacks vso.graph), a bad body — answers false, and the caller falls
-// back to the Account and Mail compare.
+// mail cannot move. The caller's object id is the one their sign-in carries
+// (oidcObjectIDFromContext), else the one their person row holds (a person set
+// up by object id, #1195); with neither it answers false without calling Azure
+// DevOps. Azure DevOps' Graph API, asked with the token itself, gives the
+// owner's originId. Any failure — no descriptor, a 401 or 403 (the token lacks
+// vso.graph), a bad body — answers false, and the caller falls back to the
+// Account and Mail compare. No object id is logged or audited.
 func (s *Server) adoOwnPATBoundByObjectID(ctx context.Context, subject, org, descriptor, token string) bool {
-	ps, ok := s.cfg.Store.(store.PersonStore)
-	if !ok || descriptor == "" {
+	if descriptor == "" {
 		return false
 	}
-	person, err := ps.GetPerson(ctx, subject)
-	if err != nil || person.ObjectID == "" {
+	var mine []string
+	if oid := oidcObjectIDFromContext(ctx); oid != "" {
+		mine = append(mine, oid)
+	}
+	if ps, ok := s.cfg.Store.(store.PersonStore); ok {
+		if person, err := ps.GetPerson(ctx, subject); err == nil && person.ObjectID != "" {
+			mine = append(mine, person.ObjectID)
+		}
+	}
+	if len(mine) == 0 {
 		return false
 	}
 	resp, err := adoOwnPATGet(ctx, adoOwnPATGraphBase+"/"+url.PathEscape(org)+"/_apis/graph/users/"+url.PathEscape(descriptor)+"?api-version=7.1-preview.1", token)
@@ -459,7 +483,7 @@ func (s *Server) adoOwnPATBoundByObjectID(ctx context.Context, subject, org, des
 		return false
 	}
 	origin := strings.TrimSpace(body.OriginID)
-	return origin != "" && strings.EqualFold(origin, person.ObjectID)
+	return origin != "" && slices.ContainsFunc(mine, func(o string) bool { return strings.EqualFold(origin, o) })
 }
 
 // adoOwnPATMismatch reports why a token's owner is not the caller, or "" when

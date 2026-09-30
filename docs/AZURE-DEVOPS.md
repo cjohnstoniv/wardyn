@@ -476,8 +476,8 @@ removes Wardyn's copy. Before storing it, in this order, Wardyn:
   longer expiry would promise what Azure DevOps will not keep;
 - asks Azure DevOps (`connectionData`, with the token itself) whether it accepts the token for this
   organisation, and refuses one it does not accept: "Azure DevOps didn't accept this token.";
-- checks whose it is. Where Wardyn holds the person's Entra object id (a person set up by object id)
-  and the token carries `vso.graph`, Wardyn asks Azure DevOps' Graph API who owns the token and binds it
+- checks whose it is. Where Wardyn holds the person's Entra object id (from their Entra sign-in, or a
+  person set up by object id; a session from before the upgrade has none) and the token carries `vso.graph`, Wardyn asks Azure DevOps' Graph API who owns the token and binds it
   when the owner's `originId` is that object id, whatever email the account shows. Otherwise, or when
   Graph refuses the token, the account Azure DevOps names for the token must match the email of the
   person's own sign-in. Another account's token is refused, and the other account is never named:

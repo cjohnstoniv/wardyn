@@ -557,3 +557,68 @@ func TestADOOwnPATPut_RepasteClearsTheRefusalStamp(t *testing.T) {
 		t.Errorf("the re-paste kept the stamp: %+v", blob)
 	}
 }
+
+// The bind by object id reads the object id the SIGN-IN carries first: a
+// caller who is no person row still binds when Graph names their object id as
+// the token's owner, a different one is refused, and a session with no object
+// id (a cookie written before the field, or another issuer) is judged by name
+// exactly as before. The object id reaches neither a response nor an audit row.
+func TestADOOwnPATPut_BindsBySessionObjectID(t *testing.T) {
+	const oid = "0a1b2c3d-1111-2222-3333-444455556666"
+	cookieWith := func(sessionOID string) *http.Cookie {
+		payload, err := json.Marshal(oidc.Session{
+			V: oidc.SessionCodecVersion, Sub: capSub, Email: capEmail, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
+			ObjectID: sessionOID, Expiry: time.Now().UTC().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signedSessionCookie(payload)
+	}
+	for _, tc := range []struct {
+		name, sessionOID, account, originID string
+		wantCode, wantGraphs                int
+	}{
+		{"session oid matches, account differs", oid, "someone.else@corp.example", oid, http.StatusOK, 1},
+		{"session oid differs, account differs", oid, "someone.else@corp.example", "ffffffff-0000-0000-0000-000000000000", http.StatusForbidden, 1},
+		{"a cookie with no oid binds by name", "", capEmail, oid, http.StatusOK, 0},
+		{"a cookie with no oid and another account is refused", "", "someone.else@corp.example", oid, http.StatusForbidden, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var graphs int
+			fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/contoso/_apis/connectionData":
+					_, _ = w.Write([]byte(`{"authenticatedUser":{"subjectDescriptor":"aad.abc","properties":{"Account":{"$value":"` + tc.account + `"}}}}`))
+				case "/contoso/_apis/graph/users/aad.abc":
+					graphs++
+					_, _ = w.Write([]byte(`{"originId":"` + tc.originID + `"}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(fake.Close)
+			d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+			prevAPI, prevGraph := adoOwnPATAPIBase, adoOwnPATGraphBase
+			adoOwnPATAPIBase, adoOwnPATGraphBase = fake.URL, fake.URL
+			t.Cleanup(func() { adoOwnPATAPIBase, adoOwnPATGraphBase = prevAPI, prevGraph })
+
+			code, body := d.putAs(t, cookieWith(tc.sessionOID), ownPATOrgKey, ownPATToken, days(10))
+			if code != tc.wantCode {
+				t.Fatalf("PUT = %d %s, want %d", code, body, tc.wantCode)
+			}
+			if graphs != tc.wantGraphs {
+				t.Errorf("graph asked %d times, want %d", graphs, tc.wantGraphs)
+			}
+			seen := []string{body}
+			for _, ev := range d.audit.snapshot() {
+				seen = append(seen, string(ev.Data), ev.Target, ev.Actor)
+			}
+			for _, s := range seen {
+				if strings.Contains(strings.ToLower(s), oid) {
+					t.Errorf("the object id reached a response or audit row: %s", s)
+				}
+			}
+		})
+	}
+}
