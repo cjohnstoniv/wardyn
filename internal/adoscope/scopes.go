@@ -31,12 +31,18 @@ func MintScopes() []string {
 	return []string{ResourceID + "/vso.pats", ResourceID + "/vso.pats_manage"}
 }
 
-// IsTokenScope reports whether s, qualified by the Azure DevOps resource or
-// not, is a scope that lets its holder create personal access tokens. A bearer
+// IsTokenScope reports whether s, qualified by the Azure DevOps resource (its id or its
+// App ID URI) or not, is a scope that lets its holder create personal access tokens. A bearer
 // token whose granted scopes name one must never ride a sandbox's traffic.
 func IsTokenScope(s string) bool {
-	return slices.Contains(neverRequestedScopes, strings.TrimPrefix(strings.ToLower(s), ResourceID+"/"))
+	s = strings.ToLower(s)
+	s = strings.TrimPrefix(strings.TrimPrefix(s, ResourceID+"/"), resourceURI)
+	return slices.Contains(neverRequestedScopes, s)
 }
+
+// resourceURI is the App ID URI form of the same resource, which a scope can
+// also be qualified by. Lower case: IsTokenScope compares lower-cased.
+const resourceURI = "https://app.vssps.visualstudio.com/"
 
 // readScopes are the scopes CapRead needs: every non-empty scope in
 // readAreas, sorted. DERIVED, not hand-written, since a hand-written copy of
