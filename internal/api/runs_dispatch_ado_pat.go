@@ -99,10 +99,17 @@ func adoRunPATValidTo(now time.Time, hours int, endsAt *time.Time) time.Time {
 	return v.UTC().Truncate(time.Second)
 }
 
-// adoRunPATAccess redeems the person's delegated access token that may create
-// and revoke their personal access tokens.
-func (s *Server) adoRunPATAccess(ctx context.Context, cfg ADOEntraConfig, owner string) (ADOEntraAccess, error) {
-	return s.adoEntraAccessFor(ctx, cfg, owner, adoscope.MintScopes(), false)
+// runPATClient is the token API a run's creates and revokes go to: the
+// sign-in configuration's own vssps client, unless a test installed one.
+func (s *Server) runPATClient(cfg ADOEntraConfig) (adoPATClient, error) {
+	if s.adoPATs != nil {
+		return s.adoPATs, nil
+	}
+	client, err := cfg.patClient()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errADOPATUnavailable, err)
+	}
+	return client, nil
 }
 
 // runPATRow is the ado_run_pats row for pat.
@@ -123,8 +130,12 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	caps []adoscope.Capability, validTo time.Time, reason string,
 ) (adoPAT, error) {
 	st, ok := s.cfg.Store.(store.RunPATStore)
-	if s.adoPATs == nil || !ok {
+	if !ok {
 		return adoPAT{}, errADOPATUnavailable
+	}
+	client, err := s.runPATClient(cfg)
+	if err != nil {
+		return adoPAT{}, err
 	}
 	scope, err := adoscope.PATScope(caps)
 	if err != nil {
@@ -143,16 +154,23 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 			runID.String(), "failure", mustJSON(data)))
 		return adoPAT{}, err
 	}
-	access, err := s.adoRunPATAccess(ctx, cfg, sn.OwnerSubject)
+	// mintAccess holds S1: the sign-in is redeemed only with the console's
+	// own secret.
+	access, err := s.mintAccess(ctx, cfg, sn.OwnerSubject)
 	if err != nil {
 		return denied(err)
 	}
-	pat, err := s.adoPATs.Create(ctx, sn.Organisation, access.AccessToken, adoPATRequest{
+	pat, err := client.Create(ctx, sn.Organisation, access.AccessToken, adoPATRequest{
 		DisplayName: "Wardyn run " + runID.String()[:8], Scope: scope, ValidTo: validTo,
 	})
+	var pe *adoPATError
+	if errors.As(err, &pe) && pe.Reason() == reasonADOPATPolicyBlocked {
+		s.noteADOMintBlocked(ctx, cfg.RowID, sn.OwnerSubject, true) // /me/scm-access: blocked by the organisation
+	}
 	if err != nil {
 		return denied(err)
 	}
+	s.noteADOMintBlocked(ctx, cfg.RowID, sn.OwnerSubject, false)
 	// Mask before anything can render it: the value, and both forms it rides in.
 	s.cfg.MaskRegistry.Add(runID, []byte(pat.Token))
 	s.cfg.MaskRegistry.Add(runID, []byte(base64.StdEncoding.EncodeToString([]byte(":"+pat.Token))))
@@ -170,7 +188,7 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	if err != nil {
 		// An unrecorded token is never handed out: nothing could revoke it
 		// after a crash. Revoke it now, best-effort.
-		_ = s.adoPATs.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
+		_ = client.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
 		return adoPAT{}, fmt.Errorf("record the run's personal access token: %w", err)
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", adoPATAuditMint,
@@ -189,6 +207,8 @@ func adoRunPATRefusal(err error) (status int, reason, body string) {
 	switch {
 	case errors.Is(err, errADOPATUnavailable):
 		return http.StatusForbidden, reasonADOPATUnavailable, adoRunPATUnavailable
+	case errors.Is(err, ErrADOMintNeedsSecret):
+		return http.StatusForbidden, ReasonADOPATNeedsConsoleApp, adoPATNeedsConsoleAppRefusal
 	case errors.Is(err, errADOPATRunPaused):
 		return http.StatusConflict, reasonADOPATRunInactive, adoRunPATPaused
 	case errors.Is(err, errADOPATRunEnded):

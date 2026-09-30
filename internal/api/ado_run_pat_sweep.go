@@ -128,7 +128,7 @@ func (s *Server) closeRunPAT(ctx context.Context, st store.RunPATStore, p store.
 // Azure DevOps no longer knows is revoked. transient reports whether trying
 // again later could succeed.
 func (s *Server) deleteRunPAT(ctx context.Context, p store.RunPAT) (transient bool, err error) {
-	if s.adoPATs == nil || s.cfg.ADOEntra == nil {
+	if s.cfg.ADOEntra == nil {
 		return false, errADOPATUnavailable
 	}
 	cfg, found, err := s.cfg.ADOEntra(ctx)
@@ -138,11 +138,15 @@ func (s *Server) deleteRunPAT(ctx context.Context, p store.RunPAT) (transient bo
 	case !found || cfg.RowID != p.ProviderRowID:
 		return false, errors.New("the sign-in this token was created through is no longer configured")
 	}
-	access, err := s.adoRunPATAccess(ctx, cfg, p.Owner)
+	client, err := s.runPATClient(cfg)
 	if err != nil {
-		return ADOEntraClassify(err) == ADOEntraFailureUnavailable, err
+		return false, err
 	}
-	err = s.adoPATs.Revoke(ctx, p.Org, access.AccessToken, p.AuthorizationID.String())
+	access, err := s.mintAccess(ctx, cfg, p.Owner)
+	if err != nil {
+		return ADOEntraClassify(err) == ADOEntraFailureUnavailable && !errors.Is(err, ErrADOMintNeedsSecret), err
+	}
+	err = client.Revoke(ctx, p.Org, access.AccessToken, p.AuthorizationID.String())
 	var pe *adoPATError
 	switch {
 	case err == nil, errors.As(err, &pe) && pe.Status == http.StatusNotFound:

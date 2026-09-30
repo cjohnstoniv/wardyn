@@ -26,6 +26,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/adofake"
+	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
 
 // fakeADOPATs is adoPATClient over a map of what Azure DevOps would hold.
@@ -94,8 +96,23 @@ type adoPATStore struct {
 	*adoCapStore
 	*store.MemRunPATs
 	mu   sync.Mutex
-	runs map[uuid.UUID]types.AgentRun
-	hint string
+	runs  map[uuid.UUID]types.AgentRun
+	hint  string
+	marks []markedRunPAT
+}
+
+// markedRunPAT is one MarkRunPATRevoked call: what closed a row, and with
+// which error kept.
+type markedRunPAT struct {
+	id                uuid.UUID
+	reason, lastError string
+}
+
+func (s *adoPATStore) MarkRunPATRevoked(ctx context.Context, runID, id uuid.UUID, reason, lastError string) (bool, error) {
+	s.mu.Lock()
+	s.marks = append(s.marks, markedRunPAT{id: id, reason: reason, lastError: lastError})
+	s.mu.Unlock()
+	return s.MemRunPATs.MarkRunPATRevoked(ctx, runID, id, reason, lastError)
 }
 
 func (s *adoPATStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
@@ -217,8 +234,11 @@ func newADOPATLane(t *testing.T) *adoPATFixture {
 	t.Helper()
 	f := newADOFixture(t)
 	// The sign-in a minted_pat row captures: the two token permissions only.
+	f.fake.SetClientSecret(mintTestSecret)
 	f.fake.SetConsentedScopes(adoscope.MintScopes()...)
 	f.cfg.Scopes = adoscope.MintScopes()
+	f.cfg.TokenMode = types.ADOTokenModeMintedPAT
+	f.cfg.ClientSecret = mintTestSecret
 	subject := f.fake.Subject()
 	if w := f.capture(t, subject); w.Code != http.StatusFound {
 		t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
@@ -367,7 +387,13 @@ func TestMintedPAT_DispatchRefusals(t *testing.T) {
 		"organisation blocks token creation": {func(fx *adoPATFixture) {
 			fx.pats.createErr = &adoPATError{Status: http.StatusForbidden, PatTokenError: adoPATErrAccessDenied}
 		}, adoRunPATPolicyBlocked},
-		"no token client": {func(fx *adoPATFixture) { fx.srv.adoPATs = nil }, adoRunPATUnavailable},
+		"no token API": {func(fx *adoPATFixture) {
+			fx.srv.adoPATs = nil
+			fx.cfg.PATAPIOverride, fx.cfg.AllowTestEndpoints = "http://127.0.0.1:1", false
+		}, adoRunPATUnavailable},
+		"S1 at the mint: the console has no secret": {func(fx *adoPATFixture) {
+			fx.cfg.ClientSecret = ""
+		}, adoPATNeedsConsoleAppRefusal},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fx := newADOPATLane(t)
@@ -734,4 +760,80 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// The lane end to end through the real token API client (vsspsPATClient)
+// against adofake: dispatch creates the run's token, the resolve hands it out
+// as Basic and Azure DevOps accepts it, and the run's end revokes it there.
+func TestMintedPAT_ThroughTheVsspsClientAgainstAdofake(t *testing.T) {
+	fx := newADOPATLane(t)
+	fx.setClock(time.Now()) // adofake expires tokens on the wall clock
+	row := &fx.st.site.WorkspaceProviders.Git[0]
+	row.Entra.CapabilityCeiling = append(row.Entra.CapabilityCeiling, adoscope.CapProjectRead)
+	row.Entra.DefaultProfile = append(row.Entra.DefaultProfile, adoscope.CapProjectRead)
+	fx.ado, _ = resolveADOEntraRun(fx.st.site, []string{adoTestRepo}, fx.subject)
+	ado := adofake.New()
+	t.Cleanup(ado.Close)
+	ado.AddProject("contoso", "p1", "proj")
+	fx.cfg.PATAPIOverride = ado.URL()
+	fx.srv.adoPATs = nil
+	fx.fake.OnIssue(func(it entrafake.IssuedToken) {
+		scopes := make([]string, 0, len(it.Scopes))
+		for _, sc := range it.Scopes {
+			scopes = append(scopes, adoUnqualified(sc))
+		}
+		ado.RegisterToken(it.AccessToken, scopes...)
+	})
+	if !fx.dispatch(t) {
+		t.Fatalf("dispatch refused: %q", fx.st.hint)
+	}
+	if n := ado.Count(adofake.EndpointPatsCreate); n != 1 {
+		t.Fatalf("token creates at Azure DevOps = %d, want 1", n)
+	}
+	resp := fx.ok(t, "dev.azure.com", nil)
+	projects := func() int {
+		req, _ := http.NewRequest(http.MethodGet, ado.URL()+"/contoso/_apis/projects", nil)
+		req.Header.Set(resp.Header, resp.Value)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	if got := projects(); got != http.StatusOK {
+		t.Fatalf("Azure DevOps answered the run's Basic token %d, want 200", got)
+	}
+	fx.srv.failAndRevoke(context.Background(), fx.run.ID, types.RunRunning, "the run failed")
+	if got := projects(); got != http.StatusUnauthorized {
+		t.Fatalf("after the run's end Azure DevOps answered %d, want 401: the token was not revoked", got)
+	}
+	if live := fx.st.unrevoked(t); len(live) != 0 {
+		t.Fatalf("live rows = %+v, want none", live)
+	}
+}
+
+// A revoke that did not complete keeps its error on the open row; when the
+// sweep later closes that row as expired, the error is kept, not wiped.
+func TestMintedPAT_SweepKeepsAnExpiredRowsLastError(t *testing.T) {
+	ctx := context.Background()
+	fx := newADOPATFixture(t)
+	first := fx.ok(t, "dev.azure.com", nil)
+	fx.pats.revokeErr = &adoPATError{Status: http.StatusBadGateway}
+	fx.srv.revokeRunPATs(ctx, fx.run.ID, adoPATRevokeDrift)
+	live := fx.st.unrevoked(t)
+	if len(live) != 1 || live[0].LastError == "" {
+		t.Fatalf("after a failed revoke: live rows %+v, want the row open with its error", live)
+	}
+	fx.setClock(time.UnixMilli(first.ExpiresAt).Add(time.Minute))
+	if err := fx.srv.sweepRunPATs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fx.st.unrevoked(t)); n != 0 {
+		t.Fatalf("live rows after the sweep = %d, want the expired one closed", n)
+	}
+	last := fx.st.marks[len(fx.st.marks)-1]
+	if last.reason != adoPATRevokeExpired || last.lastError != live[0].LastError {
+		t.Fatalf("closed with %+v, want reason %q keeping error %q", last, adoPATRevokeExpired, live[0].LastError)
+	}
 }
