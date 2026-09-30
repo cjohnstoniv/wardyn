@@ -87,7 +87,7 @@ ok()  { echo "ok: $*"; }
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
-# managed-settings-drift (#1279, #1395) went green on hosted run <PENDING> and is now in
+# managed-settings-drift (#1279, #1395) went green on hosted run 36786358051 and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 # ci-mode-dogfood-model-fake (#681, T-21): new, never run on a hosted runner — a
 # kind cluster plus the fake's image and a model-provider seed, any of which can

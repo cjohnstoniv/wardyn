@@ -200,7 +200,7 @@ jobs:
           # 36393687863 — its first two runs each caught a real environment
           # gap, see nightly.yml's own comment on the job) and joined the same
           # way. managed-settings-drift (#1395) joined after a green hosted
-          # run (run <PENDING>).
+          # run (run 36786358051).
           watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
           # Exact commit match ONLY (R2-1) — no ancestor walk, no branch
           # filter. nightly.yml runs on schedule against whatever commit is
