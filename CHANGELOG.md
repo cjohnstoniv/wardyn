@@ -213,6 +213,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   model-access problem, that line is its failure hint, quoted as the agent's output, with a pointer
   to the recording. Only a reader who can open the recording (the run's owner or a super admin)
   sees the quoted line; a security admin sees the hint without it.
+- **The "Attach from your terminal" card on the run page scrolls.** Its lanes were taller than the
+  card's tile and the bottom was cut off with no way to reach it; the card body now scrolls inside
+  the tile.
 
 ## [0.8.1] — 2026-09-29
 
