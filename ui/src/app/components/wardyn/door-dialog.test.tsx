@@ -239,6 +239,16 @@ describe("the key and token door (case c)", () => {
     );
   });
 
+  it("the notice's key-service line names Key Vault on an Azure key service", async () => {
+    renderDoor(providerStatus([{ provider: anthropicKey }], { credential_storage: "key_service_key_vault" }), {
+      for: { provider: anthropicKey.id },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Encrypted in Wardyn's database. The key that unlocks it is held in Key Vault and never leaves it.",
+    );
+  });
+
   it("the notice reads local by default (no credential_storage on an older daemon)", async () => {
     renderDoor(providerStatus([{ provider: anthropicKey }]), { for: { provider: anthropicKey.id } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));

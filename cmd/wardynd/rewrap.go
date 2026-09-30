@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,8 +54,8 @@ func rewrapMode(f *bootFlags) error {
 		if id, err = age.ParseX25519Identity(ageKey); err != nil {
 			return fmt.Errorf("parse the age identity (WARDYN_AGE_KEY): %w", err)
 		}
-	case strings.TrimSpace(*f.vault.kek) != kekTransit:
-		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q", kekTransit)
+	case !slices.Contains([]string{kekTransit, kekAzure}, strings.TrimSpace(*f.vault.kek)):
+		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q or %q", kekTransit, kekAzure)
 	}
 	platform, err := readPlatformKey(*f.platformKeyFile, ageKey)
 	if err != nil {
@@ -64,7 +65,7 @@ func rewrapMode(f *bootFlags) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// The key service (buildKEK) keeps its Vault token alive until ctx ends.
-	svc, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
+	svc, writes, err := buildKEK(ctx, f.vault, f.azure, *f.trustedCAFile)
 	if err != nil {
 		return err
 	}

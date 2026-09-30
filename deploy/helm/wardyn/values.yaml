@@ -299,11 +299,14 @@ secretStore:
     purge: auto
 
 # The key that wraps each stored credential's data key when secretStore.backend
-# is pg (docs/operations/secrets-and-keys.md "Key service: Vault Transit"). "local": derived
-# from the age key. "transit": your Vault's Transit key, over the
-# secretStore.vault client (addr, auth, role and TLS above); the key never
-# leaves Vault, and once `wardynd -rewrap` reports no row left under the age
-# key, the age key can be removed.
+# is pg (docs/operations/secrets-and-keys.md "Key service: Vault Transit" and
+# "Key service: Azure Key Vault"). "local": derived from the age key.
+# "transit": your Vault's Transit key, over the secretStore.vault client (addr,
+# auth, role and TLS above). "azurekv": two Azure Key Vault keys, as the
+# secretStore.azure identity (auth, tenantId, clientId, authorityHost above;
+# vaultUrl is not needed). Either way the key never leaves the service, and
+# once `wardynd -rewrap` reports no row left under the age key, the age key
+# can be removed. One key service at a time.
 kek:
   provider: local
   transit:
@@ -312,6 +315,16 @@ kek:
     # with provider local it only reads the rows sealed under it (the way
     # back with `wardynd -rewrap`).
     key: ""
+  azurekv:
+    # Versionless id (https://<vault>.vault.azure.net/keys/<name>) of the RSA
+    # 3072/4096 key, key_ops wrapKey and unwrapKey only, not exportable, that
+    # wraps data keys. Required with provider azurekv; set with provider local
+    # it only reads the rows sealed under it (the way back with
+    # `wardynd -rewrap`).
+    key: ""
+    # Versionless id of the EC P-256 key, sign and verify only, in the same
+    # vault, that signs every wrap. Set together with key.
+    signingKey: ""
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
