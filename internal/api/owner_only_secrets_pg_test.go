@@ -186,14 +186,19 @@ func TestOwnerOnlyGrant_NeverServesTheOperatorRow(t *testing.T) {
 		}
 	})
 
-	t.Run("an Azure DevOps host with no flag is owner_only anyway: never the operator's row (#1429)", func(t *testing.T) {
-		before := len(e.mintRows(t))
-		w := e.mint(t, "alice", mustCreate(t, e.createRun(t, "alice", adoUnflagged)))
-		if w.Code == http.StatusOK || strings.Contains(w.Body.String(), "operator-pat") {
-			t.Fatalf("mint = %d %s, want a refusal and never the operator's shared value", w.Code, w.Body.String())
+	t.Run("an Azure DevOps host with no flag is owner_only anyway: refused at launch, never the operator's row (#1429)", func(t *testing.T) {
+		w := e.createRun(t, "alice", adoUnflagged)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `secret \"x\" is owner_only`) {
+			t.Fatalf("create = %d %s, want 422 naming the owner_only grant, as if the policy had said so", w.Code, w.Body.String())
 		}
-		if got := len(e.mintRows(t)); got != before {
-			t.Errorf("mint rows grew by %d, want none", got-before)
+	})
+
+	t.Run("an Azure DevOps host with no flag and an own row: mints the own row only", func(t *testing.T) {
+		if err := e.sec.For("frank").Put(ctx, "x", []byte("frank-pat")); err != nil {
+			t.Fatal(err)
+		}
+		if got := mintedToken(t, e.mint(t, "frank", mustCreate(t, e.createRun(t, "frank", adoUnflagged)))); got != "frank-pat" {
+			t.Fatalf("minted %q, want frank's own row", got)
 		}
 	})
 
@@ -233,8 +238,10 @@ func TestOwnerOnlyGrant_NeverServesTheOperatorRow(t *testing.T) {
 // member with one mints from it. An owner_only grant is stored the same way.
 func TestStoredPolicy_SecretRefsResolvePerRunOwner(t *testing.T) {
 	e := newOwnerOnlyPG(t)
-	shared := e.storePolicy(t, "per-person", "nowhere", false)
-	e.storePolicy(t, "per-person-strict", "nowhere", true)
+	// A non-Azure DevOps host: an Azure DevOps grant is owner_only whatever the
+	// policy says (#1429) and is covered in TestOwnerOnlyGrant_NeverServesTheOperatorRow.
+	shared := e.storePolicyFor(t, "per-person", "git.corp.example", "nowhere", false)
+	e.storePolicyFor(t, "per-person-strict", "git.corp.example", "nowhere", true)
 
 	if w := e.createRun(t, "dave", shared); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `unknown secret \"nowhere\"`) {
 		t.Fatalf("member without a row: create = %d %s, want 422 at run-create", w.Code, w.Body.String())

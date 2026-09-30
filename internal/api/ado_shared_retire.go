@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -100,6 +101,11 @@ func adoGrantHost(sc types.SiteConfig, host string) bool {
 	if slug == "" || otherForgeSlugs(sc)[slug] {
 		return false
 	}
+	// Every Services address is Azure DevOps, named by a row or not: an
+	// organisation's <org>.visualstudio.com host is not known from any row.
+	if adoServicesHost(host) {
+		return true
+	}
 	return slices.ContainsFunc(adoSharedHosts(sc), func(h string) bool { return slugHost(h) == slug })
 }
 
@@ -110,18 +116,28 @@ const adoSSHGrantDropped = "ssh_key grant dropped: Azure DevOps has no SSH lane,
 const retiredADOSharedNameRefusal = "%s is a retired shared Azure DevOps credential name: Azure DevOps credentials are per person now, so the operator can no longer store one"
 
 // retiredADOSharedName reports whether name is one of the retired shared Azure
-// DevOps credential names. A read error answers false: the boot sweep, not this
-// door, is what removes them.
-func (s *Server) retiredADOSharedName(ctx context.Context, name string) bool {
-	if s.cfg.Store == nil {
-		return false
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return false
+// DevOps credential names: one the boot sweep lists, or, for any organisation's
+// <org>.visualstudio.com address no row names, the same three prefixes on a slug
+// ending in -visualstudio-com. ok is false when the site config cannot be read.
+func (s *Server) retiredADOSharedName(ctx context.Context, name string) (retired, ok bool) {
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		var err error
+		if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
+			return false, false
+		}
 	}
 	names, _ := RetiredADOSharedSecretNames(sc)
-	return slices.Contains(names, name)
+	if slices.Contains(names, name) {
+		return true, true
+	}
+	for _, prefix := range []string{"git-pat-", "ssh-key-", "known-hosts-"} {
+		if slug, cut := strings.CutPrefix(name, prefix); cut && strings.HasSuffix(slug, "-visualstudio-com") &&
+			!otherForgeSlugs(sc)[slug] {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 // refuseRetiredADOSharedName writes the 400 for an operator's write of a
@@ -129,7 +145,17 @@ func (s *Server) retiredADOSharedName(ctx context.Context, name string) bool {
 // namespace is not refused: their own token is theirs, and a grant for an Azure
 // DevOps host reads only their own row (owner_only, forced in persistRunGrants).
 func (s *Server) refuseRetiredADOSharedName(w http.ResponseWriter, r *http.Request, name, owner string) bool {
-	if owner != "" || !s.retiredADOSharedName(r.Context(), name) {
+	if owner != "" {
+		return false
+	}
+	retired, ok := s.retiredADOSharedName(r.Context(), name)
+	if !ok {
+		// Fail closed: with the provider rows unreadable the name cannot be
+		// judged, and a value stored now is never swept (the sweep runs once).
+		writeServerError(w, r, "get site config", errors.New("cannot tell whether the name is a retired shared Azure DevOps credential"))
+		return true
+	}
+	if !retired {
 		return false
 	}
 	writeErrorReason(w, http.StatusBadRequest, reasonSecretNameReserved, fmt.Sprintf(retiredADOSharedNameRefusal, name))

@@ -154,7 +154,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   row still claims its hosts, so **clones from those organisations fail with a reason until an admin
   chooses how people connect and turns the row on**, and `/setup/status` carries a non-blocking
   `ado_rows_off` warning until they do. Runs read a stored git token for an Azure DevOps host from the
-  run owner's own row only (`owner_only` is forced on the grant), an `ssh_key` grant for one is dropped
+  run owner's own row only (`owner_only` is forced on the grant, and a person with no token of their own is refused at launch, for every `dev.azure.com` and `*.visualstudio.com` address whether or not a row names it), an `ssh_key` grant for one is dropped
   with a warning, the operator can no longer store a secret under a retired shared name (`PUT
   /secrets` answers `400`), and a `pat` lane is never used for a `dev.azure.com` or
   `*.visualstudio.com` address, even on a row that also names a Server one. **Upgrading:** at the

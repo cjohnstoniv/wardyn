@@ -111,6 +111,16 @@ func TestADOGitGrantsReadOnlyTheOwnersRowAndDropSSH(t *testing.T) {
 		}
 	})
 
+	t.Run("an organisation's visualstudio.com host that no row or scm_hosts entry names (#1440 R2-1)", func(t *testing.T) {
+		srv, st := grantCapFixture(t, types.SiteConfig{})
+		if _, ok := persistOne(t, srv, pat("acme.visualstudio.com")); !ok || len(st.grants) != 1 {
+			t.Fatalf("persistRunGrants ok=%v grants=%d", ok, len(st.grants))
+		}
+		if !st.grants[0].Spec.OwnerOnly {
+			t.Error("git_pat grant for acme.visualstudio.com is not owner_only: the operator's shared token could serve it")
+		}
+	})
+
 	t.Run("ssh_key for an Azure DevOps host is dropped", func(t *testing.T) {
 		srv, st := grantCapFixture(t, types.SiteConfig{})
 		gw, ok := persistOne(t, srv, types.GrantSpec{Kind: types.GrantSSHKey,
@@ -196,6 +206,9 @@ func TestRetiredADOSharedNamesRefusedAtPutSecret(t *testing.T) {
 		{"its known-hosts", "known-hosts-dev-azure-com", false, http.StatusBadRequest},
 		{"a Server row's token", "git-pat-tfs-corp-example", false, http.StatusBadRequest},
 		{"a host a GitHub row also names", "git-pat-git-corp-example", false, http.StatusNoContent},
+		{"an organisation's visualstudio.com token no row names (R2-1)", "git-pat-acme-visualstudio-com", false, http.StatusBadRequest},
+		{"its known-hosts", "known-hosts-acme-visualstudio-com", false, http.StatusBadRequest},
+		{"a person's own copy of it", "git-pat-acme-visualstudio-com", true, http.StatusNoContent},
 		{"github.com", "git-pat-github-com", false, http.StatusNoContent},
 		{"another name", "npm-token", false, http.StatusNoContent},
 		{"a person's own token under the same name", "git-pat-dev-azure-com", true, http.StatusNoContent},
@@ -262,5 +275,21 @@ func TestSeveralOwnPATRowsCanBeEnabled(t *testing.T) {
 				t.Errorf("ado_entra_rows warned = %v for %s; it counts only rows that sign in", warned, tc.name)
 			}
 		})
+	}
+}
+
+// TestRetiredADOSharedNamePutFailsClosed (#1440 R2-4): with the site config
+// unreadable the operator's write of a retired-looking name is refused (5xx,
+// nothing stored) rather than let through, since the sweep runs only once.
+func TestRetiredADOSharedNamePutFailsClosed(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	_, srv := secretsRBACServer(t, sec)
+	srv.cfg.Store = &fakeSiteConfigStore{getErr: context.DeadlineExceeded}
+	w := do(t, srv, http.MethodPut, "/api/v1/secrets/git-pat-dev-azure-com", adminToken, `{"value":"operator-typed-token-value"}`)
+	if w.Code < 500 {
+		t.Fatalf("PUT with an unreadable site config = %d, want a 5xx; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := sec.m["git-pat-dev-azure-com"]; ok {
+		t.Error("the value was stored anyway")
 	}
 }

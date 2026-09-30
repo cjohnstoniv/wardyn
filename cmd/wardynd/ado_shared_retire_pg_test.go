@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -317,5 +318,49 @@ func TestPG_ADOSharedSweepIsOneShot(t *testing.T) {
 	var done bool
 	if err := pool.QueryRow(t.Context(), `SELECT done_at IS NOT NULL FROM boot_once WHERE name = 'ado_shared_credential_retire'`).Scan(&done); err != nil || !done {
 		t.Fatalf("marker done = %v, %v; want it set by the first start", done, err)
+	}
+}
+
+// holdersFails is a store whose Holders errors, as an unreachable store would.
+type holdersFails struct{ secretstore.Store }
+
+func (holdersFails) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, errors.New("store unreachable")
+}
+
+// TestPG_ADOSharedSweepMarkerSetOnlyAfterTheDelete (#1440 R2-2): a first sweep
+// that fails leaves the marker pending, so the next start tries again; the
+// marker is set only once the delete has succeeded.
+func TestPG_ADOSharedSweepMarkerSetOnlyAfterTheDelete(t *testing.T) {
+	pool := envelopeDB(t)
+	st, err := buildSecretStore(t.Context(), pool, mustAgeIdentity(t).String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.For("").Put(t.Context(), "git-pat-dev-azure-com", []byte("synthetic-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		t.Helper()
+		var p bool
+		if err := pool.QueryRow(t.Context(), `SELECT done_at IS NULL FROM boot_once WHERE name = 'ado_shared_credential_retire'`).Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if err := sweepRetiredADOSharedCredentials(t.Context(), pool, holdersFails{st}, types.SiteConfig{}, &capturingRecorder{}); err == nil {
+		t.Fatal("a sweep over a store that cannot answer returned nil, want it to refuse boot")
+	}
+	if !pending() {
+		t.Fatal("the marker was set although the sweep failed: the shared credentials would never be retried")
+	}
+	if err := sweepRetiredADOSharedCredentials(t.Context(), pool, st, types.SiteConfig{}, &capturingRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	if pending() {
+		t.Error("the marker is still pending after a successful sweep")
+	}
+	if holders, _ := st.Holders(t.Context(), []string{"git-pat-dev-azure-com"}); len(holders) != 0 {
+		t.Errorf("the credential survived the retried sweep: %v", holders)
 	}
 }
