@@ -1261,8 +1261,9 @@ func runCmdWithTimeout(t *testing.T, configure func(root *cobra.Command)) (strin
 	select {
 	case err := <-done:
 		return out.String(), err
-	case <-time.After(5 * time.Second):
-		t.Fatal("command did not return within 5s — follow loop likely never exited")
+	// Long enough that a loaded runner is not read as a hang (#1453).
+	case <-time.After(30 * time.Second):
+		t.Fatal("command did not return within 30s — follow loop likely never exited")
 		return "", nil
 	}
 }

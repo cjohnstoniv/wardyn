@@ -248,8 +248,9 @@ test.describe("no door for anyone but the owner, or in the Admin view (state 3)"
     await expect(block.getByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("ann@acme.example"))).toBeVisible();
     await expect(block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toHaveCount(0);
     await block.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER }).click();
-    await expect(page).toHaveURL(/^[^?]*\/runs\/[^/]+$/);
-    await expect(page).not.toHaveURL(/\/admin\//);
+    // The SSO session flips its view on the server and then reloads, which a
+    // busy runner can take past the 5s default to finish.
+    await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 15_000 });
     await expect(page.getByTestId("run-failure-block").getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeVisible();
   });
 });
