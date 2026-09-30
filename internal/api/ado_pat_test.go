@@ -397,6 +397,14 @@ func TestOrgCheck_D6(t *testing.T) {
 			t.Errorf("row %q: %d %q, want the unknown row's %d %q", id, w.Code, w.Body.String(), unknown.Code, unknown.Body.String())
 		}
 	}
+	// The deployment's sign-in row itself, when it is a bearer row.
+	bearerCfg := mf.cfg
+	bearerCfg.RowID, bearerCfg.TokenMode, bearerCfg.ClientSecret = "ado-bearer", types.ADOTokenModeBearer, mintTestSecret
+	mf.srv.cfg.ADOEntra = func(context.Context) (ADOEntraConfig, bool, error) { return bearerCfg, true, nil }
+	if w := mf.orgCheck(t, "ado-bearer"); w.Code != unknown.Code || w.Body.String() != unknown.Body.String() {
+		t.Errorf("the bearer sign-in row: %d %q, want the unknown row's answer", w.Code, w.Body.String())
+	}
+	mf.srv.cfg.ADOEntra = func(context.Context) (ADOEntraConfig, bool, error) { return mf.cfg, true, nil }
 	// A minted row that is not the deployment's sign-in row, likewise.
 	other := mf.mintedRow()
 	other.ID = "ado-minted-2"
