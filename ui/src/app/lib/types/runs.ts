@@ -348,11 +348,17 @@ export interface AdminRestartResponse {
 // answers them for every viewer, so the page never infers "removed" from a
 // setup status that lists just what the viewer's own agents use. Absent when
 // the run names no provider or the server could not tell.
+//
+// created_via_name (#1234) is the display name of AgentRun.created_via, the
+// portal that launched the run, resolved at read time (a revoked portal keeps
+// its name) so a member who cannot read the portal registry still sees it.
+// Absent for a self-launched run, or a portal the registry no longer holds.
 export interface RunDetail extends AgentRun {
   ui_apps?: UIApp[];
   user_type_name?: string;
   model_provider_name?: string;
   model_provider_deleted?: boolean;
+  created_via_name?: string;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's

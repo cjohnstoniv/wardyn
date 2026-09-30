@@ -155,6 +155,10 @@ type bootFlags struct {
 	oidcClientSecret *string
 	oidcRedirectURL  *string
 	oidcEmailDomains *string
+	// oidcRequireEmailVerified feeds oidc.Config.RequireEmailVerified
+	// (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false): the email_verified
+	// gate without a domain allowlist.
+	oidcRequireEmailVerified *bool
 	// oidcExtraScopes feeds oidc.Config.ExtraScopes (WARDYN_OIDC_EXTRA_SCOPES,
 	// CSV, default empty): scopes appended to the fixed authorization request,
 	// validated against the provider's discovery scopes_supported at boot.
@@ -253,6 +257,9 @@ type bootFlags struct {
 	reconcile      *bool
 	// rewrap is `wardynd -rewrap` (rewrap.go): no env pair, like the above.
 	rewrap *bool
+	// rewrapRetirePlatformKey is `wardynd -rewrap -rewrap-retire-platform-key`:
+	// no env pair either.
+	rewrapRetirePlatformKey *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -403,8 +410,9 @@ func parseBootFlags() *bootFlags {
 		oidcClientID:     flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
 		oidcClientSecret: flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
 		oidcRedirectURL:  flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
-		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
+		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
+		oidcRequireEmailVerified: flagBool("oidc-require-email-verified", "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED", false, "refuse a sign-in whose id_token has no email_verified claim or has email_verified=false, without needing -oidc-email-domains; an absent claim counts as unverified, so an IdP that never sends it (Entra) locks every human out (default false)"),
+		oidcOperatorEmails:       flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
@@ -497,9 +505,13 @@ func parseBootFlags() *bootFlags {
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
 		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
-		vault:          registerVaultFlags(),
-		hostCapacity:   registerHostCapacityFlags(),
-		azure:          registerAzureFlags(),
+		rewrapRetirePlatformKey: flag.Bool("rewrap-retire-platform-key", false, "with -rewrap only: move the signing, session and SSH host keys off the "+
+			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
+			"WARDYN_KEK=transit key or the local key, then exit. Afterwards unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM. "+
+			"See docs/operations/secrets-and-keys.md (default false)"),
+		vault:        registerVaultFlags(),
+		hostCapacity: registerHostCapacityFlags(),
+		azure:        registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),

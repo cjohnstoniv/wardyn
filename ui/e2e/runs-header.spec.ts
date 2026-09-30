@@ -71,6 +71,48 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
   });
 });
 
+// #1234 — the thin "Launched via" line under the bar. The seeded backend has
+// no registered portal, so created_via (and the name the server resolves for
+// it, proven in internal/api/run_created_via_name_test.go) is spliced onto the
+// real GET response, the same route.fetch()+patch+refulfill technique as above.
+test.describe("Run header — Launched via (#1234)", () => {
+  async function openFixture2(page: Page, splice?: (json: Record<string, unknown>) => void): Promise<void> {
+    await openRuns(page);
+    if (splice) {
+      await page.route("**/api/v1/runs/*", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json.task === "e2e fixture 2") splice(json);
+        await route.fulfill({ response, json });
+      });
+    }
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    await expect(page.getByTestId("run-summary-header")).toBeVisible();
+  }
+
+  test("a portal-launched run says which portal, under the bar", async ({ page }) => {
+    await openFixture2(page, (json) => {
+      json.created_via = "0b1c2d3e-0000-4000-8000-000000000001";
+      json.created_via_name = "Acme Support Portal";
+    });
+    await expect(page.getByTestId("run-launched-via")).toHaveText("Launched via Acme Support Portal");
+  });
+
+  test("a portal the server could not name falls back to 'a portal'", async ({ page }) => {
+    await openFixture2(page, (json) => {
+      json.created_via = "0b1c2d3e-0000-4000-8000-000000000001";
+    });
+    await expect(page.getByTestId("run-launched-via")).toHaveText("Launched via a portal");
+  });
+
+  test("a self-launched run has no line", async ({ page }) => {
+    await openFixture2(page);
+    await expect(page.getByTestId("run-launched-via")).toHaveCount(0);
+  });
+});
+
 // F1-F4 (verifier correction over the raised finding's own fix): `:164-172`
 // documents the failure-hint chip as "the only place a FAILED run says why —
 // stays visible at every width" — so the fix is NEVER hide it (min-w-0 shrink

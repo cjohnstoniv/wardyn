@@ -255,7 +255,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrSandboxGone) {
-			writeRunInspectGone(w, run)
+			writeRunInspectSandboxGone(w, run)
 			return
 		}
 		s.auditRunFilesFailure(r, id, err)
@@ -297,7 +297,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	// return and the deferred Close above is the only thing that frees it.
 	out, capped, readErr := readExecStdout(sess.Stdout, runFilesMaxOutput)
 	if errors.Is(readErr, runner.ErrSandboxGone) {
-		writeRunInspectGone(w, run)
+		writeRunInspectSandboxGone(w, run)
 		return
 	}
 	inspectedPath, files, truncated := parseRunFiles(bytes.NewReader(out))
@@ -323,7 +323,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		code, werr := sess.Wait()
 		if werr != nil {
 			if errors.Is(werr, runner.ErrSandboxGone) {
-				writeRunInspectGone(w, run)
+				writeRunInspectSandboxGone(w, run)
 				return
 			}
 			// The exec itself broke (deadline, connection loss) — distinct from

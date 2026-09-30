@@ -600,6 +600,45 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and
   platform policy can sit with fewer people.
 - The second role needs Kubernetes auth.
 
+**Two Transit keys (with `WARDYN_KEK=transit`).** The same split applies to the
+key service. Create a second key of type `aes256-gcm96` on the same Transit
+mount, give `wardyn-platform` `update` on `transit/encrypt/<platform-key>` and
+`transit/decrypt/<platform-key>` only, and leave that key out of
+`wardyn-credentials`' policy (Wardyn cannot check that). Set
+`WARDYN_VAULT_TRANSIT_KEY_PLATFORM=<platform-key>` (chart:
+`secretStore.vault.transitKeyPlatform`).
+
+- wardynd wraps the boot keys (signing, session and SSH host keys) under it,
+  reached as the platform role, and every credential under
+  `WARDYN_VAULT_TRANSIT_KEY` as the credentials role. A leaked credentials
+  token then unwraps no boot key.
+- Boot refuses when it is set with `WARDYN_KEK=local`, without
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or with the two roles or
+  the two keys the same. With it set, a boot key still under another key is refused at boot.
+- Run `wardynd -rewrap` with the same settings to move the boot keys onto it;
+  it touches no credential row and a second run changes nothing. The run prints
+  the key version to raise `min_decryption_version` to, as for the credential
+  key.
+
+**Retiring the platform key.** To go back to one key (or, with
+`WARDYN_KEK=local`, to the local key), do not just unset it: the boot keys are
+still under it, and boot refuses by naming the key they are under. Run
+`wardynd -rewrap -rewrap-retire-platform-key` with the settings you boot with
+today, `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` and `WARDYN_VAULT_ROLE_PLATFORM`
+included.
+
+- It reads the boot keys under the platform key, and only reads them there.
+  It writes them under the key a write uses today: the credential key with
+  `WARDYN_KEK=transit`, the local key with `WARDYN_KEK=local`.
+- With `WARDYN_KEK=local`, keep `WARDYN_VAULT_TRANSIT_KEY` set, as for any move
+  back to local. `-rewrap` moves every row, credentials included.
+- It refuses without `-rewrap`, and without `WARDYN_VAULT_TRANSIT_KEY_PLATFORM`.
+  It is the only place the platform key is read with `WARDYN_KEK=local`; a start
+  keeps every refusal above.
+- A second run moves nothing. When it finishes, unset
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` and restart every replica: a start that
+  still names the platform key refuses the boot keys it no longer finds there.
+
 **Policies that name paths instead of `platform/*`.** The platform role's
 policy must cover the whole of `<prefix>/platform/*`, not the boot keys it
 listed when you wrote it. A laptop enrolled into an organisation control
