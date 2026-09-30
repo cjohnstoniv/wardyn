@@ -138,6 +138,9 @@ type Server struct {
 
 	tokens map[string]*tokenGrant // token -> grant
 
+	identities map[string]string // token -> the account connectionData names as its owner
+	mails      map[string]string // token -> the owner's Mail property, as Azure DevOps Server names it
+
 	requests  []RecordedRequest
 	overrides map[Endpoint]override
 	counts    map[Endpoint]int
@@ -175,6 +178,8 @@ func New() *Server {
 func NewHandler() (*Server, http.Handler) {
 	s := &Server{
 		tokens:       map[string]*tokenGrant{},
+		identities:   map[string]string{},
+		mails:        map[string]string{},
 		overrides:    map[Endpoint]override{},
 		counts:       map[Endpoint]int{},
 		repos:        map[string]string{},
@@ -214,6 +219,26 @@ func (s *Server) RegisterToken(token string, scopes ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tokens[token] = &tokenGrant{scopes: setOf(scopes)}
+}
+
+// RegisterIdentity makes connectionData name account as the owner of token —
+// the sign-in name Azure DevOps shows under authenticatedUser's Account
+// property. A token with no identity registered is answered with the fake's
+// canned user, which carries no Account at all.
+func (s *Server) RegisterIdentity(token, account string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.identities[token] = account
+}
+
+// RegisterServerIdentity makes connectionData answer as Azure DevOps Server
+// does for a directory account: Account is the DOMAIN\user sign-in name and
+// Mail the account's email address.
+func (s *Server) RegisterServerIdentity(token, account, mail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.identities[token] = account
+	s.mails[token] = mail
 }
 
 // SetOverride forces every subsequent call to endpoint to answer status/body

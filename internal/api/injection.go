@@ -116,8 +116,9 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// PER-PERSON AZURE DEVOPS (the fourth sentinel): the run owner's own
 	// captured Entra sign-in, redeemed for an access token, pinned to the
 	// dispatch-time snapshot and the organisation's own hosts — see
-	// resolveADOInjection.
-	if s.resolveADOInjection(w, r, claims, minted, grantID) {
+	// resolveADOInjection. A token_mode own_pat grant is the owner's own pasted
+	// token instead, and its arm answers first (resolveADOOwnPATInjection).
+	if s.resolveADOOwnPATInjection(w, r, claims, minted, grantID) || s.resolveADOInjection(w, r, claims, minted, grantID) {
 		return
 	}
 

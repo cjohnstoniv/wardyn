@@ -279,6 +279,7 @@ func (s *Server) routes() chi.Router {
 			// Deliberately this one small, localized block rather than a mount of
 			// its own.
 			r.Get("/me/scm-access", s.handleGetSCMAccess) // #386, scmaccess.go: /me/ssh-keys' self-service shape
+			s.mountADOOwnPATRoutes(r)                     // ado_own_pat.go: the caller's own Azure DevOps token
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)

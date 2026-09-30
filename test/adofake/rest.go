@@ -258,13 +258,27 @@ func (s *Server) handleWorkItemsPatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "rev": rev, "fields": fields})
 }
 
-// handleConnectionData answers GET .../_apis/connectionData with a canned
-// identity — enough for a caller to prove IT authenticated, without modelling
-// the real service's full identity graph.
+// handleConnectionData answers GET .../_apis/connectionData with the caller's
+// identity: the account RegisterIdentity (or RegisterServerIdentity, with its
+// Mail) gave the presented token, as the real service spells a sign-in name
+// (authenticatedUser.properties.Account), or a canned user with no Account for
+// a token that has none.
 func (s *Server) handleConnectionData(w http.ResponseWriter, r *http.Request) {
+	user := map[string]any{"id": "00000000-0000-0000-0000-000000000001", "providerDisplayName": "adofake"}
+	s.mu.Lock()
+	account, ok := s.identities[tokenFromRequest(r)]
+	mail, hasMail := s.mails[tokenFromRequest(r)]
+	s.mu.Unlock()
+	if ok {
+		props := map[string]any{"Account": map[string]any{"$type": "System.String", "$value": account}}
+		if hasMail {
+			props["Mail"] = map[string]any{"$type": "System.String", "$value": mail}
+		}
+		user = map[string]any{"id": "00000000-0000-0000-0000-0000000000a1", "providerDisplayName": account, "properties": props}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"authenticatedUser": map[string]any{"id": "00000000-0000-0000-0000-000000000001", "providerDisplayName": "adofake"},
-		"authorizedUser":    map[string]any{"id": "00000000-0000-0000-0000-000000000001", "providerDisplayName": "adofake"},
+		"authenticatedUser": user,
+		"authorizedUser":    user,
 		"instanceId":        "00000000-0000-0000-0000-000000000002",
 		"deploymentId":      "00000000-0000-0000-0000-000000000003",
 		"deploymentType":    "hosted",

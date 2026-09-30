@@ -73,7 +73,6 @@ func TestADOPATVocabulary(t *testing.T) {
 		"audit org check":      {adoPATAuditOrgCheck, "ado_pat.org_check"},
 		"audit own store":      {adoPATAuditOwnStore, "ado_pat.own.store"},
 		"audit own delete":     {adoPATAuditOwnDelete, "ado_pat.own.delete"},
-		"audit own mismatch":   {adoPATAuditOwnMismatch, "ado_pat.own.identity_mismatch"},
 		"audit bearer refused": {adoBearerAuditRefusedMint, "ado_bearer.refused_mint_scopes"},
 		"audit retire":         {adoSharedCredentialRetire, "ado_shared_credential.retire"},
 		"reason policy":        {reasonADOPATPolicyBlocked, "ado_pat_policy_blocked"},

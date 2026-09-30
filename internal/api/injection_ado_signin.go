@@ -54,6 +54,11 @@ const (
 	adoSignInClosedRefusal   = "This run's Azure DevOps sign-in request is closed: %s"
 	adoSignInTooManyRefusal  = "This run has already asked for an Azure DevOps sign-in too many times; no further sign-in will be requested for it"
 	adoSignInRaiseFailedBody = "Could not raise the Azure DevOps sign-in request"
+	// adoOwnPATRaisedNote is adoSignInRaisedNote for a person's own token that
+	// reached the expiry they entered (reasonADOOwnPATExpired): a new token,
+	// not a sign-in, answers it.
+	adoOwnPATRaisedNote = "This run's Azure DevOps token has reached the expiry its owner entered — the request is held " +
+		"until its owner adds a new token, and resumes when they do; nothing is substituted"
 )
 
 // adoSignInScopeBody is the requested_scope of a sign-in request (kind
@@ -147,8 +152,14 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 		return fail(http.StatusForbidden, reasonSigninHoldsExhausted, adoSignInTooManyRefusal,
 			map[string]any{"owner": sn.OwnerSubject})
 	}
+	// The body says what answers the request; the console reads it. Matching
+	// (adoSignInScope) stays on lane and mechanism, so both causes resolve alike.
+	reason, detail := adoSignInReason, adoSignInRaisedNote
+	if class == ADOEntraFailure(reasonADOOwnPATExpired) {
+		reason, detail = reasonADOOwnPATExpired, adoOwnPATRaisedNote
+	}
 	raw, _ := json.Marshal(adoSignInScopeBody{
-		Lane: adoApprovalLane, Mechanism: adoSignInMechanism, Reason: adoSignInReason,
+		Lane: adoApprovalLane, Mechanism: adoSignInMechanism, Reason: reason,
 		Owner: sn.OwnerSubject, ProviderID: sn.ProviderRowID,
 	})
 	raisedID := uuid.New()
@@ -167,7 +178,7 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 			"credential.reauth.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
 				"approval_id": created.ID, "owner": sn.OwnerSubject, "provider": adoApprovalLane,
-				"reason": string(class), "detail": adoSignInRaisedNote,
+				"reason": string(class), "detail": detail,
 			})))
 		// No metrics.credentialReauthRecorded here (#971):
 		// wardyn_credential_reauth_total's HELP promises the AWS SSO re-auth

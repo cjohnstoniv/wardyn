@@ -135,7 +135,6 @@ const (
 	adoPATAuditOrgCheck       = "ado_pat.org_check"
 	adoPATAuditOwnStore       = "ado_pat.own.store"
 	adoPATAuditOwnDelete      = "ado_pat.own.delete"
-	adoPATAuditOwnMismatch    = "ado_pat.own.identity_mismatch"
 	adoBearerAuditRefusedMint = "ado_bearer.refused_mint_scopes"
 	adoSharedCredentialRetire = "ado_shared_credential.retire"
 )
