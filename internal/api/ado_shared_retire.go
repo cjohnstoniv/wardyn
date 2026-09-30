@@ -165,6 +165,7 @@ func (s *Server) requireADOOwnToken(ctx context.Context, subject string, rows []
 			return 0, nil
 		}
 	}
+	//lint:ignore ST1005 the text is the sentence the refused person reads, as the dispatch refusal's is
 	return http.StatusUnprocessableEntity, errors.New(adoOwnPATNotAddedRefusal)
 }
 
