@@ -74,6 +74,7 @@ var kernelDoors = map[string][]string{
 	"setupModelProviders":            {"capAgent"},
 	"setupModelProviderState":        {"capModelProvider"},
 	"computeSCMAccessRowsFor":        {"capWorkspaceProvider"},
+	"adoOwnPATRowFor":                {"capWorkspaceProvider"}, // PUT/DELETE /me/scm/azure-devops/token (D-6)
 	"userVisibleOperatorSecretNames": {"capSecret"},
 	// #1267: GET /workspaces' and GET /workspaces/{id}'s per-row
 	// available_to_you, over the two values that apply to EVERY run type —

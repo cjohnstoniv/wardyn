@@ -31,6 +31,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `pat_max_hours` (1 to 168) and `pat_max_days` (1 to 90); runs do not use any of these yet.
   Migration `0102_ado_run_pats` adds the `ado_run_pats` table that records each token a run holds,
   with no token value in it.
+- **Azure DevOps: each person can add their own personal access token on a `token_mode: own_pat`
+  row (#1430).** `PUT /api/v1/me/scm/azure-devops/token` takes `org` (the row's address as
+  `/me/scm-access` names it), `token` and `expires_on` (a date). Wardyn asks Azure DevOps
+  (`connectionData`) whether it accepts the token for the row's organisation and whether its account
+  is the caller's sign-in email, and refuses a token that belongs to another account (without naming
+  it), one Azure DevOps rejects, and an expiry past the row's `pat_max_days`. The token is stored
+  only in the person's own namespace under a sealed name, added by the proxy as Basic auth and never
+  given to the sandbox, and not used from the start of the day the person entered; `DELETE` removes
+  Wardyn's copy only, since Wardyn cannot revoke it. `/me/scm-access` grades these rows `live`,
+  `expiring` (within 7 days) or `expired_signin` (`cause: token_expired`) with `expires_on`,
+  `max_days` and the scopes to create in Azure DevOps' own wording. A launch with an expired token is
+  refused, and a run whose token expires mid-run is held on the Azure DevOps sign-in request until a
+  new token is added. Audited as `ado_pat.own.store`, `ado_pat.own.identity_mismatch` and
+  `ado_pat.own.delete`. The console's dialog and Azure DevOps Server rows follow separately.
 - **On Entra ID, a person who has never signed in is set up by tenant and object id (#1195).**
   Entra's `sub` is per app registration and unknown before a first sign-in, so `POST /people` on an
   Entra issuer also takes `tenant_id` and `object_id` (GUIDs) in place of `principal`; the person's

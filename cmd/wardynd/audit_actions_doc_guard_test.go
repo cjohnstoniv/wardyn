@@ -598,6 +598,10 @@ var auditActionGrammarAllow = map[string]bool{
 	// records a conversion that already happened, once, at upgrade.
 	"workspace.llm_cred.migrated":  true,
 	"model_provider.not_converted": true,
+	// The own-token door's refusal of another account's token (#1430), under
+	// the name the Azure DevOps token contract (#1428, adoPATAuditOwnMismatch)
+	// fixed before this grammar saw it.
+	"ado_pat.own.identity_mismatch": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.
