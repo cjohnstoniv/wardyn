@@ -136,6 +136,7 @@ func TestRevive_RechecksOwnerGrants(t *testing.T) {
 						value, named = ws.String(), ws.String()
 					case capModelProvider:
 						f.st.run.ModelProviderID = value
+						f.st.site.ModelProviders = providerBlock(keyProvider(value, "claude-code")) // the provider itself still exists
 					case capPolicy:
 						f.st.run.PolicyID = &policyID
 					}
@@ -414,7 +415,9 @@ func TestRevive_RefusesChangedOrDeletedProvider(t *testing.T) {
 // that provider was deleted since launch (or deleted and re-created under the
 // same id, a new UID) or turned off, by a revive, an admin restart and an
 // extension alike, instead of a proxy whose first model call the injection
-// sink refuses. With the provider as it was, all three go ahead.
+// sink refuses. With the provider as it was, all three go ahead. A run
+// dispatched before 0.8.2 carries no provider-authored grant (its legacy key is
+// stripped on revive), yet its deleted provider still refuses it up front.
 func TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider(t *testing.T) {
 	const uid = "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70"
 	provider := func(edit func(*types.ModelProvider)) []types.ModelProvider {
@@ -426,19 +429,26 @@ func TestReviveRestartExtend_RefuseAGoneOrDisabledModelProvider(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		providers []types.ModelProvider
+		legacy    bool // the grant was authored before 0.8.2: no snapshot, the operator's key
 		reason    string
 	}{
-		{"present and on", provider(func(*types.ModelProvider) {}), ""},
-		{"deleted", nil, "model_provider_gone"},
-		{"re-created under the same id", provider(func(p *types.ModelProvider) { p.UID = "5d0c1f7a-2b9e-4e3d-8a6c-1f4b7e9d2c30" }), "model_provider_gone"},
-		{"turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), "model_provider_disabled"},
+		{"present and on", provider(func(*types.ModelProvider) {}), false, ""},
+		{"deleted", nil, false, "model_provider_gone"},
+		{"re-created under the same id", provider(func(p *types.ModelProvider) { p.UID = "5d0c1f7a-2b9e-4e3d-8a6c-1f4b7e9d2c30" }), false, "model_provider_gone"},
+		{"turned off", provider(func(p *types.ModelProvider) { p.Disabled = true }), false, "model_provider_disabled"},
+		{"pre-0.8.2 run, present", provider(func(*types.ModelProvider) {}), true, ""},
+		{"pre-0.8.2 run, deleted", nil, true, "model_provider_gone"},
 	} {
 		arrange := func(st *leaseStore) {
 			st.run.ModelProviderID = "anthropic"
 			st.site.ModelProviders = &types.ModelProviders{Providers: tc.providers}
-			st.credGrants = []types.CredentialGrant{{ID: uuid.New(), RunID: st.run.ID, Spec: types.GrantSpec{Kind: types.GrantAPIKey,
-				Scope: mustJSON(map[string]any{"host": "api.anthropic.com", "secret_name": providerSecretName(uid, providerKeyPart),
-					"snapshot": providerGrantSnapshot{ProviderUID: uid, OwnerSubject: st.run.CreatedBy}})}}}
+			scope := map[string]any{"host": "api.anthropic.com", "secret_name": providerSecretName(uid, providerKeyPart),
+				"snapshot": providerGrantSnapshot{ProviderUID: uid, OwnerSubject: st.run.CreatedBy}}
+			if tc.legacy {
+				scope = map[string]any{"host": "api.anthropic.com", "secret_name": "anthropic-api-key"}
+			}
+			st.credGrants = []types.CredentialGrant{{ID: uuid.New(), RunID: st.run.ID,
+				Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(scope)}}}
 		}
 		// reviveArrange also has the stored proxy config inject that grant, from
 		// the owner's own key, as dispatch left it.

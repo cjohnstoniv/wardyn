@@ -7,14 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -232,13 +235,13 @@ func TestModelAccessFailureHint_QuotesTheAgentsOwnLine(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFaultRun(t, tc.exit)
-			store, err := recording.NewFSStore(t.TempDir())
+			rs, err := recording.NewFSStore(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
-			f.srv.cfg.RecordingStore = store
+			f.srv.cfg.RecordingStore = rs
 			if tc.cast != nil {
-				if err := store.SaveCast(context.Background(), f.id.String(), strings.NewReader(tc.cast(t))); err != nil {
+				if err := rs.SaveCast(context.Background(), f.id.String(), strings.NewReader(tc.cast(t))); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -246,6 +249,93 @@ func TestModelAccessFailureHint_QuotesTheAgentsOwnLine(t *testing.T) {
 			f.end(map[bool]types.RunState{true: types.RunCompleted, false: types.RunFailed}[tc.exit == 0])
 			if h := f.hint(); !tc.want(h) {
 				t.Fatalf("hint = %q", h)
+			}
+		})
+	}
+}
+
+// failWithCast ends f's run FAILED with cast as its recording.
+func (f *faultRun) failWithCast(cast string) {
+	f.t.Helper()
+	rs, err := recording.NewFSStore(f.t.TempDir())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.srv.cfg.RecordingStore = rs
+	if err := rs.SaveCast(context.Background(), f.id.String(), strings.NewReader(cast)); err != nil {
+		f.t.Fatal(err)
+	}
+	f.end(types.RunFailed)
+}
+
+// TestModelAccessFailureHint_StripsControlsAndKeepsItsQuote: every C0 and C1
+// control is gone from the quoted line, 8-bit CSI and OSC sequences with
+// their parameters, and a double quote inside the line cannot close the
+// hint's quote early; a full stop follows the quote.
+func TestModelAccessFailureHint_StripsControlsAndKeepsItsQuote(t *testing.T) {
+	ev, _ := json.Marshal([]any{0.5, "o", "\a\u009b31m\u009d0;title\u009cYou don't have access to the model \"claude\" " +
+		"with the specified model ID.\a\x1b\u0085\r\n"})
+	f := newFaultRun(t, 1)
+	f.failWithCast(`{"version":2,"width":80,"height":24}` + "\n" + string(ev) + "\n")
+	want := `The agent's last output before it exited reported a model-access problem: ` +
+		`"You don't have access to the model 'claude' with the specified model ID.". ` +
+		`Wardyn did not see the model's answer itself; the run's recording has the full output.`
+	if h := f.hint(); h != want {
+		t.Fatalf("hint = %q\nwant   %q", h, want)
+	}
+}
+
+// readFaultStore is faultHintStore with the reads GET /runs and GET /runs/{id}
+// make: the run listed, for its owner or for everyone, and no audit trail.
+type readFaultStore struct{ faultHintStore }
+
+func (s readFaultStore) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
+	r, err := s.GetRun(ctx, s.run.ID)
+	return []types.AgentRun{r}, err
+}
+
+func (s readFaultStore) ListRunsPageByCreator(ctx context.Context, by string, _ store.Page) ([]types.AgentRun, error) {
+	runs, err := s.ListRuns(ctx)
+	return slices.DeleteFunc(runs, func(r types.AgentRun) bool { return r.CreatedBy != by }), err
+}
+
+func (readFaultStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
+// TestModelAccessFailureHint_QuoteOnlyForRecordingReaders: the quoted line is
+// recording content, so a run read serves it only to a reader who could open
+// the recording (the owner, a super admin). A security admin reads the run but
+// not its recording, and is served the hint without the quote.
+func TestModelAccessFailureHint_QuoteOnlyForRecordingReaders(t *testing.T) {
+	f := newFaultRun(t, 1)
+	f.srv.cfg.OIDC = &oidc.Authenticator{}
+	f.srv.cfg.Store = readFaultStore{f.st}
+	f.srv.router = f.srv.routes()
+	f.failWithCast(modelAccessCast(t))
+	const quote = "you may not have access to it"
+	for _, tc := range []struct {
+		name   string
+		cookie *http.Cookie
+		quoted bool
+	}{
+		{"owner", ssoSession(t, "t@example.com", "t@example.com", oidc.RoleUser), true},
+		{"super admin", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), true},
+		{"security admin", ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, path := range []string{"/api/v1/runs/" + f.id.String(), "/api/v1/runs"} {
+				w := doSSO(t, f.srv, http.MethodGet, path, tc.cookie, "")
+				if w.Code != http.StatusOK {
+					t.Fatalf("GET %s = %d %s", path, w.Code, w.Body.String())
+				}
+				body := w.Body.String()
+				if got := strings.Contains(body, quote); got != tc.quoted {
+					t.Errorf("GET %s quotes the recording: %v, want %v; body=%s", path, got, tc.quoted, body)
+				}
+				if !tc.quoted && !strings.Contains(body, modelAccessHintUnquoted) {
+					t.Errorf("GET %s: want the unquoted hint; body=%s", path, body)
+				}
 			}
 		})
 	}

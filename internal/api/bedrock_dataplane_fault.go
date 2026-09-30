@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"strings"
 	"unicode"
@@ -107,19 +108,30 @@ func projectFailureHint(runs []types.AgentRun) {
 // have access to it", and Bedrock's own AccessDeniedException sentence.
 var modelAccessPhrases = []string{"may not have access to it", "don't have access to the model"}
 
-// DRAFT (M2 canon pending) — the run's failure_hint quoting the agent's own
-// model-access line from its recording.
-const modelAccessHintFormat = "The agent's last output before it exited reported a model-access problem: \"%s\" " +
-	"Wardyn did not see the model's answer itself; the run's recording has the full output."
+// modelAccessHintFormat is the run's failure_hint quoting the agent's own
+// model-access line from its recording (the line's own double quotes become
+// single ones, so it cannot close the quote early).
+const modelAccessHintFormat = modelAccessHintLead + ": \"%s\". " + modelAccessHintTail
+
+// DRAFT (M2 canon pending) — the same hint for a reader who cannot open the
+// recording (projectModelAccessQuote): no recording text.
+const modelAccessHintUnquoted = modelAccessHintLead + ". " + modelAccessHintTail
+
+const (
+	modelAccessHintLead = "The agent's last output before it exited reported a model-access problem"
+	modelAccessHintTail = "Wardyn did not see the model's answer itself; the run's recording has the full output."
+)
 
 const (
 	modelAccessTailBytes = 16 << 10 // the end of the cast, where an exiting agent's last words are
 	modelAccessLineMax   = 300      // the quoted line is cut to this many runes
 )
 
-// terminalEscape matches the CSI, OSC and two-byte escape sequences a PTY
-// capture carries around the text.
-var terminalEscape = regexp.MustCompile("\x1b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\x07\x1b]*(?:\x07|\x1b\\\\)|[@-Z\\\\-_])")
+// terminalEscape matches the CSI and OSC sequences a PTY capture carries
+// around the text, in their ESC and 8-bit (0x9B, 0x9D) forms, the other
+// two-byte ESC sequences, and every other C0 or C1 control but tab, newline
+// and carriage return (BEL, a bare ESC).
+var terminalEscape = regexp.MustCompile(`(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)|\x1b[@-Z\\-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]`)
 
 // noteModelAccessFromRecording writes the hint above for a run that just
 // failed with none. Best-effort, like every other hint write.
@@ -140,7 +152,8 @@ func (s *Server) noteModelAccessFromRecording(ctx context.Context, runID uuid.UU
 	if line == "" {
 		return
 	}
-	if err := setter.SetRunFailureHint(ctx, runID, fmt.Sprintf(modelAccessHintFormat, line)); err != nil {
+	hint := fmt.Sprintf(modelAccessHintFormat, strings.ReplaceAll(line, `"`, "'"))
+	if err := setter.SetRunFailureHint(ctx, runID, hint); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not persist model-access hint",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
@@ -176,4 +189,21 @@ func lastModelAccessLine(cast []byte) string {
 		}
 	}
 	return ""
+}
+
+// projectModelAccessQuote keeps the recording's quoted line in a failure hint
+// only for a reader who could open that recording, as recordingAuthorizer
+// decides it: the run's owner or an operator. A security admin reads every
+// run but not its recording (a privacy surface), so they are served the hint
+// without the quote.
+func (s *Server) projectModelAccessQuote(r *http.Request, runs []types.AgentRun) {
+	if s.isOperator(r.Context()) {
+		return
+	}
+	reader := principalFromRequest(r)
+	for i := range runs {
+		if runs[i].CreatedBy != reader && strings.HasPrefix(runs[i].FailureHint, modelAccessHintLead+": ") {
+			runs[i].FailureHint = modelAccessHintUnquoted
+		}
+	}
 }
