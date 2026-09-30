@@ -352,6 +352,55 @@ func TestPG_ModelProviderConversion_RosterSeveralProviders(t *testing.T) {
 	})
 }
 
+// TestPG_ModelProviderConversion_RosterOnModelProviders: an install already on
+// model providers (0.8.x) had its roster lane bypassed by that block, so a
+// roster row whose mechanism finds no provider of its kind, or two of it, makes
+// no provider and writes no audit row: the row keeps its own default_provider,
+// or none.
+func TestPG_ModelProviderConversion_RosterOnModelProviders(t *testing.T) {
+	provider := func(id, kind string) string {
+		return `{"id": "` + id + `", "uid": "u-` + id + `", "kind": "` + kind + `", "harnesses": [{"harness": "claude-code"}]}`
+	}
+	row := func(mech, def string) string {
+		if def != "" {
+			def = `, "default_provider": "` + def + `"`
+		}
+		return `"agent_providers": {"agents": [{"id": "claude-code", "mechanism": "` + mech + `", "credential_source": "shared"` + def + `}]}`
+	}
+	for _, tc := range []struct {
+		name, config string
+		wantIDs      []string
+		wantDefault  string
+	}{
+		{"admin default of another kind",
+			`{` + row("anthropic_subscription", "corp-key") + `, "model_providers": {"providers": [` + provider("corp-key", "anthropic_api_key") + `]}}`,
+			[]string{"corp-key"}, "corp-key"},
+		{"no default, no provider of the kind",
+			`{` + row("anthropic_subscription", "") + `, "model_providers": {"providers": [` + provider("corp-key", "anthropic_api_key") + `]}}`,
+			[]string{"corp-key"}, ""},
+		{"two of the kind and an admin default",
+			`{` + row("anthropic_api_key", "corp-key") + `, "model_providers": {"providers": [` + provider("corp-key", "anthropic_api_key") + `,` + provider("team-key", "anthropic_api_key") + `]}}`,
+			[]string{"corp-key", "team-key"}, "corp-key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, audit, _ := convertSiteConfig(t, tc.config, nil)
+			if got := doc.providerIDs(); !slices.Equal(got, tc.wantIDs) {
+				t.Errorf("providers = %v, want %v (nothing made from the roster row)", got, tc.wantIDs)
+			}
+			want := map[string]any{"id": "claude-code"}
+			if tc.wantDefault != "" {
+				want["default_provider"] = tc.wantDefault
+			}
+			if got := doc.roster(t, "claude-code"); !mapsEqual(got, want) {
+				t.Errorf("roster = %v, want %v", got, want)
+			}
+			if len(audit) != 0 {
+				t.Errorf("audit rows = %+v, want none", audit)
+			}
+		})
+	}
+}
+
 // TestPG_ModelProviderConversion_OrgWideNotConverted: the daemon's own AWS
 // environment, the host ~/.aws mount and the operator's host ~/.claude are one
 // credential serving everyone, so none becomes a provider; each is audited.

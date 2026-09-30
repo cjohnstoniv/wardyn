@@ -28,7 +28,10 @@
 --   2. Each roster row's lane joins a provider of exactly that kind: the one
 --      provider of the kind, or the DefaultFor:agent_runs one of several. With
 --      none, a provider "<agent>-<mechanism>" is created; with several and no
---      default, that new provider is created turned off. A bedrock_sso row's
+--      default, that new provider is created turned off. An install that
+--      already has a model-provider block had its roster lanes bypassed by it,
+--      so nothing is created there: the row keeps its own default_provider, or
+--      none. A bedrock_sso row's
 --      sso_start_url / sso_account_id / sso_role_name fill the provider's
 --      bedrock sign-in setup. bedrock_env and bedrock_aws_dir (the daemon's own
 --      AWS environment and the host ~/.aws mount) are org-wide credentials and
@@ -192,7 +195,7 @@ BEGIN
                     reason := 'several_providers_no_default';
                 END IF;
             END IF;
-            IF target IS NULL THEN
+            IF target IS NULL AND jsonb_array_length(existing) = 0 THEN
                 -- A new provider for this lane; a Bedrock one borrows the region
                 -- and model of the one Bedrock provider converted above, if any.
                 pid := left(regexp_replace(lower(agent || '-' || mech), '[^a-z0-9._-]', '-', 'g'), 64);
@@ -239,7 +242,7 @@ BEGIN
                             'sso_account_id', NULLIF(r ->> 'sso_account_id', ''),
                             'sso_role_name', NULLIF(r ->> 'sso_role_name', ''))));
                 END IF;
-            ELSIF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(existing) p, jsonb_array_elements(p -> 'harnesses') h
+            ELSIF target IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(existing) p, jsonb_array_elements(p -> 'harnesses') h
                               WHERE p ->> 'id' = target AND h ->> 'harness' = agent) THEN
                 INSERT INTO audit_events (id, actor_type, actor, action, target, outcome, data)
                 VALUES (gen_random_uuid(), 'system', 'wardyn/migration', 'model_provider.not_converted', agent, 'success',
