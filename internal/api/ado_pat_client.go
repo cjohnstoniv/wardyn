@@ -184,6 +184,13 @@ func (s *Server) mintAccess(ctx context.Context, cfg ADOEntraConfig, owner strin
 // refusal is recorded on owner's stored sign-in so /me/scm-access can say the
 // organisation blocks them; the next token created clears it.
 func (s *Server) mintADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, org string, req adoPATRequest) (adoPAT, error) {
+	return s.createADOPAT(ctx, cfg, owner, org, req, true)
+}
+
+// createADOPAT is mintADOPAT; noteBlocked=false leaves owner's blocked state
+// alone on a policy refusal — the organisation check's canaries are a probe of
+// the organisation, not the admin's own tokens.
+func (s *Server) createADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, org string, req adoPATRequest, noteBlocked bool) (adoPAT, error) {
 	access, err := s.mintAccess(ctx, cfg, owner)
 	if err != nil {
 		return adoPAT{}, err
@@ -196,7 +203,9 @@ func (s *Server) mintADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, org 
 	var perr *adoPATError
 	switch {
 	case errors.As(err, &perr) && perr.Reason() == reasonADOPATPolicyBlocked:
-		s.noteADOMintBlocked(ctx, cfg.RowID, owner, true)
+		if noteBlocked {
+			s.noteADOMintBlocked(ctx, cfg.RowID, owner, true)
+		}
 	case err == nil:
 		// Masked process-wide under its own name until it expires: one name per
 		// token, so registering it never retires the sign-in's own values.
