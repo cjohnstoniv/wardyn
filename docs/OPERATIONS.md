@@ -104,9 +104,10 @@ else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none.
 - **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
   does not turn this off; a deployment that disables recordings so terminals are
   not kept should decide on this one too.
-- **On Kubernetes** the tail is read from the agent container's log, which
-  needs `get` on `pods/log` in the runs namespace. Without it the log read is
-  refused, wardynd logs a warning, and the run's tail stays empty.
+- **On Kubernetes** the tail is read from the agent container's log: `get` on
+  `pods/log` in the runs namespace, which the chart's k8s-runner Role grants. A
+  Role you write yourself (`k8s.rbac.create=false`) needs it too; without it the
+  log read is refused, wardynd logs a warning, and the run's tail stays empty.
 
 ### Audit fallback recovery
 

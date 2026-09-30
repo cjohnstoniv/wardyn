@@ -54,8 +54,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   else a command prints is kept like a log line (OPERATIONS.md "Exec run output"). A tail is dropped
   `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output (`410`,
   `run_output_expired`) and on a wardynd restart; `WARDYN_EXEC_OUTPUT_TAIL=off` keeps none. On
-  Kubernetes the tail is read from the agent container's log, which needs `get` on `pods/log`. The
-  Go SDK reads it with `RunOutput`.
+  Kubernetes the tail is read from the agent container's log, so the chart's k8s-runner Role now
+  grants `get` on `pods/log` (a Role you write yourself needs it too). The Go SDK reads it with
+  `RunOutput`.
 
 ### Changed
 

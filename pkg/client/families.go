@@ -390,7 +390,8 @@ type RunOutput struct {
 	Output string `json:"output"`
 	// Truncated: Output does not start at the run's first byte.
 	Truncated bool `json:"truncated"`
-	// Complete: the run has finished, so no more output will come.
+	// Complete: the run has finished; bytes it printed in its last moments can
+	// land a moment later, so read once more after Complete if the end matters.
 	Complete bool `json:"complete"`
 }
 

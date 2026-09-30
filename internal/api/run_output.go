@@ -158,7 +158,7 @@ func (s *Server) readExecOutput(runID uuid.UUID, limit int, complete bool) (out 
 type runOutputResponse struct {
 	Output    string `json:"output"`
 	Truncated bool   `json:"truncated"` // output does not start at the run's first byte
-	Complete  bool   `json:"complete"`  // the run has finished, so no more output will come
+	Complete  bool   `json:"complete"`  // the run has finished; bytes printed in its last moments can land a moment later
 }
 
 // handleRunOutput serves GET /api/v1/runs/{id}/output?tail=N — owner or admin,

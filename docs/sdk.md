@@ -181,7 +181,8 @@ fmt.Println(out.Output, out.Truncated, out.Complete)
 ```
 
 `truncated` says the output does not start at the run's first byte; `complete`
-says the run has finished, so nothing more will come. The same `404` as
+says the run has finished; bytes it printed in its last moments can land a
+moment later, so read once more after `complete` if the end matters. The same `404` as
 `GET /runs/{id}` answers anyone who may not read the run; the other refusals
 carry a `run_output_*` reason (below).
 

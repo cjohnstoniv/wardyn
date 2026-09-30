@@ -35,6 +35,11 @@ canary,driver}.go. In particular:
     the SPDY/POST leg). Without "get" the websocket attempt 403s and every
     exec silently falls back to the deprecated SPDY path (still functional,
     but noisy: a 403 audit line per channel) — review round 2, M3.
+  - pods/log: get ONLY (#1232). exec.go's followExecOutput streams the agent
+    exec container's log into the run's output tail (GET /runs/{id}/output);
+    no list or watch. It adds little: pods/exec create on the same pods is
+    strictly stronger. A Role without it leaves every tail empty and logs one
+    warning per run.
   - secrets: NO get, NO list, NO watch — as in 0.7.3, and deliberately unchanged
     by the 0.7.4 sweep work (W6-S4). wardynd never reads a Secret's CONTENT
     back: it creates its own per-run proxy-config Secret and the kubelet mounts
@@ -182,6 +187,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "delete", "deletecollection"]
