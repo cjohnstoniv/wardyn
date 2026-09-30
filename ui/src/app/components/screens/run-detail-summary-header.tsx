@@ -494,6 +494,17 @@ export function SummaryHeader({
         />
       </div>
     </div>
+    {/* #1234: how a portal-launched run got here, one thin muted line directly
+        under the bar (launched-via-1234-packet.html). Not a chip: the bar is
+        already at its xl width floor, and a sentence reads better than a chip
+        for a provenance fact. Absent for a self-launched run, so the page is
+        what it was. The server names the portal (a revoked one keeps its name);
+        when it cannot, the line still says a portal did it. */}
+    {run.created_via && (
+      <p data-testid="run-launched-via" className="border-b border-border bg-card px-4 py-1 text-xs text-muted-foreground">
+        {run.created_via_name ? RUN_FACTS.LAUNCHED_VIA(run.created_via_name) : RUN_FACTS.LAUNCHED_VIA_FALLBACK}
+      </p>
+    )}
     {/* Rename's edit row (#1197 L2 review round 2, D2): a FULL-WIDTH row
         under the bar, outside its overflow-hidden xl:flex-nowrap flex
         row — matching the mock's own layout (packet:742, the heading's own
