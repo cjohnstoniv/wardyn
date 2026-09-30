@@ -198,7 +198,7 @@ export async function seen(): Promise<{
 
 /**
  * Launch an autonomous claude-code run from the signed-in person's own seat and
- * wait for it to be running. RETURNS THE RUN ID — /runs/:id is addressable, so
+ * wait for it to have left its pre-run states. RETURNS THE RUN ID — /runs/:id is addressable, so
  * the id is simply the last path segment once the launch has navigated, and a
  * caller that needs to scope an API read (approvals, the run row) to THIS run
  * has no other honest source for it.
@@ -224,6 +224,16 @@ export async function seen(): Promise<{
  * governance working, not failure — `api.anthropic.com` is dropped from egress
  * because this deployment is Bedrock, and the member's resources are capped to
  * the operator maximum.
+ *
+ * NOT "the Running chip is visible": the fake answers a streaming model call
+ * with a non-streaming body, so claude makes three calls and exits 1 within
+ * seconds, and the run page only refreshes its state every 4 s
+ * (DETAIL_POLL_MS). A chip wait is therefore a coin flip on where a poll tick
+ * lands inside a window shorter than the tick — when it loses, the page goes
+ * STARTING to FAILED, "Running" never renders, and the wait burns its whole
+ * SANDBOX_UP. The run row's own state is read instead, and any state past
+ * PENDING/STARTING counts as up: every caller's next assertion (the /_seen
+ * counters, the run's approvals) is what proves the agent did its work.
  */
 export async function launchAgentRun(page: Page, title: string): Promise<string> {
   await page.goto("/runs/new");
@@ -232,8 +242,18 @@ export async function launchAgentRun(page: Page, title: string): Promise<string>
   await page.locator("#nr-task").fill("Reply with the single word: ready.");
   await page.getByRole("button", { name: /^Launch/ }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
-  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
-  return runIDFromURL(page);
+  const id = runIDFromURL(page);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async (runID: string) => {
+          const r = await fetch(`/api/v1/runs/${runID}`, { credentials: "include" });
+          return ((await r.json().catch(() => ({}))) as { state?: string }).state ?? "";
+        }, id),
+      { timeout: SANDBOX_UP, message: "the run never left PENDING/STARTING" },
+    )
+    .not.toMatch(/^(|PENDING|STARTING)$/);
+  return id;
 }
 
 /** /runs/:id is addressable; the id is the last path segment. */
