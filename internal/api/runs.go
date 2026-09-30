@@ -167,7 +167,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Its clamp/capability warnings ride the 201 (see policyWarns below): a
 	// member whose egress host, secret grant or workspace repo was narrowed
 	// away has to hear about it from the thing they actually called.
-	spec, policyID, policyWarns, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
+	spec, policyID, policyWarns, policySource, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
 	if !ok {
 		return
 	}
@@ -394,8 +394,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Kind)
 
+	createData := createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
+	createData["policy_source"] = policySource
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)))))
+		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
 	warnings = append(warnings, noModelAccessWarning(req, mpChoice)...)

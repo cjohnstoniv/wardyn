@@ -750,7 +750,7 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 
 	// …AND IT IS STILL ON THE ENTRY (security NIT-A). The coordinator keeping it
 	// is not enough: the entry is what the next arrival reads first, and taking
-	// a LIVE workflow off it made that arrival call resolveInjection — a broker
+	// a LIVE workflow off it made that arrival call resolveInjectionQuery — a broker
 	// mint and a credential.mint audit row — and only then join, through the
 	// coordinator, the very workflow it should have joined without asking. One
 	// spare mint per disconnect, on a hash-chained log, at the measured ~30 s

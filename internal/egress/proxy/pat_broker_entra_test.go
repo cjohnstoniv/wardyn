@@ -61,6 +61,13 @@ func newADOGitHarness(t *testing.T, caps ...adoscope.Capability) *adoGitHarness 
 // the proxy from a subprocess, which the race detector cannot order otherwise.
 func newADOGitHarnessWith(t *testing.T, setup func(p *Proxy, token string), caps ...adoscope.Capability) *adoGitHarness {
 	t.Helper()
+	return newADOGitHarnessFront(t, setup, nil, caps...)
+}
+
+// newADOGitHarnessFront is newADOGitHarnessWith with front, when non-nil, wrapped around the TLS
+// front's reverse proxy to the fake: it sees every request the proxy forwards.
+func newADOGitHarnessFront(t *testing.T, setup func(p *Proxy, token string), front func(http.Handler) http.Handler, caps ...adoscope.Capability) *adoGitHarness {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
@@ -78,8 +85,12 @@ func newADOGitHarnessWith(t *testing.T, setup func(p *Proxy, token string), caps
 	if err != nil {
 		t.Fatal(err)
 	}
-	front := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(fu))
-	t.Cleanup(front.Close)
+	var toFake http.Handler = httputil.NewSingleHostReverseProxy(fu)
+	if front != nil {
+		toFake = front(toFake)
+	}
+	tlsFront := httptest.NewTLSServer(toFake)
+	t.Cleanup(tlsFront.Close)
 
 	logs := &bytes.Buffer{}
 	prev := slog.Default()
@@ -100,13 +111,16 @@ func newADOGitHarnessWith(t *testing.T, setup func(p *Proxy, token string), caps
 		Injector:        inj,
 		Sink:            &decisionSink{out: sink, ch: make(chan egress.DecisionLog, 256)},
 		Resolver:        publicResolver{},
-		Dial:            redirectDial(upstreamAddr(front)),
+		Dial:            redirectDial(upstreamAddr(tlsFront)),
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
 		ADOGrants:       adoGrantsByHost{"dev.azure.com": grant, "acme.visualstudio.com": grant},
 	})
 	if setup != nil {
 		setup(p, token)
+	}
+	if inj.base == "" { // setup wired no control plane of its own
+		echoControlPlane(t, inj)
 	}
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
