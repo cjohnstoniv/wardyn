@@ -78,7 +78,8 @@ const (
 	// above, which persistedLaunchDoors cannot produce today.
 	reasonOwnerCapabilityUnknown     = "capability_unknown"
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
-	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential was disabled
+	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential, or the run's model provider, was turned off
+	reasonOwnerModelProviderGone     = "model_provider_gone"     // the model provider that authored this run's credential was deleted (or re-created under a new UID)
 	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
 	// three arms (proxy config unreadable, config does not load, capability
 	// re-check itself failed) that all answer the identical client-facing fact —

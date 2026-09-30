@@ -196,9 +196,6 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := s.stripRevivedModelInjections(ctx, run, cfg); rerr != nil {
-		return reviveResult{}, rerr
-	}
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}

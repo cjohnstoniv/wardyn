@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -104,6 +105,14 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 			closeStretch(time.Now())
 			last = ""
 		}
+}
+
+// projectStatusDetailFor is projectStatusDetail for the reader of r, the entry
+// every route serving a run uses: a failure hint quoting the run's recording
+// keeps its quote only for a reader who could open it (projectModelAccessQuote).
+func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) {
+	projectStatusDetail(runs)
+	s.projectModelAccessQuote(r, runs)
 }
 
 // projectStatusDetail decides what a run's startup detail SAYS to a reader, on

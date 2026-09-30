@@ -299,6 +299,47 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 	return nil, nil
 }
 
+// modelProviderRefusal refuses a run whose model provider has since been
+// deleted or turned off, and a run that carries a credential its provider
+// authored (a grant whose snapshot names the provider's UID) when that
+// provider was re-created under the same id (a new UID). The injection sink
+// would refuse the run's first model call (provider_changed), or a run
+// dispatched before 0.8.2 would come back with no model credential at all;
+// this answers before a revive replaces the proxy or an extension keeps the
+// run alive.
+func (s *Server) modelProviderRefusal(ctx context.Context, run types.AgentRun) (*ownerRefusal, error) {
+	if run.ModelProviderID == "" {
+		return nil, nil
+	}
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the run's grants: %w", err)
+	}
+	var uids []string
+	for _, g := range grants {
+		var scope struct {
+			Snapshot providerGrantSnapshot `json:"snapshot"`
+		}
+		if json.Unmarshal(g.Spec.Scope, &scope) == nil && scope.Snapshot.ProviderUID != "" {
+			uids = append(uids, scope.Snapshot.ProviderUID)
+		}
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read site config: %w", err)
+	}
+	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
+	switch {
+	case !found || (len(uids) > 0 && !slices.Contains(uids, p.UID)):
+		return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderGone, msg: fmt.Sprintf(
+			"the model provider %s this run was launched with no longer exists; start a new run", run.ModelProviderID)}, nil
+	case p.Disabled:
+		return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderDisabled, msg: fmt.Sprintf(
+			"the model provider %s this run was launched with is turned off; start a new run", run.ModelProviderID)}, nil
+	}
+	return nil, nil
+}
+
 // secretPresentFor reports whether name exists in owner's namespace or the
 // operator's. A store that cannot list is an error, never "present".
 func (s *Server) secretPresentFor(ctx context.Context, owner, name string) (bool, error) {
@@ -369,11 +410,21 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 }
 
 // reviveOwnerRecheck runs the re-checks above for a revive, before its claim,
-// and rebuilds cfg's deployment parts. A refusal is audited as run.revive
-// denied; a check that cannot be answered refuses too.
+// strips the model credentials no provider authored
+// (stripRevivedModelInjections), and rebuilds cfg's deployment parts. The
+// strip comes after the refusals that do not read cfg's injections, so a
+// refused revive audits no drops, and before the credential re-check, which
+// must not refuse over a credential the strip removes. A refusal is audited as
+// run.revive denied; a check that cannot be answered refuses too.
 func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg *proxy.Config, actorType types.ActorType, actor string) *reviveError {
 	ref, err := s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))
 	if err == nil && ref == nil {
+		ref, err = s.modelProviderRefusal(ctx, run)
+	}
+	if err == nil && ref == nil {
+		if rerr := s.stripRevivedModelInjections(ctx, run, cfg); rerr != nil {
+			return rerr
+		}
 		ref, err = s.modelCredentialRefusal(ctx, run, cfg)
 	}
 	if err == nil && ref == nil {
@@ -427,6 +478,9 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 		}
 	}
 	ref, err := s.ownerCapabilityRefusal(ctx, run, principalFromRequest(r) == run.CreatedBy, runRepos(run, cfg))
+	if err == nil && ref == nil {
+		ref, err = s.modelProviderRefusal(ctx, run)
+	}
 	if err != nil {
 		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
 			msg: "re-check the run owner's authority: " + err.Error()}
