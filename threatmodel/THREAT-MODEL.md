@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.8.1)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.8.2)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -116,7 +116,7 @@ invitation, not an embarrassment.
    the same review; `confineGitBrokerEgress`,
    `internal/api/runs_dispatch_gitbroker.go`, says why deliberately.) An
    **unbrokered** SSH credential — an `ssh_key` for a forge holding no
-   `github_token` (`dev.azure.com`, or `github.com` with no repos granted) — keeps
+   `github_token` (a GitLab host, or `github.com` with no repos granted) — keeps
    the old shape: written for the clone only (`wipe_ssh_grants` shreds it and
    unsets `GIT_SSH_COMMAND` before the agent starts), a narrowing and not a
    confinement, since the grant id still rides `WARDYN_SSH_GRANTS` and an
@@ -1894,7 +1894,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     drops the matching grant's wiring at every grant site (and, for `pat`, the
     ADO egress bundle that arm would have added with it). It does not narrow the
     credential: a `git_pat` carries whatever scope the operator issued it with,
-    there is no ADO/GitLab equivalent of a repo-scoped installation token, and
+    there is no GitLab or Azure DevOps Server equivalent of a repo-scoped installation token (Azure
+    DevOps Services gets a run-scoped one through `minted_pat`, residual #62), and
     the default never-resident PAT broker (asset #4, and the `git_pat` row of
     §5's credential table) makes it NON-RESIDENT, never least-privilege. So a
     provider row narrowing `base_urls` to `https://dev.azure.com/acme` bounds the
@@ -1904,7 +1905,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     sandbox for the life of the run. Read this residual together with #40: the
     provider policy is a bound on ADDRESSES, the forge's ACL and the PAT's own
     scope are the bound on ACCESS, and 0.7.2 adds the first without touching
-    either of the others.
+    either of the others. **[0.8.2] On an Azure DevOps row the shared `pat` and
+    `ssh` lanes are refused at both write doors and their stored credentials
+    are deleted at first start, so the operator-wide PAT this residual describes
+    no longer exists there; each person's run carries a credential in that
+    person's own name instead, and residual #62 is what replaces it.** The
+    residual is unchanged for GitLab and GitHub PAT rows.
 
 42. **The private-IP denial memo is per run and bounded at 64 entries, so a name
     that becomes public mid-run stays refused until the run ends.** 0.7.2 answers
@@ -2348,6 +2354,103 @@ hiding them would repeat the failure mode we are designed to avoid.
     client id acts for whoever that client's tokens name, which is why only a
     super admin registers one and why it may never be Wardyn's own client id.
 
+62. **Azure DevOps per-run tokens put a token-CREATING credential in the store,
+    and what bounds it is a secret, a policy and a revocation — not a scope
+    (#1428) [0.8.2].** On an Azure DevOps row in `minted_pat` mode (the mode the
+    console recommends and starts a new row on; a stored row with no
+    `token_mode` still reads as `bearer`) Wardyn holds each connected person's
+    Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on
+    Wardyn's own sign-in app, and uses it to create one organisation-scoped PAT
+    per run in that person's name, scoped to the run's capabilities, at most
+    `pat_max_hours` long (default 8, at most 168). The PAT is held in wardynd
+    memory, crosses the pinned hop to the run's proxy, and is injected there as
+    Basic; it is mask-registered in its raw, base64 and header forms and never
+    enters the sandbox. Renewal and widening create a newer PAT and leave the
+    older to its own expiry; pause and every end path revoke them all, and a
+    sweep at boot and every five minutes revokes what a crash left. The token
+    APIs are a denied area in the request classifier (`deniedAreas` in
+    `internal/adoscope/classify.go`), refused to every sandbox whatever
+    credential rides, and a `bearer` row refuses to inject a token whose grant
+    names `vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration`
+    or `user_impersonation`, so no token able to create PATs ever rides a
+    sandbox's traffic. What this does NOT do, stated as residuals:
+    - **Breadth.** A token that may create PATs can create one naming ANY
+      `vso.*` scope the person holds. Wardyn's own create refuses scopes
+      outside the row's ceiling, and that binds Wardyn, not an attacker holding
+      the credential. A compromised wardynd store PLUS the sign-in app's client
+      secret yields one token-creating credential per connected person, each
+      bounded only by that person's own permissions and the organisation's
+      lifespan policy (a year if it is off), until revoked. The bounds are the
+      client secret (a `minted_pat` row must name the console's own app and that
+      app must hold a secret: refused when the row is saved, left unusable with
+      a logged error at boot, and refused again at the redemption), the tenant's
+      "Enforce maximum PAT lifespan" policy (which the admin-triggered
+      organisation-settings check verifies by creating and revoking up to two
+      canary PATs in the admin's name), and the refresh token's revocability.
+      This is the same breadth as the `bearer` lane (one credential per
+      connected person) with far less depth than the shared PAT it replaces
+      (one broad account, a year, no secret needed).
+    - **Connecting is signing in.** After admin consent, every console sign-in
+      captures a refresh token able to create tokens, including for people who
+      never launch on Azure DevOps. Capturing only for people who may launch on
+      the row is a follow-up. Disconnecting removes it until the person's next
+      sign-in captures it again; offboarding removes it.
+    - **A run can hold several live PATs until each one's `validTo`.** The
+      proxy keeps one header per Azure DevOps host and wardynd cannot reach it,
+      so a token a host may still hold is never revoked early: renewal and
+      widening leave the older PAT in place. Each is no wider than the newest,
+      and all are revoked on pause, at the end, on drift, when the person
+      disconnects and when they are offboarded.
+    - **"Restrict full-scoped PAT creation" does not bound custom scopes.** It
+      requires new PATs to name "a specific, custom-defined set of scopes",
+      and that set may name every scope, so the policy is not a bound on a
+      stolen minting credential and Wardyn does not treat it as one.
+    - **One secret guards sign-in AND token creation.** The client secret in
+      `WARDYN_OIDC_CLIENT_SECRET` is also what `WARDYN_DIRECTORY_CLIENT_SECRET`
+      defaults to, so it is a busier secret than a dedicated token app's would
+      be. Entra's sign-in logs do not separate a minting redemption from a
+      sign-in, since it is the same app. Rotate it and hold it in a secret
+      manager; a separate token app is the escape hatch and is not built.
+    - **The `bearer` refusal depends on Entra reporting the granted scopes.**
+      The check reads the token response's optional `scope` field, so an empty
+      one is refused (`scope_unknown`) rather than trusted, and one naming a
+      token permission is refused (`mint_scopes`); both are audited as
+      `ado_bearer.refused_mint_scopes`. A tenant that stops reporting scopes
+      turns every `bearer` run into a refusal, never into a bearer that may
+      create PATs.
+    - **A PAT can outlive a failed revoke by at most `pat_max_hours`.** Rows
+      are written before first use and swept at boot and every five minutes,
+      but with a dead refresh token Wardyn cannot revoke; the PAT expires on
+      its own, `ado_pat.revoke.failed` records it, and a Project Collection
+      Administrator can revoke it through the Token Administration API, which
+      can take up to an hour. Revocation does not guarantee that a connection
+      already open ends.
+    - **The widened scope outlives a one-time approval.** Widening creates a
+      new PAT with the union of the scopes, so a one-time approval widens the
+      run's token for the rest of the run, never past the row's ceiling. The
+      approval card says so.
+    - **A pasted PAT (`own_pat`, and every Azure DevOps Server row) cannot be
+      revoked by Wardyn.** Only the person can, in Azure DevOps. It is sealed,
+      readable by its owner alone, identity-checked as the person's own (the
+      sign-in email against the account's sign-in name or mail; Active
+      Directory does not enforce mail uniqueness, so on Server two accounts can
+      share one), and capped at 90 days on Services (30 on Server); its blast
+      radius is whatever scopes the person gave it. On Server it reaches git
+      only, as `code_read` and `code_write`, the push confined to the run's own
+      branch unless its policy allows any branch.
+    - **The upgrade's deletion of the shared credentials is irreversible.**
+      The first start after migration `0103` deletes `git-pat-<host>`,
+      `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in
+      the operator's namespace and in every person's namespace, because a
+      person's own copy is read before the operator's. It runs once, and a
+      host a GitHub or other non-Azure DevOps row also names is skipped and
+      logged rather than risk another forge's credential. Typed secrets are
+      write-only, so nothing can be exported first; the sweep is audited per
+      namespace as `ado_shared_credential.retire`.
+
+    Offboarding a person revokes their live PATs before their stored grant is
+    deleted. None of the audit rows for this lane carries a token value.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised
@@ -2487,7 +2590,7 @@ proxy-injected, and what bounds it; where a bound does not exist, it says so.
 | Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
 |---|---|---|---|
 | `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time, shredded right after (`wipe_ssh_grants`, before the agent starts); mask-registered at mint. On an UNBROKERED forge that window is a narrowing, not a bound; on a BROKERED forge the grant never reaches the sandbox. Wardyn cannot down-scope or expire an SSH private key where it does remain resident (`internal/broker/broker.go` `mintSSHKey`, `deploy/images/*/agent-run`). See below. |
-| `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no ADO/GitLab equivalent of a scoped installation token, so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
+| `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no GitLab or Azure DevOps Server equivalent of a scoped installation token (Azure DevOps Services gets one through `minted_pat`, residual #62), so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
 | `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists (`docs/adoption/corp-network-onboarding-findings.md` B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
 | Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | **WHOSE session, first: it is always one credential PER PRINCIPAL — a `bedrock_sso` model provider — captured by that person's own sign-in, stored in that person's own secret namespace and read with no fall-through to the operator's row or to any other lane, so the radius per capture is ONE PERSON and their own account/role.** **Which account and role a sign-in may capture is ADMIN-ASSERTED, not person-asserted** — an admin may pin `sso_account_id`/`sso_role_name` on the provider record, and a sign-in (or an uploaded blob) that disagrees with the pin, or with the account the provider's model ARN names, is refused at the capture door rather than accepted and silently wrong; the pin binds at the login sandbox's LAUNCH, so it cannot be re-pointed by an admin edit made while a sign-in is already in flight. **The shared admin bearer token is not a person and cannot hold a session of its own under SSO**: `POST /model-providers/{id}/sign-in` refuses it (`422`) — every login made with the admin token would land in the one `owner: "admin-token"` namespace and overwrite the last capture. Then: a minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. **0.7.6 (Phase B, shipped): the SSO access token no longer lands here.** With `WARDYN_AWS_SSO_PROXY_INJECT=on` the generated cache file carries an inert placeholder token (`wardyn-proxy-injected`) and a far-future `expiresAt`, and the real access token exists only in wardynd's store and the proxy's memory. The sandbox still receives the generated `config` (start URL, region, account, role — operator configuration, not a credential). With the switch `off` the 0.7.5 bytes are restored for NEW dispatches. | **Nothing — Phase B SHIPPED in 0.7.6, and this row is now an injection, not an exception.** `portal.sso.<region>` `GetRoleCredentials` is `authtype:none` (unsigned), so the proxy carries the session as the `x-amz-sso_bearer_token` **header** on a per-run TLS-MITM'd, dispatch-authored host+port entry with a paired injection grant — the same operator-configured MITM+injection pattern `isMITMHost` already admits for the corp artifact hosts and the Bedrock bearer. The token is never written into the sandbox. **The CC1/CC2 floor question this cell used to carry is moot with the switch on**: there is no longer a credential delivered outside a grant on this lane, so there is nothing for `RequiredConfinementFloor` to be too late for. It returns verbatim the moment `WARDYN_AWS_SSO_PROXY_INJECT=off` is set, which is the documented rollback — an operator who flips it is choosing the 0.7.5 residency, and should read the 0.7.3 deferral above as still current for that posture. **The re-origination is a forward dial like any other MITM host, not exempt from the corporate upstream**: it follows `SiteConfig.upstream_proxy_url`/`upstream_proxy_no_proxy` same as every other dial, and behind a TLS-intercepting corporate proxy it additionally needs `WARDYN_TRUSTED_CA_FILE` staged on the proxy sidecar or the re-dial fails closed the same way any other dial failure does — see `docs/OPERATIONS.md`'s Phase B section and `docs/adoption/aws-sso-mitm-upstream-proxy.md`. | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh again at each control-plane renewal; the refresh token, client id and client secret are WITHHELD from the sandbox cache whenever a refresh token exists, because the CONTROL PLANE renews the session at the real launch and at dispatch (SSO-OIDC `CreateToken`) and is the only party that can persist the rotated pair — one refresher per token. A renewal that cannot be completed marks the captured-SSO lane NOT READY and carries its reason on the dispatch verdict; the refusal that reason is for arrives with the dispatch-time mechanism gate, which is what stops a lapsed credential from crossing to another auth mechanism; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. **Whose credential a capture becomes is decided at LAUNCH, not at upload:** the login run's own `harness.login.start` row carries the `credential_source` + `owner` resolved when the sandbox was launched, and the upload reads that back instead of re-asking the live configuration — a login sandbox lives to its idle cap, so a configuration edit mid-run cannot re-point a capture. **Revocation ceiling, stated rather than implied:** a member's stored session is ended by their next sign-in superseding it, by revoking the session (or the account/permission-set assignment) at IAM Identity Center — the system of record, and the offboarding step — or by its own client-registration expiry. Deleting the Wardyn console account does not delete the blob; an admin's `DELETE /people/{principal}/credentials` does, and so does AWS refusing its refresh token (`invalid_grant`) or the daily sweep once its expiry has passed. **0.7.6:** the injected value is additionally mask-registered **per run** (`MaskRegistry.Add(claims.RunID, token)`) at each resolve, beside the renewal path's existing global registration — the per-run set is evicted for terminal runs past `RunSecretGrace`, the global set has no expiry (the standing ceiling; TTL-aware masking is a follow-up). Injection is pinned to ONE host and port derived from the credential's own region (or the test override), is refused without TLS on every production deployment, and is refused outright — **403, never another credential** — if the run's model provider (its UID), the credential's owner, the account, role or region drift from the snapshot taken at dispatch (`awsSSOScopeSnapshot`). A dead credential HOLDS the call rather than failing it, bounded by `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600 s, clamped `[10s, 1800s]`); see residual #46. |
 | **Derived AWS role credentials** (every `bedrock_sso` run) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs — and in 0.7.6 it did. These role credentials are still resident, still outside Wardyn's sight and still unmaskable, which is why `gradeModelCredential` keeps answering `sandbox` for this lane. Phase B did not change the residency classification, and a reader who "fixes" `credential_residency.go` because the SSO token left the sandbox is reading the wrong row. | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
@@ -2536,8 +2639,12 @@ with the run (a leased re-mint still runs the whole mint transaction, so
 against the RAW stored `decision_scope`, never `ApprovalScope.Normalize()`d, so
 no approval decided before v0.6 leases anything. The lease does not change the
 unauthenticated-mint-route residual above. Wardyn holds an operator-provisioned
-PAT and can only forward it — no ADO/GitLab token-minting integration exists, and
-that is this kind's honesty ceiling.
+PAT and can only forward it — no GitLab token-minting integration exists, and
+that is this kind's honesty ceiling. Azure DevOps is the exception [0.8.2]:
+its rows no longer take a shared `git_pat`, and a run carries the person's own
+credential instead: a PAT Wardyn creates for the run in the person's name
+(`minted_pat`), the person's Entra token (`bearer`), or a PAT the person pasted
+(`own_pat`, and every Azure DevOps Server row) (residual #62).
 
 **The GitHub contrast** the ADO design targets: a granted repo's git traffic is
 rewritten (`insteadOf`) to the proxy-side git broker, which mints the App
