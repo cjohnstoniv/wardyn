@@ -36,7 +36,6 @@ import { ChevronRight } from "lucide-react";
 import { providers as api, type GitProvider } from "../../../lib/api/providers";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { adoRowNeedsChoice } from "../../../lib/ado-pat-display";
-import { useAdoTokenHealth } from "../../../lib/hooks/use-ado-token-health";
 import { Button } from "../../ui/button";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -60,11 +59,9 @@ export function ProvidersCard({
   const operator = useOperator();
   const navigate = useNavigate();
   const [count, setCount] = React.useState<number | null>(null);
-  // The rows, for the Azure DevOps lines that need attention (#1428): a row the
-  // upgrade switched off, and what the organisation check last found.
+  // The rows, for the Azure DevOps line that needs attention (#1428): a row the
+  // upgrade switched off waits for the admin to choose how people connect.
   const [rows, setRows] = React.useState<GitProvider[]>([]);
-  const mintsTokens = rows.some((r) => !r.disabled && r.entra?.token_mode === "minted_pat");
-  const { health } = useAdoTokenHealth(operator && mintsTokens);
 
   React.useEffect(() => {
     if (!operator) return;
@@ -147,12 +144,11 @@ export function ProvidersCard({
   // collapsed header, so the open-button's own copy of it would duplicate
   // the same text node twice once expanded — suppressed there, unchanged
   // (still the two-line button) in Getting started.
-  // Each is a warning, never a blocker: the row itself already refuses what it
-  // must, with its reason.
+  // A warning, never a blocker: the row itself already refuses what it must,
+  // with its reason. The organisation check's findings are the row's own, not
+  // this card's: the server keeps no last answer to draw them from here.
   const attention = [
     ...(rows.some(adoRowNeedsChoice) ? [{ text: ADO_PAT.CONVERTED_CHECKLIST, choose: true }] : []),
-    ...(health?.lifespan === "too_long" ? [{ text: ADO_PAT.LIFESPAN_REFUSAL(health.lifespan_hours), choose: false }] : []),
-    ...(health?.blocked_person ? [{ text: ADO_PAT.POLICY_BANNER(health.blocked_person), choose: false }] : []),
   ];
   const attentionLines = attention.length > 0 && (
     <div className="mt-3 space-y-2" data-testid="ado-pat-checks">

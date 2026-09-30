@@ -130,8 +130,8 @@ export function AdoPatBody({
           open={tokenDialog}
           onOpenChange={setTokenDialog}
           address={access.org ?? ""}
-          days={access.pat_max_days ?? 30}
-          scopes={access.own_scopes}
+          days={access.max_days ?? 30}
+          scopes={access.token_scopes}
           onStored={onChanged}
         />
       )}

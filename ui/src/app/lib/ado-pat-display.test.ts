@@ -5,8 +5,9 @@
 
 import { describe, it, expect } from "vitest";
 import type { GitProvider } from "./api/providers";
-import type { ADORunToken, SCMAccessPAT } from "./types/ado-pat";
+import type { ADOOrgCheck, ADORunToken, SCMAccessPAT } from "./types/ado-pat";
 import {
+  adoIsServer,
   adoOrgLabel,
   adoRowNeedsChoice,
   adoTokenMode,
@@ -15,7 +16,7 @@ import {
   formatClock,
   formatDay,
   newRunTokenCaps,
-  ownTokenScopeLabels,
+  orgCheckView,
   patCardView,
   patLifetimeInvalid,
   patRefusalNote,
@@ -34,6 +35,12 @@ describe("times", () => {
     expect(formatClock(at(0, 5))).toBe("00:05");
     expect(formatClock(at(17, 2))).toBe("17:02");
     expect(formatDay(new Date(2026, 9, 27).toISOString())).toBe("27 October");
+  });
+  it("reads a date-only string as a calendar day in the reader's zone, not midnight UTC", () => {
+    expect(formatDay("2026-10-27")).toBe("27 October");
+    expect(formatDay("2026-01-01")).toBe("1 January");
+    const now = new Date(2026, 9, 24, 12, 0).getTime();
+    expect(daysLeft("2026-10-27", now)).toBe(3);
   });
   it("counts whole days to an expiry, rounding up, never below zero", () => {
     const now = new Date(2026, 8, 29, 12, 0).getTime();
@@ -83,20 +90,28 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     expect(v.body).toHaveLength(1);
   });
   it("sign in again, whichever cause ended the connection, offers Connect", () => {
-    for (const cause of ["ended", "consent_needed", undefined]) {
-      const v = patCardView(access({ ...minted, state: "expired_signin", cause }), "Azure DevOps")!;
+    for (const cause of ["ended", "consent_needed", "permissions_missing", undefined]) {
+      const v = patCardView(access({ ...minted, state: "expired_signin", cause, source: "org" }), "Azure DevOps")!;
       expect(v.chip).toEqual({ label: "Sign in again", tone: "warning" });
       expect(v.body).toEqual(["Your organisation asked you to sign in again before Wardyn can create tokens."]);
       expect(v.action).toBe("connect");
     }
   });
-  it("blocked by the organisation names the fix and offers nothing to press", () => {
-    const v = patCardView(access({ ...minted, state: "blocked" }), "Azure DevOps")!;
+  it("blocked by the organisation (the blocked cause) names the fix and offers nothing to press", () => {
+    const v = patCardView(access({ ...minted, state: "expired_signin", cause: "blocked" }), "Azure DevOps")!;
     expect(v.chip).toEqual({ label: "Blocked by your organisation", tone: "danger" });
     expect(v.body).toEqual([
       "Your organisation doesn't let you create personal access tokens. Ask an Azure DevOps administrator to add you to the allow list.",
     ]);
     expect(v.action).toBeNull();
+  });
+  it("a row the console cannot redeem is the admin's to fix: their own sentence, nothing to press", () => {
+    const v = patCardView(access({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app" }), "Azure DevOps")!;
+    expect(v.body).toEqual([
+      "Per-run tokens need your Wardyn app registration to have a client secret. Set WARDYN_OIDC_CLIENT_SECRET, or choose another way to connect.",
+    ]);
+    expect(v.action).toBeNull();
+    expect(v.disconnect).toBe(false);
   });
   it("an unrecognised state draws nothing", () => {
     expect(patCardView(access({ ...minted, state: "mystery" }), "Azure DevOps")).toBeNull();
@@ -112,24 +127,24 @@ describe("patCardView: a row where each person adds their own token (state 10)",
     expect(v.action).toBe("add_token");
   });
   it("expiring counts the days and offers Replace", () => {
-    const v = patCardView(access({ ...own, state: "expiring", expires_at: new Date(2026, 9, 27, 12, 0).toISOString() }), "Azure DevOps", now)!;
+    const v = patCardView(access({ ...own, state: "expiring", expires_on: "2026-10-27" }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Expires in 3 days", tone: "warning" });
     expect(v.body).toEqual(["Your token for wardyn-live-test expires on 27 October."]);
     expect(v.action).toBe("replace_token");
   });
   it("live shows the expiry line under Connected", () => {
-    const v = patCardView(access({ ...own, expires_at: new Date(2026, 9, 27).toISOString() }), "Azure DevOps", now)!;
+    const v = patCardView(access({ ...own, expires_on: "2026-10-27" }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Connected", tone: "success" });
     expect(v.body).toEqual(["Your token for wardyn-live-test expires on 27 October."]);
   });
-  it("expired says runs cannot reach Azure DevOps and offers Add", () => {
-    const v = patCardView(access({ ...own, state: "expired" }), "Azure DevOps", now)!;
+  it("expired (expired_signin, the token_expired cause) says runs cannot reach Azure DevOps and offers Add", () => {
+    const v = patCardView(access({ ...own, state: "expired_signin", cause: "token_expired" }), "Azure DevOps", now)!;
     expect(v.chip).toEqual({ label: "Expired", tone: "danger" });
     expect(v.body).toEqual(["Your runs can't reach Azure DevOps until you add a new token."]);
     expect(v.action).toBe("add_token");
   });
   it("an Azure DevOps Server row is titled as one and says it is git only", () => {
-    const v = patCardView(access({ ...own, server: true }), "Azure DevOps", now)!;
+    const v = patCardView(access({ ...own, org: "https://tfs.example.com/collection" }), "Azure DevOps", now)!;
     expect(v.title).toBe("Azure DevOps Server");
     expect(v.chip).toEqual({ label: "Connected", tone: "success" });
     expect(v.body).toContain("Git only. Azure DevOps Server has no Entra sign-in.");
@@ -142,17 +157,44 @@ it("a row on the Entra sign-in lane has no token card", () => {
   expect(patCardView(access({}), "Azure DevOps")).toBeNull();
 });
 
-describe("ownTokenScopeLabels: Azure DevOps' own wording, from the row's scopes (Q7)", () => {
-  it("labels the scopes as the token page does, dropping a read a write covers", () => {
-    expect(ownTokenScopeLabels(["vso.code", "vso.code_write", "vso.project", "vso.work"])).toEqual([
-      "Code (Read & write)",
-      "Project and Team (Read)",
-      "Work Items (Read)",
-    ]);
+describe("adoIsServer", () => {
+  it("is any host that is not dev.azure.com or *.visualstudio.com", () => {
+    expect(adoIsServer("https://dev.azure.com/o")).toBe(false);
+    expect(adoIsServer("https://contoso.visualstudio.com/x")).toBe(false);
+    expect(adoIsServer("https://tfs.example.com/collection")).toBe(true);
+    expect(adoIsServer("not a url")).toBe(false);
   });
-  it("names an unknown scope as itself and an absent list as nothing", () => {
-    expect(ownTokenScopeLabels(["vso.something_new"])).toEqual(["vso.something_new"]);
-    expect(ownTokenScopeLabels(undefined)).toEqual([]);
+});
+
+describe("orgCheckView: the check's answer as the mock's lines and alerts", () => {
+  const base: ADOOrgCheck = { checked_at: at(9, 12), organisation: "o", pat_max_hours: 8, permissions: "granted" };
+  it("permissions granted and the lifespan limit on with the row's life accepted: both good lines", () => {
+    expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "on" })).toEqual({
+      permissions: "granted",
+      lifespan: { state: "on", hours: 8 },
+      tooLong: false,
+      blocked: false,
+    });
+  });
+  it("permissions missing stops at that line", () => {
+    expect(orgCheckView({ ...base, permissions: "missing" })).toEqual({ permissions: "missing", lifespan: null, tooLong: false, blocked: false });
+  });
+  it("the lifespan limit off is its own line", () => {
+    expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "off" }).lifespan).toEqual({ state: "off" });
+  });
+  it("an unknown lifespan draws nothing", () => {
+    expect(orgCheckView({ ...base, token_life: "accepted", lifespan: "unknown" }).lifespan).toBeNull();
+  });
+  it("the row's life refused for the lifespan policy is the too-long alert, not a good line", () => {
+    const v = orgCheckView({ ...base, token_life: "refused", refusal: "ado_pat_lifespan_policy", lifespan: "on" });
+    expect(v.tooLong).toBe(true);
+    expect(v.lifespan).toBeNull();
+    expect(v.blocked).toBe(false);
+  });
+  it("a create refused on the organisation's policy is the blocked banner", () => {
+    const v = orgCheckView({ ...base, token_life: "refused", refusal: "ado_pat_policy_blocked", lifespan: "unknown" });
+    expect(v.blocked).toBe(true);
+    expect(v.tooLong).toBe(false);
   });
 });
 

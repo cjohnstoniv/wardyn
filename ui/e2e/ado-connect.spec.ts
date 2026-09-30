@@ -105,7 +105,7 @@ test.describe("the person's Azure DevOps card, a row that creates a token for ea
   });
 
   test("blocked by the organisation: the card names the allow list and offers nothing to press", async ({ page }) => {
-    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "blocked" }));
+    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "expired_signin", cause: "blocked" }));
     await openAccountCard(page);
     await expect(page.getByText(ADO_PAT.BLOCKED_BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toHaveCount(0);
@@ -113,19 +113,23 @@ test.describe("the person's Azure DevOps card, a row that creates a token for ea
 });
 
 test.describe("the person's Azure DevOps card, a row where each person adds their own token", () => {
-  const own = { token_mode: "own_pat", pat_max_days: 30, own_scopes: ["vso.code_write", "vso.project", "vso.work"] };
+  const own = {
+    token_mode: "own_pat",
+    max_days: 30,
+    token_scopes: ["Code (Read & write)", "Project and Team (Read)", "Work Items (Read)"],
+  };
 
   test("add: refusals sit under the field they are about, then a stored token reads Connected with its expiry", async ({ page }) => {
     let access: Record<string, unknown> = { ...own, state: "not_configured" };
     await spliceAccess(page, () => access);
-    const refusals = ["ado_pat_identity_mismatch", "ado_pat_expiry_too_long", "ado_pat_rejected"];
+    const refusals = ["ado_own_pat_identity_mismatch", "ado_own_pat_expiry_too_long", "ado_own_pat_rejected"];
     const bodies: Record<string, unknown>[] = [];
-    await page.route("**/api/v1/scm/azure-devops/own-token", async (route) => {
+    await page.route("**/api/v1/me/scm/azure-devops/token", async (route) => {
       bodies.push(route.request().postDataJSON() as Record<string, unknown>);
       const reason = refusals[bodies.length - 1];
       if (reason) return route.fulfill({ status: 422, json: { error: "refused", reason } });
-      access = { ...own, state: "live", expires_at: new Date(2026, 9, 27).toISOString() };
-      await route.fulfill({ status: 204 });
+      access = { ...own, state: "live", source: "own", expires_on: "2026-10-27" };
+      await route.fulfill({ json: { state: "live", org: ORG } });
     });
     await openAccountCard(page);
     await page.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }).click();
@@ -149,25 +153,27 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
     await dialog.getByLabel(ADO_PAT.OWN_FIELD_EXPIRES).fill("2026-10-27");
     await dialog.getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }).click();
     await expect(dialog).toHaveCount(0);
-    expect(bodies.at(-1)).toEqual({ token: "pasted-secret", expires_on: "2026-10-27" });
+    expect(bodies.at(-1)).toEqual({ org: ORG, token: "pasted-secret", expires_on: "2026-10-27" });
     await expect(page.getByText(ADO_PAT.OWN_EXPIRING_LINE("wardyn-e2e", "27 October"))).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
   });
 
   test("expiring, expired and the Server row each read as the mock draws them", async ({ page }) => {
-    let access: Record<string, unknown> = { ...own, state: "expiring", expires_at: new Date(Date.now() + 2.5 * 86_400_000).toISOString() };
+    const soon = new Date(Date.now() + 3 * 86_400_000);
+    const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    let access: Record<string, unknown> = { ...own, state: "expiring", source: "own", expires_on: day };
     await spliceAccess(page, () => access);
     await openAccountCard(page);
     await expect(page.getByText(ADO_PAT.OWN_CHIP_EXPIRING(3))).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
 
-    access = { ...own, state: "expired" };
+    access = { ...own, state: "expired_signin", cause: "token_expired", source: "own", expires_on: "2026-09-01" };
     await page.reload();
     await expandCard(page, "Azure DevOps");
     await expect(page.getByText(ADO_PAT.OWN_EXPIRED_BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).toBeVisible();
 
-    access = { ...own, state: "live", server: true, expires_at: new Date(2026, 9, 27).toISOString() };
+    access = { ...own, org: "https://tfs.example.com/collection", state: "live", source: "own", expires_on: "2026-10-27" };
     await page.reload();
     await expandCard(page, ADO_PAT.OWN_SERVER_TITLE);
     await expect(page.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeVisible();
@@ -307,7 +313,13 @@ test.describe("no horizontal scroll at 390px", () => {
 
   test("the person's card, the token dialog, New Run and a run page", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
-    let access: Record<string, unknown> = { token_mode: "own_pat", pat_max_days: 30, own_scopes: ["vso.code_write", "vso.project", "vso.work"], state: "expired" };
+    let access: Record<string, unknown> = {
+      token_mode: "own_pat",
+      max_days: 30,
+      token_scopes: ["Code (Read & write)", "Project and Team (Read)", "Work Items (Read)"],
+      state: "expired_signin",
+      cause: "token_expired",
+    };
     await spliceAccess(page, () => ({ default_profile: ["code_read"], ...access }));
     await page.route(`**/api/v1/runs/${runId}/ado-tokens`, (route) =>
       route.fulfill({

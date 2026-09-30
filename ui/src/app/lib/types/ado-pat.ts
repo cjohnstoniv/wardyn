@@ -14,27 +14,33 @@
 import type { ADOTokenMode } from "./site";
 import type { SCMAccess } from "./setup";
 
-/** What /me/scm-access adds on a row whose token_mode is minted_pat or own_pat. */
+/** What /me/scm-access adds for a row that creates tokens or takes a pasted one.
+ *
+ *  token_mode, expires_on, max_days and token_scopes are internal/api's
+ *  SCMAccess fields from the own-token lane (#1430): they are set on an own_pat
+ *  row and on no other, so when that lane merges these four move into the
+ *  mirrored SCMAccess (setup.ts), where its parity probe covers them.
+ *  token_mode must ALSO read "minted_pat" on a minted row: without it a member's
+ *  console cannot tell a row that creates a token per run from the Entra
+ *  sign-in, and the card, the New Run line and the launch note all key on it.
+ *  last_token and default_profile have no server source yet. */
 export interface ADOPATAccess {
   token_mode?: ADOTokenMode;
+  /** own_pat: the date (YYYY-MM-DD) the person said their token expires. */
+  expires_on?: string;
+  /** own_pat: the furthest expiry, in days from today, the admin allows. */
+  max_days?: number;
+  /** own_pat: what to tick on Azure DevOps' own token page, in its own wording. */
+  token_scopes?: string[];
   /** minted_pat: the last token Wardyn created for this person, for the card. */
   last_token?: { created_at: string; revoked_at?: string };
-  /** own_pat: when the pasted token stops being used (RFC 3339). */
-  expires_at?: string;
-  /** own_pat: the furthest expiry the admin allows, in days. */
-  pat_max_days?: number;
-  /** own_pat: the Azure DevOps scopes the token needs (`vso.code_write`), off
-   *  the row's ceiling. */
-  own_scopes?: string[];
-  /** own_pat on an Azure DevOps Server row: git only, no Entra sign-in. */
-  server?: boolean;
   /** What a run gets when its policy names nothing: the row's default profile. */
   default_profile?: string[];
 }
 
-/** SCMAccess as the token console reads it. `state` also takes "blocked" (the
- *  organisation restricts who may create tokens) and "expired" (an own token
- *  past its expiry), beside the states the mirror lists. */
+/** SCMAccess as the token console reads it. On a minted row `expired_signin`
+ *  carries the causes permissions_missing, blocked and ado_pat_needs_console_app
+ *  beside ended and consent_needed; on an own-token row token_expired. */
 export type SCMAccessPAT = SCMAccess & ADOPATAccess;
 
 /** One token a run held: a row of ado_run_pats, never the token value. */
@@ -53,22 +59,26 @@ export interface ADORunToken {
   added_capabilities?: string[];
 }
 
-/** The organisation-settings check's answer, and the admin-facing refusals
- *  the server has seen since. Every field is absent until it is known. */
-export interface ADOTokenHealth {
-  checked_at?: string;
-  permissions?: "granted" | "missing";
-  lifespan?: "on" | "off" | "too_long";
-  /** lifespan on: the hours the check saw accepted (the row's longest life);
-   *  too_long: the longest life it saw accepted, when it knows one. */
-  lifespan_hours?: number;
-  /** The person Azure DevOps last refused a token for on the organisation's
-   *  create policy; absent when nobody was. */
-  blocked_person?: string;
+/** POST /workspace-providers/git/{id}/org-check's answer (internal/api
+ *  adoOrgCheckResult). Empty token_life or lifespan means that step was not
+ *  reached; lifespan "unknown" means Azure DevOps said nothing that tells. */
+export interface ADOOrgCheck {
+  checked_at: string;
+  organisation: string;
+  pat_max_hours: number;
+  permissions: "granted" | "missing";
+  token_life?: "accepted" | "refused";
+  /** The reason (ado_pat_*) canary 1 was refused with. */
+  refusal?: string;
+  lifespan?: "on" | "off" | "unknown";
+  /** Canaries Wardyn created and could not revoke. */
+  unrevoked?: string[];
 }
 
-/** What the own-token dialog sends. */
+/** What the own-token dialog sends: PUT /me/scm/azure-devops/token's body. */
 export interface ADOOwnTokenBody {
+  /** The row's address, exactly as /me/scm-access names it (SCMAccess.org). */
+  org: string;
   token: string;
   /** YYYY-MM-DD, the expiry the person chose in Azure DevOps. */
   expires_on: string;

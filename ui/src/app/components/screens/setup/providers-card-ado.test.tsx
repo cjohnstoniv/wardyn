@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Azure DevOps lines the providers card raises for an admin (#1428, mock
-// state 12a and the setup-checklist half of states 3 and 8c): each a warning
-// with its reason, never a blocker.
+// The Azure DevOps line the providers card raises for an admin (#1428, mock
+// state 12a): a warning with its reason, never a blocker. The organisation
+// check's findings are the row's own: the server keeps no last answer for this
+// card to draw them from.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -15,12 +16,6 @@ const getWorkspaceProvidersMock = vi.fn();
 vi.mock("../../../lib/api/providers", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/providers")>("../../../lib/api/providers");
   return { ...actual, providers: { ...actual.providers, getWorkspaceProviders: () => getWorkspaceProvidersMock() } };
-});
-
-const healthMock = vi.fn();
-vi.mock("../../../lib/api/ado-pat", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api/ado-pat")>("../../../lib/api/ado-pat");
-  return { ...actual, adoPat: { ...actual.adoPat, health: () => healthMock() } };
 });
 
 const navigateMock = vi.fn();
@@ -58,12 +53,10 @@ function renderCard() {
 
 beforeEach(() => {
   getWorkspaceProvidersMock.mockReset();
-  healthMock.mockReset();
-  healthMock.mockResolvedValue({});
   navigateMock.mockReset();
 });
 
-describe("ProvidersCard: Azure DevOps lines", () => {
+describe("ProvidersCard: the Azure DevOps line", () => {
   it("12a: a row the upgrade switched off says so, and Choose goes to the providers page", async () => {
     getWorkspaceProvidersMock.mockResolvedValue(snap([converted]));
     renderCard();
@@ -73,32 +66,10 @@ describe("ProvidersCard: Azure DevOps lines", () => {
     expect(navigateMock).toHaveBeenCalledWith("/admin/providers");
   });
 
-  it("says nothing when no row needs a choice and the organisation has raised nothing", async () => {
+  it("says nothing when no row needs a choice", async () => {
     getWorkspaceProvidersMock.mockResolvedValue(snap([ado({})]));
     renderCard();
-    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    await screen.findByText(/git provider/);
     expect(screen.queryByTestId("ado-pat-checks")).not.toBeInTheDocument();
-  });
-
-  it("3: a lifespan the organisation refused is a line with the longest life it accepted", async () => {
-    getWorkspaceProvidersMock.mockResolvedValue(snap([ado({})]));
-    healthMock.mockResolvedValue({ lifespan: "too_long", lifespan_hours: 24 });
-    renderCard();
-    expect(await screen.findByText(ADO_PAT.LIFESPAN_REFUSAL(24))).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: ADO_PAT.CONVERTED_CHOOSE })).not.toBeInTheDocument();
-  });
-
-  it("8c: an organisation that blocks token creation names the person", async () => {
-    getWorkspaceProvidersMock.mockResolvedValue(snap([ado({})]));
-    healthMock.mockResolvedValue({ blocked_person: "Priya Shah" });
-    renderCard();
-    expect(await screen.findByText(ADO_PAT.POLICY_BANNER("Priya Shah"))).toBeInTheDocument();
-  });
-
-  it("a deployment with no row that creates tokens never asks for the check", async () => {
-    getWorkspaceProvidersMock.mockResolvedValue(snap([ado({ entra: { tenant_id: "t", client_id: "c" } })]));
-    renderCard();
-    await screen.findByText(/1 git provider|git provider/);
-    expect(healthMock).not.toHaveBeenCalled();
   });
 });

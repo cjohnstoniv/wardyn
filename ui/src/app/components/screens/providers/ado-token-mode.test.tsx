@@ -8,20 +8,20 @@
 // meet (mock states 1, 2, 3, 8c, 8d, 10a, 12b).
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
-import type { ADOTokenHealth } from "../../../lib/types/ado-pat";
+import type { ADOOrgCheck } from "../../../lib/types/ado-pat";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { gitRowInvalid } from "./display";
 import { AdoConvertedRow, AdoRowsContext } from "./ado-token-mode";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { EntraEditor } from "./entra-editor";
 
-const healthMock = vi.fn();
 const orgCheckMock = vi.fn();
 vi.mock("../../../lib/api/ado-pat", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/ado-pat")>("../../../lib/api/ado-pat");
-  return { ...actual, adoPat: { ...actual.adoPat, health: () => healthMock(), orgCheck: () => orgCheckMock() } };
+  return { ...actual, adoPat: { ...actual.adoPat, orgCheck: (id: string) => orgCheckMock(id) } };
 });
 
 const TENANT = "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f";
@@ -55,15 +55,15 @@ function Harness({
   const [r, setR] = React.useState(initial);
   onLatest?.(r);
   return (
-    <AdoRowsContext.Provider value={{ refusal, saveBlocked: false }}>
-      <EntraEditor row={r} operator={operator} onUpdate={setR} />
-    </AdoRowsContext.Provider>
+    <OperatorProvider operator={operator} principal="wardyn-admin">
+      <AdoRowsContext.Provider value={{ refusal, saveBlocked: false }}>
+        <EntraEditor row={r} operator={operator} onUpdate={setR} />
+      </AdoRowsContext.Provider>
+    </OperatorProvider>
   );
 }
 
 beforeEach(() => {
-  healthMock.mockReset();
-  healthMock.mockResolvedValue({});
   orgCheckMock.mockReset();
 });
 
@@ -79,12 +79,10 @@ describe("state 1: how people connect", () => {
     expect(screen.getByText(ADO_PAT.MODE_BEARER_HELP)).toBeInTheDocument();
     expect(screen.getByText(ADO_PAT.MODE_OWN_HELP)).toBeInTheDocument();
     expect(screen.getByText(ADO_PAT.RECOMMENDED_SETTINGS)).toBeInTheDocument();
-    await waitFor(() => expect(healthMock).toHaveBeenCalled());
   });
 
-  it("the token option carries the setup note, the console-redirect line, the check button and the longest life", async () => {
+  it("the token option carries the setup note, the console-redirect line, the check button and the longest life", () => {
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
-    await act(async () => {});
     expect(screen.getByText(ADO_PAT.MINTED_SETUP)).toBeInTheDocument();
     // The plan review's F5: register the redirect under Web, then add the secret.
     expect(screen.getByText(ADO_PAT.MINTED_SETUP_REDIRECT)).toBeInTheDocument();
@@ -118,19 +116,18 @@ describe("state 1: how people connect", () => {
     render(<Harness initial={row({ token_mode: "minted_pat" })} operator={false} />);
     expect(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeDisabled();
     expect(screen.queryByRole("button", { name: ADO_PAT.CHECK_BUTTON })).not.toBeInTheDocument();
-    expect(healthMock).not.toHaveBeenCalled();
   });
 
-  it("an untouched Entra sign-in row asks the server nothing", () => {
-    render(<Harness initial={row({ token_mode: "bearer" })} />);
-    expect(healthMock).not.toHaveBeenCalled();
+  it("the check is for an enabled row: a row that is off cannot be checked", () => {
+    render(<Harness initial={row({ token_mode: "minted_pat" }, { disabled: true })} />);
+    expect(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON })).toBeDisabled();
   });
 });
 
 describe("state 2: check organisation settings", () => {
-  const ok: ADOTokenHealth = { checked_at: at(9, 12), permissions: "granted", lifespan: "on", lifespan_hours: 8 };
+  const ok: ADOOrgCheck = { checked_at: at(9, 12), organisation: "wardyn-live-test", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
 
-  it("runs the check on request and draws both good answers", async () => {
+  it("runs the check on this row when asked and draws both good answers", async () => {
     orgCheckMock.mockResolvedValue(ok);
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
@@ -141,22 +138,24 @@ describe("state 2: check organisation settings", () => {
     expect(within(card).getByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).toBeInTheDocument();
     expect(screen.getByText(ADO_PAT.CHECK_LAST("09:12"))).toBeInTheDocument();
     expect(orgCheckMock).toHaveBeenCalledTimes(1);
+    expect(orgCheckMock).toHaveBeenCalledWith("ado");
   });
 
-  it("draws the last answer without a click, and both warnings when permissions are missing and the lifespan limit is off", async () => {
-    healthMock.mockResolvedValue({ checked_at: at(9, 12), permissions: "missing", lifespan: "off" });
+  it("draws both warnings when permissions are missing and the lifespan limit is off", async () => {
+    orgCheckMock.mockResolvedValue({ ...ok, permissions: "missing", lifespan: "off" });
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
     const card = await screen.findByTestId("ado-org-check");
     expect(within(card).getByText(ADO_PAT.CHECK_PERMS_MISSING)).toBeInTheDocument();
     expect(within(card).getByText(ADO_PAT.CHECK_LIFESPAN_OFF)).toBeInTheDocument();
     expect(within(card).queryByText(ADO_PAT.CHECK_PERMS_OK)).not.toBeInTheDocument();
   });
 
-  it("says nothing before any check has run", async () => {
+  it("says nothing before any check has run (the server keeps no last answer to read)", () => {
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
-    await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(screen.queryByTestId("ado-org-check")).not.toBeInTheDocument();
     expect(screen.queryByText(/Last checked/)).not.toBeInTheDocument();
+    expect(orgCheckMock).not.toHaveBeenCalled();
   });
 });
 
@@ -177,9 +176,8 @@ describe("state 3: setup errors", () => {
     expect(gitRowInvalid(latest!)).toBe(false);
   });
 
-  it("a Save refused for want of a client secret says so under the token option", async () => {
+  it("a Save refused for want of a client secret says so under the token option", () => {
     render(<Harness initial={row({ token_mode: "minted_pat" })} refusal={ADO_PAT.NO_CLIENT_SECRET} />);
-    await act(async () => {});
     expect(screen.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeInTheDocument();
   });
 
@@ -188,26 +186,41 @@ describe("state 3: setup errors", () => {
     expect(screen.queryByText(ADO_PAT.NO_CLIENT_SECRET)).not.toBeInTheDocument();
   });
 
-  it("a lifespan the organisation refused reads with the longest life it accepted", async () => {
-    healthMock.mockResolvedValue({ checked_at: at(9, 12), permissions: "granted", lifespan: "too_long", lifespan_hours: 24 });
+  it("a row's life the organisation refused reads 'Lower it.' (the server does not say the longest it accepts)", async () => {
+    orgCheckMock.mockResolvedValue({
+      checked_at: at(9, 12),
+      organisation: "o",
+      pat_max_hours: 8,
+      permissions: "granted",
+      token_life: "refused",
+      refusal: "ado_pat_lifespan_policy",
+      lifespan: "on",
+    });
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
-    expect(await screen.findByText(ADO_PAT.LIFESPAN_REFUSAL(24))).toBeInTheDocument();
-    expect(screen.getByText("Longest token life is above your organisation's maximum token lifespan. Lower it to 24 hours or less.")).toBeInTheDocument();
-  });
-
-  it("and reads 'Lower it.' when it does not know one", async () => {
-    healthMock.mockResolvedValue({ checked_at: at(9, 12), lifespan: "too_long" });
-    render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
     expect(await screen.findByText("Longest token life is above your organisation's maximum token lifespan. Lower it.")).toBeInTheDocument();
+    expect(screen.queryByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).not.toBeInTheDocument();
   });
 });
 
 describe("state 8: the organisation blocks token creation", () => {
-  it("8c: the banner names the person and offers Switch to Entra sign-in", async () => {
-    healthMock.mockResolvedValue({ blocked_person: "Priya Shah" });
+  const blocked: ADOOrgCheck = {
+    checked_at: at(9, 12),
+    organisation: "o",
+    pat_max_hours: 8,
+    permissions: "granted",
+    token_life: "refused",
+    refusal: "ado_pat_policy_blocked",
+    lifespan: "unknown",
+  };
+
+  it("8c: a check the policy refused raises the banner naming the person, and Switch to Entra sign-in", async () => {
+    orgCheckMock.mockResolvedValue(blocked);
     let latest: GitProvider | undefined;
     render(<Harness initial={row({ token_mode: "minted_pat" })} onLatest={(r) => (latest = r)} />);
-    expect(await screen.findByText(ADO_PAT.POLICY_BANNER("Priya Shah"))).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
+    // The admin ran the check, so the person is the signed-in principal.
+    expect(await screen.findByText(ADO_PAT.POLICY_BANNER("wardyn-admin"))).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }));
     expect(latest?.entra?.token_mode).toBeUndefined();
     expect(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
@@ -216,8 +229,9 @@ describe("state 8: the organisation blocks token creation", () => {
   });
 
   it("8d: choosing the Entra sign-in while the app holds the token permissions is refused inline", async () => {
-    healthMock.mockResolvedValue({ checked_at: at(9, 12), permissions: "granted", lifespan: "on", lifespan_hours: 8 });
+    orgCheckMock.mockResolvedValue({ ...blocked, token_life: "accepted", refusal: undefined, lifespan: "on" });
     render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    await userEvent.click(screen.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }));
     await screen.findByTestId("ado-org-check");
     expect(screen.queryByText(ADO_PAT.BEARER_WITH_TOKEN_PERMS)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER }));
@@ -239,7 +253,6 @@ describe("state 10a: each person adds their own token", () => {
     expect(screen.getByText(ADO_PAT.OWN_EXPIRY_RANGE)).toBeInTheDocument();
     expect(screen.queryByLabelText("Directory (tenant) ID")).not.toBeInTheDocument();
     expect(screen.queryByText(ADO_PAT.MINTED_SETUP)).not.toBeInTheDocument();
-    expect(healthMock).not.toHaveBeenCalled();
   });
 
   it("writes pat_max_days, and an expiry past 90 days shows the range and withholds Save", async () => {

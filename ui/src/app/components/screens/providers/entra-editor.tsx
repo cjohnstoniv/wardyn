@@ -20,7 +20,7 @@ import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { adoTokenMode } from "../../../lib/ado-pat-display";
-import { useAdoTokenHealth } from "../../../lib/hooks/use-ado-token-health";
+import { useAdoOrgCheck } from "../../../lib/hooks/use-ado-org-check";
 import { AdoTokenMode } from "./ado-token-mode";
 // clsx, not cn: tailwind-merge doesn't know the text-meta/text-body size
 // tokens, so cn() drops them whenever a text colour class is merged in.
@@ -193,8 +193,7 @@ export function EntraEditor({
   const uid = useId();
   const cfg: ADOEntraConfig = row.entra ?? { tenant_id: "", client_id: "" };
   const tokenMode = adoTokenMode(row);
-  // Only a row that creates tokens asks the server for the organisation check.
-  const { health, checking, check } = useAdoTokenHealth(operator && tokenMode === "minted_pat");
+  const { result: orgCheck, checking, check } = useAdoOrgCheck(row.id);
   const set = (patch: Partial<ADOEntraConfig>) => onUpdate({ ...row, entra: { ...cfg, ...patch } });
   const ceiling = cfg.capability_ceiling ?? [];
   const defaults = effectiveDefault(cfg);
@@ -203,7 +202,7 @@ export function EntraEditor({
 
   return (
     <div className="space-y-5 border-t border-border pt-4" data-testid="entra-editor">
-      <AdoTokenMode row={row} operator={operator} onUpdate={onUpdate} health={health} checking={checking} onCheck={check} />
+      <AdoTokenMode row={row} operator={operator} onUpdate={onUpdate} check={orgCheck} checking={checking} onCheck={check} />
 
       <div>
         {/* A token the person pastes in involves no sign-in: no tenant, no client. */}

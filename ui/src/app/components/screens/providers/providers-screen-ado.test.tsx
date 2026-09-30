@@ -147,6 +147,22 @@ describe("ProvidersScreen: Azure DevOps token choices", () => {
     expect(inline.length).toBe(2);
   });
 
+  it("Save sends an Azure DevOps row in the lane its addresses call for, even if the address never lost focus", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git: [adoRow()] }, etag: '"e1"' });
+    putWorkspaceProvidersMock.mockResolvedValue({ providers: { git: [] }, etag: '"e2"', sourcesNoLongerAdmitted: 0 });
+    renderScreen();
+    await screen.findByRole("radiogroup", { name: ADO_PAT.SECTION_TITLE });
+    const address = screen.getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+    await userEvent.clear(address);
+    await userEvent.type(address, "https://tfs.corp.example/acme");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await waitFor(() => expect(putWorkspaceProvidersMock).toHaveBeenCalledTimes(1));
+    const [sent] = putWorkspaceProvidersMock.mock.calls[0] as [{ git: GitProvider[] }];
+    expect(sent.git[0].lanes).toEqual(["pat"]);
+    expect(sent.git[0].credential_source).toBe("per_user");
+    expect("entra" in sent.git[0]).toBe(false);
+  });
+
   it("a lifetime the server would refuse withholds Save", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git: [adoRow({ entra: { ...adoRow().entra!, pat_max_hours: 400 } })] }, etag: '"e1"' });
     renderScreen();

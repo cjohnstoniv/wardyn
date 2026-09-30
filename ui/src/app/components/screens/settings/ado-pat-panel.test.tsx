@@ -115,8 +115,22 @@ describe("a row that creates a token for each run", () => {
     expect(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeInTheDocument();
   });
 
-  it("8b: blocked by the organisation names the fix and offers no button", async () => {
-    renderCard({ ...minted, state: "blocked" });
+  it("9: a stored sign-in that lacks the token permissions asks the same, so Microsoft can ask for consent", async () => {
+    renderCard({ ...minted, state: "expired_signin", cause: "permissions_missing", source: "org" });
+    await expandCard("Azure DevOps");
+    expect(screen.getByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeInTheDocument();
+  });
+
+  it("a row the console cannot redeem names the client secret and offers no Connect", async () => {
+    renderCard({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app" });
+    await expandCard("Azure DevOps");
+    expect(screen.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
+  });
+
+  it("8b: blocked by the organisation (the blocked cause) names the fix and offers no button", async () => {
+    renderCard({ ...minted, state: "expired_signin", cause: "blocked" });
     expect(screen.getByText(ADO_PAT.CHIP_BLOCKED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
     expect(screen.getByText(ADO_PAT.BLOCKED_BODY)).toBeInTheDocument();
@@ -125,7 +139,11 @@ describe("a row that creates a token for each run", () => {
 });
 
 describe("a row where each person adds their own token", () => {
-  const own: Partial<SCMAccessPAT> = { token_mode: "own_pat", pat_max_days: 30, own_scopes: ["vso.code_write", "vso.project", "vso.work"] };
+  const own: Partial<SCMAccessPAT> = {
+    token_mode: "own_pat",
+    max_days: 30,
+    token_scopes: ["Code (Read & write)", "Project and Team (Read)", "Work Items (Read)"],
+  };
 
   it("10b: no token yet offers Add your personal access token, and the dialog says what to create", async () => {
     renderCard({ ...own, state: "not_configured" });
@@ -157,13 +175,13 @@ describe("a row where each person adds their own token", () => {
     await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN), "pasted-secret");
     await userEvent.type(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES), "2026-10-27");
     await userEvent.click(add);
-    await waitFor(() => expect(storeMock).toHaveBeenCalledWith({ token: "pasted-secret", expires_on: "2026-10-27" }));
+    await waitFor(() => expect(storeMock).toHaveBeenCalledWith({ org: ORG, token: "pasted-secret", expires_on: "2026-10-27" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
   async function refuse(reason: string) {
-    storeMock.mockRejectedValue(new HttpError(422, "refused", reason));
+    storeMock.mockImplementation(() => Promise.reject(new HttpError(422, "refused", reason)));
     renderCard({ ...own, state: "not_configured" });
     await expandCard("Azure DevOps");
     await userEvent.click(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
@@ -175,26 +193,27 @@ describe("a row where each person adds their own token", () => {
   }
 
   it("11: another account's token is refused under the Token field, never naming the account", async () => {
-    const dialog = await refuse("ado_pat_identity_mismatch");
+    const dialog = await refuse("ado_own_pat_identity_mismatch");
     expect(await within(dialog).findByText(ADO_PAT.OWN_MISMATCH)).toBeInTheDocument();
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveAttribute("aria-invalid", "true");
   });
 
   it("11: an expiry past the administrator's limit is refused under Expires on", async () => {
-    const dialog = await refuse("ado_pat_expiry_too_long");
+    const dialog = await refuse("ado_own_pat_expiry_too_long");
     expect(await within(dialog).findByText(ADO_PAT.OWN_TOO_LONG(30))).toBeInTheDocument();
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveAttribute("aria-invalid", "true");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).not.toHaveAttribute("aria-invalid", "true");
   });
 
   it("11: a token Azure DevOps did not accept is refused under the Token field", async () => {
-    const dialog = await refuse("ado_pat_rejected");
+    const dialog = await refuse("ado_own_pat_rejected");
     expect(await within(dialog).findByText(ADO_PAT.OWN_REJECTED)).toBeInTheDocument();
   });
 
   it("10: expiring counts the days and offers Replace token", async () => {
-    const soon = new Date(Date.now() + 2.5 * 24 * 60 * 60 * 1000);
-    renderCard({ ...own, state: "expiring", expires_at: soon.toISOString() });
+    const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    renderCard({ ...own, state: "expiring", expires_on: day });
     expect(screen.getByText(ADO_PAT.OWN_CHIP_EXPIRING(3))).toBeInTheDocument();
     await expandCard("Azure DevOps");
     expect(screen.getByText(/^Your token for wardyn-live-test expires on /)).toBeInTheDocument();
@@ -202,7 +221,7 @@ describe("a row where each person adds their own token", () => {
   });
 
   it("10: expired says runs cannot reach Azure DevOps, and offers Add", async () => {
-    renderCard({ ...own, state: "expired" });
+    renderCard({ ...own, state: "expired_signin", cause: "token_expired" });
     expect(screen.getByText(ADO_PAT.OWN_CHIP_EXPIRED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
     expect(screen.getByText(ADO_PAT.OWN_EXPIRED_BODY)).toBeInTheDocument();
@@ -210,7 +229,7 @@ describe("a row where each person adds their own token", () => {
   });
 
   it("10: an Azure DevOps Server row is titled as one and says git only", async () => {
-    renderCard({ ...own, state: "live", server: true, expires_at: at(9, 0) });
+    renderCard({ ...own, org: "https://tfs.example.com/collection", state: "live", expires_on: "2026-10-27" });
     await expandCard(ADO_PAT.OWN_SERVER_TITLE);
     expect(screen.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();

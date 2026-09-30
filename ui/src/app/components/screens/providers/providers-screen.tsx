@@ -51,6 +51,7 @@ import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
 import { AdoRowsContext } from "./ado-token-mode";
+import { reshapeADORow } from "./ado-row-shape";
 import { ImagesTab } from "./images-tab";
 import { StorageTab } from "./storage-tab";
 
@@ -134,7 +135,8 @@ export function ProvidersScreen() {
     setSaveError(null);
     clearWriteDropped();
     try {
-      const result = await api.putWorkspaceProviders(next, etag);
+      // An Azure DevOps row is sent in the lane its addresses call for.
+      const result = await api.putWorkspaceProviders({ ...next, git: next.git?.map(reshapeADORow) }, etag);
       setDraft(result.providers);
       // The PUT response is the new BASELINE too — a save with nothing left
       // unsaved must not still read as dirty to the guard above or to a

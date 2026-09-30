@@ -16,9 +16,10 @@ import { clsx } from "clsx";
 import type { ADOEntraConfig, GitProvider } from "../../../lib/api/providers";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { adoCapName } from "../../../lib/ado-access-copy";
-import { adoTokenMode, formatClock, patDaysOk, patHoursOk } from "../../../lib/ado-pat-display";
-import { useAdoTokenHealth } from "../../../lib/hooks/use-ado-token-health";
-import type { ADOTokenHealth } from "../../../lib/types/ado-pat";
+import { adoTokenMode, formatClock, orgCheckView, patDaysOk, patHoursOk } from "../../../lib/ado-pat-display";
+import { useAdoOrgCheck } from "../../../lib/hooks/use-ado-org-check";
+import type { ADOOrgCheck } from "../../../lib/types/ado-pat";
+import { usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -112,21 +113,22 @@ function CheckLine({ tone, children }: { tone: "ok" | "bad" | "warn"; children: 
 }
 
 // The organisation check's answer as the mock's card. A lifespan the check saw
-// refused is the row's own amber alert, not a line here.
-function OrgCheckCard({ health }: { health: ADOTokenHealth }) {
-  if (!health.checked_at) return null;
-  const clean = health.permissions === "granted" && health.lifespan === "on";
+// refused, and a refusal on the create policy, are the row's own alerts (below),
+// not lines here.
+function OrgCheckCard({ result }: { result: ADOOrgCheck }) {
+  const v = orgCheckView(result);
+  const clean = v.permissions === "granted" && v.lifespan?.state === "on";
   return (
     <div className="mt-3 rounded-lg border border-border p-3" data-testid="ado-org-check">
       <div className="flex items-center justify-between gap-2">
         <h5 className="text-sm font-medium text-foreground">{ADO_PAT.CHECK_TITLE}</h5>
-        <Chip tone={clean ? "success" : "warning"}>{ADO_PAT.CHECK_CHIP(formatClock(health.checked_at))}</Chip>
+        <Chip tone={clean ? "success" : "warning"}>{ADO_PAT.CHECK_CHIP(formatClock(result.checked_at))}</Chip>
       </div>
       <ul className="mt-2 space-y-1.5">
-        {health.permissions === "granted" && <CheckLine tone="ok">{ADO_PAT.CHECK_PERMS_OK}</CheckLine>}
-        {health.permissions === "missing" && <CheckLine tone="bad">{ADO_PAT.CHECK_PERMS_MISSING}</CheckLine>}
-        {health.lifespan === "on" && <CheckLine tone="ok">{ADO_PAT.CHECK_LIFESPAN_ON(health.lifespan_hours ?? 0)}</CheckLine>}
-        {health.lifespan === "off" && <CheckLine tone="warn">{ADO_PAT.CHECK_LIFESPAN_OFF}</CheckLine>}
+        {v.permissions === "granted" && <CheckLine tone="ok">{ADO_PAT.CHECK_PERMS_OK}</CheckLine>}
+        {v.permissions === "missing" && <CheckLine tone="bad">{ADO_PAT.CHECK_PERMS_MISSING}</CheckLine>}
+        {v.lifespan?.state === "on" && <CheckLine tone="ok">{ADO_PAT.CHECK_LIFESPAN_ON(v.lifespan.hours)}</CheckLine>}
+        {v.lifespan?.state === "off" && <CheckLine tone="warn">{ADO_PAT.CHECK_LIFESPAN_OFF}</CheckLine>}
       </ul>
     </div>
   );
@@ -150,17 +152,19 @@ export function AdoTokenMode({
   row,
   operator,
   onUpdate,
-  health,
+  check,
   checking,
   onCheck,
 }: {
   row: GitProvider;
   operator: boolean;
   onUpdate: (next: GitProvider) => void;
-  health: ADOTokenHealth | null;
+  /** The last organisation check this visit, null before one has run. */
+  check: ADOOrgCheck | null;
   checking: boolean;
   onCheck: () => void;
 }) {
+  const person = usePrincipal();
   const uid = React.useId();
   const { refusal } = React.useContext(AdoRowsContext);
   const cfg: ADOEntraConfig = row.entra ?? { tenant_id: "", client_id: "" };
@@ -169,18 +173,18 @@ export function AdoTokenMode({
   // bearer is the unset default; writing nothing keeps an untouched row's diff empty.
   const pick = (m: Mode) => set({ token_mode: m === "bearer" ? undefined : m });
 
-  const lifespanTooLong = health?.lifespan === "too_long";
+  const view = check ? orgCheckView(check) : null;
   // Entra sign-in while the app still holds the token permissions: known from
   // the last check, or from the server refusing this very Save.
-  const bearerBlocked = mode === "bearer" && (health?.permissions === "granted" || refusal === ADO_PAT.BEARER_WITH_TOKEN_PERMS);
+  const bearerBlocked = mode === "bearer" && (view?.permissions === "granted" || refusal === ADO_PAT.BEARER_WITH_TOKEN_PERMS);
   const noSecret = mode === "minted_pat" && refusal === ADO_PAT.NO_CLIENT_SECRET;
 
   return (
     <div data-testid="ado-token-mode">
       <h4 className="text-sm font-medium text-foreground">{ADO_PAT.SECTION_TITLE}</h4>
-      {health?.blocked_person && (
+      {view?.blocked && (
         <Alert>
-          <span>{ADO_PAT.POLICY_BANNER(health.blocked_person)}</span>
+          <span>{ADO_PAT.POLICY_BANNER(person)}</span>
           {operator && mode !== "bearer" && (
             <div className="mt-2">
               <Button size="sm" variant="outline" onClick={() => pick("bearer")}>
@@ -214,13 +218,15 @@ export function AdoTokenMode({
                     {noSecret && <p className="mt-2 text-body text-danger">{ADO_PAT.NO_CLIENT_SECRET}</p>}
                     {operator && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <Button size="sm" variant="outline" disabled={checking} onClick={onCheck}>
+                        {/* The check acts on the saved, enabled row with the admin's own
+                            connection: enable and save it, sign in, then check. */}
+                        <Button size="sm" variant="outline" disabled={checking || !!row.disabled} onClick={onCheck}>
                           {ADO_PAT.CHECK_BUTTON}
                         </Button>
-                        {health?.checked_at && <span className="text-meta text-muted-foreground">{ADO_PAT.CHECK_LAST(formatClock(health.checked_at))}</span>}
+                        {check && <span className="text-meta text-muted-foreground">{ADO_PAT.CHECK_LAST(formatClock(check.checked_at))}</span>}
                       </div>
                     )}
-                    {health && <OrgCheckCard health={health} />}
+                    {check && <OrgCheckCard result={check} />}
                     <LifetimeField
                       id={`${uid}-hours`}
                       label={ADO_PAT.TOKEN_LIFE_LABEL}
@@ -232,7 +238,7 @@ export function AdoTokenMode({
                       valid={patHoursOk}
                       onCommit={(n) => set({ pat_max_hours: n })}
                     />
-                    {lifespanTooLong && <Alert>{ADO_PAT.LIFESPAN_REFUSAL(health?.lifespan_hours)}</Alert>}
+                    {view?.tooLong && <Alert>{ADO_PAT.LIFESPAN_REFUSAL()}</Alert>}
                   </>
                 )}
 
@@ -274,20 +280,33 @@ export function AdoConvertedRow({
   onUpdate: (next: GitProvider) => void;
 }) {
   const { saveAndEnable, saveBlocked } = React.useContext(AdoRowsContext);
-  const { health, checking, check } = useAdoTokenHealth(operator && !!row.entra && adoTokenMode(row) === "minted_pat");
+  const { result, checking, check } = useAdoOrgCheck(row.id);
   const ceiling = (row.entra?.capability_ceiling ?? []).map(adoCapName).join(", ");
   return (
     <div className="space-y-3" data-testid="ado-converted-row">
       <div role="status" className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-body text-foreground">
         {ADO_PAT.CONVERTED_NOTE}
       </div>
-      {row.entra && <AdoTokenMode row={row} operator={operator} onUpdate={onUpdate} health={health} checking={checking} onCheck={check} />}
+      {row.entra && <AdoTokenMode row={row} operator={operator} onUpdate={onUpdate} check={result} checking={checking} onCheck={check} />}
       {ceiling && <p className="text-meta text-muted-foreground">{ADO_PAT.CONVERTED_CEILING(ceiling)}</p>}
       <div className="flex justify-end">
         <Button disabled={!operator || saveBlocked || !saveAndEnable} onClick={() => saveAndEnable?.(row.id)}>
           {ADO_PAT.CONVERTED_SAVE_ON}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// An Azure DevOps Server row: no Entra sign-in, so each person adds their own
+// token. It is the one choice, so it is stated, not offered.
+export function AdoServerRow() {
+  return (
+    <div className="space-y-1 border-t border-border pt-4" data-testid="ado-server-row">
+      <h4 className="text-sm font-medium text-foreground">{ADO_PAT.SECTION_TITLE}</h4>
+      <p className="text-body font-medium text-foreground">{ADO_PAT.MODE_OWN}</p>
+      <p className="text-meta text-muted-foreground">{ADO_PAT.MODE_OWN_HELP}</p>
+      <p className="text-meta text-muted-foreground">{ADO_PAT.OWN_SERVER_NOTE}</p>
     </div>
   );
 }

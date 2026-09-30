@@ -100,6 +100,7 @@ import { ViewAccessProvider, type ViewAccess } from "../../wardyn/console-view";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
+import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { CONNECTIONS } from "../../wardyn/copy/door";
 
@@ -534,6 +535,28 @@ describe("MemberGettingStarted", () => {
       await userEvent.click(link);
       expect(adoConnectMock).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    });
+
+    // #1428, #1430: causes that signing in does not fix say what does, and open no popup.
+    it("a blocked organisation names the allow list and offers no Connect", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "expired_signin", cause: "blocked" } }));
+      renderPage();
+      expect(await screen.findByText(ADO_PAT.BLOCKED_BODY)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("an expired own token says runs cannot reach Azure DevOps and offers no Connect", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "expired_signin", cause: "token_expired" } }));
+      renderPage();
+      expect(await screen.findByText(ADO_PAT.OWN_EXPIRED_BODY)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("missing token permissions ask to sign in again, and Connect stays", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "expired_signin", cause: "permissions_missing", source: "org" } }));
+      renderPage();
+      expect(await screen.findByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: ADO.CONNECT_ADO })).toBeInTheDocument();
     });
 
     it("shared_expired: warning tone, the action line, and NO button — nothing the member can do", async () => {

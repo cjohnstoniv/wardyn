@@ -376,15 +376,20 @@ export function MemberGettingStarted() {
               {scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
                 <>
                   <p className="mt-2 text-sm text-warning">{scmAccessCause(status.scm_access.cause)}</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-3"
-                    disabled={adoConnecting}
-                    onClick={() => void handleAdoConnect()}
-                  >
-                    {ADO.CONNECT_ADO}
-                  </Button>
+                  {/* A blocked organisation, a missing client secret and an expired own
+                      token are not fixed by signing in (#1428): the line above says
+                      what is, and nothing here opens the popup. */}
+                  {scmAccessNeedsConnect(status.scm_access.state, status.scm_access.cause) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-3"
+                      disabled={adoConnecting}
+                      onClick={() => void handleAdoConnect()}
+                    >
+                      {ADO.CONNECT_ADO}
+                    </Button>
+                  )}
                   {/* review finding F9: the browser refused the popup outright;
                       N1: the fallback link's own click also starts the poll. */}
                   {adoBlockedUrl && (

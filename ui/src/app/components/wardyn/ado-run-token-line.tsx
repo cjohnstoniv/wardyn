@@ -46,13 +46,15 @@ export function AdoLaunchNote({
   // A refusal names the row as one that creates tokens even when the answer
   // above could not be read.
   if (access?.token_mode !== "minted_pat" && !refusal) return null;
-  if (access?.state === "blocked" || refusal === "blocked") {
+  if ((access?.state === "expired_signin" && access.cause === "blocked") || refusal === "blocked") {
     return (
       <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-body text-foreground" data-testid="ado-launch-note">
         {ADO_PAT.LAUNCH_POLICY_REFUSED}
       </div>
     );
   }
+  // A row the console cannot redeem is the admin's to fix: no Connect to press.
+  if (access?.cause === "ado_pat_needs_console_app") return null;
   if (refusal !== "connect" && access?.state !== "not_configured" && access?.state !== "expired_signin") return null;
   return (
     <div role="status" className="rounded-lg border border-info/30 bg-info-subtle px-3 py-2 text-body text-foreground" data-testid="ado-launch-note">

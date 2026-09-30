@@ -40,8 +40,9 @@ import {
 } from "../../ui/alert-dialog";
 import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
 import { EntraEditor } from "./entra-editor";
-import { AdoConvertedRow } from "./ado-token-mode";
+import { AdoConvertedRow, AdoServerRow } from "./ado-token-mode";
 import { adoRowNeedsChoice } from "../../../lib/ado-pat-display";
+import { newADORow, reshapeADORow } from "./ado-row-shape";
 
 const ALL_LANES: LegacyGitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
@@ -230,6 +231,7 @@ function Row({
 
   // "" when the row names no parseable address — see rowHost. Everything keyed
   // off it is gated on it being non-empty.
+  const isADO = kind === "azure_devops";
   const host = rowHost(row);
   const slug = slugHost(host);
   const patName = `git-pat-${slug}`;
@@ -302,7 +304,7 @@ function Row({
         </div>
       ) : (
         <div className="space-y-4 p-3">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className={isADO ? "grid gap-4" : "grid gap-4 sm:grid-cols-2"}>
             <Field label={PROVIDERS.FIELD_BASE_URLS} hint={PROVIDERS.BASE_URLS_HINT} htmlFor={`${uid}provider-${kind}-base-urls`}>
               <Textarea
                 id={`${uid}provider-${kind}-base-urls`}
@@ -311,6 +313,11 @@ function Row({
                 aria-invalid={invalidLines.length > 0 || noAddresses}
                 disabled={!operator}
                 value={baseURLText}
+                // An Azure DevOps row's lane follows its addresses, but only once they
+                // are settled: every prefix of "https://dev.azure.com/acme" is a valid
+                // Server host, so reshaping per keystroke would flip the row and lose
+                // what was entered. The screen's Save reshapes as well.
+                onBlur={() => onUpdate(reshapeADORow(row))}
                 onChange={(e) => {
                   setBaseURLText(e.target.value);
                   onUpdate({ ...row, base_urls: normalizeBaseURLText(e.target.value) });
@@ -325,158 +332,167 @@ function Row({
                 invalidLines.length > 0 && <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URL_INVALID}</p>
               )}
             </Field>
-            <Field label={PROVIDERS.FIELD_LANES} hint={PROVIDERS.LANES_HINT}>
-              {/* A group, not a labelled control: the Field's label cannot point at
-                  three checkboxes, so the group carries the name and each box its own. */}
-              <div className="space-y-2" role="group" aria-label={PROVIDERS.FIELD_LANES}>
-                {ALL_LANES.map((lane) => {
-                  const reason = laneUnavailableReason(lane, kind, row.base_urls);
-                  const meta = laneMeta(lane);
-                  return (
-                    <label key={lane} className="flex items-start gap-2">
-                      <Checkbox
-                        aria-label={meta.label}
-                        checked={permitted.has(lane) && !reason}
-                        disabled={!operator || !!reason}
-                        onCheckedChange={() => onUpdate({ ...row, lanes: withLaneToggled(row, lane) })}
-                      />
-                      <span>
-                        <span className="block text-body font-medium text-foreground" title={meta.tooltip}>
-                          {meta.label}
+            {!isADO && (
+              <Field label={PROVIDERS.FIELD_LANES} hint={PROVIDERS.LANES_HINT}>
+                {/* A group, not a labelled control: the Field's label cannot point at
+                    three checkboxes, so the group carries the name and each box its own. */}
+                <div className="space-y-2" role="group" aria-label={PROVIDERS.FIELD_LANES}>
+                  {ALL_LANES.map((lane) => {
+                    const reason = laneUnavailableReason(lane, kind, row.base_urls);
+                    const meta = laneMeta(lane);
+                    return (
+                      <label key={lane} className="flex items-start gap-2">
+                        <Checkbox
+                          aria-label={meta.label}
+                          checked={permitted.has(lane) && !reason}
+                          disabled={!operator || !!reason}
+                          onCheckedChange={() => onUpdate({ ...row, lanes: withLaneToggled(row, lane) })}
+                        />
+                        <span>
+                          <span className="block text-body font-medium text-foreground" title={meta.tooltip}>
+                            {meta.label}
+                          </span>
+                          {reason && <span className="block text-meta text-muted-foreground">{reason}</span>}
                         </span>
-                        {reason && <span className="block text-meta text-muted-foreground">{reason}</span>}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </Field>
-          </div>
-
-          {/* The credential lanes, inside the row — GitHostCard's Lane/
-              SecretLane/HostSummary, unchanged, keyed to this row's host. No
-              free-text Host field: the host is the row's own (§2.1, Q4).
-              With no host (no parseable first address) every lane is disabled
-              and names no secret: the secret name is derived from the host, so a
-              defaulted host would write one row's token into another host's
-              secret. The moment a valid address exists the lanes key off its
-              host.
-
-              F4-F13 (Appendix A V8): the group needs roving tabindex and
-              arrow keys (wardyn/use-roving-radio.ts) over the lanes actually
-              rendered for this row's kind/base_urls. A `role="radiogroup"`
-              nesting a Save button is an ARIA violation, so the selected
-              lane's body renders as a sibling below the group, not inside
-              it. */}
-          <div role="radiogroup" aria-label={`${KIND_LABEL[kind]} credentials`} className="space-y-2" {...credGroup.containerProps}>
-            {!host && <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.LANES_NEED_ADDRESS}</p>}
-            <CredentialLane
-              id={`${uid}lane-${kind}-pat`}
-              title="Personal access token"
-              hint={
-                patBrokerEnabled
-                  ? "The simplest lane — stored once; brokered at the proxy by default, so it never enters the sandbox."
-                  : "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
-              }
-              connected={!!host && present.includes(patName)}
-              connectedDetail={`${host} · stored as ${patName}`}
-              selected={!!host && credLane === "pat"}
-              disabled={!host}
-              onSelect={() => setCredLane("pat")}
-              {...credGroup.itemProps(credLanes.indexOf("pat"))}
-            />
-
-            {kind === "github" && appLaneAvailable(kind, row.base_urls) && (
-              <CredentialLane
-                id={`${uid}lane-${kind}-app`}
-                title="GitHub App"
-                hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
-                connected={!!host && githubApp}
-                connectedDetail="Installation credentials stored"
-                selected={!!host && credLane === "app"}
-                disabled={!host}
-                onSelect={() => setCredLane("app")}
-                {...credGroup.itemProps(credLanes.indexOf("app"))}
-              />
-            )}
-
-            {sshLaneAvailable(row.base_urls) && (
-              <CredentialLane
-                id={`${uid}lane-${kind}-ssh`}
-                title="SSH key"
-                hint="A per-run copy is written inside the sandbox for the clone, then shredded."
-                connected={!!host && present.includes(sshName)}
-                connectedDetail={`${host} · stored as ${sshName}`}
-                selected={!!host && credLane === "ssh"}
-                disabled={!host}
-                onSelect={() => setCredLane("ssh")}
-                {...credGroup.itemProps(credLanes.indexOf("ssh"))}
-              />
+                      </label>
+                    );
+                  })}
+                </div>
+              </Field>
             )}
           </div>
 
-          {host && credLane === "pat" && (
-            <LaneBody>
-              <SecretLane
-                label="Access token"
-                // This row's placeholder, not GitHub's: an Azure DevOps PAT
-                // carries no `ghp_` prefix, and suggesting one here risks an
-                // ADO token typed into git-pat-github-com. The discriminator
-                // is the kind, not the host: a GitHub Enterprise Server row is
-                // kind github on a corporate host and its PATs are ghp_ too.
-                placeholder={kind === "github" ? "ghp_…" : "Paste the token"}
-                secretName={patName}
-                stored={present.includes(patName)}
-                disabled={!operator}
-                onChanged={onStatusRefresh}
-                summary={<HostSummary host={host} />}
-                hint={GIT_S.STORE_NOTE}
-                saveVariant="secondary"
+          {/* An Azure DevOps row has no shared credential lane to fill (#1429): the
+              shared token and key are retired, and a stored one would be swept at
+              startup. How people connect is the choice below. */}
+          {!isADO && (
+            <>
+            {/* The credential lanes, inside the row — GitHostCard's Lane/
+                SecretLane/HostSummary, unchanged, keyed to this row's host. No
+                free-text Host field: the host is the row's own (§2.1, Q4).
+                With no host (no parseable first address) every lane is disabled
+                and names no secret: the secret name is derived from the host, so a
+                defaulted host would write one row's token into another host's
+                secret. The moment a valid address exists the lanes key off its
+                host.
+
+                F4-F13 (Appendix A V8): the group needs roving tabindex and
+                arrow keys (wardyn/use-roving-radio.ts) over the lanes actually
+                rendered for this row's kind/base_urls. A `role="radiogroup"`
+                nesting a Save button is an ARIA violation, so the selected
+                lane's body renders as a sibling below the group, not inside
+                it. */}
+            <div role="radiogroup" aria-label={`${KIND_LABEL[kind]} credentials`} className="space-y-2" {...credGroup.containerProps}>
+              {!host && <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.LANES_NEED_ADDRESS}</p>}
+              <CredentialLane
+                id={`${uid}lane-${kind}-pat`}
+                title="Personal access token"
+                hint={
+                  patBrokerEnabled
+                    ? "The simplest lane — stored once; brokered at the proxy by default, so it never enters the sandbox."
+                    : "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
+                }
+                connected={!!host && present.includes(patName)}
+                connectedDetail={`${host} · stored as ${patName}`}
+                selected={!!host && credLane === "pat"}
+                disabled={!host}
+                onSelect={() => setCredLane("pat")}
+                {...credGroup.itemProps(credLanes.indexOf("pat"))}
               />
-            </LaneBody>
-          )}
-          {host && credLane === "app" && kind === "github" && appLaneAvailable(kind, row.base_urls) && (
-            <LaneBody>
-              <div className="space-y-4">
+
+              {kind === "github" && appLaneAvailable(kind, row.base_urls) && (
+                <CredentialLane
+                  id={`${uid}lane-${kind}-app`}
+                  title="GitHub App"
+                  hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
+                  connected={!!host && githubApp}
+                  connectedDetail="Installation credentials stored"
+                  selected={!!host && credLane === "app"}
+                  disabled={!host}
+                  onSelect={() => setCredLane("app")}
+                  {...credGroup.itemProps(credLanes.indexOf("app"))}
+                />
+              )}
+
+              {sshLaneAvailable(row.base_urls) && (
+                <CredentialLane
+                  id={`${uid}lane-${kind}-ssh`}
+                  title="SSH key"
+                  hint="A per-run copy is written inside the sandbox for the clone, then shredded."
+                  connected={!!host && present.includes(sshName)}
+                  connectedDetail={`${host} · stored as ${sshName}`}
+                  selected={!!host && credLane === "ssh"}
+                  disabled={!host}
+                  onSelect={() => setCredLane("ssh")}
+                  {...credGroup.itemProps(credLanes.indexOf("ssh"))}
+                />
+              )}
+            </div>
+
+            {host && credLane === "pat" && (
+              <LaneBody>
                 <SecretLane
-                  label="App ID"
-                  placeholder="123456"
-                  secretName="github-app-id"
-                  stored={present.includes("github-app-id")}
+                  label="Access token"
+                  // This row's placeholder, not GitHub's: an Azure DevOps PAT
+                  // carries no `ghp_` prefix, and suggesting one here risks an
+                  // ADO token typed into git-pat-github-com. The discriminator
+                  // is the kind, not the host: a GitHub Enterprise Server row is
+                  // kind github on a corporate host and its PATs are ghp_ too.
+                  placeholder={kind === "github" ? "ghp_…" : "Paste the token"}
+                  secretName={patName}
+                  stored={present.includes(patName)}
                   disabled={!operator}
                   onChanged={onStatusRefresh}
+                  summary={<HostSummary host={host} />}
+                  hint={GIT_S.STORE_NOTE}
                   saveVariant="secondary"
                 />
+              </LaneBody>
+            )}
+            {host && credLane === "app" && kind === "github" && appLaneAvailable(kind, row.base_urls) && (
+              <LaneBody>
+                <div className="space-y-4">
+                  <SecretLane
+                    label="App ID"
+                    placeholder="123456"
+                    secretName="github-app-id"
+                    stored={present.includes("github-app-id")}
+                    disabled={!operator}
+                    onChanged={onStatusRefresh}
+                    saveVariant="secondary"
+                  />
+                  <SecretLane
+                    label="Private key (PEM)"
+                    placeholder="-----BEGIN RSA PRIVATE KEY-----" // gitleaks:allow — a placeholder string, never a real key
+                    secretName="github-app-key"
+                    stored={present.includes("github-app-key")}
+                    disabled={!operator}
+                    onChanged={onStatusRefresh}
+                    saveVariant="secondary"
+                  />
+                </div>
+              </LaneBody>
+            )}
+            {host && credLane === "ssh" && sshLaneAvailable(row.base_urls) && (
+              <LaneBody>
                 <SecretLane
-                  label="Private key (PEM)"
-                  placeholder="-----BEGIN RSA PRIVATE KEY-----" // gitleaks:allow — a placeholder string, never a real key
-                  secretName="github-app-key"
-                  stored={present.includes("github-app-key")}
+                  label="Private key"
+                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                  secretName={sshName}
+                  stored={present.includes(sshName)}
                   disabled={!operator}
                   onChanged={onStatusRefresh}
+                  summary={<HostSummary host={host} />}
                   saveVariant="secondary"
                 />
-              </div>
-            </LaneBody>
-          )}
-          {host && credLane === "ssh" && sshLaneAvailable(row.base_urls) && (
-            <LaneBody>
-              <SecretLane
-                label="Private key"
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                secretName={sshName}
-                stored={present.includes(sshName)}
-                disabled={!operator}
-                onChanged={onStatusRefresh}
-                summary={<HostSummary host={host} />}
-                saveVariant="secondary"
-              />
-            </LaneBody>
+              </LaneBody>
+            )}
+            </>
           )}
           {/* The entra lane's own section — only on a row that carries it. */}
-          {kind === "azure_devops" && (row.entra || row.lanes?.includes("entra")) && (
-            <EntraEditor row={row} operator={operator} onUpdate={onUpdate} />
-          )}
+          {isADO && (row.entra || row.lanes?.includes("entra")) && <EntraEditor row={row} operator={operator} onUpdate={onUpdate} />}
+          {/* A Server row has no Entra sign-in: people add their own token. */}
+          {isADO && !row.entra && !row.lanes?.includes("entra") && <AdoServerRow />}
         </div>
       )}
 
@@ -558,7 +574,7 @@ export function GitTab({
     // purpose (the org segment is required there, §5.1), so the row shows
     // BASE_URL_INVALID until the admin appends their org; a bare
     // `https://github.com` is a valid host-wide row and needs no edit.
-    onChange([...git, { id: kind, kind, base_urls: [kind === "github" ? "https://github.com" : "https://dev.azure.com/"] }]);
+    onChange([...git, kind === "github" ? { id: kind, kind, base_urls: ["https://github.com"] } : newADORow(kind)]);
 
   return (
     <div className="space-y-4">

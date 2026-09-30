@@ -11,7 +11,7 @@ import { ADO_PAT } from "./ado-pat-copy";
 import { ADO_PAT_REASON } from "./api/ado-pat";
 import { adoCapName } from "./ado-access-copy";
 import type { ADOEntraConfig, GitProvider } from "./api/providers";
-import type { ADORunToken, SCMAccessPAT } from "./types/ado-pat";
+import type { ADOOrgCheck, ADORunToken, SCMAccessPAT } from "./types/ado-pat";
 
 // en-GB on purpose: the copy is written in British English, and the clock is
 // 24-hour, as the mock draws it.
@@ -21,17 +21,24 @@ export function formatClock(iso: string): string {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 }
 
+// A date-only string (the wire's expires_on) is a calendar day in the reader's
+// own zone, not midnight UTC, which would name the day before west of Greenwich.
+function parseDay(iso: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
+}
+
 export function formatDay(iso: string): string {
-  const d = new Date(iso);
+  const d = parseDay(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Whole days until iso, rounded up (a token with 20 hours left has 1 day). */
+/** Whole days until iso (a date or an instant), rounded up, never below zero. */
 export function daysLeft(iso: string, now: number): number {
-  const t = new Date(iso).getTime();
+  const t = parseDay(iso).getTime();
   return Number.isNaN(t) ? 0 : Math.max(0, Math.ceil((t - now) / DAY_MS));
 }
 
@@ -78,6 +85,17 @@ export function adoPatMode(access?: SCMAccessPAT): "minted_pat" | "own_pat" | nu
   return access?.token_mode === "minted_pat" || access?.token_mode === "own_pat" ? access.token_mode : null;
 }
 
+/** Whether an Azure DevOps address is an Azure DevOps Server one: any host that
+ *  is not dev.azure.com or *.visualstudio.com, which have no Entra sign-in. */
+export function adoIsServer(address: string): boolean {
+  try {
+    const host = new URL(address).hostname.toLowerCase();
+    return host !== "dev.azure.com" && !host.endsWith(".visualstudio.com");
+  } catch {
+    return false;
+  }
+}
+
 // The person's Azure DevOps card for a minted_pat or own_pat row; null when the
 // row is neither, or the state is one this console does not recognise.
 export function patCardView(access: SCMAccessPAT, title: string, now: number = Date.now()): PatCardView | null {
@@ -87,6 +105,10 @@ export function patCardView(access: SCMAccessPAT, title: string, now: number = D
   return null;
 }
 
+// A minted row's states. The blocked and permissions-missing answers are causes
+// of expired_signin on the wire, not states of their own; a row the console
+// cannot redeem (no client secret) is the admin's to fix, so it names that
+// with the admin's own sentence and offers nothing to press.
 function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
   switch (access.state) {
     case "not_configured":
@@ -99,20 +121,28 @@ function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
       return { title, chip: { label: ADO_PAT.CHIP_CONNECTED, tone: "success" }, body, action: null, disconnect: true };
     }
     case "expired_signin":
+      if (access.cause === "blocked") {
+        return { title, chip: { label: ADO_PAT.CHIP_BLOCKED, tone: "danger" }, body: [ADO_PAT.BLOCKED_BODY], action: null, disconnect: false };
+      }
+      if (access.cause === "ado_pat_needs_console_app") {
+        return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.NO_CLIENT_SECRET], action: null, disconnect: false };
+      }
+      // ended, consent_needed, permissions_missing and an unnamed cause: the
+      // person signs in again (Microsoft asks for consent there if it is due).
       return { title, chip: { label: ADO_PAT.CHIP_SIGN_IN_AGAIN, tone: "warning" }, body: [ADO_PAT.SIGN_IN_AGAIN_BODY], action: "connect", disconnect: false };
-    case "blocked":
-      return { title, chip: { label: ADO_PAT.CHIP_BLOCKED, tone: "danger" }, body: [ADO_PAT.BLOCKED_BODY], action: null, disconnect: false };
     default:
       return null;
   }
 }
 
+// An own-token row's states: expired is expired_signin with the token_expired
+// cause. An Azure DevOps Server row names itself and says why there is no sign-in.
 function ownCard(access: SCMAccessPAT, title: string, now: number): PatCardView | null {
-  // An Azure DevOps Server row names itself, and says why there is no sign-in.
-  const cardTitle = access.server ? ADO_PAT.OWN_SERVER_TITLE : title;
+  const server = adoIsServer(access.org ?? "");
+  const cardTitle = server ? ADO_PAT.OWN_SERVER_TITLE : title;
   const org = adoOrgLabel(access.org ?? "");
-  const expiryLine = access.expires_at ? ADO_PAT.OWN_EXPIRING_LINE(org, formatDay(access.expires_at)) : null;
-  const serverNote = access.server ? [ADO_PAT.OWN_SERVER_NOTE] : [];
+  const expiryLine = access.expires_on ? ADO_PAT.OWN_EXPIRING_LINE(org, formatDay(access.expires_on)) : null;
+  const serverNote = server ? [ADO_PAT.OWN_SERVER_NOTE] : [];
   switch (access.state) {
     case "not_configured":
       return { title: cardTitle, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: serverNote, action: "add_token", disconnect: false };
@@ -121,71 +151,39 @@ function ownCard(access: SCMAccessPAT, title: string, now: number): PatCardView 
     case "expiring":
       return {
         title: cardTitle,
-        chip: { label: ADO_PAT.OWN_CHIP_EXPIRING(access.expires_at ? daysLeft(access.expires_at, now) : 0), tone: "warning" },
+        chip: { label: ADO_PAT.OWN_CHIP_EXPIRING(access.expires_on ? daysLeft(access.expires_on, now) : 0), tone: "warning" },
         body: [...serverNote, ...(expiryLine ? [expiryLine] : [])],
         action: "replace_token",
         disconnect: false,
       };
-    case "expired":
+    case "expired_signin":
       return { title: cardTitle, chip: { label: ADO_PAT.OWN_CHIP_EXPIRED, tone: "danger" }, body: [...serverNote, ADO_PAT.OWN_EXPIRED_BODY], action: "add_token", disconnect: false };
     default:
       return null;
   }
 }
 
-// ---- The own-token dialog ----
+// ---- The organisation check ----
 
-// The labels Azure DevOps' own "Create a new personal access token" page shows
-// for the scopes a capability can need. The person ticks these boxes there, so
-// the dialog names them in that wording, not Wardyn's. A write scope covers the
-// read beside it, which is why the list drops the covered read.
-const SCOPE_LABEL: Record<string, string> = {
-  "vso.code": "Code (Read)",
-  "vso.code_write": "Code (Read & write)",
-  "vso.code_manage": "Code (Read, write, & manage)",
-  "vso.project": "Project and Team (Read)",
-  "vso.project_manage": "Project and Team (Read, write, & manage)",
-  "vso.work": "Work Items (Read)",
-  "vso.work_write": "Work Items (Read & write)",
-  "vso.wiki": "Wiki (Read)",
-  "vso.wiki_write": "Wiki (Read & write)",
-  "vso.build": "Build (Read)",
-  "vso.build_execute": "Build (Read & execute)",
-  "vso.release": "Release (Read)",
-  "vso.release_execute": "Release (Read, write, & execute)",
-  "vso.release_manage": "Release (Read, write, execute, & manage)",
-  "vso.packaging": "Packaging (Read)",
-  "vso.packaging_write": "Packaging (Read & write)",
-  "vso.serviceendpoint": "Service Connections (Read)",
-  "vso.serviceendpoint_manage": "Service Connections (Read, query, & manage)",
-  "vso.graph": "Graph (Read)",
-  "vso.identity": "Identity (Read)",
-  "vso.test": "Test Management (Read)",
-  "vso.analytics": "Analytics (Read)",
-};
+export interface OrgCheckView {
+  permissions: "granted" | "missing";
+  /** The lifespan line to draw: on (with the hours allowed), off, or nothing. */
+  lifespan: { state: "on"; hours: number } | { state: "off" } | null;
+  /** The row's longest life is above the organisation's maximum. */
+  tooLong: boolean;
+  /** Azure DevOps refused the check's own token on the create policy. */
+  blocked: boolean;
+}
 
-// scope -> the scopes whose label already includes it.
-const COVERED_BY: Record<string, string[]> = {
-  "vso.code": ["vso.code_write", "vso.code_manage"],
-  "vso.code_write": ["vso.code_manage"],
-  "vso.project": ["vso.project_manage"],
-  "vso.work": ["vso.work_write"],
-  "vso.wiki": ["vso.wiki_write"],
-  "vso.build": ["vso.build_execute"],
-  "vso.release": ["vso.release_execute", "vso.release_manage"],
-  "vso.release_execute": ["vso.release_manage"],
-  "vso.packaging": ["vso.packaging_write"],
-  "vso.serviceendpoint": ["vso.serviceendpoint_manage"],
-};
-
-/** The scope labels the own-token dialog lists: sorted by label, a covered read
- *  dropped, a scope with no label shown as itself. */
-export function ownTokenScopeLabels(scopes: string[] | undefined): string[] {
-  const have = new Set(scopes ?? []);
-  return [...have]
-    .filter((s) => !(COVERED_BY[s] ?? []).some((w) => have.has(w)))
-    .map((s) => SCOPE_LABEL[s] ?? s)
-    .sort((a, b) => a.localeCompare(b));
+/** What the check's answer says, in the mock's three lines and two alerts. An
+ *  "unknown" lifespan draws nothing: Azure DevOps said nothing that tells. */
+export function orgCheckView(r: ADOOrgCheck): OrgCheckView {
+  const tooLong = r.token_life === "refused" && r.refusal === ADO_PAT_REASON.LIFESPAN_POLICY;
+  const blocked = r.token_life === "refused" && r.refusal === ADO_PAT_REASON.POLICY_BLOCKED;
+  let lifespan: OrgCheckView["lifespan"] = null;
+  if (r.lifespan === "off") lifespan = { state: "off" };
+  else if (r.lifespan === "on" && r.token_life === "accepted") lifespan = { state: "on", hours: r.pat_max_hours };
+  return { permissions: r.permissions, lifespan, tooLong, blocked };
 }
 
 // ---- New Run ----

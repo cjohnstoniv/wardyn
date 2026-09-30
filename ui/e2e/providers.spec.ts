@@ -151,39 +151,41 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     ]);
   });
 
-  test("enabling Azure DevOps shows `app` disabled with its own reason", async ({ page }) => {
+  // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
+  // console authors the lane its addresses call for and the person-owned choice.
+  test("Add provider authors a valid Azure DevOps row: no lanes to tick, the token choice, saved in the entra lane", async ({ page }) => {
     await gotoProviders(page);
-    // The github row already exists (previous test) as a FULL row — it
-    // renders no "Add provider" button of its own once populated (git-tab.tsx:
-    // that CTA belongs only to the absent-row state). So with the ADO row
-    // still absent, this is the one "Add provider" button left on the
-    // screen — never re-adding github.
+    // The github row already exists (previous test) as a FULL row — it renders
+    // no "Add provider" button of its own once populated. So with the ADO row
+    // still absent, this is the one "Add provider" button left on the screen.
     await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).click();
 
     const row = page.getByTestId("provider-row-azure_devops");
     await expect(row).toBeVisible();
-    // `app` is offered WITH its reason, never hidden (Q3) — the checkbox is
-    // named by LANE_META.app.label via its wrapping <label>, so the reason
-    // line and the disabled state are both pinned to the SAME lane's control.
-    const appCheckbox = row.getByRole("checkbox", { name: "App · brokered" });
-    await expect(appCheckbox).toBeDisabled();
-    await expect(row.getByText(PROVIDERS.LANE_APP_UNAVAILABLE)).toBeVisible();
+    // No Lanes group and no credential lanes: the shared token and key are retired.
+    await expect(row.getByRole("group", { name: PROVIDERS.FIELD_LANES })).toHaveCount(0);
+    await expect(row.getByRole("radiogroup", { name: /credentials/ })).toHaveCount(0);
+    await expect(row.getByText(PROVIDERS.LANE_APP_UNAVAILABLE)).toHaveCount(0);
+    // How people connect is the row's choice, on the recommended one to begin with.
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_MINTED })).toBeChecked();
 
-    // FINDING (git-tab.tsx's addRow default, not fixed here — see this
-    // lane's report): a freshly-added Azure DevOps row defaults its base URL
-    // to "https://dev.azure.com" — ZERO path segments — which the server
-    // refuses outright (workspace_providers_baseurl.go: "dev.azure.com is shared by
-    // every org on the planet, so the organization segment is REQUIRED
-    // there"). Saving the row exactly as "Add provider" leaves it is a
-    // guaranteed 400, with no client-side hint that the default itself is
-    // unsavable. This test's job is the app-lane gate, not the default, so
-    // it supplies a real org path before saving — the way an admin who hit
-    // the refusal above would.
+    // A freshly added row's address names no organisation on purpose: the server
+    // refuses it, and the row says so before that.
+    await expect(row.getByText(PROVIDERS.BASE_URL_INVALID)).toBeVisible();
     await row.locator("textarea").fill("https://dev.azure.com/acme");
+
+    // Each person adds their own token: the choice that needs no app registration.
+    await row.getByRole("radio", { name: ADO_PAT.MODE_OWN }).click();
     await saveProviders(page);
 
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(snap.git.map((g: { kind: string }) => g.kind).sort()).toEqual(["azure_devops", "github"]);
+    const ado = snap.git.find((g: { kind: string }) => g.kind === "azure_devops");
+    expect(ado.lanes).toEqual(["entra"]);
+    expect(ado.credential_source).toBe("per_user");
+    expect(ado.entra).toEqual(
+      expect.objectContaining({ token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"] }),
+    );
   });
 
   test("storing a PAT inside the GitHub row writes the secret, inline", async ({ page }) => {
@@ -658,12 +660,11 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     };
     await spliceProviders(page, minted, () => ({ status: 400, json: { error: ADO_PAT.NO_CLIENT_SECRET } }));
     const checkedAt = new Date(2026, 8, 29, 9, 12).toISOString();
-    let health: Record<string, unknown> = {};
-    await page.route("**/api/v1/scm/azure-devops/org-check", async (route) => {
-      if (route.request().method() === "POST") {
-        health = { checked_at: checkedAt, permissions: "granted", lifespan: "on", lifespan_hours: 8 };
-      }
-      await route.fulfill({ json: health });
+    let answer: Record<string, unknown> = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
+    let checks = 0;
+    await page.route("**/api/v1/workspace-providers/git/azure_devops/org-check", async (route) => {
+      checks++;
+      await route.fulfill({ json: answer });
     });
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-azure_devops");
@@ -673,10 +674,13 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     await expect(row.getByText(ADO_PAT.MINTED_SETUP_REDIRECT)).toBeVisible();
     await expect(row.getByLabel(ADO_PAT.TOKEN_LIFE_LABEL)).toHaveValue("8");
 
+    // Nothing is drawn until the admin asks: the server keeps no last answer.
+    await expect(row.getByTestId("ado-org-check")).toHaveCount(0);
     await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
     const card = row.getByTestId("ado-org-check");
     await expect(card.getByText(ADO_PAT.CHECK_PERMS_OK)).toBeVisible();
     await expect(card.getByText(ADO_PAT.CHECK_LIFESPAN_ON(8))).toBeVisible();
+    expect(checks).toBe(1);
 
     // A longest life outside 1 to 168 names the range and withholds Save.
     const hours = row.getByLabel(ADO_PAT.TOKEN_LIFE_LABEL);
@@ -689,16 +693,51 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
     await expect(row.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeVisible();
 
-    // What the organisation later refused, as the server now reports it.
-    health = { checked_at: checkedAt, permissions: "granted", lifespan: "too_long", lifespan_hours: 24, blocked_person: "Priya Shah" };
-    await page.reload();
-    const again = page.getByTestId("provider-row-azure_devops");
-    await expect(again.getByText(ADO_PAT.LIFESPAN_REFUSAL(24))).toBeVisible();
-    await expect(again.getByText(ADO_PAT.POLICY_BANNER("Priya Shah"))).toBeVisible();
-    await again.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }).click();
-    await expect(again.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
+    // What the organisation refused, as the check now reports it.
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "refused", refusal: "ado_pat_lifespan_policy", lifespan: "on" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByText(ADO_PAT.LIFESPAN_REFUSAL())).toBeVisible();
+
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "refused", refusal: "ado_pat_policy_blocked", lifespan: "unknown" };
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByText(/^Azure DevOps refused to create a token for .+: your organisation restricts who can create personal access tokens\./)).toBeVisible();
+    await row.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON }).click();
+    await expect(row.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
     // Entra sign-in while the app holds the token permissions: refused inline.
-    await expect(again.getByText(ADO_PAT.BEARER_WITH_TOKEN_PERMS)).toBeVisible();
+    answer = { checked_at: checkedAt, organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "granted", token_life: "accepted", lifespan: "on" };
+    await row.getByRole("radio", { name: ADO_PAT.MODE_MINTED }).click();
+    await row.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
+    await expect(row.getByTestId("ado-org-check")).toBeVisible();
+    await row.getByRole("radio", { name: ADO_PAT.MODE_BEARER }).click();
+    await expect(row.getByText(ADO_PAT.BEARER_WITH_TOKEN_PERMS)).toBeVisible();
+  });
+
+  test("an Azure DevOps Server address makes the row a git-only per-person token row", async ({ page }) => {
+    const services = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "own_pat", capability_ceiling: ["project_read", "code_read"], default_profile: [] },
+    };
+    let sent: { git: Record<string, unknown>[] } | null = null;
+    await spliceProviders(page, services, (body) => {
+      sent = body;
+      return { status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } };
+    });
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    await row.locator("textarea").fill("https://tfs.corp.example/acme");
+    await row.locator("textarea").blur();
+    await expect(row.getByTestId("ado-server-row")).toBeVisible();
+    await expect(row.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeVisible();
+    await expect(row.getByLabel(ADO_ENTRA_EDITOR.FIELD_TENANT)).toHaveCount(0);
+    await saveProviders(page);
+    expect(sent!.git[0]).toEqual(
+      expect.objectContaining({ lanes: ["pat"], credential_source: "per_user", base_urls: ["https://tfs.corp.example/acme"] }),
+    );
+    expect("entra" in sent!.git[0]).toBe(false);
   });
 
   test("the row the upgrade switched off says why, and Save and turn on saves it on", async ({ page }) => {
@@ -740,12 +779,15 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
       },
       () => ({ status: 200, json: { git: [] } }),
     );
-    await page.route("**/api/v1/scm/azure-devops/org-check", (route) =>
-      route.fulfill({ json: { checked_at: new Date(2026, 8, 29, 9, 12).toISOString(), permissions: "missing", lifespan: "off", blocked_person: "Priya Shah" } }),
+    await page.route("**/api/v1/workspace-providers/git/azure_devops/org-check", (route) =>
+      route.fulfill({
+        json: { checked_at: new Date(2026, 8, 29, 9, 12).toISOString(), organisation: "wardyn-e2e", pat_max_hours: 8, permissions: "missing", token_life: "accepted", lifespan: "off" },
+      }),
     );
     // The sidebar is collapsed at this width, so go straight to the page.
     await page.goto("/admin/providers");
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await page.getByRole("button", { name: ADO_PAT.CHECK_BUTTON }).click();
     await expect(page.getByTestId("ado-org-check")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
