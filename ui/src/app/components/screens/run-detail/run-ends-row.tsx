@@ -49,6 +49,20 @@ export function weekdayClock(iso: string): string {
   return `${weekday} ${clock}`;
 }
 
+// How the Ended banner names kept_until. The default grace is exactly 7 days, so
+// weekday + clock alone repeats the moment the run ended and reads as already
+// past. By whole days away: under 6 is weekday + clock, 6 to 13 adds the
+// packet's " next week", and 14 or more is a full local date with the clock.
+export function keptUntilText(iso: string, now: number = Date.now()): string {
+  const days = Math.round((Date.parse(iso) - now) / DAY_MS);
+  if (days < 6) return weekdayClock(iso);
+  if (days < 14) return `${weekdayClock(iso)} next week`;
+  const d = new Date(iso);
+  const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const clock = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return `${date} ${clock}`;
+}
+
 export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {
   const [changeOpen, setChangeOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);

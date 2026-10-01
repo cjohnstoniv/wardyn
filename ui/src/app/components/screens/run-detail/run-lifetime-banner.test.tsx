@@ -167,14 +167,37 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(screen.queryByText("This run's sandbox stopped")).not.toBeInTheDocument();
   });
 
-  it("#1320: an interactive run with kept_until says until when its files are kept, from the server's date", () => {
-    const keptUntil = new Date(NOW + 5 * 24 * 3600_000).toISOString();
-    const run = detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, kept_until: keptUntil });
+  // The ended run is read just after it ended, so kept_until is the grace less a
+  // minute away. weekday + clock alone would repeat the moment it ended.
+  const DAY = 24 * 3600_000;
+  const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const keptRun = (graceDays: number) => {
+    const keptUntil = new Date(NOW + graceDays * DAY - 60_000).toISOString();
+    return { keptUntil, run: detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, kept_until: keptUntil }) };
+  };
+  const body = (dateText: string) => `It has no network. Its files are kept until ${dateText}. Extend to revive it.`;
+
+  it("#1320: a 1-day grace says the weekday and clock", () => {
+    const { keptUntil, run } = keptRun(1);
     renderBanner(run);
-    expect(
-      screen.getByText(`It has no network. Its files are kept until ${weekdayClock(keptUntil)}. Extend to revive it.`),
-    ).toBeInTheDocument();
+    expect(screen.getByText(body(weekdayClock(keptUntil)))).toBeInTheDocument();
+    expect(screen.queryByText(/next week/)).not.toBeInTheDocument();
     expect(screen.queryByText("It has no network. Extend to revive it.")).not.toBeInTheDocument();
+  });
+
+  it("#1320: the default 7-day grace says 'next week', not a bare weekday that repeats the end", () => {
+    const { keptUntil, run } = keptRun(7);
+    renderBanner(run);
+    expect(screen.getByText(body(`${weekdayClock(keptUntil)} next week`))).toBeInTheDocument();
+  });
+
+  it("#1320: a 14-day grace says the full date with the clock", () => {
+    const { keptUntil, run } = keptRun(14);
+    renderBanner(run);
+    const d = new Date(keptUntil);
+    const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    expect(screen.getByText(body(`${date} ${clock(keptUntil)}`))).toBeInTheDocument();
+    expect(screen.queryByText(/next week/)).not.toBeInTheDocument();
   });
 
   it("#1320: a task run keeps ENDED_BODY_TASK even when kept_until is present", () => {

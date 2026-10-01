@@ -21,7 +21,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import * as RL from "../../wardyn/copy/run-lifetime";
-import { weekdayClock } from "./run-ends-row";
+import { keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
@@ -205,7 +205,7 @@ export function RunLifetimeBanner({
           data-testid="run-lifetime-ended"
           tone="plain"
           title={RL.ENDED_TITLE}
-          body={run.interactive ? (run.kept_until ? RL.endedBody(weekdayClock(run.kept_until)) : RL.ENDED_BODY_NO_DATE) : RL.ENDED_BODY_TASK}
+          body={run.interactive ? (run.kept_until ? RL.endedBody(keptUntilText(run.kept_until)) : RL.ENDED_BODY_NO_DATE) : RL.ENDED_BODY_TASK}
         >
           {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">

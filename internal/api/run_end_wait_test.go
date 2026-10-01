@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -417,6 +419,32 @@ func TestSetRunEnd_CapLoosenedIsToldNotApplied(t *testing.T) {
 				out.EndsAt == nil || !out.EndsAt.Equal(f.now.Add(2*day)) {
 				t.Fatalf("over-ask %d = %d %+v, want the captured %v", i, code, out, f.now.Add(2*day))
 			}
+		}
+	})
+
+	// The comparison is against the profile the run launched under, never
+	// another one in the list (the owner's current assignment may be a looser or
+	// tighter profile than the one the run was captured from).
+	t.Run("the launch profile decides, not another profile", func(t *testing.T) {
+		for _, tc := range []struct {
+			name         string
+			launch, nowB int
+			want         bool
+		}{
+			{"launch unchanged, another looser", 2 * 86400, 30 * 86400, false},
+			{"launch loosened, another tighter", 30 * 86400, 86400, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f, st, profileID := newReclampFixture(t, captured, 2*day, 1800)
+				st.profiles = []types.GovernanceProfile{
+					{ID: uuid.New(), Name: "owner's current", Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: tc.nowB}}},
+					{ID: profileID, Name: "launch", Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: tc.launch}}},
+				}
+				code, m, raw := f.patchRaw(t, ownerSession(t), endsAtBody(f.now.Add(10*day)))
+				if _, present := m["ends_cap_loosened"]; code != http.StatusOK || present != tc.want {
+					t.Errorf("PATCH = %d %s; want ends_cap_loosened present = %v", code, raw, tc.want)
+				}
+			})
 		}
 	})
 
