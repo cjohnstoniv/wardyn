@@ -321,7 +321,9 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 # One command from "fixes ready" to "published and verified": scripts/release-patch.sh
 # (RELEASING.md, "The patch command"). Variables given on the make command line reach
 # it as environment: V (required), BRANCH, MERGE, NOTES, BODY, HIGHLIGHTS, ISSUES,
-# PHASE, DRY_RUN. DRY_RUN=1 tags, pushes to release/* and publishes nothing.
+# PHASE, DRY_RUN. DRY_RUN=1 makes no release commit, PR, release/* push, tag or
+# Release, but it still pushes the candidate branch, dispatches nightly.yml (which
+# pushes public staging images) and dispatches release.yml's promote dry run.
 release-patch: ## Cut a patch release: make release-patch V=x.y.z (DRY_RUN=1 rehearses)
 	@./scripts/release-patch.sh
 

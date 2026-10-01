@@ -29,6 +29,13 @@
 # watched, then the same table. The local checks are skipped (a rehearsal branch
 # need not carry a release commit).
 #
+# A final X.Y.Z moves release/X.Y (fast-forward) and tags the candidate. A real
+# X.Y.Z-rc.N never moves release/X.Y: it is tagged and published as a pre-release
+# from the candidate branch.
+# A dispatched nightly older than NIGHTLY_MAX_AGE (24 h, what release.yml's promote
+# preflight allows) counts as absent: prepare dispatches a fresh one, wait does not
+# accept the old one, and publish checks again before each irreversible push.
+#
 # It never reruns a failed job and never runs the forward-port: it prints them.
 # It never forces a push: a rejected push means a branch moved, and it stops.
 set -euo pipefail
@@ -47,6 +54,7 @@ PHASE="${PHASE:-all}"
 DRY_RUN="${DRY_RUN:-0}"
 WAIT_INTERVAL="${WAIT_INTERVAL:-60}"
 RUN_POLL_INTERVAL="${RUN_POLL_INTERVAL:-5}"
+NIGHTLY_MAX_AGE=86400 # seconds; release.yml's promote preflight refuses older staging
 BODY_LIMIT=125000 # GitHub's release body limit, in characters
 
 say() { echo "release-patch: $*"; }
@@ -103,6 +111,13 @@ git rev-parse --verify -q "origin/$RB^{commit}" >/dev/null || die "origin/$RB do
 REPO="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
 [ -n "$REPO" ] || die "cannot tell the repository (set GITHUB_REPOSITORY=owner/name)"
 
+# age_s <ISO-8601 time>: seconds since then (large when unreadable, so it reads as stale)
+age_s() {
+  local t
+  t="$(date -d "$1" +%s 2>/dev/null)" || { echo 999999999; return 0; }
+  echo $(( $(date +%s) - t ))
+}
+
 LATEST=""; LATEST_KEY=""
 while IFS= read -r t; do
   [ "$t" = "v$V" ] && continue
@@ -111,7 +126,15 @@ while IFS= read -r t; do
 done < <(git tag -l "v$XY.*")
 [ -n "$LATEST" ] || die "no v$XY.* tag to patch from"
 [[ "$(vkey "$V")" > "$LATEST_KEY" ]] || die "$V must be greater than every v$XY.* tag; the newest is $LATEST"
-FROM="${LATEST#v}"
+# FROM is the newest tag the release line already contains: an rc tagged from a
+# candidate branch is not on origin/release/X.Y, and its pins are not in the tree.
+FROM=""; FROM_KEY=""
+while IFS= read -r t; do
+  [ "$t" = "v$V" ] && continue
+  k="$(vkey "${t#v}")" || continue
+  if [ -z "$FROM_KEY" ] || [[ "$k" > "$FROM_KEY" ]]; then FROM="${t#v}"; FROM_KEY="$k"; fi
+done < <(git tag -l "v$XY.*" --merged "origin/$RB")
+[ -n "$FROM" ] || die "no v$XY.* tag is reachable from origin/$RB"
 
 # A tag vV may exist only as this candidate's own, resumed release.
 if git rev-parse --verify -q "refs/tags/v$V" >/dev/null; then
@@ -148,14 +171,17 @@ remote_tip() { git ls-remote origin "refs/heads/$1" | awk '{print $1}'; }
 # (the newest finished, non-cancelled dispatched run has every watched job green
 # and the multi-arch build green), or none.
 nightly_state() {
-  local tree="$1" runs id rows
+  local tree="$1" runs id rows row
   runs="$(gh api -X GET "repos/$REPO/actions/workflows/nightly.yml/runs" -f event=workflow_dispatch -f per_page=100)" \
     || { echo "release-patch: cannot list the nightly runs" >&2; return 1; }
   if [ "$(jq --arg t "$tree" '[.workflow_runs[] | select(.head_commit.tree_id == $t and .event == "workflow_dispatch" and .status != "completed")] | length' <<<"$runs")" -gt 0 ]; then
     echo active; return 0
   fi
-  id="$(jq -r --arg t "$tree" '[.workflow_runs[] | select(.head_commit.tree_id == $t and .event == "workflow_dispatch" and .status == "completed" and .conclusion != "cancelled")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$runs")"
-  if [ -z "$id" ]; then echo none; return 0; fi
+  row="$(jq -r --arg t "$tree" '[.workflow_runs[] | select(.head_commit.tree_id == $t and .event == "workflow_dispatch" and .status == "completed" and .conclusion != "cancelled")] | sort_by(.created_at) | reverse | .[0] | select(. != null) | [.id, .updated_at] | @tsv' <<<"$runs")"
+  if [ -z "$row" ]; then echo none; return 0; fi
+  id="${row%%$'\t'*}"
+  # too old for release.yml's promote preflight: as good as absent, dispatch a fresh one
+  if [ "$(age_s "${row#*$'\t'}")" -gt "$NIGHTLY_MAX_AGE" ]; then echo none; return 0; fi
   rows="$(gh api -X GET --paginate "repos/$REPO/actions/runs/$id/jobs" -f per_page=100 --jq '.jobs[] | [.name, .conclusion] | @tsv')" \
     || { echo "release-patch: cannot read the jobs of nightly run $id" >&2; return 1; }
   if awk -F'\t' -v watched="$WATCHED" '
@@ -252,6 +278,19 @@ phase_prepare() {
   esac
 }
 
+# nightly_fresh <run id>: 0 when the run finished within NIGHTLY_MAX_AGE, 1 (with a
+# message on stderr) when it is older; an unreadable run is an error.
+nightly_fresh() {
+  local upd
+  [ -n "$1" ] || { echo "release-patch: green-by-tree named no nightly run" >&2; return 1; }
+  upd="$(gh api -X GET "repos/$REPO/actions/runs/$1" --jq .updated_at)" || die "cannot read nightly run $1"
+  if [ "$(age_s "$upd")" -gt "$NIGHTLY_MAX_AGE" ]; then
+    echo "release-patch: nightly run $1 finished $upd, more than 24 hours ago: release.yml's promote preflight would refuse it" >&2
+    return 1
+  fi
+  return 0
+}
+
 # ── wait ─────────────────────────────────────────────────────────────────────
 active_runs() {  # active_runs <sha>: how many ci.yml and nightly.yml runs on it are unfinished
   local wf n total=0
@@ -290,6 +329,13 @@ phase_wait() {
     reason="$(tail -n 3 "$err" | tr '\n' ' ')"
     case "$rc" in
       0)
+        if ! nightly_fresh "$(sed -n 's/^nightly_run=//p' <<<"$out")" 2>"$err"; then
+          reason="$(tail -n 1 "$err")"; rc=1
+          if [ "$(active_runs "$sha")" -gt 0 ]; then say "waiting ${WAIT_INTERVAL}s: $reason"; sleep "$WAIT_INTERVAL"; continue; fi
+          rm -f "$err"
+          echo "release-patch: STOP: $reason. Dispatch a fresh one: gh workflow run nightly.yml --ref $CAND" >&2
+          exit 1
+        fi
         rm -f "$err"
         sed 's/^/  /' <<<"$out"
         finish "green: T0 starts"
@@ -354,20 +400,22 @@ EOF
 }
 
 phase_publish() {
-  local sha rtip rc id queued state body vout err prev
+  local sha rtip rc id queued state body vout err prev gout nrun
   sha="$(git rev-parse HEAD)"
   [ "$(remote_tip "$CAND")" = "$sha" ] || die "$CAND is not pushed at ${sha:0:12}: run PHASE=prepare first"
   [ -n "$T0" ] || T0=$SECONDS
 
   begin "green-by-tree"
   err="$(mktemp)"
-  if GITHUB_REPOSITORY="$REPO" WATCHED="$WATCHED" NEED_STAGING=1 "$HERE/green-by-tree.sh" "$sha" >/dev/null 2>"$err"; then rc=0; else rc=$?; fi
+  if gout="$(GITHUB_REPOSITORY="$REPO" WATCHED="$WATCHED" NEED_STAGING=1 "$HERE/green-by-tree.sh" "$sha" 2>"$err")"; then rc=0; else rc=$?; fi
+  nrun="$(sed -n 's/^nightly_run=//p' <<<"$gout")"
   if [ "$rc" != 0 ]; then
     echo "release-patch: green-by-tree said: $(tail -n 3 "$err" | tr '\n' ' ')" >&2
     rm -f "$err"
     die "publish refused: the tree of ${sha:0:12} is not green (green-by-tree exit $rc). PHASE=wait shows why"
   fi
   rm -f "$err"
+  nightly_fresh "$nrun" || die "publish refused: the nightly is stale. Dispatch a fresh one (gh workflow run nightly.yml --ref $CAND), wait, and run this again"
   finish ok
 
   begin "queued runs in the repo"
@@ -393,11 +441,22 @@ phase_publish() {
     return 0
   fi
 
+  # A local tag from an earlier, interrupted run must be the commit just verified.
+  check_local_tag() {
+    local at
+    git rev-parse --verify -q "refs/tags/v$V" >/dev/null || return 0
+    at="$(git rev-parse "refs/tags/v$V^{commit}")"
+    [ "$at" = "$sha" ] || die "local tag v$V is at ${at:0:12}, not ${sha:0:12}, the commit just verified. Delete it (git tag -d v$V) if it was never pushed, then run this again"
+  }
+  check_local_tag
+
   begin "fast-forward origin/$RB"
   git fetch origin --quiet || die "git fetch origin failed"
   rtip="$(remote_tip "$RB")"
-  if [ "$rtip" = "$sha" ]; then finish "skipped (already there)"
+  if [[ "$V" == *-rc.* ]]; then finish "skipped (an rc never moves $RB)"
+  elif [ "$rtip" = "$sha" ]; then finish "skipped (already there)"
   else
+    nightly_fresh "$nrun" || die "refusing to push $RB: the nightly went stale"
     git merge-base --is-ancestor "origin/$RB" "$sha" || die "$RB moved: origin/$RB is not an ancestor of ${sha:0:12}. Prepare the candidate again"
     git push origin "$sha:refs/heads/$RB" || die "the push to $RB was rejected: it moved. Nothing is forced"
     finish ok
@@ -408,8 +467,11 @@ phase_publish() {
   if [ "$rtip" = "$sha" ]; then finish "skipped (already pushed)"
   elif [ -n "$rtip" ]; then die "tag v$V already exists on origin at ${rtip:0:12}, not ${sha:0:12}"
   else
+    check_local_tag
+    nightly_fresh "$nrun" || die "refusing to push v$V: the nightly went stale"
     git rev-parse --verify -q "refs/tags/v$V" >/dev/null || git tag -a "v$V" -m "Wardyn v$V" "$sha"
-    git push origin "v$V" || die "pushing v$V failed"
+    check_local_tag
+    git push origin "refs/tags/v$V" || die "pushing v$V failed"
     finish ok
   fi
 

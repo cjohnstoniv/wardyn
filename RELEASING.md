@@ -5,7 +5,8 @@ are not stable, so a minor bump may still carry breaking changes (see the CHANGE
 header). Releases are cut by the maintainer; no workflow cuts a tag or a Release
 for you (`release.yml` only reacts to a tag you push). A patch is cut with one
 command the maintainer runs, `make release-patch` (see "The patch command" under
-Steps), which pushes the branch and the tag itself. Anything else, and every
+Steps), which pushes the candidate branch, fast-forwards `release/X.Y`, pushes the
+tag and publishes the Release itself. Anything else, and every
 minor, follows the manual steps. This document is that process, written down.
 
 ## Prerequisites
@@ -211,11 +212,22 @@ crash or a usage limit resumes with the same command:
 3. **publish.** `green-by-tree.sh` again (it must exit 0), a warning when other
    runs are queued, then `git push origin <sha>:refs/heads/release/X.Y` (never
    forced: a rejected push means `release/X.Y` moved, so it stops), the annotated
-   tag `vX.Y.Z` and its push, `gh run watch` on `release.yml`'s run for the tag,
+   tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere
+   but the commit just verified is refused by name), `gh run watch` on `release.yml`'s run for the tag,
    `gh release edit vX.Y.Z --draft=false --prerelease` on the draft that
    `release-assets` made, and `scripts/verify-release.sh`, which must end
    `fails=0`. The forward-port commands are printed, never run. If `gh release
    edit` finds no draft, the command prints the releases listing and stops.
+
+A final `X.Y.Z` fast-forwards `release/X.Y`. A real `X.Y.Z-rc.N` never does: it is
+tagged and published as a pre-release from the candidate branch, and the next
+final's `--from` is the newest tag `release/X.Y` itself contains.
+
+A dispatched nightly older than 24 hours counts as absent, because `release.yml`'s
+promote preflight refuses staging older than that. prepare dispatches a fresh one,
+wait does not accept the old one, and publish checks again before it pushes
+`release/X.Y` and before it pushes the tag, so a cut resumed the next day stops
+instead of going red in `release.yml` after the push.
 
 The clock: the design starts it from a green candidate. With the release commit
 already on `BRANCH` (it rides in the batch's last round), prepare skips the
@@ -242,9 +254,14 @@ publish becomes `gh workflow run release.yml --ref <branch> -f path=promote -f
 dry_run=true`, watched, then the same table. The local checks are skipped, and
 `release-commit.sh --dry-run` runs only as a warning: it refuses a missing
 ROADMAP Shipped row without `--highlights`, so pass `HIGHLIGHTS=` to rehearse
-cleanly. `BRANCH` need not contain `origin/release/X.Y` in a rehearsal (the command
+cleanly. A rehearsal is not read-only: it still pushes the candidate branch (creating
+`chore/release-V` on origin when `BRANCH` is unset, carrying the merge commit when
+`MERGE` is set), dispatches `nightly.yml`, which pushes public staging images, and
+dispatches the promote dry run of `release.yml`. It pushes nothing to `release/*`
+or `refs/tags/*`. `BRANCH` need not contain `origin/release/X.Y` in a rehearsal (the command
 warns), but the branch's tree must be one that CI tested, or the wait phase has
-nothing to find. The promote path needs the `path` input on `release.yml`.
+nothing to find. The promote path needs the `path` input on `release.yml`, which a branch gets
+by containing R7.
 
 **Recovery.** Every recovery is the same command again, or a rerun it printed.
 - A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the

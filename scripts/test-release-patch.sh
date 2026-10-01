@@ -99,6 +99,8 @@ case "$1 ${2:-}" in
     case "$ep" in
       */nightly.yml/runs) emit "$key" '{"workflow_runs":[]}' ;;
       */releases) emit "$key" '[]' ;;
+      */actions/runs/*/jobs) [ -f "$FIX/$key" ] && emit "$key" '{}' || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; } ;;
+      */actions/runs/*) emit "$key" "{\"updated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" ;;
       *) [ -f "$FIX/$key" ] && emit "$key" '{}' || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; } ;;
     esac ;;
   *) echo "gh shim: unhandled: $*" >&2; exit 1 ;;
@@ -138,7 +140,7 @@ STUB
   cat >scripts/verify-release.sh <<'STUB'
 #!/usr/bin/env bash
 echo "V=${V:-}" >>"$FIX/verify.log"
-echo "fails=0"
+cat "$FIX/verify.out" 2>/dev/null || echo "fails=0"
 exit "$(cat "$FIX/verify.rc" 2>/dev/null || echo 0)"
 STUB
   cat >scripts/test-claims-match-code.sh <<'STUB'
@@ -397,6 +399,79 @@ rp V=0.8.4 PHASE=bogus
 refused "P: refuses an unknown PHASE" 'PHASE'
 rp V=0.8.4 DRY_RUN=maybe
 refused "P: refuses a DRY_RUN other than 0 or 1" 'DRY_RUN'
+
+# ── R. F1: a local tag left at an older head is never pushed ────────────────
+mkfix R
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+g -C "$WK" tag -a v0.8.4 -m old
+OLD=$(g -C "$WK" rev-parse HEAD)
+g clone -q "$OR" "$WORK/R/other" && (cd "$WORK/R/other" && echo more >MORE && g add MORE && g commit -q -s -m "more main" && g push -q origin main)
+rp V=0.8.4 MERGE=origin/main
+if [ "$RC" != 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" != "$OLD" ] && out_has 'local tag v0\.8\.4 is at' \
+  && [ -z "$(g -C "$OR" tag -l v0.8.4)" ] && log_lacks push.log 'refs/tags|v0\.8\.4$' && log_lacks push.log 'refs/heads/release/' && log_lacks gh.log 'release edit'; then
+  ok "R: a stale local tag is refused by name before release/0.8 or the tag moves"
+else bad "R: stale local tag (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
+keep_pushes
+check "R: the tag is pushed by its full ref when it is right" bash -c "grep -q 'refs/tags/v0.8.4' '$ALLPUSH'"
+
+# ── S. F2: a nightly older than 24 hours is absent ───────────────────────────
+mkfix S
+rp V=0.8.4 PHASE=prepare
+STREE=$(g -C "$WK" rev-parse 'HEAD^{tree}')
+OLDTS=$(date -u -d '30 hours ago' +%Y-%m-%dT%H:%M:%SZ); NEWTS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+runs_json() { printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"completed","conclusion":"success","created_at":"%s","updated_at":"%s","head_commit":{"tree_id":"%s"}}]}' "$1" "$1" "$STREE"; }
+printf '{"jobs":[{"name":"w1","conclusion":"success"},{"name":"w2","conclusion":"success"},{"name":"w3","conclusion":"success"},{"name":"multi-arch build (x)","conclusion":"success"}]}' >"$FIX/api_repos_acme_wardyn_actions_runs_9_jobs.json"
+W1=$(grep -c '^workflow run nightly' "$FIX/gh.log")
+runs_json "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
+rp V=0.8.4 PHASE=prepare
+check "S: a green nightly from now is not dispatched again" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $W1 ]"
+runs_json "$OLDTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
+rp V=0.8.4 PHASE=prepare
+check "S: a green nightly 30 hours old is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W1 + 1)) ]"
+# wait and publish: green-by-tree passes on the old run (nightly_run=2), the run is stale
+printf '{"updated_at":"%s"}' "$OLDTS" >"$FIX/api_repos_acme_wardyn_actions_runs_2.json"
+rp V=0.8.4 PHASE=publish
+if [ "$RC" != 0 ] && out_has 'more than 24 hours' && [ "$(lines "$FIX/push.log")" = 1 ] && log_lacks push.log 'release/0\.8$|v0\.8\.4'; then ok "S: publish refuses a stale nightly before any push"
+else bad "S: publish with a stale nightly (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
+rp V=0.8.4 PHASE=wait
+if [ "$RC" != 0 ] && out_has 'more than 24 hours'; then ok "S: wait does not accept a stale nightly with nothing running"
+else bad "S: wait with a stale nightly (rc=$RC)"; fi
+keep_pushes
+
+# ── T. an rc never moves release/X.Y ─────────────────────────────────────────
+mkfix T
+printf '[{"databaseId":902,"headBranch":"v0.8.4-rc.1","status":"completed","event":"push"}]' >"$FIX/run_list_release.yml.json"
+rp V=0.8.4-rc.1
+[ "$RC" = 0 ] && ok "T: an rc run exits 0" || { bad "T: rc run exit $RC"; sed 's/^/      /' "$FIX/out.txt"; }
+check "T: release/0.8 on origin is untouched" bash -c "[ \"\$('$REAL_GIT' -C '$OR' rev-parse refs/heads/release/0.8)\" = \"\$('$REAL_GIT' -C '$WK' rev-parse origin/release/0.8)\" ]"
+check "T: no push to release/*" log_lacks push.log 'refs/heads/release/'
+check "T: the rc tag is pushed from the candidate" bash -c "[ \"\$('$REAL_GIT' -C '$OR' rev-parse 'refs/tags/v0.8.4-rc.1^{commit}')\" = \"\$('$REAL_GIT' -C '$OR' rev-parse refs/heads/chore/release-0.8.4-rc.1)\" ]"
+check "T: published as a pre-release" log_has gh.log '^release edit v0\.8\.4-rc\.1 --draft=false --prerelease '
+keep_pushes
+# an rc already on a candidate branch does not become the next FROM
+mkfix T2
+g -C "$WK" tag v0.8.4-rc.1 main
+rp V=0.8.4 PHASE=prepare
+check "T: FROM ignores an rc tag that release/0.8 does not contain" log_has rc.log -- '--from 0\.8\.3 --to 0\.8\.4'
+keep_pushes
+
+# ── U. F4: a dry run on a branch that DOES hold release/0.8 pushes nothing there
+mkfix U
+g -C "$WK" branch --no-track feat-y origin/release/0.8
+RELBEFORE=$(g -C "$OR" rev-parse refs/heads/release/0.8)
+rp V=0.8.4 BRANCH=feat-y DRY_RUN=1 HIGHLIGHTS=x
+[ "$RC" = 0 ] && ok "U: dry run exits 0" || { bad "U: dry run exit $RC"; sed 's/^/      /' "$FIX/out.txt"; }
+check "U: release/0.8 unchanged and no tag" bash -c "[ \"\$('$REAL_GIT' -C '$OR' rev-parse refs/heads/release/0.8)\" = '$RELBEFORE' ] && [ -z \"\$('$REAL_GIT' -C '$OR' tag -l v0.8.4)\" ]"
+check "U: no push but the candidate branch" bash -c "[ \"\$(grep -vc '^push origin HEAD:refs/heads/feat-y\$' '$FIX/push.log')\" = 0 ]"
+check "U: no release edit, no verify, no PR" bash -c "! grep -qE '^release edit|^pr create' '$FIX/gh.log' && [ ! -s '$FIX/verify.log' ]"
+keep_pushes
+
+# ── V. F4: verify-release that does not end fails=0 fails the command ─────────
+mkfix V
+echo "fails=3" >"$FIX/verify.out"
+rp V=0.8.4
+check "V: exit 0 from verify-release without fails=0 still fails" bash -c "[ '$RC' != 0 ] && grep -q 'did not end fails=0' '$FIX/out.txt'"
+keep_pushes
 
 # ── Q. the script text and every recorded push ───────────────────────────────
 check "Q: the script text never forces a push" bash -c "! grep -nE 'push[^#]*(--force|-f |--mirror| \\+)' '$SCRIPT'"
