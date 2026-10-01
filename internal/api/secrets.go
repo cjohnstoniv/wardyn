@@ -849,10 +849,8 @@ func (s *Server) presentSecretNames(ctx context.Context) map[string]bool {
 // presentSecretNamesFor widens presentSecretNames to a caller's own namespace:
 // the operator names UNION owner's own reserved-filtered names (For(owner).List
 // — own rows only, never another member's). owner == "" collapses to exactly
-// presentSecretNames (the byte-identical-for-operators case). This is what lets
-// a member's own anthropic-api-key synthesise their anthropic_api_key row
-// (effectiveIntegrations) and satisfy a model-access verdict with no operator
-// row at all.
+// presentSecretNames (the byte-identical-for-operators case). A stored model
+// key is no model-access path since 0.8.2 (retiredModelCredentialNames above).
 func (s *Server) presentSecretNamesFor(ctx context.Context, owner string) map[string]bool {
 	present := s.presentSecretNames(ctx)
 	if owner == "" || s.cfg.Secrets == nil {

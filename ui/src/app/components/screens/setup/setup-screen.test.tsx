@@ -132,6 +132,9 @@ function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
+// One enabled model provider serving a harness — what the server's llm_ready counts.
+const MODEL_PROVIDER = { id: "corp", kind: "custom_endpoint", harnesses: ["claude-code"], host: "gw.corp.example" };
+
 describe("setupDismissed()/dismissSetup() — localStorage flag", () => {
   beforeEach(() => localStorage.clear());
 
@@ -462,10 +465,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   });
 
   it("the connection step renders the shared cards (not the old catalog) and the rail badge counts a connection", async () => {
-    getSetupStatusMock.mockResolvedValue(
-      baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
-    );
-    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    getSetupStatusMock.mockResolvedValue(baseStatus({ llm_ready: true, model_providers: [MODEL_PROVIDER] }));
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
 
@@ -492,6 +492,42 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     const nav = navs[navs.length - 1];
     const btn = within(nav).getByRole("button", { name: /^secrets/i });
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
+  });
+
+  // #1421 — the count is the server's model-provider truth. An operator key a
+  // status still lists is no model path (#548), so it must not earn the badge.
+  it("the badge ignores stale model-key secrets — they are no model provider", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ secrets: { present: ["anthropic-api-key", "openai-api-key"], github_app: false } }),
+    );
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const btn = within(navs[navs.length - 1]).getByRole("button", { name: /^secrets/i });
+    expect(await within(btn).findByText("Optional")).toBeInTheDocument();
+    expect(within(btn).queryByText(/connected/)).not.toBeInTheDocument();
+  });
+
+  it("a disabled model provider earns no badge even when llm_ready", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ llm_ready: true, model_providers: [{ ...MODEL_PROVIDER, disabled: true }] }),
+    );
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const btn = within(navs[navs.length - 1]).getByRole("button", { name: /^secrets/i });
+    expect(await within(btn).findByText("Optional")).toBeInTheDocument();
   });
 
   // The step is two cards, Model provider and Git host — the catalog for
