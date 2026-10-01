@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -318,6 +318,15 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@echo "nightly.yml's multi-arch build — confirm CI is green on the commit, and"
 	@echo "the multi-arch build green on it, before tagging (RELEASING.md)."
 
+# One command from "fixes ready" to "published and verified": scripts/release-patch.sh
+# (RELEASING.md, "The patch command"). Variables given on the make command line reach
+# it as environment: V (required), BRANCH, MERGE, NOTES, BODY, HIGHLIGHTS, ISSUES,
+# PHASE, DRY_RUN. DRY_RUN=1 makes no release commit, PR, release/* push, tag or
+# Release, but it still pushes the candidate branch, dispatches nightly.yml (which
+# pushes public staging images) and dispatches release.yml's promote dry run.
+release-patch: ## Cut a patch release: make release-patch V=x.y.z (DRY_RUN=1 rehearses)
+	@./scripts/release-patch.sh
+
 # 20m, not 10m: this suite is no longer the runner-contract cases alone. 0.7.5's
 # boot-egress measurement boots the REAL claude-code image, walks its first screens
 # through a PTY and then waits out two fixed settle sleeps on the proxy's decision
@@ -606,6 +615,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
+	./scripts/test-release-patch.sh
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh

@@ -2,10 +2,12 @@
 
 Wardyn is **pre-alpha** and does **not** follow semantic versioning yet — interfaces
 are not stable, so a minor bump may still carry breaking changes (see the CHANGELOG
-header). Releases are cut **manually** by the maintainer; there is no `make release`
-target and no workflow that cuts a tag or a Release for you (`release.yml` only
-reacts to a tag you push) — **nothing here is automated to push anything**. This
-document is that process, written down.
+header). Releases are cut by the maintainer; no workflow cuts a tag or a Release
+for you (`release.yml` only reacts to a tag you push). A patch is cut with one
+command the maintainer runs, `make release-patch` (see "The patch command" under
+Steps), which pushes the candidate branch, fast-forwards `release/X.Y`, pushes the
+tag and publishes the Release itself. Anything else, and every
+minor, follows the manual steps. This document is that process, written down.
 
 ## Prerequisites
 
@@ -140,10 +142,13 @@ flowchart LR
 4. **Release branch and tag.** Steps 3 to 5 below run on the merged release
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
    for a patch, and the tag goes on that branch.
-5. **Point releases.** A fix is a PR to `main`, cherry-picked onto
-   `release/X.Y`. The branch never takes a feature. Once `main` carries the
-   next minor, fast-forwarding `release/X.Y` would ship all of it, so a patch
-   takes this path instead:
+5. **Point releases.** `make release-patch V=X.Y.Z` is the patch path (see
+   "The patch command" under Steps): it makes the candidate, opens the release
+   PR, waits for CI and the nightly on the candidate's tree, then publishes and
+   verifies. Steps 1 to 6 below are the fallback when it cannot be used. A fix
+   is a PR to `main`, cherry-picked onto `release/X.Y`. The branch never takes
+   a feature. Once `main` carries the next minor, fast-forwarding `release/X.Y`
+   would ship all of it, so a patch takes this path instead:
    1. Each fix is an issue labelled `backport/X.Y`, fixed by a PR into `main`.
    2. One backport PR into `release/X.Y` cherry-picks those merge commits with
       `git cherry-pick -x -m 1 <merge>`, so each commit names its source.
@@ -167,6 +172,109 @@ commit itself — re-opens every gate that commit could affect, and the release
 record names the SHA each piece of evidence was produced on.
 
 ## Steps
+
+### The patch command
+
+```sh
+make release-patch V=0.8.4 MERGE=origin/main ISSUES="1461 1470" HIGHLIGHTS="..."
+make release-patch V=0.8.4 DRY_RUN=1 BRANCH=<a branch whose tree CI tested> HIGHLIGHTS="..."
+```
+
+It takes a patch from "fixes ready" to "published and verified", and prints a
+table of the seconds each step took. Inputs, all optional but `V`:
+
+| Input | Meaning |
+|---|---|
+| `V` | `X.Y.Z` or `X.Y.Z-rc.N`, required. It must be greater than every `vX.Y.*` tag. |
+| `BRANCH` | An existing branch that contains `origin/release/X.Y`. Default: `chore/release-V`, cut from `origin/release/X.Y`. |
+| `MERGE` | A ref to merge into the candidate, for example `origin/main`. Merged with `--no-ff --signoff` and `rerere.enabled=false`. |
+| `NOTES` | The CHANGELOG paste file, passed to `release-commit.sh --notes`. |
+| `BODY` | The Release body file. Default: the new CHANGELOG section. Over 125000 characters is refused. |
+| `HIGHLIGHTS` | The ROADMAP Shipped row's text. Required when the row is missing. |
+| `ISSUES` | Issue numbers. The PR body gets one `Closes #N` per line. |
+| `PHASE` | `prepare`, `wait`, `publish` or `all` (default). |
+| `DRY_RUN=1` | A rehearsal (below). |
+
+The phases, each of which first detects what already exists and skips it, so a
+crash or a usage limit resumes with the same command:
+
+1. **prepare.** Branch, `MERGE`, `scripts/release-commit.sh --apply`, three local
+   checks that must each pass (`make dco DCO_RANGE="HEAD ^origin/main
+   ^origin/release/X.Y"`, the version tests, `scripts/test-claims-match-code.sh`),
+   push, a PR into `release/X.Y` titled `release: V`, and `nightly.yml`
+   dispatched on the branch unless a dispatched nightly on the same tree is
+   already queued, running or green.
+2. **wait.** Every 60 seconds, `scripts/green-by-tree.sh` on the head with
+   `NEED_STAGING=1`. Exit 0 starts the clock, **T0**. Exit 2 stops. Exit 1 keeps
+   waiting while a `ci.yml` or `nightly.yml` run on the head is queued or running;
+   otherwise it stops and prints each red job with
+   `gh run rerun <id> --failed` as the next command. It never reruns anything.
+3. **publish.** `green-by-tree.sh` again (it must exit 0), a warning when other
+   runs are queued, then `git push origin <sha>:refs/heads/release/X.Y` (never
+   forced: a rejected push means `release/X.Y` moved, so it stops), the annotated
+   tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere
+   but the commit just verified is refused by name), `gh run watch` on `release.yml`'s run for the tag,
+   `gh release edit vX.Y.Z --draft=false --prerelease` on the draft that
+   `release-assets` made, and `scripts/verify-release.sh`, which must end
+   `fails=0`. The forward-port commands are printed, never run. If `gh release
+   edit` finds no draft, the command prints the releases listing and stops.
+
+A final `X.Y.Z` fast-forwards `release/X.Y`. A real `X.Y.Z-rc.N` never does: it is
+tagged and published as a pre-release from the candidate branch, and the next
+final's `--from` is the newest tag `release/X.Y` itself contains.
+
+A dispatched nightly older than 24 hours counts as absent, because `release.yml`'s
+promote preflight refuses staging older than that. prepare dispatches a fresh one,
+wait does not accept the old one, and publish checks again before it pushes
+`release/X.Y` and before it pushes the tag, so a cut resumed the next day stops
+instead of going red in `release.yml` after the push.
+
+The clock: the design starts it from a green candidate. With the release commit
+already on `BRANCH` (it rides in the batch's last round), prepare skips the
+release commit and the batch's own green CI and nightly are T0. The table's
+"from T0" total is this invocation's: a resumed run reports only the steps it
+did, and starts its clock at its own first green.
+
+**What it enforces, so nobody has to remember it** (each of these cost a 0.8.2 or
+0.8.3 cut time):
+
+| Gotcha | Where it is handled |
+|---|---|
+| The release PR's `dco` failed on GitHub's own merge commits that merging main brings in | `ci.yml`'s PR range is `$BASE..$PR_HEAD ^origin/main`; the command's local range is `HEAD ^origin/main ^origin/release/X.Y`. Never `DCO_ALLOW_GITHUB_MERGES=1` on a release (it leaks into `scripts/test-dco.sh` case 6). |
+| `release-commit.sh` refused a pin that was already bumped | A pin already at the new version counts as OK. |
+| `--expect-tip` took only an 8-character sha | Any unique prefix of 7 to 40 hex characters works. |
+| The preflight needed a nightly on the exact sha | Evidence is keyed by tree (`green-by-tree.sh`). |
+| ROADMAP Highlights were filled in by hand | `HIGHLIGHTS=`; the command refuses when the row is missing and none was given. |
+| A sha with both PR and push runs was ambiguous | `green-by-tree.sh` judges each run. |
+| A repeated cut | `release-commit.sh` exits 4 when `## [V]` is already in the CHANGELOG, so a second `--apply` cannot duplicate the section. The command never calls it again: it sees `## [V]` and skips. |
+
+**Rehearsal.** `DRY_RUN=1` makes no release commit, no PR, no push to `release/*`,
+no tag and no Release. The nightly dispatch and the wait phase run as usual, and
+publish becomes `gh workflow run release.yml --ref <branch> -f path=promote -f
+dry_run=true`, watched, then the same table. The local checks are skipped, and
+`release-commit.sh --dry-run` runs only as a warning: it refuses a missing
+ROADMAP Shipped row without `--highlights`, so pass `HIGHLIGHTS=` to rehearse
+cleanly. A rehearsal is not read-only: it still pushes the candidate branch (creating
+`chore/release-V` on origin when `BRANCH` is unset, carrying the merge commit when
+`MERGE` is set), dispatches `nightly.yml`, which pushes public staging images, and
+dispatches the promote dry run of `release.yml`. It pushes nothing to `release/*`
+or `refs/tags/*`. `BRANCH` need not contain `origin/release/X.Y` in a rehearsal (the command
+warns), but the branch's tree must be one that CI tested, or the wait phase has
+nothing to find. The promote path needs the `path` input on `release.yml`, which a branch gets
+by containing R7.
+
+**Recovery.** Every recovery is the same command again, or a rerun it printed.
+- A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the
+  tree, so a newer red is not hidden by an older green. Rerun the failed jobs
+  with the printed `gh run rerun <id> --failed`, or dispatch a fresh one
+  (`gh workflow run nightly.yml --ref <branch>`; `make release-patch` does it
+  when the newest finished run is not green). Re-dispatching is the deliberate
+  recovery.
+- A red `release.yml` run: rerun its failed jobs, then run the command again.
+- The tag, the branch push and the published Release are each skipped once they
+  exist. A tag that exists at some other commit is refused.
+
+When the command cannot be used, the manual steps below are the fallback.
 
 For a patch release, choose `X.Y.Z` **before** updating version strings: refresh
 tags with `git fetch origin --tags`, then inspect
