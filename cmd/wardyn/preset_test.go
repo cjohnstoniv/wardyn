@@ -17,8 +17,8 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// TestPresetGetApplyRoundTrip: `wardyn preset apply` PUTs each preset by
-// name, and `wardyn preset get > f && wardyn preset apply f` leaves every
+// TestPresetGetApplyRoundTrip: `wardyn preset set` PUTs each preset by
+// name, and `wardyn preset get > f && wardyn preset set f` leaves every
 // version where it was. The fake bumps a version only on a changed body, the
 // server's own rule (PutLaunchPreset).
 func TestPresetGetApplyRoundTrip(t *testing.T) {
@@ -75,13 +75,13 @@ func TestPresetGetApplyRoundTrip(t *testing.T) {
 	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run("preset", "apply", path)
+	run("preset", "set", path)
 
 	got := run("preset", "get")
 	if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run("preset", "apply", path)
+	run("preset", "set", path)
 	var before, after sdk.PresetsDocument
 	if err := json.Unmarshal([]byte(got), &before); err != nil {
 		t.Fatalf("get printed %q: %v", got, err)

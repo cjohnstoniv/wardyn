@@ -10,7 +10,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-Three changes can refuse a configuration that worked on 0.8.3. Migration `0105_branding_logo_from_file`
+Four changes can refuse a configuration that worked on 0.8.3. Migration `0105_branding_logo_from_file`
 runs on the first start; it adds one column with a default and changes no existing row.
 
 - **The `secret.rewrap` audit field `key_version` is now a string.** It was an integer before 0.8.4
@@ -24,6 +24,23 @@ runs on the first start; it adds one column with a default and changes no existi
   through `wardyn site-config set`, that puts one host on rows of two kinds (a GitHub row and an Azure
   DevOps row, for example) is refused with a `400`, disabled rows included. Rows already stored are not
   re-checked until the next save or apply (an MDM file is applied at each boot).
+- **The CLI commands below are renamed to one noun-verb shape (#206).** These names are a clean break with no alias: an
+  old spelling now answers `unknown command` and a non-zero exit, so a script or CI job that types one
+  must change before it runs against 0.8.4. A few plural and short aliases remain for now (`runs`,
+  `sources`, `workspaces`, `ls` and `rm`). Flags, arguments and guards are unchanged, including
+  `--reason`, `--scope` and `--until` on a decision and the `--sub`-or-`--all` rule on `session revoke`.
+
+  | Before | Now |
+  |---|---|
+  | `wardyn approvals list`, `wardyn approvals get` | `wardyn approval list`, `wardyn approval get` |
+  | `wardyn approve <id>`, `wardyn deny <id>` | `wardyn approval approve <id>`, `wardyn approval deny <id>` |
+  | `wardyn logs <run-id>` | `wardyn run logs <run-id>` |
+  | `wardyn sessions list`, `wardyn sessions revoke` | `wardyn session list`, `wardyn session revoke` |
+  | `wardyn drive apply [file]` | `wardyn drive set [file]` |
+  | `wardyn governance apply [file]` | `wardyn governance set [file]` |
+  | `wardyn preset apply [file]` | `wardyn preset set [file]` |
+
+  The git credential helper's "already minted" hint now names `wardyn approval approve <id> --scope run`.
 
 ### Security
 
