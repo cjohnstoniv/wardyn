@@ -158,6 +158,22 @@ runs on the first start; it adds one column with a default and changes no existi
 - **The nightly's published-image scan restores the trivy database cache,** and its issue now says the
   scan failed, instead of claiming a published image has a CRITICAL vulnerability when the failure may
   be a database download or an empty release list.
+- **Upgrading: the CLI is one noun-verb tree, and the old spellings are gone (#206).** A clean break with
+  no alias: an old spelling now answers `unknown command` and a non-zero exit, so a script or CI job that
+  types one must change before it runs against 0.8.4. Flags, arguments and guards are unchanged, including
+  `--reason`, `--scope` and `--until` on a decision and the `--sub`-or-`--all` rule on `session revoke`.
+
+  | Before | Now |
+  |---|---|
+  | `wardyn approvals list`, `wardyn approvals get` | `wardyn approval list`, `wardyn approval get` |
+  | `wardyn approve <id>`, `wardyn deny <id>` | `wardyn approval approve <id>`, `wardyn approval deny <id>` |
+  | `wardyn logs <run-id>` | `wardyn run logs <run-id>` |
+  | `wardyn sessions list`, `wardyn sessions revoke` | `wardyn session list`, `wardyn session revoke` |
+  | `wardyn drive apply [file]` | `wardyn drive set [file]` |
+  | `wardyn governance apply [file]` | `wardyn governance set [file]` |
+  | `wardyn preset apply [file]` | `wardyn preset set [file]` |
+
+  The git credential helper's "already minted" hint now names `wardyn approval approve <id> --scope run`.
 
 ### Fixed
 

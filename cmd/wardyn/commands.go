@@ -223,7 +223,7 @@ func runCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client), runPolicyCmd(client),
-		attachCmd(client), sshCmd(client))
+		runLogsCmd(client), attachCmd(client), sshCmd(client))
 	return cmd
 }
 
@@ -559,11 +559,12 @@ func approvalHost(a types.ApprovalRequest) string {
 	return s.Host
 }
 
-// approvalsCmd lists approval requests; approve/deny act on a single one.
-func approvalsCmd(client clientFn) *cobra.Command {
+// approvalCmd groups the approval verbs: list and get read, approve and deny
+// decide a single request.
+func approvalCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "approvals",
-		Short: "List approval requests (approve/deny decide a single one)",
+		Use:   "approval",
+		Short: "List, show, approve or deny approval requests",
 	}
 	var state string
 	var runFilter string
@@ -609,7 +610,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
 	cmd.AddCommand(list)
 
-	// approvalScanPage is the page size `approvals get` scans a run with. It
+	// approvalScanPage is the page size `approval get` scans a run with. It
 	// matches the server's own default page (defaultListLimit, well under
 	// maxListLimit=1000), and asking for it EXPLICITLY is what makes the next
 	// page reachable at all — offset only advances if the request carries one.
@@ -632,7 +633,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 				return fmt.Errorf("invalid approval id %q: %w", args[0], err)
 			}
 			if getRun == "" {
-				return errors.New("--run is required: the API has no get-by-id lookup, so `approvals get` scans one run's approvals")
+				return errors.New("--run is required: the API has no get-by-id lookup, so `approval get` scans one run's approvals")
 			}
 			runID, err := uuid.Parse(getRun)
 			if err != nil {
@@ -668,7 +669,9 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	}
 	get.Flags().StringVar(&getRun, "run", "", "run ID to search (required)")
 	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON")
-	cmd.AddCommand(get)
+	cmd.AddCommand(get,
+		approvalDecisionCmd(client, "approve", "Approve a pending approval request", (*sdk.Client).Approve),
+		approvalDecisionCmd(client, "deny", "Deny a pending approval request", (*sdk.Client).Deny))
 	return subcommandGroup(cmd)
 }
 
@@ -744,7 +747,7 @@ func parseDecisionUntil(s string) (time.Time, error) {
 }
 
 // logTail dedupes a run's audit-event stream across repeated polls for
-// logsCmd. The server's Since filter is RFC3339 (second resolution, see
+// runLogsCmd. The server's Since filter is RFC3339 (second resolution, see
 // AuditFilter.Since), so re-polling with since=<last event's second> can
 // legitimately re-return every event from that same second — logTail tracks
 // which event IDs at the current boundary second were already emitted so
@@ -792,7 +795,7 @@ func logLine(e types.AuditEvent) string {
 	return line
 }
 
-// logsCmd tails a run's audit-event trail as a live, human-readable log
+// runLogsCmd (`wardyn run logs`) tails a run's audit-event trail as a live, human-readable log
 // stream: a batch/headless run's live progress is otherwise unreachable from
 // the CLI (`attach` opens a SEPARATE interactive exec, not a tail of the
 // agent — see Runner.Attach's doc; `run --wait` only polls terminal state,
@@ -804,7 +807,7 @@ func logLine(e types.AuditEvent) string {
 // internal/runner/runner.go's Exec/ExecStream docs). Every line is a real
 // audited action, not raw process bytes; it is the closest live signal the
 // CLI has today without new server plumbing.
-func logsCmd(client clientFn) *cobra.Command {
+func runLogsCmd(client clientFn) *cobra.Command {
 	var follow bool
 	var interval time.Duration
 	cmd := &cobra.Command{

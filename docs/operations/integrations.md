@@ -249,7 +249,7 @@ reset-all` take them with the volume.
 
 1. Export: `wardyn governance get > governance.json` (`GET
    /api/v1/governance`) before a reset.
-2. Restore: `wardyn governance apply governance.json` after — the same
+2. Restore: `wardyn governance set governance.json` after — the same
    get-then-apply shape `wardyn site-config get|set` and `wardyn drive
    get|apply` already take (0.8, #1108).
 
@@ -259,6 +259,6 @@ profile the file does not mention is left alone. One present server-side
 but absent from the file is only removed with `--prune`. `--prune` also
 removes an omitted assignment. It removes assignments before profiles. So
 a still-referenced profile never trips the delete-while-assigned refusal
-above. `wardyn governance get > f && wardyn governance apply f` is a
+above. `wardyn governance get > f && wardyn governance set f` is a
 no-op: unchanged rows are skipped rather than re-written, so a repeat
 apply issues no writes and adds no audit rows.

@@ -775,7 +775,7 @@ func TestApproveCmd_PostsApproveWithReason(t *testing.T) {
 	})
 
 	apID := uuid.New()
-	err := execCmd(t, "approve", apID.String(), "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
+	err := execCmd(t, "approval", "approve", apID.String(), "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
 	if err != nil {
 		t.Fatalf("approve returned error: %v", err)
 	}
@@ -797,7 +797,7 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 	})
 
 	apID := uuid.New()
-	if err := execCmd(t, "deny", apID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+	if err := execCmd(t, "approval", "deny", apID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("deny returned error: %v", err)
 	}
 	got := srv.last()
@@ -813,7 +813,7 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
 	runID := uuid.New()
-	if err := execCmd(t, "approvals", "list", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+	if err := execCmd(t, "approval", "list", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("approvals list returned error: %v", err)
 	}
 	q, err := url.ParseQuery(srv.last().query)
@@ -837,7 +837,7 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 	}})
 	gotBuf := &strings.Builder{}
 	root := rootCmd()
-	root.SetArgs([]string{"approvals", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"approval", "list", "--url", srv.URL, "--token", "tok"})
 	root.SetOut(gotBuf)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -855,7 +855,7 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 // TestApprovalsGetCmd_RequiresRunFlag: `approvals get` has no server-side
 // get-by-id endpoint to fall back on, so --run is mandatory, not optional.
 func TestApprovalsGetCmd_RequiresRunFlag(t *testing.T) {
-	if err := execCmd(t, "approvals", "get", uuid.New().String(), "--token", "tok"); err == nil {
+	if err := execCmd(t, "approval", "get", uuid.New().String(), "--token", "tok"); err == nil {
 		t.Error("expected error when --run is missing, got nil")
 	}
 }
@@ -873,7 +873,7 @@ func TestApprovalsGetCmd_FindsByIDWithinRun(t *testing.T) {
 	})
 	out := &strings.Builder{}
 	root := rootCmd()
-	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"approval", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -898,7 +898,7 @@ func TestApprovalsGetCmd_NotFound(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
 		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
 	})
-	err := execCmd(t, "approvals", "get", uuid.New().String(), "--run", uuid.New().String(),
+	err := execCmd(t, "approval", "get", uuid.New().String(), "--run", uuid.New().String(),
 		"--url", srv.URL, "--token", "tok")
 	if err == nil {
 		t.Error("expected error for an approval id not found in --run, got nil")
@@ -907,7 +907,7 @@ func TestApprovalsGetCmd_NotFound(t *testing.T) {
 
 // approve/deny take exactly one positional arg.
 func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
-	if err := execCmd(t, "approve", "--token", "tok"); err == nil {
+	if err := execCmd(t, "approval", "approve", "--token", "tok"); err == nil {
 		t.Error("expected error when approval id is missing, got nil")
 	}
 }
@@ -923,7 +923,7 @@ func TestApproveCmd_WithScopeAndUntil(t *testing.T) {
 
 	apID := uuid.New()
 	before := time.Now()
-	err := execCmd(t, "approve", apID.String(), "--url", srv.URL, "--token", "tok",
+	err := execCmd(t, "approval", "approve", apID.String(), "--url", srv.URL, "--token", "tok",
 		"--scope", "until", "--until", "2h")
 	if err != nil {
 		t.Fatalf("approve returned error: %v", err)
@@ -950,7 +950,7 @@ func TestApproveCmd_WithScopeOnly(t *testing.T) {
 		ID: uuid.New(), State: types.ApprovalApproved,
 	})
 
-	if err := execCmd(t, "approve", uuid.New().String(), "--url", srv.URL, "--token", "tok",
+	if err := execCmd(t, "approval", "approve", uuid.New().String(), "--url", srv.URL, "--token", "tok",
 		"--scope", "once"); err != nil {
 		t.Fatalf("approve returned error: %v", err)
 	}
@@ -1209,7 +1209,7 @@ func TestLogsCmd_FollowStopsAtTerminalState(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	})
 	if err != nil {
 		t.Fatalf("logs returned error: %v", err)
@@ -1240,14 +1240,14 @@ func TestLogsCmd_UnknownRunErrorsInsteadOfHanging(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", uuid.New().String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", uuid.New().String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	}); err == nil {
 		t.Fatal("logs returned nil for an unknown run id, want the GetRun 404 propagated")
 	}
 }
 
 // runCmdWithTimeout builds rootCmd(), lets configure set its args/flags, and
-// executes it with output captured (logsCmd writes via cmd.OutOrStdout()).
+// executes it with output captured (runLogsCmd writes via cmd.OutOrStdout()).
 // It doubles as the timeout backstop for a follow loop that fails to exit.
 func runCmdWithTimeout(t *testing.T, configure func(root *cobra.Command)) (string, error) {
 	t.Helper()
@@ -1767,7 +1767,7 @@ func TestApprovalsListCmd(t *testing.T) {
 		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
 	})
 
-	if err := execCmd(t, "approvals", "list", "--state", "PENDING", "--url", srv.URL, "--token", "tok"); err != nil {
+	if err := execCmd(t, "approval", "list", "--state", "PENDING", "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("approvals list returned error: %v", err)
 	}
 	got := srv.last()
@@ -1784,7 +1784,7 @@ func TestApprovalsListCmd_JSON(t *testing.T) {
 		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
 	})
 
-	if err := execCmd(t, "approvals", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+	if err := execCmd(t, "approval", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("approvals list --json returned error: %v", err)
 	}
 	got := srv.last()
@@ -1927,7 +1927,7 @@ func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 		{"run list", []types.AgentRun{{ID: runID, Agent: "claude-code"}},
 			[]string{"run", "list"}, runID, nil},
 		{"approvals list", []types.ApprovalRequest{{ID: apprID, RunID: apprRun, State: types.ApprovalPending}},
-			[]string{"approvals", "list"}, apprID, &apprRun},
+			[]string{"approval", "list"}, apprID, &apprRun},
 		{"policy list", []types.RunPolicy{{ID: polID, Name: "p"}},
 			[]string{"policy", "list"}, polID, nil},
 	} {
@@ -2064,7 +2064,7 @@ func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
 
 	out := &strings.Builder{}
 	root := rootCmd()
-	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"approval", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -2096,7 +2096,7 @@ func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", uuid.New().String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", uuid.New().String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
 	}); err == nil {
 		t.Fatal("logs --follow=false returned nil for an unknown run id, want the GetRun 404 propagated")
 	}
@@ -2133,7 +2133,7 @@ func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", runID.String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", runID.String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
 	})
 	if err != nil {
 		t.Fatalf("logs returned error: %v", err)
@@ -2174,7 +2174,7 @@ func TestLogsCmd_FollowDrainsAuditsAfterTerminal(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	})
 	if err != nil {
 		t.Fatalf("logs returned error: %v", err)
@@ -2370,7 +2370,7 @@ func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
 // help on stdout and exits 0. That is the half of the contract subcommandGroup
 // must not break — the compat note covers the typo path only.
 func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
-	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "sessions", "device", "source", "ssh-key", "site-config", "drive", "preset", "approvals"} {
+	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "session", "device", "source", "ssh-key", "site-config", "drive", "preset", "approval"} {
 		t.Run(group, func(t *testing.T) {
 			root := rootCmd()
 			var out, errOut strings.Builder
@@ -2475,7 +2475,7 @@ func TestRunAttachAndSSHAreReachable(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// #206: `wardyn sessions list`
+// #206: `wardyn session list`
 // --------------------------------------------------------------------------
 
 func TestSessionsListCmd(t *testing.T) {
@@ -2488,7 +2488,7 @@ func TestSessionsListCmd(t *testing.T) {
 
 	root := rootCmd()
 	out := &strings.Builder{}
-	root.SetArgs([]string{"sessions", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"session", "list", "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -2521,7 +2521,7 @@ func TestSessionsListCmd_JSON(t *testing.T) {
 
 	root := rootCmd()
 	out := &strings.Builder{}
-	root.SetArgs([]string{"sessions", "list", "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"session", "list", "--json", "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -2542,7 +2542,7 @@ func TestSessionsListCmd_JSON(t *testing.T) {
 func TestSessionsListCmd_APIError(t *testing.T) {
 	srv := newCmdServer(t, http.StatusForbidden, map[string]string{"error": "forbidden"})
 
-	err := execCmd(t, "sessions", "list", "--url", srv.URL, "--token", "tok")
+	err := execCmd(t, "session", "list", "--url", srv.URL, "--token", "tok")
 	var ae *sdk.APIError
 	if !errors.As(err, &ae) {
 		t.Fatalf("err = %v, want *sdk.APIError", err)

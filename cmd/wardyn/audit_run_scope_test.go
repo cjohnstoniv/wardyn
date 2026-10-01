@@ -53,7 +53,7 @@ func runAuditCmd(t *testing.T, url string, args ...string) error {
 // array. Rendering that as the header row alone and exit 0 turns an authz refusal
 // into a clean bill of health: an operator checking whether a run was tampered
 // with, or a CI job asserting an audit trail exists, reads "no findings" from a
-// request that was actually refused. logsCmd guards the identical case with a
+// request that was actually refused. runLogsCmd guards the identical case with a
 // GetRun first, and says so in a comment; auditCmd had no such call between
 // parseID and the render loop.
 func TestAuditRunScopeRefusalIsNotSuccess(t *testing.T) {

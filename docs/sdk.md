@@ -494,6 +494,10 @@ path. The chart key is a clean break, no alias — see
 | `POST /runs/{id}/profile` | `POST /runs/{id}/profile/synthesize` | HTTP route, aliased for one minor |
 | Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
 | Helm `userDrives.reclaim.enabled` | Helm `drives.reclaim.enabled` | Chart value, clean break (no alias); never released under the old name |
+| `approvals list\|get`, `approve`, `deny` | `wardyn approval list\|get\|approve\|deny` | CLI command, clean break (no alias) |
+| `logs <run-id>` | `wardyn run logs <run-id>` | CLI command, clean break (no alias) |
+| `sessions list\|revoke` | `wardyn session list\|revoke` | CLI command, clean break (no alias) |
+| `drive apply`, `governance apply`, `preset apply` | `wardyn drive set`, `wardyn governance set`, `wardyn preset set` | CLI command, clean break (no alias) |
 
 ### Azure DevOps capabilities (#1409)
 
