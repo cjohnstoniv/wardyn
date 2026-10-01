@@ -328,8 +328,9 @@ func (m *metrics) egressDenied() {
 // when nothing was denied by policy at all:
 //
 //   - builtin:dial-failed — emitted from exactly three sites in
-//     internal/egress/proxy (proxy.go:890, upstream_protocol.go:405 and
-//     llm_routes.go:213), all genuine dial failures on a request policy
+//     internal/egress/proxy (handleConnect in proxy.go, failUpstream in
+//     upstream_protocol.go and forwardInspectedLLM in llm_routes.go), all genuine
+//     dial failures on a request policy
 //     ALLOWED, where the network lost it. A guard refusal of the configured
 //     model gateway (errGatewayVet, from vetTrustedHost) is not one of them: it
 //     carries its own rule_source (ruleSourceGatewayVetFailed), because it is a

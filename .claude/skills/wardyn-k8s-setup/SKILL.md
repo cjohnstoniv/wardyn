@@ -65,7 +65,7 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      substrate drives the apiserver directly via client-go, which needs the
      pod's own projected token).
    - **Images**: `k8s.proxyImage` (required — the chart refuses to render
-     with `k8s.enabled` and no `k8s.proxyImage`, `deployment.yaml:87-88`; also
+     with `k8s.enabled` and no `k8s.proxyImage`, `templates/deployment.yaml`; also
      what the egress canary itself launches) and `image.repository`/`image.tag`
      for wardynd.
    - **`runtimeClasses`**: `k8s.runtimeClasses.CC2`/`.CC3` pin a Confinement

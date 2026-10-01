@@ -82,10 +82,10 @@ the box on the compose stack. Four things ship pre-wired:
   origin as the binary: integrity, not a pin.
 - **What the cache key identifies.** `CacheKey = SHA256(ProfileHash|v2)`
   identifies the recipe, not the resolved tools.
-  - Reuse needs all three conditions at `internal/api/workspace_run_image.go:285-289`
-    (a stored image ref, a matching `BuiltProfileHash`, and
-    `cachedImageStillPresent`). That presence check fails open
-    (`:99-110`): a runner that cannot answer counts the image as present.
+  - Reuse needs all three conditions, checked just before a generated image is
+    built (`internal/api/workspace_run_image.go`): a stored image ref, a matching
+    `BuiltProfileHash`, and `cachedImageStillPresent`. That presence check fails
+    open: a runner that cannot answer counts the image as present.
   - A rebuild happens on a profile change, a `cacheKeySalt` bump or a missing
     image. A rebuild **may** resolve newer versions; envbuilder's layer cache can
     replay layers, so it is not a security refresh.
