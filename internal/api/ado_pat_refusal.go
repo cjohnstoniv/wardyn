@@ -26,6 +26,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -61,7 +62,13 @@ func (s *Server) handleADOPATRefusal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := pager.QueryAuditEventsFilteredPage(ctx, nil, store.AuditFilter{
-		Action:       adoPATAuditMintDenied,
+		Action: adoPATAuditMintDenied,
+		// The mint's own row only: wardynd, as system, written here and not
+		// forwarded. A laptop may forward any action (POST /devices/{id}/audit),
+		// and its row must never put a false refusal in front of an admin.
+		Origin:       store.AuditOriginOrganisation,
+		ActorType:    types.ActorSystem,
+		Actor:        "wardynd",
 		Since:        s.cfg.Now().Add(-adoPATRefusalWindow),
 		DataContains: string(mustJSON(map[string]any{"refusal": reasonADOPATPolicyBlocked, "provider_row": rowID})),
 	}, store.Page{Limit: adoPATRefusalScan})

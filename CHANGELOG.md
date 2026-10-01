@@ -27,6 +27,7 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Security
 
+- **Four follow-ups on the 0.8.4 identity and Azure DevOps code (#1449, #1444, #155, #622).** A laptop's forwarded audit row can no longer put a false "refused" banner on the Azure DevOps row: the banner reads only rows `wardynd` wrote itself. A pasted token is bound to the sign-in's Entra object id alone, never the union with the stored one, and the `ado_pat.own.store` row says whether the token was bound by `object_id` or `name`. A browser sign-in refused for a missing or false `email_verified`, or an email outside `WARDYN_OIDC_EMAIL_DOMAINS`, now writes an `auth.fail` row (`email_verified_absent`, `email_unverified`, `email_domain`). A role-mapping change that cannot list or revoke the outstanding API tokens says so in its audit row (`tokens_revocation_failed`) and in the upsert response, instead of reporting zero revoked.
 - **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
   The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
   skipped it, so three of the four baked GitHub keys loaded. It is replaced with the key GitHub

@@ -679,12 +679,16 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// value before the edit acted — so the audit row carries both numbers:
 	// what was outstanding, and what this write actually revoked.
 	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
-	revoked := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	revoked, revokeErr := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	data := map[string]any{
+		"value": saved.Value, "role": saved.Role, "user_type": saved.UserType,
+		"stale_token_snapshots": stale, "tokens_revoked": revoked,
+	}
+	if revokeErr != nil {
+		data["tokens_revocation_failed"] = true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"value": saved.Value, "role": saved.Role, "user_type": saved.UserType,
-			"stale_token_snapshots": stale, "tokens_revoked": revoked,
-		})))
+		action, saved.ID.String(), "success", mustJSON(data)))
 	// Embedded, so the response is a strict SUPERSET of the RoleMapping every
 	// existing client already decodes — the console, pkg/client and the CLI keep
 	// working byte for byte, and a client that wants the signal reads one more
@@ -692,9 +696,12 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// at all.
 	writeJSON(w, status, struct {
 		types.RoleMapping
-		StaleTokenSnapshots int `json:"stale_token_snapshots,omitempty"`
-		TokensRevoked       int `json:"tokens_revoked,omitempty"`
-	}{RoleMapping: saved, StaleTokenSnapshots: stale, TokensRevoked: revoked})
+		StaleTokenSnapshots    int    `json:"stale_token_snapshots,omitempty"`
+		TokensRevoked          int    `json:"tokens_revoked,omitempty"`
+		TokensRevocationFailed bool   `json:"tokens_revocation_failed,omitempty"`
+		Detail                 string `json:"detail,omitempty"`
+	}{RoleMapping: saved, StaleTokenSnapshots: stale, TokensRevoked: revoked,
+		TokensRevocationFailed: revokeErr != nil, Detail: roleTokensNotReachedDetail(revokeErr)})
 }
 
 // DELETE /access/mappings/{id}
@@ -767,13 +774,28 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// the audit row and the WARN line rather than the wire — a body here would
 	// change this route's status shape for every existing client.
 	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
-	revokedDeleted := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	revokedDeleted, revokeErr := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	data := map[string]any{
+		"value": matched.Value, "role": matched.Role, "user_type": matched.UserType,
+		"stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
+	}
+	if revokeErr != nil {
+		data["tokens_revocation_failed"] = true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
-			"value": matched.Value, "role": matched.Role, "user_type": matched.UserType,
-			"stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
-		})))
+		"access.role_mapping.delete", id.String(), "success", mustJSON(data)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// roleTokensNotReachedDetail is the upsert response's statement that a
+// role-mapping change was saved but did not reach every outstanding API token
+// ("" when it did). The delete answers 204 with no body, so on that route only
+// the audit row and the WARN line carry the signal. The remedy names the door that exists: POST /sessions/revoke.
+func roleTokensNotReachedDetail(revokeErr error) string {
+	if revokeErr == nil {
+		return ""
+	}
+	return "The change is saved, but Wardyn could not revoke every API token that may still hold the old role. Revoke them with POST /sessions/revoke."
 }
 
 // POST /access/preview
