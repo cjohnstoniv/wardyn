@@ -162,6 +162,7 @@ function RunDetailPage({ id }: { id: string }) {
   // state). A generation counter drops an older read that answers after a newer
   // one. Best-effort: a failed read leaves the last-good rows, and a failed mint
   // read is "couldn't read which credentials".
+  const settleSince = React.useRef<number | null>(null);
   const endingGen = React.useRef(0);
   const endingInFlight = React.useRef(false);
   const loadEnding = React.useCallback(() => {
@@ -247,7 +248,7 @@ function RunDetailPage({ id }: { id: string }) {
           // is a belt-and-braces no-op kept so a backend that ignored the
           // predicate cannot leak another run's rows onto this page.
           if (runApprovals.status === "fulfilled")
-            setApprovals(runApprovals.value.filter((x) => x.run_id === id));
+            setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
           setStatus("ready");
           // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
@@ -433,17 +434,25 @@ function RunDetailPage({ id }: { id: string }) {
   // teardown: the server re-kills a KILLED run (runs_lifecycle.go), and the
   // cascade is safe to repeat — the one action that settles the doubt.
   const killEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
-  const killAgain = run?.state === "KILLED" && (endingState === "failed" || (endingState === "ready" && killEvidence !== "confirmed"));
-  // The outcome block of a KILLED run waits for its facts (see loadEnding).
-  const outcomeReady = run?.state !== "KILLED" || endingState === "ready";
+  // Kill again follows the evidence: offered once the ending facts have settled
+  // (or failed to read) and the trail does not PROVE the teardown. A failed read
+  // does not hide a row the main trail already holds, so a proven kill stays off.
+  const killAgain = run?.state === "KILLED" && endingState !== "loading" && killEvidence !== "confirmed";
+  // The outcome block of a KILLED run waits for its facts (see loadEnding). When
+  // the read failed it still shows what the main trail proves, and nothing when
+  // that holds no kill row either (no row would read as "no kill record", which a
+  // failed read cannot claim).
+  const outcomeReady = run?.state !== "KILLED" || endingState === "ready" || (endingState === "failed" && killEvidence !== "unknown");
   // The server marks a run KILLED BEFORE it writes the run.kill row
   // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
-  // whose trail does not yet PROVE the teardown, bounded to two minutes from when
-  // it ended: the row arrives, or the wait gives up and the person can kill again.
-  const killSettling =
-    run?.state === "KILLED" &&
-    killEvidence !== "confirmed" &&
-    Date.now() - new Date(run.ended_at ?? run.updated_at).getTime() < KILL_SETTLE_MS;
+  // whose trail does not yet PROVE the teardown for two minutes, counted on THIS
+  // page's clock from when it first saw such a run (a ref, so it resets on
+  // remount): the server's ended_at against our Date.now() would depend on skew.
+  // The row arrives, or the wait gives up and the person can kill again. A failed
+  // ending read is retried on the same polls (load re-calls loadEnding).
+  const unconfirmedKill = run?.state === "KILLED" && killEvidence !== "confirmed";
+  if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
+  const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
   usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills

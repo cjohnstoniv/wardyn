@@ -229,15 +229,26 @@ describe("RunDetailScreen — a kill seen mid-teardown settles without a reload"
     expect(getRunMock.mock.calls.length).toBe(calls);
   });
 
-  it("the wait is bounded: a run that ended long ago with no row is not polled forever", async () => {
-    seed({ kills: [] });
-    getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date(Date.now() - 10 * 60_000).toISOString() });
-    renderRun();
-    await screen.findByText(/audit trail has no kill record/);
-    const calls = getRunMock.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(getRunMock.mock.calls.length).toBe(calls);
-  });
+  // Review G2: the bound is the client's own clock from when THIS page first saw
+  // an unconfirmed KILLED run, never the server's ended_at against Date.now().
+  for (const [label, endedAt] of [
+    ["long ago", () => new Date(Date.now() - 365 * 86_400_000).toISOString()],
+    ["in the future (a skewed clock)", () => new Date(Date.now() + 365 * 86_400_000).toISOString()],
+  ] as const) {
+    it(`ended_at ${label}: still settles for about two minutes, then stops`, async () => {
+      seed({ kills: [] });
+      getRunMock.mockResolvedValue({ ...RUN, ended_at: endedAt() });
+      renderRun();
+      await screen.findByText(/audit trail has no kill record/);
+      const first = getRunMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getRunMock.mock.calls.length).toBeGreaterThan(first + 5);
+      await vi.advanceTimersByTimeAsync(80_000);
+      const stopped = getRunMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(getRunMock.mock.calls.length).toBe(stopped);
+    });
+  }
 });
 
 // Review F3: a terminal run's page used to wait on four audit calls (60s on a
@@ -270,5 +281,42 @@ describe("RunDetailScreen — the run renders at once; the outcome waits for its
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Review G1: a failed read of the ending facts must not hide an outcome the main
+// trail already proves, and must be retried while the page is still settling.
+describe("RunDetailScreen — a failed ending read", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  it("with a run.kill success in the main trail: the confirmed outcome shows and Kill stays off", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date().toISOString() });
+    getGrantsMock.mockResolvedValue([]);
+    listAuditMock.mockImplementation(async (_id: string, o?: { action?: string; actionPrefix?: string }) => {
+      if (o?.action) throw new Error("audit store degraded");
+      return o?.actionPrefix ? [] : [kill("success", 6)];
+    });
+    renderRun();
+    expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
+    expect(killButton()).toBeDisabled();
+  });
+
+  it("with no row anywhere: hidden and Kill on, then the next tick retries and recovers", async () => {
+    let failing = true;
+    getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date().toISOString() });
+    getGrantsMock.mockResolvedValue([]);
+    listAuditMock.mockImplementation(async (_id: string, o?: { action?: string }) => {
+      if (o?.action && failing) throw new Error("audit store degraded");
+      return o?.action === "run.kill" ? [kill("success", 0)] : [];
+    });
+    renderRun();
+    await screen.findAllByText(RUN.task);
+    await waitFor(() => expect(killButton()).toBeEnabled());
+    expect(screen.queryByTestId("run-failure-block")).not.toBeInTheDocument();
+    failing = false;
+    await vi.advanceTimersByTimeAsync(4100);
+    expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
+    expect(killButton()).toBeDisabled();
   });
 });

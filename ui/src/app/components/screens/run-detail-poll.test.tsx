@@ -362,3 +362,15 @@ describe("RunDetailScreen — a run id in the URL is matched case-insensitively"
     expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
   });
 });
+
+// Review G4: the approvals filter matches run ids case-insensitively too.
+describe("RunDetailScreen — approvals match the run id case-insensitively", () => {
+  it("counts a pending approval whose run_id differs from the URL's only in case", async () => {
+    listApprovalsMock.mockResolvedValue([
+      { id: "ap-1", run_id: "RUN-1", kind: "egress_domain", state: "PENDING", scope: { host: "a.example" } },
+    ]);
+    renderRun({ ...RUN, state: "RUNNING" });
+    await screen.findAllByText(RUN.task);
+    expect(await screen.findByRole("tab", { name: /Approvals\s*1/ })).toBeInTheDocument();
+  });
+});
