@@ -90,6 +90,13 @@ export interface Me {
   // ceilings apply. Absent on a pre-0.8 daemon, which reads the same as "the
   // plain view" — and the plain view is exactly what such a daemon is in.
   user_view_no_credential?: boolean;
+  // Whether the person INSIDE the user view is stamped a super admin (admin,
+  // not security_admin) — internal/api/me.go's user_view_super_admin (#1335).
+  // Every tier field above is clamped in the view, so this is the one bit that
+  // says whether /admin/setup would open for them; it gates only the "Set up a
+  // barrier" link. Present only inside the view for an admin or security_admin;
+  // absent (reads false) for everyone else and on an older daemon.
+  user_view_super_admin?: boolean;
   // Whether the preview is worth offering here (0.7.5): true only where the
   // org's model-access agent row gives each person their OWN AWS sign-in. Under
   // a `shared` row the posture hides nothing, so its banner would claim a state

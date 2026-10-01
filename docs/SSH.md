@@ -95,7 +95,7 @@ key belongs to, not just running the query.
 
 A per-user API token can register an SSH key through `wardyn ssh-key ensure`.
 Deleting that token alone leaves the key registered. Revoking the person's
-sessions with `wardyn sessions revoke --sub '<subject-or-email>'` also revokes
+sessions with `wardyn session revoke --sub '<subject-or-email>'` also revokes
 their API tokens and removes their registered SSH keys. `--all` applies those
 three actions deployment-wide, including the calling admin's credentials.
 A registration already in flight cannot escape that cutoff: registration time

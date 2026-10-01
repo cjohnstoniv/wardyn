@@ -12,7 +12,7 @@
 //     deployment's runner, so the picker never shows a pair whose every save
 //     would meet a 400; on Docker with no WARDYN_USER_DRIVE_HOST_ROOTS the
 //     `host_path` option is disabled with its reason rather than offered and
-//     refused. The 400 stays on the API path, where `wardyn drive apply` will
+//     refused. The 400 stays on the API path, where `wardyn drive set` will
 //     meet it.
 //  2. The home-template rule is keyed on who NAMES the object, not on managed
 //     vs share (#808): host_path names its own homes, so the derived (`hash`)

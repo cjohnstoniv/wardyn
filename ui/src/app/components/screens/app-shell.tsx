@@ -111,6 +111,11 @@ export interface ShellMeta {
   // fail-open default as `operator`, and deliberately a separate field: with
   // three role values the two booleans are not complements of each other.
   securityOperator: boolean;
+  // #1335 — /me's `user_view_super_admin`: the person inside the User view is
+  // stamped a super admin, the one bit that says /admin/setup would open for
+  // them while `operator` reads false. Fail CLOSED (false) when /me has not
+  // answered or an older daemon never sends it — it only gates a link.
+  userViewSuperAdmin: boolean;
   // The same B1-derived tier as `operator`, named directly (B3) — fail-open
   // "admin" for the identical three cases (unresolved /me, a failed fetch, an
   // unwrapped test). Kept alongside `operator` rather than replacing it: every
@@ -202,6 +207,7 @@ function identityFromMe(me: Me | null) {
     // ?? true, not `?? me?.operator`: an older daemon that never sends
     // this field must fail OPEN like every other identity signal here.
     securityOperator: me?.security_operator ?? true,
+    userViewSuperAdmin: me?.user_view_super_admin ?? false,
     role: me?.role ?? "admin",
     // F3-F11: a bad string parses to an Invalid Date, not null — guard
     // NaN here so useSessionExpiry never has to.
@@ -238,6 +244,7 @@ function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     identityResolved: false,
     operator: true,
     securityOperator: true,
+    userViewSuperAdmin: false,
     role: "admin",
     sessionExpiresAt: null,
     memberLocalDirRoot: null,
@@ -666,12 +673,16 @@ export function AppShell({
   // Environment step: an operator (meta.operator resolves NO_BARRIER.ADMIN_ROUTE
   // directly, whichever view they're in — console-view.tsx's viewVerdict
   // `pass`es "url"/"admin-only"/"session-admin" straight through) or a
-  // session-user (an SSO admin who switched to the User view: ViewGate's own
-  // "to-admin" interstitial asks before switching, and its target already
-  // carries `?step=environment` — see NO_BARRIER's doc comment). Anyone else
-  // (a member, a security admin) gets the banner's text with no link — there
-  // is nothing behind that route for them to open.
-  const canReachEnvironmentStep = meta.operator || access === "session-user";
+  // super admin in the User view (access "session-user" AND /me's
+  // user_view_super_admin, #1335: ViewGate's own "to-admin" interstitial asks
+  // before switching, and its target already carries `?step=environment` — see
+  // NO_BARRIER's doc comment). Anyone else gets the banner's text with no
+  // link: a member, a security admin in the Admin view, and a security admin
+  // in the User view too (session-user, but /admin/setup is super-admin-only
+  // and would land them on the member recap) — there is nothing behind that
+  // route for them to open.
+  const canReachEnvironmentStep =
+    meta.operator || (access === "session-user" && meta.userViewSuperAdmin);
   React.useEffect(() => {
     document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
   }, [view]);
@@ -694,6 +705,7 @@ export function AppShell({
       operator={meta.operator}
       operatorResolved={meta.identityResolved}
       securityOperator={meta.securityOperator}
+      userViewSuperAdmin={meta.userViewSuperAdmin}
       principal={meta.principal}
       memberLocalDirRoot={meta.memberLocalDirRoot}
       userDrive={meta.userDrive}

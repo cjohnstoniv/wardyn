@@ -161,9 +161,10 @@ test.beforeAll(async () => {
     "GET /api/v1/setup/status failed — is the stack up on :8080?",
   ).toBe(true);
 
-  // (2) NO stored anthropic-api-key: it would pre-empt the managed fallback
-  // silently and beat 3 would cat a file that never materialized. (Video 02's
-  // secret beat deliberately uses a neutral name for exactly this reason.)
+  // (2) NO stored anthropic-api-key: a current daemon refuses to store one and
+  // sweeps any left at boot (secrets.go's retiredModelCredentialNames), so this
+  // only catches a stack that predates that. (Video 02's secret beat
+  // deliberately uses a neutral name for exactly this reason.)
   expect(
     !present.includes("anthropic-api-key"),
     "an anthropic-api-key secret is stored on this stack — it pre-empts the managed subscription lane, " +

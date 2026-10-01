@@ -471,7 +471,9 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		http.Error(w, deniedPathsBody(denied, why), http.StatusForbidden)
 		return nil, pushReview{}, noRelease, false
 	}
-	if rules.maxFileBytes > 0 && !p.refuseLargeFiles(w, r, rules, res, forge, subject, deny) {
+	if rules.maxFileBytes > 0 && !p.refuseLargeFiles(w, r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
+		return oversize(rules.maxFileBytes, cs)
+	}, res, forge, subject, deny) {
 		return nil, pushReview{}, noRelease, false
 	}
 	review := pushReview{cmds: res.Commands}
@@ -565,14 +567,19 @@ func oversize(limit int64, changes []gitpack.Change) (hits []string, unknown []g
 	return hits, unknown, nil
 }
 
-// refuseLargeFiles applies max_file_size_mib to one inspected push and writes
-// the refusal itself (a deny, like a deny_paths match), returning false when
-// it refused.
-func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request, rules *pushRuleSet, res gitpack.Result,
+// refuseLargeFiles applies max_file_size_mib (claim is oversize at that limit)
+// to one inspected push and writes the refusal itself (a deny, like a
+// deny_paths match), returning false when it refused. A claim that fails is a
+// push it could not judge, refused as blind like an uninspectable path rule.
+func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
+	claim func([]gitpack.Change) ([]string, []gitpack.Change, error), res gitpack.Result,
 	forge *forgeRepo, subject slog.Attr, deny func(ruleSource string)) bool {
-	over, left, why, _ := p.claimedEntries(r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
-		return oversize(rules.maxFileBytes, cs)
-	}, res, forge, subject)
+	over, left, why, err := p.claimedEntries(r, claim, res, forge, subject)
+	if err != nil {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			"wardyn: cannot enforce push content rules on this push: "+err.Error())
+		return false
+	}
 	const headline = "wardyn: this push is refused by the run's push content rules: files over the size limit"
 	var body string
 	switch {

@@ -182,6 +182,16 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 // the generic authErrorSignInRefused, since nothing the user can do clears it.
 const DenialReservedPrincipal = "reserved_principal"
 
+// The email policy refusals reported to onDenied (#155): the same codes the
+// browser sees as auth_error and a portal's token exchange records as its
+// refusal reason. Literals, equal to authErrorEmailVerifiedAbsent,
+// authErrorEmailUnverified and authErrorEmailDomain.
+const (
+	DenialEmailVerifiedAbsent = "email_verified_absent"
+	DenialEmailUnverified     = "email_unverified"
+	DenialEmailDomain         = "email_domain"
+)
+
 // CallbackHandlerWithDenials is CallbackHandler with a reserved-subject check
 // (DenialReservedPrincipal) and sign-in denials (including
 // DenialUserTypeAmbiguous, DenialUserTypeUnknown) reported to onDenied so
@@ -307,6 +317,13 @@ func (a *Authenticator) emailVerifiedEnv() string {
 	return "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED"
 }
 
+// deny reports a refusal to onDenied when one is wired.
+func deny(onDenied func(*http.Request, string), r *http.Request, reason string) {
+	if onDenied != nil {
+		onDenied(r, reason)
+	}
+}
+
 // admit is the sign-in decision over a verified token's claims — reserved
 // subject, email-domain gate, role/user-type derivation, overage and
 // unreadable-claim refusals, and the group snapshot — shared by the callback
@@ -344,14 +361,17 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 			// IdP that never sends this claim.
 			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
 				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
+			deny(onDenied, r, DenialEmailVerifiedAbsent)
 			return Session{}, authErrorEmailVerifiedAbsent
 		case !*cc.emailVerified:
 			slog.Warn("oidc: login denied — the id_token says email_verified=false",
 				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
+			deny(onDenied, r, DenialEmailUnverified)
 			return Session{}, authErrorEmailUnverified
 		}
 	}
 	if len(a.cfg.AllowedEmailDomains) > 0 && !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
+		deny(onDenied, r, DenialEmailDomain)
 		return Session{}, authErrorEmailDomain
 	}
 

@@ -10,7 +10,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-Three changes can refuse a configuration that worked on 0.8.3. Migration `0105_branding_logo_from_file`
+Four changes can refuse a configuration that worked on 0.8.3. Migration `0105_branding_logo_from_file`
 runs on the first start; it adds one column with a default and changes no existing row.
 
 - **The `secret.rewrap` audit field `key_version` is now a string.** It was an integer before 0.8.4
@@ -24,6 +24,23 @@ runs on the first start; it adds one column with a default and changes no existi
   through `wardyn site-config set`, that puts one host on rows of two kinds (a GitHub row and an Azure
   DevOps row, for example) is refused with a `400`, disabled rows included. Rows already stored are not
   re-checked until the next save or apply (an MDM file is applied at each boot).
+- **The CLI commands below are renamed to one noun-verb shape (#206).** These names are a clean break with no alias: an
+  old spelling now answers `unknown command` and a non-zero exit, so a script or CI job that types one
+  must change before it runs against 0.8.4. A few plural and short aliases remain for now (`runs`,
+  `sources`, `workspaces`, `ls` and `rm`). Flags, arguments and guards are unchanged, including
+  `--reason`, `--scope` and `--until` on a decision and the `--sub`-or-`--all` rule on `session revoke`.
+
+  | Before | Now |
+  |---|---|
+  | `wardyn approvals list`, `wardyn approvals get` | `wardyn approval list`, `wardyn approval get` |
+  | `wardyn approve <id>`, `wardyn deny <id>` | `wardyn approval approve <id>`, `wardyn approval deny <id>` |
+  | `wardyn logs <run-id>` | `wardyn run logs <run-id>` |
+  | `wardyn sessions list`, `wardyn sessions revoke` | `wardyn session list`, `wardyn session revoke` |
+  | `wardyn drive apply [file]` | `wardyn drive set [file]` |
+  | `wardyn governance apply [file]` | `wardyn governance set [file]` |
+  | `wardyn preset apply [file]` | `wardyn preset set [file]` |
+
+  The git credential helper's "already minted" hint now names `wardyn approval approve <id> --scope run`.
 
 ### Security
 
@@ -32,6 +49,7 @@ runs on the first start; it adds one column with a default and changes no existi
   is under it yet. Once one is, a boot key under any other key is refused, with nothing changed and the rows
   named, because someone holding the credential key and write access to the table could have planted it. The
   boot-time refusal of such a row no longer says to run `-rewrap`; it says to find out who wrote it first.
+- **Four follow-ups on the 0.8.4 identity and Azure DevOps code (#1449, #1444, #155, #622).** A laptop's forwarded audit row can no longer put a false "refused" banner on the Azure DevOps row: the banner reads only rows `wardynd` wrote itself. A pasted token is bound to the sign-in's Entra object id alone, never the union with the stored one, and the `ado_pat.own.store` row says whether the token was bound by `object_id` or `name`. A browser sign-in refused for a missing or false `email_verified`, or an email outside `WARDYN_OIDC_EMAIL_DOMAINS`, now writes an `auth.fail` row (`email_verified_absent`, `email_unverified`, `email_domain`). A role-mapping change that cannot list or revoke the outstanding API tokens says so in its audit row (`tokens_revocation_failed`) and in the upsert response, instead of reporting zero revoked.
 - **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
   The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
   skipped it, so three of the four baked GitHub keys loaded. It is replaced with the key GitHub
@@ -48,6 +66,11 @@ runs on the first start; it adds one column with a default and changes no existi
 - **A development-only dependency pin.** The console's dev dependencies now pin `brace-expansion` 5 to
   5.0.12 for GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (`ui/package.json` overrides; development
   tooling only).
+- **A push-size check that cannot run now refuses the push, and an Azure DevOps REST ref move outside the
+  run's branch is audited as `brokered:git:branch-ns-off` (#1273, #1372).** A failed `max_file_size_mib` claim
+  was dropped, which read as no file being over the limit; it is refused as `brokered:git:push-uninspectable`.
+  The REST door allowed such a move under `git_push_any_branch` with only the `brokered:ado` row; once forwarded it now
+  adds a `brokered:git:branch-ns-off` row, as the git door does.
 
 ### Added
 
@@ -131,6 +154,11 @@ runs on the first start; it adds one column with a default and changes no existi
   time, or `204`. A person with no email on file is passed over, never named by subject. No audit
   action, reason or migration is added. The read filters in the store, so enough newer denials of other
   kinds can no longer push the refusal out of view.
+- **The Ended banner says until when an ended run's files are kept, and a capped end says when the
+  admin has since loosened the limit (#1320, #1322).** `GET /runs/{id}` carries `kept_until` while a run
+  its own end stopped is still kept, and the `PATCH /runs/{id}` response carries `ends_cap_loosened` when
+  the launch profile now allows a later end than the run captured. Both are display only, and the
+  captured limit still binds.
 
 ### Changed
 
@@ -166,6 +194,11 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Fixed
 
+- **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
+  /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
+  same choice: a provider that is off, missing or without your credential names it (with its kind), a
+  provider you are not granted is a `403` that names none, and a provider block or a credential that
+  cannot be read is the same `503`. A not-granted refusal at record was a `422` before.
 - **A model-access door button no longer does nothing when clicked just after the setup status
   changes (#1460).** The door resolved its request against the previous status until a later effect ran,
   so a click in that gap (the owner's subscription sign-in button, for example) opened nothing.
@@ -176,6 +209,11 @@ runs on the first start; it adds one column with a default and changes no existi
   a run whose state has not yet flipped reads "the sandbox is gone; the run is finishing" rather than
   that it has finished.
 - **A long portal name wraps on the run page's "Launched via" line (#1234).**
+- **The User view no longer offers a security admin a link to Setup, and the Secrets step counts model
+  providers (#1335, #1421).** A security admin in the User view saw "Set up a barrier", which opens
+  the member recap; `GET /me` now carries `user_view_super_admin` (true only for a super admin inside the
+  view) and the link needs it. The Secrets step's badge and auto-skip read the server's enabled model
+  providers rather than stored key secrets, and the retired model-key rows are gone from the console.
 
 ## [0.8.3] — 2026-09-30
 

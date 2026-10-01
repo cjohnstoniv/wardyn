@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { SetupStatus } from "./types";
-import { hasLlmPath, deriveReadiness, deploymentMode } from "./readiness";
+import { hasLlmPath, deriveReadiness, deploymentMode, modelProviderCount } from "./readiness";
 import { baseStatus } from "./test-fixtures";
 
 // A minimal-but-valid SetupStatus: no CLI login and no key secret — the case
@@ -45,11 +45,10 @@ describe("hasLlmPath — the server's llm_ready", () => {
 });
 
 describe("deriveReadiness — must not overclaim a connected model", () => {
-  it("nothing configured: llmReady/composerReady false and no label", () => {
+  it("nothing configured: llmReady false and no label", () => {
     const r = deriveReadiness(status());
     expect(r.llmReady).toBe(false);
     expect(r.llmLabel).toBe("");
-    expect(r.composerReady).toBe(false);
   });
 
   it("llm_ready names the first enabled provider serving a harness", () => {
@@ -72,18 +71,53 @@ describe("deriveReadiness — must not overclaim a connected model", () => {
     expect(r.llmLabel).toBe("");
   });
 
-  it("an operator Anthropic key still powers Wardyn features, but is no agent path", () => {
-    const r = deriveReadiness(status({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+  // The AI Run Composer is deleted: a stored operator key, a stored Azure key or a
+  // fake composer backend is no model path, and nothing reads as composer-ready.
+  it.each([
+    ["an operator Anthropic key", { secrets: { present: ["anthropic-api-key"], github_app: false } }],
+    ["a stored Azure key", { secrets: { present: ["azure-openai-key"], github_app: false } }],
+  ] as [string, Partial<SetupStatus>][])("%s is no agent path and reads no composer readiness", (_name, over) => {
+    const r = deriveReadiness(status(over));
     expect(r.llmReady).toBe(false);
-    expect(r.composerReady).toBe(true);
+    expect(r).not.toHaveProperty("composerReady");
   });
 
-  // Azure powered Wardyn's own features and no agent tool; those features (the
-  // AI Run Composer) are deleted, so its stored secret is inert.
-  it("a stored Azure key is inert — neither an agent path nor a Wardyn-features path", () => {
-    const r = deriveReadiness(status({ secrets: { present: ["azure-openai-key"], github_app: false } }));
+  it("a fake composer backend never reads Ready", () => {
+    const r = deriveReadiness(status({ composer: { backends: [{ wire: "fake" }] } } as unknown as Partial<SetupStatus>));
     expect(r.llmReady).toBe(false);
-    expect(r.composerReady).toBe(false);
+    expect(r).not.toHaveProperty("composerReady");
+  });
+});
+
+// The Secrets step's badge, auto-skip and Skipped override all read this count:
+// the server's own model-provider truth, never the secrets a status still lists.
+describe("modelProviderCount — enabled providers serving a harness, only when llm_ready", () => {
+  const mp = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    kind: "custom_endpoint",
+    harnesses: ["claude-code"],
+    host: "gw.corp.example",
+    ...over,
+  });
+
+  it("is 0 when llm_ready is false, whatever the rows say", () => {
+    expect(modelProviderCount(status({ llm_ready: false, model_providers: [mp("a")] }))).toBe(0);
+    expect(modelProviderCount(status({ model_providers: [mp("a")] }))).toBe(0);
+  });
+
+  it("counts enabled providers that serve a harness", () => {
+    const s = status({
+      llm_ready: true,
+      model_providers: [mp("a"), mp("b", { disabled: true }), mp("c", { harnesses: [] }), mp("d")],
+    });
+    expect(modelProviderCount(s)).toBe(2);
+  });
+
+  it("is 0 for a redacted view that lists no provider, and ignores stale api-key secrets", () => {
+    expect(modelProviderCount(status({ checks_redacted: true, llm_ready: true }))).toBe(0);
+    expect(
+      modelProviderCount(status({ secrets: { present: ["anthropic-api-key", "openai-api-key"], github_app: false } })),
+    ).toBe(0);
   });
 });
 

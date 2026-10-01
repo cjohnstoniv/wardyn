@@ -502,3 +502,21 @@ func TestDeviceCodeGrantIsNotOffered(t *testing.T) {
 		t.Fatalf("error = %v, want %q", got, entrafake.ErrUnsupportedGrantType)
 	}
 }
+
+// TestOmitRefreshTokenAnswersTheCodeGrantWithoutOne: the knob drops the
+// refresh_token from the authorization_code grant and nothing else.
+func TestOmitRefreshTokenAnswersTheCodeGrantWithoutOne(t *testing.T) {
+	s := entrafake.New()
+	t.Cleanup(s.Close)
+	if body := redeemCode(t, s, "verifier-keeps", s.ConsentedScopes()...); body["refresh_token"] == nil {
+		t.Fatalf("a code grant carries no refresh_token by default: %v", body)
+	}
+	s.SetOmitRefreshToken(true)
+	body := redeemCode(t, s, "verifier-omits", s.ConsentedScopes()...)
+	if _, has := body["refresh_token"]; has {
+		t.Errorf("refresh_token present with the knob on: %v", body)
+	}
+	if body["access_token"] == nil || body["id_token"] == nil {
+		t.Errorf("the knob dropped more than the refresh_token: %v", body)
+	}
+}

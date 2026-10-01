@@ -542,8 +542,8 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 // bulk-write route, and none is added. A drive is routed by the id doc
 // carries: one already issued by GetDrives (non-nil) is REPLACED in place
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
-// > f && wardyn drive apply f` a no-op: the ids `get` wrote back are exactly
-// what route the re-`apply` to an update of the same rows, not a second copy
+// > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
+// what route the re-`set` to an update of the same rows, not a second copy
 // under a fresh name. A grant carries no id of its own; every one is POSTed,
 // and the server's own (subject_type, subject) upsert repoints an existing
 // allocation rather than duplicating it.
@@ -702,7 +702,7 @@ func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
 // assignment doc does not name (assignments first, since a profile still
 // referenced by a to-be-pruned assignment fails the FK restrict). Without it —
 // the default — nothing present server-side but absent from doc is touched,
-// matching drive apply's own "nothing the file omits is touched" rule.
+// matching drive set's own "nothing the file omits is touched" rule.
 //
 // Every write's saved row replaces the caller's copy of doc in place, so a
 // partial failure (returned as the second value) leaves doc's earlier entries

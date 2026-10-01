@@ -66,6 +66,11 @@ describe("New run rail — Push rules section (#181)", () => {
     expect(screen.queryByText(PUSH.RAIL_TITLE)).toBeNull();
   });
 
+  it("renders no section when only max_file_size_mib is set — nothing to say about paths", () => {
+    renderRail({ max_file_size_mib: 10 });
+    expect(screen.queryByText(PUSH.RAIL_TITLE)).toBeNull();
+  });
+
   it("counts deny_paths and require_review_paths, pluralized", () => {
     renderRail({ deny_paths: [".github/workflows/**", "secrets/**"], require_review_paths: ["infra/**"] });
     expect(screen.getByText(PUSH.RAIL_TITLE)).toBeInTheDocument();
@@ -123,5 +128,11 @@ describe("pushRulesIsSet (#181)", () => {
 
   it("is true when only max_inspect_pack_mib is set", () => {
     expect(pushRulesIsSet({ max_inspect_pack_mib: 16 })).toBe(true);
+  });
+
+  // #1273 — Go's IsSet counts max_file_size_mib, so a policy whose only rule is
+  // the size cap has push rules; the rail still draws no path section for it.
+  it("is true when only max_file_size_mib is set", () => {
+    expect(pushRulesIsSet({ max_file_size_mib: 10 })).toBe(true);
   });
 });
