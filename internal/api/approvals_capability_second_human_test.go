@@ -6,7 +6,9 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -151,4 +153,73 @@ func TestCapabilitySecondHuman_SwitchesAreIndependent(t *testing.T) {
 			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// Local mode authenticates nobody, so the capability switch cannot be enforced
+// there either: every decision on an Azure DevOps escalation is a 503 naming the
+// switch, and the approval stays PENDING. Pinned for both verbs, with the
+// ceiling widened so the 503 is the rule under test and not the ceiling's 403.
+func TestCapabilitySecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
+	for _, verb := range []string{"approve", "deny"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Setenv(envCapabilitySecondHuman, "1")
+			srv, aap, runID := localCapabilityFixture(t)
+			id := seedLocalADO(t, aap, runID)
+
+			w := localDecide(t, srv, id, verb, "")
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("local mode + capability switch, %s: status = %d, want 503; body=%s", verb, w.Code, w.Body.String())
+			}
+			var body errorBody
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Reason != reasonEgressSecondHumanLocalMode {
+				t.Errorf("reason = %q, want %q", body.Reason, reasonEgressSecondHumanLocalMode)
+			}
+			if !strings.Contains(body.Error, envCapabilitySecondHuman) {
+				t.Errorf("the 503 must name the capability switch; body=%s", w.Body.String())
+			}
+			aap.mu.Lock()
+			st := aap.byID[id].State
+			aap.mu.Unlock()
+			if st != types.ApprovalPending {
+				t.Fatalf("approval state = %q after the refusal, want PENDING", st)
+			}
+		})
+	}
+}
+
+// localCapabilityFixture is a local-mode server whose one run is created by
+// local:alice and whose Azure DevOps ceiling admits code_write and pr_create.
+func localCapabilityFixture(t *testing.T) (*Server, *authzApprovals, uuid.UUID) {
+	t.Helper()
+	ast := newAuthzStore()
+	aap := newAuthzApprovals(ast)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Approvals = aap
+	cfg.LocalMode = true
+	cfg.LocalOperator = "local:alice"
+	srv := New(cfg)
+
+	runID := uuid.New()
+	ast.mu.Lock()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: "local:alice", State: types.RunRunning}
+	ast.siteCfg = adoSite(adoEntraTestRow())
+	ast.mu.Unlock()
+	return srv, aap, runID
+}
+
+func seedLocalADO(t *testing.T, aap *authzApprovals, runID uuid.UUID) uuid.UUID {
+	t.Helper()
+	grant := uuid.New()
+	scope, _ := json.Marshal(adoCapabilityScope{Lane: adoApprovalLane, ProviderID: "ado-row-1", Org: "contoso",
+		GrantID: grant, Capability: string(adoscope.CapPR), Tool: "Azure DevOps", Cmd: "x"})
+	id := uuid.New()
+	aap.mu.Lock()
+	aap.byID[id] = types.ApprovalRequest{ID: id, RunID: runID, Kind: types.ApprovalToolCall, GrantID: &grant,
+		RequestedScope: scope, State: types.ApprovalPending, RequestedAt: time.Now().UTC()}
+	aap.mu.Unlock()
+	return id
 }

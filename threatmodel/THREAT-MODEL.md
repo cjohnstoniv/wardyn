@@ -2930,6 +2930,14 @@ the whole member rule for that kind. Everything below applies to it unchanged: t
 admin token bypasses it, the bypass is the same `approval.second_human.bypass` row
 (its `switch` field names which setting was bypassed), and local mode refuses it.
 
+The residual is wider than the admin token. The switch governs escalation
+DECISIONS made during a run. An admin-tier creator can still list admin-class
+capabilities in `azure_devops_capabilities` when launching a run
+(`withPolicyCapabilities`); that standing list is out of the switch's scope and is
+bounded only by the Azure DevOps row's capability ceiling. A creator of a user type
+is bounded by the governance lists an administrator granted them, so for them the
+switch holds.
+
 **A bare `WARDYN_ADMIN_TOKEN` caller BYPASSES the rule.** That caller is attributed
 `system`/`admin-token` (`actorFromRequest`, FIX #10) precisely because a shared
 token carries NO per-human identity — there is no second human to compare it
