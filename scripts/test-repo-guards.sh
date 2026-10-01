@@ -41,7 +41,7 @@
 #      `gh` fails with "failed to run git: fatal: not a git repository" (#511,
 #      #1069).
 #  13. release.yml's publishing jobs (images, binaries, chart,
-#      images-ui-sandbox, release-assets) all depend on preflight-green,
+#      images-ui-sandbox, release-assets, promote) all depend on preflight-green,
 #      directly or transitively, and preflight-green has no `|| true` /
 #      `continue-on-error` escape hatch (T-06, #666).
 #  14. no demo/live spec or demo-take verifier still names an audit action
@@ -57,6 +57,8 @@
 #      A local-only image (claude-code, oracle, full) can never be staged. The
 #      build step is pinned too: same context, file, platforms and provenance,
 #      build-args from the matrix, and no target or cache on either side.
+#      release.yml's promote matrix carries the same rows as the build jobs, and
+#      the staged-digest proof in preflight-green keeps its three parts.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -422,7 +424,7 @@ if ! command -v yq >/dev/null 2>&1; then
     fi
 else
     preflight_fail=0
-    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets"
+    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets promote"
     reaches_preflight() {  # $1 = job name, $2 = space-separated jobs already visited (cycle guard)
         local job="$1" seen="$2" needs n
         case " $seen " in *" $job "*) return 1 ;; esac
@@ -471,7 +473,7 @@ else
             preflight_fail=1
         fi
     fi
-    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
 # ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
@@ -576,6 +578,29 @@ else
     base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
     printf '%s' "$base_run" | grep -qF '@sha256:[0-9a-f]{64}$' \
         || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    # The promote job copies these digests, so its rows are the build jobs' rows
+    # (name, dockerfile, float-latest) and preflight-green's staging step keeps
+    # every part of the proof. Once R10 removes the build jobs, the promote rows
+    # are the only source and the row comparison has nothing to compare.
+    promote_rows='[.jobs.promote.strategy.matrix.include[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    promote_got="$(yq -o=json -I=0 "$promote_rows" "$REL")"
+    [ "$(yq -r '.jobs.promote.strategy.matrix.include | length' "$REL")" -gt 0 ] \
+        || { bad "$REL: the promote job has no matrix rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    if [ "$(yq -r '.jobs.images | type' "$REL")" != "!!null" ]; then
+        build_got="$(yq -o=json -I=0 "$build_rows" "$REL")"
+        [ "$promote_got" = "$build_got" ] \
+            || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
+    fi
+    staging_run="$(yq -r '.jobs["preflight-green"].steps[] | select(.id == "staging") | .run' "$REL")"
+    for marker in 'gh attestation verify' '--signer-workflow' '--source-digest' 'org.opencontainers.image.revision' '86400'; do
+        printf '%s' "$staging_run" | grep -qF -- "$marker" \
+            || { bad "$REL: preflight-green's staging step no longer contains '$marker' — a promoted digest would lose part of its proof (attestation, source commit, revision label, age limit)"; stage_fail=1; }
+    done
+    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL")"
+    printf '%s' "$promote_copy" | grep -qF 'cosign copy' \
+        && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \
+        || { bad "$REL: the promote job's copy step must run cosign copy and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 

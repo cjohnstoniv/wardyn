@@ -103,6 +103,39 @@ name: Release images
 # parity check above against the actual tree. The image-build steps
 # themselves (Dockerfile correctness, GO_BUILD_TAGS=docker,k8s compiling) ARE
 # locally verified — see the lane report's gate output.
+# ── build once, promote ──────────────────────────────────────────────────────
+# A workflow_dispatch with `path: promote` publishes without rebuilding. The
+# images were built once, by the candidate's nightly (nightly.yml, dispatched on
+# the candidate's branch), which pushed them to the public
+# ghcr.io/cjohnstoniv/staging/<image>:run-<nightly run id>. The `promote` job
+# copies those exact digests to the release tags, then signs, scans and attests
+# them under this workflow's identity. A tag push still takes the build path
+# (the `images` and `images-ui-sandbox` jobs) until R9 flips the default in
+# preflight-green's `path` step.
+#
+# Where the digest comes from. preflight-green resolves
+# staging/<image>:run-<nightly_run> to its index digest, for every row of the
+# `promote` matrix, and passes the {image: digest} map on as the `digests`
+# output. nightly_run is the run scripts/green-by-tree.sh selected.
+#
+# The proof that a digest was built from the tagged tree has three parts, all in
+# preflight-green:
+#   1. green-by-tree.sh selected nightly run R at commit C, and the tree of C
+#      equals the tag's tree, so the Dockerfiles and the nightly.yml that ran are
+#      the tag's own.
+#   2. `gh attestation verify` on the staged digest, with --signer-workflow
+#      nightly.yml and --source-digest C: GitHub-signed provenance that
+#      nightly.yml at C built that digest.
+#   3. The image's org.opencontainers.image.revision label equals C. This is a
+#      cross-check only: a label is self-asserted and proves nothing alone.
+# Staging older than 24 hours is refused, because a fresh build carries Debian
+# fixes that a stale one lacks.
+#
+# Fallback. If promotion cannot be used, dispatch this workflow on the tag with
+# `path: build` and dry_run false: it rebuilds at the tag as before. The CLI
+# binaries and the chart are built here on both paths. Promote is idempotent, so
+# a failed job can simply be re-run.
+#
 on:
   push:
     tags: ['v*']
@@ -121,6 +154,11 @@ on:
         description: "Build and verify without pushing anything (leave true)"
         type: boolean
         default: true
+      path:
+        description: "promote = copy the digests the candidate's nightly built (R4); build = rebuild at the tag"
+        type: choice
+        options: [build, promote]
+        default: build
 
 jobs:
   # The gate on a release: the tag's TREE must be green, by CI and by the
@@ -160,13 +198,31 @@ jobs:
     permissions:
       contents: read
       actions: read
+      packages: read # the staged digests are read from ghcr.io/cjohnstoniv/staging
     outputs:
+      path: ${{ steps.path.outputs.path }}
       tree: ${{ steps.green.outputs.tree }}
       ci_run: ${{ steps.green.outputs.ci_run }}
       nightly_run: ${{ steps.green.outputs.nightly_run }}
       nightly_sha: ${{ steps.green.outputs.nightly_sha }}
+      digests: ${{ steps.staging.outputs.digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Which publish path runs: build rebuilds the images at the tag, promote
+      # copies the digests the candidate's nightly staged. Only a dispatch can
+      # ask for promote; a tag push is always build. R9 changes the push
+      # default here and only here.
+      - id: path
+        name: Choose the publish path
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PATH_INPUT: ${{ inputs.path }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$PATH_INPUT" = promote ]; then
+            echo "path=promote" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=build" >> "$GITHUB_OUTPUT"
+          fi
       # The nightly RUN's own conclusion is never success: e2e-live (known-fail,
       # #965 + the OIDC-flow issue nightly.yml's own comment names) and
       # migration-merge-check (red by design, scripts/test-repo-guards.sh's
@@ -184,22 +240,76 @@ jobs:
       # green hosted run (see nightly.yml's own comment on each job).
       - id: green
         name: The tag's tree must be green by CI and by a dispatched nightly
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true || steps.path.outputs.path == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
-          WATCHED="$watched" ./scripts/green-by-tree.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          need=0
+          if [ "${{ steps.path.outputs.path }}" = promote ]; then need=1; fi
+          WATCHED="$watched" NEED_STAGING="$need" ./scripts/green-by-tree.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Rehearsal — dry_run skips the preflight (no real release contract to check)
-        if: inputs.dry_run == true
+        if: inputs.dry_run == true && steps.path.outputs.path != 'promote'
         run: |
           echo "workflow_dispatch dry_run=true rehearsal: preflight-green's checks apply only to a real vX.Y.Z tag push, or a workflow_dispatch with dry_run=false."
+      - if: steps.path.outputs.path == 'promote'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The staged digests are the release, so each is proved before anything is
+      # copied: it resolves to an index digest, its revision label names the
+      # nightly's commit, and GitHub's signed provenance says nightly.yml at
+      # that commit built it (a label alone is self-asserted). The tree check
+      # above ties that commit to the tag. A dry run does all of this too: only
+      # the copy, the signing and the attestations are skipped.
+      - id: staging
+        name: Resolve and verify the staged digests
+        if: steps.path.outputs.path == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_RUN: ${{ steps.green.outputs.nightly_run }}
+          NIGHTLY_SHA: ${{ steps.green.outputs.nightly_sha }}
+        run: |
+          set -euo pipefail
+          # A fresh build carries Debian fixes that a stale one lacks.
+          updated="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${NIGHTLY_RUN}" --jq .updated_at)"
+          age=$(( $(date +%s) - $(date -d "${updated}" +%s) ))
+          if [ "${age}" -gt 86400 ]; then
+            echo "nightly run ${NIGHTLY_RUN} finished ${updated}, more than 24 hours ago: dispatch a fresh nightly on the candidate"
+            exit 1
+          fi
+          digests='{}'
+          for name in $(yq -r '.jobs.promote.strategy.matrix.include[].name' .github/workflows/release.yml); do
+            tagref="ghcr.io/cjohnstoniv/staging/${name}:run-${NIGHTLY_RUN}"
+            digest="$(docker buildx imagetools inspect "${tagref}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "${tagref} did not resolve to an index digest (got '${digest}')"
+              exit 1
+            fi
+            ref="ghcr.io/cjohnstoniv/staging/${name}@${digest}"
+            labels="$(docker buildx imagetools inspect "${ref}" --format '{{json (index .Image "linux/amd64").Config.Labels}}')"
+            revision="$(jq -r '.["org.opencontainers.image.revision"] // ""' <<<"${labels}")"
+            if [ "${revision}" != "${NIGHTLY_SHA}" ]; then
+              echo "${ref}: revision label is '${revision}', expected the nightly's commit ${NIGHTLY_SHA}"
+              exit 1
+            fi
+            gh attestation verify "oci://${ref}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/nightly.yml" \
+              --source-digest "${NIGHTLY_SHA}"
+            digests="$(jq -c --arg n "${name}" --arg d "${digest}" '. + {($n): $d}' <<<"${digests}")"
+            echo "verified ${name} ${digest}"
+          done
+          echo "digests=${digests}" >> "$GITHUB_OUTPUT"
 
   images:
     name: build, push, sign (${{ matrix.name }})
     runs-on: ubuntu-latest
     needs: preflight-green
+    if: needs.preflight-green.outputs.path == 'build'
     # 60, not 30: the three agent rows run their apt-get/npm/installer steps
     # twice, one of those passes under arm64 emulation. A timeout kill here
     # would read as a build break — the one failure a release must not fake.
@@ -439,7 +549,8 @@ jobs:
   # a real tag push exercises.
   images-ui-sandbox:
     name: build, push, sign (${{ matrix.name }})
-    needs: images
+    needs: [preflight-green, images]
+    if: needs.preflight-green.outputs.path == 'build'
     runs-on: ubuntu-latest
     # Same 60-minute floor as `images`, for the same reason (novnc alone is
     # 1.22 GB across two platforms, one pass under arm64 emulation).
@@ -544,6 +655,147 @@ jobs:
         with:
           subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Upload the SBOM for the release-assets job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.cdx.json
+          if-no-files-found: error
+
+  # The promote path: no build. preflight-green resolved and verified the digests
+  # the candidate's nightly staged (see "build once, promote" in the header), and
+  # this job copies each one to the release tags, then signs, scans and attests
+  # that same digest under this workflow's own identity, so verify-release.sh and
+  # docs/VERIFY.md see no difference from the build path.
+  promote:
+    name: promote, sign (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: preflight-green
+    if: needs.preflight-green.outputs.path == 'promote'
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing (Fulcio/Rekor OIDC exchange)
+      attestations: write
+    env:
+      DIGEST: ${{ fromJSON(needs.preflight-green.outputs.digests)[matrix.name] }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same seven rows as `images` and `images-ui-sandbox`. `dockerfile` is
+        # the recipe nightly built, read by check-image-pins.sh,
+        # gpl-source-offer.sh and guard 16; this job never builds it.
+        include:
+          - name: wardynd
+            dockerfile: deploy/compose/Dockerfile.wardynd
+          - name: wardyn-proxy
+            dockerfile: deploy/compose/Dockerfile.proxy
+          - name: agent-base
+            dockerfile: deploy/images/base/Dockerfile
+            float-latest: "true"
+          - name: agent-codex-cli
+            dockerfile: deploy/images/codex-cli/Dockerfile
+            float-latest: "true"
+          - name: agent-aws-sso
+            dockerfile: deploy/images/aws-sso/Dockerfile
+            float-latest: "true"
+          - name: agent-vscode
+            dockerfile: deploy/images/vscode/Dockerfile
+          - name: agent-novnc
+            dockerfile: deploy/images/novnc/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v2.6.4"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute the release tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # `:latest` moves only for a final release on a float-latest row: a
+      # prerelease (a tag holding `-`) never takes it.
+      - name: Compute the image tags
+        id: tags
+        env:
+          IMAGE_NAME: ghcr.io/cjohnstoniv/${{ matrix.name }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          FLOAT_LATEST: ${{ matrix.float-latest }}
+        run: |
+          latest=0
+          if [ "$FLOAT_LATEST" = "true" ]; then
+            case "$RELEASE_TAG" in *-*) ;; *) latest=1 ;; esac
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE_NAME}:${RELEASE_TAG}"
+            if [ "$latest" = 1 ]; then
+              echo "${IMAGE_NAME}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      # A copy moves the manifest bytes as they are, so the digest cannot change;
+      # the check after each copy is what proves it did not.
+      - name: Copy the verified digest to the release tags (no rebuild)
+        if: inputs.dry_run != true
+        env:
+          NAME: ${{ matrix.name }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            cosign copy "ghcr.io/cjohnstoniv/staging/${NAME}@${DIGEST}" "$tag"
+            got="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            test "$got" = "$DIGEST" || { echo "$tag is $got after the copy, expected $DIGEST"; exit 1; }
+            echo "copied $tag -> $DIGEST"
+          done <<<"$TAGS"
+      - name: Sign the promoted image (keyless, by digest)
+        if: inputs.dry_run != true
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ env.DIGEST }}
+        run: cosign sign --yes "${IMAGE_REF}"
+      # Scans the staged copy of the digest being promoted: the same bytes as the
+      # release tags, and readable in a dry run, where nothing is copied.
+      - name: SBOM for the promoted digest
+        env:
+          IMAGE_REF: registry:ghcr.io/cjohnstoniv/staging/${{ matrix.name }}@${{ env.DIGEST }}
+          SYFT_VERSION: v1.46.0
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
+            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          syft "${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
+          # wardynd embeds the console as a Vite bundle, which strips every
+          # package.json, so the lockfile scan is merged in (see the `images` job).
+          if [ "${{ matrix.name }}" = wardynd ]; then
+            syft dir:ui -o cyclonedx-json > ui-sbom.json
+            jq -s '.[0].components += [.[1].components[] | select(.purl // "" | startswith("pkg:npm"))] | .[0]' \
+              "sbom-${{ matrix.name }}.cdx.json" ui-sbom.json > merged.json
+            mv merged.json "sbom-${{ matrix.name }}.cdx.json"
+            test "$(jq '[.components[]|select(.purl//""|startswith("pkg:npm"))]|length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
+              || { echo "wardynd SBOM still reports zero npm packages after the merge"; exit 1; }
+          fi
+          # A scan that finds nothing is a scan that ran against the wrong thing.
+          test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
+            || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
+      - name: Attest the SBOM to the digest
+        if: inputs.dry_run != true
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ env.DIGEST }}
+        run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
+      - name: Attest build provenance
+        if: inputs.dry_run != true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
+          subject-digest: ${{ env.DIGEST }}
           push-to-registry: true
       - name: Upload the SBOM for the release-assets job
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -668,8 +920,10 @@ jobs:
   # all, and nobody could verify what they did pull without reading RELEASING.md.
   release-assets:
     name: Release assets (SBOMs, checksums, notices)
-    if: inputs.dry_run != true
-    needs: [images, images-ui-sandbox, chart, binaries]
+    # !failure() lets this run when `images` or `promote` was skipped by the path
+    # choice; any job that FAILED still stops it.
+    if: ${{ !cancelled() && !failure() && inputs.dry_run != true }}
+    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -696,14 +950,21 @@ jobs:
           merge-multiple: true
           path: assets
       - name: Assemble the asset set
+        env:
+          RELEASE_PATH: ${{ needs.preflight-green.outputs.path }}
         run: |
           set -euo pipefail
           cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
           chmod +x assets/wardyn-* 2>/dev/null || true
           cd assets
-          # One SBOM per published image. If the matrix grows and this does not,
-          # the count assertion below is what says so.
-          want=$(grep -cE '^          - name: [a-z0-9-]+$' ../.github/workflows/release.yml)
+          # One SBOM per published image, counted from the matrix of the path
+          # that ran. If the matrix grows and this does not, the count assertion
+          # below is what says so.
+          if [ "$RELEASE_PATH" = promote ]; then
+            want=$(yq '.jobs.promote.strategy.matrix.include | length' ../.github/workflows/release.yml)
+          else
+            want=$(yq '[.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]] | length' ../.github/workflows/release.yml)
+          fi
           have=$(ls -1 sbom-*.cdx.json | wc -l)
           test "$have" -eq "$want" || { echo "expected $want image SBOMs, found $have"; ls -1; exit 1; }
           sha256sum ./* > SHA256SUMS
