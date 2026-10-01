@@ -8,6 +8,42 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+Three changes can refuse a configuration that worked on 0.8.3. Migration `0105_branding_logo_from_file`
+runs on the first start; it adds one column with a default and changes no existing row.
+
+- **The `secret.rewrap` audit field `key_version` is now a string.** It was an integer before 0.8.4
+  (Key Vault key versions are not numbers). A reader of the audit log that expects a number must read a
+  string. See the Azure Key Vault entry below.
+- **One Transit key can no longer be named for both the boot keys and the credentials (#979).**
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` equal to `WARDYN_VAULT_TRANSIT_KEY` is refused at boot and by
+  `wardynd -rewrap -rewrap-retire-platform-key`, the way the same role already was. Leave the setting
+  empty to keep one key for both.
+- **A host may appear on workspace-provider rows of one kind only (#1450).** A save, in the console or
+  through `wardyn site-config set`, that puts one host on rows of two kinds (a GitHub row and an Azure
+  DevOps row, for example) is refused with a `400`, disabled rows included. Rows already stored are not
+  re-checked until the next save or apply (an MDM file is applied at each boot).
+
+### Security
+
+- **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
+  The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
+  skipped it, so three of the four baked GitHub keys loaded. It is replaced with the key GitHub
+  publishes at `api.github.com/meta`, and the `agent-base` build (and the unpublished `claude-code`
+  build) now fails if any baked `known_hosts` line does not parse.
+- **The AWS CLI in `agent-aws-sso` is 2.37.1 (it was 2.31.13) and code-server in `agent-vscode` is
+  4.138.0 (it was 4.133.0).** 2.31.13 bundled `wheel` 0.45.1 (CVE-2026-24049); 2.37.1 bundles 0.46.3.
+  code-server 4.133.0 bundled `js-yaml` 4.3.0 and `tar` 7.5.20, each with HIGH CVEs; 4.138.0 clears both.
+  Its bundled `undici` 7.29.0 is still flagged by the scanner (CVE-2026-19534, CVE-2026-84961; fixed
+  in 7.29.1) and stays open.
+- **The `claude-code` and `full` images, which Wardyn does not publish, build on Debian 13 like the
+  published ones.** `claude-code` moved to `node:24-trixie-slim` (the digest `agent-base` uses) and runs
+  `apt-get upgrade`; `full` moved to `rust:1.98.0-slim-trixie` and Adoptium's trixie apt suite.
+- **A development-only dependency pin.** The console's dev dependencies now pin `brace-expansion` 5 to
+  5.0.12 for GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (`ui/package.json` overrides; development
+  tooling only).
+
 ### Added
 
 - **Azure Key Vault can hold the key that unlocks stored credentials (`WARDYN_KEK=azurekv`, #587).**
@@ -19,6 +55,122 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `kek.azurekv.key`, `kek.azurekv.signingKey`. The `secret.rewrap` audit field `key_version` is now a
   string (it was an int before 0.8.4). See docs/operations/secrets-and-keys.md "Key service: Azure
   Key Vault".
+- **A second Transit key and Vault role for wardynd's own boot keys (`WARDYN_VAULT_TRANSIT_KEY_PLATFORM`,
+  #979).** With the key set (flag `-vault-transit-key-platform`, chart
+  `secretStore.vault.transitKeyPlatform`, which needs `secretStore.vault.rolePlatform` and
+  `kek.provider=transit`), wardynd wraps its signing, session and SSH host keys under it, reached as
+  `WARDYN_VAULT_ROLE_PLATFORM`; `WARDYN_VAULT_TRANSIT_KEY` then wraps only credentials, so a leaked
+  credentials token unwraps no boot key. A boot key found under any other key is refused at boot, and
+  `wardynd -rewrap` moves them onto it. Boot also refuses the setting with `WARDYN_KEK=local`, without
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or when the two roles are the same. The way back is
+  new: `wardynd -rewrap -rewrap-retire-platform-key` reads the boot keys under the platform key
+  (read-only) and writes them under the key a write uses today (the credential Transit key, or the local
+  key with `WARDYN_KEK=local`), after which the setting can be removed. See
+  docs/operations/secrets-and-keys.md "Two Vault roles".
+- **`push_rules.max_file_size_mib` refuses a push that introduces a file over the limit (#1273).** The
+  brokered git push path refuses it with a `403` (`brokered:git:push-rules`) like a `deny_paths` match,
+  and also refuses a file whose size the pack does not carry when the forge cannot show it unchanged.
+  `0` or absent is off; the value is bounded to 0 to 1024 at write time. Under an operator ceiling the
+  smaller non-zero limit wins: a proposal can neither raise a ceiling's limit nor turn it off with `0`.
+  `push_rules.deny_new_executables` is on the policy wire type but a policy that sets it `true` is
+  refused with a `400` ("not supported yet"), because the broker cannot yet tell an added executable
+  from an edit; a ceiling's `true` still cannot be switched off. See docs/POLICIES.md.
+- **`WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` applies the `email_verified` check without a domain list
+  (#155).** Default off. When on, an ID token with no `email_verified` claim counts as unverified and is
+  refused (`auth_error=email_verified_absent`), `false` is refused (`email_unverified`), and `true`
+  signs in; the sign-in refusal codes and copy are the ones `WARDYN_OIDC_EMAIL_DOMAINS` already used.
+  **Do not turn it on with Entra, which never sends the claim: it would refuse every sign-in.** The
+  People page's email-key badge now follows whether sign-in enforces `email_verified` by either
+  setting, an `email_verified=false` refusal is logged like an absent one, and the compose file passes
+  the variable through (empty is off).
+- **A site configuration can deliver the console logo (`branding.logo_path`, #1215).** `wardyn
+  site-config set` and the MDM file name a `.svg` or `.png` file as wardynd sees it; wardynd reads it at
+  each apply, checks it as an upload is checked (512 KB, a PNG that decodes, an SVG rebuilt from the
+  allowlist), and stores it as the branding logo. A bad file refuses the whole apply (`400`,
+  `site_config_invalid`). With no branding saved yet the apply succeeds with
+  `branding_logo_pending: true` (`wardyn site-config set` prints a warning, and the SDK has
+  `PutSiteConfigResult`), and the logo attaches on the next apply after the card is saved. Taking
+  `logo_path` out of the block (`"branding": {}`) removes a logo the file delivered, never an uploaded
+  one. `GET /branding/settings` carries the read-only `logo_from_file`, and `remove_logo` on such a logo
+  is refused (`logo_from_site_config`). `site_config.write` audit rows record `branding_logo_path` and
+  `branding_logo_sha256` when the body names `branding`. Migration `0105_branding_logo_from_file`. The
+  Branding card gains **Remove logo** and **Remove branding** (`DELETE /branding/settings`, which
+  already existed), each behind a confirmation. See docs/operations/console-branding.md.
+- **The run page says which portal launched the run (#1234).** `GET /runs/{id}` carries
+  `created_via_name` beside `created_via`, resolved from the portal registry at read time and never
+  stored on the run (a revoked portal keeps its name; an unknown one gives an empty name). The page
+  shows one muted line under the header, "Launched via {portal name}", only when `created_via` is set.
+- **A person's own Azure DevOps token is bound by Entra object id, and a token Azure DevOps refuses
+  before its expiry is reported (#1444, #1445).** An Entra sign-in now carries the person's object id
+  (`oid`) in the session cookie under its existing MAC; a cookie without one still signs in. A pasted
+  token binds by it where Wardyn holds the person's object id (from the sign-in, or from the person row)
+  and the token carries `vso.graph`, which the add-token dialog now asks for: Wardyn asks Azure DevOps'
+  Graph API who owns the token and binds when the owner's `originId` matches. Otherwise, or when Graph
+  refuses the token, the account-name or email match applies as before; a token without `vso.graph`
+  is still accepted. When a run's proxy
+  re-resolves a stored token after a `401` and the entered expiry is still ahead, Wardyn first asks
+  Azure DevOps whether it still accepts the token, and only if not stamps the token once. `GET
+  /me/scm-access` gains `refused_at`; `state` is unchanged and the token is used until its expiry. The
+  stamp is audited once as `ado_pat.own.store` with `reason: upstream_refused`, and a new paste
+  clears it. The own-token card reads "Refused" in danger with "Azure DevOps refused this token on
+  {date}, before it expires on {expiry}. Replace it." and a primary Replace token button; the Getting
+  started Azure DevOps chip uses the same words (Connected, Expires in N days, Refused, Expired) and
+  its Replace token or Add your personal access token button opens the Settings dialog rather than an
+  Entra sign-in. Removing the token now takes the lock the paste and the stamp share, so a stamp
+  cannot write a removed token back.
+- **An administrator sees which person the organisation refused a token for (#1449).** The Azure
+  DevOps row shows the existing refusal banner, with no check run, when a member's launch was refused
+  because the organisation restricts who may create tokens. `GET
+  /workspace-providers/git/{id}/ado-pat-refusal` (administrators only) answers the newest such refusal
+  from the last seven days, from the `ado_pat.mint.denied` audit rows, as the person's email and the
+  time, or `204`. A person with no email on file is passed over, never named by subject. No audit
+  action, reason or migration is added. The read filters in the store, so enough newer denials of other
+  kinds can no longer push the refusal out of view.
+
+### Changed
+
+- **Release tooling (#1461).** For the maintainers who cut a release; nothing here changes what
+  runs for a user.
+  - `make release-patch V=x.y.z` (`scripts/release-patch.sh`) runs prepare, wait and publish for a patch,
+    each step resuming from what already exists, and prints a table of the seconds each step took.
+    `DRY_RUN=1` rehearses without a release commit, PR, `release/*` push, tag or Release; it still
+    pushes the candidate branch and dispatches `nightly.yml` and the promote dry run. RELEASING.md
+    documents it, with the manual steps as the fallback.
+  - A release accepts CI and nightly evidence by tree, not by commit
+    (`scripts/green-by-tree.sh`). CI uploads a `ci-full-tree-<tree>` marker; only a dispatched nightly
+    qualifies, the newest one decides, and `ci.yml` no longer runs on pushes to `release/**`. A release
+    PR's DCO range excludes commits already on `main`, and the exemption for GitHub-made merge
+    commits now also checks GitHub's signing key id.
+  - A dispatched nightly builds the release image set once, multi-arch and unsigned, with build
+    provenance, into `ghcr.io/cjohnstoniv/staging/<image>:run-<run_id>`. `release.yml` gains a `path`
+    input (`build`, the default, or `promote`): promote copies those digests to the release tags,
+    refusing staging older than 24 hours or one whose revision label or attestation does not match,
+    then signs, scans and attests them. A tag push still builds.
+  - `release-commit.sh` and `verify-release.sh` move into `scripts/`, tested; a repeated `--apply`
+    refuses (exit 4) instead of duplicating the CHANGELOG section, and `--expect-tip` takes any unique
+    7 to 40 hex prefix.
+  - A test that passes only on a retry fails the e2e gate unless `ui/e2e/quarantine.txt` lists it with an
+    issue, an owner and an expiry at most 14 days out; listed tests pass with a warning, expired or
+    malformed entries fail every run, and every flake is written to `test/reports/e2e/flaky.tsv`.
+    A new `notify-flaky` CI job opens or updates one issue per flaky test.
+  - The managed-settings drift probe now checks arm64 and the behaviour of the frozen documents, and
+    joins the nightly's notifications and the release gate.
+- **The nightly's published-image scan restores the trivy database cache,** and its issue now says the
+  scan failed, instead of claiming a published image has a CRITICAL vulnerability when the failure may
+  be a database download or an empty release list.
+
+### Fixed
+
+- **A model-access door button no longer does nothing when clicked just after the setup status
+  changes (#1460).** The door resolved its request against the previous status until a later effect ran,
+  so a click in that gap (the owner's subscription sign-in button, for example) opened nothing.
+- **The run page's idle sampler waits out every Sandbox-widget read, and its sandbox-gone answer is
+  logged and accurate (#1402).** A read refused its disk walk still ran the rest of its script inside
+  the sampler's window; every read is now counted, and a read whose request ended stays counted for
+  2 s while its `du` may still run. The `409` for a sandbox that is gone is logged at info level, and for
+  a run whose state has not yet flipped reads "the sandbox is gone; the run is finishing" rather than
+  that it has finished.
+- **A long portal name wraps on the run page's "Launched via" line (#1234).**
 
 ## [0.8.3] — 2026-09-30
 
