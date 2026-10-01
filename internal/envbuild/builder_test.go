@@ -8,6 +8,7 @@ package envbuild
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"io"
 	"maps"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/moby/moby/api/types/container"
 )
 
@@ -960,5 +962,69 @@ func TestBuildFinalizeContext_WiresGitCredentialHelper(t *testing.T) {
 	}
 	if got := modes["gitconfig"]; got != 0o644 {
 		t.Errorf("gitconfig mode = %#o, want 0644 (root-owned: the sandbox user must not rewrite its own helper path)", got)
+	}
+}
+
+// A daemon that accepts the create but reports it discarded a requested limit
+// leaves the build uncapped, so the builder removes the container and refuses
+// before it stages a context or starts it. A warning that discards nothing, and
+// a clean create, still build. Builds never honour the sandbox cap override.
+func TestBuildRefusesDiscardedResourceCaps(t *testing.T) {
+	const discard = "Your kernel does not support memory limit capabilities or the cgroup is not mounted. Limitation discarded."
+	for _, generated := range []bool{false, true} {
+		lane := "repo"
+		if generated {
+			lane = "generated"
+		}
+		for _, tc := range []struct {
+			name     string
+			warnings []string
+			refuse   bool
+		}{
+			{"discarded-memory", []string{discard}, true},
+			{"warning-free", nil, false},
+			{"non-discard-warning", []string{"Memory limited without swap."}, false},
+		} {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				t.Setenv("WARDYN_ALLOW_UNENFORCEABLE_CAPS", "1")
+				f := newFakeEnvbuilderDocker()
+				f.createWarnings = tc.warnings
+				b := newWithClient(f, "envbuilder:test", "registry.example.com/review-cache")
+				b.ToolsDir = fakeToolsDir(t)
+				var err error
+				if generated {
+					_, err = b.BuildFromDevcontainerFiles(t.Context(), map[string]string{".devcontainer/devcontainer.json": `{"image":"base:synthetic"}`}, "wardyn-review:synthetic", nil)
+				} else {
+					_, err = b.Build(t.Context(), BuildSpec{RepoURL: "https://example.invalid/synthetic/repo", OutputImageTag: "wardyn-review:synthetic"})
+				}
+				if f.lastResources.Memory == 0 || f.lastResources.NanoCPUs == 0 || f.lastResources.PidsLimit == nil {
+					t.Fatal("build did not request its resource caps")
+				}
+				if !tc.refuse {
+					if err != nil || f.startCalled != 1 {
+						t.Fatalf("err=%v start_calls=%d, want a normal build", err, f.startCalled)
+					}
+					return
+				}
+				if !errors.Is(err, dockerutil.ErrCapsDiscarded) {
+					t.Fatalf("err=%v, want it to wrap dockerutil.ErrCapsDiscarded", err)
+				}
+				if !strings.Contains(err.Error(), "memory limit") {
+					t.Errorf("err=%q does not name the discarded limit", err)
+				}
+				if strings.Contains(err.Error(), "WARDYN_ALLOW_UNENFORCEABLE_CAPS") {
+					t.Errorf("err=%q offers an override builds do not honour", err)
+				}
+				if f.startCalled != 0 {
+					t.Errorf("start_calls=%d, want 0", f.startCalled)
+				}
+				if len(f.copiedTo) != 0 {
+					t.Errorf("CopyToContainer called %d times, want 0 (context must not be staged)", len(f.copiedTo))
+				}
+				if !f.removed || !slices.Equal(f.removedIDs, []string{"fake-build-container"}) {
+					t.Errorf("removedIDs=%v, want the build container removed exactly once", f.removedIDs)
+				}
+			})
+		}
 	}
 }
