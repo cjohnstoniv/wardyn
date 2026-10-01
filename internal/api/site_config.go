@@ -545,6 +545,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// effective_scm_hosts: the read-only union (workspace_providers.go) — ONE
 	// spelling of the claim rule, in Go, so the console never re-implements it.
 	cfg.EffectiveScmHosts = effectiveScmHosts(cfg)
+	cfg.WithheldScmHosts = withheldScmHosts(cfg)
 	// workspace_providers.git_pat_broker_enabled: the SAME projection GET
 	// /workspace-providers does, and for the same reason (#381) — this door
 	// returns the identical nested block, so a console reading site-config
@@ -646,6 +647,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing
 	// to preserve — the write clears it instead.
 	cfg.EffectiveScmHosts = nil
+	cfg.WithheldScmHosts = nil
 	// git_pat_broker_enabled (nested in workspace_providers) takes the SAME
 	// treatment, and for the same reason (#381 F1): it is projected on read
 	// from the deployment's own env switch, never stored. Without this line a
@@ -906,6 +908,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Projected onto the response for the same reason GET projects it — and
 	// AFTER the ETag above, which must hash the stored document.
 	saved.EffectiveScmHosts = effectiveScmHosts(saved)
+	saved.WithheldScmHosts = withheldScmHosts(saved)
 	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
 	// `site-config set` (or the console's own PUT round trip) sees the live
 	// switch immediately rather than a dropped field until the next GET. A

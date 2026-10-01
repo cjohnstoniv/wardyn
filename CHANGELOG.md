@@ -192,6 +192,12 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Changed
 
+- **A disabled git provider row now says why its host is missing.** `GET /site-config` returns a
+  read-only `withheld_scm_hosts` beside `effective_scm_hosts`: each host a disabled row claims that the
+  effective list leaves out, as `{host, provider_id, provider_kind}`. The host stays out of run egress and
+  a launch on it is still refused naming the row; a `PUT` ignores the new field. The comment in migration
+  `0103` now states this instead of saying only that the row "still claims its hosts".
+
 - **Release tooling (#1461).** For the maintainers who cut a release; nothing here changes what
   runs for a user.
   - `make release-patch V=x.y.z` (`scripts/release-patch.sh`) runs prepare, wait and publish for a patch,

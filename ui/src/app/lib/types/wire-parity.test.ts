@@ -209,6 +209,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
+  it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "WithheldScmHost");
+    expect(goTags).toEqual(["host", "provider_id", "provider_kind"]);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "WithheldScmHost");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
   // #1215: GET /branding/settings is the public subset (brandingPublic, embedded)
   // plus brandingSettings' own keys, which is everything the TS Branding mirror
   // declares — logo_from_file, the read-only file-delivered mark, included.

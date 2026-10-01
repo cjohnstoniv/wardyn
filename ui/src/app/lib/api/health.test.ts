@@ -120,6 +120,7 @@ describe("health — site-config integrations round-trip", () => {
       // #1215: a stale spread would re-read (and could fail on) a logo file the save never meant to touch.
       branding: { logo_path: "/etc/wardyn/branding/logo.svg" },
       effective_scm_hosts: ["github.com"],
+      withheld_scm_hosts: [{ host: "dev.azure.com", provider_id: "ado", provider_kind: "azure_devops" }],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));
     const got = await health.getSiteConfig();
