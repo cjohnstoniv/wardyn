@@ -551,6 +551,7 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 	// ...and the whole wire payload, on a fixture that puts a k8s runner and an
 	// unadvertised floor in play at once.
 	srv := New(Config{
+		BaseCtx:       testBaseCtx(t),
 		AdminToken:    adminToken,
 		Runner:        k8sRunner{networkPolicy: true},
 		DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},

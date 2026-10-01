@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -175,7 +174,7 @@ func TestSweepExpiredCredentials_ReachesThroughTheAuditedWrapper(t *testing.T) {
 func TestSweepExpiredCredentials_WrappedStoreWithoutSweepLogsOnce(t *testing.T) {
 	noSweepOnce = sync.Once{}
 	t.Cleanup(func() { noSweepOnce = sync.Once{} })
-	var logged bytes.Buffer
+	var logged lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

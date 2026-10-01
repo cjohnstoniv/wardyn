@@ -150,6 +150,7 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 		t.Fatalf("embedded.New: %v", err)
 	}
 	srv := New(Config{
+		BaseCtx:     testBaseCtx(t),
 		Store:       store.NewPG(pool),
 		Identity:    idp,
 		Approvals:   newFakeApprovals(),
