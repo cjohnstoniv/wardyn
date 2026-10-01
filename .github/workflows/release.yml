@@ -123,125 +123,74 @@ on:
         default: true
 
 jobs:
-  # T-06 (#666): nothing before this job ever asked "is the commit this tag
-  # points at actually green" — a tag can be pushed on any commit, including
-  # one CI never ran on or one whose nightly has never gone green. Reads
-  # branch protection's LIVE required_status_checks.contexts (the one list
-  # RELEASING.md's own PATCH configures — never a second, hand-typed copy that
-  # could drift from it) and the check-runs GitHub recorded for the tagged
-  # commit, plus the completed nightly run for that EXACT commit (no
-  # ancestor walk, no branch filter — see the step's own comment). Skipped
-  # only when this is an explicit dry-run rehearsal
-  # (`inputs.dry_run == true`) — a real tag push has no `inputs` at all, and a
-  # workflow_dispatch with `dry_run: false` is a real publish, so keying the
-  # skip on the event name instead of the flag would have let that path
-  # through with no gate at all.
+  # The gate on a release: the tag's TREE must be green, by CI and by the
+  # nightly. T-06 (#666) added it because nothing asked "is the commit this tag
+  # points at actually green" — a tag can be pushed on any commit, including one
+  # CI never ran on or one whose nightly has never gone green.
+  #
+  # Evidence is keyed by tree, not by commit (#1461). In 0.8.2 the nightly
+  # passed on one sha, then release/0.8 got a different sha for the same tree
+  # after a merge, and the exact-sha rule forced a second nightly (about 20
+  # minutes). Now ci.yml uploads a ci-full-tree-<tree> marker holding the tree it
+  # tested, and a run counts when its marker names the tag's tree: a pull
+  # request's run qualifies a commit it never saw, because the marker records
+  # the merge commit's tree, which the run API does not show. The run's own head
+  # tree must match too, so a PR counts only when its merge left the tree equal
+  # to its head; that fails closed. scripts/green-by-tree.sh holds the rules and
+  # is the same command the release runs by hand.
+  #
+  # R2-1's rule survives: an IDENTICAL tree only, never an ancestor's. An
+  # ancestor walk could pick a stale run from days earlier, silently passing a
+  # tag whose cherry-picks it never saw. The nightly must be a workflow_dispatch
+  # run: a scheduled one skips the staging matrix and never qualifies a tree.
+  # The NEWEST such run decides (cancelled ones skipped): a red newest run is
+  # not rescued by an older green one, so re-dispatching is the recovery.
+  #
+  # The script reads branch protection's LIVE required_status_checks.contexts
+  # (the one list RELEASING.md's own PATCH configures, never a second typed
+  # copy) and the watched= list below. Skipped only when this is an explicit
+  # dry-run rehearsal (`inputs.dry_run == true`) — a real tag push has no
+  # `inputs` at all, and a workflow_dispatch with `dry_run: false` is a real
+  # publish, so keying the skip on the event name instead of the flag would have
+  # let that path through with no gate at all.
   preflight-green:
-    name: Preflight — required contexts + latest nightly green on the tag commit
+    name: Preflight — required contexts + newest dispatched nightly green on the tag's tree
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
-      checks: read
       actions: read
+    outputs:
+      tree: ${{ steps.green.outputs.tree }}
+      ci_run: ${{ steps.green.outputs.ci_run }}
+      nightly_run: ${{ steps.green.outputs.nightly_run }}
+      nightly_sha: ${{ steps.green.outputs.nightly_sha }}
     steps:
-      - name: Required status checks must all be green on this commit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The nightly RUN's own conclusion is never success: e2e-live (known-fail,
+      # #965 + the OIDC-flow issue nightly.yml's own comment names) and
+      # migration-merge-check (red by design, scripts/test-repo-guards.sh's
+      # guard 1 comment) are red on purpose and carry no error-tolerant step
+      # override. So the script judges the WATCHED jobs individually instead of
+      # the run's conclusion. The list must stay identical to nightly.yml's
+      # notify-new-lanes.needs (the set nightly.yml itself treats as "no
+      # characterised noise"), which already excludes both of those by name:
+      # test-repo-guards.sh's guard 13 fails the build if the two drift.
+      # buildx-smoke is not on the list: it is a matrix job whose API job name
+      # is "multi-arch build (<matrix.name>)" (nightly.yml), never the literal
+      # YAML key, so the script matches that prefix instead.
+      # daemon-proxy-secret-kind (T-59, #719), provider-subscription-docker-pg
+      # (T-17, #677) and managed-settings-drift (#1395) each joined after a
+      # green hosted run (see nightly.yml's own comment on each job).
+      - id: green
+        name: The tag's tree must be green by CI and by a dispatched nightly
         if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          repo="${{ github.repository }}"
-          sha="${{ github.sha }}"
-          # "Get a branch" (Contents: read) — NOT branches/main/protection,
-          # which needs Administration: read and 403s under GITHUB_TOKEN's
-          # ordinary job permissions (F2).
-          contexts="$(gh api "repos/${repo}/branches/main" --jq '.protection.required_status_checks.contexts[]')"
-          [ -n "${contexts}" ] || { echo "::error::branch protection reported no required_status_checks.contexts — nothing to preflight against"; exit 1; }
-          checks="$(gh api "repos/${repo}/commits/${sha}/check-runs" --paginate --jq '.check_runs[] | "\(.name)\t\(.conclusion)"')"
-          failed=0
-          while IFS= read -r ctx; do
-            [ -n "${ctx}" ] || continue
-            status="$(printf '%s\n' "${checks}" | awk -F'\t' -v c="${ctx}" '$1==c{print $2; exit}')"
-            if [ "${status}" != "success" ]; then
-              echo "::error::required context '${ctx}' is not green on ${sha} (saw: '${status:-not reported}')"
-              failed=1
-            fi
-          done <<<"${contexts}"
-          [ "${failed}" -eq 0 ] || exit 1
-      - name: The completed nightly run on this exact commit must have its watched jobs green
-        if: inputs.dry_run != true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          repo="${{ github.repository }}"
-          sha="${{ github.sha }}"
-          # The nightly RUN's own conclusion is never success: e2e-live
-          # (known-fail, #965 + the OIDC-flow issue nightly.yml's own comment
-          # names) and migration-merge-check (red by design,
-          # scripts/test-repo-guards.sh's guard 1 comment) are red on purpose
-          # and carry no error-tolerant step override. So judge the WATCHED jobs
-          # individually instead of the run's conclusion — this list must
-          # stay identical to nightly.yml's notify-new-lanes.needs (the set
-          # nightly.yml itself treats as "no characterised noise"), which
-          # already excludes both of those by name — test-repo-guards.sh's
-          # guard 13 fails the build if this list and that needs: list drift.
-          # buildx-smoke is handled separately below: it is a matrix job whose
-          # API job name is "multi-arch build (<matrix.name>)"
-          # (nightly.yml:444), never the literal YAML key "buildx-smoke", so it
-          # cannot be matched by name the way the other watched jobs are.
-          # daemon-proxy-secret-kind (T-59, #719) went green on its first real
-          # nightly run (workflow_dispatch, 2026-09-28, run 36377937351) and
-          # joined this list and nightly.yml's notify-new-lanes.needs together
-          # (guard 13 requires both change at once).
-          # provider-subscription-docker-pg (T-17, #677) went green on its
-          # third real nightly run (workflow_dispatch, 2026-09-28, run
-          # 36393687863 — its first two runs each caught a real environment
-          # gap, see nightly.yml's own comment on the job) and joined the same
-          # way. managed-settings-drift (#1395) joined after a green hosted
-          # run (run 36786358051).
           watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
-          # Exact commit match ONLY (R2-1) — no ancestor walk, no branch
-          # filter. nightly.yml runs on schedule against whatever commit is
-          # main's HEAD at 07:00 UTC, or on whatever ref a workflow_dispatch
-          # names, so this finds a run only when someone actually ran nightly
-          # ON the commit being tagged (RELEASING.md's own "for that SHA").
-          # An ancestor walk was tried and reverted: it could pick an old,
-          # stale run from days earlier (silently passing a tag whose
-          # cherry-picks that nightly never saw), or a run dispatched on an
-          # unrelated feature branch that happens to be an ancestor after a
-          # merge commit. --method GET is load-bearing: gh api defaults to
-          # POST the moment any -f/-F field is present, which 404s on this
-          # GET-only endpoint. A failing gh api call here is not caught and
-          # falls back to anything — set -e stops the job outright.
-          run_id="$(gh api --method GET "repos/${repo}/actions/workflows/nightly.yml/runs" -f status=completed -f "head_sha=${sha}" -f per_page=1 --jq '.workflow_runs[0].id // empty')"
-          if [ -z "${run_id}" ]; then
-            echo "::error::no completed nightly.yml run was found for exactly ${sha} — dispatch one on the commit you are about to tag (e.g. \`gh workflow run nightly.yml --ref <branch-or-tag-pointing-at-this-commit>\`), wait for it to complete, then re-tag"
-            exit 1
-          fi
-          job_conclusions="$(gh api "repos/${repo}/actions/runs/${run_id}/jobs" --paginate --jq '.jobs[] | "\(.name)\t\(.conclusion)"')"
-          failed=0
-          for job in ${watched}; do
-            status="$(printf '%s\n' "${job_conclusions}" | awk -F'\t' -v j="${job}" '$1==j{print $2; exit}')"
-            if [ "${status}" != "success" ]; then
-              echo "::error::watched nightly job '${job}' is not green on run ${run_id} (commit ${sha}; saw: '${status:-not reported}')"
-              failed=1
-            fi
-          done
-          buildx_rows="$(printf '%s\n' "${job_conclusions}" | awk -F'\t' '$1 ~ /^multi-arch build \(/')"
-          if [ -z "${buildx_rows}" ]; then
-            echo "::error::watched nightly job 'buildx-smoke' (matrix rows 'multi-arch build (...)') was not reported on run ${run_id} (commit ${sha})"
-            failed=1
-          else
-            while IFS=$'\t' read -r name status; do
-              if [ "${status}" != "success" ]; then
-                echo "::error::watched nightly job 'buildx-smoke' row '${name}' is not green on run ${run_id} (commit ${sha}; saw: '${status}')"
-                failed=1
-              fi
-            done <<<"${buildx_rows}"
-          fi
-          [ "${failed}" -eq 0 ] || exit 1
+          WATCHED="$watched" ./scripts/green-by-tree.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Rehearsal — dry_run skips the preflight (no real release contract to check)
         if: inputs.dry_run == true
         run: |

@@ -596,6 +596,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
+	./scripts/test-green-by-tree.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
@@ -1305,17 +1306,22 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 DCO_RANGE ?= origin/main..HEAD
 # 1 only where GitHub itself makes merge commits (push, merge_group): its
 # "Merge pull request" commits (committer GitHub <noreply@github.com>, 2+
-# parents) carry no Signed-off-by. PR ranges end at the PR head instead and
-# never pass this flag — every commit in a PR's own range, merges included,
-# must carry Signed-off-by, even a GitHub-committed one (e.g. from "Update
-# branch") landed on the branch itself (#1070).
+# parents) carry no Signed-off-by. They carry GitHub's web-flow signature, so the
+# exemption also wants that key id (%GK, which git prints from the signature
+# even when the key is not in the keyring): setting GIT_COMMITTER_EMAIL alone no
+# longer forges it. The key id is not a verification, since a copied signature
+# block names the same key; branch protection is what keeps a forged merge off
+# main. A missing gpg leaves %GK empty and fails the exemption closed. PR ranges
+# end at the PR head instead and never pass this flag — every commit in a PR's
+# own range, merges included, must carry Signed-off-by, even a GitHub-committed
+# one (e.g. from "Update branch") landed on the branch itself (#1070).
 DCO_ALLOW_GITHUB_MERGES ?= 0
 dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
-	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
+	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%GK%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
 	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
 	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' -v gh=$(DCO_ALLOW_GITHUB_MERGES) \
-	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" {next} $$4 !~ /.+ <.+@.+>/ {print $$1}'); \
+	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" && $$4=="B5690EEEBB952194" {next} $$5 !~ /.+ <.+@.+>/ {print $$1}'); \
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 

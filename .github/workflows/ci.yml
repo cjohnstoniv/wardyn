@@ -2,10 +2,9 @@ name: CI
 
 on:
   push:
-    # `release/**` stays until release.yml accepts a run by tree (#1461 R6): until
-    # then a release branch's merge commit needs its own push run for the
-    # preflight's exact-sha check. R6 removes it.
-    branches: [main, master, 'release/**', 'feature/**']
+    # No `release/**`: release.yml accepts CI by tree (#1461), and a release
+    # branch only ever fast-forwards to a tree its own pull request run tested.
+    branches: [main, master, 'feature/**']
   # No branches filter: `branches:` matches the PR's BASE, and the 0.8
   # working-practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90),
   # not on main — a filtered trigger gave a stacked PR no checks at all
