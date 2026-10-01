@@ -100,7 +100,7 @@ case "$1 ${2:-}" in
       */nightly.yml/runs) emit "$key" '{"workflow_runs":[]}' ;;
       */releases) emit "$key" '[]' ;;
       */actions/runs/*/jobs) [ -f "$FIX/$key" ] && emit "$key" '{}' || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; } ;;
-      */actions/runs/*) emit "$key" "{\"updated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" ;;
+      */actions/runs/*) emit "$key" "{\"created_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"updated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" ;;
       *) [ -f "$FIX/$key" ] && emit "$key" '{}' || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; } ;;
     esac ;;
   *) echo "gh shim: unhandled: $*" >&2; exit 1 ;;
@@ -421,7 +421,7 @@ mkfix S
 rp V=0.8.4 PHASE=prepare
 STREE=$(g -C "$WK" rev-parse 'HEAD^{tree}')
 OLDTS=$(date -u -d '30 hours ago' +%Y-%m-%dT%H:%M:%SZ); NEWTS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-runs_json() { printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"completed","conclusion":"success","created_at":"%s","updated_at":"%s","head_commit":{"tree_id":"%s"}}]}' "$1" "$1" "$STREE"; }
+runs_json() { printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"completed","conclusion":"success","created_at":"%s","updated_at":"%s","head_commit":{"tree_id":"%s"}}]}' "$1" "${2:-$1}" "$STREE"; }
 printf '{"jobs":[{"name":"w1","conclusion":"success"},{"name":"w2","conclusion":"success"},{"name":"w3","conclusion":"success"},{"name":"multi-arch build (x)","conclusion":"success"}]}' >"$FIX/api_repos_acme_wardyn_actions_runs_9_jobs.json"
 W1=$(grep -c '^workflow run nightly' "$FIX/gh.log")
 runs_json "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
@@ -430,8 +430,13 @@ check "S: a green nightly from now is not dispatched again" bash -c "[ \"\$(grep
 runs_json "$OLDTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
 rp V=0.8.4 PHASE=prepare
 check "S: a green nightly 30 hours old is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W1 + 1)) ]"
+# A rerun of failed jobs keeps the old image jobs and moves updated_at: the age is created_at
+W2=$(grep -c '^workflow run nightly' "$FIX/gh.log")
+runs_json "$OLDTS" "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
+rp V=0.8.4 PHASE=prepare
+check "S: a green nightly created 30 hours ago but updated now (a rerun) is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W2 + 1)) ]"
 # wait and publish: green-by-tree passes on the old run (nightly_run=2), the run is stale
-printf '{"updated_at":"%s"}' "$OLDTS" >"$FIX/api_repos_acme_wardyn_actions_runs_2.json"
+printf '{"created_at":"%s","updated_at":"%s"}' "$OLDTS" "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_runs_2.json"
 rp V=0.8.4 PHASE=publish
 if [ "$RC" != 0 ] && out_has 'more than 24 hours' && [ "$(lines "$FIX/push.log")" = 1 ] && log_lacks push.log 'release/0\.8$|v0\.8\.4'; then ok "S: publish refuses a stale nightly before any push"
 else bad "S: publish with a stale nightly (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi

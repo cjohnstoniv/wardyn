@@ -268,8 +268,10 @@ by containing R7.
   tree, so a newer red is not hidden by an older green. Rerun the failed jobs
   with the printed `gh run rerun <id> --failed`, or dispatch a fresh one
   (`gh workflow run nightly.yml --ref <branch>`; `make release-patch` does it
-  when the newest finished run is not green). Re-dispatching is the deliberate
-  recovery.
+  when the newest finished run is not green). A rerun does not refresh image
+  age: staging is judged by the run's creation time, so a nightly created more
+  than 24 hours ago needs a fresh dispatch, never a rerun. Re-dispatching is the
+  deliberate recovery.
 - A red `release.yml` run: rerun its failed jobs, then run the command again.
 - The tag, the branch push and the published Release are each skipped once they
   exist. A tag that exists at some other commit is refused.

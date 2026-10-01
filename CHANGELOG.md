@@ -173,7 +173,9 @@ runs on the first start; it adds one column with a default and changes no existi
     provenance, into `ghcr.io/cjohnstoniv/staging/<image>:run-<run_id>`. `release.yml` gains a `path`
     input (`build`, the default, or `promote`): promote copies those digests to the release tags,
     refusing staging older than 24 hours or one whose revision label or attestation does not match,
-    then signs, scans and attests them. A tag push still builds.
+    then signs, scans and attests them. A tag push still builds. The age is the run's `created_at`
+    here and in `release-patch`: `gh run rerun --failed` refreshes `updated_at` but keeps the old
+    image jobs, so a stale nightly needs a fresh dispatch.
   - `release-commit.sh` and `verify-release.sh` move into `scripts/`, tested; a repeated `--apply`
     refuses (exit 4) instead of duplicating the CHANGELOG section, and `--expect-tip` takes any unique
     7 to 40 hex prefix.
