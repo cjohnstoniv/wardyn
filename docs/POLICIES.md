@@ -834,7 +834,7 @@ or forwards the buffered bytes unchanged:
 | Refusal | Status | `rule_source` | Remedy |
 |---|---|---|---|
 | A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them and, for a path the broker compared with the forge, why it could not clear it. |
-| A file the push introduces is over `max_file_size_mib`, or its size is not carried by the pack and the forge cannot show it unchanged | `403` | `brokered:git:push-rules` | Remove or shrink those files, push from a complete clone, or have an operator raise `max_file_size_mib` (`0` turns it off). Names up to ten files; a deny, so it wins over `require_review_paths`. |
+| A file the push introduces is over `max_file_size_mib`, or its size is not carried by the pack and the forge cannot show it unchanged | `403` | `brokered:git:push-rules` | Remove or shrink those files, or have an operator raise `max_file_size_mib` (`0` turns it off; off github.com that is the only remedy besides pushing through a GitHub lane). Names up to ten files; a deny, so it wins over `require_review_paths`. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
 | The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
@@ -1035,11 +1035,13 @@ match always wins: a path both lists match is refused and nothing is asked.
   is `ado_entra` and its label is the person whose sign-in the push uses. The
   lane's REST door holds the same way — see **Every door, not only git's**.
 
-`deny_new_executables` and `max_file_size_mib` are a later change. Whoever adds
-a size rule decides with `gitpack.Change.Within`, which refuses a size the pack
-does not carry (a submodule pointer, an unchanged file on a second push);
-`Size()` returns `(bytes, known)`, so a bare comparison against a limit does
-not compile.
+`deny_new_executables` is not supported yet (see its row below). `max_file_size_mib`
+decides with `gitpack.Change.Size()`, which returns `(bytes, known)`, so a bare comparison against a limit does
+not compile: a size the pack does not carry (a submodule pointer, an unchanged file on a
+second push) is cleared against the forge or refused. The forge can be read only on github.com: on
+Azure DevOps and any other `git_pat` host the rule refuses every push that builds on history, because every
+file the push did not itself change has no size the broker can learn, and a size-only rule also refuses the
+Azure DevOps REST content routes that name no paths.
 
 **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on
 the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
@@ -1067,7 +1069,7 @@ there is nothing here for a silent ceiling to protect against. When both set
 |---|---|---|---|
 | `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, valid UTF-8, no NUL or other control character, and no leading or trailing whitespace; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
-| `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB. `0`/absent is **off**. Bounded at write time to **0..1024**. A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above) and refused, as "size not carried by the pack", when it cannot be shown unchanged; on a lane that cannot read the forge, that is every file the push did not itself change. A file past `max_inspect_pack_mib`, or past `internal/gitpack`'s own compiled-in ceilings, is refused as too large before this rule sees it. A deny, like a `deny_paths` match (`403`, `brokered:git:push-rules`). |
+| `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB. `0`/absent is **off**. Bounded at write time to **0..1024**. A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above) and refused, as "size not carried by the pack", when it cannot be shown unchanged; on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change, so the push is refused whatever the sizes; set it to `0` on that lane, or push through a GitHub lane. A complete clone does not help: git never sends objects the remote already holds. A file past `max_inspect_pack_mib`, or past `internal/gitpack`'s own compiled-in ceilings, is refused as too large before this rule sees it. A deny, like a `deny_paths` match (`403`, `brokered:git:push-rules`). |
 | `deny_new_executables` | `bool` | `false` | **Not supported yet:** a policy that sets it `true` is refused (`400`) at write time, because the broker cannot yet tell a newly added executable from an edit to an existing one. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |

@@ -591,8 +591,14 @@ func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
 		for i, pth := range uncarriedPaths(left) {
 			lines[i] = pth + ": size not carried by the pack"
 		}
-		body = pathsBody(headline, lines, "unsized", "",
-			"push from a complete clone so the pack carries every object, or ask an operator to set push_rules.max_file_size_mib to 0")
+		// A complete clone cannot help: git never sends objects the remote
+		// already has. The broker has to read the forge, and only GitHub's
+		// can be read.
+		remedy := "ask an operator to set push_rules.max_file_size_mib to 0"
+		if why == whyNotGitHub {
+			remedy = "ask an operator to set push_rules.max_file_size_mib to 0 on this lane, or push through a GitHub lane"
+		}
+		body = pathsBody(headline, lines, "unsized", why, remedy)
 	default:
 		return true
 	}

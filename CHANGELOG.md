@@ -10,16 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
-Four changes can refuse a configuration that worked on 0.8.3. Migration `0105_branding_logo_from_file`
+Four changes can break a setup, a script or an upgrade path that worked before. Migration `0105_branding_logo_from_file`
 runs on the first start; it adds one column with a default and changes no existing row.
 
-- **The `secret.rewrap` audit field `key_version` is now a string.** It was an integer before 0.8.4
-  (Key Vault key versions are not numbers). A reader of the audit log that expects a number must read a
-  string. See the Azure Key Vault entry below.
-- **One Transit key can no longer be named for both the boot keys and the credentials (#979).**
-  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` equal to `WARDYN_VAULT_TRANSIT_KEY` is refused at boot and by
-  `wardynd -rewrap -rewrap-retire-platform-key`, the way the same role already was. Leave the setting
-  empty to keep one key for both.
+- **A pre-envelope boot key beside a platform key now stops the boot (#979).** Going straight from 0.7.11 or
+  earlier to 0.8.4 with `WARDYN_PLATFORM_KEY_FILE` (or `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` with the age key
+  still set) holds only pre-envelope boot keys, and the boot refuses them, naming the row, and commits
+  nothing. Start once without the platform key first, then set it. See Security below.
+- **`wardynd -rewrap` no longer moves boot keys off the age key unless you pass `-rewrap-adopt-boot-keys`
+  (#979).** A script or runbook that ran a plain `wardynd -rewrap` to move them onto a platform key now
+  aborts, naming the row, and moves nothing. See Security below.
 - **A host may appear on workspace-provider rows of one kind only (#1450).** A save, in the console or
   through `wardyn site-config set`, that puts one host on rows of two kinds (a GitHub row and an Azure
   DevOps row, for example) is refused with a `400`, disabled rows included. Rows already stored are not
@@ -68,9 +68,8 @@ runs on the first start; it adds one column with a default and changes no existi
   with `refusal` `adopt_not_requested` or `mixed_boot_keys`. The flag does not make adoption safe: if the real
   boot keys were deleted and a forged set planted, an operator who passes the flag adopts the forgery. The
   boot-time refusal of such a row now asks whether you have adopted before, and says to investigate if you
-  have. **Before you upgrade:** a script that runs `wardynd -rewrap` to move boot keys onto a platform key
-  needs the flag.
-- **Four follow-ups on the 0.8.4 identity and Azure DevOps code (#1449, #1444, #155, #622).** A laptop's forwarded audit row can no longer put a false "refused" banner on the Azure DevOps row: the banner reads only rows `wardynd` wrote itself. A pasted token is bound to the sign-in's Entra object id alone, never the union with the stored one, and the `ado_pat.own.store` row says whether the token was bound by `object_id` or `name`. A browser sign-in refused for a missing or false `email_verified`, or an email outside `WARDYN_OIDC_EMAIL_DOMAINS`, now writes an `auth.fail` row (`email_verified_absent`, `email_unverified`, `email_domain`). A role-mapping change that cannot list or revoke the outstanding API tokens says so in its audit row (`tokens_revocation_failed`) and in the upsert response, instead of reporting zero revoked.
+  have.
+- **Four follow-ups on the 0.8.4 identity and Azure DevOps code (#1449, #1444, #155, #622).** A laptop's forwarded audit row can no longer put a false "refused" banner on the Azure DevOps row: the banner reads only rows `wardynd` wrote itself. A pasted token is bound to one Entra object id, the sign-in's (or the person row's when the sign-in has none), never the union of the two, and the `ado_pat.own.store` row says whether the token was bound by `object_id` or `name`. A browser sign-in refused for a missing or false `email_verified`, or an email outside `WARDYN_OIDC_EMAIL_DOMAINS`, now writes an `auth.fail` row (`email_verified_absent`, `email_unverified`, `email_domain`). A role-mapping change that cannot list or revoke the outstanding API tokens says so in its audit row (`tokens_revocation_failed`) and in the upsert response, instead of reporting zero revoked.
 - **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
   The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
   skipped it, so three of the four baked GitHub keys loaded. It is replaced with the key GitHub
@@ -120,7 +119,7 @@ runs on the first start; it adds one column with a default and changes no existi
   `WARDYN_VAULT_ROLE_PLATFORM`; `WARDYN_VAULT_TRANSIT_KEY` then wraps only credentials, so a leaked
   credentials token unwraps no boot key. A boot key found under any other key is refused at boot, and
   `wardynd -rewrap` moves them onto it. Boot also refuses the setting with `WARDYN_KEK=local`, without
-  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or when the two roles are the same. The way back is
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or when the two roles, or the two keys, are the same. The way back is
   new: `wardynd -rewrap -rewrap-retire-platform-key` reads the boot keys under the platform key
   (read-only) and writes them under the key a write uses today (the credential Transit key, or the local
   key with `WARDYN_KEK=local`), after which the setting can be removed. See
@@ -128,6 +127,9 @@ runs on the first start; it adds one column with a default and changes no existi
 - **`push_rules.max_file_size_mib` refuses a push that introduces a file over the limit (#1273).** The
   brokered git push path refuses it with a `403` (`brokered:git:push-rules`) like a `deny_paths` match,
   and also refuses a file whose size the pack does not carry when the forge cannot show it unchanged.
+  The size limit can read an untouched file's size only on github.com. On Azure DevOps and other
+  `git_pat` hosts it refuses any push that builds on history, and a size-only rule also refuses Azure
+  DevOps REST content routes that name no paths. Set it only on github.com lanes.
   `0` or absent is off; the value is bounded to 0 to 1024 at write time. Under an operator ceiling the
   smaller non-zero limit wins: a proposal can neither raise a ceiling's limit nor turn it off with `0`.
   `push_rules.deny_new_executables` is on the policy wire type but a policy that sets it `true` is
@@ -217,9 +219,9 @@ runs on the first start; it adds one column with a default and changes no existi
     then signs, scans and attests them. A tag push still builds. The age is the run's `created_at`
     here and in `release-patch`: `gh run rerun --failed` refreshes `updated_at` but keeps the old
     image jobs, so a stale nightly needs a fresh dispatch.
-  - `release-commit.sh` and `verify-release.sh` move into `scripts/`, tested; a repeated `--apply`
-    refuses (exit 4) instead of duplicating the CHANGELOG section, and `--expect-tip` takes any unique
-    7 to 40 hex prefix.
+  - `release-commit.sh` and `verify-release.sh` are new in `scripts/`; `release-commit.sh` is tested (a repeated `--apply`
+    refuses with exit 4 instead of duplicating the CHANGELOG section, and `--expect-tip` takes any unique
+    7 to 40 hex prefix), and `verify-release.sh` is only stubbed in `test-release-patch.sh`.
   - A test that passes only on a retry fails the e2e gate unless `ui/e2e/quarantine.txt` lists it with an
     issue, an owner and an expiry at most 14 days out; listed tests pass with a warning, expired or
     malformed entries fail every run, and every flake is written to `test/reports/e2e/flaky.tsv`.

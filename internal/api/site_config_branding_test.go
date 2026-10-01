@@ -195,7 +195,7 @@ func TestSiteConfigBrandingLogoBadFileRefused(t *testing.T) {
 // With no branding record there is nothing to hold the logo: the apply
 // succeeds and says so, and the file is attached once the record exists.
 func TestSiteConfigBrandingLogoPendingWithoutRecord(t *testing.T) {
-	srv, st, _ := siteBrandingServer(t, false)
+	srv, st, audit := siteBrandingServer(t, false)
 	path := writeFile(t, filepath.Join(t.TempDir(), "logo.png"), testPNG(t, 8))
 	code, body := putSiteLogoPath(t, srv, path)
 	if code != http.StatusOK || !strings.Contains(body, `"branding_logo_pending":true`) {
@@ -203,6 +203,15 @@ func TestSiteConfigBrandingLogoPendingWithoutRecord(t *testing.T) {
 	}
 	if st.br.rec != nil {
 		t.Fatalf("a record appeared: %+v", st.br.rec)
+	}
+	var datum map[string]any
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "site_config.write" {
+			_ = json.Unmarshal(ev.Data, &datum)
+		}
+	}
+	if datum["branding_logo_pending"] != true || datum["branding_logo_sha256"] != nil {
+		t.Errorf("datum = %v, want branding_logo_pending true and no digest for bytes that were never stored", datum)
 	}
 	if w := do(t, srv, http.MethodPut, "/api/v1/branding/settings", adminToken, brandingBody(t, nil)); w.Code != http.StatusOK {
 		t.Fatalf("save branding = %d %s", w.Code, w.Body.String())

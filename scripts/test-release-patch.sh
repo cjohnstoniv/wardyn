@@ -416,6 +416,17 @@ else bad "R: stale local tag (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
 keep_pushes
 check "R: the tag is pushed by its full ref when it is right" bash -c "grep -q 'refs/tags/v0.8.4' '$ALLPUSH'"
 
+# ── MC. a conflicting MERGE tells the operator to commit signed off ───────────
+mkfix MC
+(
+  cd "$WK" || exit 1
+  g checkout -q release/0.8 && echo rel >CLASH && g add CLASH && g commit -q -s -m "release clash" && g push -q origin release/0.8
+  g checkout -q main && echo main >CLASH && g add CLASH && g commit -q -s -m "main clash" && g push -q origin main
+  g fetch -q origin --tags
+) || { echo "FAIL: fixture MC did not build"; exit 1; }
+rp V=0.8.4 MERGE=origin/main
+refused "MC: a conflicting MERGE stops and says to commit with git commit -s --no-edit" 'git commit -s --no-edit'
+
 # ── S. F2: a nightly older than 24 hours is absent ───────────────────────────
 mkfix S
 rp V=0.8.4 PHASE=prepare

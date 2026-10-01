@@ -854,8 +854,9 @@ func TestPushRulesMaxFileSizeRefusalText(t *testing.T) {
 				"remove or shrink these files, or ask an operator to raise push_rules.max_file_size_mib",
 				"  big.txt (2 MiB)")},
 		{"size not carried by the pack", map[string]string{"kept.txt": "kept\n"}, map[string]string{"small.txt": "small\n"}, fileSizeBody(
-			"push from a complete clone so the pack carries every object, or ask an operator to set push_rules.max_file_size_mib to 0",
-			"  kept.txt: size not carried by the pack")},
+			"ask an operator to set push_rules.max_file_size_mib to 0",
+			"  kept.txt: size not carried by the pack",
+			"the broker could not compare what this push does not carry with the commit it builds on: invalid character 'g' looking for beginning of value")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -873,6 +874,30 @@ func TestPushRulesMaxFileSizeRefusalText(t *testing.T) {
 				t.Errorf("refusal =\n%q\nwant\n%q", got, c.want)
 			}
 		})
+	}
+}
+
+// On a lane that cannot read the forge the refusal says so and offers only the
+// remedies that work: a complete clone never carries what the remote holds.
+func TestPushRulesMaxFileSizeRefusalNamesTheForge(t *testing.T) {
+	p, _ := newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, "", fileSizeSpec(1))
+	rec := httptest.NewRecorder()
+	ok := p.refuseLargeFiles(rec, mustLocalReq(t, http.MethodPost, "/", strings.NewReader("")),
+		func([]gitpack.Change) ([]string, []gitpack.Change, error) {
+			return nil, []gitpack.Change{{Path: "kept.txt"}}, nil
+		},
+		gitpack.Result{}, nil, slog.String("repo", "octocat/hello-world"), func(string) {})
+	if ok || rec.Code != http.StatusForbidden {
+		t.Fatalf("ok = %v, status = %d, want a refusal with 403", ok, rec.Code)
+	}
+	want := fileSizeBody(
+		"ask an operator to set push_rules.max_file_size_mib to 0 on this lane, or push through a GitHub lane",
+		"  kept.txt: size not carried by the pack", whyNotGitHub)
+	if got := rec.Body.String(); got != want {
+		t.Errorf("refusal =\n%q\nwant\n%q", got, want)
+	}
+	if strings.Contains(rec.Body.String(), "complete clone") {
+		t.Errorf("refusal offers a complete clone, which cannot carry what the remote holds: %q", rec.Body.String())
 	}
 }
 

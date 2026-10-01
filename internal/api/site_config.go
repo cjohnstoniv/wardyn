@@ -885,7 +885,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
-	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil)
+	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
 	// Only once a provider block exists, so a deployment without one writes the
 	// row it always wrote.
 	if saved.ModelProviders != nil {
