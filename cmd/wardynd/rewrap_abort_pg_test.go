@@ -608,6 +608,7 @@ func TestRewrapKeys_RotationMidRunRetiresNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	data = nil
 	if err := json.Unmarshal(rec2.got[0].Data, &data); err != nil || data["secrets"] != float64(0) || data["rotated"] != nil || data["key_version"] != "2" {
 		t.Fatalf("second run audit = %s (%v); want 0 rows, no rotation and key_version 2", rec2.got[0].Data, err)
 	}
