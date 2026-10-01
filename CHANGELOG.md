@@ -94,6 +94,15 @@ Migration `0106_attach_ticket_authority` runs on the first start; it adds two nu
 
 ### Fixed
 
+- **Adding your own Azure DevOps token failed on every Azure DevOps Services organisation (0.8.4).** The identity
+  check asked `connectionData?api-version=7.1`, which Services answers with a `400` for every token, and the
+  console said "Azure DevOps didn't accept this token." about a valid one. The check now asks without an
+  `api-version`, as the Azure DevOps Server check already did, so a run's background check no longer marks a
+  stored token refused for it either. A `400` from Azure DevOps is now reported as a refused request
+  (`502 ado_own_pat_request_refused`), never as a refused token.
+- **A run no longer warns "resources capped to operator maximum" when its policy names no sizes.** A policy
+  with no CPU, memory, PID or disk value takes the governance ceiling's numbers, which is the normal case and
+  cut nothing the policy asked for. The warning now appears only when a policy asked for more than the ceiling.
 - **The run page no longer shows, or acts on, a run it is not showing after you move between runs (#1483).**
   The Kill dialog sends the id it names.
 - **The shared delete dialog sends one delete per confirm (#1484).** It disables the button while the delete

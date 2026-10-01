@@ -72,13 +72,14 @@ var adoOwnPATTransport = http.DefaultTransport
 // The door's refusals. The canon ones are the approved mock's (own-token
 // errors); the rest name what the caller can do.
 const (
-	adoOwnPATUnknownRowRefusal   = "No Azure DevOps provider row you may use takes your own token at this address"
-	adoOwnPATTooLongRefusal      = "This token expires after the %d-day limit your administrator set."
-	adoOwnPATExpiryPastRefusal   = "Enter the date this token expires; it must be after today."
-	adoOwnPATRejectedRefusal     = "Azure DevOps didn't accept this token."
-	adoOwnPATMismatchRefusal     = "This token belongs to a different Azure DevOps account than yours."
-	adoOwnPATUnavailableRefusal  = "Wardyn couldn't reach Azure DevOps to check this token. Try again in a moment."
-	adoOwnPATTokenInvalidRefusal = "Paste the token itself: one value, with no spaces"
+	adoOwnPATUnknownRowRefusal     = "No Azure DevOps provider row you may use takes your own token at this address"
+	adoOwnPATTooLongRefusal        = "This token expires after the %d-day limit your administrator set."
+	adoOwnPATExpiryPastRefusal     = "Enter the date this token expires; it must be after today."
+	adoOwnPATRejectedRefusal       = "Azure DevOps didn't accept this token."
+	adoOwnPATRequestRefusedRefusal = "Azure DevOps refused Wardyn's request, not your token. Ask your admin to report this."
+	adoOwnPATMismatchRefusal       = "This token belongs to a different Azure DevOps account than yours."
+	adoOwnPATUnavailableRefusal    = "Wardyn couldn't reach Azure DevOps to check this token. Try again in a moment."
+	adoOwnPATTokenInvalidRefusal   = "Paste the token itself: one value, with no spaces"
 	// DRAFT (owner approval pending): nothing was compared, so the mismatch
 	// sentence would be untrue.
 	adoOwnPATNoEmailRefusal = "Your Wardyn sign-in has no email address, so Wardyn can't check that this token is yours."
@@ -232,6 +233,12 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		audit["reason"] = reasonADOOwnPATRejected
 		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnStore, row.ID, "failure", audit)
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonADOOwnPATRejected, adoOwnPATRejectedRefusal)
+		return
+	case errors.Is(err, errADOOwnPATRequestRefused):
+		slog.WarnContext(ctx, "wardynd: Azure DevOps refused the own-token identity request", slog.String("row", row.ID), slog.Any("err", err))
+		audit["reason"] = reasonADOOwnPATRequestRefused
+		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnStore, row.ID, "failure", audit)
+		writeErrorReason(w, http.StatusBadGateway, reasonADOOwnPATRequestRefused, adoOwnPATRequestRefusedRefusal)
 		return
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: the Azure DevOps own-token check did not complete", slog.String("row", row.ID), slog.Any("err", err))
@@ -418,6 +425,9 @@ var (
 	// for this organisation (revoked, mistyped, another organisation's), or
 	// named nobody.
 	errADOOwnPATRejected = errors.New("azure devops did not accept the token")
+	// errADOOwnPATRequestRefused: Azure DevOps answered 400, refusing the request
+	// itself; that says nothing about the token, so it is never stamped refused.
+	errADOOwnPATRequestRefused = errors.New("azure devops refused the request, not the token")
 	// errADOOwnPATUnavailable: the check did not complete; nothing is known
 	// about the token.
 	errADOOwnPATUnavailable = errors.New("the azure devops token check did not complete")
@@ -430,7 +440,7 @@ var (
 // email where the directory has one. It returns the ones present, and the
 // owner's subjectDescriptor when Azure DevOps gave one. Any answer but a 200
 // naming at least one is a refusal, except a transient status (adoPATTransientStatus), which say nothing
-// about the token.
+// about the token, and a 400, which refuses the request rather than the token (errADOOwnPATRequestRefused).
 func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) (adoOwnPATOwnerInfo, error) {
 	resp, err := adoOwnPATGet(ctx, identityURL, token)
 	if err != nil {
@@ -439,6 +449,9 @@ func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) 
 	defer func() { _ = resp.Body.Close() }()
 	if adoPATTransientStatus(resp.StatusCode) {
 		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: HTTP %d", errADOOwnPATUnavailable, resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: HTTP %d", errADOOwnPATRequestRefused, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: HTTP %d", errADOOwnPATRejected, resp.StatusCode)

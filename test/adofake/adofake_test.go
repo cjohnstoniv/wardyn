@@ -697,7 +697,7 @@ func TestRoutingIsLenientOnCaseSlashAndAPIVersion(t *testing.T) {
 		"/fakeorg/_APIS/connectiondata",
 		"/fakeorg/_apis/connectionData/",
 	} {
-		req, _ := http.NewRequest(http.MethodGet, s.URL()+path+"?api-version=7.1", nil)
+		req, _ := http.NewRequest(http.MethodGet, s.URL()+path+"?api-version=7.1-preview", nil)
 		req.Header.Set("Authorization", "Bearer reader")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -715,8 +715,8 @@ func TestRoutingIsLenientOnCaseSlashAndAPIVersion(t *testing.T) {
 			lastAPIVersion = rr.APIVersion
 		}
 	}
-	if lastAPIVersion != "7.1" {
-		t.Errorf("last recorded connectionData request's APIVersion = %q, want 7.1", lastAPIVersion)
+	if lastAPIVersion != "7.1-preview" {
+		t.Errorf("last recorded connectionData request's APIVersion = %q, want 7.1-preview", lastAPIVersion)
 	}
 }
 
@@ -869,7 +869,7 @@ func TestConnectionDataNamesTheTokensOwner(t *testing.T) {
 
 	account := func(token string) string {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, s.URL()+"/fakeorg/_apis/connectionData?api-version=7.1", nil)
+		req, _ := http.NewRequest(http.MethodGet, s.URL()+"/fakeorg/_apis/connectionData", nil)
 		req.SetBasicAuth("", token)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -928,5 +928,29 @@ func TestConnectionDataNamesAServerAccountsMail(t *testing.T) {
 	}
 	if p := body.AuthenticatedUser.Properties; p["Account"].Value != `CORP\alice` || p["Mail"].Value != "alice@corp.example" {
 		t.Errorf("properties = %+v", p)
+	}
+}
+
+// connectionData answers like Services: no api-version or a -preview one is a
+// 200, a released version is a 400 whatever the token.
+func TestConnectionDataRefusesAReleasedAPIVersion(t *testing.T) {
+	s := New()
+	defer s.Close()
+	s.RegisterToken("alice-pat", ScopeProjectRead)
+	s.RegisterIdentity("alice-pat", "alice@contoso.example")
+	for query, want := range map[string]int{
+		"": http.StatusOK, "?api-version=7.1-preview": http.StatusOK,
+		"?api-version=7.1": http.StatusBadRequest, "?api-version=5.0": http.StatusBadRequest,
+	} {
+		req, _ := http.NewRequest(http.MethodGet, s.URL()+"/fakeorg/_apis/connectionData"+query, nil)
+		req.SetBasicAuth("", "alice-pat")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET connectionData%s: %v", query, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("GET connectionData%s = %d, want %d", query, resp.StatusCode, want)
+		}
 	}
 }

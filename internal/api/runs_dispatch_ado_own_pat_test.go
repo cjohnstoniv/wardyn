@@ -389,6 +389,7 @@ func TestResolveADOOwnPAT_StampsOnlyWhenTheTokenItselfIsRefused(t *testing.T) {
 	}{
 		{"the token still authenticates", http.StatusOK, false},
 		{"azure devops is unavailable", http.StatusServiceUnavailable, false},
+		{"azure devops refused the request, not the token", http.StatusBadRequest, false},
 		{"the token is refused", http.StatusUnauthorized, true},
 		{"the answer is the sign-in page", http.StatusNonAuthoritativeInfo, true},
 	} {

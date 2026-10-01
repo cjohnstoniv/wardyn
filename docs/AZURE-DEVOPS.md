@@ -923,6 +923,7 @@ a Server row either. What differs:
 | A run on a `bearer` row is refused with `mint_scopes` or `scope_unknown` (audit `ado_bearer.refused_mint_scopes`) | The app holds a token permission, or Entra reported no granted scope | Remove `vso.pats` and `vso.pats_manage` from that app, or move the row to `minted_pat`; people sign in again |
 | Clones from an organisation fail after the upgrade | The upgrade turned its row off; the refusal names the row. `GET /site-config` also lists its host under `withheld_scm_hosts`, unless an enabled row names the same host (several organisations on `dev.azure.com`), when the list is empty | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
 | `ado_own_pat_identity_mismatch` on a pasted token | The token belongs to another account, or the person's sign-in has no email to match | Create the token while signed in to Azure DevOps as yourself; a sign-in with no email can't be matched |
+| `ado_own_pat_request_refused`: "Azure DevOps refused Wardyn's request, not your token. Ask your admin to report this." | Azure DevOps answered the identity check with a `400`: it refused the request itself, so nothing is known about the token and nothing was stored | Report it with the time and the organisation; the person's token is not the problem and needs no change |
 
 ---
 
