@@ -903,6 +903,14 @@ enabled at once. A `minted_pat` row must name the console's own OIDC application
 hold a client secret (`WARDYN_OIDC_CLIENT_SECRET`), or it is refused at write and left unusable at
 boot (an error in the daemon log naming `ado_pat_needs_console_app`).
 
+**A disabled row stays closed, and says so.** A launch into a disabled git provider row's organisation
+is refused naming the row. Its hosts are left out of `effective_scm_hosts` and out of run egress only
+when no enabled row also names the same host: with several organisations on `dev.azure.com`, one off and
+another on, the host stays effective. `GET /site-config` also returns `withheld_scm_hosts`, read-only
+like `effective_scm_hosts` (a `PUT` ignores it, and it is never stored): one
+`{host, provider_id, provider_kind}` entry per host a disabled row claims that `effective_scm_hosts`
+omits. A host an enabled row also names is not listed. The list is absent when nothing is withheld.
+
 **The upgrade that retired the shared Azure DevOps credentials (0.8.2).** Migration
 `0103_retire_ado_shared_credentials` rewrites the stored rows (a row left with no per-person lane is
 turned **off**, and the setup checklist warns with `ado_rows_off` until an admin turns it on), and

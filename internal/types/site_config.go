@@ -105,6 +105,12 @@ type SiteConfig struct {
 	// (not a wrapper key) so a get|set round trip still decodes under
 	// DisallowUnknownFields. PUT ignores a submitted value; never stored.
 	EffectiveScmHosts []string `json:"effective_scm_hosts,omitempty"`
+	// WithheldScmHosts is READ-ONLY, SERVER-OWNED, on the same terms as
+	// EffectiveScmHosts: each host a DISABLED provider row claims that
+	// EffectiveScmHosts therefore leaves out, with the row that withholds it, so
+	// an admin is told why a host is missing rather than left to look for it.
+	// Projected on read, ignored on PUT, never stored.
+	WithheldScmHosts []WithheldScmHost `json:"withheld_scm_hosts,omitempty"`
 	// OnboardingCompletedAt records when an operator finished (or left) the
 	// Getting Started funnel on THIS INSTALL. Nil until then.
 	//
@@ -178,4 +184,13 @@ type EgressRedirect struct {
 	// ("npm"|"pip"|"cargo"|"maven"|"go"|"nuget") this redirect ALSO emits a
 	// config file for. Empty means NETWORK-ONLY: no config file is emitted.
 	Ecosystem string `json:"ecosystem,omitempty"`
+}
+
+// WithheldScmHost is one entry of SiteConfig.WithheldScmHosts: a host kept out
+// of the effective set because the named provider row is turned off. The row is
+// named the way a refused clone names it, by kind and id.
+type WithheldScmHost struct {
+	Host         string          `json:"host"`
+	ProviderID   string          `json:"provider_id"`
+	ProviderKind GitProviderKind `json:"provider_kind"`
 }
