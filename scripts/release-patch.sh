@@ -205,7 +205,7 @@ phase_prepare() {
     if git merge-base --is-ancestor "$MERGE" HEAD; then finish "skipped (already in)"
     else
       git -c rerere.enabled=false merge --no-ff --no-edit --signoff "$MERGE" \
-        || die "merging $MERGE conflicted. Resolve it, commit, and re-run: it resumes here"
+        || die "merging $MERGE conflicted. Resolve it, commit with \`git commit -s --no-edit\` (so the merge is signed off), and re-run: it resumes here"
       finish ok
     fi
   fi

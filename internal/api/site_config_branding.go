@@ -210,12 +210,18 @@ func (s *Server) followSiteBranding(r *http.Request, named bool, bs store.Brandi
 // who delivered which bytes is reviewable from the log alone. logoFailed is the
 // logo write having errored after the document committed: the row says so
 // (branding_logo_failed) and carries no digest, as no bytes were stored.
-func auditSiteBranding(datum map[string]any, named bool, saved *types.SiteBranding, logo *siteBrandingLogo, logoFailed bool) {
+// logoPending is the console having no branding record yet to hold the logo:
+// the row says so (branding_logo_pending) and likewise carries no digest.
+func auditSiteBranding(datum map[string]any, named bool, saved *types.SiteBranding, logo *siteBrandingLogo, logoFailed, logoPending bool) {
 	if !named {
 		return
 	}
 	if logoFailed {
 		datum["branding_logo_failed"] = true
+		logo = nil
+	}
+	if logoPending {
+		datum["branding_logo_pending"] = true
 		logo = nil
 	}
 	datum["branding_logo_path"] = ""
