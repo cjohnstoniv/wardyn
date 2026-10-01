@@ -63,6 +63,15 @@ afterEach(() => {
   toastError.mockReset();
 });
 
+// #1486: the logo Field wraps a div, so its cloned aria-describedby missed the
+// file input it describes.
+describe("Branding card — the logo input's hint", () => {
+  it("the file input is described by the logo hint", async () => {
+    await validDraft();
+    expect(screen.getByLabelText(BRANDING.LOGO_LABEL)).toHaveAccessibleDescription(BRANDING.LOGO_HINT);
+  });
+});
+
 describe("Branding card (#1125)", () => {
   it("renders the canon heading, lede and labels", async () => {
     await validDraft();
