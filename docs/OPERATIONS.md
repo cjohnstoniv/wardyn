@@ -678,6 +678,20 @@ lever today**. Concretely:
   `push_content` approval: one raised by a previous-release proxy, which sent no
   list, answers with the ten paths its scope names and `truncated: true` when
   more matched.
+- **An export that cannot be finished never looks finished.** If
+  `GET /api/v1/audit/export` cannot read the audit store (or a held push's path
+  list) before it has written anything, it answers `503` with a JSON error
+  (`audit_export_read_failed`) and nothing else. If the failure comes after the
+  first rows were sent, the `200` is already committed, so wardynd aborts the
+  response: the connection is cut without a clean end of stream, and a client
+  sees a read error. `curl --fail` exits `18` (partial file) or `56` (receive
+  error); a Go client's body read returns `unexpected EOF`. A complete export
+  ends cleanly and its format is unchanged. Treat any non-clean end as an
+  incomplete export and re-run it. A reverse proxy that buffers whole responses
+  can hide the abort from its own client, so export directly or through a proxy
+  that streams. A member whose ownership of the requested `run_id` cannot be
+  checked gets `503` (`audit_scope_unavailable`), not an empty export; a run
+  that is not theirs or does not exist still answers the same empty `200`.
 
 **This is asymmetric with session recordings**, which have the retention lever
 audit lacks: `WARDYN_RECORDING_RETENTION_DAYS` (`docs/ENV.md:47`) age-deletes
