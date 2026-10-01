@@ -655,8 +655,10 @@ know whether the first move already happened.
   nothing moves. The refusal tells you either to adopt (if you never have) or
   to investigate (if you have: such a row was not written by Wardyn).
 - With the flag, `-rewrap` still refuses, naming the rows, when some boot keys
-  are under the platform key and others are not. No run of wardynd leaves that
-  state. Find out who wrote the rows (`updated_at`, the audit log, the database
+  are under the platform key and others are not. With a key service writing
+  beside `WARDYN_PLATFORM_KEY_FILE`, it refuses a boot key under the age key's
+  platform KEK once another is under the key service or the file key. No run
+  of wardynd leaves that state. Find out who wrote the rows (`updated_at`, the audit log, the database
   access log) and restore the boot keys from a backup if they are forged.
 - Both refusals are audited as `secret.rewrap` `failure` with `reason`
   `refused` and `refusal` `adopt_not_requested` or `mixed_boot_keys`.
