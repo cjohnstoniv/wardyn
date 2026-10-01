@@ -143,6 +143,11 @@ runs on the first start; it adds one column with a default and changes no existi
   time, or `204`. A person with no email on file is passed over, never named by subject. No audit
   action, reason or migration is added. The read filters in the store, so enough newer denials of other
   kinds can no longer push the refusal out of view.
+- **The Ended banner says until when an ended run's files are kept, and a capped end says when the
+  admin has since loosened the limit (#1320, #1322).** `GET /runs/{id}` carries `kept_until` while a run
+  its own end stopped is still kept, and the `PATCH /runs/{id}` response carries `ends_cap_loosened` when
+  the launch profile now allows a later end than the run captured. Both are display only, and the
+  captured limit still binds.
 
 ### Changed
 
