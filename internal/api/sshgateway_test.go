@@ -513,7 +513,7 @@ func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
 		ID: runID, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
 		LostAt: &endedAt, LostReason: types.LostEnded,
 	})
-	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Runner: &sshFakeRunner{}})
 
 	if run, msg := srv.sshFreshRun(context.Background(), runID, "alice"); msg == "" || !strings.Contains(msg, "run has ended") {
 		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)

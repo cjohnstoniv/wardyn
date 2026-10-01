@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -258,7 +257,7 @@ func TestServerErrorsDoNotLeakDriverText(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	var logged bytes.Buffer
+	var logged lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

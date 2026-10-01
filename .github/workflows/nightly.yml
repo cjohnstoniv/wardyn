@@ -1476,7 +1476,8 @@ jobs:
 
   notify-published-image-scan:
     needs: [published-image-scan]
-    if: failure()
+    # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
+    if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1487,17 +1488,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
+          failed="$(jq -r 'to_entries[] | select(.value.result == "failure") | .key' <<<"$NEEDS_JSON" | paste -sd ',' - | sed 's/,/, /g')"
           title="nightly: the published-image scan failed"
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+            gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
               "The published-image scan failed; see the run." \
               "" \
               "The job strict-scans the latest published release's agent images (agent-base, agent-codex-cli, agent-aws-sso, agent-vscode, agent-novnc) for any CRITICAL, fixed or not, minus .trivyignore. A red run is either a finding or a scan failure (DB download, image pull, no release to resolve); the run log says which and names the image, package and CVE for a finding. A finding means a patch release is due." \
+              "" \
+              "Failed in this run: ${failed:-no job reported failure}" \
               "" \
               "Run: $RUN_URL")
             gh issue create --title "$title" --body "$body"
@@ -1505,7 +1510,8 @@ jobs:
 
   notify-new-lanes:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift]
-    if: failure()
+    # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
+    if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1516,19 +1522,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
+          failed="$(jq -r 'to_entries[] | select(.value.result == "failure") | .key' <<<"$NEEDS_JSON" | paste -sd ',' - | sed 's/,/, /g')"
           title="nightly: a governed e2e lane is failing"
           # Deduplicate by title: a lane that stays broken for a week should
           # append to one issue, not open seven.
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+            gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
               "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke and buildx-smoke-ui-sandbox (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg or managed-settings-drift." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
+              "" \
+              "Failed in this run: ${failed:-no job reported failure}" \
               "" \
               "Run: $RUN_URL")
             gh issue create --title "$title" --body "$body"

@@ -198,6 +198,7 @@ func TestSetupStatus_Assembly(t *testing.T) {
 		"wardyn-signing-key": []byte("reserved"), // must be excluded from present
 	}}
 	srv := New(Config{
+		BaseCtx:       testBaseCtx(t),
 		Runner:        &fakeRunner{},
 		Secrets:       sec,
 		AdminToken:    adminToken,
@@ -330,7 +331,7 @@ func TestSetupStatus_K8sEgressContainmentCheck(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicy: tc.netpol}})
+			srv := New(Config{BaseCtx: testBaseCtx(t), AdminToken: adminToken, Runner: k8sRunner{networkPolicy: tc.netpol}})
 			code, st := decodeSetup(t, srv, adminToken)
 			if code != http.StatusOK {
 				t.Fatalf("code = %d, want 200", code)
@@ -360,7 +361,7 @@ func TestSetupStatus_K8sEgressContainmentCheck(t *testing.T) {
 // /setup/status wired through the real Capabilities() call, warn-graded and
 // distinct from both the enforced (ok) and unenforced (fail) rows.
 func TestSetupStatus_K8sEgressContainmentCheck_Acknowledged(t *testing.T) {
-	srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicyAcknowledged: true}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), AdminToken: adminToken, Runner: k8sRunner{networkPolicyAcknowledged: true}})
 	code, st := decodeSetup(t, srv, adminToken)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", code)
@@ -382,7 +383,7 @@ func TestSetupStatus_K8sEgressContainmentCheck_Acknowledged(t *testing.T) {
 // A docker-shaped (non-k8s) runner must never carry the row — it is L0
 // structural, not L1 packet-filter, and has nothing to prove here.
 func TestSetupStatus_NonK8sRunnerOmitsEgressContainmentRow(t *testing.T) {
-	srv := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), AdminToken: adminToken, Runner: &fakeRunner{}})
 	code, st := decodeSetup(t, srv, adminToken)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", code)
@@ -401,6 +402,7 @@ func TestSetupStatus_NonK8sRunnerOmitsEgressContainmentRow(t *testing.T) {
 func TestSetupStatus_ConfinementFloorRow(t *testing.T) {
 	t.Run("floor unadvertised: warn row present", func(t *testing.T) {
 		srv := New(Config{
+			BaseCtx:       testBaseCtx(t),
 			AdminToken:    adminToken,
 			Runner:        k8sRunner{}, // advertises only CC1
 			DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
@@ -428,6 +430,7 @@ func TestSetupStatus_ConfinementFloorRow(t *testing.T) {
 
 	t.Run("floor advertised: no row", func(t *testing.T) {
 		srv := New(Config{
+			BaseCtx:       testBaseCtx(t),
 			AdminToken:    adminToken,
 			Runner:        &fakeRunner{}, // advertises CC1, CC2, CC3
 			DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
@@ -444,7 +447,7 @@ func TestSetupStatus_ConfinementFloorRow(t *testing.T) {
 	})
 
 	t.Run("no floor configured: no row", func(t *testing.T) {
-		srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{}})
+		srv := New(Config{BaseCtx: testBaseCtx(t), AdminToken: adminToken, Runner: k8sRunner{}})
 		code, st := decodeSetup(t, srv, adminToken)
 		if code != http.StatusOK {
 			t.Fatalf("code = %d, want 200", code)

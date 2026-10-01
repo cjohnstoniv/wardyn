@@ -38,7 +38,7 @@ func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
 	fire := func(t *testing.T, rn runner.Runner) *recRecorder {
 		t.Helper()
 		audit := &recRecorder{}
-		srv := New(Config{Runner: rn, Audit: audit})
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: rn, Audit: audit})
 		srv.auditK8sNetpolIfUnenforced(context.Background())
 		return audit
 	}

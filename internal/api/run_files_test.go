@@ -45,7 +45,7 @@ func (s runFilesStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, 
 // newRunFilesHarness wires a Server around ONE running run and the shared
 // sshFakeRunner (whose execFn is exactly the ExecStream behaviour this test
 // wants — see its doc in sshgateway_test.go).
-func newRunFilesHarness(execFn func(spec runner.ExecSpec) (*runner.ExecSession, error)) (*Server, *sshFakeRunner, *recRecorder, types.AgentRun) {
+func newRunFilesHarness(t *testing.T, execFn func(spec runner.ExecSpec) (*runner.ExecSession, error)) (*Server, *sshFakeRunner, *recRecorder, types.AgentRun) {
 	run := types.AgentRun{
 		ID:         uuid.New(),
 		CreatedBy:  "sub-owner@corp.example",
@@ -54,7 +54,7 @@ func newRunFilesHarness(execFn func(spec runner.ExecSpec) (*runner.ExecSession, 
 	}
 	fr := &sshFakeRunner{execFn: execFn}
 	audit := &recRecorder{}
-	srv := New(Config{Store: runFilesStore{run: run}, Runner: fr, Audit: audit})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: runFilesStore{run: run}, Runner: fr, Audit: audit})
 	return srv, fr, audit, run
 }
 
@@ -119,7 +119,7 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 		"?? scratch.txt",
 		"",
 	}, "\n")
-	srv, fr, audit, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, fr, audit, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, "", 0), nil
 	})
 
@@ -165,7 +165,7 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 // nothing — it must come back binary:true with the count fields ABSENT.
 func TestRunFiles_BinaryIsNotZeroZero(t *testing.T) {
 	stdout := "path=/home/agent/work\n" + runFilesSeparator + "\n-\t-\tdocs/logo.png\n" + runFilesSeparator + "\nA  docs/logo.png\n"
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, "", 0), nil
 	})
 
@@ -190,7 +190,7 @@ func TestRunFiles_BinaryIsNotZeroZero(t *testing.T) {
 func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	// The script still prints the directory it looked in before exiting 3 —
 	// that is the whole point of reporting Path (see below).
-	srv, _, audit, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, audit, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession("path=/srv/custom-target\n", "fatal: not a git repository\n", 3), nil
 	})
 
@@ -235,7 +235,7 @@ func TestRunFiles_NoRunnerReasonIsPinned(t *testing.T) {
 // asked this question at all — 501 naming the reason, plus the one audit row
 // (this IS a failure).
 func TestRunFiles_ExecStreamUnsupported(t *testing.T) {
-	srv, _, audit, run := newRunFilesHarness(nil) // nil execFn => ErrExecStreamUnsupported
+	srv, _, audit, run := newRunFilesHarness(t, nil) // nil execFn => ErrExecStreamUnsupported
 
 	w := doRunFiles(srv, run.ID, nil)
 	if w.Code != http.StatusNotImplemented {
@@ -254,7 +254,7 @@ func TestRunFiles_ExecStreamUnsupported(t *testing.T) {
 // sandbox is never touched.
 func TestRunFiles_ForeignRun404(t *testing.T) {
 	execCalled := false
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		execCalled = true
 		return fakeExecSession("", "", 0), nil
 	})
@@ -284,7 +284,7 @@ func TestRunFiles_CapSetsTruncated(t *testing.T) {
 	for i := 0; i < rows; i++ {
 		fmt.Fprintf(&b, "1\t1\tfile%04d.go\n", i)
 	}
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(b.String(), "", 0), nil
 	})
 
@@ -306,7 +306,7 @@ func TestRunFiles_CapSetsTruncated(t *testing.T) {
 func TestRunFiles_StderrDrainedConcurrently(t *testing.T) {
 	stdout := "path=/home/agent/work\n" + runFilesSeparator + "\n4\t0\tnotes.md\n" + runFilesSeparator + "\n M notes.md\n"
 	stderr := strings.Repeat("warning: this stderr is written first and nobody buffered it\n", 200)
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, stderr, 0), nil
 	})
 
@@ -422,7 +422,7 @@ func TestRunFiles_SandboxGoneBeforeStateFlips(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			logs := captureSlog(t)
-			srv, _, audit, run := newRunFilesHarness(execFn)
+			srv, _, audit, run := newRunFilesHarness(t, execFn)
 			w := doRunFiles(srv, run.ID, nil)
 			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunInspectTerminal) {
 				t.Fatalf("status = %d body %s, want 409 %s", w.Code, w.Body.String(), reasonRunInspectTerminal)

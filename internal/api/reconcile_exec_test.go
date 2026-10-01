@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -174,16 +173,6 @@ func (s *bootReconcileStore) claimCalls() int {
 	return s.claims
 }
 
-// bootTestCtx is a daemon-lifetime BaseCtx bounded by the test: ReconcileOnBoot
-// starts the periodic watcher sweeper on BaseCtx, and that goroutine must stop
-// when the test does rather than outliving it against a dead fake.
-func bootTestCtx(t *testing.T) context.Context {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	return ctx
-}
-
 func execRun(t *testing.T, agentExecID string) types.AgentRun {
 	t.Helper()
 	runID := uuid.New()
@@ -212,7 +201,7 @@ func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
@@ -248,7 +237,7 @@ func TestReconcileOnBoot_ExecRunFailsFromNonZeroExit(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
@@ -325,7 +314,7 @@ func TestReconcileOnBoot_UndispatchedRunAgeGate(t *testing.T) {
 			cfg := baseTestConfig(h, fake)
 			cfg.Runner = &fakeRunner{}
 			cfg.Broker = h.broker
-			cfg.BaseCtx = bootTestCtx(t)
+			cfg.BaseCtx = testBaseCtx(t)
 			srv := New(cfg)
 
 			if err := srv.ReconcileOnBoot(context.Background()); err != nil {
@@ -354,7 +343,7 @@ func TestStartCompletionWatcher_HoldsTheLease(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{} // Wait blocks until BaseCtx is cancelled
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	srv.startCompletionWatcher(run.ID, run.SandboxRef, run.AgentExecID)
@@ -381,7 +370,7 @@ func TestRunWatcherSweeper_PeriodicClaimAdoptsAndLeases(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{} // AgentStatus: RUNNING — adopt, do not finalize
 	cfg.Broker = h.broker
-	ctx := bootTestCtx(t)
+	ctx := testBaseCtx(t)
 	cfg.BaseCtx = ctx
 	srv := New(cfg)
 
@@ -419,7 +408,7 @@ func TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	ctx := bootTestCtx(t)
+	ctx := testBaseCtx(t)
 	cfg.BaseCtx = ctx
 	srv := New(cfg)
 
@@ -464,7 +453,7 @@ func TestSweepRunWatchers_NeverExecdRunFinalizesWithoutAgeGate(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{} // AgentStatus would report RUNNING — must not be consulted
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	if err := srv.sweepRunWatchers(context.Background()); err != nil {
@@ -525,7 +514,7 @@ func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = rn
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	// The dispatch phase under test: persists the real post-Exec value for an
@@ -659,7 +648,7 @@ func TestReconcileOnBoot_ImageBuilderWithoutSweepCapabilityIsNoop(t *testing.T) 
 // arm fifteen lines above already uses — the sandbox stopped, the run FAILED with
 // a hint naming the write, and the audit row saying `failure`.
 func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -672,7 +661,7 @@ func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
@@ -727,7 +716,7 @@ func TestDispatchExecIDWritePersistsOnTheHappyPath(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	cfg.BaseCtx = bootTestCtx(t)
+	cfg.BaseCtx = testBaseCtx(t)
 	srv := New(cfg)
 
 	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)

@@ -170,13 +170,13 @@ fi
 if [ -n "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   DECLARE_FLOOR=0
 fi
-# conformance-docker, conformance-k8s and envbuild have no testfloor.Mark
+# conformance-docker, conformance-k8s, envbuild and l0-docker have no testfloor.Mark
 # probes of their own (see the REQUIRE_ALL floor right below, which is their
 # equivalent) — the testfloor.Mark floor further down must not run for them,
 # or it would read "no package suite tested calls testfloor.Mark" as a red
 # floor instead of a floor that simply lives elsewhere.
 case "$SUITE" in
-  conformance-docker | conformance-k8s | envbuild) DECLARE_FLOOR=0 ;;
+  conformance-docker | conformance-k8s | envbuild | l0-docker) DECLARE_FLOOR=0 ;;
 esac
 
 # T-08 (G9): conformance and envbuild have no must-pass floor at all today —
@@ -214,6 +214,12 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   # being true, the same shape as the three floors above.
   if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore'
+  fi
+  # #707: `make test-conformance-docker` ran these through a bare
+  # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
+  # skip. Named here, the rename and the skip both go red.
+  if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+    REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil'
   fi
 fi
 if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then
