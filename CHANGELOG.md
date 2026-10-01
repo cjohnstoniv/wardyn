@@ -191,6 +191,10 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Fixed
 
+- **A failed console-logo write no longer hides a committed site-config save from the audit log.**
+  `PUT /site-config` stored the document, then answered `500` before it wrote the `site_config.write` row
+  when the logo write failed. The row is now written first and carries `branding_logo_failed: true`; the
+  response is still the `500`, and the same apply repeated finishes the logo.
 - **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
   /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
   same choice: a provider that is off, missing or without your credential names it (with its kind), a

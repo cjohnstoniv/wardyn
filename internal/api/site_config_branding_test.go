@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -289,3 +290,52 @@ func TestSiteConfigBrandingLogoNeedsTheBrandingStore(t *testing.T) {
 }
 
 var _ store.BrandingStore = siteBrandStore{}
+
+// siteBrandLogoWriteFails is the branding fake whose logo write errors, the
+// auxiliary step that follows the document PutSiteConfig already committed.
+type siteBrandLogoWriteFails struct{ *siteBrandStore }
+
+func (siteBrandLogoWriteFails) SetBrandingLogo(context.Context, []byte, string, bool, string) (bool, error) {
+	return false, errors.New("synthetic database failure updating branding")
+}
+
+// A failed logo write leaves the document committed and the response a 500, and
+// the committed write must still reach the audit log, naming the logo failure.
+func TestSiteConfigLogoFailureStillAuditsCommittedWrite(t *testing.T) {
+	srv, st, audit := siteBrandingServer(t, true)
+	srv.cfg.Store = siteBrandLogoWriteFails{st}
+	path := writeFile(t, filepath.Join(t.TempDir(), "logo.png"), testPNG(t, 8))
+	payload, err := json.Marshal(map[string]any{
+		"branding":  map[string]any{"logo_path": path},
+		"scm_hosts": []string{"new-git.example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, string(payload))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if st.putSeen == nil || len(st.putSeen.ScmHosts) != 1 || st.putSeen.ScmHosts[0] != "new-git.example.com" {
+		t.Fatalf("the document was not committed: %+v", st.putSeen)
+	}
+	var rows []types.AuditEvent
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "site_config.write" {
+			rows = append(rows, ev)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("site_config.write rows = %d, want 1 for the committed document", len(rows))
+	}
+	var datum map[string]any
+	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
+		t.Fatal(err)
+	}
+	if datum["branding_logo_failed"] != true {
+		t.Errorf("datum = %v, want branding_logo_failed true", datum)
+	}
+	if datum["branding_logo_sha256"] != nil {
+		t.Errorf("datum = %v, claims a digest for bytes that were never stored", datum)
+	}
+}
