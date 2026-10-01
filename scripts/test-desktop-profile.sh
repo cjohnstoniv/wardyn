@@ -448,7 +448,7 @@ grep -q 'wardynd:latest' "${DESKTOP_MD}" \
 grep -qi 'nothing in this lane verifies that signature' "${DESKTOP_MD}" \
   || fail "docs/DESKTOP.md does not say that nothing in this lane verifies the continuous image's signature — the envelope pins a digest, so a reader assumes the whole lane is verified (F113/F184)"
 grep -qi 'echo ".*nothing in this lane verifies that signature' "${DESK_DIR}/install.sh" \
-  || fail "deploy/desktop/install.sh does not tell the console that that nothing in this lane verifies the continuous image's signature (F113/F184)"
+  || fail "deploy/desktop/install.sh does not tell the console that nothing in this lane verifies the continuous image's signature (F113/F184)"
 grep -qF 'is a MUTABLE tag, not a digest' "${DESK_DIR}/install.sh" \
   || fail "deploy/desktop/install.sh no longer warns at the console when the enrolment ref floats — the person who needs that is the one RUNNING it, not the one reading the source (F113/F184)"
 echo "test-desktop-profile: enrolment-image disclosure PASS"

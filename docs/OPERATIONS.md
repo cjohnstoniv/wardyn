@@ -265,7 +265,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 |---|---|---|---|---|---|
 | **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in `deploy/compose/docker-compose.yaml`). |
 | **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in `deploy/desktop/wardyn-desktop.sh`). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
-| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), or `secrets.ageKey`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
+| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
 **Rules for every row.**
 
@@ -280,8 +280,9 @@ commands are the ones in "Back them up" and "Restore them", and in
   live trail first.
 - **Drives.** Record the volume to drive id to person map at backup time. After
   a restore, a volume you recreate by hand is adopted by name, so the
-  `wardyn.drive=<id>` label is the only check that it belongs to the right drive
-  (`driveVolumeAdoptable`, `internal/runner/docker/driver_volumes.go`).
+  `wardyn.drive=<id>` label is the only check that it belongs to the right drive.
+  A volume recreated without that label is adopted unchecked, so set the label when you
+  recreate it (`driveVolumeAdoptable`, `internal/runner/docker/driver_volumes.go`).
 - **Hybrid desktop.** A device re-enrols with a fresh enrolment token. Never
   restore a revoked device.
 
@@ -4090,9 +4091,10 @@ Consequences worth knowing:
   driving the route for the same person, are serialized by a per-person lock
   (`lockLoginSupersede`) held across both supersede passes and the new run's insert, so the second
   launch sees the first and ends the caller's older sign-in. A lock not taken within about 5 seconds
-  answers 503 and starts nothing; the person signs in again. The one unserialized case is
-  `pool_max_conns=2` (see the `WARDYN_PG_DSN` row in [ENV.md](ENV.md)): the pool cannot spare a
-  connection for the lock, so each such pass proceeds and writes an `auth.signin_unserialized` audit
+  answers 503 and starts nothing; the person signs in again. A pass is unserialized
+  whenever the pool cannot spare two connections at that moment (see the `WARDYN_PG_DSN` row in
+  [ENV.md](ENV.md)): on every call at `pool_max_conns=2`, and transiently on a busy larger pool.
+  Each such pass proceeds and writes an `auth.signin_unserialized` audit
   row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#auth)). Unserialized, two launches racing across replicas
   with clock skew can leave both sandboxes alive, and the next sign-in clears it.
 - **A sandbox superseded mid-upload does not win.** A capture takes the same per-person lock as a
@@ -4101,7 +4103,7 @@ Consequences worth knowing:
   overwriting the newer session. A capture that cannot get the lock within about 5 seconds is refused
   with `reason = signin_busy` and stores nothing. Whoever is watching the old sandbox sees "this
   sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one. At
-  `pool_max_conns=2` there is no lock, so a supersede landing between the re-read and the write can
+  an unserialized pass (every call at `pool_max_conns=2`) there is no lock, so a supersede landing between the re-read and the write can
   still lose to the old capture; the next sign-in replaces it.
 
 ### What the sign-in pane's waiting messages mean

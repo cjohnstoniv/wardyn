@@ -29,7 +29,7 @@ func TestRecoverySetByDeploymentDocumented(t *testing.T) {
 		want []string // every string must appear in the cell
 	}{
 		{"database", []string{"postgres"}},
-		{"age identity and keys", []string{"age"}},
+		{"age identity and keys", []string{"age_key|age.key|ageKey"}},
 		{"recordings", []string{"WARDYN_RECORDING_STORE"}},
 		{"drives", []string{"drive"}},
 		{"audit spool", []string{"audit-spool.jsonl", ".consumed", ".quarantine"}},
@@ -54,7 +54,11 @@ func TestRecoverySetByDeploymentDocumented(t *testing.T) {
 		}
 		for i, c := range cols {
 			for _, w := range c.want {
-				if !strings.Contains(strings.ToLower(cells[i]), strings.ToLower(w)) {
+				found := false
+				for _, alt := range strings.Split(w, "|") {
+					found = found || strings.Contains(strings.ToLower(cells[i]), strings.ToLower(alt))
+				}
+				if !found {
 					t.Errorf("%s row, %s cell never mentions %q", dep, c.name, w)
 				}
 			}

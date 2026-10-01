@@ -423,7 +423,7 @@ func TestDocsOpsContinuousImageLaneDocumentedHonestly(t *testing.T) {
 	// unsigned: that is the same false claim RELEASING.md carried. Signing is not
 	// verification either, so they say that nothing in the lane checks it.
 	if signs {
-		calledUnsigned := regexp.MustCompile(`(?i)not[^.\n]{0,40}cosign-signed|unsigned (main-tip|continuous|code|image)|:latest[^.\n]{0,60}\bunsigned\b`)
+		calledUnsigned := regexp.MustCompile(`(?is)(?:continuous|:latest|main-tip).{0,150}\bnot\b\W{0,6}cosign-sign|unsigned (?:main-tip|continuous)|:latest[^.\n]{0,60}\bunsigned\b`)
 		for _, rel := range [][]string{{"deploy", "desktop", "install.sh"}, {"docs", "DESKTOP.md"}} {
 			if m := calledUnsigned.FindString(readOpsDoc(t, rel...)); m != "" {
 				t.Errorf("%s calls the continuous image unsigned (%q) — publish-image.yml runs cosign sign on the pushed digest; say that nothing in the install lane verifies the signature instead", filepath.Join(rel...), m)
