@@ -111,7 +111,7 @@ export function SummaryHeader({
   // row it lived in.
   onCopyLink?: () => void;
   linkCopied?: boolean;
-  onKill: () => void;
+  onKill: (runId: string) => void;
   // "Start a run like this one", for EVERY terminal run — the failure block
   // only renders it for a run that ended badly (3 of the 5 terminal states),
   // so it belongs here instead. Optional so the header stays renderable

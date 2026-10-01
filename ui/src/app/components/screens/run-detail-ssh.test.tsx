@@ -647,3 +647,23 @@ describe("ConnectSSHCard — a FAILED /healthz asserts nothing about the deploym
     expect(screen.getByText(new RegExp(UI_APPS_LANE.off.slice(0, 40)))).toBeInTheDocument();
   });
 });
+
+// #1485: the CLI hint's WARDYN_URL named the bare origin, but under
+// WARDYN_BASE_PATH the API is served beneath the prefix, and a root URL would
+// aim the CLI (and its bearer token) at whatever else owns the host root.
+describe("ConnectSSHCard — the CLI hint's WARDYN_URL keeps the base path", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.wardynBase;
+  });
+
+  it("is origin + base path, never the bare origin", async () => {
+    document.documentElement.dataset.wardynBase = "/wardyn";
+    healthMock.mockResolvedValue({ status: "ok" });
+    listKeysMock.mockResolvedValue([]);
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    const cmd = screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`));
+    expect(cmd.textContent).toContain(`WARDYN_URL=${window.location.origin}/wardyn wardyn run attach`);
+    expect(cmd.textContent).not.toContain(`WARDYN_URL=${window.location.origin} `);
+  });
+});

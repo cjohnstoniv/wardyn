@@ -33,6 +33,7 @@ import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
+import { basePath } from "../../lib/base-path";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
@@ -193,9 +194,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
 
   // The console already knows the address it is served from, so the env line is
   // this deployment's real URL rather than a placeholder the operator has to
-  // translate. Omitted when it matches the CLI's own default.
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const cliEnv = origin && origin !== "http://localhost:8080" ? `WARDYN_URL=${origin} ` : "";
+  // translate. Omitted when it matches the CLI's own default. The base path
+  // rides along: the API is served beneath it, and a bare origin would aim
+  // the CLI's bearer token at whatever else owns the host root.
+  const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
+  const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
   const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
 
   return (

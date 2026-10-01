@@ -616,3 +616,39 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
     expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
   });
 });
+
+// #1485: Copy link built `${origin}/runs/…` with no base path, so under
+// WARDYN_BASE_PATH the pasted link missed the console. The id is encoded.
+describe("RunDetailScreen — Copy link keeps the base path", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.wardynBase;
+  });
+
+  async function copied(base: string | undefined): Promise<string> {
+    if (base) document.documentElement.dataset.wardynBase = base;
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    getRunMock.mockResolvedValue({ ...RUN, id: "a/b c" });
+    render(
+      <MemoryRouter initialEntries={["/runs/a%2Fb%20c"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findAllByText(RUN.task);
+    await user.click(screen.getByRole("button", { name: "Copy link to this run" }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    return write.mock.calls[0][0];
+  }
+
+  it("with a base path: origin + base + /runs/<encoded id>", async () => {
+    const url = await copied("/wardyn");
+    expect(url).toBe(`${window.location.origin}/wardyn/runs/a%2Fb%20c`);
+    expect(url).not.toContain("/wardyn/wardyn");
+  });
+
+  it("without one: origin + /runs/<encoded id>", async () => {
+    expect(await copied(undefined)).toBe(`${window.location.origin}/runs/a%2Fb%20c`);
+  });
+});

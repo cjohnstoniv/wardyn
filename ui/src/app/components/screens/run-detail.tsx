@@ -47,6 +47,7 @@ import {
   exitCodeFromAudit,
 } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
+import { appURL } from "../../lib/base-path";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../lib/use-poll";
@@ -88,8 +89,18 @@ const DETAIL_POLL_MS = 4000;
 
 type Tab = "overview" | "approvals" | "policy" | "audit" | "recording";
 
+// The route's component. KEYED by the route id on both run routes (/runs/:id
+// and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
+// in-flight load, its poll's in-flight guard, its detached fetches and every
+// piece of state it held (grants, approvals, recording, ending audit) die with
+// the old instance instead of landing on B (#1483). react-router reuses one
+// element across a param change, so without the key nothing resets.
 export function RunDetailScreen() {
   const { id = "" } = useParams();
+  return <RunDetailPage key={id} id={id} />;
+}
+
+function RunDetailPage({ id }: { id: string }) {
   const navigate = useNavigate();
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
@@ -168,6 +179,9 @@ export function RunDetailScreen() {
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
         .then(([r, g, runApprovals, a, recA]) => {
+          // A run answer for a different id than this page shows is dropped:
+          // the page never renders, or acts on, a run it was not asked for.
+          if (r.status === "fulfilled" && r.value && r.value.id !== id) return;
           if (r.status === "rejected") {
             // The run itself is the one fetch this page cannot render without.
             // Foreground load shows the error state; a background poll blip
@@ -270,7 +284,8 @@ export function RunDetailScreen() {
   React.useEffect(() => () => { recRequest.current = -1; }, []);
 
   const copyLink = () => {
-    const url = `${window.location.origin}/runs/${encodeURIComponent(id)}`;
+    if (!run) return;
+    const url = `${window.location.origin}${appURL(`/runs/${encodeURIComponent(run.id)}`)}`;
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
@@ -280,12 +295,13 @@ export function RunDetailScreen() {
     });
   };
 
-  const kill = async () => {
+  // killId is what the confirm dialog NAMED; this sends exactly that id.
+  const kill = async (killId: string) => {
     try {
-      await runsApi.killRun(id);
-      toast.success(`Kill requested for ${id}`);
+      await runsApi.killRun(killId);
+      toast.success(`Kill requested for ${killId}`);
     } catch (err) {
-      toast.error(`Failed to kill ${id}`, {
+      toast.error(`Failed to kill ${killId}`, {
         description: getErrorMessage(err),
       });
     } finally {
@@ -297,8 +313,9 @@ export function RunDetailScreen() {
   // title renders in place — no reload, same `load(false)` pattern kill and
   // the decision handlers below already use.
   const rename = async (title: string) => {
+    if (!run) return;
     try {
-      await runsApi.setTitle(id, title);
+      await runsApi.setTitle(run.id, title);
       toast.success(RUN_COCKPIT.renamed);
     } catch (err) {
       toast.error(`Couldn't rename this run`, { description: getErrorMessage(err) });
@@ -507,7 +524,7 @@ export function RunDetailScreen() {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} onMakePolicy={() => setProfileRunId(id)} />
+            <AuditTab events={audit} runId={run.id} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
