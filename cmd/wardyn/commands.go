@@ -388,16 +388,6 @@ func runGrantsCmd(client clientFn) *cobra.Command {
 // waitPollInterval is how often --wait polls the run state (var for tests).
 var waitPollInterval = 2 * time.Second
 
-// errWaitTimeout is the cause of a wait's own deadline context, so a deadline
-// that fired is told apart from a parent cancelled from outside.
-var errWaitTimeout = errors.New("wait deadline exceeded")
-
-// errNonPositiveTimeout is the 124 a --timeout of zero or less gets without a
-// request: a wait that is out of budget before it starts.
-func errNonPositiveTimeout(timeout time.Duration) error {
-	return &exitError{code: 124, err: fmt.Errorf("--timeout %s leaves no time to wait: give a positive duration", timeout)}
-}
-
 // waitForRun polls the run until it is terminal and maps the outcome to the
 // CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
 // run.complete audit event (fallback 1), KILLED/STOPPED/ARCHIVED→2, timeout→124.
