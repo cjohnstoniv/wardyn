@@ -43,8 +43,13 @@ const attachTicketTTL = 30 * time.Second
 // mintAttachTicket issues a fresh single-use ticket bound to runID, to the
 // minting principal, and to that principal's role (admin/member) at mint time
 // — the WS attach route's ?ticket= lane bypasses humanOrAdminAuth entirely, so
-// this stamped role is the only signal available to re-check owner-or-admin
+// this stamped role is the only signal available to re-check the owner rule
 // when the ticket is consumed (see attach.go's handleAttachWS).
+//
+// now is the time the minting request was ADMITTED, and it is stamped on the
+// ticket as the authority time (#1474): redemption asks whether a revoke landed
+// since. The email is the verified identity's, from ctx — "" on the admin-token
+// and local lanes — because a revoke may name the email instead of the subject.
 func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, now time.Time) (string, error) {
 	var via *types.DelegationVia
 	if v, ok := audit.DelegationFrom(ctx); ok {
@@ -55,7 +60,8 @@ func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, acto
 		return "", err
 	}
 	tok := hex.EncodeToString(raw)
-	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role, Via: via}
+	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role, Via: via,
+		AuthorizedAt: now.UTC(), Email: oidcEmailFromContext(ctx)}
 	if err := st.MintAttachTicket(ctx, tok, t, now, now.Add(attachTicketTTL)); err != nil {
 		return "", err
 	}
@@ -77,7 +83,8 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 	if !ok || t.RunID != runID {
 		return ticketActor{}, false, nil
 	}
-	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via}, true, nil
+	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
+		authorizedAt: t.AuthorizedAt, email: t.Email}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -91,7 +98,7 @@ type ticketActor struct {
 	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleUser) at
 	// mint time, stamped by handleAttachTicket. It is the ONLY role source
 	// available in the ?ticket= WS lane (ticketOrHumanAuth bypasses
-	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner-or-admin
+	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner
 	// re-check.
 	role string
 	// via is the portal and delegated token the ticket was minted through
@@ -99,6 +106,13 @@ type ticketActor struct {
 	// context, so recordAudit stamps data.via on the ticket lane's rows and
 	// isOperator refuses it there as it did at mint.
 	via *types.DelegationVia
+	// authorizedAt and email are the authority the ticket was minted under
+	// (#1474), and grantExpires the portal grant's expiry on a delegated ticket
+	// (#1475, set by redeemAttachTicket). authorizedAt is zero on a row written
+	// before the column existed, which redemption refuses.
+	authorizedAt time.Time
+	email        string
+	grantExpires time.Time
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -126,14 +140,18 @@ func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
 //
 //	POST /api/v1/runs/{id}/attach/ticket
 //
-// Mounted INSIDE the humanOrAdminAuth group, owner-or-admin (getRunAuthorized):
-// a run's OWNER may mint a ticket for their own run, same as an admin — a
-// member who did not create this run gets the byte-identical 404 a missing run
-// would (no existence oracle). The minted ticket carries the minter's OWN
+// Mounted INSIDE the humanOrAdminAuth group (getRunAuthorized), then narrowed to
+// the owner (mayEnterRun): a run's OWNER may mint a ticket for their own run; a
+// super admin only for a run with no personal owner, and otherwise gets a 403
+// run_owner_only. A member who did not create this run gets the byte-identical
+// 404 a missing run would (no existence oracle). The minted ticket carries the minter's OWN
 // role, which is the ONLY authorization signal the WS handler has left to
 // check at consume time, since the ?ticket= lane bypasses humanOrAdminAuth
 // entirely.
 func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
+	// The ticket's authority time, taken before any store call so nothing the
+	// client can stretch falls before it (the same convention as apitokens.go).
+	authorizedAt := s.cfg.Now().UTC()
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
 		return
@@ -142,29 +160,26 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Explicit strict re-check, on top of getRunAuthorized. ownsRunOrAdmin
-	// (which getRunAuthorized delegates to) passes a
-	// SECURITY ADMIN on any run — deliberately, for incident response. Minting
-	// is the one route under that predicate that is not inspect-or-stop: this
-	// ticket becomes a live interactive PTY inside a foreign sandbox, an
-	// authority the three-tier model reserves to the super admin
-	// (internal/auth/oidc's RoleSecurityAdmin doc).
+	// Interactive entry needs the run's owner (mayEnterRun, run_entry.go), on top
+	// of getRunAuthorized: its ownsRunOrAdmin passes a SECURITY ADMIN on any run,
+	// deliberately, for incident response, and a super admin too. Minting is the
+	// one route under that predicate that is not inspect-or-stop: this ticket
+	// becomes a live interactive PTY or UI session inside the owner's sandbox,
+	// holding the owner's personal connections.
 	//
-	// Without this, the mint would still be BLOCKED downstream — the ticket
-	// stamps oidc.RoleUser below (a security admin is not an operator here),
-	// and handleAttachWS re-checks owner-or-RoleAdmin on consume. That is an
-	// ACCIDENT of defense-in-depth, not a decision: it holds only while two
-	// other lines in two other files keep their current shape, and it fails as
-	// a bewildering WS-time error rather than a refusal at the surface that
-	// took the request. Refuse HERE, where the rule is legible and testable.
-	//
-	// 404, byte-identical to the foreign-member deny getRunAuthorized writes —
-	// same no-existence-oracle rule, so probing run ids through this route
-	// still learns nothing, including its wire reason (AsIf, #656 slice 3).
-	// Audited under its OWN reason, not "not_owner": an auditor should be able
-	// to see a security admin refused a foreign PTY without inferring it from
-	// the path.
-	if !s.isOperator(r.Context()) && run.CreatedBy != principalFromRequest(r) {
+	// A super admin on a run that is not theirs, and not an operator-owned one,
+	// gets a 403 naming why (#1476): they can already see the run, so there is
+	// no existence to hide. Everyone else keeps the byte-identical 404 the
+	// foreign-member deny writes — no existence oracle, including its wire
+	// reason (AsIf, #656 slice 3) — audited under its OWN reason, so an auditor
+	// can see a security admin refused a foreign PTY without inferring it from
+	// the path. A delegated token is never a super admin here (isOperator is
+	// false under one), so a portal cannot mint for a run its person may not enter.
+	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
+		if s.isOperator(r.Context()) {
+			s.refuseRunOwnerOnly(w, r, run)
+			return
+		}
 		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
 		return
 	}
@@ -189,7 +204,21 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if s.isOperator(r.Context()) {
 		role = oidc.RoleAdmin
 	}
-	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, s.cfg.Now())
+	// A revoke that landed while this request was in flight must not leave a
+	// ticket behind: the same late re-check as handleCreateAPIToken, and the same
+	// fail-closed answer when it cannot be made.
+	if s.cfg.SessionRevocations != nil {
+		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), authorizedAt)
+		if rerr != nil {
+			writeServerError(w, r, "mint attach ticket", rerr)
+			return
+		}
+		if revoked {
+			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "this session is no longer authorized")
+			return
+		}
+	}
+	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, authorizedAt)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")
@@ -214,12 +243,15 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // only AUTHENTICATES, so a member who never minted a ticket must not simply
 // omit ?ticket= and get the same live PTY straight from their session cookie
 // (which browsers attach to a same-origin WebSocket handshake automatically).
-// The TICKET lane is owner-or-admin: minting is itself owner-or-admin-gated
-// (POST /runs/{id}/attach/ticket, getRunAuthorized), so holding a ticket at
-// all already proves that much — but the handler (handleAttachWS, attach.go)
-// ALSO re-checks the ticket's own stamped role/principal against the run it
-// names, since this lane never runs humanOrAdminAuth/requireOperator at all
-// and the ticket's stamped data is the only signal left to check.
+// The TICKET lane is owner-only (a super admin only on a run with no personal
+// owner): minting is itself gated on that rule (POST /runs/{id}/attach/ticket,
+// mayEnterRun), so holding a ticket at all already proves that much — but the
+// handler (handleAttachWS, attach.go) ALSO re-checks the ticket's own stamped
+// role/principal against the run it names, since this lane never runs
+// humanOrAdminAuth/requireOperator at all and the ticket's stamped data is the
+// only signal left to check. Redemption (redeemAttachTicket, run_entry.go) also
+// refuses a ticket admitted before a revoke or minted through a portal whose
+// grant has since ended.
 func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 	human := s.humanOrAdminAuth(s.requireOperator(next))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +264,7 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, tok, id, s.cfg.Now())
+		ta, v, err := s.redeemAttachTicket(r.Context(), tok, id)
 		if err != nil {
 			// A store failure is not a bad ticket: say so, and never leak the
 			// database error to an as-yet-unauthenticated caller — but DO log it,
@@ -241,9 +273,8 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
 			return
 		}
-		if !ok {
-			s.auditAttachDenied(r, id, "unknown", "invalid, expired, or already-used attach ticket")
-			writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
+		if v != verdictOK {
+			s.refuseAttachTicket(w, r, id, ta, v)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ta)))
@@ -263,8 +294,17 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 // same distinction sshAuditAuthFailure draws, for the same reason: naming a
 // principal the caller never proved is worse than naming none.
 func (s *Server) auditAttachDenied(r *http.Request, runID uuid.UUID, actor, reason string) {
-	ev := s.auditEvent(&runID, types.ActorHuman, actor, "session.attach", runID.String(), "failure",
-		mustJSON(map[string]any{"lane": "ticket", "reason": reason}))
+	s.auditAttachRefused(r, runID, actor, "ticket", reason, nil)
+}
+
+// auditAttachRefused is auditAttachDenied for either lane, with the portal the
+// refused credential came through when it came through one.
+func (s *Server) auditAttachRefused(r *http.Request, runID uuid.UUID, actor, lane, reason string, via *types.DelegationVia) {
+	data := map[string]any{"lane": lane, "reason": reason}
+	if via != nil {
+		data["via"] = via
+	}
+	ev := s.auditEvent(&runID, types.ActorHuman, actor, "session.attach", runID.String(), "failure", mustJSON(data))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 }

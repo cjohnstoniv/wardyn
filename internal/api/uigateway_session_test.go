@@ -13,6 +13,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,8 +29,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -322,8 +325,11 @@ func TestUIGateway_RevokedSessionIsRefusedOnTheNextConnection(t *testing.T) {
 // did nothing wrong — and never a quiet success.
 func TestUIGateway_UnverifiableRevocationFailsClosed(t *testing.T) {
 	h := newUIHarness(t, closingBackend("sandbox app"))
-	h.srv.cfg.SessionRevocations = errUIRevocations{}
+	// The store answers at redemption, then stops: redemption itself fails
+	// closed on an unreadable store (TestUIGateway_UnverifiableRevocationRefusesRedemption).
+	h.srv.cfg.SessionRevocations = &uiRevocations{}
 	cookie := h.openSession()
+	h.srv.cfg.SessionRevocations = errUIRevocations{}
 	rec := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/ide", cookie)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unreadable revocation store: %d %s, want 503", rec.Code, rec.Body.String())
@@ -563,6 +569,7 @@ func TestUIGateway_ReassertIsDebouncedPerSession(t *testing.T) {
 	h.srv.cfg.SessionRevocations = rev
 	cookie := h.openSession()
 	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+	redeemed := rev.askedCount() // the redemption's own check (#1474)
 
 	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
 		t.Fatalf("first request: %d %s", rec.Code, rec.Body.String())
@@ -571,9 +578,9 @@ func TestUIGateway_ReassertIsDebouncedPerSession(t *testing.T) {
 	// dial that request triggers checks again. A new connection is always
 	// re-checked — that guarantee is not debounced away.
 	opening := rev.askedCount()
-	if opening != 2 {
+	if opening-redeemed != 2 {
 		t.Fatalf("the first relayed request asked the revocation store %d time(s), want 2 "+
-			"(once on the request path, once on the connection it opened)", opening)
+			"(once on the request path, once on the connection it opened)", opening-redeemed)
 	}
 
 	for i := range 9 {
@@ -658,4 +665,403 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// auditRows returns the recorded rows with the given action and outcome.
+func (r *safeRecorder) auditRows(action, outcome string) []types.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []types.AuditEvent
+	for _, ev := range r.events {
+		if ev.Action == action && ev.Outcome == outcome {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// setCookies lists the cookies a response set under the relay cookie's name.
+func setUICookies(rec *httptest.ResponseRecorder) []*http.Cookie {
+	var out []*http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// the ticket carries its authority (#1474)
+
+// TestUIGateway_TicketMintedBeforeCutoffIsRefused: a ticket admitted before a
+// revoke must not mint a relay session stamped with the redemption time, which
+// is after the cutoff and would pass every later check. The refusal is the
+// bad-ticket one byte for byte, sets no cookie, and writes one denied row.
+func TestUIGateway_TicketMintedBeforeCutoffIsRefused(t *testing.T) {
+	h := newUIHarness(t, closingBackend("sandbox terminal reachable"))
+	rev := newCutoffRevocations()
+	rev.nowFunc = h.clock.now
+	h.srv.cfg.SessionRevocations = rev
+	ticket := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
+	h.clock.advance(3 * time.Second)
+	if err := rev.RevokeSub(context.Background(), h.owner); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(3 * time.Second)
+
+	rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "invalid, expired, or already-used attach ticket") {
+		t.Fatalf("a ticket minted before the cutoff: %d %s, want the 403 bad-ticket body", rec.Code, rec.Body.String())
+	}
+	if cs := setUICookies(rec); len(cs) != 0 {
+		t.Fatalf("a refused ticket set a relay cookie: %+v", cs)
+	}
+	rows := h.audit.auditRows("ui.authorize", "denied")
+	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"revoked"`) || rows[0].Actor != h.owner {
+		t.Fatalf("denied rows = %+v, want exactly one naming %q with reason revoked", rows, h.owner)
+	}
+}
+
+// TestUIGateway_PortalRevokeEndsDerivedSession: a relay session opened through a
+// portal ends with the portal's grant. Revoking the portal is not undone by the
+// session's own eight-hour cookie.
+func TestUIGateway_PortalRevokeEndsDerivedSession(t *testing.T) {
+	h := newUIHarness(t, closingBackend("portal still reaches sandbox"))
+	ds := newFakeDelegateStore()
+	h.srv.cfg.Store = &uiDelegateStore{h.store, ds}
+	raw, via := seedDelegation(t, ds, h.owner)
+	minted := do(t, h.srv, http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/attach-ticket", raw, "")
+	if minted.Code != http.StatusOK {
+		t.Fatalf("ticket route = %d %s", minted.Code, minted.Body.String())
+	}
+	var body struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(minted.Body.Bytes(), &body); err != nil || body.Ticket == "" {
+		t.Fatalf("ticket response: %v %s", err, minted.Body.String())
+	}
+	rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {body.Ticket}})
+	cs := setUICookies(rec)
+	if rec.Code != http.StatusFound || len(cs) != 1 {
+		t.Fatalf("enter = %d %s, want a redirect with the relay cookie", rec.Code, rec.Body.String())
+	}
+	cookie := cs[0]
+	path := uiRelayPrefix(h.run.ID, "code") + "/"
+	if r := uiGet(h, path, cookie); r.Code != http.StatusOK {
+		t.Fatalf("control before the revoke: %d %s", r.Code, r.Body.String())
+	}
+	if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(uiReassertInterval + time.Second)
+
+	relay := uiGet(h, path, cookie)
+	if relay.Code != http.StatusForbidden || !strings.Contains(relay.Body.String(), uiSessionNoLongerAuthorizedMsg) {
+		t.Fatalf("relay after the portal revoke: %d %s, want the not-authorized 403", relay.Code, relay.Body.String())
+	}
+	rows := h.audit.auditRows("ui.authorize", "denied")
+	if len(rows) == 0 || !strings.Contains(string(rows[0].Data), `"via"`) {
+		t.Fatalf("first denied row = %+v, want data.via", rows)
+	}
+}
+
+// uiDelegateStore is the UI harness's run and ticket store with the portal
+// tables beside it.
+type uiDelegateStore struct {
+	*uiMemStore
+	*fakeDelegateStore
+}
+
+// ticket authority: negatives (#1474)
+
+// enterWith drives the browser hand-off for ticket on h's run and app.
+func (h *uiHarness) enterWith(ticket string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	return h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
+}
+
+// mintFor mints a ticket the way the mint route does for a verified human: the
+// email rides the context, and now is the admission time.
+func (h *uiHarness) mintFor(principal, email, role string) string {
+	h.t.Helper()
+	ctx := withOIDCEmail(context.Background(), email)
+	tok, err := mintAttachTicket(ctx, h.store, h.run.ID, types.ActorHuman, principal, role, h.clock.now())
+	if err != nil {
+		h.t.Fatalf("mint ticket: %v", err)
+	}
+	return tok
+}
+
+// TestUIGateway_EmailNamedRevokeReachesATicketSession: a revoke that names the
+// person's email stops a relay session opened from a ticket, at redemption and
+// at the next re-assert. The ticket used to carry no email, so only a revoke by
+// subject or all:true could.
+func TestUIGateway_EmailNamedRevokeReachesATicketSession(t *testing.T) {
+	const email = "alice@corp.example"
+	t.Run("at redemption", func(t *testing.T) {
+		h := newUIHarness(t, closingBackend("sandbox app"))
+		rev := newCutoffRevocations()
+		rev.nowFunc = h.clock.now
+		h.srv.cfg.SessionRevocations = rev
+		ticket := h.mintFor(h.owner, email, oidc.RoleUser)
+		h.clock.advance(time.Second)
+		if err := rev.RevokeSub(context.Background(), email); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(time.Second)
+		if rec := h.enterWith(ticket); rec.Code != http.StatusForbidden || len(setUICookies(rec)) != 0 {
+			t.Fatalf("enter after an email-named revoke: %d %s, want 403 and no cookie", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("at the next re-assert", func(t *testing.T) {
+		h := newUIHarness(t, closingBackend("sandbox app"))
+		rev := newCutoffRevocations()
+		rev.nowFunc = h.clock.now
+		h.srv.cfg.SessionRevocations = rev
+		rec := h.enterWith(h.mintFor(h.owner, email, oidc.RoleUser))
+		cs := setUICookies(rec)
+		if rec.Code != http.StatusFound || len(cs) != 1 {
+			t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
+		}
+		path := uiRelayPrefix(h.run.ID, "code") + "/"
+		if r := uiGet(h, path, cs[0]); r.Code != http.StatusOK {
+			t.Fatalf("control: %d %s", r.Code, r.Body.String())
+		}
+		h.clock.advance(time.Second)
+		if err := rev.RevokeSub(context.Background(), email); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(uiReassertInterval + time.Second)
+		if r := uiGet(h, path, cs[0]); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), uiSessionNoLongerAuthorizedMsg) {
+			t.Fatalf("relay after an email-named revoke: %d %s, want the not-authorized 403", r.Code, r.Body.String())
+		}
+	})
+}
+
+// TestUIGateway_UnverifiableRevocationRefusesRedemption: a revocation store that
+// cannot answer at redemption is a retryable 503 with no cookie, never reported
+// as a bad ticket and never a session.
+func TestUIGateway_UnverifiableRevocationRefusesRedemption(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	h.srv.cfg.SessionRevocations = errUIRevocations{}
+	rec := h.enterWith(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), uiSessionUnverifiableMsg) ||
+		!strings.Contains(rec.Body.String(), `"reason":"revocation_unavailable"`) {
+		t.Fatalf("enter with an unreadable revocation store: %d %s, want 503 revocation_unavailable", rec.Code, rec.Body.String())
+	}
+	if cs := setUICookies(rec); len(cs) != 0 {
+		t.Fatalf("a refused redemption set a cookie: %+v", cs)
+	}
+}
+
+// TestUIGateway_TicketWithoutAuthorityIsRefused: a row written before the
+// authority columns existed reads a zero authority time. Zero never means
+// exempt, so it is refused with the bad-ticket body and no cookie.
+func TestUIGateway_TicketWithoutAuthorityIsRefused(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	h.store.mu.Lock()
+	h.store.tickets["legacy"] = store.AttachTicket{RunID: h.run.ID, ActorType: types.ActorHuman, Principal: h.owner, Role: oidc.RoleUser}
+	h.store.mu.Unlock()
+	rec := h.enterWith("legacy")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "invalid, expired, or already-used attach ticket") ||
+		len(setUICookies(rec)) != 0 {
+		t.Fatalf("a ticket with no authority time: %d %s, want the 403 bad-ticket body and no cookie", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_CookieWithoutAuthorityFailsClosed: a relay cookie from before
+// 0.8.5 carries no authority time, so the revoke check cannot be made against
+// it. It is refused on first use, like the pre-0.7.4 format.
+func TestUIGateway_CookieWithoutAuthorityFailsClosed(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	old := signUISessionPayload(h.srv.cfg.UISessionKey, fmt.Sprintf(
+		`{"r":%q,"a":"code","p":%d,"s":%q,"o":%q,"e":%d,"i":%d}`,
+		h.run.ID, uiTestPort, h.owner, oidc.RoleUser, time.Now().Add(time.Hour).Unix(), time.Now().Unix()))
+	rec := uiGet(h, uiRunPrefix+h.run.ID.String()+"/code/ide", &http.Cookie{Name: uiCookieName, Value: old})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a cookie with no authority time was accepted: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_AdminTokenTicketStillOpensASession: the admin token and local
+// seat carry no email; "" is valid, and a revoke of someone else does not reach
+// it.
+func TestUIGateway_AdminTokenTicketStillOpensASession(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	rev := newCutoffRevocations()
+	h.srv.cfg.SessionRevocations = rev
+	op := h.run
+	op.CreatedBy, op.OperatorOwned = "admin-token", true
+	h.store.putRun(op)
+	if err := rev.RevokeSub(context.Background(), "someone-else"); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.enterWith(h.ticket(h.run.ID, "admin-token", oidc.RoleAdmin))
+	if rec.Code != http.StatusFound || len(setUICookies(rec)) != 1 {
+		t.Fatalf("admin-token ticket: %d %s, want a session", rec.Code, rec.Body.String())
+	}
+}
+
+// the portal grant (#1475)
+
+// portalHarness is a UI harness whose store has the portal tables, with a live
+// grant for the run's owner.
+func portalHarness(t *testing.T) (*uiHarness, *fakeDelegateStore, string, types.DelegationVia) {
+	t.Helper()
+	h := newUIHarness(t, closingBackend("portal sandbox app"))
+	ds := newFakeDelegateStore()
+	h.srv.cfg.Store = &uiDelegateStore{h.store, ds}
+	raw, via := seedDelegation(t, ds, h.owner)
+	return h, ds, raw, via
+}
+
+// portalTicket mints a ticket through the portal, as the delegated route does.
+func (h *uiHarness) portalTicket(via types.DelegationVia) string {
+	h.t.Helper()
+	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID,
+		types.ActorHuman, h.owner, oidc.RoleUser, h.clock.now())
+	if err != nil {
+		h.t.Fatalf("mint ticket: %v", err)
+	}
+	return tok
+}
+
+func TestUIGateway_PortalGrant(t *testing.T) {
+	const body = "invalid, expired, or already-used attach ticket"
+
+	t.Run("redemption after a portal revoke is refused, naming the portal", func(t *testing.T) {
+		h, ds, _, via := portalHarness(t)
+		ticket := h.portalTicket(via)
+		if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+			t.Fatal(err)
+		}
+		rec := h.enterWith(ticket)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), body) || len(setUICookies(rec)) != 0 {
+			t.Fatalf("enter after a portal revoke: %d %s, want the bad-ticket 403 and no cookie", rec.Code, rec.Body.String())
+		}
+		rows := h.audit.auditRows("ui.authorize", "denied")
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"delegation_ended"`) || !strings.Contains(string(rows[0].Data), `"via"`) {
+			t.Fatalf("denied rows = %+v, want one delegation_ended carrying via", rows)
+		}
+	})
+
+	t.Run("grant expiry with no revoke refuses redemption and the open session", func(t *testing.T) {
+		h, _, _, via := portalHarness(t)
+		rec := h.enterWith(h.portalTicket(via))
+		cs := setUICookies(rec)
+		if rec.Code != http.StatusFound || len(cs) != 1 {
+			t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
+		}
+		h.clock.advance(delegatedTokenTTL + time.Second) // past the grant, with no revoke
+		if r := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/", cs[0]); r.Code != http.StatusForbidden {
+			t.Fatalf("relay after the grant expired: %d %s, want 403", r.Code, r.Body.String())
+		}
+		if rec := h.enterWith(h.portalTicket(via)); rec.Code != http.StatusForbidden {
+			t.Fatalf("redemption after the grant expired: %d %s, want 403", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("the cookie never outlives the grant", func(t *testing.T) {
+		h, ds, _, via := portalHarness(t)
+		rec := h.enterWith(h.portalTicket(via))
+		cs := setUICookies(rec)
+		if rec.Code != http.StatusFound || len(cs) != 1 {
+			t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
+		}
+		grant, err := ds.GetDelegatedTokenByID(context.Background(), via.Grant, h.clock.now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cs[0].Expires.After(grant.ExpiresAt) {
+			t.Fatalf("cookie expires %s, after the grant's %s", cs[0].Expires, grant.ExpiresAt)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(cs[0])
+		sess, ok := h.srv.decodeUISession(req, h.clock.now())
+		if !ok || sess.Expires > grant.ExpiresAt.Unix() {
+			t.Fatalf("signed session expiry %d, want <= grant %d (ok=%v)", sess.Expires, grant.ExpiresAt.Unix(), ok)
+		}
+	})
+
+	t.Run("a swept grant row ends the session", func(t *testing.T) {
+		h, ds, _, via := portalHarness(t)
+		cs := setUICookies(h.enterWith(h.portalTicket(via)))
+		if len(cs) != 1 {
+			t.Fatal("no session")
+		}
+		ds.mu.Lock()
+		clear(ds.tokens)
+		ds.mu.Unlock()
+		h.clock.advance(uiReassertInterval + time.Second)
+		if r := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/", cs[0]); r.Code != http.StatusForbidden {
+			t.Fatalf("relay after the grant row was swept: %d %s, want 403", r.Code, r.Body.String())
+		}
+	})
+
+	t.Run("a grant under another portal is refused", func(t *testing.T) {
+		h, _, _, via := portalHarness(t)
+		other := types.DelegationVia{Delegate: uuid.New(), Grant: via.Grant}
+		if rec := h.enterWith(h.portalTicket(other)); rec.Code != http.StatusForbidden || len(setUICookies(rec)) != 0 {
+			t.Fatalf("a ticket naming another portal's grant: %d %s, want 403 and no cookie", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a grant store that errors is a 503", func(t *testing.T) {
+		h, ds, _, via := portalHarness(t)
+		h.srv.cfg.Store = &delegationErrStore{&uiDelegateStore{h.store, ds}}
+		rec := h.enterWith(h.portalTicket(via))
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"reason":"delegation_unavailable"`) ||
+			len(setUICookies(rec)) != 0 {
+			t.Fatalf("enter with an unreadable grant store: %d %s, want 503 delegation_unavailable and no cookie", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a store that is not a DelegateStore is refused, not waved through", func(t *testing.T) {
+		h := newUIHarness(t, okBackend())
+		via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+		rec := h.enterWith(h.portalTicket(via))
+		if rec.Code != http.StatusServiceUnavailable || len(setUICookies(rec)) != 0 {
+			t.Fatalf("a portal ticket against a store with no portal capability: %d %s, want 503 and no cookie", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("the revoke reaches a session with no SessionRevocations configured", func(t *testing.T) {
+		h, ds, _, via := portalHarness(t)
+		if h.srv.cfg.SessionRevocations != nil {
+			t.Fatal("the harness must not configure SessionRevocations")
+		}
+		cs := setUICookies(h.enterWith(h.portalTicket(via)))
+		if len(cs) != 1 {
+			t.Fatal("no session")
+		}
+		if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(uiReassertInterval + time.Second)
+		if r := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/", cs[0]); r.Code != http.StatusForbidden {
+			t.Fatalf("relay after a portal revoke with no revocation store: %d %s, want 403", r.Code, r.Body.String())
+		}
+	})
+
+	t.Run("a personal session is unaffected by a portal revoke", func(t *testing.T) {
+		h, ds, _, via := portalHarness(t)
+		cs := setUICookies(h.enterWith(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		if len(cs) != 1 {
+			t.Fatal("no session")
+		}
+		if _, err := ds.RevokeDelegate(context.Background(), via.Delegate, h.clock.now()); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(uiReassertInterval + time.Second)
+		if r := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/", cs[0]); r.Code != http.StatusOK {
+			t.Fatalf("a personal session after a portal revoke: %d %s, want 200", r.Code, r.Body.String())
+		}
+	})
+}
+
+// delegationErrStore is a store whose grant lookup cannot answer.
+type delegationErrStore struct{ *uiDelegateStore }
+
+func (*delegationErrStore) GetDelegatedTokenByID(context.Context, uuid.UUID, time.Time) (types.DelegatedToken, error) {
+	return types.DelegatedToken{}, errors.New("store unreachable")
 }

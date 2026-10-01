@@ -178,12 +178,18 @@ func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc class
 		if adminCode != http.StatusNotFound {
 			t.Errorf("admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", adminCode)
 		}
+	} else if rc.ownerTier == tierEntry {
+		// Interactive entry (#1476): the super admin is refused with a 403
+		// naming why, not the 404 of a missing run.
+		if adminCode != http.StatusForbidden {
+			t.Errorf("admin on a foreign tierEntry entity: %d, want 403 run_owner_only", adminCode)
+		}
 	} else if !reached(adminCode) {
 		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", adminCode)
 	}
 	code := on(cast.sec)
 	switch rc.ownerTier {
-	case tierSuper:
+	case tierSuper, tierEntry:
 		if code != http.StatusNotFound {
 			t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
 		}

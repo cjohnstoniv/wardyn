@@ -675,6 +675,9 @@ const (
 const (
 	reasonCredentialErasePrincipalRequired = "credential_erase_principal_required"
 	reasonCredentialEraseOperatorNamespace = "credential_erase_operator_namespace"
+	// The Azure DevOps sign-in's configuration could not be read, so the erase
+	// could not take the sign-in's lock and refused (#1478).
+	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
 // GET /permissions/explain (capabilities_explain.go).
@@ -776,4 +779,8 @@ const (
 	uiDeniedReasonNotAuthorized         = "not_authorized"
 	uiDeniedReasonRevoked               = "revoked"
 	uiDeniedReasonRevocationUnavailable = "revocation_unavailable"
+	// A session opened through a portal ends with that portal's grant (#1475):
+	// the portal was revoked or the grant expired, or the store could not say.
+	uiDeniedReasonDelegationEnded       = "delegation_ended"
+	uiDeniedReasonDelegationUnavailable = "delegation_unavailable"
 )

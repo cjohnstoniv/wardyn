@@ -915,7 +915,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
-| `POST /people`, `POST /people/{principal}/tokens` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and minting or listing API tokens for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). The mint is refused for an admin or security-admin target unless the caller is an admin | ⛔ admin or `security_admin` |
+| `POST /people` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and listing the API tokens an admin once created for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). `POST /people/{principal}/tokens` stays mounted on this tier so a non-admin is refused as ever, and answers every admin `403` `person_token_mint_removed`: no role creates a token that acts as another person (0.8.5) | ⛔ admin or `security_admin` |
 | `GET /model-providers/credentials` — the credential inventory (0.8): for each model provider, every person who holds a credential of their own for it, with its state (`stored`, or `expired` past its sign-in's expiry), where it is stored (`pg`, `vaultkv`, `azurekv`), when it was added and when a run last used it (to the minute: a sink stamps a row at most once a minute), plus counts. Each row also carries `email` and `provider_name` (CS-8, both additive and non-secret) so a `security_admin` — who has no route to the model-provider roster or an identity directory — can still read the table well enough to offboard from it. The console's own page is `/admin/credentials`. The erase's companion; read from the rows' metadata, never a value | ⛔ admin or `security_admin` |
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach/ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
@@ -1158,7 +1158,19 @@ migration `0050`)** are the second and third owned nouns after runs.
   recover them for that long unless its vault operators purge them. It never
   answers success with a credential left behind (`500`, audited
   `credential.erase` `failure` with the count it did delete; run it again), and
-  it never erases the operator namespace. A run already going keeps a static key
+  it never erases the operator namespace. A renewal of their AWS session, or
+  an Azure DevOps refusal stamp, already in flight finishes first and is erased
+  with the rest: the erase waits for the owner's AWS lock, the Azure DevOps
+  sign-in's lock and the own-token write lock (for a renewal, at most about 21
+  seconds), so a success is final for everything Wardyn itself was writing. That
+  coordination lives in one process: on a deployment with more than one replica
+  a second one can still interleave, and the erase's own re-list reports only a
+  write it can see (tombstones are tracked in #1511). An Azure DevOps sign-in
+  configuration that cannot be read refuses the erase (`503`,
+  `credential_erase_signin_config_unreadable`, nothing erased). A person who
+  reconnects afterwards writes new credentials, which stay. The erase does not
+  reach into a running run: one that already holds a credential in memory keeps
+  it. A run already going keeps a static key
   (an `api_key` injection is fetched once and cached for the run) until it ends,
   so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
   **Wardyn cannot revoke anything upstream**, with one exception: it first
@@ -1189,7 +1201,8 @@ migration `0050`)** are the second and third owned nouns after runs.
   nothing else. In order:
   1. Disable the person in the identity provider, so no new sign-in succeeds.
   2. `POST /sessions/revoke` with their subject or email: ends their console
-     sessions and revokes every `wdn_` API token they hold (its
+     sessions, refuses a UI-app session at its next re-check (an attach ticket
+     minted before the revoke is refused at redemption) and revokes every `wdn_` API token they hold (its
      `tokens_revoked` count is the receipt; see "Per-user API tokens: stop
      sharing the admin token").
   3. Remove their registered SSH keys and end established SSH connections:
@@ -2190,7 +2203,9 @@ its own.
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also
-revokes their API tokens and removes their registered SSH keys. The `all` arm
+revokes their API tokens, removes their registered SSH keys, and refuses their
+UI-app sessions at the next re-check, whether the revoke names the subject or
+the email. The `all` arm
 applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
 revoke.
@@ -2331,17 +2346,43 @@ token's role AND group snapshot are bounded-stale, not frozen").
 
 ### Tokens for a person who never signs in
 
-For people who never open the console, an admin or `security_admin` can set the
-person up and mint their token. A trusted front-end that acts for people who ARE
-signed in to it uses [delegation](#delegated-run-management-portals) instead: it
-never holds a long-lived token for anyone.
+**No one can create a token that acts as another person (0.8.5).** An admin or
+`security_admin` can still set a person up before their first sign-in, but
+cannot mint a token for them: `POST /api/v1/people/{principal}/tokens` answers
+every caller `403` with reason `person_token_mint_removed` ("No one can create
+a token that acts as another person. They sign in and create their own."),
+whether or not the person exists. No role, flag or environment variable turns
+it back on. A token an admin created for someone else acted as that person
+while the admin held its plaintext, which is the reach this closes.
+
+For people who never open the console, the interim path is that the person
+signs in once and creates their own token (`POST /api/v1/me/tokens`, or the
+console; see [CI.md](CI.md)). It is never the deployment's admin token. A
+trusted front-end that acts for people who ARE signed in to it uses
+[delegation](#delegated-run-management-portals) instead: it never holds a
+long-lived token for anyone.
 
 | Call | What |
 |---|---|
 | `POST /api/v1/people` `{"principal":"<sub>","email":"<email>"}` | create the person, or confirm the one already there (`201` / `200`) |
 | `POST /api/v1/people` `{"tenant_id":"<tid>","object_id":"<oid>","email":"<email>"}` | Entra ID only: the same, keyed by the tenant and object id (see below); the principal is `entra:<tid>:<oid>` |
-| `POST /api/v1/people/{principal}/tokens` `{"name":"ci"}` | mint a `wdn_` token owned by that person; the plaintext is in this response only |
-| `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included; revoke one with `DELETE /api/v1/tokens/{id}` |
+| `POST /api/v1/people/{principal}/tokens` | refused: `403` `person_token_mint_removed`, one `person.token.create` audit row with outcome `denied` |
+| `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included |
+| `GET /api/v1/tokens?minted_for_others=true` | every live token an admin created for someone else before this change (metadata only, never a plaintext); also on the console's Admin > Credentials page |
+
+**Tokens already minted keep working until you revoke them.** Nothing is
+revoked by the upgrade. List them with `GET /api/v1/tokens?minted_for_others=true`
+(each row carries `minted_by`, the admin who created it), and revoke one with
+`DELETE /api/v1/tokens/{id}`, or all of a person's with `POST /sessions/revoke`
+for their `sub`. The revoke's `token.revoke` audit row carries `minted_by`. The
+owner sees `minted_by` on their own `GET /me/tokens`. At the person's sign-in
+the usual login re-stamp applies, with one difference: if their real role
+differs from the token's stamp, a token an admin created for them is **revoked**
+instead of re-stamped, otherwise whoever kept the plaintext would hold a higher
+tier's credential. When the role is unchanged, the token is re-stamped with the
+person's real groups at that sign-in and keeps working. Until then its groups
+are unknown, so every group-tier ceiling, drive allocation or deny grant fails
+closed for it, as for a truncated session.
 
 **Keying rule: a person is their identity provider's `sub`.** A sign-in resolves
 to exactly the id_token's `sub`, case-sensitive, and nothing else. So `principal`
@@ -2362,7 +2403,7 @@ the person's first sign-in. So on a deployment whose issuer is Entra ID
 `principal`. Both are GUIDs; find them as described in
 [deploy/azure-entra-sso/README.md](../deploy/azure-entra-sso/README.md#pre-creating-a-person-by-object-id).
 Their principal is `entra:<tenant_id>:<object_id>`, which is what you pass as
-`{principal}` to mint or list their tokens. Wardyn records this deployment's
+`{principal}` to list their tokens. Wardyn records this deployment's
 issuer with them. A sign-in becomes this person only when its issuer, `tid`
 and `oid` claims all equal the recorded ones exactly, and then on every
 sign-in, so re-registering the app does not orphan them. Nothing else attaches
@@ -2396,31 +2437,8 @@ one only by case, or when the subject is another person's email. It answers
 `local:…`, `device:…` and `delegate:…`, in any case — the same set a sign-in is refused for
 (see "Some subjects never sign in").
 
-**What the minted token carries.** It gets the role and user type the person's
-sign-in would derive from their email. Their groups are unknown until they sign
-in, so the group snapshot is stamped as partial, and every group-tier ceiling,
-drive allocation or deny grant fails closed for the token, as it does for a
-truncated session. Give such a person a user-tier drive grant. Every request the
-token makes is the person: runs are owned and audited as them and read their
-own secrets. `minted_by` on the token row names the admin who minted it, and
-the `person.token.create` audit row names both of you.
-
-**Guard rails.**
-
-- The caller must be a signed-in admin or `security_admin`. The admin token,
-  local mode and an API token cannot mint.
-- Only an admin may mint for a person whose derived role is admin or
-  `security_admin`.
-- A person whose elevated role would come only from `WARDYN_OIDC_DEFAULT_ROLE` must
-  sign in once first, because their groups might narrow it.
-- The token never carries more than that derivation gives.
-
-At the person's sign-in the usual login re-stamp applies, with one difference.
-If their real role differs from the token's stamp, a token an admin minted for
-them is **revoked** instead of re-stamped. Otherwise a `security_admin` who kept
-the plaintext would hold an admin's credential once an admin person signed in.
-Revocation is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's
-own `DELETE /api/v1/me/tokens/{id}`.
+Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`,
+or the person's own `DELETE /api/v1/me/tokens/{id}`.
 
 ### Delegated run management (portals)
 
@@ -2499,8 +2517,15 @@ the same way and refuses new exchanges of tokens issued before it. A disable
 done only at the identity provider takes effect at the next exchange, so at
 most ten minutes. An open `GET /runs/{id}/events` stream re-checks its token at
 each keepalive (about every 15 seconds) and ends when the portal has been revoked
-or the token has expired, rather than at its five-minute hold. Runs a portal
-launched keep running after it is revoked: they are the person's runs.
+or the token has expired, rather than at its five-minute hold. A UI-app session
+a portal opened (through an attach ticket) is a credential derived from that
+grant and is bounded by it: redemption and every 30-second re-check ask whether
+the portal is registered and the grant unexpired, and the session cookie is
+capped at the grant's expiry, so it lasts at most about ten minutes. Revoking the
+portal ends it at the next re-check. Open WebSocket streams are the exception: a
+terminal or relayed socket already established keeps working until it closes or
+the run ends. Runs a portal launched keep running after it is revoked: they are
+the person's runs.
 
 ### Three roles, and who sets the walls
 
@@ -2596,7 +2621,9 @@ create, keyed on the profile the run was created under as it stands now, so a
 limit set later reaches runs already going (a deleted profile binds nothing).
 `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the
 console terminal) and every SSH-gateway connection into any run under the
-profile, exec runs and the run's owner included; the attach is an `authz.denied`
+profile, exec runs and the run's owner included (a super admin enters only a
+run of their own or one with no personal owner, so the exemption below reaches no
+person's run); the attach is an `authz.denied`
 row (`governance_profile`, target `runs.attach`), the SSH refusal an
 `ssh.authenticate` failure naming the profile. The harness sign-in run is exempt,
 as it is at create. `deny_ui_apps` strips `ui_apps` from a run at create, with a
@@ -2750,7 +2777,8 @@ admin walking the member path, not an incident.
 | `admin_view` | an admin in the user view launched a run (`POST /runs` or `POST /runs/preflight`) after the type the view looks through was deleted. Not audited on its own — the cause row is `user_view_type_deleted`, which the launch response answered; see that row for the shape and the marker | ⛔ `409` |
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
-| `attach_ticket_foreign_run` | a caller who is not the super admin — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
+| `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
+| `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
 | `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
@@ -2809,9 +2837,11 @@ policy that bounds them
 (`threatmodel/THREAT-MODEL.md` residual #14, still open).
 
 The SSH gateway's admin override is a **bounded-stale stamp**, not a live role
-check: since migration `0043` a key authorizes when `run.created_by == the key's
-principal` OR the key's `role` column reads `admin` AND its `role_checked_at`
-(migration `0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). The
+check, and since 0.8.5 it reaches only runs with no personal owner
+(`operator_owned`; a fresh admin key on a person's run is refused
+`run_owner_only`): since migration `0043` a key authorizes when `run.created_by == the key's
+principal` OR (the run is operator-owned AND the key's `role` column reads `admin` AND its `role_checked_at`
+(migration `0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`)). The
 stamp is written at `POST /me/ssh-keys` time from the registering session's role
 and RE-stamped — both columns — on every OIDC login for that principal, across
 every key they hold. The gateway never reads the role live at connect time (SSH

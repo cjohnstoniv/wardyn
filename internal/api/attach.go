@@ -213,27 +213,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ticket lane authorization: ticketOrHumanAuth's ?ticket= branch
-	// runs neither humanOrAdminAuth nor requireOperator, so the ticket's OWN
-	// stamped role/principal (captured at MINT time — see attach_ticket.go) is
-	// the only authorization signal left. owner-or-admin, re-checked here
-	// against the just-loaded run — belt-and-suspenders alongside
-	// ticketOrHumanAuth's own run-id binding check, using the run row this
-	// handler already needs for its state/sandbox checks below (no extra
-	// store call). The fall-through (cookie) lane is unaffected: reaching this
-	// handler via it already proves admin (requireOperator gates it).
-	if ta, tok := ticketActorFromContext(ctx); tok {
-		superAdmin := ta.role == oidc.RoleAdmin
-		if !superAdmin && run.CreatedBy != ta.principal {
-			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
-			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
-			return
-		}
-		// The fall-through lane is operator-only, and a super admin's ticket
-		// is exempt the same way.
-		if !superAdmin && s.refuseInteractiveAttach(w, r, run) {
-			return
-		}
+	// Entry authorization (#1476): the owner rule, on both lanes.
+	if s.refuseAttachEntry(w, r, run) {
+		return
 	}
 
 	// Fail closed before upgrading: only a RUNNING run with a live sandbox ref
@@ -927,4 +909,45 @@ func parseUint16(s string) uint16 {
 		return 0
 	}
 	return uint16(n)
+}
+
+// refuseAttachEntry is handleAttachWS's entry authorization (#1476): true when
+// it has answered. The run's owner, or a super admin on a run with no personal
+// owner (mayEnterRun); neither lane may skip it.
+//
+// Ticket lane: ticketOrHumanAuth's ?ticket= branch runs neither
+// humanOrAdminAuth nor requireOperator, so the ticket's OWN stamped
+// role/principal (captured at MINT time — see attach_ticket.go) is the only
+// signal left, re-checked here against the just-loaded run. An admin stamp
+// that fails the rule gets the 403 naming why; a member stamp keeps its own.
+// superAdmin is true past this block only on the admin's own run or an
+// operator-owned one, so the deny_interactive exemption cannot reach a
+// person's run.
+func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
+	id := run.ID
+	if ta, tok := ticketActorFromContext(r.Context()); tok {
+		superAdmin := ta.role == oidc.RoleAdmin
+		if !mayEnterRun(run, ta.principal, superAdmin) {
+			if superAdmin {
+				s.auditAttachRefused(r, id, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
+				s.refuseRunOwnerOnly(w, r, run)
+				return true
+			}
+			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+			return true
+		}
+		// The fall-through lane is operator-only, and a super admin's ticket
+		// is exempt the same way.
+		return !superAdmin && s.refuseInteractiveAttach(w, r, run)
+	}
+	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
+		// The cookie lane: requireOperator and the origin check keep members
+		// out of it, and the owner rule keeps a super admin out of a person's
+		// run, which that gate alone no longer does.
+		s.auditAttachRefused(r, id, principalFromRequest(r), "cookie", runOwnerOnlyReason, nil)
+		s.refuseRunOwnerOnly(w, r, run)
+		return true
+	}
+	return false
 }

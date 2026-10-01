@@ -173,7 +173,8 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 	ast := newAuthzStore()
 	st := &touchCountingStore{authzStore: ast}
 	rec := &sshTestRecorder{} // shared audit sink: a real one survives a restart too
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, State: types.RunRunning, SandboxRef: "sbx-reconnect"}
+	// Operator-owned, as holderTestServer's run is: the second human is a super admin.
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-reconnect"}
 	ast.mu.Lock()
 	ast.runs[run.ID] = run
 	ast.mu.Unlock()
