@@ -182,8 +182,8 @@ async function openFailedRun(page: Page, view: "user" | "admin" = "user"): Promi
 test.describe("the failure block opens the run's own provider's door (state 2)", () => {
   const cases = [
     { p: P.bedrock, state: "you are not signed in to AWS for it", aria: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA, label: AGENTS.SIGN_IN_AWS, note: MODEL_ACCESS_RUN_DOOR.NOTE, dialog: MODEL_ACCESS_BANNER.DIALOG_TITLE },
-    { p: P.gateway, state: "you have not added your token for it", aria: MODEL_ACCESS_RUN_DOOR.ADD_TOKEN_ARIA, label: CONNECTIONS.ADD_TOKEN, note: MODEL_ACCESS_RUN_DOOR.NOTE_KEY, dialog: KEY_DOOR.TITLE(true, P.gateway.name) },
-    { p: P.key, state: "you have not added your key for it", aria: MODEL_ACCESS_RUN_DOOR.ADD_KEY_ARIA, label: CONNECTIONS.ADD_KEY, note: MODEL_ACCESS_RUN_DOOR.NOTE_KEY, dialog: KEY_DOOR.TITLE(false, P.key.name) },
+    { p: P.gateway, state: "no token is available for it", aria: MODEL_ACCESS_RUN_DOOR.ADD_TOKEN_ARIA, label: CONNECTIONS.ADD_TOKEN, note: MODEL_ACCESS_RUN_DOOR.NOTE_KEY, dialog: KEY_DOOR.TITLE(true, P.gateway.name) },
+    { p: P.key, state: "no key is available for it", aria: MODEL_ACCESS_RUN_DOOR.ADD_KEY_ARIA, label: CONNECTIONS.ADD_KEY, note: MODEL_ACCESS_RUN_DOOR.NOTE_KEY, dialog: KEY_DOOR.TITLE(false, P.key.name) },
     { p: P.claude, state: "you are not signed in to Claude for it", aria: MODEL_ACCESS_RUN_DOOR.SIGN_IN_CLAUDE_ARIA, label: CONNECTIONS.SIGN_IN_CLAUDE, note: MODEL_ACCESS_RUN_DOOR.NOTE, dialog: CLAUDE_DOOR.TITLE },
   ];
   for (const c of cases) {
@@ -257,7 +257,7 @@ test.describe("no door for anyone but the owner, or in the Admin view (state 3)"
 
 test.describe("a New Run refusal opens the door its provider names (state 4)", () => {
   test("a refusal over the gateway's token opens the token door, not AWS (#146 defect 2)", async ({ page }) => {
-    const sentence = refusal(P.gateway.name, "you have not added your token for it");
+    const sentence = refusal(P.gateway.name, "no token is available for it");
     await asViewer(page, VIEWER);
     await withProviders(page);
     await page.route("**/api/v1/runs", async (route) => {

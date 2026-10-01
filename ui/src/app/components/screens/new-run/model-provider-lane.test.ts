@@ -65,9 +65,9 @@ describe("providerWhatWord / providerStateWord / providerOptionLabel — QC-2", 
     expect(providerStateWord("bedrock_sso", "not_configured")).toBe("not signed in");
   });
 
-  it("a key/token kind reads added / not added", () => {
+  it("a key/token kind reads added / not available", () => {
     expect(providerStateWord("custom_endpoint", "live")).toBe("added");
-    expect(providerStateWord("anthropic_api_key", "not_configured")).toBe("not added");
+    expect(providerStateWord("anthropic_api_key", "not_configured")).toBe("not available");
   });
 
   it("renders RAIL_PROVIDER.OPTION verbatim — packet C's own examples", () => {
@@ -79,7 +79,7 @@ describe("providerWhatWord / providerStateWord / providerOptionLabel — QC-2", 
     ];
     expect(providerOptionLabel(gateway, access)).toBe(RAIL_PROVIDER.OPTION("Corp gateway", "token", "added"));
     expect(providerOptionLabel(anthropicKey, access)).toBe(
-      RAIL_PROVIDER.OPTION("Anthropic API key", "key", "not added"),
+      RAIL_PROVIDER.OPTION("Anthropic API key", "key", "not available"),
     );
     expect(providerOptionLabel(claude, access)).toBe(RAIL_PROVIDER.OPTION("Claude subscription", "sign-in", "signed in"));
     expect(providerOptionLabel(bedrock, access)).toBe(

@@ -14,7 +14,7 @@ export const BANNER = {
   B3: (name: string, when: string) => `Your AWS sign-in for ${name} lapses ${when}.`,
   // Drawn for a token; "a key reads the same with 'key'".
   B4: (harness: string, name: string, token: boolean) =>
-    `${harness} runs use ${name}, and you haven't added your ${token ? "token" : "key"}.`,
+    `${harness} runs use ${name}, and no ${token ? "token" : "key"} is available.`,
   B5: (harness: string) => `${harness} runs use your Claude subscription, and you're not signed in to Claude.`,
   B8: (n: number) => `${n} of your model connections need you.`,
   REVIEW: "Review",
@@ -44,8 +44,8 @@ export const CONNECTIONS = {
   EXPIRING: "Expiring",
   EXPIRING_LINE: (when: string) => `Sign in again before ${when}`,
   SIGNED_OUT: "Signed out",
-  NO_KEY: "No key added",
-  NO_TOKEN: "No token added",
+  NO_KEY: "No key available",
+  NO_TOKEN: "No token available",
   KEY_GOES_TO: (host: string) => `Your key goes to ${host}`,
   // vendor is fixed to "Anthropic" at every call site (packet MP-D's own
   // wording) — the packet's own report flags this as questionable on a row

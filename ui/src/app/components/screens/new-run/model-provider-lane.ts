@@ -62,12 +62,12 @@ export function providerWhatWord(kind: string): string {
   return "key";
 }
 
-/** The trailing state word ("added"/"not added"/"signed in"/"not signed
+/** The trailing state word ("added"/"not available"/"signed in"/"not signed
  *  in"), keyed on the SAME kind-vocabulary as providerWhatWord. */
 export function providerStateWord(kind: string, state: string): string {
   const connected = providerConnected(state);
   if (isSignInKind(kind)) return connected ? "signed in" : "not signed in";
-  return connected ? "added" : "not added";
+  return connected ? "added" : "not available";
 }
 
 /** RAIL_PROVIDER.OPTION for one candidate, given this person's access rows. */

@@ -85,14 +85,14 @@ describe("B1–B5: one provider needs the person", () => {
     expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
   });
 
-  it("B4: a default token not added, for both agents it serves; a key reads 'key'", async () => {
+  it("B4: a default token not available, for both agents it serves; a key reads 'key'", async () => {
     const { unmount } = strip(providerStatus([{ provider: gateway, defaultFor: ["claude-code", "codex-cli"] }]));
     expect(screen.getByText(BANNER.B4("Claude Code and Codex CLI", "Corp gateway", true))).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Add your token" }));
     expect(await screen.findByRole("dialog", { name: "Add your token for Corp gateway" })).toBeInTheDocument();
     unmount();
     strip(providerStatus([{ provider: anthropicKey, defaultFor: ["claude-code"] }]));
-    expect(screen.getByText("Claude Code runs use Anthropic API key, and you haven't added your key.")).toBeInTheDocument();
+    expect(screen.getByText("Claude Code runs use Anthropic API key, and no key is available.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add your key" })).toBeInTheDocument();
   });
 

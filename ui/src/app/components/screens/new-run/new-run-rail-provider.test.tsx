@@ -142,7 +142,7 @@ describe("R2/R6 — several candidates: a Select, each option stating what you p
     const trigger = await screen.findByRole("combobox", { name: RAIL_PROVIDER.LABEL });
     expect(trigger).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
     await userEvent.click(trigger);
-    await userEvent.click(await screen.findByRole("option", { name: RAIL_PROVIDER.OPTION("Corp gateway", "token", "not added") }));
+    await userEvent.click(await screen.findByRole("option", { name: RAIL_PROVIDER.OPTION("Corp gateway", "token", "not available") }));
     expect(onChange).toHaveBeenCalledWith(gateway.id);
   });
 });

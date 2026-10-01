@@ -28,8 +28,12 @@ import (
 
 // DRAFT (M2 canon pending).
 const (
-	mpRunNoKey          = "you have not added your key for it"
-	mpRunNoToken        = "you have not added your token for it"
+	// Cause-neutral on purpose (#1489): a credential that is not there looks the
+	// same whether it was never stored, was deleted when an admin changed the
+	// provider's address, or could not be read, so these say only that none is
+	// available.
+	mpRunNoKey          = "no key is available for it"
+	mpRunNoToken        = "no token is available for it"
 	mpRunCredUnreadable = "Wardyn couldn't read your credential for model provider %s just now, so nothing was started. Try again in a moment."
 	mpRunUnreadable     = "Wardyn couldn't read its model providers just now, so nothing was started. Try again in a moment."
 	mpRunNoIntegration  = "integration_id no longer chooses a model credential: a run's model provider does — use model_provider instead."

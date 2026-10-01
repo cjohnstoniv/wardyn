@@ -248,9 +248,10 @@ than to Anthropic.
 
 - **Where you see it.** In the User view only (not on Getting started), a
   banner names a provider that is the default for one of your harnesses and
-  still needs you — not connected yet, or (Bedrock SSO only) your sign-in is
-  expiring or no longer works; a provider nobody defaults to is not an alarm
-  even if you never connected it. Two or more needing you collapse to one "N
+  still needs you — no key or token is available for it (it may never have
+  been added, or been removed or unreadable since), or (Bedrock SSO only) your
+  sign-in is expiring or no longer works; a provider nobody defaults to is not
+  an alarm even if you never connected it. Two or more needing you collapse to one "N
   of your model connections need you" line with a Review link, rather than
   naming each. `GET /setup/status`'s `model_providers` and `provider_access`
   are the same answer, if you are scripting: one row per provider you may use,
