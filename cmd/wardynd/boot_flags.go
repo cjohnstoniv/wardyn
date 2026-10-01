@@ -700,6 +700,12 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 			slog.String("listen", *f.listen),
 		)
 	}
+	// The capability switch is the same story for Azure DevOps escalations.
+	if api.CapabilitySecondHumanEnabled() {
+		slog.Warn("wardynd: WARDYN_CAPABILITY_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY Azure DevOps capability approval decision will be refused with 503. Configure SSO to use this switch, or unset it.",
+			slog.String("listen", *f.listen),
+		)
+	}
 	if lm.operator == "" {
 		lm.operator = defaultLocalOperator()
 	}

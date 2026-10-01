@@ -73,7 +73,8 @@ disclose them — but a *more severe than documented* instance is in scope):
   `POST /api/v1/admin/sandboxes/sweep`, attach / attach-ticket / take-over on a
   run they do not own, an SSH key stamped above `user`), or a `user` reaching
   either admin tier. A bypass of the four-eyes rule on egress approvals
-  (`WARDYN_EGRESS_SECOND_HUMAN=1`) is likewise in scope — except by the admin
+  (`WARDYN_EGRESS_SECOND_HUMAN=1`) or on Azure DevOps capability escalations
+  (`WARDYN_CAPABILITY_SECOND_HUMAN=1`) is likewise in scope — except by the admin
   token, which is a documented, deliberate exemption
   (`threatmodel/THREAT-MODEL.md` § "Four-eyes on egress approvals is bypassable by
   the admin token, by design"). Separation of duty WITHIN the super-admin tier

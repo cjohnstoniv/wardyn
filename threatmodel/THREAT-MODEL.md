@@ -1057,9 +1057,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     by design — it writes policy, site-config, secrets and the role map, and
     nothing above it offers more than attribution. There is no per-resource
     permission model, no custom roles, and no tenant or org column. One optional
-    four-eyes rule exists, on one act only (`WARDYN_EGRESS_SECOND_HUMAN`,
-    § "Four-eyes on egress approvals"), and it is bypassable by the admin token by
-    design. So: separation of duty BETWEEN the two admin tiers is shipped and
+    four-eyes rule exists, on two acts only (`WARDYN_EGRESS_SECOND_HUMAN` for
+    egress approvals and `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
+    capability escalations, § "Four-eyes on egress approvals"), and both are
+    bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
     testable; separation of duty WITHIN the super admin tier remains `ROADMAP.md`'s
     v1.0 item. `SECURITY.md` scopes its out-of-scope disclosure to match — an
     escalation ACROSS the `security_admin`/super-admin boundary, or a bypass of the
@@ -2921,6 +2922,13 @@ as an opaque tunnel and is never offered the bearer.
 DECIDES an `egress_domain` approval is not the human who created the run —
 four-eyes on the one decision that widens what a running agent can reach. It is
 published here rather than in §4 because of the exemption it ships with.
+
+`WARDYN_CAPABILITY_SECOND_HUMAN=1` (off by default) is the same rule for the other
+decision a run's creator could make on their own: an Azure DevOps capability
+escalation, admin-class capabilities included. Without it, ownership of the run is
+the whole member rule for that kind. Everything below applies to it unchanged: the
+admin token bypasses it, the bypass is the same `approval.second_human.bypass` row
+(its `switch` field names which setting was bypassed), and local mode refuses it.
 
 **A bare `WARDYN_ADMIN_TOKEN` caller BYPASSES the rule.** That caller is attributed
 `system`/`admin-token` (`actorFromRequest`, FIX #10) precisely because a shared

@@ -633,7 +633,7 @@ func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 //
 // The "trusted single-dev machine" premise the header override rests on
 // (actorFromRequest's case 1) is one this codebase already refuses to rely on
-// elsewhere: approvals.go's requireSecondHuman answers 503 rather than compare
+// elsewhere: approvals_second_human.go's requireSecondHuman answers 503 rather than compare
 // two client-supplied operands precisely because Config.LocalTrustForwarder
 // documents LocalMode as the compose/team topology too. The exposure this
 // closes is a deployment whose secrets table already carries member-owned rows

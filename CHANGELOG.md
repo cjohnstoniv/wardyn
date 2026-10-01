@@ -95,6 +95,15 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Added
 
+- **An operator can require a second person for Azure DevOps capability escalations
+  (`WARDYN_CAPABILITY_SECOND_HUMAN`).** Off by default. When on, the person who created a run cannot
+  approve or deny that run's Azure DevOps capability escalation, admin-class capabilities included; a
+  different administrator decides, and the admin token stays the audited break-glass. It is
+  `WARDYN_EGRESS_SECOND_HUMAN`'s twin, with the same refusal, the same `approval.second_human.bypass`
+  row (its `switch` field names which setting was bypassed) and the same local-mode behaviour: with
+  local mode on, every Azure DevOps capability decision is refused with a `503`, and boot warns.
+  A run's "needs you" attention state follows the setting, as it does for egress, and a refused
+  decision is shown the server's refusal. See docs/ENV.md.
 - **Azure Key Vault can hold the key that unlocks stored credentials (`WARDYN_KEK=azurekv`, #587).**
   Credentials stay sealed in Postgres; each data key is wrapped by a Key Vault RSA key
   (`WARDYN_AZURE_KEK_KEY`) and every wrap is signed by a second, EC P-256 key
