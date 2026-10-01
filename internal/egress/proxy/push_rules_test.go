@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/adler32"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -872,5 +873,26 @@ func TestPushRulesMaxFileSizeRefusalText(t *testing.T) {
 				t.Errorf("refusal =\n%q\nwant\n%q", got, c.want)
 			}
 		})
+	}
+}
+
+// A size claim that fails is a push the proxy could not judge, so it is
+// refused under the blind rule source, as an uninspectable path rule is: it
+// must never read as "no file is over the limit".
+func TestPushRulesMaxFileSizeClaimErrorRefuses(t *testing.T) {
+	p, _ := newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, "", fileSizeSpec(1))
+	var denied []string
+	rec := httptest.NewRecorder()
+	ok := p.refuseLargeFiles(rec, mustLocalReq(t, http.MethodPost, "/", strings.NewReader("")),
+		func([]gitpack.Change) ([]string, []gitpack.Change, error) {
+			return nil, nil, errors.New("claim failed")
+		},
+		gitpack.Result{}, nil, slog.String("repo", "octocat/hello-world"),
+		func(src string) { denied = append(denied, src) })
+	if ok || rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("ok = %v, status = %d, want a refusal with 415", ok, rec.Code)
+	}
+	if len(denied) != 1 || denied[0] != ruleSourceGitPackBlind {
+		t.Errorf("deny rows = %v, want one %s", denied, ruleSourceGitPackBlind)
 	}
 }

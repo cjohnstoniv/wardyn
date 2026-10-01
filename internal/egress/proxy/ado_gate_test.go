@@ -234,7 +234,7 @@ func TestADOGate_RefusalBodyGolden(t *testing.T) {
 // A host the grant does not cover is not gated at all.
 func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
 	p := &Proxy{adoGrants: adoGrantsByHost{}}
-	if got := p.gateADO(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "example.com", 443, "artifact:mitm"); got != "artifact:mitm" {
+	if got, _ := p.gateADO(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "example.com", 443, "artifact:mitm"); got != "artifact:mitm" {
 		t.Errorf("gateADO on an uncovered host = %q, want the source unchanged", got)
 	}
 }
@@ -390,5 +390,87 @@ func TestADOGate_DiscoveryNeedsOnlyAGrant(t *testing.T) {
 	h.do(t, http.MethodOptions, "/acme/_apis/wit", "", nil)
 	if log := h.log(); strings.Contains(log, ruleSourceADODenied) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
 		t.Errorf("OPTIONS location discovery under wiki_read was refused: %s", log)
+	}
+}
+
+// A ref move outside the run's own branch that is forwarded under
+// git_push_any_branch is audited as branch-ns-off, as the git door audits it;
+// a move inside the branch is not, and with the switch off it is refused.
+func TestADOGate_RESTOutOfBranchMoveIsAuditedAsBranchNSOff(t *testing.T) {
+	const target = "/acme/proj/_apis/git/repositories/app/refs?api-version=7.1"
+	move := func(ref func(uuid.UUID) string, anyBranch bool) (*adoHarness, *httptest.ResponseRecorder) {
+		h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+		h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: anyBranch})
+		body := `[{"name":"` + ref(h.p.runID) + `","oldObjectId":"` + zeroOID + `","newObjectId":"` + zeroOID + `"}]`
+		return h, h.do(t, http.MethodPost, target, body, nil)
+	}
+	main := func(uuid.UUID) string { return "refs/heads/main" }
+	own := func(runID uuid.UUID) string { return BranchNSPrefix(runID) + "work" }
+
+	h, rec := move(main, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("any-branch move to main: status = %d, want 200. body=%s", rec.Code, rec.Body.String())
+	}
+	if log := h.log(); !strings.Contains(log, `"`+ruleSourceGitNSOff+`"`) || strings.Contains(log, ruleSourceADODenied) {
+		t.Errorf("any-branch move to main is not audited as %s: %s", ruleSourceGitNSOff, log)
+	}
+
+	for _, anyBranch := range []bool{false, true} {
+		h, rec := move(own, anyBranch)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("move inside the run's branch (any-branch=%v): status = %d, want 200", anyBranch, rec.Code)
+		}
+		if log := h.log(); strings.Contains(log, ruleSourceGitNSOff) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+			t.Errorf("move inside the run's branch (any-branch=%v) must stay %s: %s", anyBranch, ruleSourceADO, log)
+		}
+	}
+
+	h, rec = move(main, false)
+	h.mustRefuse(t, rec, "this run may push only to its own branch")
+	if log := h.log(); strings.Contains(log, ruleSourceGitNSOff) {
+		t.Errorf("a refused out-of-branch move is audited as %s: %s", ruleSourceGitNSOff, log)
+	}
+}
+
+// The branch-ns-off row means a ref move was forwarded: a move the gate passed
+// but whose forward then failed carries none.
+func TestADOGate_RESTOutOfBranchMoveThatFailsToForwardIsNotAuditedAsBranchNSOff(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+	h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+	h.fake.Close()
+	body := `[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `","newObjectId":"` + zeroOID + `"}]`
+	rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/refs?api-version=7.1", body, nil)
+	if rec.Code < 500 {
+		t.Fatalf("status = %d, want the forward's failure (5xx). body=%s", rec.Code, rec.Body.String())
+	}
+	if log := h.log(); strings.Contains(log, ruleSourceGitNSOff) {
+		t.Errorf("a move that never reached the upstream is audited as %s: %s", ruleSourceGitNSOff, log)
+	}
+}
+
+// Held for code_write and then approved, an any-branch move outside the run's
+// branch is forwarded with exactly one branch-ns-off row; denied, with none.
+func TestADOHold_RESTOutOfBranchMoveIsAuditedOnlyWhenApprovedAndForwarded(t *testing.T) {
+	run := func(t *testing.T, answers ...types.ApprovalState) (*adoHarness, *httptest.ResponseRecorder) {
+		t.Helper()
+		cp := newCapControlPlane(t)
+		h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(answers...)})
+		h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: true})
+		body := `[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `","newObjectId":"` + zeroOID + `"}]`
+		return h, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/refs?api-version=7.1", body, nil)
+	}
+	h, rec := run(t, types.ApprovalPending, types.ApprovalApproved)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approved: status = %d, want 200. body=%s", rec.Code, rec.Body.String())
+	}
+	if log := h.log(); strings.Count(log, `"`+ruleSourceGitNSOff+`"`) != 1 {
+		t.Errorf("approved move: want exactly one %s row: %s", ruleSourceGitNSOff, log)
+	}
+	h, rec = run(t, types.ApprovalPending, types.ApprovalDenied)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("denied: status = %d, want 403. body=%s", rec.Code, rec.Body.String())
+	}
+	if log := h.log(); strings.Contains(log, ruleSourceGitNSOff) {
+		t.Errorf("denied move is audited as %s: %s", ruleSourceGitNSOff, log)
 	}
 }
