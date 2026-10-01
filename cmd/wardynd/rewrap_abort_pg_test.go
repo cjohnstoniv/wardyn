@@ -645,3 +645,52 @@ func TestRetireStep_AzureNamesOlderVersionsOnly(t *testing.T) {
 		t.Fatalf("retireStep = %q; want it to name older versions only", got)
 	}
 }
+
+// The same with a key service writing beside WARDYN_PLATFORM_KEY_FILE: the
+// boot keys sit under the key service, someone holding the age key plants one
+// under the age-derived platform KEK, and -rewrap -rewrap-adopt-boot-keys
+// (which arms the age reader) refuses it as mixed, with nothing moved. Without
+// the flag the plant is refused by name.
+func TestRewrapKeys_RefusesABootKeyPlantedUnderTheAgeKeyBesideAKeyService(t *testing.T) {
+	pool := envelopeDB(t)
+	id, platform := mustAgeIdentity(t), mustAgeIdentity(t)
+	split, err := buildSecretStore(t.Context(), pool, id.String(), platform, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"wardyn-signing-key", "wardyn-session-key", "a-credential"} {
+		if err := split.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cred := newMemKEK()
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, PlatformIdentity: platform, KEK: cred, KEKWrites: true}
+	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
+		t.Fatal(err)
+	}
+	if got := rewrapKEKID(t, pool, "wardyn-signing-key"); got != cred.ID() {
+		t.Fatalf("the boot key is under %q, want the key service", got)
+	}
+	// Someone holding the age key alone overwrites one boot key.
+	ageOnly, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ageOnly.Put(t.Context(), "wardyn-session-key", []byte("forged")); err != nil {
+		t.Fatal(err)
+	}
+	before := rewrapRows(t, pool)
+
+	for adopt, want := range map[bool]error{false: secretstorepg.ErrAdoptNotRequested, true: secretstorepg.ErrMixedBootKeys} {
+		rec := &capturingRecorder{}
+		d.AdoptBootKeys = adopt
+		err := rewrapKeys(t.Context(), rec, d)
+		if !errors.Is(err, want) || !strings.Contains(err.Error(), "wardyn-session-key") {
+			t.Fatalf("-rewrap (adopt=%v) with a boot key planted under the age key beside a key service = %v; want a named refusal (%v)", adopt, err, want)
+		}
+		assertRefusalAudit(t, rec, map[bool]string{false: "adopt_not_requested", true: "mixed_boot_keys"}[adopt])
+		if rewrapRows(t, pool) != before {
+			t.Fatalf("a refused -rewrap (adopt=%v) changed rows", adopt)
+		}
+	}
+}

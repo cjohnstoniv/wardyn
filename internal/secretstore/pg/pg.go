@@ -662,12 +662,14 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		p.platformService, p.platformWrites = nil, false
 		prior = append(prior, &p)
 	}
+	var agePlatformID string // the platform KEK the age key alone derives
 	if d.AdoptBootKeys && s.separate {
 		shared := &Store{}
 		if err := shared.setLocalKeys(d.AgeIdentity, nil); err != nil {
 			return res, fmt.Errorf("pg secretstore: rewrap: %w", err)
 		}
 		prior = append(prior, shared)
+		agePlatformID = shared.platform.ID()
 	}
 	if len(prior) > 0 {
 		source = func(e envelope) (kek.KEK, error) {
@@ -711,6 +713,14 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 			return refuseMixedBootKeys(s.platformService.ID(), all)
 		case s.separate && !s.serviceWrites:
 			return refuseMixedBootKeys(s.platform.ID(), all)
+		case s.separate && agePlatformID != "":
+			// A key service writes beside the platform file, and the age
+			// reader is armed: a boot key under the age-derived platform KEK
+			// is adopted only while no boot key has moved onto the service
+			// or the file key yet.
+			return refuseMixed(s.service.ID(), all,
+				func(id string) bool { return id == s.service.ID() || id == s.platform.ID() },
+				func(id string) bool { return id == agePlatformID })
 		}
 		return nil
 	}
@@ -733,15 +743,27 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 // where it sits after the move, by whoever holds that key and can write the
 // table. It changes nothing and names the rows.
 func refuseMixedBootKeys(platformID string, all []envelope) error {
+	return refuseMixed(platformID, all,
+		func(id string) bool { return id == platformID },
+		func(id string) bool { return id != platformID })
+}
+
+// refuseMixed is that check for a given split of the boot keys' kek_ids: it
+// refuses when some boot key is under a key moved accepts and another is under
+// a key planted accepts. A key service writing beside a platform file leaves
+// boot keys under the service or the file key legitimately, and only a key the
+// age key alone derives is what its holder can plant.
+func refuseMixed(platformID string, all []envelope, moved, planted func(kekID string) bool) error {
 	var under bool
 	var other []string
 	for _, e := range all {
 		if secretstore.Kind(e.ownedBy, e.name) != "platform" {
 			continue
 		}
-		if e.kekID == platformID {
+		switch {
+		case moved(e.kekID):
 			under = true
-		} else {
+		case planted(e.kekID):
 			other = append(other, fmt.Sprintf("%s under %q", rowRef(e.ownedBy, e.name), e.kekID))
 		}
 	}
