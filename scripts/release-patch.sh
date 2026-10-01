@@ -177,7 +177,7 @@ nightly_state() {
   if [ "$(jq --arg t "$tree" '[.workflow_runs[] | select(.head_commit.tree_id == $t and .event == "workflow_dispatch" and .status != "completed")] | length' <<<"$runs")" -gt 0 ]; then
     echo active; return 0
   fi
-  row="$(jq -r --arg t "$tree" '[.workflow_runs[] | select(.head_commit.tree_id == $t and .event == "workflow_dispatch" and .status == "completed" and .conclusion != "cancelled")] | sort_by(.created_at) | reverse | .[0] | select(. != null) | [.id, .updated_at] | @tsv' <<<"$runs")"
+  row="$(jq -r --arg t "$tree" '[.workflow_runs[] | select(.head_commit.tree_id == $t and .event == "workflow_dispatch" and .status == "completed" and .conclusion != "cancelled")] | sort_by(.created_at) | reverse | .[0] | select(. != null) | [.id, .created_at] | @tsv' <<<"$runs")"
   if [ -z "$row" ]; then echo none; return 0; fi
   id="${row%%$'\t'*}"
   # too old for release.yml's promote preflight: as good as absent, dispatch a fresh one
@@ -278,14 +278,15 @@ phase_prepare() {
   esac
 }
 
-# nightly_fresh <run id>: 0 when the run finished within NIGHTLY_MAX_AGE, 1 (with a
-# message on stderr) when it is older; an unreadable run is an error.
+# nightly_fresh <run id>: 0 when the run was created within NIGHTLY_MAX_AGE, 1 (with a
+# message on stderr) when it is older; an unreadable run is an error. created_at, not
+# updated_at: a rerun of failed jobs moves updated_at but keeps the old image jobs.
 nightly_fresh() {
-  local upd
+  local created
   [ -n "$1" ] || { echo "release-patch: green-by-tree named no nightly run" >&2; return 1; }
-  upd="$(gh api -X GET "repos/$REPO/actions/runs/$1" --jq .updated_at)" || die "cannot read nightly run $1"
-  if [ "$(age_s "$upd")" -gt "$NIGHTLY_MAX_AGE" ]; then
-    echo "release-patch: nightly run $1 finished $upd, more than 24 hours ago: release.yml's promote preflight would refuse it" >&2
+  created="$(gh api -X GET "repos/$REPO/actions/runs/$1" --jq .created_at)" || die "cannot read nightly run $1"
+  if [ "$(age_s "$created")" -gt "$NIGHTLY_MAX_AGE" ]; then
+    echo "release-patch: nightly run $1 was created $created, more than 24 hours ago: release.yml's promote preflight would refuse it" >&2
     return 1
   fi
   return 0
