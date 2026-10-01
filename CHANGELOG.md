@@ -59,8 +59,23 @@ Migration `0106_attach_ticket_authority` runs on the first start; it adds two nu
   checksum file. `docs/VERIFY.md` uses the exact identity in every command.
 - **Environment builds no longer start when the daemon discarded a requested resource cap (#1497).**
 
+### Added
+
+- **Admin › Credentials lists the tokens an admin created for someone else, with Revoke (#1477).**
+
 ### Changed
 
+- **A killed run says only what its audit trail proves (#1487).** The run page shows confirmed, partial (a
+  teardown step failed) or no kill record, and lists a GitHub token, a git token or SSH key (with its host) and
+  an environment secret that Wardyn cannot take back. Kill is offered again when the trail does not prove the
+  teardown.
+- **Your Azure DevOps card has "Remove from Wardyn" on every state that holds your token (#1488).** It does not
+  revoke the token in Azure DevOps.
+- **Model connection wording says "No key available" / "No token available" instead of "No key added" / "No
+  token added" (#1489).** The credential may have been deleted or be unreadable. The setup check sentence and
+  the launch refusals, including the Azure DevOps own-token refusal, read the same way.
+- **A run page you cannot enter says who can open its terminal, apps and SSH (#1476).** Super admins see no
+  terminal or Attach card on another person's run.
 - **The continuous `:latest` desktop enrolment image is described as signed by digest after push but not
   verified by the install lane (#1498).** The warning and the docs name the digest-verify route.
 - **Generated environment recipes are described as deterministic documents, not locks (#1499).**
@@ -78,6 +93,14 @@ Migration `0106_attach_ticket_authority` runs on the first start; it adds two nu
 - **The sign-in section states per-person lock serialisation as current behaviour (#1506).**
 
 ### Fixed
+
+- **The run page no longer shows, or acts on, a run it is not showing after you move between runs (#1483).**
+  The Kill dialog sends the id it names.
+- **The shared delete dialog sends one delete per confirm (#1484).** It disables the button while the delete
+  runs and ignores Cancel and Escape until it finishes.
+- **Copy link on a run and the CLI hint's `WARDYN_URL` keep the base path (#1485).**
+- **Field hints are announced on the real control (#1486)** in People, run limits, the branding logo and the
+  default model provider.
 
 - **A stale lease sweep could stop the proxy a revive had just started (#1480).** It also revoked the revived
   run's broker credentials. The revive and the sweep's re-assertion of a kept run's stop now hold a per-run
