@@ -26,6 +26,17 @@ describe("credentials.listAdminMintedTokens", () => {
     expect(String(url)).toMatch(/\/api\/v1\/tokens\?minted_for_others=true$/);
     expect(init?.method).toBe("GET");
   });
+  it("drops rows the server should have filtered: self-minted, revoked, or with no minter (an older daemon answers with every token)", async () => {
+    const mine = { id: "t-1", principal: "p", name: "ci", minted_by: "a", created_at: aheadByHours(-300) };
+    respond(200, [
+      mine,
+      { ...mine, id: "t-2", minted_by: "" },
+      { ...mine, id: "t-3", minted_by: "p" },
+      { ...mine, id: "t-4", revoked_at: aheadByHours(-1) },
+      { id: "t-5", principal: "p", name: "legacy", created_at: aheadByHours(-300) },
+    ]);
+    await expect(credentials.listAdminMintedTokens()).resolves.toEqual([mine]);
+  });
   it("is an error on a non-2xx, never an empty list", async () => {
     respond(403, { error: "no" });
     await expect(credentials.listAdminMintedTokens()).rejects.toMatchObject({ status: 403 });

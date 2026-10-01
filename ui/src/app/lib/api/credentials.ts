@@ -41,6 +41,7 @@ export interface AdminMintedToken {
   minted_by: string;
   created_at: string;
   last_used_at?: string;
+  revoked_at?: string;
 }
 
 export interface EraseResult {
@@ -63,12 +64,17 @@ export const credentials = {
   },
 
   // GET /api/v1/tokens?minted_for_others=true (#1477): the unrevoked tokens an
-  // admin created for someone else, newest-agnostic, metadata only — the
-  // response never carries a token value. Both admin tiers read it.
+  // admin created for someone else, metadata only — the response never carries
+  // a token value. Both admin tiers read it. The filter is the server's, and is
+  // applied again here: a daemon that predates the parameter answers with EVERY
+  // token, and the console must never call a person's own token one an admin
+  // created for them.
   async listAdminMintedTokens(): Promise<AdminMintedToken[]> {
     const res = await wfetch("/tokens?minted_for_others=true", { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
-    return unwrapList<AdminMintedToken>(await asJson<unknown>(res));
+    return unwrapList<AdminMintedToken>(await asJson<unknown>(res)).filter(
+      (t) => !!t.minted_by && t.minted_by !== t.principal && !t.revoked_at,
+    );
   },
 
   // DELETE /api/v1/tokens/{id}: revoke anyone's token (the existing admin
