@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func (s *flakyGetStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRu
 // the test moves.
 func pausedRunClock(t *testing.T, fail int) (*pauseFixture, *flakyThaw, *time.Time) {
 	t.Helper()
-	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	f := newPauseFixture(t, time.Hour, func(c *Config) { c.Now = func() time.Time { return now } })
 	paused := now.Add(-time.Minute)
 	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseIdle
@@ -192,5 +193,86 @@ func TestMarkPresent_AReadOnlyAttachViewerNeverThaws(t *testing.T) {
 	}
 	if rn.tries != 0 {
 		t.Errorf("a read-only viewer's input thawed the run (%d attempts)", rn.tries)
+	}
+}
+
+// slowThaw is a thaw that takes a while and fails, and can move the test's
+// clock while it runs.
+type slowThaw struct {
+	*pauseRunner
+	mu    sync.Mutex
+	tries int
+	took  time.Duration
+	clock *time.Time
+}
+
+func (r *slowThaw) ThawSandbox(context.Context, string) error {
+	r.mu.Lock()
+	r.tries++
+	r.mu.Unlock()
+	if r.clock != nil {
+		*r.clock = r.clock.Add(r.took)
+	} else {
+		time.Sleep(r.took)
+	}
+	return errors.New("synthetic thaw failure")
+}
+
+func (r *slowThaw) attempts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tries
+}
+
+// TestMarkPresent_ConcurrentInputsAtADueBackoffMakeOneAttempt: when the backoff
+// comes due, the first input reserves the attempt. The others typing at the same
+// moment neither thaw nor write a failure row each.
+func TestMarkPresent_ConcurrentInputsAtADueBackoffMakeOneAttempt(t *testing.T) {
+	f, _, now := pausedRunClock(t, -1)
+	if err := f.typed(); err == nil {
+		t.Fatal("the first thaw should have failed")
+	}
+	rn := &slowThaw{pauseRunner: f.rn, took: 50 * time.Millisecond}
+	f.srv.cfg.Runner = rn
+	*now = now.Add(thawRetryFloor)
+	rowsBefore := len(f.rows("run.resume", "failure"))
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = f.typed()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if n := rn.attempts(); n != 1 {
+		t.Errorf("%d thaw attempts for 20 concurrent inputs at a due backoff; want 1", n)
+	}
+	if rows := len(f.rows("run.resume", "failure")) - rowsBefore; rows != 1 {
+		t.Errorf("%d run.resume failure rows; want 1", rows)
+	}
+}
+
+// TestMarkPresent_ASlowFailedThawStillHoldsTheNextInput: the backoff counts
+// from when the attempt failed, not from when it began, so a thaw slower than
+// its wait does not leave the next input free to retry at once.
+func TestMarkPresent_ASlowFailedThawStillHoldsTheNextInput(t *testing.T) {
+	f, _, now := pausedRunClock(t, -1)
+	rn := &slowThaw{pauseRunner: f.rn, took: 5 * time.Second, clock: now}
+	f.srv.cfg.Runner = rn
+	if err := f.typed(); err == nil {
+		t.Fatal("the first thaw should have failed")
+	}
+	if err := f.typed(); err != nil || rn.attempts() != 1 {
+		t.Fatalf("an input right after a slow failure: err %v, %d attempts; want it held, 1 attempt", err, rn.attempts())
+	}
+	*now = now.Add(thawRetryFloor)
+	_ = f.typed()
+	if rn.attempts() != 2 {
+		t.Fatalf("%d attempts after the backoff passed; want 2", rn.attempts())
 	}
 }

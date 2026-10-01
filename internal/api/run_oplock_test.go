@@ -254,3 +254,76 @@ func TestRunOp_ReviveFailuresReleaseTheLock(t *testing.T) {
 		release()
 	})
 }
+
+// hangingEndRunner's first EndSandbox hangs until its context ends, as a
+// wedged daemon's container stop would.
+type hangingEndRunner struct {
+	*startingRunner
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *hangingEndRunner) EndSandbox(ctx context.Context, ref string) error {
+	hang := false
+	r.once.Do(func() { hang = true })
+	if !hang {
+		return r.startingRunner.EndSandbox(ctx, ref)
+	}
+	close(r.entered)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.release:
+		return nil
+	}
+}
+
+// TestKeepRebootedRun_AWedgedStopReleasesTheLockWithinItsBound: the watcher's
+// keep takes the run's lock and calls the daemon. A stop that never answers
+// must not hold the lock for ever, or every later revive of the run waits on it.
+// The bound is the one the lapsed-token sweep puts on its own work.
+func TestKeepRebootedRun_AWedgedStopReleasesTheLockWithinItsBound(t *testing.T) {
+	old := keepRebootedRunTimeout
+	keepRebootedRunTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { keepRebootedRunTimeout = old })
+
+	f := newReviveFixture(t)
+	f.st.run.LostAt, f.st.run.LostReason = nil, ""
+	live := f.st.run
+	hr := &hangingEndRunner{startingRunner: &startingRunner{reviveRunner: f.rr}, entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(hr.release) })
+	f.srv.cfg.Runner = hr
+	code := 137
+
+	kept := make(chan bool, 1)
+	go func() { kept <- f.srv.keepRebootedRun(context.Background(), live, runner.Status{ExitCode: &code}) }()
+	select {
+	case <-hr.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the keep never reached the stop")
+	}
+	lost, err := f.st.GetRun(context.Background(), f.run.ID)
+	if err != nil || lost.LostReason != types.LostReboot {
+		t.Fatalf("the run is not lost to a reboot yet: %v %q", err, lost.LostReason)
+	}
+
+	revived := make(chan *reviveError, 1)
+	go func() {
+		_, rerr := f.srv.reviveRunProxy(context.Background(), lost, types.ActorHuman, "owner", true)
+		revived <- rerr
+	}()
+	select {
+	case <-kept:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a wedged stop held keepRebootedRun, and the run's lock, past its bound")
+	}
+	select {
+	case rerr := <-revived:
+		if rerr != nil {
+			t.Fatalf("the revive that waited on the lock: %+v", rerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a revive waiting on the run's lock never proceeded")
+	}
+}

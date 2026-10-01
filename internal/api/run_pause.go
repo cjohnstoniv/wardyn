@@ -93,20 +93,31 @@ type thawBackoff struct {
 }
 
 // thawGate reports whether a failed thaw of id is outstanding, and whether its
-// backoff still holds at now.
+// backoff still holds at now. A backoff that has come due is reserved for the
+// caller before it is reported, so concurrent inputs at that moment make one
+// attempt between them, not one each.
 func (c *pauseClocks) thawGate(id uuid.UUID, now time.Time) (pending, hold bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	b, ok := c.thawRetry[id]
-	return ok, ok && now.Before(b.next)
+	if !ok {
+		return false, false
+	}
+	if now.Before(b.next) {
+		return true, true
+	}
+	b.next = now.Add(b.wait)
+	c.thawRetry[id] = b
+	return true, false
 }
 
-// thawFailed notes a failed thaw (or a failed read of the paused run) of id at
-// now and sets when the next input retries it.
+// thawFailed notes a failed thaw (or a failed read of the paused run) of id and
+// sets when the next input retries it. now is read after the attempt, so a thaw
+// slower than its wait still holds the next input for a full wait.
 func (c *pauseClocks) thawFailed(id uuid.UUID, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.thawRetry == nil || len(c.thawRetry) > 4096 {
+	if c.thawRetry == nil || len(c.thawRetry) >= 4096 {
 		c.thawRetry = map[uuid.UUID]thawBackoff{}
 	}
 	wait := thawRetryFloor
@@ -319,7 +330,7 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 		err = s.resumeRun(ctx, pauser, run, actorType, principal, reason)
 	}
 	if err != nil {
-		s.pause.thawFailed(runID, now)
+		s.pause.thawFailed(runID, s.cfg.Now())
 		return false, err
 	}
 	s.pause.thawDone(runID)

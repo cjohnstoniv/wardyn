@@ -71,6 +71,10 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 	return nil
 }
 
+// keepRebootedRunTimeout bounds keepRebootedRun while it holds the run's lock.
+// A variable only so a test can shorten it.
+var keepRebootedRunTimeout = reconcileFinalizeTimeout
+
 // keepRebootedRun is the watcher's side: an agent it observed terminal whose
 // container still exists (the probe carries an exit code; a gone container
 // does not) is marked lost (reboot) rather than finalized. false leaves the
@@ -90,6 +94,10 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 		return true
 	}
 	defer unlock()
+	// The lock must not outlive a wedged daemon: the stop below is bounded as
+	// the lapsed-token sweep's is, or a revive of this run would wait for it.
+	ctx, cancel := context.WithTimeout(ctx, keepRebootedRunTimeout)
+	defer cancel()
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if !ok || !lok || st.ExitCode == nil {
