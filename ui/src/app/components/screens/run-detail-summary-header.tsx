@@ -23,6 +23,7 @@ import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy"
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { mayEnterRun } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import {
   isTerminalStatusReason,
@@ -131,16 +132,15 @@ export function SummaryHeader({
   // an editable input without pushing Kill off-screen (review round 2, D2).
   const [renaming, setRenaming] = React.useState(false);
   const [draftTitle, setDraftTitle] = React.useState("");
-  // Claim "attachable" only under the SAME owner-or-admin predicate
-  // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
-  // && !owned`) — otherwise a member sees this chip promise attachability and
-  // then gets a red "requires the admin role" error the instant they open
-  // the terminal below it (OverviewTab renders <AttachTerminal> whenever
-  // `attachable`).
+  // Claim "attachable" only under the SAME entry rule AttachTerminal itself
+  // gates the connect on (lib/run-entry.ts) — otherwise a viewer sees this chip
+  // promise attachability and then gets a refusal the instant they open the
+  // terminal below it (OverviewTab renders <AttachTerminal> whenever
+  // `attachable`). #1476: the run's person, or an admin on a run no person owns.
   const operator = useOperator();
   const principal = usePrincipal();
   const owned = !!run.created_by && run.created_by === principal;
-  const canAttach = operator || owned;
+  const canAttach = mayEnterRun(run, principal, operator);
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked

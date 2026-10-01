@@ -29,6 +29,8 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 
 import { ConnectSSHCard } from "./run-detail-ssh";
+import { HttpError } from "../../lib/api/core";
+import { RUN_OWNER_ONLY } from "../../lib/run-entry";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { aheadByHours } from "../../lib/test-clock";
@@ -83,10 +85,22 @@ describe("ConnectSSHCard — visibility", () => {
   // The server's three lanes are owner-OR-admin (attach_ticket.go's isOperator,
   // uigateway.go's role check, sshgateway.go's admin arm). Hiding the card from
   // an admin offered less than the API already serves them.
-  it("renders for an ADMIN on a run they do not own", async () => {
+  // #1476: entry is the owner's alone on a person's run (a super admin keeps
+  // Kill/Approve/Policy, not the terminal, apps or SSH), so the card is hidden
+  // for them rather than shown with controls that cannot work.
+  it("renders NOTHING for an ADMIN on another person's run", async () => {
     healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: "admin@example.com", name: "k", public_key: "", created_at: "" }]);
     const { container } = renderCard({}, "admin@example.com", true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.querySelector("section")).toBeNull();
+    expect(healthMock).not.toHaveBeenCalled();
+  });
+
+  it("renders for an ADMIN on an operator-owned run", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: "admin@example.com", name: "k", public_key: "", created_at: "" }]);
+    const { container } = renderCard({ operator_owned: true } as Partial<RunDetail>, "admin@example.com", true);
     await waitFor(() => expect(container.querySelector("section")).not.toBeNull());
     expect(healthMock).toHaveBeenCalled();
   });
@@ -547,6 +561,22 @@ describe("ConnectSSHCard — UI apps lane", () => {
     ).toBeInTheDocument();
     // The other row's button is untouched — still its normal CTA, not busy.
     expect(screen.getByRole("button", { name: UI_APPS_LANE.cta("docs") })).toBeInTheDocument();
+  });
+
+  // #1476: the server's lowercase run_owner_only sentence never shows; the
+  // console's own line is mapped from the reason.
+  it("maps a run_owner_only refusal to the console's sentence, not the server's wire text", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    listKeysMock.mockResolvedValue([]);
+    attachTicketMock.mockRejectedValue(
+      new HttpError(403, "only the person who started this run can open it interactively", "run_owner_only"),
+    );
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
+    await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
+    expect(screen.getByText(RUN_OWNER_ONLY)).toBeInTheDocument();
+    expect(screen.queryByText(/^only the person who started/)).toBeNull();
   });
 
   it("renders the UI apps lane LAST — after the ssh command, per the mock's S3 order", async () => {

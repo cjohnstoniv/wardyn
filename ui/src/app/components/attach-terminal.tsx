@@ -53,6 +53,8 @@ import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
+import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
+import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
 import { useAttachSession, MAX_RECONNECT_ATTEMPTS, type ConnState } from "./use-attach-session";
 import { useSignedOut } from "../lib/use-signed-out";
@@ -121,6 +123,10 @@ export interface AttachTerminalProps {
    * lets it through to the ticket lane, which is the enforcement point.
    */
   createdBy?: string;
+  /** The run belongs to no person (an operator-owned service or local run): an
+   *  admin may enter it. Absent on a person's run, where entry is the owner's
+   *  alone (#1476). */
+  operatorOwned?: boolean;
 }
 
 export interface AttachTerminalHandle {
@@ -129,7 +135,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy, operatorOwned },
   ref,
 ) {
   // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
@@ -144,8 +150,17 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const operatorResolved = useOperatorResolved();
   const signedOut = useSignedOut(); // #483: no socket at all while signed out mid-page
   const principal = usePrincipal();
-  // Unknown ownership asks the server (P1) — see createdBy's doc above.
-  const owned = createdBy === undefined || createdBy === principal;
+  // Unknown ownership asks the server (P1) — see createdBy's doc above. So does
+  // an unresolved /me (R4-F110): the ticket lane is the enforcement point, and
+  // refusing on a principal we do not know yet would turn away the real owner.
+  // Otherwise the one entry rule (#1476): the run's person, or an admin on a
+  // run no person owns.
+  const mayEnter =
+    createdBy === undefined ||
+    !operatorResolved ||
+    mayEnterRun({ created_by: createdBy, operator_owned: operatorOwned }, principal, operator);
+  // This pane's own error line: the terminal-error wording of the owner-only rule.
+  const refusal = operatorOwned ? OPERATOR_ONLY_REASON : RUN_OWNER_ONLY;
   const containerRef = React.useRef<HTMLDivElement>(null);
   // The whole panel (title bar + grid) — the element handed to the native
   // Fullscreen API below.
@@ -270,7 +285,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     signedOut,
     operator,
     operatorResolved,
-    owned,
+    mayEnter,
+    refusal,
     tokenOnlyMode,
     containerRef,
     panelRef,
@@ -330,7 +346,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         reclaimRef.current();
         return;
       }
-      setTakeoverErr(getErrorMessage(e));
+      setTakeoverErr(entryErrorMessage(e, getErrorMessage));
       return;
     }
     setTakenOverBy(null);
@@ -348,7 +364,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // dialog — because fullscreen goes through the native API (see
   // toggleFullscreen) rather than a `fixed inset-0` overlay that any ancestor
   // could capture. Portaling on toggle would NOT have been safe: the xterm setup
-  // effect is keyed on [runId, tokenOnlyMode, refit, operator, owned] and not on
+  // effect is keyed on [runId, tokenOnlyMode, refit, operator, mayEnter] and not on
   // fullscreen, so React would rebuild this container under the new parent
   // without re-running term.open() and leave a permanently blank terminal.
   return (
