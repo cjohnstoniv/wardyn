@@ -38,7 +38,15 @@ interface Session {
 // internal/api/user_view_test.go's TestMeUserViewTypes). Passed here as
 // `extra.user_view_types` so a picker test can hand the mock a fixed roster
 // with no real POST /user-types write needed.
-async function ssoAdminSession(context: BrowserContext, extra: Record<string, unknown> = {}): Promise<Session> {
+//
+// `stampedRole` is the role stamped on the signed cookie: while the view is on
+// /me clamps every tier field but reports only whether that stamp is a super
+// admin (user_view_super_admin, #1335) — a security admin reads false.
+async function ssoAdminSession(
+  context: BrowserContext,
+  extra: Record<string, unknown> = {},
+  stampedRole: "admin" | "security_admin" = "admin",
+): Promise<Session> {
   const session: Session = { userView: false, viewType: null, posts: [], failNext: false };
   const types = (extra.user_view_types as { id: string; name: string }[] | undefined) ?? [];
   // CACHE-AND-SERVE the real fetch, not route.fetch()+refulfill per match — a
@@ -55,7 +63,12 @@ async function ssoAdminSession(context: BrowserContext, extra: Record<string, un
     const json: Record<string, unknown> = { ...cachedBase };
     Object.assign(json, { method: "sso", user_view: session.userView }, extra);
     if (session.userView) {
-      Object.assign(json, { role: "user", operator: false, security_operator: false });
+      Object.assign(json, {
+        role: "user",
+        operator: false,
+        security_operator: false,
+        user_view_super_admin: stampedRole === "admin",
+      });
       const chosen = types.find((t) => t.id === session.viewType);
       if (chosen) json.user_type = chosen;
     }
@@ -389,12 +402,31 @@ test.describe("the slimmed avatar menu and the preview", () => {
 // #1328 review round 2, R2-1 — a session-user (an SSO admin who switched to
 // the User view) is clamped exactly like a plain member (role "user",
 // operator false), so #214's no-barrier CTA cannot gate on meta.operator
-// alone for them; it gates on access === "session-user" instead, routes to
+// alone for them; it gates on access === "session-user" AND /me's
+// user_view_super_admin (#1335: a security admin in the view is session-user
+// too, and /admin/setup would refuse them) instead, routes to
 // the SAME /admin/setup?step=environment an operator uses, and leaves
 // entering admin authority to ViewGate's own "to-admin" click (never a
 // silent redirect). The click's own target already carries the full
 // pathname+search (console-view.tsx's ViewInterstitial), so `?step=
 // environment` needs no extra plumbing to survive the switch.
+// The same probe for both tiers, because the setup that makes the link render is
+// identical: a settled, empty barrier probe (context-level, so it survives the
+// full reload switchView triggers).
+async function noBarrierProbe(context: BrowserContext) {
+  // Cache-and-serve (see ssoAdminSession): the console re-reads this on every
+  // poll, so a real round trip per match would race the response disposal.
+  let setupStatus: Record<string, unknown> | null = null;
+  await context.route("**/api/v1/setup/status*", async (route) => {
+    if (!setupStatus) {
+      const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+      body.runner = { ...(body.runner as object), driver: "docker", confinement_classes: [] };
+      setupStatus = body;
+    }
+    await route.fulfill({ json: setupStatus });
+  });
+}
+
 test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment", () => {
   test("a session-user's CTA still reaches the Environment step, through the switch prompt", async ({
     page,
@@ -413,19 +445,8 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
       }
     });
     // A settled, empty probe — the deployment genuinely has no barrier, so
-    // the CTA this test clicks actually renders (context-level: it must
-    // survive the full reload switchView triggers).
-    // Cache-and-serve (see ssoAdminSession): the console re-reads this on every
-    // poll, so a real round trip per match would race the response disposal.
-    let setupStatus: Record<string, unknown> | null = null;
-    await context.route("**/api/v1/setup/status*", async (route) => {
-      if (!setupStatus) {
-        const body = (await (await route.fetch()).json()) as Record<string, unknown>;
-        body.runner = { ...(body.runner as object), driver: "docker", confinement_classes: [] };
-        setupStatus = body;
-      }
-      await route.fulfill({ json: setupStatus });
-    });
+    // the CTA this test clicks actually renders.
+    await noBarrierProbe(context);
     await gotoConsole(page);
 
     // Scoped with .first(): the banner and the top bar both carry this CTA.
@@ -438,5 +459,18 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     await page.getByRole("button", { name: VIEW_TO_ADMIN.GO }).click();
     await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
     await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
+  });
+
+  // #1335 — a security admin in the User view is a session-user too, but
+  // /admin/setup is super-admin-only: the reason shows with no link at either
+  // site (shell banner, top bar), and nothing sends them to the member recap.
+  test("a security admin in the User view reads the reason with no link", async ({ page, context }) => {
+    const session = await ssoAdminSession(context, {}, "security_admin");
+    session.userView = true;
+    await noBarrierProbe(context);
+    await gotoConsole(page);
+
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
+    await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
   });
 });

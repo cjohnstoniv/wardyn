@@ -171,6 +171,11 @@ runs on the first start; it adds one column with a default and changes no existi
   a run whose state has not yet flipped reads "the sandbox is gone; the run is finishing" rather than
   that it has finished.
 - **A long portal name wraps on the run page's "Launched via" line (#1234).**
+- **The User view no longer offers a security admin a link to Setup, and the Secrets step counts model
+  providers (#1335, #1421).** A security admin in the User view saw "Set up a barrier", which opens
+  the member recap; `GET /me` now carries `user_view_super_admin` (true only for a super admin inside the
+  view) and the link needs it. The Secrets step's badge and auto-skip read the server's enabled model
+  providers rather than stored key secrets, and the retired model-key rows are gone from the console.
 
 ## [0.8.3] — 2026-09-30
 
