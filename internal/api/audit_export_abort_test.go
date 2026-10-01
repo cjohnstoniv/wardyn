@@ -27,7 +27,6 @@ type exportFaultStore struct {
 	pages  [][]types.AuditEvent
 	failAt int
 	calls  int
-	lists  store.PushPathListStore
 }
 
 func (s *exportFaultStore) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.UUID, _ store.AuditFilter, _ store.Page) ([]types.AuditEvent, error) {

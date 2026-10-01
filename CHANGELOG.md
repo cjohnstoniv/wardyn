@@ -24,8 +24,8 @@ Migration `0106_attach_ticket_authority` runs on the first start; it adds two nu
   `DELETE /api/v1/tokens/{id}` or `POST /sessions/revoke`. A sign-in under a different role still revokes such
   a token; otherwise it is re-stamped with the person's groups at that person's sign-in. Until then the person
   should sign in once and create their own token (`POST /me/tokens`). Follow-up: #1508.
-- **UI app tabs opened before the upgrade must be reopened (#1474).** A UI app opened through a portal now ends
-  with that portal's grant, at most 10 minutes.
+- **UI app tabs opened before the upgrade must be reopened (#1474).**
+- **A UI app opened through a portal now ends with that portal's grant, at most 10 minutes (#1475).**
 - **The CLI and the Go SDK default client no longer follow HTTP redirects (#1490).** A redirected request now
   fails with exit 3 (an `*APIError` in the SDK) instead of being replayed at the new location, so point `--url`
   or the SDK `BaseURL` at the final address. A caller-supplied `HTTPClient` keeps its own redirect policy.
@@ -53,7 +53,7 @@ Migration `0106_attach_ticket_authority` runs on the first start; it adds two nu
 - **An audit export that cannot be finished no longer looks complete (#1494).** A read failure before the first
   byte answers `503 audit_export_read_failed`; after that the transfer is aborted so the client sees a read
   error. A held push whose path list cannot be read fails the export. A member whose run ownership cannot be
-  checked gets `503 audit_scope_unavailable` instead of an empty export.
+  checked gets `503 audit_scope_unavailable` instead of an empty query or export.
 - **`scripts/verify-release.sh` and the installer's cosign check bind the signer to the requested release tag
   (#1496).** A signature from a different release tag is refused for the images, the SBOM attestation and the
   checksum file. `docs/VERIFY.md` uses the exact identity in every command.
@@ -101,7 +101,6 @@ Migration `0106_attach_ticket_authority` runs on the first start; it adds two nu
 - **Copy link on a run and the CLI hint's `WARDYN_URL` keep the base path (#1485).**
 - **Field hints are announced on the real control (#1486)** in People, run limits, the branding logo and the
   default model provider.
-
 - **A stale lease sweep could stop the proxy a revive had just started (#1480).** It also revoked the revived
   run's broker credentials. The revive and the sweep's re-assertion of a kept run's stop now hold a per-run
   lock in the daemon; the sweep skips a locked run and retries next pass, and an expired kept run is still
