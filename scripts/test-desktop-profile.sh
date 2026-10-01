@@ -431,6 +431,65 @@ md="$(f185_fixture 0600)"; f185_run "${md}" >/dev/null
   || fail "a root-owned 0600 secret.env was NOT sourced — the audit-sink bearer token and OIDC client secret never reach the stack (F185)"
 echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 
+# ── #1493: the published port the launcher probes is the one compose publishes ─
+#
+# Compose takes WARDYN_UP_PORT from the process environment, then --env-file.
+# The launcher read only the process environment, so an envelope-only port made
+# it probe 8080 forever (or pass on whatever else answered there). Stubs only:
+# curl records its argv, docker records its argv, neither touches a network.
+f1493_run() { # MANAGED_DIR [VAR=VALUE...] -> exit code; argv logs in MANAGED_DIR
+  local md="$1"; shift
+  : > "${md}/curl.log"; : > "${md}/docker.log"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/curl.log"\nexit 0\n' "${md}" > "${md}/bin-curl"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\nexit 0\n' "${md}" > "${md}/bin-docker"
+  mkdir -p "${md}/bin"; mv "${md}/bin-curl" "${md}/bin/curl"; mv "${md}/bin-docker" "${md}/bin/docker"
+  chmod +x "${md}/bin/curl" "${md}/bin/docker"
+  printf '{}\n' > "${md}/site-config.json"
+  timeout 30 env -u WARDYN_UP_PORT PATH="${md}/bin:${PATH}" \
+      DOCKER_HOST="unix:///nonexistent-f1493.sock" WARDYN_MANAGED_DIR="${md}" "$@" \
+      "${DESKTOP_SH}" up >"${md}/out.log" 2>&1
+}
+f1493_fixture() { # ENVELOPE_PORT_LINE [SECRET_LINE] -> managed dir
+  local md; md="$(mktemp -d -p "${F185_TMP}")"
+  printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n%s\ntouch "%s/ENVELOPE_SOURCED"\n' "$1" "${md}" > "${md}/wardyn.env"
+  printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
+  if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "${md}/secret.env"; chmod 0600 "${md}/secret.env"; fi
+  printf '%s' "${md}"
+}
+f1493_probed() { head -1 "$1/curl.log"; }
+
+# envelope only: probes the envelope's port, then applies site-config.
+md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
+f1493_run "${md}" || fail "launcher failed with WARDYN_UP_PORT=8097 only in the envelope (#1493): $(tail -1 "${md}/out.log")"
+f1493_probed "${md}" | grep -q '127.0.0.1:8097/healthz' \
+  || fail "launcher probed '$(f1493_probed "${md}")', not the envelope's port 8097 (#1493)"
+grep -q 'site-config set' "${md}/docker.log" || fail "site-config was never applied with an envelope-only port (#1493)"
+[ ! -e "${md}/ENVELOPE_SOURCED" ] || fail "the envelope was SOURCED as root shell code to read one value (#1493)"
+# the shell wins over the envelope.
+md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
+f1493_run "${md}" WARDYN_UP_PORT=8098 || fail "launcher failed with a shell WARDYN_UP_PORT (#1493)"
+f1493_probed "${md}" | grep -q '127.0.0.1:8098/healthz' || fail "a shell WARDYN_UP_PORT no longer beats the envelope (#1493): $(f1493_probed "${md}")"
+# an empty shell value falls through to the envelope, as unset does.
+md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
+f1493_run "${md}" WARDYN_UP_PORT= || fail "launcher failed with an empty shell WARDYN_UP_PORT (#1493)"
+f1493_probed "${md}" | grep -q '127.0.0.1:8097/healthz' || fail "an empty shell WARDYN_UP_PORT did not fall through to the envelope (#1493): $(f1493_probed "${md}")"
+# secret.env is part of the process environment, so its value wins over the envelope.
+md="$(f1493_fixture 'WARDYN_UP_PORT=8097' 'WARDYN_UP_PORT=8099')"
+f1493_run "${md}" || fail "launcher failed with a secret.env WARDYN_UP_PORT (#1493)"
+f1493_probed "${md}" | grep -q '127.0.0.1:8099/healthz' || fail "a secret.env WARDYN_UP_PORT did not beat the envelope (#1493): $(f1493_probed "${md}")"
+# neither: 8080.
+md="$(f1493_fixture '# no port')"
+f1493_run "${md}" || fail "launcher failed with no WARDYN_UP_PORT anywhere (#1493)"
+f1493_probed "${md}" | grep -q '127.0.0.1:8080/healthz' || fail "the default port is no longer 8080 (#1493): $(f1493_probed "${md}")"
+# an unusable value dies naming the key, before any probe or compose call that publishes it.
+for bad in 'abc' '"8097"' '0' '65536' '8097 ' '-1'; do
+  md="$(f1493_fixture "WARDYN_UP_PORT=${bad}")"
+  if f1493_run "${md}"; then fail "launcher accepted WARDYN_UP_PORT='${bad}' (#1493)"; fi
+  grep -q 'WARDYN_UP_PORT' "${md}/out.log" || fail "launcher refused WARDYN_UP_PORT='${bad}' without naming the key (#1493)"
+  [ ! -s "${md}/curl.log" ] || fail "launcher probed after refusing WARDYN_UP_PORT='${bad}' (#1493)"
+done
+echo "test-desktop-profile: published-port resolution PASS"
+
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #
 # install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag

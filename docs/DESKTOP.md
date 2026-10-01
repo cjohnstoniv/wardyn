@@ -31,7 +31,7 @@ RBAC, no shared docker socket). This tier sits below both.
   │                            NEVER from MDM       │
   │                    │                            │
   │                    ▼                            │
-  │   wardynd  ── 127.0.0.1:8080 ──▶ console        │
+  │   wardynd  ── 127.0.0.1:PORT ──▶ console        │
   │      │        (local mode: no SSO,              │
   │      │         the developer is admin)          │
   │      │                                          │
@@ -47,6 +47,10 @@ RBAC, no shared docker socket). This tier sits below both.
                                          ▼
                                  org control plane
 ```
+
+`PORT` is 8080 unless `WARDYN_UP_PORT` says otherwise, resolved process
+environment (which includes `secret.env`) first, then `wardyn.env`, then 8080;
+the launcher probes the same port compose publishes.
 
 Three properties define it:
 
@@ -455,7 +459,7 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 | [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root), and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk. `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both. |
 | `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`. Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up). |
 | [`wardyn.service`](../deploy/desktop/wardyn.service) + [`wardyn.timer`](../deploy/desktop/wardyn.timer) | The systemd analogue. `Type=oneshot` driven by the timer — `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does, so a `Restart=` would fight the timer. `OnBootSec` mirrors `RunAtLoad` and `OnUnitActiveSec=300s` mirrors `StartInterval`; the two platforms must not drift, and `scripts/test-desktop-profile.sh` asserts they do not. Logs to journald rather than a file, which is where a Linux operator looks and which rotates on its own. |
-| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz`, and idempotently applies `site-config.json` if MDM has delivered one. |
+| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz` on the published port (`WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080; a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key), and idempotently applies `site-config.json` if MDM has delivered one. |
 
 ### What the enrolment mint pulls
 
