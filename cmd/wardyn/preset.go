@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -73,9 +72,7 @@ func presetSetCmd(client clientFn) *cobra.Command {
 				return fmt.Errorf("read presets document: %w", err)
 			}
 			var doc sdk.PresetsDocument
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&doc); err != nil {
+			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse presets document JSON: %w", err)
 			}
 			out, err := client().ApplyPresets(cmd.Context(), doc)

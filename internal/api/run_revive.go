@@ -183,6 +183,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	defer s.reviving.Delete(run.ID)
+	// The run's lock (run_oplock.go) is held from here to the settle, so a lease
+	// pass that read the run's lost mark before the claim cannot stop the proxy
+	// this revive starts. It is released after the settle, and after the
+	// compensation of a failed one.
+	defer s.lockRunOp(run.ID)()
 
 	c, rerr := s.reviveCeiling(ctx, run)
 	if rerr != nil {
@@ -232,6 +237,13 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if !claimed {
 		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
 	}
+	// From the claim on, the revive finishes or compensates whatever becomes of
+	// the request: a person closing the tab stops waiting for the answer, not
+	// the consistency work. The context keeps the request's values (the audit
+	// delegation) and loses its cancellation, bounded as the kill cascade is.
+	// This is also what bounds how long the run's lock is held.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
 		"profile_id":              run.GovernanceProfileID,
@@ -261,12 +273,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		// The old proxy is, or may be, gone: nothing is left to serve on the
 		// retiring token, so revoking it here is safe (F4).
-		data["lost_again"] = true
 		s.revokeRetiringToken(ctx, retiring, run.ID)
-		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-		s.reloseRun(ctx, run)
-		return reviveResult{}, &reviveError{status: http.StatusBadGateway, reason: reasonReviveProxyReplaceFailedLost, lost: true,
-			msg: "the run's proxy could not be replaced, so the run has no egress and is lost until revived: " + err.Error()}
+		return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+			"the run's proxy could not be replaced, so the run has no egress and is lost until revived: ", err)
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
@@ -294,11 +303,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		// Only now, behind the new proxy. A failed start is lost (reboot) again,
 		// which stops the new proxy with the agent.
 		if err := starter.StartSandbox(ctx, run.SandboxRef); err != nil {
-			data["error"], data["lost_again"] = "start agent: "+err.Error(), true
-			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-			s.reloseRun(ctx, run)
-			return reviveResult{}, &reviveError{status: http.StatusBadGateway, reason: reasonReviveAgentStartFailedLost, lost: true,
-				msg: "the run's agent could not be started, so the run is stopped and lost until revived: " + err.Error()}
+			data["error"] = "start agent: " + err.Error()
+			return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveAgentStartFailedLost,
+				"the run's agent could not be started, so the run is stopped and lost until revived: ", err)
 		}
 		data["agent_started"] = true
 	}
@@ -311,6 +318,23 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
 	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version, AgentStarted: rebooted}, nil
+}
+
+// reviveFailedAfterClaim is the end of a revive whose proxy replace or agent
+// start failed after the claim: the run is put back to lost, and the answer says
+// "lost" only when that was persisted. When the lost mark could not be written
+// the run is not lost on record, its proxy is stopped and its broker revoked
+// anyway (reloseRun), and the answer says the recovery is unresolved, for a
+// later sweep to settle. data carries the failure; err is the cause.
+func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
+	unresolved := s.reloseRun(ctx, run)
+	data["lost_again"] = !unresolved
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+	if unresolved {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
+			"the revive failed ("+err.Error()+") and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it")
+	}
+	return &reviveError{status: http.StatusBadGateway, reason: reason, lost: true, msg: msg + err.Error()}
 }
 
 // reviveSourceConfig is the config a revive starts from: the run's stored
@@ -626,7 +650,12 @@ func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
 // cannot be kept. A rebooted run stays lost (reboot), so the next revive
 // starts its agent again. An ended run goes back to ended under its FIRST mark,
 // so a failed revive never restarts its files grace.
-func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) {
+//
+// It reports whether the recovery is unresolved: the lost mark could not be
+// written, so nothing says the run is lost. The run is contained anyway, its
+// proxy stopped and its broker credentials revoked, and a sweep settles the
+// rest; the caller must not tell anyone the run is lost.
+func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved bool) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {
 	case types.LostReboot:
@@ -637,12 +666,24 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) {
 	run.LostAt, run.LostReason = nil, ""
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
-	if ok && lok && s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0, at) {
-		return
+	if ok && lok {
+		switch s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0, at) {
+		case loseWriteFailed:
+			s.revokeRunBroker(ctx, run.ID)
+			run.LostAt, run.LostReason = &at, reason
+			if err := s.stopLostSandbox(ctx, run, s.cfg.Now()); err != nil {
+				slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
+					slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			}
+			return true
+		case loseApplied, loseNotApplied:
+			return false
+		}
 	}
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",
 		slog.String("run_id", run.ID.String()))
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
+	return false
 }
 
 // adminRestartRequest is POST /api/v1/admin/runs/restart's body.
@@ -676,6 +717,13 @@ func (s *Server) handleAdminRestartRuns(w http.ResponseWriter, r *http.Request) 
 	results := make([]adminRestartResult, 0, len(req.RunIDs))
 	for _, id := range req.RunIDs {
 		res := adminRestartResult{RunID: id}
+		if r.Context().Err() != nil {
+			// A cancelled request settles the run in flight (reviveRunProxy) and
+			// refuses the rest before their claim.
+			res.Error = "the request was cancelled before this run was restarted"
+			results = append(results, res)
+			continue
+		}
 		run, err := s.cfg.Store.GetRun(r.Context(), id)
 		switch {
 		case errors.Is(err, store.ErrNotFound):

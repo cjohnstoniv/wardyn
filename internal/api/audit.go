@@ -5,10 +5,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -57,6 +59,15 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 		owned := raw != ""
 		if owned {
 			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
+			if gerr != nil && !errors.Is(gerr, store.ErrNotFound) {
+				// An ownership read that cannot be answered is not "not yours":
+				// the empty 200 below would present an outage as a run with no
+				// events. Not-found and another person's run keep that empty 200.
+				slog.ErrorContext(r.Context(), "wardyn: audit scope could not read the run",
+					slog.String("run_id", runID.String()), slog.Any("err", gerr))
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditScopeUnavailable, "the audit scope could not be determined; try again")
+				return nil, false
+			}
 			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
 		}
 		if !owned {
@@ -166,9 +177,17 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // the same no-existence-oracle collapse a collection endpoint uses.
 //
 // Requires a Pager backend (store.PG is one); a non-Pager store (test fakes with
-// no pager) gets 501 rather than a silently-capped read. A mid-stream store error
-// after the header is sent can only stop and log — the NDJSON is then a truncated
-// prefix, which a consumer detects by the request not ending cleanly.
+// no pager) gets 501 rather than a silently-capped read.
+//
+// An export that cannot be finished never looks finished. A read failure before
+// the first byte is a 503 (reasonAuditExportReadFailed, a JSON body with a fixed
+// message, never the store's error text). After a byte is written the 200 is
+// committed, so the failure aborts the response (http.ErrAbortHandler): the
+// client's body read fails and cannot reach a clean end of stream. chi's
+// Recoverer re-panics that value, so net/http cuts the connection without a
+// trailing chunk. The same holds for a held push's path list that cannot be
+// read and for an event that cannot be encoded. A buffering reverse proxy in
+// front can hide the abort (docs/OPERATIONS.md).
 func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	pager, ok := s.cfg.Store.(store.Pager)
 	if !ok {
@@ -186,24 +205,44 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	enc := json.NewEncoder(w)
+	wrote := false // a byte has reached the response: the 200 is committed
 	offset := 0
+	// fail ends an export that cannot be finished: a 503 while nothing has been
+	// written, otherwise an aborted response. It always logs first (the abort
+	// carries no message of its own) and never returns.
+	fail := func(what string, err error) {
+		slog.ErrorContext(r.Context(), "wardyn: audit export failed",
+			slog.String("what", what), slog.Int("offset", offset), slog.Bool("after_first_byte", wrote),
+			slog.String("request_id", middleware.GetReqID(r.Context())), slog.String("actor", principalFromRequest(r)),
+			slog.Any("err", err))
+		if !wrote {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditExportReadFailed, "the audit store could not be read; nothing was exported")
+			return
+		}
+		panic(http.ErrAbortHandler)
+	}
 	for {
 		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
 			store.Page{Limit: auditExportPageSize, Offset: offset})
 		if err != nil {
-			// Header (200) is already committed; a truncated NDJSON prefix is all we
-			// can leave. Log so the operator can tell a partial export from a whole one.
-			slog.ErrorContext(r.Context(), "wardyn: audit export page failed mid-stream",
-				slog.Int("offset", offset), slog.Any("err", err))
+			fail("page read", err)
 			return
 		}
 		for i := range page {
 			ev := page[i]
 			if ev.Action == pushPathsAuditAction {
-				ev = s.withPushPaths(r.Context(), ev)
+				if ev, err = s.withPushPaths(r.Context(), ev); err != nil {
+					fail("push path list read", err)
+					return
+				}
 			}
-			if err := enc.Encode(ev); err != nil {
+			line, err := json.Marshal(ev)
+			if err != nil {
+				fail("event encode", err)
+				return
+			}
+			wrote = true
+			if _, err := w.Write(append(line, '\n')); err != nil {
 				return // client hung up
 			}
 		}
@@ -213,6 +252,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		offset += len(page)
 		if fl, ok := w.(http.Flusher); ok {
 			fl.Flush()
+			wrote = true
 		}
 	}
 }

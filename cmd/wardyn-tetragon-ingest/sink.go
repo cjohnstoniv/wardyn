@@ -66,18 +66,9 @@ func controlPlaneClient(controlURL, caFile string) (*http.Client, error) {
 // seam so the refresh-on-401 path is testable and so the token can be re-read or
 // re-minted on demand instead of being frozen at boot.
 //
-// FINDING (HIGH): the sidecar's embedded identity mints the bearer token with a
-// fixed ~1h ceiling. The default source below just re-reads
-// WARDYN_GROUNDTRUTH_TOKEN from the process environment on a 401 — but a
-// running container's environment is fixed at exec time and can never change,
-// so that path is INERT: it always returns the same stale value, and after
-// ~1h every POST 401s forever with no actual recovery. The real fix is
-// WARDYN_GROUNDTRUTH_TOKEN_FILE: when set, the source re-reads that file from
-// disk on every call (including the 401 refresh), so an operator/control-plane
-// process rewriting the file DOES rotate the live token and the stream
-// survives past the TTL. Use the file form for anything expected to outlive
-// ~1h; the plain env form only degrades gracefully (a persistent 401 is
-// counted as a drop, never retried forever).
+// Process-environment tokens cannot refresh after exec. Use
+// WARDYN_GROUNDTRUTH_TOKEN_FILE for a sensor that must survive the ~1h TTL;
+// persistent 401s count as drops after one refresh attempt.
 type tokenSource func() (string, error)
 
 // eventSink batches kernel AuditEvents and POSTs them to the control plane's
@@ -97,14 +88,7 @@ type eventSink struct {
 	dropped  atomic.Uint64
 	posted   atomic.Uint64
 	observed atomic.Uint64
-	// observedByKind splits observed by event subtype (W20-W20-groundtruth-
-	// mapper-4): ebpf_groundtruth's "healthy" used to be one aggregate over
-	// every kernel event kind, so a sensor that sees exec but never a single
-	// network.connect (a mis-scoped TracingPolicy, say) reported healthy
-	// exactly like one seeing all three — the operator gets no signal that
-	// one whole event class went dark. Keyed by types.ActionProcessExec /
-	// ActionNetworkConnect / ActionFileWrite; mu guards the map (rare writes,
-	// one per mapped kernel event — not the hot POST path).
+	// Per-kind counts expose a missing event class; kindMu guards the map.
 	kindMu         sync.Mutex
 	observedByKind map[string]uint64
 	batchSize      int

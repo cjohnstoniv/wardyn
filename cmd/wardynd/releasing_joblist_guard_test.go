@@ -93,3 +93,26 @@ func TestReleasingDocNamesEveryCIJob(t *testing.T) {
 		})
 	}
 }
+
+// TestReleasingDiffQuietPathspecsExist: `git diff --quiet A B -- <path>` exits 0
+// for a path that exists in neither tree, so a stale pathspec (the doc once
+// named internal/store/migrations) makes the "nothing from main came along"
+// check pass vacuously. Every repo path in a RELEASING.md pathspec must exist.
+func TestReleasingDiffQuietPathspecsExist(t *testing.T) {
+	root := repoRoot(t)
+	doc, err := os.ReadFile(filepath.Join(root, "RELEASING.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs := regexp.MustCompile("git diff --quiet[^`]*?\\s--\\s+([^`\n]+)").FindAllStringSubmatch(string(doc), -1)
+	if len(specs) == 0 {
+		t.Fatal("RELEASING.md names no `git diff --quiet ... --` pathspec")
+	}
+	for _, m := range specs {
+		for _, p := range strings.Fields(m[1]) {
+			if _, err := os.Stat(filepath.Join(root, p)); err != nil {
+				t.Errorf("RELEASING.md pathspec %q does not exist in the tree: the git diff --quiet check passes vacuously on it", p)
+			}
+		}
+	}
+}

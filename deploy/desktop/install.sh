@@ -205,11 +205,17 @@ else
   # This is NOT the image the fleet then runs: wardyn.env pins
   # WARDYN_WARDYND_IMAGE by DIGEST (wardyn.env.example), while the default here
   # is the CONTINUOUS main-tip tag :latest that
-  # .github/workflows/publish-image.yml pushes after CI passes on main and does
-  # not cosign-sign. Enrolment therefore pulls and runs unsigned main-tip code as
-  # root, once, on this device. A fleet that will not accept that sets
-  # WARDYN_INSTALL_IMAGE to the release digest it already pins in the envelope,
-  # or to its corporate mirror of it — see docs/DESKTOP.md "The install lane".
+  # .github/workflows/publish-image.yml pushes after CI passes on main and
+  # signs by digest AFTER pushing it (keyless; the identity is in docs/VERIFY.md
+  # "The continuous lane"). Nothing in this lane verifies that signature,
+  # :latest can move, and this lane has no SBOM or provenance. Signing began at
+  # a4c27fa26 (2026-08-26), so earlier :sha-* tags are unsigned. Enrolment
+  # therefore pulls and runs unverified main-tip code as root, once, on this
+  # device. A fleet that will not accept that resolves a digest, verifies THAT
+  # digest with the publish-image.yml identity, and passes it via
+  # WARDYN_INSTALL_IMAGE (or uses the release digest it already pins in the
+  # envelope, or its corporate mirror of it) — see docs/DESKTOP.md "The install
+  # lane".
   IMG="${WARDYN_INSTALL_IMAGE:-ghcr.io/cjohnstoniv/wardynd:latest}"
   # Say it at the console, not only in this comment: the comment is read by
   # whoever edits the installer, and the person who needs this is whoever RUNS
@@ -222,9 +228,12 @@ else
       echo "install.sh: WARNING — ${IMG} is a MUTABLE tag, not a digest." >&2
       echo "  This step runs that image AS ROOT to mint ${AGE_FILE}, the only" >&2
       echo "  identity that can decrypt this device's secret store. The default is" >&2
-      echo "  the CONTINUOUS main-tip tag publish-image.yml pushes after CI passes;" >&2
-      echo "  it is not cosign-signed, so nothing verifies what gets pulled." >&2
-      echo "  Pin it to the digest wardyn.env already pins for WARDYN_WARDYND_IMAGE:" >&2
+      echo "  the CONTINUOUS main-tip tag publish-image.yml pushes after CI passes." >&2
+      echo "  It signs it by digest after pushing, but nothing in this lane verifies that signature;" >&2
+      echo "  :latest can move, and this lane has no SBOM or provenance. Resolve a" >&2
+      echo "  digest, verify THAT digest with the publish-image.yml identity" >&2
+      echo "  (docs/VERIFY.md 'The continuous lane'), or" >&2
+      echo "  use the digest wardyn.env already pins for WARDYN_WARDYND_IMAGE:" >&2
       echo "    sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh" >&2
       echo "  See docs/DESKTOP.md 'The install lane'." >&2
       ;;
