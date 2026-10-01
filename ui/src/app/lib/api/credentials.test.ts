@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { credentials } from "./credentials";
+import { aheadByHours } from "../test-clock";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -18,7 +19,7 @@ const respond = (status: number, body: unknown = null) =>
 // console asks for metadata only and never sends or reads a token value.
 describe("credentials.listAdminMintedTokens", () => {
   it("GETs /tokens?minted_for_others=true and returns the rows", async () => {
-    const rows = [{ id: "t-1", principal: "p", name: "ci", minted_by: "a", created_at: "2026-09-14T00:00:00Z" }];
+    const rows = [{ id: "t-1", principal: "p", name: "ci", minted_by: "a", created_at: aheadByHours(-300) }];
     const spy = respond(200, rows);
     await expect(credentials.listAdminMintedTokens()).resolves.toEqual(rows);
     const [url, init] = spy.mock.calls[0];

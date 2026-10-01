@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent, CredentialGrant } from "./types";
 import { heldCredentials } from "./held-credentials";
+import { aheadByHours } from "./test-clock";
 
 const grant = (id: string, audience: string, host?: string): CredentialGrant => ({
   id,
@@ -16,7 +17,7 @@ const grant = (id: string, audience: string, host?: string): CredentialGrant => 
 });
 const mint = (grantID: string, outcome: AuditEvent["outcome"] = "success", extra: Record<string, unknown> = {}): AuditEvent => ({
   id: `m-${grantID}-${outcome}`,
-  time: "2026-10-01T00:00:00Z",
+  time: aheadByHours(-1),
   actor_type: "agent",
   actor: "spiffe://x",
   action: "credential.mint",

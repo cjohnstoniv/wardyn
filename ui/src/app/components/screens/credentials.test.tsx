@@ -37,6 +37,7 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { INVENTORY, ERASE, MINTED } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
+import { aheadByHours } from "../../lib/test-clock";
 
 function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
   const { status = null, operator = true, securityOperator = true } = opts;
@@ -260,9 +261,9 @@ describe("erasing someone not listed (design F-5)", () => {
 // shows what an admin already created — metadata only, with Revoke — under the
 // inventory. Strings are console-085-packet's, character for character.
 describe("tokens an admin created for someone else (#1477)", () => {
-  const dana = { id: "t-1", principal: "sub-dana", email: "dana@acme.io", name: "ci", minted_by: "sam@acme.io", created_at: "2026-09-14T00:00:00Z", last_used_at: "2026-09-29T00:00:00Z" };
-  const lee = { id: "t-2", principal: "sub-lee", email: "lee@acme.io", name: "nightly", minted_by: "sam@acme.io", created_at: "2026-09-02T00:00:00Z" };
-  const bare = { id: "t-3", principal: "sub-kim", name: "deploy", minted_by: "kim@acme.io", created_at: "2026-08-28T00:00:00Z" };
+  const dana = { id: "t-1", principal: "sub-dana", email: "dana@acme.io", name: "ci", minted_by: "sam@acme.io", created_at: aheadByHours(-300), last_used_at: aheadByHours(-48) };
+  const lee = { id: "t-2", principal: "sub-lee", email: "lee@acme.io", name: "nightly", minted_by: "sam@acme.io", created_at: aheadByHours(-700) };
+  const bare = { id: "t-3", principal: "sub-kim", name: "deploy", minted_by: "kim@acme.io", created_at: aheadByHours(-900) };
 
   async function section() {
     return (await screen.findByRole("heading", { name: "Tokens an admin created for someone else" })).closest("section")!;
