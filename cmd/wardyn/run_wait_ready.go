@@ -76,6 +76,16 @@ sandbox to an external tool over the SSH gateway.
 	return cmd
 }
 
+// errWaitTimeout is the cause of a wait's own deadline context, so a deadline
+// that fired is told apart from a parent cancelled from outside.
+var errWaitTimeout = errors.New("wait deadline exceeded")
+
+// errNonPositiveTimeout is the 124 a --timeout of zero or less gets without a
+// request: a wait that is out of budget before it starts.
+func errNonPositiveTimeout(timeout time.Duration) error {
+	return &exitError{code: 124, err: fmt.Errorf("--timeout %s leaves no time to wait: give a positive duration", timeout)}
+}
+
 // waitForRunReady polls until the run is RUNNING and GET /runs/{id}/files
 // answers. The run state is re-read on EVERY tick, including after RUNNING: a
 // run that dies while its clone is landing exits 1/2 at once, never 124 later.
