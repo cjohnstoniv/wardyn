@@ -71,6 +71,19 @@ func (a *Authenticator) UserViewStampedRole(r *http.Request) string {
 	return sess.Role
 }
 
+// UserViewSuperAdmin answers, for a request in the user view, whether the role stamped on its
+// session is admin (true) or security_admin (false); ok is false for anyone else, including a
+// stamped user. The comparison lives here, beside the stamp, so callers never re-derive a tier.
+func (a *Authenticator) UserViewSuperAdmin(r *http.Request) (superAdmin, ok bool) {
+	switch a.UserViewStampedRole(r) {
+	case RoleAdmin:
+		return true, true
+	case RoleSecurityAdmin:
+		return false, true
+	}
+	return false, false
+}
+
 // DropUserView turns the user view off when its type no longer exists: the cookie re-signs with
 // view bits cleared and the type recorded in UserViewDropped (so GET /me can say why), returning
 // the context republished from that session with the admin's real tier. Only GET /me may serve

@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -40,7 +39,7 @@ func TestCeilingAndDriveErrorsLogMethodAndPath(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var logged bytes.Buffer
+			var logged lockedBuffer
 			prev := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 			t.Cleanup(func() { slog.SetDefault(prev) })

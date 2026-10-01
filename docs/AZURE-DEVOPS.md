@@ -490,6 +490,14 @@ removes Wardyn's copy. Before storing it, in this order, Wardyn:
 The scopes the dialog asks the person to tick include **Graph (Read)** (`vso.graph`), which the bind by
 object id uses; a token without it is still accepted, and is matched by name.
 
+The pasted token's `vso.graph` is wider than the row's ceiling: it reads the organisation's users, and
+the `identity_read` capability that covers that read is not in the default profile. Wardyn makes the one
+Graph lookup itself, at paste time; the proxy holds every run to the row's ceiling and the run's own
+capabilities, so a run never gets that read from the token. Where the sign-in carries an Entra object id,
+the owner's `originId` is compared with that id alone; the person's stored id is used only when the sign-in
+has none. The `ado_pat.own.store` audit row says which basis bound the token (`bound_by`: `object_id` or
+`name`), never the id.
+
 The token is stored sealed in the person's own namespace, readable only by them, with no fallback to an
 administrator's or another person's copy. Wardyn cannot read a pasted token's scopes or its expiry, so
 it trusts the date the person entered, and stops using the token from the start of that day (UTC). The
@@ -662,7 +670,8 @@ ref at all, is not available through this lane.
   only.** Wardyn forwards it with the person's own credential, and Azure DevOps' branch policies
   and permissions decide: a protected `main` still rejects someone who lacks the permission to
   push to it. Each such git push is recorded as `brokered:git:branch-ns-off`, as on the GitHub
-  lanes; a REST ref move keeps the ordinary `brokered:ado` row (see
+  lanes; a REST ref move outside the run's branch keeps its `brokered:ado` row and, once forwarded,
+  adds a `brokered:git:branch-ns-off` row beside it (see
   [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
 - **`policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy: true`**,
   the one request whose body asks Azure DevOps to skip its own policies. The switch does not touch

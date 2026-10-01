@@ -8,6 +8,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -88,10 +89,11 @@ func TestRequireEmailVerified(t *testing.T) {
 			if sess.Sub != "" {
 				t.Errorf("sess.Sub = %q, want no session", sess.Sub)
 			}
-			// Audited the way the domain-allowlist refusal is: no onDenied
-			// event, a server-side log line naming the env var (below).
-			if len(denied) != 0 {
-				t.Errorf("onDenied reasons = %v, want none (the domain refusal raises none)", denied)
+			// Reported to onDenied under its own auth_error code, so the
+			// browser refusal is audited as token exchange already is; the
+			// server-side log line naming the env var is below.
+			if len(denied) != 1 || denied[0] != c.wantError {
+				t.Errorf("onDenied reasons = %v, want exactly [%s]", denied, c.wantError)
 			}
 			assertSessionCookieCleared(t, w)
 		})
@@ -144,6 +146,52 @@ func TestRequireEmailVerifiedFalseIsLogged(t *testing.T) {
 			doCallback(t, auth)
 			if out := buf.String(); !strings.Contains(out, "email_verified=false") || !strings.Contains(out, c.wantEnv) {
 				t.Errorf("log = %q, want the false-claim denial naming %s", out, c.wantEnv)
+			}
+		})
+	}
+}
+
+// TestEmailDomainRefusalIsReported: a verified email outside the allowed
+// domains is reported to onDenied as email_domain, once, and signs nobody in.
+func TestEmailDomainRefusalIsReported(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, []string{"corp.example"})
+	env.buildIDTokenRawClaim(t, "sub-dom", "alice@elsewhere.example", "email_verified", true)
+	var denied []string
+	w, sess := doCallbackVia(t, auth, auth.CallbackHandlerWithDenials(nil, func(_ *http.Request, reason string) {
+		denied = append(denied, reason)
+	}))
+	if loc := w.Result().Header.Get("Location"); !strings.Contains(loc, "auth_error=email_domain") || sess.Sub != "" {
+		t.Fatalf("Location = %q sess.Sub = %q, want the email_domain refusal and no session", loc, sess.Sub)
+	}
+	if len(denied) != 1 || denied[0] != "email_domain" {
+		t.Errorf("onDenied reasons = %v, want exactly [email_domain]", denied)
+	}
+}
+
+// TestRequireEmailVerifiedRefusesTheTokenExchange: the knob holds on a
+// portal's token exchange too (VerifySubjectToken admits through the same
+// code), with no domain allowlist configured.
+func TestRequireEmailVerifiedRefusesTheTokenExchange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+		want string
+	}{
+		{"absent", func(c map[string]any) { delete(c, "email_verified") }, "email_verified_absent"},
+		{"false", func(c map[string]any) { c["email_verified"] = false }, "email_unverified"},
+		{"true", func(map[string]any) {}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			auth := env.newAuthRequireEmailVerified(t, true)
+			c := env.subjectClaims()
+			c["email"] = "person@anywhere.example"
+			tc.edit(c)
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/token", nil)
+			sess, denied := auth.VerifySubjectToken(r, env.sign(t, c), testPortalClient, nil)
+			if denied != tc.want || (tc.want != "" && sess.Sub != "") {
+				t.Fatalf("exchange = %+v, %q, want %q and no identity on a refusal", sess, denied, tc.want)
 			}
 		})
 	}

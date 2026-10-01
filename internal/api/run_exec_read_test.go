@@ -88,7 +88,7 @@ func overCapNumstat() string {
 // truncation itself was invisible: truncated stayed false, so a short list was
 // presented as the whole truth.
 func TestRunFiles_ByteCapTruncatesWithoutStallingOnWait(t *testing.T) {
-	srv, _, audit, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, audit, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return stallingExecSession(overCapNumstat()), nil
 	})
 
@@ -136,7 +136,7 @@ func TestRunExec_NilSessionIsA500OnBothWidgets(t *testing.T) {
 		State:      types.RunRunning,
 		SandboxRef: "sandbox-abc",
 	}
-	srv := New(Config{Store: runFilesStore{run: run}, Runner: nilSessionRunner{}, Audit: &recRecorder{}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: runFilesStore{run: run}, Runner: nilSessionRunner{}, Audit: &recRecorder{}})
 
 	for name, call := range map[string]func(http.ResponseWriter, *http.Request){
 		"files":     srv.handleRunFiles,
@@ -170,7 +170,7 @@ func TestRunResources_ByteCapSkipsWait(t *testing.T) {
 	fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return stallingExecSession(b.String()), nil
 	}}
-	srv := New(Config{Store: runFilesStore{run: run}, Runner: fr, Audit: &recRecorder{}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: runFilesStore{run: run}, Runner: fr, Audit: &recRecorder{}})
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/resources", nil)
 	rctx := chi.NewRouteContext()

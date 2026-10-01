@@ -122,6 +122,7 @@ func findCheck(checks []SetupCheck, id string) (SetupCheck, bool) {
 func TestZeroAI_SetupStatus(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := New(Config{
+		BaseCtx:    testBaseCtx(t),
 		AdminToken: adminToken,
 		Runner:     &fakeRunner{}, // the ONLY thing wired
 	})

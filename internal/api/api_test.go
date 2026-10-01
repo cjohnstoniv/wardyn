@@ -534,7 +534,7 @@ func (enforcementWordRunner) Capabilities(context.Context) (runner.Capabilities,
 // field precisely so a field added to the setup status never appears here by
 // accident; this is the test that notices when one does.
 func TestHealthz_OmitsTheEnforcementWord(t *testing.T) {
-	srv := New(Config{Runner: enforcementWordRunner{}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Runner: enforcementWordRunner{}})
 	w := do(t, srv, http.MethodGet, "/healthz", "", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("healthz code = %d", w.Code)
@@ -570,21 +570,21 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 	}
 
 	t.Run("k8s enforced", func(t *testing.T) {
-		srv := New(Config{Runner: k8sRunner{networkPolicy: true}})
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRunner{networkPolicy: true}})
 		body := decode(t, srv)
 		if body["network_policy"] != "enforced" {
 			t.Errorf("network_policy = %v, want enforced", body["network_policy"])
 		}
 	})
 	t.Run("k8s unenforced", func(t *testing.T) {
-		srv := New(Config{Runner: k8sRunner{}})
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRunner{}})
 		body := decode(t, srv)
 		if body["network_policy"] != "unenforced" {
 			t.Errorf("network_policy = %v, want unenforced", body["network_policy"])
 		}
 	})
 	t.Run("k8s acknowledged", func(t *testing.T) {
-		srv := New(Config{Runner: k8sRunner{networkPolicyAcknowledged: true}})
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRunner{networkPolicyAcknowledged: true}})
 		body := decode(t, srv)
 		if body["network_policy"] != "acknowledged" {
 			t.Errorf("network_policy = %v, want acknowledged", body["network_policy"])
@@ -593,7 +593,7 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 	// Negative control: a non-k8s driver must OMIT the key entirely, never
 	// report it as "" — a Docker deployment must not sprout this field.
 	t.Run("docker driver omits the field", func(t *testing.T) {
-		srv := New(Config{Runner: &fakeRunner{}})
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: &fakeRunner{}})
 		body := decode(t, srv)
 		if v, ok := body["network_policy"]; ok {
 			t.Errorf("network_policy = %v, want key entirely absent", v)
@@ -603,7 +603,7 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 	// must never report "enforced" (or any verdict) — it reports no field, the
 	// same as a non-k8s driver, never a silent false claim of enforcement.
 	t.Run("k8s driver, Capabilities() errors: omits the field", func(t *testing.T) {
-		srv := New(Config{Runner: k8sRunner{capsErr: errors.New("k8s api unreachable")}})
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRunner{capsErr: errors.New("k8s api unreachable")}})
 		body := decode(t, srv)
 		if v, ok := body["network_policy"]; ok {
 			t.Errorf("network_policy = %v, want key entirely absent on a Capabilities() error", v)

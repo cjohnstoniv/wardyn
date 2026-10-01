@@ -102,6 +102,7 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 		// new k8s_egress_containment row — absent on every other fixture here,
 		// which all leave Runner unset (Driver "none").
 		"with_k8s_runner": setupCheckIds(t, New(Config{
+			BaseCtx:    testBaseCtx(t),
 			AdminToken: adminToken,
 			Runner:     k8sRunner{networkPolicy: true},
 		})),

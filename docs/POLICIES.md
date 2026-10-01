@@ -464,7 +464,9 @@ Either switch produces the identical audit posture: a push forwarded with
 confinement off carries `rule_source: "brokered:git:branch-ns-off"`
 (`ruleSourceGitNSOff`) instead of the ordinary `"brokered:git"`, so a reader
 of the audit stream never has to know which of the two opt-outs was set to
-see that this run's pushes were not ref-checked.
+see that this run's pushes were not ref-checked. On the Azure DevOps REST door a
+ref move outside the run's branch keeps its `brokered:ado` row and, once
+forwarded, adds the `brokered:git:branch-ns-off` row beside it.
 
 **This turns off Wardyn's own check, not the grant's.** The installation
 token itself is not narrowed by this field — see ["Bound the token

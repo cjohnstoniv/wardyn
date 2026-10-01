@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 	"math"
@@ -481,9 +480,9 @@ func TestRunResources_SandboxGoneBeforeStateFlips(t *testing.T) {
 }
 
 // captureSlog routes the default logger into the returned buffer for the test.
-func captureSlog(t *testing.T) *bytes.Buffer {
+func captureSlog(t *testing.T) *lockedBuffer {
 	t.Helper()
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -492,7 +491,7 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 
 // wantGoneLogged: the sandbox-gone path leaves one info line naming the run and
 // its state, so a misclassification that persists is not silent.
-func wantGoneLogged(t *testing.T, logs *bytes.Buffer, id uuid.UUID) {
+func wantGoneLogged(t *testing.T, logs *lockedBuffer, id uuid.UUID) {
 	t.Helper()
 	got := logs.String()
 	if strings.Count(got, "run inspect: sandbox gone") != 1 || !strings.Contains(got, "run="+id.String()) || !strings.Contains(got, "state=RUNNING") {
