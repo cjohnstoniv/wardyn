@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -98,9 +97,7 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 			// both take: a key this file mistypes must surface as a parse
 			// error, not silently vanish from what ApplyGovernance then sends.
 			var doc sdk.GovernanceDocument
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&doc); err != nil {
+			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse governance document JSON: %w", err)
 			}
 			out, err := client().ApplyGovernance(cmd.Context(), doc, prune)

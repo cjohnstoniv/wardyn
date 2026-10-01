@@ -489,3 +489,25 @@ func TestDriveReclaim_RefusesANonUUIDDriveID(t *testing.T) {
 		t.Errorf("a non-uuid id was still sent: %v", cs.reqs)
 	}
 }
+
+// TestOperatorOtherSetCommandsIgnoreTrailingDocument is #1491's second
+// reproduction, flipped: `{}` followed by the requested additions used to be
+// applied as an empty document, silently dropping the additions. drive set
+// and preset set now refuse it before any request.
+func TestOperatorOtherSetCommandsIgnoreTrailingDocument(t *testing.T) {
+	for _, tc := range []struct{ name, desired string }{
+		{"drive", `{"drives":[{"name":"new","backend":"docker_volume"}]}`},
+		{"preset", `{"presets":[{"name":"new","request":{"agent":"claude-code"}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := countingServer(t)
+			_, err := operatorCommand(t, srv.URL, "{}\n"+tc.desired, tc.name, "set", "-")
+			if err == nil || !strings.Contains(err.Error(), "exactly one document") {
+				t.Fatalf("err = %v, want the exactly-one-document refusal", err)
+			}
+			if got := seen(); len(got) != 0 {
+				t.Errorf("requests were made before the input was refused: %q", got)
+			}
+		})
+	}
+}
