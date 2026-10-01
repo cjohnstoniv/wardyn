@@ -84,7 +84,9 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
     await mockMutableRunsList(page, [
       baseRun(endedId, "e2e lease-ended run", {
         lost_reason: "ended",
-        lost_at: new Date(Date.now() - 3600_000).toISOString(),
+        // An hour ago, but never before today's midnight: a run that ended
+        // yesterday sits under the collapsed "Earlier" group, not "Ended today".
+        lost_at: new Date(Math.max(Date.now() - 3600_000, new Date().setHours(0, 0, 1, 0))).toISOString(),
       }),
     ]);
 
