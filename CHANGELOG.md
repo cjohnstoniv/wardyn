@@ -171,6 +171,11 @@ runs on the first start; it adds one column with a default and changes no existi
   a run whose state has not yet flipped reads "the sandbox is gone; the run is finishing" rather than
   that it has finished.
 - **A long portal name wraps on the run page's "Launched via" line (#1234).**
+- **The `WARDYN_ORG_URL` row of `docs/ENV.md` no longer says a revoked device may get a 410 (#701).**
+  The organisation answers a revoked device and an unknown one alike with a 401 carrying the device
+  realm, and no route sends a 410. The device client still accepts one. Migration `0078`'s comment now
+  says its plain `CREATE INDEX` blocks audit writes while it builds, and that a large install can build
+  the index `CONCURRENTLY` beforehand.
 
 ## [0.8.3] — 2026-09-30
 

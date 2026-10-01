@@ -697,13 +697,15 @@ jobs:
       # secrets.ageKeyFromSecret is turned off (it also reads that Secret, as
       # env). A live Vault Agent proving the CSI/Vault-Agent shape end to end
       # is an owner-gated walk on the owner's own cluster, out of scope here.
+      # defaultMode=288 is 0440 in decimal, the mode the chart's own boot-secrets
+      # mount uses (deployment.yaml), so this stand-in reads files as the chart's do.
       - name: helm install + boot proof, WARDYN_PG_DSN_FILE/WARDYN_AGE_KEY_FILE via extraVolumes (T-60, #720)
         if: needs.changes.outputs.backend != 'false'
         run: |
           make helm-install-test \
             HELM_TEST_NAMESPACE=wardyn-test-vaultagent \
             HELM_TEST_RELEASE=wardyn-test-vaultagent \
-            HELM_TEST_SET="--set postgres.dsn.secretRef.name= --set secrets.ageKeyFromSecret=false --set env.WARDYN_PG_DSN_FILE=/mnt/secrets-store/dsn --set env.WARDYN_AGE_KEY_FILE=/mnt/secrets-store/age-key --set extraVolumes[0].name=boot-secrets --set extraVolumes[0].secret.secretName=wardyn-postgres-dsn --set extraVolumeMounts[0].name=boot-secrets --set extraVolumeMounts[0].mountPath=/mnt/secrets-store --set extraVolumeMounts[0].readOnly=true"
+            HELM_TEST_SET="--set postgres.dsn.secretRef.name= --set secrets.ageKeyFromSecret=false --set env.WARDYN_PG_DSN_FILE=/mnt/secrets-store/dsn --set env.WARDYN_AGE_KEY_FILE=/mnt/secrets-store/age-key --set extraVolumes[0].name=boot-secrets --set extraVolumes[0].secret.secretName=wardyn-postgres-dsn --set extraVolumes[0].secret.defaultMode=288 --set extraVolumeMounts[0].name=boot-secrets --set extraVolumeMounts[0].mountPath=/mnt/secrets-store --set extraVolumeMounts[0].readOnly=true"
       - name: Lay down a CI-local managed envelope at /etc/wardyn
         run: |
           set -euo pipefail
