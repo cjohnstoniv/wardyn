@@ -171,3 +171,70 @@ test.describe("Stored credentials (Admin view)", () => {
     await expect(page.getByText(/This page is part of the admin view/i)).toBeVisible();
   });
 });
+
+// #1477: no one can create a token that acts as another person (the mint route
+// is refused), so the console lists the admin-created tokens that already exist
+// — metadata only — and revokes them. Real backend: legacy rows are seeded the
+// way an older release left them (a minter that is not the owner), and the list
+// and the revoke are the daemon's own GET /tokens?minted_for_others=true and
+// DELETE /tokens/{id}.
+test.describe("Tokens an admin created for someone else (Admin view, #1477)", () => {
+  function seedMinted(name: string, minter: string): { email: string; id: string } {
+    const sfx = randomBytes(4).toString("hex");
+    const email = `minted-${sfx}@e2e.wardyn.invalid`;
+    const id = sql(
+      `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, minted_by)
+       VALUES (gen_random_uuid(), 'e2e-minted-${sfx}', '${email}', 'user', 'standard', '[]'::jsonb, false, '${name}', '${createHash("sha256").update(sfx).digest("hex")}', now(), '${minter}')
+       RETURNING id`,
+    )
+      .split("\n")[0]
+      .trim();
+    return { email, id };
+  }
+
+  test("nothing to list: the empty line and the rule", async ({ page }) => {
+    await openCredentials(page);
+    const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
+    await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    await expect(
+      section.getByText("No one can create a token that acts as another person. They sign in and create their own."),
+    ).toBeVisible();
+    await expect(section.getByRole("table")).toHaveCount(0);
+  });
+
+  test("lists a legacy token without its value, and Revoke asks first, then ends it", async ({ page }) => {
+    const t = seedMinted("ci-e2e", "e2e-admin@e2e.wardyn.invalid");
+    await openCredentials(page);
+    const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
+    const row = section.getByRole("row").filter({ hasText: t.email });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("ci-e2e");
+    await expect(row).toContainText("e2e-admin@e2e.wardyn.invalid");
+    await expect(section.getByText("1 still works")).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("wdn_");
+
+    await row.getByRole("button", { name: "Revoke" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(`Revoke ci-e2e for ${t.email}?`)).toBeVisible();
+    await expect(dialog.getByText(`It stops working now. ${t.email} can create their own after signing in.`)).toBeVisible();
+    expect(sql(`SELECT revoked_at IS NULL FROM api_tokens WHERE id = '${t.id}'`)).toBe("t");
+    await dialog.getByRole("button", { name: "Revoke token" }).click();
+    await expect(page.getByText("Token revoked.")).toBeVisible();
+    await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    expect(sql(`SELECT revoked_at IS NULL FROM api_tokens WHERE id = '${t.id}'`)).toBe("f");
+  });
+
+  test("a self-minted token is never listed as admin-created", async ({ page }) => {
+    const sfx = randomBytes(4).toString("hex");
+    const email = `selfmint-${sfx}@e2e.wardyn.invalid`;
+    sql(
+      `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at)
+       VALUES (gen_random_uuid(), 'e2e-self-${sfx}', '${email}', 'user', 'standard', '[]'::jsonb, false, 'mine', '${createHash("sha256").update(`self${sfx}`).digest("hex")}', now())`,
+    );
+    await openCredentials(page);
+    const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
+    await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    await expect(section.getByText(email)).toHaveCount(0);
+  });
+});
+

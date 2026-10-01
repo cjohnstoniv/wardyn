@@ -21,7 +21,7 @@ import { AttachTerminal } from "../../attach-terminal";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
-import { mayEnterRun, operatorOwnedOf, runEntryRefusalLine } from "../../../lib/run-entry";
+import { mayEnterRun, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
@@ -57,7 +57,7 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={operatorOwnedOf(run)} />;
+    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} />;
   }
 
   // Finished run: the pane becomes the replay surface in place rather than a

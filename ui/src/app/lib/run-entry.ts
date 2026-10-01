@@ -9,16 +9,13 @@
 // (an operator-owned service or local run). An admin on another person's run
 // keeps Kill, Approve and Policy, and loses entry.
 //
-// `operator_owned` rides AgentRun (lib/types/runs.ts); typed structurally here
-// so this file asks only for the two facts it reads.
+// `operator_owned` rides AgentRun (lib/types/runs.ts, #1476); typed structurally
+// here so this file asks only for the two facts it reads.
 
 import { HttpError } from "./api/core";
 import { OPERATOR_ONLY_REASON } from "../components/wardyn/copy";
 
 export type RunEntryFacts = { created_by?: string; operator_owned?: boolean };
-
-/** `run.operator_owned`, read without requiring the field on the caller's run type. */
-export const operatorOwnedOf = (run: object): boolean | undefined => (run as RunEntryFacts).operator_owned;
 
 export function mayEnterRun(run: RunEntryFacts, principal: string | null | undefined, operator: boolean): boolean {
   return (!!principal && run.created_by === principal) || (operator && !!run.operator_owned);
