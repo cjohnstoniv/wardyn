@@ -58,7 +58,7 @@ func (a *runScopedApprovals) ListApprovalsPageByRun(_ context.Context, runID uui
 // Page{}) -> Page.appendTo with Limit<=0, which emits NO LIMIT clause. One
 // run-scoped request therefore materialised EVERY approval row the deployment
 // had ever written, in Go, and discarded all but one run's — on a path the CLI
-// (`wardyn approvals --run`) and the console's run detail page poll, over a
+// (`wardyn approval list --run`) and the console's run detail page poll, over a
 // table whose decided rows are never deleted.
 //
 // The pin holds the property, not a row count: the run-scoped read must go to

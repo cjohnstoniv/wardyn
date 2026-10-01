@@ -182,7 +182,7 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
   it("an SSO admin who switched to the User view (session-user): the CTA still offers /admin/setup, from both the banner and the top bar", async () => {
     renderShellAt(
       "/runs",
-      { principal: "admin-in-member@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true },
+      { principal: "admin-in-member@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true, user_view_super_admin: true },
       {},
       true,
     );
@@ -192,6 +192,19 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
     for (const link of links) {
       expect(link).toHaveAttribute("href", "/admin/setup?step=environment");
     }
+  });
+
+  // #1335 — a security admin in the User view is session-user too, but
+  // /admin/setup would refuse them: no link from the banner or the top bar.
+  it("a security admin in the User view: the reason shows, with no CTA at either site", async () => {
+    renderShellAt(
+      "/runs",
+      { principal: "sec-in-view@corp.example", method: "sso", role: "user", operator: false, security_operator: false, user_view: true, user_view_super_admin: false },
+      {},
+      true,
+    );
+    expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
 
   it("a security admin (not a full operator) in the Admin view: no CTA — /admin/setup would only refuse them", async () => {

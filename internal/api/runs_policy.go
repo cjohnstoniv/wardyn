@@ -240,11 +240,31 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ModelProviderName    string        `json:"model_provider_name,omitempty"`
 		ModelProviderDeleted bool          `json:"model_provider_deleted,omitempty"`
 		CreatedViaName       string        `json:"created_via_name,omitempty"`
+		// KeptUntil (#1320) is when an ended run's files are torn down. A
+		// projection for display only, never a field of types.AgentRun.
+		KeptUntil *time.Time `json:"kept_until,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
 		CreatedViaName: s.runCreatedViaName(r.Context(), run),
+		KeptUntil:      s.endedRunKeptUntil(run),
 	})
+}
+
+// endedRunKeptUntil is when a run its own end stopped, and kept, is torn down:
+// only a RUNNING run still marked ended, under a grace that keeps files at all.
+// A run that was stopped at its end, killed, revived or lost to a reboot has no
+// such date, and the grace itself is never sent. The date is keptUntil's, the
+// one the run.ended row records.
+func (s *Server) endedRunKeptUntil(run types.AgentRun) *time.Time {
+	if run.State != types.RunRunning || run.LostReason != types.LostEnded || run.LostAt == nil || s.cfg.EndedRunGrace <= 0 {
+		return nil
+	}
+	until, ok := s.keptUntil(run)
+	if !ok {
+		return nil
+	}
+	return &until
 }
 
 // runModelProviderFacts names the model provider a run chose and says whether

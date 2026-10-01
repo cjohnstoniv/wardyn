@@ -213,7 +213,7 @@ func runGovernanceGet(t *testing.T, url string) (stdout string, err error) {
 	return out.String(), err
 }
 
-// runGovernanceApply marshals doc to a temp file, runs `governance apply` on
+// runGovernanceApply marshals doc to a temp file, runs `governance set` on
 // it (with --prune when asked), and returns what it printed and any error.
 func runGovernanceApply(t *testing.T, url string, doc sdk.GovernanceDocument, prune bool) (stdout string, err error) {
 	t.Helper()
@@ -225,7 +225,7 @@ func runGovernanceApply(t *testing.T, url string, doc sdk.GovernanceDocument, pr
 	if werr := os.WriteFile(path, b, 0o600); werr != nil {
 		t.Fatalf("write doc: %v", werr)
 	}
-	args := []string{"governance", "apply", path, "--url", url, "--token", "tok"}
+	args := []string{"governance", "set", path, "--url", url, "--token", "tok"}
 	if prune {
 		args = append(args, "--prune")
 	}
@@ -285,9 +285,9 @@ func bootstrapGovernance(t *testing.T, url string) map[string]uuid.UUID {
 }
 
 // TestGovernanceApply_GetApplyRoundTripIsANoOp is #1108's stated acceptance:
-// `wardyn governance get > f && wardyn governance apply f` changes nothing —
+// `wardyn governance get > f && wardyn governance set f` changes nothing —
 // ZERO writes, ZERO audit rows, on a populated install. Stricter than drive
-// apply's own round-trip test (which only checks the state ends up the same):
+// set's own round-trip test (which only checks the state ends up the same):
 // the real server audits every successful profile/assignment write
 // unconditionally, so an apply that blindly re-PUTs/re-POSTs unchanged rows
 // would pass a state-equality check while still spamming the audit log.
@@ -407,7 +407,7 @@ func TestGovernanceApply_EmptyInstallReproducesState(t *testing.T) {
 }
 
 // TestGovernanceApply_RejectsUnknownField pins the same strict-decode
-// contract drive apply and site-config set both take: each upserts exactly
+// contract drive set and site-config set both take: each upserts exactly
 // what the file states, so a typo'd key must be a parse error, not a silently
 // dropped field.
 func TestGovernanceApply_RejectsUnknownField(t *testing.T) {
@@ -420,7 +420,7 @@ func TestGovernanceApply_RejectsUnknownField(t *testing.T) {
 		t.Fatalf("write doc: %v", err)
 	}
 	root := rootCmd()
-	root.SetArgs([]string{"governance", "apply", path, "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"governance", "set", path, "--url", srv.URL, "--token", "tok"})
 	root.SetOut(&strings.Builder{})
 	root.SetErr(&strings.Builder{})
 	err := root.Execute()

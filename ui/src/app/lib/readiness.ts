@@ -16,33 +16,8 @@
 // provider serves a harness — internal/api/setup.go's llmPathExists), and
 // llmLabel names the first such provider. Since 0.8 (#548) a run's model
 // credential comes only from its model provider, so an operator key or login
-// the integration rows below still derive is no model path at all.
-//
-// composerReady reads the SAME rows /integrations itself derives
-// (lib/api/integrations.ts) instead of a bespoke heuristic over raw
-// SetupStatus fields — one source of truth. AI rows never depend on
-// SiteConfig (only SCM/mirror/proxy rows do), so `null` is the right
-// siteConfig to pass into deriveIntegrations.
-//
-// Honesty guard: a `wire: "fake"` composer backend — the default `make setup`
-// demo config — can never satisfy composerReady. deriveAiRows only ever reads
-// status.composer.backends for the Azure provider; a `fake` backend matches
-// none of its rows, so it never becomes a row in the first place. Do not "fix"
-// this by falling back to raw status.composer.backends.
+// is no model path at all.
 import type { SetupStatus } from "./types";
-import { deriveIntegrations, type IntegrationRow } from "./api/integrations";
-
-const WARDYN_FEATURES_CAPABILITY = /^Wardyn features/;
-
-function aiIntegrationRows(status: SetupStatus): IntegrationRow[] {
-  return deriveIntegrations(status, null, status.secrets.present).ai;
-}
-
-// A row's credential is genuinely usable — excludes Bedrock/Azure's
-// region/model-incomplete posture (IntegrationRow's "region_model_unset").
-function credentialResolved(row: IntegrationRow): boolean {
-  return row.posture.kind !== "region_model_unset";
-}
 
 // Whether a coding agent (Claude Code / Codex CLI) has somewhere to call: the
 // server's llm_ready, which a member's redacted status keeps too. Used
@@ -61,28 +36,31 @@ export interface Readiness {
   llmReady: boolean;
   /** Human label for the connected LLM path, "" when none. */
   llmLabel: string;
-  composerReady: boolean;
 }
 
 export function deriveReadiness(status: SetupStatus): Readiness {
   const barrierCount = status.runner?.confinement_classes?.length ?? 0;
-  const aiRows = aiIntegrationRows(status);
-  // ≥1 integration with the Wardyn-features capability ON and a resolved
-  // credential.
-  const composerReady = aiRows.some(
-    (r) => credentialResolved(r) && r.chips.some((c) => !c.muted && WARDYN_FEATURES_CAPABILITY.test(c.label)),
-  );
   const llmReady = hasLlmPath(status);
   // The first enabled provider serving a harness — the one llm_ready counted.
-  const provider = llmReady ? status.model_providers?.find((p) => !p.disabled && p.harnesses.length > 0) : undefined;
+  const provider = llmReady ? status.model_providers?.find(servesAHarness) : undefined;
   return {
     ready: status.ready,
     barrierReady: barrierCount > 0,
     barrierCount,
     llmReady,
     llmLabel: provider ? provider.name || provider.id : "",
-    composerReady,
   };
+}
+
+// The providers llm_ready counts: enabled, and serving at least one harness.
+const servesAHarness = (p: NonNullable<SetupStatus["model_providers"]>[number]) => !p.disabled && p.harnesses.length > 0;
+
+// How many model providers the Secrets step reads as connected (its rail badge,
+// its auto-skip and its Skipped override): the server's own answer, so 0
+// whenever llm_ready is false. An operator key a status still lists is no model
+// path since 0.8 (#548) and never counts.
+export function modelProviderCount(status: SetupStatus): number {
+  return hasLlmPath(status) ? (status.model_providers ?? []).filter(servesAHarness).length : 0;
 }
 
 // deploymentMode — single-user (one admin credential, no per-person identity)

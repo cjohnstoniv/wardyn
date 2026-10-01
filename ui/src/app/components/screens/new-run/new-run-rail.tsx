@@ -39,7 +39,7 @@ import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { RailSection } from "./new-run-primitives";
 import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
@@ -228,7 +228,13 @@ function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
 // runs board) and this screen is lazy — bundle-split fix, #181, same pattern
 // push-content-card.tsx's isPushContentRequest documents.
 export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
-  return !!s && ((s.deny_paths?.length ?? 0) > 0 || (s.require_review_paths?.length ?? 0) > 0 || (s.max_inspect_pack_mib ?? 0) > 0);
+  return (
+    !!s &&
+    ((s.deny_paths?.length ?? 0) > 0 ||
+      (s.require_review_paths?.length ?? 0) > 0 ||
+      (s.max_inspect_pack_mib ?? 0) > 0 ||
+      (s.max_file_size_mib ?? 0) > 0)
+  );
 }
 
 export function RunRail({
@@ -250,6 +256,7 @@ export function RunRail({
   // #1328 review round 2, R2-1 — who can reach the Environment step from
   // here, see the noBarrier reason line below.
   const operator = useOperator();
+  const userViewSuperAdmin = useUserViewSuperAdmin();
   const access = useViewAccess();
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
@@ -579,14 +586,15 @@ export function RunRail({
           #1328 review round 2, R2-1 — the CTA itself renders only for a
           caller who can actually reach the Environment step: an operator
           (already resolves NO_BARRIER.ADMIN_ROUTE directly, whichever view
-          they're in) or a session-user (an SSO admin in the User view, whom
-          ViewGate's own "to-admin" interstitial asks before switching — see
-          NO_BARRIER's doc comment). Everyone else reads the reason alone;
-          there is nothing behind that route they may open. */}
+          they're in) or a super admin in the User view (#1335: session-user
+          AND /me's user_view_super_admin — ViewGate's own "to-admin"
+          interstitial asks before switching, see NO_BARRIER's doc comment).
+          Everyone else reads the reason alone, a security admin in the User
+          view included; there is nothing behind that route they may open. */}
       {launch.noBarrier && !launch.inFlight && (
         <p className="mt-2 text-center text-xs text-muted-foreground">
           {NO_BARRIER.LAUNCH_REASON}
-          {(operator || access === "session-user") && (
+          {(operator || (access === "session-user" && userViewSuperAdmin)) && (
             <>
               {" "}
               <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">

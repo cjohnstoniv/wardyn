@@ -59,6 +59,7 @@ vi.mock("../../../lib/capabilities", async () => {
 import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ViewAccessProvider } from "../../wardyn/console-view";
 import { NO_BARRIER, RUN } from "../../wardyn/copy";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 
@@ -522,6 +523,40 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     await user.type(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+  });
+
+  // #1335 — session-user is a clamped admin of EITHER tier, and only a super
+  // admin may open /admin/setup: a security admin in the User view reads the
+  // reason alone, a super admin gets the link.
+  it("a security admin in the User view sees the reason with no CTA", async () => {
+    mockConfinementClasses = [];
+    render(
+      <MemoryRouter>
+        <ViewAccessProvider value="session-user">
+          <OperatorProvider operator={false} userViewSuperAdmin={false}>
+            <NewRunScreen />
+          </OperatorProvider>
+        </ViewAccessProvider>
+      </MemoryRouter>,
+    );
+    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+  });
+
+  it("a super admin in the User view gets the CTA", async () => {
+    mockConfinementClasses = [];
+    render(
+      <MemoryRouter>
+        <ViewAccessProvider value="session-user">
+          <OperatorProvider operator={false} userViewSuperAdmin>
+            <NewRunScreen />
+          </OperatorProvider>
+        </ViewAccessProvider>
+      </MemoryRouter>,
+    );
+    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    expect(await screen.findByRole("link", { name: NO_BARRIER.CTA })).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
   });
 });
 

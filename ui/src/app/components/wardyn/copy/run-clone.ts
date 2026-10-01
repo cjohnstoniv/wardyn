@@ -60,13 +60,16 @@ export const NO_BARRIER = {
   //   - an operator (meta.operator) already resolves this path directly,
   //     whichever view they're currently rendering in (console-view.tsx's
   //     viewVerdict: "url"/"admin-only"/"session-admin" all `pass`).
-  //   - an SSO admin who switched to the User view (access "session-user")
-  //     gets ViewGate's own "to-admin" interstitial instead of a redirect —
+  //   - a SUPER admin who switched to the User view (access "session-user"
+  //     AND /me's user_view_super_admin, #1335) gets ViewGate's own
+  //     "to-admin" interstitial instead of a redirect —
   //     entering admin authority is always a deliberate click — and that
   //     interstitial's `target` already carries the full pathname+search, so
   //     `?step=environment` survives the switch with no extra plumbing here.
-  //   - anyone else (a member, a security admin) gets NO link at all: there
-  //     is nothing behind this route they may open, and view+role gating one
+  //   - anyone else (a member, a security admin in either view) gets NO link
+  //     at all: there is nothing behind this route they may open (a security
+  //     admin in the User view is session-user too, which is why that alone
+  //     is not enough), and view+role gating one
   //     less faithfully (confinement-posture.tsx's #510-F7 precedent) is how
   //     R2-1's dead-end shipped in the first place.
   ADMIN_ROUTE: "/admin/setup?step=environment",

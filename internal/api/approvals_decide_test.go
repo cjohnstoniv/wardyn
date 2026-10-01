@@ -305,7 +305,7 @@ func TestDecideScope_NonEgressKindRejectsScope(t *testing.T) {
 // suite seeds decision_scope straight into its fake rows, so every lease test
 // there stays green with this API path 400ing; the sibling above pins only the
 // refusal direction (once -> 400). Delete the exception from rule 4 and both
-// suites remain green while every `wardyn approve <id> --scope run` on a
+// suites remain green while every `wardyn approval approve <id> --scope run` on a
 // credential approval 400s and B2's per-run lease is unreachable end to end.
 //
 // Asserted through the STORE because the broker reads decision_scope RAW

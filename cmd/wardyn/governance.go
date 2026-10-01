@@ -16,7 +16,7 @@ import (
 )
 
 // governance.go — read/replace the admin-authored governance profiles and
-// their subject assignments (migration 0052), the same get-then-apply shape
+// their subject assignments (migration 0052), the same get-then-set shape
 // drive.go established for the drive family: `subcommandGroup`, `emitJSON`,
 // strict decoding, and `-` meaning stdin.
 //
@@ -27,9 +27,9 @@ import (
 // Governance screen is one GET away (#1108).
 //
 //	wardyn governance get > governance.json      # a snapshot, or before a reset
-//	wardyn governance apply governance.json      # restore, or hand-authored additions
+//	wardyn governance set governance.json      # restore, or hand-authored additions
 //
-// `apply` UPSERTS every profile and assignment the file names, over the
+// `set` UPSERTS every profile and assignment the file names, over the
 // existing POST/PUT /governance/profiles and POST /governance/assignments
 // routes — there is no bulk-write route, and this command adds none. A
 // PROFILE is upserted BY NAME (its unique human handle), not by id — see
@@ -37,8 +37,8 @@ import (
 // hand-maintained, version-controlled file re-apply as a no-op. An
 // ASSIGNMENT is upserted by its own natural key (subject_type, subject).
 // Nothing the file omits is touched, and nothing is deleted, unless --prune is
-// passed — so `get` immediately followed by `apply` is a no-op, the same round
-// trip drive get/apply's pair promises.
+// passed — so `get` immediately followed by `set` is a no-op, the same round
+// trip drive get/set's pair promises.
 func governanceCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "governance",
@@ -46,15 +46,15 @@ func governanceCmd(client clientFn) *cobra.Command {
 		Long: "Read or upsert the governance profiles (named, assignable ceilings) and the\n" +
 			"assignments binding them to a user, a group, or everyone:\n\n" +
 			"    wardyn governance get > governance.json\n" +
-			"    wardyn governance apply governance.json\n\n" +
-			"`apply` upserts every profile and assignment the file names — a profile is\n" +
+			"    wardyn governance set governance.json\n\n" +
+			"`set` upserts every profile and assignment the file names — a profile is\n" +
 			"upserted BY NAME (its unique handle), an assignment by its own natural key\n" +
 			"(subject_type, subject). A profile in the file but absent server-side is\n" +
 			"created; one present server-side but absent from the file is left alone unless\n" +
 			"--prune is passed, which also deletes any server-side assignment the file omits.\n" +
-			"`wardyn governance get > f && wardyn governance apply f` is a no-op.",
+			"`wardyn governance get > f && wardyn governance set f` is a no-op.",
 	}
-	cmd.AddCommand(governanceGetCmd(client), governanceApplyCmd(client))
+	cmd.AddCommand(governanceGetCmd(client), governanceSetCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -73,10 +73,10 @@ func governanceGetCmd(client clientFn) *cobra.Command {
 	}
 }
 
-func governanceApplyCmd(client clientFn) *cobra.Command {
+func governanceSetCmd(client clientFn) *cobra.Command {
 	var prune bool
 	cmd := &cobra.Command{
-		Use:   "apply [file]",
+		Use:   "set [file]",
 		Short: "Upsert the governance profiles and assignments in a JSON file (or stdin with '-')",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,7 +94,7 @@ func governanceApplyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read governance document: %w", err)
 			}
-			// Strict decode, the same shape drive apply and site-config set
+			// Strict decode, the same shape drive set and site-config set
 			// both take: a key this file mistypes must surface as a parse
 			// error, not silently vanish from what ApplyGovernance then sends.
 			var doc sdk.GovernanceDocument
