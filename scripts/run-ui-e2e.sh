@@ -45,6 +45,14 @@
 # e.g. "drives ssh") allowed to report zero executed tests without failing the
 # gate — see the zero-executed check below. Empty by default: a spec every one
 # of whose tests skipped is a red flag until named here on purpose.
+#
+# Flaky tests (X2-F10, #1461 R3): a test that passed only after a Playwright
+# retry is a defect and fails the gate — unless it is listed in
+# ui/e2e/quarantine.txt (issue, owner, expiry <= 14 days; format in that file),
+# in which case it passes with a warning (::warning under $CI). The quarantine
+# file is validated before any backend starts: a malformed or expired entry
+# exits 1 here. Every flake, quarantined or not, is written to
+# test/reports/e2e/flaky.tsv (always written, empty when nothing flaked).
 set -uo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "run-ui-e2e.sh: jq is required (used to read Playwright's JSON report)" >&2; exit 1; }
@@ -58,7 +66,11 @@ cd "${REPO_ROOT}"
 # on — not the default one.
 WARDYN_LOG_TAG="[e2e-ui]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
+. "${REPO_ROOT}/scripts/lib/e2e-quarantine.sh"
 wardyn_pick_docker_host
+
+# An expired or malformed quarantine entry fails the run before anything boots.
+quarantine_validate ui/e2e/quarantine.txt "$(date -u +%F)" >&2 || exit 1
 
 # Two default invocations on one host — two worktrees, two lanes, a developer
 # box and CI at once — used to fight over the same fixed :8088/:8089/:8443 and
@@ -247,6 +259,7 @@ run_lane() {
 
   local spec base spec_rel spec_ok spec_name verdict
   local stats_expected stats_unexpected stats_flaky stats_skipped executed total
+  local flaky_new flaky_quarantined flaky_tsv
   for spec in "${specs[@]}"; do
     base="$(basename "${spec}")"
     mkdir "${work}/${base}" 2>/dev/null || continue
@@ -266,7 +279,7 @@ run_lane() {
       if ! ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
         log "backend up failed for ${base} (twice) — this is the backend, not the spec"
         tail -30 "${up_log}" >&2 || true
-        echo "fail 0 0" > "${work}/${base}/result"
+        echo "fail 0 0 0" > "${work}/${base}/result"
         continue
       fi
     fi
@@ -301,14 +314,24 @@ run_lane() {
     total=$((executed + stats_skipped))
     # stats_flaky counts tests that only passed after Playwright retried them —
     # folded into `executed` above (so a flaky run still counts as spec_ok=1 and
-    # never fails the gate), and until now never surfaced anywhere else. A flaky
-    # test IS a defect (X2-F10): print it per spec and fail the whole gate on any
-    # nonzero total, the same way a genuine failure does. Nonzero only where
-    # retries are enabled — playwright.config.ts's `retries: process.env.CI ? 2
-    # : 0` means stats_flaky is structurally 0 on an uncustomized dev box; this
-    # check has teeth in CI (and anywhere else CI=1 is set).
-    if [[ ${stats_flaky} -gt 0 ]]; then
-      log "${base}: ${stats_flaky} flaky test(s) (passed only after a Playwright retry)"
+    # never fails the gate on its own). A flaky test IS a defect (X2-F10): each
+    # one is classified against ui/e2e/quarantine.txt, and every NEW (unlisted)
+    # one fails the whole gate below, the same way a genuine failure does. Nonzero
+    # only where retries are enabled — playwright.config.ts's `retries:
+    # process.env.CI ? 2 : 0` means it is structurally 0 on an uncustomized dev
+    # box; this check has teeth in CI (and anywhere else CI=1 is set).
+    flaky_tsv="${work}/${base}/flaky.tsv"
+    quarantine_classify "${results_json}" "${base}" ui/e2e/quarantine.txt > "${flaky_tsv}"
+    flaky_new=$(awk -F'\t' '$3 == "new"' "${flaky_tsv}" | wc -l)
+    flaky_quarantined=$(awk -F'\t' '$3 == "quarantined"' "${flaky_tsv}" | wc -l)
+    # Fail closed: Playwright counted more flaky tests than the report walk
+    # classified (an unexpected report shape) — the unaccounted ones are new.
+    if [[ ${stats_flaky} -gt $((flaky_new + flaky_quarantined)) ]]; then
+      flaky_new=$((stats_flaky - flaky_quarantined))
+    fi
+    stats_flaky=${flaky_new}
+    if [[ ${stats_flaky} -gt 0 || ${flaky_quarantined} -gt 0 ]]; then
+      log "${base}: ${stats_flaky} flaky test(s) (passed only after a Playwright retry), ${flaky_quarantined} quarantined"
     fi
 
     verdict=fail
@@ -325,7 +348,7 @@ run_lane() {
         verdict=zero
       fi
     fi
-    echo "${verdict} ${stats_skipped} ${stats_flaky}" > "${work}/${base}/result"
+    echo "${verdict} ${stats_skipped} ${stats_flaky} ${flaky_quarantined}" > "${work}/${base}/result"
   done
 
   [[ -n "${LIVE_BASE_URL}" ]] || ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
@@ -402,13 +425,34 @@ done
 wait
 trap - INT TERM
 
-pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0
+pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0; quarantined_total=0
+# Every flake of the run, quarantined or not — always written, empty when none.
+flaky_report="${REPO_ROOT}/test/reports/e2e/flaky.tsv"
+mkdir -p "$(dirname "${flaky_report}")"
+: > "${flaky_report}"
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
-  verdict=none; stats_skipped=0; stats_flaky=0
-  [[ -s "${work}/${base}/result" ]] && read -r verdict stats_skipped stats_flaky < "${work}/${base}/result"
+  verdict=none; stats_skipped=0; stats_flaky=0; stats_quarantined=0
+  [[ -s "${work}/${base}/result" ]] && read -r verdict stats_skipped stats_flaky stats_quarantined < "${work}/${base}/result"
   skipped_total=$((skipped_total + stats_skipped))
   flaky_total=$((flaky_total + stats_flaky))
+  quarantined_total=$((quarantined_total + stats_quarantined))
+  if [[ -s "${work}/${base}/flaky.tsv" ]]; then
+    cat "${work}/${base}/flaky.tsv" >> "${flaky_report}"
+    # Quarantined flakes pass with a warning, naming the entry that excuses them.
+    while IFS=$'\t' read -r q_spec q_title q_verdict; do
+      [[ "${q_verdict}" == quarantined ]] || continue
+      q_meta="$(Q_SPEC="${q_spec}" Q_TITLE="${q_title}" awk -F' [|] ' '
+        function trim(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); return v }
+        NF == 5 && (trim($1) "") == ENVIRON["Q_SPEC"] "" && (trim($2) "") == ENVIRON["Q_TITLE"] "" {
+          print trim($3) ", " trim($4) ", until " trim($5); exit }' ui/e2e/quarantine.txt)"
+      if [[ -n "${CI:-}" ]]; then
+        echo "::warning title=Quarantined flaky test::${q_spec} › ${q_title} (${q_meta})"
+      else
+        log "quarantined flaky test: ${q_spec} › ${q_title} (${q_meta})"
+      fi
+    done < "${work}/${base}/flaky.tsv"
+  fi
   case "${verdict}" in
     pass) pass=$((pass+1)) ;;
     zero) fail=$((fail+1)); failed_specs+=("${base}"); zero_executed_specs+=("${base}") ;;
@@ -418,7 +462,7 @@ for spec in "${specs[@]}"; do
 done
 
 echo
-log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped, ${flaky_total} test(s) flaky"
+log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped, ${flaky_total} test(s) flaky (${quarantined_total} quarantined)"
 if [[ ${#zero_executed_specs[@]} -gt 0 ]]; then
   log "zero executed (all skipped, not allowlisted): ${zero_executed_specs[*]}"
 fi

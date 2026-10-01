@@ -293,7 +293,7 @@ fail-closed gate".
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. A long run's cast arrives in parts (wardyn-rec's tail upload, `/recordings/{run}/parts/{n}`), each capped at 64 MiB and audited as its own `recording.upload` row, so the same route can also add parts, up to `types.RecordingMaxParts` (2048: no run-lifetime or disk limit bounds an honest run's part count, so it is a named ceiling above five and a half years of 24 h parts or 64 GiB of output). Past it the proxy and the control plane refuse the part (413, audited `reason: part_limit`), so a run's stored recording is bounded at 2048 uploads of at most 64 MiB, and a replay or list render at 2048 reads. Each part is masked with the secrets registered when it arrives, so a value printed before it is registered stays in an earlier part. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.bypass`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
-| Stored credential moved or forged by a DATABASE writer | **[v0.7.12 shipped]** Every `secrets` row is envelope v1 (`0069_secret_envelope_v1.sql`, `internal/secretstore/pg`): a fresh 32-byte data key per save seals the value with AES-256-GCM, bound as associated data to the row's own `(owned_by, name)`, and the data key is wrapped by a key-encryption key bound to the same pair and its `kek_id` (`internal/secretstore/kek`). A ciphertext moved to another person, another name, or into the operator's slot fails that check; the `local` KEK is derived from `WARDYN_AGE_KEY` with HKDF-SHA256 and is symmetric, so the public age recipient no longer lets anyone write a row that opens. Every refusal names the row, never the value, and is never read as "not found" — so `loadOrCreateSecret` fails boot rather than minting a fresh signing key over a tampered one. Pre-envelope rows are converted once at boot and never read again. After that, an older wardynd still running is refused by name ("an older wardynd is still writing"): a new name it inserts lands as v0 and the next boot converts it; a name it replaces keeps its v1 columns around an age payload and must be set again | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
+| Stored credential moved or forged by a DATABASE writer | **[v0.7.12 shipped]** Every `secrets` row is envelope v1 (`0069_secret_envelope_v1.sql`, `internal/secretstore/pg`): a fresh 32-byte data key per save seals the value with AES-256-GCM, bound as associated data to the row's own `(owned_by, name)`, and the data key is wrapped by a key-encryption key bound to the same pair and its `kek_id` (`internal/secretstore/kek`). A ciphertext moved to another person, another name, or into the operator's slot fails that check; the `local` KEK is derived from `WARDYN_AGE_KEY` with HKDF-SHA256 and is symmetric, so the public age recipient no longer lets anyone write a row that opens. A key service holds the KEK instead under `WARDYN_KEK=transit` (Transit binds `associated_data` server-side) or `WARDYN_KEK=azurekv`: there the RSA wrap alone binds nothing and anyone with the public key could make one, so every wrap also carries a Key Vault ES256 signature over the row's bind, both key versions and the ciphertext, which `azurekv.KEK` verifies before any `unwrapkey`. Every refusal names the row, never the value, and is never read as "not found" — so `loadOrCreateSecret` fails boot rather than minting a fresh signing key over a tampered one. Pre-envelope rows are converted once at boot and never read again. After that, an older wardynd still running is refused by name ("an older wardynd is still writing"): a new name it inserts lands as v0 and the next boot converts it; a name it replaces keeps its v1 columns around an age payload and must be set again | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, `internal/runner/k8s/sandbox.go`). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]**. | AU |
@@ -1057,9 +1057,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     by design — it writes policy, site-config, secrets and the role map, and
     nothing above it offers more than attribution. There is no per-resource
     permission model, no custom roles, and no tenant or org column. One optional
-    four-eyes rule exists, on one act only (`WARDYN_EGRESS_SECOND_HUMAN`,
-    § "Four-eyes on egress approvals"), and it is bypassable by the admin token by
-    design. So: separation of duty BETWEEN the two admin tiers is shipped and
+    four-eyes rule exists, on two acts only (`WARDYN_EGRESS_SECOND_HUMAN` for
+    egress approvals and `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
+    capability escalations, § "Four-eyes on egress approvals"), and both are
+    bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
     testable; separation of duty WITHIN the super admin tier remains `ROADMAP.md`'s
     v1.0 item. `SECURITY.md` scopes its out-of-scope disclosure to match — an
     escalation ACROSS the `security_admin`/super-admin boundary, or a bypass of the
@@ -2065,15 +2066,36 @@ hiding them would repeat the failure mode we are designed to avoid.
     /people/{principal}/credentials`, or the daily expiry sweep) still decrypts
     from any earlier backup while both exist — the erasure horizon is the
     deployment's backup retention, not the API call. **A key service that keeps
-    the KEK away from the database has shipped for one provider**: `WARDYN_KEK=
+    the KEK away from the database has shipped for two providers**: `WARDYN_KEK=
     transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows
     this to residual 49(c)'s shape — a Vault-side actor, not a database reader
-    alone — rather than closing it; Azure Key Vault and AWS KMS key-wrapping
-    (as opposed to Azure Key Vault as a plain external secret STORE, which has
-    also shipped and inherits this residual unchanged, since Wardyn does no
-    at-rest cryptography of its own on a row held there) remain planned. (c)
-    **Metadata stays in the clear:** who holds which named credential, and since
-    when, is readable to anyone who can read the table.
+    alone — rather than closing it, and `WARDYN_KEK=azurekv` moves it to Azure
+    Key Vault, with what (d) leaves open. AWS KMS key-wrapping remains planned
+    (Azure Key Vault as a plain external secret STORE has also shipped and
+    inherits this residual unchanged, since Wardyn does no at-rest cryptography
+    of its own on a row held there). (c) **Metadata stays in the clear:** who
+    holds which named credential, and since when, is readable to anyone who can
+    read the table. (d) **Under the Key Vault KEK** (`WARDYN_KEK=azurekv`,
+    `azurekv.KEK`), four things stay open. **`keys/sign` is at least as powerful
+    as `keys/unwrap`:** a principal with `sign` on the signing key and write on
+    the database plants a boot key, forges admin sessions with it, and reaches
+    every credential through the console. So every principal with `sign` on the
+    vault is credential-equivalent — the custom role, Key Vault Crypto User and
+    Crypto Officer alike — and the vault dedicated to Wardyn is load-bearing,
+    not hygiene. Crypto Officer is a full-trust role: it can also import a
+    signing-key version whose private key it holds, rotate and disable keys.
+    **Boot keys and credentials share one Entra identity and one key pair**: a
+    leaked identity token, or the vault's crypto operators, can unwrap both and
+    sign (so forge) both; there is no platform split like Transit's.
+    **One key pair per deployment:** the bind names the vault host and both key
+    names but not the install, so two Wardyn databases on the same vault and
+    key names accept each other's rows for the same `(owned_by, name)` — (a)'s
+    restored row, restored from another install. A shared vault is fine; shared
+    key names are not. **RSA and ECDSA are not quantum-resistant:** a database
+    backup taken now could have its data keys unwrapped by a future adversary
+    who can factor the public modulus; the local key and Transit (AES-256) do
+    not have this exposure. (a) holds unchanged: a restored row opens until its
+    wrapping-key version is disabled in Key Vault.
 
 49. **One age key guards every stored credential AND the daemon's own
     signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
@@ -2115,8 +2137,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     a second age identity from which alone the boot keys' key-encryption key is
     derived (`local/platform:` vs `local/cred:` on each row); once it is set, no
     key the age key derives opens a boot key row, so a stolen age key forges
-    nothing. It is optional, the move onto it is `wardynd -rewrap`, and that
-    move is the one moment the age key still vouches for the boot keys. Unset,
+    nothing. It is optional, the move onto it is `wardynd -rewrap
+    -rewrap-adopt-boot-keys`, and that move is the one moment the age key
+    vouches for the boot keys. A pre-envelope boot key found beside the platform
+    key is refused at boot rather than converted under it, so the only
+    adoption is the operator's. Unset,
     the residual stands and `/setup/status` shows `platform_shared`. (b) **store
     mode:** the boot keys live under `platform/` in the organisation's store;
     with ONE Vault role that separates audit and filtering only (the one token
@@ -2127,13 +2152,35 @@ hiding them would repeat the failure mode we are designed to avoid.
     can forge what this residual lists. (c) **Transit mode**
     (`WARDYN_KEK=transit`): the age key protects nothing once `wardynd -rewrap`
     has moved every row, and boot refuses while it is still set with no row
-    under it. The residual moves to Vault: ONE Transit key and ONE Vault role
-    wrap the boot keys and the credentials alike, so that role's token (or
-    Vault's operators) unwraps both and can forge what this residual lists.
-    What it cannot do from the database alone is pass a credential's wrap off
-    as a boot key's: each wrap's `associated_data` binds `kek_id`, owner and
-    name, so a wrap moved to another row does not unwrap. A separate Transit
-    key and role for the boot keys is a 0.8.x follow-up (#979).
+    under it. The residual moves to Vault. With ONE Transit key and ONE Vault
+    role, that role's token (or Vault's operators) unwraps the boot keys and the
+    credentials alike and can forge what this residual lists. The split:
+    `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` (chart
+    `secretStore.vault.transitKeyPlatform`) wraps the boot keys under a second
+    Transit key that only `WARDYN_VAULT_ROLE_PLATFORM` reaches, and
+    `WARDYN_VAULT_TRANSIT_KEY` wraps the credentials as the credentials role.
+    A leaked credentials-side token, with or without the database, then unwraps
+    no boot key, and a serving wardynd opens no boot key that token planted:
+    it opens a boot key under the platform key alone and refuses one wrapped
+    under the credential key. The one command that moves a boot key off
+    another key, `wardynd -rewrap`, adopts one only when the operator passes
+    `-rewrap-adopt-boot-keys`, which says that no boot key has been adopted
+    yet, so adoption is an operator step taken once. A planted row met without
+    that flag aborts the run by name, and one met beside boot keys already on
+    the platform key is refused even with it (audited as `secret.rewrap`
+    `refused`). The operator's word is the trust root: an operator who passes
+    the flag over a planted row, say after the attacker deleted the real boot
+    keys, adopts it. The same holds the other way for a leaked platform token
+    and the credentials.
+    What the split does not do: the wardynd process holds both tokens, so a
+    compromise of the process still reaches both; it holds only while the
+    credentials role's Vault policy leaves the platform key out, which Wardyn
+    cannot check; and the move onto the platform key (`wardynd -rewrap -rewrap-adopt-boot-keys`), like
+    the move off it (`-rewrap-retire-platform-key`), is one more moment at which
+    one key vouches for the boot keys. What neither setup lets anyone do from the
+    database alone is pass one wrap off as another's: each wrap's
+    `associated_data` binds `kek_id`, owner and name, so a wrap moved to another
+    row, or to the other key, does not unwrap.
 
 50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`
@@ -2875,6 +2922,21 @@ as an opaque tunnel and is never offered the bearer.
 DECIDES an `egress_domain` approval is not the human who created the run —
 four-eyes on the one decision that widens what a running agent can reach. It is
 published here rather than in §4 because of the exemption it ships with.
+
+`WARDYN_CAPABILITY_SECOND_HUMAN=1` (off by default) is the same rule for the other
+decision a run's creator could make on their own: an Azure DevOps capability
+escalation, admin-class capabilities included. Without it, ownership of the run is
+the whole member rule for that kind. Everything below applies to it unchanged: the
+admin token bypasses it, the bypass is the same `approval.second_human.bypass` row
+(its `switch` field names which setting was bypassed), and local mode refuses it.
+
+The residual is wider than the admin token. The switch governs escalation
+DECISIONS made during a run. An admin-tier creator can still list admin-class
+capabilities in `azure_devops_capabilities` when launching a run
+(`withPolicyCapabilities`); that standing list is out of the switch's scope and is
+bounded only by the Azure DevOps row's capability ceiling. A creator of a user type
+is bounded by the governance lists an administrator granted them, so for them the
+switch holds.
 
 **A bare `WARDYN_ADMIN_TOKEN` caller BYPASSES the rule.** That caller is attributed
 `system`/`admin-token` (`actorFromRequest`, FIX #10) precisely because a shared

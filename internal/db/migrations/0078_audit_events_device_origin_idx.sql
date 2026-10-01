@@ -15,6 +15,16 @@
 -- Text, not ::bigint: an index expression that can raise would make an audit
 -- insert fail on a row it cannot cast. Partial, so the organisation's own rows
 -- cost it nothing. Additive: nothing rewrites audit_events.
+--
+-- A plain CREATE INDEX takes a SHARE lock on audit_events for the whole build.
+-- That blocks every audit writer, and an audit write that cannot land fails
+-- closed, so on an install with a large audit table the upgrade stalls writes
+-- until the build finishes. An operator with such a table can pre-build the
+-- index CONCURRENTLY out of band, with this exact name and definition, before
+-- upgrading; the IF NOT EXISTS below then finds it and does nothing.
+-- A CONCURRENTLY build that fails leaves an INVALID index under that name, which
+-- IF NOT EXISTS then skips silently: check pg_index.indisvalid for it (and drop
+-- and rebuild an invalid one) before upgrading.
 CREATE INDEX IF NOT EXISTS audit_events_device_origin_idx
     ON audit_events ((data->'device_origin'->>'device_id'), (data->'device_origin'->>'seq'), seq)
     WHERE data ? 'device_origin';

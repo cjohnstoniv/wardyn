@@ -15,6 +15,16 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
 import { Field, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
@@ -113,6 +123,19 @@ function ContrastLine({ ratio, low }: { ratio: number | null; low: boolean }) {
   return <p className="text-xs text-muted-foreground">{BRANDING.CONTRAST_OK(ratioText(ratio))}</p>;
 }
 
+// The STORED brand as a save body: Remove logo changes the logo and nothing the
+// admin has half-typed in the form.
+function storedBody(b: Branding): BrandingSave {
+  return {
+    org_name: b.org_name ?? "", name_format: b.name_format ?? "prefix",
+    primary: b.primary ?? "", primary_text: b.primary_text ?? "", support_url: b.support_url || undefined,
+    ...(b.dark_custom ? { dark_primary: b.dark_primary, dark_primary_text: b.dark_primary_text } : {}),
+  };
+}
+
+const DANGER_OUTLINE = "border-danger text-danger hover:bg-danger/10 hover:text-danger";
+const DANGER_CONFIRM = "bg-danger text-danger-foreground hover:bg-danger/90";
+
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -133,6 +156,8 @@ export function BrandingCard() {
   }, []);
   const [draft, setDraft] = React.useState<Draft>(() => draftFrom(brand));
   const [saving, setSaving] = React.useState(false);
+  const [confirm, setConfirm] = React.useState<"logo" | "all" | null>(null);
+  const [removing, setRemoving] = React.useState(false);
   // Seed from the brand when it arrives, unless the admin has started typing.
   const touched = React.useRef(false);
   React.useEffect(() => {
@@ -169,6 +194,34 @@ export function BrandingCard() {
       toast.error(BRANDING.SAVE_FAILED, { description: getErrorMessage(e) });
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Remove logo / Remove branding (#1215): the server's two existing doors,
+  // each behind a confirmation. The dialog stays open on a refusal.
+  const remove = async (what: "logo" | "all") => {
+    if (!brand) return;
+    setRemoving(true);
+    try {
+      if (what === "logo") {
+        const saved = await brandingApi.save({ ...storedBody(brand), remove_logo: true });
+        setBrand(saved);
+        setConsoleBrand(saved);
+        toast.success(BRANDING.REMOVE_LOGO_TOAST);
+      } else {
+        await brandingApi.remove();
+        touched.current = false;
+        setBrand(null);
+        setConsoleBrand({});
+        toast.success(BRANDING.REMOVE_BRANDING_TOAST);
+      }
+      setConfirm(null);
+    } catch (e) {
+      toast.error(what === "logo" ? BRANDING.REMOVE_LOGO_FAILED : BRANDING.REMOVE_BRANDING_FAILED, {
+        description: getErrorMessage(e),
+      });
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -214,12 +267,28 @@ export function BrandingCard() {
             onChange={(text) => set({ text })}>
             <ContrastLine ratio={light.ratio} low={light.low} />
           </ColourField>
-          <Field label={BRANDING.LOGO_LABEL} htmlFor="brand-logo" hint={BRANDING.LOGO_HINT}>
-            <Input id="brand-logo" type="file" accept="image/svg+xml,image/png"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                set({ logo: file ? { name: file.name, size: file.size, type: file.type, file } : null });
-              }} />
+          <Field label={BRANDING.LOGO_LABEL} htmlFor={brand?.logo_from_file ? undefined : "brand-logo"} hint={BRANDING.LOGO_HINT}>
+            <div className="space-y-2">
+              {brand?.logo_url && (
+                <div className="flex items-center gap-2.5">
+                  <img src={brand.logo_url} alt="" data-testid="branding-stored-logo" className="size-7 rounded-md object-contain" />
+                  {!brand.logo_from_file && (
+                    <Button type="button" size="sm" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("logo")}>
+                      {BRANDING.REMOVE_LOGO}
+                    </Button>
+                  )}
+                </div>
+              )}
+              {brand?.logo_from_file ? (
+                <p className="rounded-md bg-surface-2 px-2.5 py-2 text-xs text-muted-foreground">{BRANDING.FILE_LOGO_NOTE}</p>
+              ) : (
+                <Input id="brand-logo" type="file" accept="image/svg+xml,image/png"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    set({ logo: file ? { name: file.name, size: file.size, type: file.type, file } : null });
+                  }} />
+              )}
+            </div>
           </Field>
           {draft.logo && (
             <div className="space-y-1.5">
@@ -251,6 +320,11 @@ export function BrandingCard() {
           )}
           <div className="flex items-center gap-3">
             <Button onClick={() => void save()} disabled={!canSave}>{BRANDING.SAVE}</Button>
+            {brand && (
+              <Button type="button" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("all")}>
+                {BRANDING.REMOVE_BRANDING}
+              </Button>
+            )}
             {problems > 0 && (
               <span className="text-meta text-muted-foreground">{problems > 1 ? BRANDING.FIX_MANY : BRANDING.FIX_ONE}</span>
             )}
@@ -277,6 +351,32 @@ export function BrandingCard() {
           </div>
         </div>
       </div>
+      <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && !removing && setConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirm === "logo" ? BRANDING.REMOVE_LOGO_TITLE : BRANDING.REMOVE_BRANDING_TITLE}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirm === "logo" ? BRANDING.REMOVE_LOGO_BODY(brand?.org_name ?? "") : BRANDING.REMOVE_BRANDING_BODY}
+            </AlertDialogDescription>
+            {confirm === "all" && brand?.logo_from_file && (
+              <p className="text-sm text-muted-foreground">{BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING}</p>
+            )}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={DANGER_CONFIRM}
+              disabled={removing}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirm) void remove(confirm);
+              }}
+            >
+              {confirm === "logo" ? BRANDING.REMOVE_LOGO_CONFIRM : BRANDING.REMOVE_BRANDING_CONFIRM}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </CollapsibleCard>
   );
 }

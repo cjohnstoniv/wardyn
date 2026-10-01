@@ -299,3 +299,32 @@ func TestSiteConfigSet_NoOmittedFieldsNoteOnRejectedApply(t *testing.T) {
 		t.Errorf("stderr = %q, want no omitted-fields note when PutSiteConfig failed", stderr)
 	}
 }
+
+// #1215: a valid branding.logo_path with no branding record yet succeeds but
+// attaches nothing; the server says so with branding_logo_pending and `set`
+// prints a warning, or the operator reads a green apply as a logo that landed.
+func TestSiteConfigSet_WarnsTheBrandingLogoIsPending(t *testing.T) {
+	doc := `{"scm_hosts":["gitlab.corp"],"branding":{"logo_path":"/etc/wardyn/branding/logo.svg"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"scm_hosts":["gitlab.corp"],"branding":{"logo_path":"/etc/wardyn/branding/logo.svg"},"branding_logo_pending":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, stderr, err := runSiteConfigSet(t, srv.URL, doc)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !strings.Contains(stderr, "warning: branding.logo_path was not attached") {
+		t.Errorf("stderr = %q, want a warning that the logo was not attached", stderr)
+	}
+
+	// An echoing server (no pending signal) stays quiet.
+	var got types.SiteConfig
+	_, quiet, err := runSiteConfigSet(t, applyServer(t, &got).URL, doc)
+	if err != nil {
+		t.Fatalf("apply against an echoing server: %v", err)
+	}
+	if strings.Contains(quiet, "branding.logo_path was not attached") {
+		t.Errorf("stderr = %q, want no warning without branding_logo_pending", quiet)
+	}
+}

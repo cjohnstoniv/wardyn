@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -1722,29 +1720,6 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, "", driveSizeCeiling{}); err != nil {
 		t.Errorf("a share templated on sub = %v, want it to resolve", err)
 	}
-}
-
-// lockedBuffer is a bytes.Buffer safe to install behind the process-global
-// slog default — see its one use below. slog.SetDefault is PROCESS-global:
-// for as long as it is installed, any run-watcher goroutine an earlier test
-// in this package left running also writes into it. A bare bytes.Buffer made
-// that a data race with the String() read below — red under `-race` whenever
-// such a goroutine happened to log inside this window, green otherwise (#1278).
-type lockedBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (l *lockedBuffer) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.Write(p)
-}
-
-func (l *lockedBuffer) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.String()
 }
 
 // TestPreviewUnmountableDriveCountsNoRefusal is POST /drives/preview is a

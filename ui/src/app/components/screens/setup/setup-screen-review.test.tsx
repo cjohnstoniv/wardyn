@@ -222,9 +222,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
     it("a connected integration never shows Skipped, even after navigating past it", async () => {
       getSetupStatusMock.mockResolvedValue(
-        baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
+        baseStatus({
+          llm_ready: true,
+          model_providers: [{ id: "corp", kind: "custom_endpoint", harnesses: ["claude-code"], host: "gw.corp.example" }],
+        }),
       );
-      listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 

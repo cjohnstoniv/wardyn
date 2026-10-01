@@ -113,7 +113,7 @@ export WARDYN_URL=http://localhost:8080 WARDYN_ADMIN_TOKEN=demo-admin-token
 wardyn run --agent claude-code --repo octocat/Hello-World --task "explain this repo"
 wardyn run list        # watch state
 wardyn audit <id>
-wardyn approve <approval-id> --reason "reviewed scope, looks correct"
+wardyn approval approve <approval-id> --reason "reviewed scope, looks correct"
 
 # Or bring a sandbox up idle and drive it yourself (--interactive is mutually
 # exclusive with --wait). The idle reaper still applies: sandbox.yaml stops the

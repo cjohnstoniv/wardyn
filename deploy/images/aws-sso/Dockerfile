@@ -205,7 +205,7 @@ RUN printf '%s\n' \
 #   curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64-<ver>.zip -o deploy/images/aws-sso/awscliv2-bin
 # then build with: make agent-images AWS_CLI_INSTALL=staged
 ARG AWS_CLI_INSTALL=download
-ARG AWS_CLI_VERSION=2.31.13
+ARG AWS_CLI_VERSION=2.37.1
 ARG TARGETARCH
 # Host-staged installer zip (opt-in, gitignored). The README.md decoy makes
 # the COPY succeed when the awscliv2-bin* glob matches nothing (the download

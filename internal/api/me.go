@@ -105,6 +105,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"user_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
 			s.userPreviewApplies(r.Context()),
 	}
+	// #1335: whether the person inside the user view is STAMPED a super admin
+	// (admin, not security_admin) — the one bit the console needs to decide if it
+	// may offer the link to the admin-only recap, which every clamped field above
+	// cannot answer. Present only while the view is on for a stamped admin or
+	// security_admin (true only for the former); absent for a real user, the
+	// admin token, local mode and outside the view. Advisory UI data only: the
+	// server's own gates read the clamped role, never this.
+	if superAdmin, ok := s.meUserViewSuperAdmin(r); ok {
+		body["user_view_super_admin"] = superAdmin
+	}
 	body["user_type"] = s.meUserType(r)
 	// The type whose deletion turned the user view off, until the next
 	// switch: the console says why it is back in the Admin view.
@@ -279,6 +289,18 @@ func (s *Server) meUserType(r *http.Request) *meUserTypeView {
 		slog.WarnContext(r.Context(), "api: could not read the caller's user type for /me", "user_type", id, "error", err)
 	}
 	return v
+}
+
+// meUserViewSuperAdmin says whether the role stamped on the caller's verified
+// session is admin (true) or security_admin (false) while the user view is on;
+// ok is false for everyone else. The context gates come first so the cookie is
+// decoded only for a human in the view.
+func (s *Server) meUserViewSuperAdmin(r *http.Request) (superAdmin, ok bool) {
+	ctx := r.Context()
+	if s.cfg.OIDC == nil || s.cfg.LocalMode || oidcHumanFromContext(ctx) == "" || !oidc.MemberModeFromContext(ctx) {
+		return false, false
+	}
+	return s.cfg.OIDC.UserViewSuperAdmin(r)
 }
 
 type meUserTypeView struct {

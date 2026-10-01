@@ -13,6 +13,7 @@ import {
   mockSecurityAdminRole,
   navToRoute,
   sidebarLink,
+  sql,
 } from "./fixtures";
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
@@ -718,6 +719,48 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     await expect(row.getByTestId("ado-org-check")).toBeVisible();
     await row.getByRole("radio", { name: ADO_PAT.MODE_BEARER }).click();
     await expect(row.getByText(ADO_PAT.BEARER_WITH_TOKEN_PERMS)).toBeVisible();
+  });
+
+  test("a member's launch the organisation refused raises the banner naming them, read from the daemon's own audit rows", async ({ page }) => {
+    // A row of its own, so the refusals seeded here belong to no other test's row.
+    const rowId = "ado-refusal-e2e";
+    const minted = {
+      id: rowId,
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+    };
+    // ado_pat.mint.denied as mintRunPAT writes it; the audit log is append-only, so
+    // the rows stay and the people are the same on every run.
+    const denied = (owner: string, age: string) =>
+      sql(
+        `INSERT INTO audit_events (id, time, actor_type, actor, action, target, outcome, data) VALUES ` +
+          `(gen_random_uuid(), now() - interval '${age}', 'system', 'wardynd', 'ado_pat.mint.denied', 'e2e-run', 'failure', ` +
+          `'{"reason":"launch","owner":"${owner}","provider_row":"${rowId}","organisation":"wardyn-e2e","scope":"vso.code","refusal":"ado_pat_policy_blocked","status":400,"pat_token_error":"accessDenied"}'::jsonb)`,
+      );
+    sql(
+      `INSERT INTO people (principal, email, created_by) VALUES ` +
+        `('e2e-refused-sub', 'refused.e2e@corp.example', 'e2e') ON CONFLICT DO NOTHING`,
+    );
+    denied("e2e-refused-sub", "2 hours");
+
+    await spliceProviders(page, minted, (body) => ({ status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } }));
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    // No check was run: the person is the one the daemon says was refused, by the address an admin knows them by.
+    await expect(row.getByText(ADO_PAT.POLICY_BANNER("refused.e2e@corp.example"))).toBeVisible();
+    await expect(row.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON })).toBeVisible();
+
+    // The wire: a person and a time, never the subject, the organisation, the scope or Azure DevOps' own error.
+    const res = await page.request.get(`/api/v1/workspace-providers/git/${rowId}/ado-pat-refusal`, { headers: auth });
+    expect(res.status()).toBe(200);
+    const body = await res.text();
+    expect(Object.keys(JSON.parse(body)).sort()).toEqual(["at", "person"]);
+    for (const leak of ["e2e-refused-sub", "wardyn-e2e", "vso.code", "accessDenied"]) expect(body).not.toContain(leak);
+    // A row nobody was refused on answers 204.
+    expect((await page.request.get("/api/v1/workspace-providers/git/no-such-row/ado-pat-refusal", { headers: auth })).status()).toBe(204);
   });
 
   test("an Azure DevOps Server address makes the row a git-only per-person token row", async ({ page }) => {

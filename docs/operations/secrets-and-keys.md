@@ -321,29 +321,36 @@ only read credentials (`threatmodel/THREAT-MODEL.md` residual #49).
 `WARDYN_PLATFORM_KEY_FILE` names a file holding a **second** age
 identity. The boot keys are then wrapped under a key derived from it
 alone, and no key `WARDYN_AGE_KEY` derives opens one. A boot key row
-wrapped under the age key is refused, naming `wardynd -rewrap`, and boot
-stops rather than mint over it. The file stays optional; nothing requires
-it.
+wrapped under the age key is refused, naming `wardynd -rewrap
+-rewrap-adopt-boot-keys`, and boot stops rather than mint over it. The file
+stays optional; nothing requires it.
 
-1. Mint the second key where only wardynd can read it (0600, off-host
+1. Boot this version once with your `WARDYN_AGE_KEY` and without
+   `WARDYN_PLATFORM_KEY_FILE`. It converts any pre-envelope rows, which an
+   install coming from 0.7.x or earlier still holds. With the platform key
+   set, a boot refuses a pre-envelope boot key.
+2. Mint the second key where only wardynd can read it (0600, off-host
    backup):
    ```sh
    umask 077
    ./bin/wardynd -gen-age-key > ~/.wardyn/platform.key
    ```
-2. Move the boot keys onto it with `-rewrap` (see "Moving data keys"
-   below):
+3. Move the boot keys onto it, once, with `-rewrap -rewrap-adopt-boot-keys`
+   (see "Moving data keys" below). The flag says that you have never done
+   this move before; without it `-rewrap` refuses a boot key under the age key:
    ```sh
    WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
-     WARDYN_PLATFORM_KEY_FILE=~/.wardyn/platform.key ./bin/wardynd -rewrap
+     WARDYN_PLATFORM_KEY_FILE=~/.wardyn/platform.key ./bin/wardynd -rewrap -rewrap-adopt-boot-keys
    ```
    Expected output:
    ```
    INFO wardynd: stored secrets rewrapped … secrets=4 platform_key_separate=true
    ```
-3. Restart every replica with `WARDYN_PLATFORM_KEY_FILE` set.
+4. Restart every replica with `WARDYN_PLATFORM_KEY_FILE` set.
 
-The one moment the age key still vouches for the boot keys is this move.
+This move is the one step at which the age key vouches for the boot keys, which
+is why it needs `-rewrap-adopt-boot-keys`. A boot start refuses a pre-envelope
+boot key once the platform key is set; those convert only on the boot before it.
 Run it from a host you trust, not after a suspected leak of the age key.
 (After a leak, replace the boot keys instead: delete their rows and
 restart, which mints new ones — console sessions end and SSH clients see
@@ -449,6 +456,10 @@ old versions:
    vault write transit/keys/wardyn/config min_decryption_version=2
    ```
 
+If a rotation lands while `-rewrap` is moving rows, the command says so and
+prints no retirement step. Run it again until it moves 0 rows, then raise
+`min_decryption_version`.
+
 A row still wrapped under a retired version is refused, naming the row,
 until `min_decryption_version` is lowered again — `-rewrap` first, then
 raise it.
@@ -457,6 +468,128 @@ raise it.
 or unreachable Vault is *transient* (the sink answers 503, "Wardyn
 couldn't reach the service that holds this run's credential"). A 403, a
 wrap that does not unwrap for its row, or a retired version is
+*definitive*.
+
+
+## Key service: Azure Key Vault
+
+With `WARDYN_KEK=azurekv`, each stored credential is still sealed in
+Postgres (AES-256-GCM under its own data key). Two keys in your Azure Key
+Vault protect the data key, and neither ever leaves the vault:
+
+| Key | Setting | Type | `key_ops` | Does |
+|---|---|---|---|---|
+| wrapping key | `WARDYN_AZURE_KEK_KEY` | RSA 3072 or 4096 (RSA-HSM on Premium) | wrapKey, unwrapKey | `wrapkey` / `unwrapkey` the data key with RSA-OAEP-256 |
+| signing key | `WARDYN_AZURE_KEK_SIGNING_KEY` | EC P-256 (EC-HSM on Premium) | sign, verify | `sign` each wrap with ES256, over the row's owner and name, both key versions and the ciphertext |
+
+- **Why two keys.** Anyone with the RSA public key (Key Vault Reader is
+  enough) can wrap a data key of their own locally. The signature needs
+  the private EC key, so a database writer cannot plant a row.
+- **A moved or forged wrap costs no Key Vault call.** wardynd checks the
+  signature for the row before any `unwrapkey`, so every unwrap in the
+  vault's `AuditEvent` log is one Key Vault itself signed for that row.
+- **Only these calls:** `GET` on the two keys, `wrapkey`, `sign` and
+  `unwrapkey`, with the algorithm fixed. No Azure SDK; plain HTTPS.
+- The database alone decrypts nothing; neither does the database plus
+  anything on the Wardyn host, once no row is sealed under the age key
+  and `WARDYN_AGE_KEY` is unset.
+- Wardyn's boot keys are wrapped the same way, under the same keys, so
+  **do not restart wardynd during a Key Vault outage**.
+- Public-cloud Key Vault only: a Managed HSM or sovereign-cloud vault is
+  refused at boot, by name.
+
+**Keys.** One key pair per Wardyn deployment. Two Wardyn databases on the
+same vault and key names accept each other's rows for the same owner and
+name. A shared vault is fine; shared key names are not.
+
+```sh
+az keyvault key create --vault-name <vault> --name wardyn-kek     --kty RSA --size 3072  --ops wrapKey unwrapKey
+az keyvault key create --vault-name <vault> --name wardyn-kek-sig --kty EC  --curve P-256 --ops sign verify
+# Premium vault: --kty RSA-HSM / EC-HSM. Leave --exportable unset.
+```
+
+Set the versionless ids, `https://<vault>.vault.azure.net/keys/wardyn-kek`
+and `…/keys/wardyn-kek-sig`. Each write reads both keys' latest versions
+and refuses, by name, a version that is:
+
+- the wrong type, size or curve, or with wider `key_ops` (`decrypt` on the
+  RSA key would open data keys too);
+- exportable, disabled, not yet valid (`nbf`) or expired (`exp`).
+
+**Role.** A custom role, assigned **at the scope of a vault dedicated to
+Wardyn**. Each key's own `key_ops` stops the wrapping key from signing
+and the signing key from wrapping.
+
+```json
+{"Name": "Wardyn Key Service User", "Actions": [], "NotDataActions": [],
+ "DataActions": ["Microsoft.KeyVault/vaults/keys/read", "Microsoft.KeyVault/vaults/keys/wrap/action",
+                 "Microsoft.KeyVault/vaults/keys/unwrap/action", "Microsoft.KeyVault/vaults/keys/sign/action"],
+ "AssignableScopes": ["/subscriptions/<subscription-id>"]}
+```
+
+- **`keys/sign` is as sensitive as `keys/unwrap`.** With the database, a
+  signature plants a boot key, which forges admin sessions and reaches
+  every credential.
+- Every principal with `sign` on this vault is credential-equivalent:
+  this role, Key Vault Crypto User and Crypto Officer alike. That is why
+  the dedicated vault matters.
+- Crypto Officer is full trust: it can also import, rotate and disable keys.
+- **Fallback:** the built-in Key Vault Crypto User, which also grants
+  encrypt, decrypt, update, backup and verify.
+- **Legacy access policy:** get, wrapKey, unwrapKey, sign.
+- **Turn on purge protection.** Deleting the wrapping key loses every
+  credential.
+- **Egress:** NetworkPolicy must allow the vault host and the Entra
+  authority, as in store mode.
+
+**Identity.** The Entra identity settings are the store's
+(`WARDYN_AZURE_AUTH`, `_TENANT_ID`, `_CLIENT_ID`, `_FEDERATED_TOKEN_FILE`,
+`_AUTHORITY_HOST`); see [Store mode: credentials in Azure Key
+Vault](#store-mode-credentials-in-azure-key-vault). There is no client
+secret. `WARDYN_AZURE_KV_URL` is not needed: the vault is the one the keys
+name. On Helm set `kek.provider=azurekv`, `kek.azurekv.key` and
+`kek.azurekv.signingKey`, with `secretStore.azure` for the identity.
+
+**Boot.** wardynd wraps a probe data key, unwraps it, and tries it under
+another row. If the probe does not round-trip, or opens under the other
+row, or Key Vault is unreachable, **wardynd refuses to start**.
+
+**Moving an install to Key Vault, and back.** As for Transit, above:
+
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the
+   Postgres dump (see Backup).
+2. Set `WARDYN_KEK=azurekv`, both key ids and the identity settings,
+   keep `WARDYN_AGE_KEY`, and restart.
+3. Run `wardynd -rewrap` with the same settings. Expected output:
+   `every sealed secret is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
+4. Unset `WARDYN_AGE_KEY` and restart.
+
+**Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep both key ids
+so Key Vault still reads its rows, restart, and run `wardynd -rewrap`.
+A move between Transit and Key Vault goes through the local key: wardynd
+refuses to start with both named.
+
+**Rotating either key.**
+
+1. `az keyvault key rotate --vault-name <vault> --name wardyn-kek` (or
+   `wardyn-kek-sig`). New writes name the new version at once, with no
+   restart.
+2. Run `wardynd -rewrap`. Every row not at the latest versions is
+   unwrapped and wrapped again, bound to its row.
+3. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an
+   automatic rotation, during step 2 can leave a row on an older version.
+   When a rotation lands mid-run, the command says so and prints no
+   retirement step. Repeat until it reports 0.
+4. Disable every older version of both keys:
+   `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
+5. Restart every replica, so none keeps an older signing version cached.
+
+A row still wrapped under a disabled wrapping version is refused, naming
+the row, until that version is enabled again.
+
+**When Key Vault is unavailable.** Throttling (429), a 5xx or an
+unreachable vault is *transient* (the sink answers 503). A 401, a 403, a
+deleted key or version, or a wrap that does not verify for its row is
 *definitive*.
 
 
@@ -473,17 +606,19 @@ it runs with:
   rows a pre-0.8 wardynd wrote (`local:`), and, once `WARDYN_PLATFORM_KEY_FILE`
   is set, the boot keys still under the age key ("Separating the platform
   keys" above).
-- **The key service**, with `WARDYN_KEK=transit`, at the Transit key's latest
-  version: every local row, and every Transit row wrapped under an older
-  version ("Key service: Vault Transit" above). It then prints the
-  `min_decryption_version` that retires the older versions.
+- **The key service**, with `WARDYN_KEK=transit` or `azurekv`, at its latest
+  version: every local row, and every key-service row wrapped under any
+  other version ("Key service: Vault Transit" and "Key service: Azure Key
+  Vault" above). It then prints what retires the other versions:
+  Transit's `min_decryption_version`, or disabling Key Vault versions.
 - **Back to the local key**, with `WARDYN_KEK=local` and
-  `WARDYN_VAULT_TRANSIT_KEY` still set: every row under Transit.
+  `WARDYN_VAULT_TRANSIT_KEY` or `WARDYN_AZURE_KEK_KEY` still set: every row
+  under that key service.
 
 Run it with the same `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`,
-`WARDYN_KEK` and `WARDYN_VAULT_*` settings the daemon uses
-(`WARDYN_AGE_KEY` may be unset only with `WARDYN_KEK=transit`, once no
-row is under it).
+`WARDYN_KEK`, `WARDYN_VAULT_*` and `WARDYN_AZURE_*` settings the daemon uses
+(`WARDYN_AGE_KEY` may be unset only with `WARDYN_KEK=transit` or `azurekv`,
+once no row is under it).
 
 Properties:
 
@@ -503,11 +638,41 @@ Properties:
   `-rotate-age-key`, so the two never run at once.
 - **Pointer rows** (store mode) hold no data key and are never touched.
 
+**Adopting boot keys: `-rewrap-adopt-boot-keys`.** A boot key under a key other
+than the platform key (the credential key service, or the age key) moves onto
+the platform key only when you pass `-rewrap-adopt-boot-keys`. At this step
+Wardyn takes the database's word that such a row is its own, so the step is
+yours to take, once. Run it when you first turn on
+`WARDYN_VAULT_TRANSIT_KEY_PLATFORM` or `WARDYN_PLATFORM_KEY_FILE`, and not
+again.
+
+Someone with the credential key's token, or the age key, can plant a boot key
+under that key if they can also write to the table. They can delete the rows
+under the platform key first, so the plant looks like a first move. Only you
+know whether the first move already happened.
+
+- Without the flag, a boot key under any other key aborts the run by name and
+  nothing moves. The refusal tells you either to adopt (if you never have) or
+  to investigate (if you have: such a row was not written by Wardyn).
+- With the flag, `-rewrap` still refuses, naming the rows, when some boot keys
+  are under the platform key and others are not. With a key service writing
+  beside `WARDYN_PLATFORM_KEY_FILE`, it refuses a boot key under the age key's
+  platform KEK once another is under the key service or the file key. No run
+  of wardynd leaves that state. Find out who wrote the rows (`updated_at`, the audit log, the database
+  access log) and restore the boot keys from a backup if they are forged.
+- Both refusals are audited as `secret.rewrap` `failure` with `reason`
+  `refused` and `refusal` `adopt_not_requested` or `mixed_boot_keys`.
+- The flag is a mode of `-rewrap`, has no environment variable, and is refused
+  with `-rewrap-retire-platform-key`. It applies to every move of a boot key off
+  another key: onto the platform key service, onto `WARDYN_PLATFORM_KEY_FILE`'s
+  key, or, with a platform key file set, from the age key's platform KEK onto
+  `WARDYN_KEK=transit`.
+
 Restart every replica with the settings it ran with afterwards. After a move
-onto Transit, the last step is: **unset `WARDYN_AGE_KEY`; wardynd refuses to
-start until you do.** With `WARDYN_KEK=transit` and no stored row left under the
-age key, the key could only let whoever also holds the database forge a row
-wardynd still reads under it, its own boot keys among them.
+onto a key service, the last step is: **unset `WARDYN_AGE_KEY`; wardynd refuses to
+start until you do.** Once no stored row is left under the age key, it
+could only let whoever also holds the database forge a row wardynd still
+reads under it, its own boot keys among them.
 
 
 ## Store mode: credentials in Vault
@@ -599,6 +764,51 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and
 - Revoking or rotating one role leaves the other untouched, and the
   platform policy can sit with fewer people.
 - The second role needs Kubernetes auth.
+
+**Two Transit keys (with `WARDYN_KEK=transit`).** The same split applies to the
+key service. Create a second key of type `aes256-gcm96` on the same Transit
+mount, give `wardyn-platform` `update` on `transit/encrypt/<platform-key>` and
+`transit/decrypt/<platform-key>` only, and leave that key out of
+`wardyn-credentials`' policy (Wardyn cannot check that). Set
+`WARDYN_VAULT_TRANSIT_KEY_PLATFORM=<platform-key>` (chart:
+`secretStore.vault.transitKeyPlatform`).
+
+- wardynd wraps the boot keys (signing, session and SSH host keys) under it,
+  reached as the platform role, and every credential under
+  `WARDYN_VAULT_TRANSIT_KEY` as the credentials role. A leaked credentials
+  token then unwraps no boot key.
+- Boot refuses when it is set with `WARDYN_KEK=local`, without
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or with the two roles or
+  the two keys the same. With it set, a boot key still under another key is refused at boot,
+  and the refusal asks whether you have adopted boot keys before.
+- On an install coming from 0.7.x or earlier, boot this version once with
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` unset first, so the pre-envelope rows
+  convert; a boot with it set refuses a pre-envelope boot key.
+- Run `wardynd -rewrap -rewrap-adopt-boot-keys` with the same settings, once,
+  to move the boot keys onto it (see "Adopting boot keys" above); it touches no
+  credential row. A later `-rewrap` needs no flag, changes nothing unless a
+  version rotated, and refuses a boot key found under any other key. The run prints
+  the key version to raise `min_decryption_version` to, as for the credential
+  key.
+
+**Retiring the platform key.** To go back to one key (or, with
+`WARDYN_KEK=local`, to the local key), do not just unset it: the boot keys are
+still under it, and boot refuses by naming the key they are under. Run
+`wardynd -rewrap -rewrap-retire-platform-key` with the settings you boot with
+today, `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` and `WARDYN_VAULT_ROLE_PLATFORM`
+included.
+
+- It reads the boot keys under the platform key, and only reads them there.
+  It writes them under the key a write uses today: the credential key with
+  `WARDYN_KEK=transit`, the local key with `WARDYN_KEK=local`.
+- With `WARDYN_KEK=local`, keep `WARDYN_VAULT_TRANSIT_KEY` set, as for any move
+  back to local. `-rewrap` moves every row, credentials included.
+- It refuses without `-rewrap`, and without `WARDYN_VAULT_TRANSIT_KEY_PLATFORM`.
+  It is the only place the platform key is read with `WARDYN_KEK=local`; a start
+  keeps every refusal above.
+- A second run moves nothing. When it finishes, unset
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` and restart every replica: a start that
+  still names the platform key refuses the boot keys it no longer finds there.
 
 **Policies that name paths instead of `platform/*`.** The platform role's
 policy must cover the whole of `<prefix>/platform/*`, not the boot keys it

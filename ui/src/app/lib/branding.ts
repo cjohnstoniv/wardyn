@@ -28,6 +28,8 @@ export interface Branding {
   // /branding/settings only.
   support_url?: string;
   dark_custom?: boolean;
+  /** Read-only: the logo is the site configuration's branding.logo_path file (#1215). */
+  logo_from_file?: boolean;
 }
 
 /** The product name a brand shows, or "Wardyn" unbranded. */

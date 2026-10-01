@@ -96,7 +96,7 @@ const (
 	reasonApprovalAlreadyDecided       = "approval_already_decided"        // the approval was already approved or denied
 	reasonInvalidRequestBody           = "invalid_request_body"            // the JSON body did not decode
 	reasonInvalidViewParam             = "invalid_view_param"              // ?view= is not one of "", "user", "admin" (approvals AND runs listings)
-	reasonEgressSecondHumanLocalMode   = "egress_second_human_local_mode"  // WARDYN_EGRESS_SECOND_HUMAN cannot be enforced with nobody authenticated (local mode)
+	reasonEgressSecondHumanLocalMode   = "egress_second_human_local_mode"  // WARDYN_EGRESS_SECOND_HUMAN or WARDYN_CAPABILITY_SECOND_HUMAN cannot be enforced with nobody authenticated (local mode)
 
 	// The `decision_scope=always` persistence path (approvals.go): a
 	// permanent approved-egress entry has its own small validation chain,

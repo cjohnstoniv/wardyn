@@ -53,6 +53,15 @@ func NameFromContext(ctx context.Context) string {
 	return n
 }
 
+// ObjectIDFromContext returns the Entra object id the session was signed in
+// with, or "" when there is none: a non-Entra issuer, or a session written
+// before the field existed. Identity input only — never log it or put it in a
+// response or an audit row.
+func ObjectIDFromContext(ctx context.Context) string {
+	o, _ := ctx.Value(objectIDCtxKey{}).(string)
+	return o
+}
+
 // RoleFromContext returns the EFFECTIVE Wardyn role, or "" when there is no
 // SSO session. Effective, not stamped: in "view as member" mode this always
 // answers RoleUser, clamped once in contextWithPrincipal — the stamped role
@@ -163,6 +172,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
 	ctx = context.WithValue(ctx, nameCtxKey{}, sess.Name)
+	ctx = context.WithValue(ctx, objectIDCtxKey{}, sess.ObjectID)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
 	// THE MEMBER-MODE CLAMP — the only place it's applied. This is the sole
@@ -195,6 +205,9 @@ type emailCtxKey struct{}
 
 // nameCtxKey — see NameFromContext.
 type nameCtxKey struct{}
+
+// objectIDCtxKey — see ObjectIDFromContext.
+type objectIDCtxKey struct{}
 
 // roleCtxKey — see RoleFromContext.
 type roleCtxKey struct{}

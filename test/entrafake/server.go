@@ -193,6 +193,9 @@ type Server struct {
 	invalidGrant        bool
 	// omitIDToken answers the code grant without an id_token (SetOmitIDToken).
 	omitIDToken bool
+	// omitRefreshToken answers the code grant without a refresh_token
+	// (SetOmitRefreshToken).
+	omitRefreshToken bool
 
 	codes   map[string]codeGrant
 	access  map[string][]string
@@ -380,6 +383,11 @@ func (s *Server) SetInvalidGrant(v bool) { s.set(func() { s.invalidGrant = v }) 
 // no id_token: a token endpoint that is not speaking OIDC, which a relying
 // party must refuse rather than sign anyone in on.
 func (s *Server) SetOmitIDToken(v bool) { s.set(func() { s.omitIDToken = v }) }
+
+// SetOmitRefreshToken makes the authorization_code grant answer 200 with an
+// access token but no refresh_token: a sign-in that granted no offline access,
+// which leaves a relying party nothing to store and nothing to renew.
+func (s *Server) SetOmitRefreshToken(v bool) { s.set(func() { s.omitRefreshToken = v }) }
 
 func (s *Server) set(f func()) {
 	s.mu.Lock()
@@ -675,9 +683,9 @@ func (s *Server) tokenFromCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	withIDToken := !s.omitIDToken
+	withIDToken, withRefresh := !s.omitIDToken, !s.omitRefreshToken
 	s.mu.Unlock()
-	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, grant.who)
+	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, withRefresh, grant.who)
 }
 
 // tokenFromRefresh redeems a refresh token, and is where the two properties the
@@ -737,7 +745,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	s.refresh[presented].retired = true
 	s.mu.Unlock()
 
-	s.issueTokens(w, consented, consented, "", false, grant.who)
+	s.issueTokens(w, consented, consented, "", false, true, grant.who)
 }
 
 // issueTokens mints the access/refresh/id triple and answers with the GRANTED
@@ -748,14 +756,17 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 //
 // withIDToken is false on a refresh: the real service only returns an id_token
 // when `openid` is in the request, and a control-plane renewal has no use for
-// one — the identity was bound once, at capture.
-func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken bool, who *Identity) {
+// one — the identity was bound once, at capture. withRefresh is false only
+// when SetOmitRefreshToken asks for a grant with no offline access.
+func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken, withRefresh bool, who *Identity) {
 	access := "fake-entra-access-" + randHex(16)
 	refresh := "fake-entra-refresh-" + randHex(16)
 
 	s.mu.Lock()
 	s.access[access] = slices.Clone(granted)
-	s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}
+	if withRefresh {
+		s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}
+	}
 	onIssue, subject := s.onIssue, s.subject
 	s.mu.Unlock()
 	if who != nil {
@@ -770,11 +781,13 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 		"expires_in":     int(accessTokenTTL.Seconds()),
 		"ext_expires_in": int(accessTokenTTL.Seconds()),
 		"access_token":   access,
-		"refresh_token":  refresh,
 		// THE GRANTED SET, which is not the requested one: a client must read
 		// what it was given rather than assume it got what it asked for, and on
 		// this service those differ whenever a caller asks for a subset.
 		"scope": strings.Join(granted, " "),
+	}
+	if withRefresh {
+		body["refresh_token"] = refresh
 	}
 	if withIDToken {
 		idToken, err := s.signIDToken(nonce, who)

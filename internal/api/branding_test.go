@@ -41,14 +41,28 @@ func (m *brandingMemStore) GetBranding(context.Context) (types.Branding, error) 
 func (m *brandingMemStore) PutBranding(_ context.Context, b types.Branding, keepLogo bool) (types.Branding, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	b.LogoFromFile = false
 	if keepLogo {
 		b.Logo, b.LogoType = nil, ""
 		if m.rec != nil {
-			b.Logo, b.LogoType = m.rec.Logo, m.rec.LogoType
+			b.Logo, b.LogoType, b.LogoFromFile = m.rec.Logo, m.rec.LogoType, m.rec.LogoFromFile
 		}
 	}
 	m.rec = &b
 	return b, nil
+}
+
+func (m *brandingMemStore) SetBrandingLogo(_ context.Context, logo []byte, logoType string, fromFile bool, by string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rec == nil {
+		return false, nil
+	}
+	if len(logo) == 0 {
+		logo, logoType, fromFile = nil, "", false
+	}
+	m.rec.Logo, m.rec.LogoType, m.rec.LogoFromFile, m.rec.UpdatedBy = logo, logoType, fromFile, by
+	return true, nil
 }
 
 func (m *brandingMemStore) DeleteBranding(context.Context) (bool, error) {

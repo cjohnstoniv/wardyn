@@ -233,7 +233,8 @@ func TestRekeyAbortsOnAV0Row(t *testing.T) {
 
 // TestRekeyAbortsOnAnUnknownKey: a v1 row whose kek_id names no key this
 // wardynd knows (not local, not a key service's) aborts the rotation naming
-// the row, rather than passing unrotated. Only Transit's rows are left alone.
+// the row, rather than passing unrotated. Only key services' rows are left
+// alone (TestRekeyLeavesKeyVaultRows).
 func TestRekeyAbortsOnAnUnknownKey(t *testing.T) {
 	pool := rekeyDatabase(t)
 	ctx := context.Background()
@@ -244,6 +245,31 @@ func TestRekeyAbortsOnAnUnknownKey(t *testing.T) {
 	n, err := Rekey(ctx, pool, mustIdentity(t), mustIdentity(t), nil)
 	if err == nil || n != 0 || !strings.Contains(err.Error(), rowRef("", "stranger")) || !strings.Contains(err.Error(), "awskms:arn:x") {
 		t.Fatalf("Rekey over a row under an unknown key = (%d, %v), want an abort naming the row and its key", n, err)
+	}
+}
+
+// TestRekeyLeavesKeyVaultRows: a v1 row under the Key Vault KEK holds nothing
+// under the age key, so a rotation leaves it exactly as it was instead of
+// aborting on a key it cannot reach.
+func TestRekeyLeavesKeyVaultRows(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	const id = "azurekv-key:kv.vault.azure.net/wardyn-kek/wardyn-kek-sig"
+	if _, err := pool.Exec(ctx, `INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
+		VALUES ('', 'kv-row', 1, $1, '\x01', '\x02')`, id); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Rekey(ctx, pool, mustIdentity(t), mustIdentity(t), nil)
+	if err != nil || n != 0 {
+		t.Fatalf("Rekey over a Key Vault row = (%d, %v), want it left alone", n, err)
+	}
+	var kekID string
+	var wrapped []byte
+	if err := pool.QueryRow(ctx, `SELECT kek_id, wrapped_dek FROM secrets WHERE name='kv-row'`).Scan(&kekID, &wrapped); err != nil {
+		t.Fatal(err)
+	}
+	if kekID != id || !bytes.Equal(wrapped, []byte{1}) {
+		t.Fatalf("the Key Vault row changed: kek_id %q, wrapped_dek %x", kekID, wrapped)
 	}
 }
 

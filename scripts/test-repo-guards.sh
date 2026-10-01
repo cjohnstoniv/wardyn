@@ -41,7 +41,7 @@
 #      `gh` fails with "failed to run git: fatal: not a git repository" (#511,
 #      #1069).
 #  13. release.yml's publishing jobs (images, binaries, chart,
-#      images-ui-sandbox, release-assets) all depend on preflight-green,
+#      images-ui-sandbox, release-assets, promote) all depend on preflight-green,
 #      directly or transitively, and preflight-green has no `|| true` /
 #      `continue-on-error` escape hatch (T-06, #666).
 #  14. no demo/live spec or demo-take verifier still names an audit action
@@ -51,6 +51,14 @@
 #      override) sets a model variable 0.8.2 retired — wardynd refuses to boot
 #      on one (#549, #672). The compose files and Helm values are rendered by
 #      `make compose-config` / `make helm-lint` instead.
+#  16. nightly.yml's staged images are release.yml's publish set: every
+#      published image has a staged row with the same name and Dockerfile, every
+#      staged row is published, and the `images` rows' build-args are byte-equal.
+#      A local-only image (claude-code, oracle, full) can never be staged. The
+#      build step is pinned too: same context, file, platforms and provenance,
+#      build-args from the matrix, and no target or cache on either side.
+#      release.yml's promote matrix carries the same rows as the build jobs, and
+#      the staged-digest proof in preflight-green keeps its three parts.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -87,10 +95,8 @@ ok()  { echo "ok: $*"; }
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
-# managed-settings-drift (#1279): new, never run on a hosted runner — a first run
-# that fails for an environment reason (npm registry, runner disk for the ~300 MB
-# CLI package) must not block a release. Add it to notify-new-lanes' needs (and
-# to release.yml's watched=) once it has gone green on a real nightly.
+# managed-settings-drift (#1279, #1395) went green on hosted run 36786358051 and is now in
+# notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
 # ci-mode-dogfood-model-fake (#681, T-21): new, never run on a hosted runner — a
 # kind cluster plus the fake's image and a model-provider seed, any of which can
 # fail for an environment reason on the first run. Same promotion rule as above.
@@ -99,7 +105,7 @@ ok()  { echo "ok: $*"; }
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk managed-settings-drift ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -402,10 +408,10 @@ if [ "$notify_gh_repo_fail" = 0 ]; then ok "every notify-* job carries GH_REPO";
 #
 # R2-2 (review round 2): release.yml's `watched=` list (the nightly jobs
 # preflight-green judges) is a hand-typed string, not derived from anything —
-# it must stay identical to nightly.yml's notify-new-lanes.needs (minus
-# buildx-smoke, which release.yml matches by job-name PREFIX instead, since
-# its API job name is "multi-arch build (<matrix.name>)", never the literal
-# YAML key) or a lane added to nightly and to notify-new-lanes silently stops
+# it must stay identical to nightly.yml's notify-new-lanes.needs (minus the
+# jobs named "multi-arch build (<matrix.name>)", which release.yml matches by
+# job-name PREFIX instead, since their API job name is never the literal YAML
+# key) or a lane added to nightly and to notify-new-lanes silently stops
 # being release-gated. This guard is what makes that parity enforced instead
 # of assumed; on CI (yq preinstalled on ubuntu-latest) a missing yq fails the
 # guard rather than skipping it, since a skip in CI is not evidence of
@@ -418,7 +424,7 @@ if ! command -v yq >/dev/null 2>&1; then
     fi
 else
     preflight_fail=0
-    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets"
+    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets promote"
     reaches_preflight() {  # $1 = job name, $2 = space-separated jobs already visited (cycle guard)
         local job="$1" seen="$2" needs n
         case " $seen " in *" $job "*) return 1 ;; esac
@@ -445,7 +451,7 @@ else
         bad "$REL: preflight-green contains \`|| true\`, \`|| :\`, or \`continue-on-error\` — its gate can be satisfied without actually being green"
         preflight_fail=1
     fi
-    # R2-2: watched= must equal notify-new-lanes.needs minus buildx-smoke —
+    # R2-2: watched= must equal notify-new-lanes.needs minus the multi-arch jobs —
     # neither list may drift from the other without this guard going red.
     rel_watched="$(printf '%s' "$preflight_block" | grep -m1 '^ *watched="' | sed -E 's/^ *watched="([^"]*)".*/\1/')"
     if [ -z "$rel_watched" ]; then
@@ -453,16 +459,21 @@ else
         preflight_fail=1
     else
         nightly_needs_raw="$(yq -r '.jobs["notify-new-lanes"].needs[]' "$NIGHTLY" 2>/dev/null)"
+        # Every nightly job named "multi-arch build (...)" is matched by that name
+        # PREFIX in release.yml, never listed in watched=.
+        nightly_multiarch="$(yq -r '.jobs | to_entries[] | select((.value.name // "") | test("^multi-arch build \\(")) | .key' "$NIGHTLY" 2>/dev/null)"
+        printf '%s\n' "$nightly_multiarch" | grep -qx 'buildx-smoke' \
+            || { bad "$NIGHTLY: buildx-smoke no longer has a \`multi-arch build (...)\` name — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
         printf '%s\n' "$nightly_needs_raw" | grep -qx 'buildx-smoke' \
             || { bad "$NIGHTLY: notify-new-lanes.needs no longer lists buildx-smoke — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
-        nightly_watched_sorted="$(printf '%s\n' "$nightly_needs_raw" | grep -vx 'buildx-smoke' | sort)"
+        nightly_watched_sorted="$(printf '%s\n' "$nightly_needs_raw" | grep -vxF -f <(printf '%s\n' "$nightly_multiarch") | sort)"
         rel_watched_sorted="$(printf '%s\n' $rel_watched | sort)"
         if [ "$rel_watched_sorted" != "$nightly_watched_sorted" ]; then
-            bad "$REL: preflight-green's watched= list has drifted from $NIGHTLY's notify-new-lanes.needs (minus buildx-smoke) — watched=[$(printf '%s ' $rel_watched_sorted)] vs needs=[$(printf '%s ' $nightly_watched_sorted)]. A lane added to (or renamed in) notify-new-lanes must be added to watched= too, or it silently stops gating a release."
+            bad "$REL: preflight-green's watched= list has drifted from $NIGHTLY's notify-new-lanes.needs (minus the multi-arch build jobs) — watched=[$(printf '%s ' $rel_watched_sorted)] vs needs=[$(printf '%s ' $nightly_watched_sorted)]. A lane added to (or renamed in) notify-new-lanes must be added to watched= too, or it silently stops gating a release."
             preflight_fail=1
         fi
     fi
-    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
 # ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
@@ -500,6 +511,105 @@ for f in scripts/e2e-backend.sh scripts/kind-sso-walk.sh scripts/ci-run.sh scrip
     fi
 done
 [ "$retired_fail" = 0 ] && ok "no wardynd-booting script sets a retired model variable"
+
+# ── 16. nightly's staged rows are release.yml's publish set ─────────────────
+# A dispatched nightly pushes its `stage: "true"` rows (and the ui-sandbox job's
+# two) to ghcr.io/cjohnstoniv/staging/, and release.yml promotes those digests.
+# So a staged row that drifts from the release row's Dockerfile or build-args
+# promotes an image release.yml would never have built, and an image that is
+# published but not staged has nothing to promote. The publish set is the
+# `- name:` idiom check-image-pins.sh uses. A missing yq fails in CI like guard 13.
+if ! command -v yq >/dev/null 2>&1; then
+    if [ "${CI:-}" = "true" ]; then
+        bad "yq not installed — guard 16 (staging parity) cannot run in CI and a skip here proves nothing"
+    else
+        echo "skip: yq not installed — staging parity guard needs it"
+    fi
+else
+    stage_fail=0
+    published="$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "$REL" | awk '{print $3}' | sort -u || true)"
+    [ -n "$published" ] || { bad "$REL: no '- name:' image entries found — guard 16 is pointing at nothing"; stage_fail=1; }
+    rel_pairs="$(yq -r '.jobs[].strategy.matrix.include[]? | select(.dockerfile) | .name + " " + .dockerfile' "$REL" | sort -u)"
+    staged_pairs="$( { yq -r '.jobs["buildx-smoke"].strategy.matrix.include[] | select(.stage == "true") | .name + " " + .dockerfile' "$NIGHTLY"
+                       yq -r '.jobs["buildx-smoke-ui-sandbox"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"; } | sort -u)"
+    for n in $published; do
+        want="$(printf '%s\n' "$rel_pairs" | grep -E "^$n " || true)"
+        [ -n "$want" ] || { bad "$REL: published image '$n' has no matrix row with a dockerfile — guard 16 cannot compare it"; stage_fail=1; continue; }
+        printf '%s\n' "$staged_pairs" | grep -qxF "$want" \
+            || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\") or buildx-smoke-ui-sandbox — a release would have nothing to promote"; stage_fail=1; }
+    done
+    for n in $(printf '%s\n' "$staged_pairs" | awk '{print $1}'); do
+        printf '%s\n' "$published" | grep -qx "$n" \
+            || { bad "$NIGHTLY: staged image '$n' is not in $REL's publish set — a local-only or vendor-CLI image must never be pushed to staging"; stage_fail=1; }
+    done
+    for n in $(yq -r '.jobs.images.strategy.matrix.include[].name' "$REL"); do
+        rel_args="$(yq -r ".jobs.images.strategy.matrix.include[] | select(.name == \"$n\") | .[\"build-args\"] // \"\"" "$REL")"
+        stage_args="$(yq -r ".jobs[\"buildx-smoke\"].strategy.matrix.include[] | select(.name == \"$n\") | .[\"build-args\"] // \"\"" "$NIGHTLY")"
+        [ "$rel_args" = "$stage_args" ] \
+            || { bad "$NIGHTLY: '$n' build-args differ from $REL's images row — release: [$rel_args] vs nightly: [$stage_args]"; stage_fail=1; }
+    done
+    # The build STEP decides what a digest is, so it is compared too: a staged
+    # image equals a release.yml build only if context, file, platforms,
+    # provenance and build-args agree, and neither side carries a target,
+    # cache-from, cache-to or any other key the other lacks.
+    bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
+    with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
+    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox"; do
+        set -- $pair
+        rel_job="$1"; ngt_job="$2"
+        for jf in "$rel_job $REL" "$ngt_job $NIGHTLY"; do
+            set -- $jf
+            [ "$(yq -r ".jobs[\"$1\"] | [$bps] | length" "$2")" = 1 ] \
+                || { bad "$2: job '$1' must have exactly one docker/build-push-action step — guard 16 cannot compare the build step"; stage_fail=1; }
+        done
+        rel_with="$(yq -o=json -I=0 ".jobs[\"$rel_job\"] | $with_norm" "$REL")"
+        ngt_with="$(yq -o=json -I=0 ".jobs[\"$ngt_job\"] | $with_norm" "$NIGHTLY")"
+        [ "$rel_with" = "$ngt_with" ] \
+            || { bad "$NIGHTLY: $ngt_job's build step differs from $REL's $rel_job (push, tags and labels aside) — release: $rel_with vs nightly: $ngt_with. A staged digest must be built exactly as release.yml builds it: same platforms and provenance, no target or cache."; stage_fail=1; }
+    done
+    want_args='${{ matrix.build-args }}'
+    got_args="$(yq -r ".jobs[\"buildx-smoke\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
+    [ "$got_args" = "$want_args" ] \
+        || { bad "$NIGHTLY: buildx-smoke's build step must take build-args from the matrix row ('$want_args'), not '$got_args' — a hardcoded value would stage wardynd without RELEASE_BUILD=true"; stage_fail=1; }
+    want_base='BASE_IMAGE=${{ steps.base.outputs.ref }}'
+    got_base="$(yq -r ".jobs[\"buildx-smoke-ui-sandbox\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
+    [ "$got_base" = "$want_base" ] \
+        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's build-args must be exactly '$want_base' (the staged agent-base digest), not '$got_base'"; stage_fail=1; }
+    base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
+    printf '%s' "$base_run" | grep -qF '@sha256:[0-9a-f]{64}$' \
+        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    # The promote job copies these digests, so its rows are the build jobs' rows
+    # (name, dockerfile, float-latest) and preflight-green's staging step keeps
+    # every part of the proof. Once R10 removes the build jobs, the promote rows
+    # are the only source and the row comparison has nothing to compare.
+    promote_rows='[.jobs.promote.strategy.matrix.include[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    promote_got="$(yq -o=json -I=0 "$promote_rows" "$REL")"
+    [ "$(yq -r '.jobs.promote.strategy.matrix.include | length' "$REL")" -gt 0 ] \
+        || { bad "$REL: the promote job has no matrix rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    if [ "$(yq -r '.jobs.images | type' "$REL")" != "!!null" ]; then
+        build_got="$(yq -o=json -I=0 "$build_rows" "$REL")"
+        [ "$promote_got" = "$build_got" ] \
+            || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
+    fi
+    # Whole-line comments are dropped first, so a marker named only in a comment
+    # proves nothing; each pattern is anchored to the command it must be.
+    nocomment() { sed -E '/^[[:space:]]*#/d'; }
+    staging_run="$(yq -r '.jobs["preflight-green"].steps[] | select(.id == "staging") | .run' "$REL" | nocomment)"
+    for pat in '^[[:space:]]*gh attestation verify ' '^[[:space:]]*--signer-workflow ' '^[[:space:]]*--source-digest ' 'org\.opencontainers\.image\.revision' '\-gt 86400 \]'; do
+        printf '%s' "$staging_run" | grep -qE -- "$pat" \
+            || { bad "$REL: preflight-green's staging step no longer has a command matching '$pat' — a promoted digest would lose part of its proof (attestation call, signer workflow, source commit, revision label, 86400-second age limit)"; stage_fail=1; }
+    done
+    # The age is the run's created_at: updated_at moves on `gh run rerun --failed`
+    # while the image jobs it keeps stay as old as they were.
+    printf '%s' "$staging_run" | grep -qE -- '--jq \.created_at' && ! printf '%s' "$staging_run" | grep -q 'updated_at' \
+        || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
+    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
+    printf '%s' "$promote_copy" | grep -qE '^[[:space:]]*cosign copy --force ' \
+        && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \
+        || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
+    if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
+fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

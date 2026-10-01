@@ -154,7 +154,7 @@ var accessTestHMACKey = []byte("access-test-hmac-key-32-bytes!!!")
 // discovery server. st, when non-nil, is wired as Config.RoleMappings via
 // accessOIDCBridge; nil leaves RoleMappings unset (env-only derivation).
 // opts, when given, can tweak the Config before it is built — e.g. setting
-// AllowedEmailDomains (A-4's HasEmailDomains) without a new positional param
+// AllowedEmailDomains (A-4's EnforcesEmailVerified) without a new positional param
 // on every existing call site.
 func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, legacyAdminEmails []string, st *roleMapStore, opts ...func(*oidc.Config)) *oidc.Authenticator {
 	t.Helper()
@@ -512,13 +512,23 @@ func TestAccess_GetOperatorEmailsNeverNull(t *testing.T) {
 }
 
 // TestAccess_GetReflectsEmailDomainsConfigured (A-4): the EMAIL_KEY badge
-// copy needs to tell "no WARDYN_OIDC_EMAIL_DOMAINS" apart from "configured".
+// copy needs to tell "email_verified not enforced" apart from "enforced" — by
+// WARDYN_OIDC_EMAIL_DOMAINS or by WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED alone.
 func TestAccess_GetReflectsEmailDomainsConfigured(t *testing.T) {
-	for _, configured := range []bool{false, true} {
-		t.Run(fmt.Sprintf("configured=%v", configured), func(t *testing.T) {
+	cases := []struct {
+		name string
+		opt  func(*oidc.Config)
+		want bool
+	}{
+		{"neither", nil, false},
+		{"domains", func(c *oidc.Config) { c.AllowedEmailDomains = []string{"corp.example"} }, true},
+		{"require_email_verified", func(c *oidc.Config) { c.RequireEmailVerified = true }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			var opts []func(*oidc.Config)
-			if configured {
-				opts = append(opts, func(c *oidc.Config) { c.AllowedEmailDomains = []string{"corp.example"} })
+			if tc.opt != nil {
+				opts = append(opts, tc.opt)
 			}
 			auth := newAccessAuth(t, nil, "", nil, nil, opts...)
 			srv := accessServer(t, auth, &roleMapStore{})
@@ -531,8 +541,8 @@ func TestAccess_GetReflectsEmailDomainsConfigured(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if resp.EmailDomainsConfigured != configured {
-				t.Errorf("email_domains_configured = %v, want %v", resp.EmailDomainsConfigured, configured)
+			if resp.EmailDomainsConfigured != tc.want {
+				t.Errorf("email_domains_configured = %v, want %v", resp.EmailDomainsConfigured, tc.want)
 			}
 		})
 	}

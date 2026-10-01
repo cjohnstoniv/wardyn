@@ -180,6 +180,29 @@ test.describe("one door — keyed by provider (User view)", () => {
     expect(writes).toEqual([JSON.stringify({ value: "gw-e2e-token" })]);
   });
 
+  test("on an Azure key service the notice says the key is held in Key Vault", async ({ page }) => {
+    const GATEWAY = {
+      id: "corp-gateway",
+      name: "Corp gateway",
+      kind: "custom_endpoint",
+      harnesses: ["claude-code"],
+      default_for: ["claude-code"],
+      host: "gateway.corp.example",
+    };
+    await mockMemberRole(page);
+    await spliceStatus(page, (body) => {
+      body.model_providers = [GATEWAY];
+      body.provider_access = [{ provider: GATEWAY.id, state: "not_configured" }];
+      body.credential_storage = "key_service_key_vault";
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+    await page.getByRole("button", { name: "Add your token" }).click();
+    const door = page.getByRole("dialog", { name: "Add your token for Corp gateway" });
+    await expect(door).toContainText(CRED_NOTICE.KEY_SERVICE("Key Vault"));
+    await expect(door).toContainText("held in Key Vault");
+  });
+
   // No shipped surface offers "Replace" for an ALREADY-stored, working
   // credential yet — that row lives on packet F §2's "Your model connections"
   // list, which sits on the still-open PR #1042 (#541, MP-22). So this pin

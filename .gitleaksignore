@@ -118,3 +118,7 @@ c9a5f79ea091ced42f46f019867a970ce41dc4ac:internal/runner/k8s/sandbox_test.go:aws
 # its renamed successor ("0065_secret_envelope_v1.sql" -> "0069_…"): file names,
 # not a secret. Commit-scoped to the commit that introduced it.
 b75f982ca32cbea3a887acf57fa213d5535c2527:internal/db/db.go:generic-api-key:57
+# #587: generic-api-key false positive on docs/AUDIT-ACTIONS.md's secret.rewrap
+# row, which names the config setting `WARDYN_KEK=transit` (a mode name, not a
+# secret). Commit-scoped to the commit that introduced it.
+267d9d7cef16401aeecc34550dbfb71385d662e0:docs/AUDIT-ACTIONS.md:generic-api-key:244

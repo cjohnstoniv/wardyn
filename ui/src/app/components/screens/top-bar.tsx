@@ -148,11 +148,12 @@ export function TopBar({
                 itself stays reachable, since disabling it would hide this
                 explanation behind the one control that carries it.
                 #1328 review round 2, R2-1 — gated the same way as the shell
-                banner (app-shell.tsx's own doc): only an operator or a
-                session-user can reach NO_BARRIER.ADMIN_ROUTE at all, so
-                anyone else sees no link here (New run itself stays the only
-                control). */}
-            {noBarrier && (meta.operator || access === "session-user") && (
+                banner (app-shell.tsx's own doc): only an operator or a super
+                admin in the User view (#1335) can reach
+                NO_BARRIER.ADMIN_ROUTE at all, so anyone else — a security
+                admin in the User view included — sees no link here (New run
+                itself stays the only control). */}
+            {noBarrier && (meta.operator || (access === "session-user" && meta.userViewSuperAdmin)) && (
               <Link
                 to={NO_BARRIER.ADMIN_ROUTE}
                 className="hidden text-xs font-medium text-info hover:underline sm:inline"

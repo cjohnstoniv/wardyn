@@ -16,14 +16,14 @@ import (
 )
 
 // preset.go — read/upsert the admin-managed launch presets, the same
-// get-then-apply shape as `wardyn drive`:
+// get-then-set shape as `wardyn drive`:
 //
 //	wardyn preset get > presets.json    # a snapshot
-//	wardyn preset apply presets.json    # restore, or hand-authored presets
+//	wardyn preset set presets.json    # restore, or hand-authored presets
 //
-// `apply` PUTs every preset the file names, by name. Nothing the file omits is
+// `set` PUTs every preset the file names, by name. Nothing the file omits is
 // touched or deleted, and an unchanged preset keeps its version, so `get`
-// followed by `apply` is a no-op.
+// followed by `set` is a no-op.
 func presetCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preset",
@@ -31,13 +31,13 @@ func presetCmd(client clientFn) *cobra.Command {
 		Long: "Read or upsert the launch presets (named bundles of run fields a launcher\n" +
 			"starts with `preset` instead of a full spec):\n\n" +
 			"    wardyn preset get > presets.json\n" +
-			"    wardyn preset apply presets.json\n\n" +
-			"`apply` upserts every preset the file names, by name; a changed preset moves\n" +
+			"    wardyn preset set presets.json\n\n" +
+			"`set` upserts every preset the file names, by name; a changed preset moves\n" +
 			"to its next version, an unchanged one keeps its version. Nothing the file\n" +
 			"omits is touched and nothing is deleted, so `wardyn preset get > f && wardyn\n" +
-			"preset apply f` is a no-op.",
+			"preset set f` is a no-op.",
 	}
-	cmd.AddCommand(presetGetCmd(client), presetApplyCmd(client))
+	cmd.AddCommand(presetGetCmd(client), presetSetCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -56,9 +56,9 @@ func presetGetCmd(client clientFn) *cobra.Command {
 	}
 }
 
-func presetApplyCmd(client clientFn) *cobra.Command {
+func presetSetCmd(client clientFn) *cobra.Command {
 	return &cobra.Command{
-		Use:   "apply [file]",
+		Use:   "set [file]",
 		Short: "Upsert the launch presets in a JSON file (or stdin with '-')",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

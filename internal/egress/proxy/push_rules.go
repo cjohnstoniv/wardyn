@@ -54,8 +54,9 @@ package proxy
 // commit the push builds on — unchanged means dropped. Every other outcome
 // (different/absent entry, no vouching commit, unreadable forge) refuses.
 //
-// Phase one has no size rule; a future max_file_size_mib would use
-// gitpack.Change.Within/Size once "unknown" is resolved.
+// max_file_size_mib reads the same change set: a carried file over the limit is
+// refused from the pack alone; one whose size the pack doesn't carry is cleared
+// against the forge like a matched entry and refused when it can't be.
 
 import (
 	"bytes"
@@ -136,6 +137,8 @@ type pushRuleSet struct {
 	// inspectMax is how many bytes of the request are buffered before the push
 	// is refused as too large.
 	inspectMax int64
+	// maxFileBytes refuses a pushed file larger than this; 0 is off.
+	maxFileBytes int64
 }
 
 // compilePushRules builds the compiled form, or nil when the spec carries no
@@ -154,6 +157,7 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 		// a policy stored before its bound existed reaches here unvalidated.
 		rs.hold = min(time.Duration(s.HoldSeconds)*pushHoldSecond, maxHoldTimeout)
 	}
+	rs.maxFileBytes = int64(s.MaxFileSizeMiB) << 20
 	rs.deny = rs.compile(s.DenyPaths)
 	rs.review = rs.compile(s.RequireReviewPaths)
 	return rs
@@ -467,6 +471,11 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		http.Error(w, deniedPathsBody(denied, why), http.StatusForbidden)
 		return nil, pushReview{}, noRelease, false
 	}
+	if rules.maxFileBytes > 0 && !p.refuseLargeFiles(w, r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
+		return oversize(rules.maxFileBytes, cs)
+	}, res, forge, subject, deny) {
+		return nil, pushReview{}, noRelease, false
+	}
 	review := pushReview{cmds: res.Commands}
 	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge, subject); err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -486,32 +495,45 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 
 // matchedPaths is the verdict of one pattern list on one inspected push:
 // every path it claims, and why when the forge was asked (a push the pack
-// alone passes is never asked). History the pack re-sends is cleared first
-// (forgeRepo.settle); an entry the pack still carries is claimed outright,
-// and only then does the forge get to clear entries the pack doesn't carry.
+// alone passes is never asked).
 func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo,
 	subject slog.Attr) (paths []string, why string, err error) {
 	if len(pats) == 0 {
 		return nil, "", nil
 	}
-	paths, unknown, err := match(pats, res.Changes)
-	if err != nil || len(paths) == 0 && len(unknown) == 0 {
-		return paths, "", err
+	paths, left, why, err := p.claimedEntries(r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
+		return match(pats, cs)
+	}, res, forge, subject)
+	for _, c := range left {
+		paths = append(paths, shownPath(c))
+	}
+	return paths, why, err
+}
+
+// claimedEntries runs one rule's claim over an inspected push: claim splits
+// the changes into those the pack carries (hits, claimed outright) and those
+// it doesn't (unknown, for the forge to clear or not). History the pack
+// re-sends is cleared first (forgeRepo.settle); an entry the pack still
+// carries is claimed outright, and only then does the forge get to clear
+// entries the pack doesn't carry. left is what no one cleared, and why says
+// what the forge could not show.
+func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]string, []gitpack.Change, error),
+	res gitpack.Result, forge *forgeRepo, subject slog.Attr) (hits []string, left []gitpack.Change, why string, err error) {
+	hits, unknown, err := claim(res.Changes)
+	if err != nil || len(hits) == 0 && len(unknown) == 0 {
+		return hits, nil, "", err
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), forgeReadWait)
 	defer cancel()
-	left := unknown
+	left = unknown
 	if res, why = forge.settle(ctx, res); why == "" {
-		if paths, unknown, err = match(pats, res.Changes); err != nil {
-			return nil, "", err
+		if hits, unknown, err = claim(res.Changes); err != nil {
+			return nil, nil, "", err
 		}
 		left = nil
-		if len(paths) == 0 && len(unknown) > 0 {
+		if len(hits) == 0 && len(unknown) > 0 {
 			left, why = forge.unchanged(ctx, unknown, res)
 		}
-	}
-	for _, c := range left {
-		paths = append(paths, shownPath(c))
 	}
 	if forge != nil && forge.reads > 0 {
 		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
@@ -519,10 +541,86 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,
-			slog.Int("still_matched", len(paths)),
+			slog.Int("still_matched", len(hits)+len(left)),
 			slog.Int("forge_reads", forge.reads))
 	}
-	return paths, why, nil
+	return hits, left, why, nil
+}
+
+// modeGitlink is a submodule pointer: a commit id, not a file, so it has no size.
+const modeGitlink = "160000"
+
+// oversize is the size rule's claim: a carried file above limit is a hit named
+// with its size, rounded up to a whole MiB so the figure is always past the
+// limit it is shown against; a file whose size the pack doesn't carry is
+// unknown, for the forge to show unchanged.
+func oversize(limit int64, changes []gitpack.Change) (hits []string, unknown []gitpack.Change, err error) {
+	for _, c := range changes {
+		switch n, known := c.Size(); {
+		case c.Mode == modeGitlink:
+		case !known:
+			unknown = append(unknown, c)
+		case n > limit:
+			hits = append(hits, fmt.Sprintf("%s (%d MiB)", c.Path, (n+1<<20-1)>>20))
+		}
+	}
+	return hits, unknown, nil
+}
+
+// refuseLargeFiles applies max_file_size_mib (claim is oversize at that limit)
+// to one inspected push and writes the refusal itself (a deny, like a
+// deny_paths match), returning false when it refused. A claim that fails is a
+// push it could not judge, refused as blind like an uninspectable path rule.
+func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
+	claim func([]gitpack.Change) ([]string, []gitpack.Change, error), res gitpack.Result,
+	forge *forgeRepo, subject slog.Attr, deny func(ruleSource string)) bool {
+	over, left, why, err := p.claimedEntries(r, claim, res, forge, subject)
+	if err != nil {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			"wardyn: cannot enforce push content rules on this push: "+err.Error())
+		return false
+	}
+	const headline = "wardyn: this push is refused by the run's push content rules: files over the size limit"
+	var body string
+	switch {
+	case len(over) > 0:
+		body = pathsBody(headline, over, "oversize", "",
+			"remove or shrink these files, or ask an operator to raise push_rules.max_file_size_mib")
+	case len(left) > 0:
+		lines := make([]string, len(left))
+		for i, pth := range uncarriedPaths(left) {
+			lines[i] = pth + ": size not carried by the pack"
+		}
+		// A complete clone cannot help: git never sends objects the remote
+		// already has. The broker has to read the forge, and only GitHub's
+		// can be read.
+		remedy := "ask an operator to set push_rules.max_file_size_mib to 0"
+		if why == whyNotGitHub {
+			remedy = "ask an operator to set push_rules.max_file_size_mib to 0 on this lane, or push through a GitHub lane"
+		}
+		body = pathsBody(headline, lines, "unsized", why, remedy)
+	default:
+		return true
+	}
+	deny(ruleSourceGitRules)
+	slog.WarnContext(r.Context(), "wardyn-proxy: git push denied by content rules",
+		slog.String("run_id", p.runID.String()),
+		subject,
+		slog.Int("denied_paths", len(over)+len(left)),
+		slog.Any("paths", sampleOf(append(over, uncarriedPaths(left)...))),
+		slog.String("reason", "max_file_size_mib"),
+		slog.String("forge", why))
+	http.Error(w, body, http.StatusForbidden)
+	return false
+}
+
+// uncarriedPaths names each entry the way a refusal shows it.
+func uncarriedPaths(cs []gitpack.Change) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = shownPath(c)
+	}
+	return out
 }
 
 // refusePush records, logs and answers one content-rule refusal that names no

@@ -148,10 +148,11 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("parse site config JSON: %w", err)
 			}
-			out, dangling, onboardingIgnored, err := client().PutSiteConfig(cmd.Context(), cfg)
+			res, err := client().PutSiteConfigResult(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
+			out, dangling, onboardingIgnored := res.SiteConfig, res.DanglingSecretRefs, res.OnboardingCompletedAtIgnored
 			// Printed only after a successful apply — an operator debugging a
 			// rejected file doesn't need a note about fields that were never
 			// reached.
@@ -169,6 +170,11 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			// the pre-reset install's.
 			if onboardingIgnored {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: onboarding_completed_at in this file was not applied — the setup flow owns that mark on this install; the stored one is left as it is\n")
+			}
+			// #1215: a valid branding.logo_path with no branding record to hold it
+			// succeeded but attached nothing; say what makes it land.
+			if res.BrandingLogoPending {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: branding.logo_path was not attached — the console has no branding yet; save the Branding card (Admin view, Settings), then apply this file again\n")
 			}
 			return emitJSON(cmd.OutOrStdout(), out)
 		},

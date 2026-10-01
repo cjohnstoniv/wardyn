@@ -8,7 +8,8 @@
 // bound to the row's owner and name. Each provider implements KEK; the row
 // records the provider's ID as kek_id, and a read picks the KEK by that id.
 // `local` lives here, one key per purpose (NewLocalPurpose); Vault Transit
-// (package vaultkv) wraps through the service's own encrypt/decrypt.
+// (package vaultkv) wraps through the service's own encrypt/decrypt, and Azure
+// Key Vault (package azurekv) through wrapkey/unwrapkey under a signature.
 // WARDYN_KEK selects the one every write uses.
 package kek
 
@@ -22,14 +23,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"filippo.io/age"
 )
 
 // KEK wraps and unwraps data keys. bind carries the row's identity
 // (BindOwner, BindName); a provider must refuse to unwrap under a different
-// bind than the one it wrapped under, enforced as associated data (local,
-// Transit) or encryption context (AWS KMS).
+// bind than the one it wrapped under (F1), enforced as associated data (local,
+// Transit) or a service-made signature (Key Vault), and nobody without the
+// KEK may make a wrap that unwraps (F2): with an asymmetric key the public
+// half alone must not suffice.
 type KEK interface {
 	// ID is stable and non-secret; it is recorded on each row as kek_id.
 	ID() string
@@ -42,15 +46,29 @@ type KEK interface {
 // transient: an unreachable service is secretstore.ErrUnavailable instead.
 var ErrService = errors.New("key service error")
 
-// Versioned is a KEK whose key has versions (Vault Transit): each wrap names
-// the version it was made under, and `wardynd -rewrap` migrates rows still on
-// an older version to the latest so old versions can be retired.
+// Versioned is a KEK whose key has versions (Vault Transit, Key Vault): each
+// wrap names the version it was made under, and `wardynd -rewrap` moves every
+// row naming any other version onto the latest, so the others can be retired.
+// A version is opaque; only equality counts.
 type Versioned interface {
 	KEK
 	// WrapVersion is the key version wrapped was made under.
-	WrapVersion(wrapped []byte) (int, error)
+	WrapVersion(wrapped []byte) (string, error)
 	// LatestVersion is the version a wrap made now would name.
-	LatestVersion(ctx context.Context) (int, error)
+	LatestVersion(ctx context.Context) (string, error)
+}
+
+// The kek_id prefixes of the key services. A row under one holds nothing an
+// age key derives.
+const (
+	TransitIDPrefix  = "transit:"
+	AzureKeyIDPrefix = "azurekv-key:"
+)
+
+// IsServiceID reports whether id names a key service's KEK (Transit, Key
+// Vault). A kek_id that is neither local nor a known service's is not one.
+func IsServiceID(id string) bool {
+	return strings.HasPrefix(id, TransitIDPrefix) || strings.HasPrefix(id, AzureKeyIDPrefix)
 }
 
 // The bind keys: KMS encryption context / Transit associated data a

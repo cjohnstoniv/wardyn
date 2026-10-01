@@ -42,6 +42,7 @@ import (
 const (
 	providers400BaseURL     = "base_urls[%d]: must be an https URL with a host and no credentials, query or fragment"
 	providers400HostKind    = "base_urls[%d]: %q is not a %s host"
+	providers400HostTwoKind = "row %d: host %q is already on a %s row; a host may appear on rows of one kind only"
 	providers400Lane        = "lanes: %q is not available for %s (%s)"
 	providers400DiskOrder   = "storage.ephemeral: default_disk_mib may not exceed max_disk_mib"
 	providers400DupID       = "id %q is not unique"
@@ -269,7 +270,26 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 	if err := validateOneEntraRow(p.Git); err != nil {
 		return err
 	}
+	if err := validateHostOneKind(p.Git); err != nil {
+		return err
+	}
 	return validateStorageProviders(p.Storage)
+}
+
+// validateHostOneKind refuses one host (keyed by its secret-name slug) on rows of
+// two kinds (#1450): a host is one forge. Disabled rows count toward it too.
+func validateHostOneKind(rows []types.GitProvider) error {
+	kindOf := map[string]types.GitProviderKind{}
+	for i, row := range rows {
+		for _, raw := range row.BaseURLs {
+			host := canonicalProviderHost(strings.ToLower(hostrules.HostOf(raw)))
+			if first, ok := kindOf[slugHost(host)]; ok && first != row.Kind {
+				return fmt.Errorf(providers400HostTwoKind, i, host, string(first))
+			}
+			kindOf[slugHost(host)] = row.Kind
+		}
+	}
+	return nil
 }
 
 // validateProviderLanes refuses a lane the row's own addresses can never carry.
@@ -813,9 +833,9 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "count sources this block refuses", err)
 		return
 	}
-	// EffectiveScmHosts is projected on read and never stored — a value that
-	// rode in on a GET-spread body would otherwise be persisted into the JSONB.
-	candidate.EffectiveScmHosts = nil
+	// EffectiveScmHosts and WithheldScmHosts are projected on read and never
+	// stored — a value on a GET-spread body would otherwise reach the JSONB.
+	candidate.EffectiveScmHosts, candidate.WithheldScmHosts = nil, nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)

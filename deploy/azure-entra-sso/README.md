@@ -54,7 +54,9 @@ troubleshooting table (redirect loops, `no Wardyn role assigned`,
   browser `az login`, never `--use-device-code`.
 - **Entra never emits `email_verified`.** `WARDYN_OIDC_EMAIL_DOMAINS` fails
   *every* login closed against an Entra tenant if set (`docs/ENV.md`'s own
-  row says so) — `04-values.sh` never sets it, and neither should you.
+  row says so) — `04-values.sh` never sets it, and neither should you. The same
+  goes for `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED`: an absent claim counts as
+  unverified, so turning it on with Entra refuses every sign-in.
 - A **cloud-only** user has no `email` claim unless (a) the app registration
   requests the **optional** `email` ID-token claim (`02-app.sh` does this)
   **and** (b) the user object's `mail` attribute is actually populated —

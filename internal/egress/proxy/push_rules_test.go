@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/adler32"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,6 +40,14 @@ func contentRulesSpec(deny ...string) types.RunPolicySpec {
 // and a fixture that encoded the answer would prove nothing about it.
 func recordedPush(t *testing.T, ref string, files map[string]string) []byte {
 	t.Helper()
+	return recordedPushOn(t, ref, nil, files)
+}
+
+// recordedPushOn is recordedPush on top of a repository that already holds seed
+// on main: the pushed commit's parent stays on the forge, so the pack omits
+// every seed file the push does not change, as a real governed run's does.
+func recordedPushOn(t *testing.T, ref string, seed, files map[string]string) []byte {
+	t.Helper()
 	f := forgeOn(t, httptest.NewServer)
 	bare := filepath.Join(f.root, "octocat", "hello-world.git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
@@ -48,6 +57,12 @@ func recordedPush(t *testing.T, ref string, files map[string]string) []byte {
 
 	work := t.TempDir()
 	runGit(t, work, "init", "-q", "--initial-branch=main", work)
+	if seed != nil {
+		writeFiles(t, work, seed)
+		runGit(t, work, "add", "-A")
+		runGit(t, work, "commit", "-qm", "seed")
+		runGit(t, work, "push", "-q", bare, "HEAD:refs/heads/main")
+	}
 	writeFiles(t, work, files)
 	runGit(t, work, "add", "-A")
 	runGit(t, work, "commit", "-qm", "work")
@@ -687,6 +702,13 @@ func TestPushRulesDefaultInspectionCeilingLeavesRoomToRaise(t *testing.T) {
 // subdirectory, a file at the root, and the source tree the run edits.
 func pushThroughBroker(t *testing.T, deny ...string) (string, error) {
 	t.Helper()
+	return pushThroughBrokerSpec(t, contentRulesSpec(deny...), 2000)
+}
+
+// pushThroughBrokerSpec is pushThroughBroker under any policy, with the edited
+// file's size (in lines of bigFile) chosen by the caller.
+func pushThroughBrokerSpec(t *testing.T, spec types.RunPolicySpec, lines int) (string, error) {
+	t.Helper()
 	forge := newGitForge(t)
 	bare := filepath.Join(forge.root, "octocat", "hello-world.git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
@@ -707,7 +729,7 @@ func pushThroughBroker(t *testing.T, deny ...string) (string, error) {
 
 	p, sink := newGitBrokerProxyWithSpec(t,
 		map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
-		upstreamAddr(forge.srv), contentRulesSpec(deny...))
+		upstreamAddr(forge.srv), spec)
 	broker := httptest.NewServer(p)
 	t.Cleanup(broker.Close)
 
@@ -715,7 +737,7 @@ func pushThroughBroker(t *testing.T, deny ...string) (string, error) {
 	runGit(t, t.TempDir(), "clone", "-q", "--depth", "1",
 		broker.URL+"/wardyn/gh/octocat/hello-world", work)
 	writeFiles(t, work, map[string]string{
-		"src/app.go": strings.Replace(bigFile(2000), "line 01000:", "line 01000! edited", 1),
+		"src/app.go": strings.Replace(bigFile(lines), "line 01000:", "line 01000! edited", 1),
 	})
 	runGit(t, work, "commit", "-qam", "edit one line")
 
@@ -771,5 +793,131 @@ func TestPushRulesSeeWhatThePackCarriesAndNoMore(t *testing.T) {
 				t.Fatalf("git push was refused under deny %q, which this push leaves unchanged:\n%s", c.deny, out)
 			}
 		})
+	}
+}
+
+// fileSizeBody is the refusal a max_file_size_mib push gets: the approved
+// headline, the lines, and the remedy.
+func fileSizeBody(remedy string, lines ...string) string {
+	return "wardyn: this push is refused by the run's push content rules: files over the size limit\n" +
+		strings.Join(lines, "\n") + "\n" + remedy + "\n"
+}
+
+func fileSizeSpec(mib int) types.RunPolicySpec {
+	return types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{"nothing/**"}, MaxFileSizeMiB: mib}}
+}
+
+// TestPushRulesMaxFileSize drives real governed pushes: the edited file is the
+// only one the pack carries, so every untouched seed file has no size in the
+// pack and is cleared against the forge as unchanged.
+func TestPushRulesMaxFileSize(t *testing.T) {
+	cases := []struct {
+		name      string
+		mib       int
+		lines     int // of the edited file; 25000 lines is about 1.4 MiB
+		wantRefus bool
+	}{
+		{"a file under the limit passes", 1, 2000, false},
+		{"a file over the limit is refused", 1, 25000, true},
+		{"0 is off", 0, 25000, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := pushThroughBrokerSpec(t, fileSizeSpec(c.mib), c.lines)
+			if !c.wantRefus {
+				if err != nil {
+					t.Fatalf("git push was refused at max_file_size_mib %d:\n%s", c.mib, out)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("git push succeeded at max_file_size_mib %d, want a refusal\n%s", c.mib, out)
+			}
+			if !strings.Contains(out, `"rule_source":"`+ruleSourceGitRules+`"`) {
+				t.Errorf("git push failed for some other reason:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestPushRulesMaxFileSizeRefusalText pins the two approved refusals word for
+// word: a carried file over the limit, and a file the pack omits that the
+// forge cannot show unchanged (the App-lane test upstream serves no API).
+func TestPushRulesMaxFileSizeRefusalText(t *testing.T) {
+	cases := []struct {
+		name        string
+		seed, files map[string]string
+		want        string
+	}{
+		{"over the limit", nil, map[string]string{"big.txt": strings.Repeat("0123456789abcdef", 3<<15) + "\n"}, // 1.5 MiB, shown as 2
+			fileSizeBody(
+				"remove or shrink these files, or ask an operator to raise push_rules.max_file_size_mib",
+				"  big.txt (2 MiB)")},
+		{"size not carried by the pack", map[string]string{"kept.txt": "kept\n"}, map[string]string{"small.txt": "small\n"}, fileSizeBody(
+			"ask an operator to set push_rules.max_file_size_mib to 0",
+			"  kept.txt: size not carried by the pack",
+			"the broker could not compare what this push does not carry with the commit it builds on: invalid character 'g' looking for beginning of value")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			up := newGitBrokerUpstream(t, "gh-inst-token")
+			p, _ := newGitBrokerProxyWithSpec(t,
+				map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv), fileSizeSpec(1))
+			body := recordedPushOn(t, BranchNSPrefix(p.runID)+"work", c.seed, c.files)
+
+			rec := postPush(t, p, string(body))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+			}
+			if got := rec.Body.String(); got != c.want {
+				t.Errorf("refusal =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+// On a lane that cannot read the forge the refusal says so and offers only the
+// remedies that work: a complete clone never carries what the remote holds.
+func TestPushRulesMaxFileSizeRefusalNamesTheForge(t *testing.T) {
+	p, _ := newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, "", fileSizeSpec(1))
+	rec := httptest.NewRecorder()
+	ok := p.refuseLargeFiles(rec, mustLocalReq(t, http.MethodPost, "/", strings.NewReader("")),
+		func([]gitpack.Change) ([]string, []gitpack.Change, error) {
+			return nil, []gitpack.Change{{Path: "kept.txt"}}, nil
+		},
+		gitpack.Result{}, nil, slog.String("repo", "octocat/hello-world"), func(string) {})
+	if ok || rec.Code != http.StatusForbidden {
+		t.Fatalf("ok = %v, status = %d, want a refusal with 403", ok, rec.Code)
+	}
+	want := fileSizeBody(
+		"ask an operator to set push_rules.max_file_size_mib to 0 on this lane, or push through a GitHub lane",
+		"  kept.txt: size not carried by the pack", whyNotGitHub)
+	if got := rec.Body.String(); got != want {
+		t.Errorf("refusal =\n%q\nwant\n%q", got, want)
+	}
+	if strings.Contains(rec.Body.String(), "complete clone") {
+		t.Errorf("refusal offers a complete clone, which cannot carry what the remote holds: %q", rec.Body.String())
+	}
+}
+
+// A size claim that fails is a push the proxy could not judge, so it is
+// refused under the blind rule source, as an uninspectable path rule is: it
+// must never read as "no file is over the limit".
+func TestPushRulesMaxFileSizeClaimErrorRefuses(t *testing.T) {
+	p, _ := newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, "", fileSizeSpec(1))
+	var denied []string
+	rec := httptest.NewRecorder()
+	ok := p.refuseLargeFiles(rec, mustLocalReq(t, http.MethodPost, "/", strings.NewReader("")),
+		func([]gitpack.Change) ([]string, []gitpack.Change, error) {
+			return nil, nil, errors.New("claim failed")
+		},
+		gitpack.Result{}, nil, slog.String("repo", "octocat/hello-world"),
+		func(src string) { denied = append(denied, src) })
+	if ok || rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("ok = %v, status = %d, want a refusal with 415", ok, rec.Code)
+	}
+	if len(denied) != 1 || denied[0] != ruleSourceGitPackBlind {
+		t.Errorf("deny rows = %v, want one %s", denied, ruleSourceGitPackBlind)
 	}
 }

@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import * as React from "react";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -211,5 +212,35 @@ describe("claim() — one PRIMARY recovery action per state per screen", () => {
     act(() => rerender(<Poll state="expiring" />));
     expect(claims.length).toBeGreaterThan(1);
     expect(new Set(claims).size).toBe(1);
+  });
+});
+
+describe("openDoor resolves against the status the screen just committed", () => {
+  // A click after the commit but before passive effects (a busy runner yields
+  // there) must not read the status before it. The consumer here acts in a
+  // layout effect of a component ABOVE the provider, which runs after the
+  // provider's own layout effects and before any passive one, so the gap is
+  // exact and needs no timer.
+  it("a request made between the commit and its passive effects opens the door", () => {
+    function Grab({ door }: { door: { current: ReturnType<typeof useModelAccessDoor> | null } }) {
+      door.current = useModelAccessDoor();
+      return null;
+    }
+    function Shell({ status }: { status: SetupStatus | null }) {
+      const door = React.useRef<ReturnType<typeof useModelAccessDoor> | null>(null);
+      React.useLayoutEffect(() => {
+        if (status) door.current?.openDoor({ for: { provider: MODEL_PROVIDERS.bedrock.id } });
+      }, [status]);
+      return (
+        <ModelAccessProvider status={status} onRefresh={vi.fn()}>
+          <Grab door={door} />
+          <Probe />
+        </ModelAccessProvider>
+      );
+    }
+    const { rerender } = render(<Shell status={null} />);
+    expect(screen.getByTestId("probe-open")).toHaveTextContent("false");
+    act(() => rerender(<Shell status={statusWith("not_configured")} />));
+    expect(screen.getByTestId("probe-open")).toHaveTextContent("true");
   });
 });
