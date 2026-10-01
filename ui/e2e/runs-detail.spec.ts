@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
 import { RUN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
@@ -86,6 +86,42 @@ test.describe("Run detail (/runs/:id)", () => {
     const killBtn = page.getByRole("button", { name: "Kill", exact: true });
     await expect(killBtn).toBeVisible();
     await expect(killBtn).toBeEnabled();
+  });
+
+  // #1483: the route changed from run A to run B but the screen did not
+  // remount, so A's late answer replaced B's page while the URL still said B,
+  // and the Kill dialog named A while sending B. Moves between runs go through
+  // the router (a popstate), not a full load.
+  test("moving from run A to run B: A's late answer never renders on B, and Kill names B", async ({ page }) => {
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })).json()) as { id: string; task: string }[];
+    const a = list.find((r) => r.task === "e2e fixture 2")!;
+    const b = list.find((r) => r.task === "e2e fixture 1")!;
+    expect(a && b).toBeTruthy();
+    // A answers slowly: its page is still loading when the router moves to B.
+    await page.route(`**/api/v1/runs/${a.id}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await new Promise((r) => setTimeout(r, 2500));
+      await route.continue();
+    });
+    // Only move once A's request is actually in flight: the router moving
+    // before the page mounted A would test nothing.
+    const requestedA = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(`/api/v1/runs/${a.id}`));
+    await page.goto(`runs/${a.id}`);
+    await requestedA;
+    await page.evaluate((to) => {
+      window.history.pushState({}, "", to);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, page.url().replace(a.id, b.id));
+    const headingB = page.getByRole("heading", { name: "e2e fixture 1", level: 1 });
+    await expect(headingB).toBeVisible();
+    // Wait out A's answer, then B must still be what the page shows.
+    await page.waitForTimeout(3200);
+    await expect(headingB).toBeVisible();
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toHaveCount(0);
+    await page.getByRole("button", { name: "Kill", exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(`Kill ${b.id}?`);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
   });
 
   test("detail of a COMPLETED run renders and has a disabled Kill button", async ({ page }) => {

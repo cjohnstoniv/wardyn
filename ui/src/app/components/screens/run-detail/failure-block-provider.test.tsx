@@ -118,7 +118,7 @@ describe("state 2 — the owner, User view: the door of the run's own provider",
   });
 
   it("token: Add your token opens the token door (#146 defect 2: never Sign in to AWS)", async () => {
-    const hint = refusal(gateway.name, "you have not added your token for it", CONNECT);
+    const hint = refusal(gateway.name, "no token is available for it", CONNECT);
     renderBlock({ hint, audit: trail(gateway.id, "custom_endpoint") });
     const btn = screen.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.ADD_TOKEN_ARIA });
     expect(btn).toHaveTextContent(CONNECTIONS.ADD_TOKEN);
@@ -129,7 +129,7 @@ describe("state 2 — the owner, User view: the door of the run's own provider",
   });
 
   it("key: Add your key opens the key door", async () => {
-    const hint = refusal(anthropicKey.name, "you have not added your key for it", CONNECT);
+    const hint = refusal(anthropicKey.name, "no key is available for it", CONNECT);
     renderBlock({ hint, audit: trail(anthropicKey.id, "anthropic_api_key") });
     const btn = screen.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.ADD_KEY_ARIA });
     expect(btn).toHaveTextContent(CONNECTIONS.ADD_KEY);
@@ -150,7 +150,7 @@ describe("state 2 — the owner, User view: the door of the run's own provider",
   });
 
   it("a provider this person no longer has a door for: the sentence alone", () => {
-    const hint = refusal("gone", "you have not added your key for it", CONNECT);
+    const hint = refusal("gone", "no key is available for it", CONNECT);
     renderBlock({ hint, audit: trail("gone", "anthropic_api_key") });
     expect(screen.getByText(hint)).toBeInTheDocument();
     expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOTE_KEY)).toBeNull();

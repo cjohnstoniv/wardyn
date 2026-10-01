@@ -158,6 +158,18 @@ export const ADO_PAT = {
   OWN_REFUSED_LINE: (date: string, expiry: string) => `Azure DevOps refused this token on ${date}, before it expires on ${expiry}. Replace it.`,
   OWN_REPLACE: "Replace token",
   OWN_EXPIRED_BODY: "Your runs can't reach Azure DevOps until you add a new token.",
+  // #1488 — Remove from Wardyn (console-085-packet, approved 2026-10-01). The
+  // runs line is the owner's replacement for the packet's, which overclaimed: a
+  // run already using the token keeps its cached copy for up to 10 minutes.
+  OWN_REMOVE: "Remove from Wardyn",
+  OWN_REMOVE_TITLE: (org: string) => `Remove your token for ${org}?`,
+  OWN_REMOVE_BODY:
+    "This deletes Wardyn's copy of your token. It does not revoke the token in Azure DevOps, so revoke it there too.",
+  OWN_REMOVE_RUNS: "Runs already using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now.",
+  OWN_REMOVE_CANCEL: "Cancel",
+  OWN_REMOVE_PENDING: "Removing…",
+  OWN_REMOVED_TOAST: (org: string) => `Your token for ${org} was removed from Wardyn. It isn't revoked in Azure DevOps.`,
+  OWN_REMOVE_FAILED_TOAST: (org: string) => `Couldn't remove your token for ${org}. It's still stored in Wardyn. Try again.`,
   OWN_SERVER_TITLE: "Azure DevOps Server",
   OWN_SERVER_NOTE: "Git only. Azure DevOps Server has no Entra sign-in.",
 

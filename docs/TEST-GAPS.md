@@ -40,7 +40,7 @@ Postgres lane ALSO leaves them at 0.0%.
 - **cmd/wardynd**: CountPendingApprovals, CountPendingApprovalsByRunCreator, ExpireOne, ListPendingApprovalsForRuns, ListRoleMappings, Record, Write
 - **internal/api**: Error, Error, Error, GoBackground, Peek, StartDrain
 - **internal/contentscan**: Scan
-- **internal/egress/proxy**: Error, NoProxyCovers, Unwrap
+- **internal/egress/proxy**: Error, Unwrap
 - **internal/identity**: New
 - **internal/lifecycle**: Run
 - **internal/recording**: Sweep

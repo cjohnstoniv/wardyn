@@ -14,7 +14,7 @@ import { adoPat } from "../../../lib/api/ado-pat";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { getErrorMessage } from "../../../lib/format";
-import type { PatCardView, PatTone } from "../../../lib/ado-pat-display";
+import { adoOrgLabel, adoTokensURL, type PatCardView, type PatTone } from "../../../lib/ado-pat-display";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import {
   AlertDialog,
@@ -55,6 +55,13 @@ export function AdoPatBody({
 }) {
   const [confirmDisconnect, setConfirmDisconnect] = React.useState(false);
   const [tokenDialog, setTokenDialog] = React.useState(false);
+  const [confirmRemove, setConfirmRemove] = React.useState(false);
+  const [removing, setRemoving] = React.useState(false);
+  // A ref as well as the state: two clicks in one tick both see removing ===
+  // false until React re-renders, and the DELETE must go once.
+  const removeInFlight = React.useRef(false);
+  const org = adoOrgLabel(access.org ?? "");
+  const tokensURL = adoTokensURL(access.org ?? "");
 
   const disconnect = async () => {
     setConfirmDisconnect(false);
@@ -63,6 +70,29 @@ export function AdoPatBody({
       onChanged();
     } catch (e) {
       toast.error(getErrorMessage(e));
+    }
+  };
+
+  // Remove from Wardyn (#1488): the dialog stays open and says Removing… while
+  // the DELETE runs, then closes, and the outcome is a toast. Any failure is one
+  // sentence (a 404 from an older daemon included) and the card is left as it
+  // was: never a "removed" that did not happen. A success reloads, which also
+  // settles a stale card whose token was already gone (a 204).
+  const removeToken = async () => {
+    if (removeInFlight.current) return;
+    removeInFlight.current = true;
+    setRemoving(true);
+    try {
+      await adoPat.removeOwnToken(access.org ?? "");
+      setConfirmRemove(false);
+      toast.success(ADO_PAT.OWN_REMOVED_TOAST(org));
+      onChanged();
+    } catch {
+      setConfirmRemove(false);
+      toast.error(ADO_PAT.OWN_REMOVE_FAILED_TOAST(org));
+    } finally {
+      removeInFlight.current = false;
+      setRemoving(false);
     }
   };
 
@@ -87,6 +117,11 @@ export function AdoPatBody({
         {view.action === "replace_token" && (
           <Button size="sm" variant={view.refused ? "default" : "outline"} onClick={() => setTokenDialog(true)}>
             {ADO_PAT.OWN_REPLACE}
+          </Button>
+        )}
+        {view.remove && (
+          <Button size="sm" variant="outline" onClick={() => setConfirmRemove(true)}>
+            {ADO_PAT.OWN_REMOVE}
           </Button>
         )}
         {view.disconnect && (
@@ -120,6 +155,36 @@ export function AdoPatBody({
             <AlertDialogCancel>{ADO_PAT.DISCONNECT_CANCEL}</AlertDialogCancel>
             <AlertDialogAction className={buttonVariants({ variant: "destructive" })} onClick={() => void disconnect()}>
               {ADO_PAT.MEMBER_DISCONNECT}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmRemove} onOpenChange={(o) => !removing && setConfirmRemove(o)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{ADO_PAT.OWN_REMOVE_TITLE(org)}</AlertDialogTitle>
+            <AlertDialogDescription>{ADO_PAT.OWN_REMOVE_BODY}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {tokensURL && (
+            <p className="text-body">
+              <a href={tokensURL} target="_blank" rel="noopener noreferrer" className="font-medium text-info hover:underline">
+                {ADO_PAT.OWN_OPEN_TOKENS}
+              </a>
+            </p>
+          )}
+          <p className="text-body text-muted-foreground">{ADO_PAT.OWN_REMOVE_RUNS}</p>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>{ADO_PAT.OWN_REMOVE_CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              disabled={removing}
+              onClick={(e) => {
+                e.preventDefault();
+                void removeToken();
+              }}
+            >
+              {removing ? ADO_PAT.OWN_REMOVE_PENDING : ADO_PAT.OWN_REMOVE}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

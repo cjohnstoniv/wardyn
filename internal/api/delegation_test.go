@@ -108,6 +108,17 @@ func (f *fakeDelegateStore) GetDelegatedTokenByRaw(_ context.Context, raw string
 	return t, nil
 }
 
+func (f *fakeDelegateStore) GetDelegatedTokenByID(_ context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.tokens {
+		if t.ID == id && t.ExpiresAt.After(now) && f.delegates[t.DelegateID].RevokedAt == nil {
+			return t, nil
+		}
+	}
+	return types.DelegatedToken{}, store.ErrNotFound
+}
+
 // seedDelegation registers a portal and hands it a live delegated token for
 // principal at the given role's reach — the state a successful exchange
 // leaves, without an IdP (delegation_pg_test.go drives the real exchange).
@@ -316,7 +327,9 @@ func TestDelegation_AttachTicketCarriesVia(t *testing.T) {
 // ticket's via is written onto its entry rows explicitly — success and refusal.
 func TestDelegation_UIGatewayEntryCarriesVia(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+	ds := newFakeDelegateStore()
+	h.srv.cfg.Store = &uiDelegateStore{h.store, ds}
+	_, via := seedDelegation(t, ds, h.owner)
 	delegated := audit.WithDelegation(context.Background(), via)
 	ticket := func() string {
 		tok, err := mintAttachTicket(delegated, h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, time.Now())
@@ -415,6 +428,12 @@ func TestDelegation_AttachPromoteAndDetachCarryVia(t *testing.T) {
 	}
 }
 
+// uiPauseDelegateStore is uiPauseStore with the portal tables beside it.
+type uiPauseDelegateStore struct {
+	*uiPauseStore
+	*fakeDelegateStore
+}
+
 // TestDelegation_UIGatewayRelayRowsCarryVia is #1234's UI-gateway half: the
 // relay audits on the daemon's context, so the session minted from a delegated
 // ticket carries the portal onto ui.start, ui.open, ui.close, a re-assert's
@@ -423,11 +442,12 @@ func TestDelegation_AttachPromoteAndDetachCarryVia(t *testing.T) {
 func TestDelegation_UIGatewayRelayRowsCarryVia(t *testing.T) {
 	h := newUIHarness(t, closingBackend("sandbox app"))
 	h.launcher = 5 // the app was started by this request, so ui.start is written
-	h.srv.cfg.Store = &uiPauseStore{uiMemStore: h.store, pauseMarks: pauseMarks{paused: true}}
+	ds := newFakeDelegateStore()
+	h.srv.cfg.Store = &uiPauseDelegateStore{&uiPauseStore{uiMemStore: h.store, pauseMarks: pauseMarks{paused: true}}, ds}
+	_, via := seedDelegation(t, ds, h.owner)
 	paused, pausedAt := h.run, h.clock.now()
 	paused.PausedAt, paused.PausedReason = &pausedAt, types.PauseReason("idle")
 	h.store.putRun(paused)
-	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
 	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID, types.ActorHuman, h.owner, oidc.RoleUser, time.Now())
 	if err != nil {
 		t.Fatal(err)

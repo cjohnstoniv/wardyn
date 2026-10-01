@@ -45,8 +45,11 @@ import {
   createRequestFromAudit,
   egressFromAudit,
   exitCodeFromAudit,
+  runEndingFromAudit,
 } from "../../lib/api/audit";
+import { heldCredentials, type HeldCredentials } from "../../lib/held-credentials";
 import { LIST_LIMIT } from "../../lib/api/core";
+import { appURL } from "../../lib/base-path";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../lib/use-poll";
@@ -60,7 +63,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
   RUN_COCKPIT,
@@ -85,11 +88,23 @@ import type { WidgetContext } from "./run-detail/widget-registry";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
+// How long after a KILLED run ended its page keeps asking whether the kill row has landed.
+const KILL_SETTLE_MS = 120_000;
 
 type Tab = "overview" | "approvals" | "policy" | "audit" | "recording";
 
+// The route's component. KEYED by the route id on both run routes (/runs/:id
+// and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
+// in-flight load, its poll's in-flight guard, its detached fetches and every
+// piece of state it held (grants, approvals, recording, ending audit) die with
+// the old instance instead of landing on B (#1483). react-router reuses one
+// element across a param change, so without the key nothing resets.
 export function RunDetailScreen() {
   const { id = "" } = useParams();
+  return <RunDetailPage key={id} id={id} />;
+}
+
+function RunDetailPage({ id }: { id: string }) {
   const navigate = useNavigate();
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
@@ -106,6 +121,13 @@ export function RunDetailScreen() {
   // scoped-fetched the same way session.recording.write is, so the exit code and
   // ending derivation stay known past that cap.
   const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
+  // #1487: this run's credential.mint rows, fetched with their OWN action filter
+  // (never read off the 1000-row trail above) so a kill outcome can name what
+  // the run held. undefined = not fetched yet; null = the fetch failed. Joined
+  // to `grants` for the kind and host by held-credentials.ts.
+  const [endingState, setEndingState] = React.useState<"loading" | "ready" | "failed">("loading");
+  const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
+  const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [tab, setTab] = React.useState<Tab>("overview");
   // "Make a policy from this run" — the honest home of "write the policy from
@@ -132,6 +154,40 @@ export function RunDetailScreen() {
     action: "approve" | "deny";
     kind: ApprovalRequest["kind"];
   } | null>(null);
+
+  // How a terminal run ended, read off its own scoped audit rows (#1487): the
+  // facts that decide a KILLED run's outcome. The run page renders without them;
+  // the KILLED outcome block and the Kill-again offer wait for them rather than
+  // guess ("no kill record" before the rows landed is a claim, not a loading
+  // state). A generation counter drops an older read that answers after a newer
+  // one. Best-effort: a failed read leaves the last-good rows, and a failed mint
+  // read is "couldn't read which credentials".
+  const settleSince = React.useRef<number | null>(null);
+  const endingGen = React.useRef(0);
+  const endingInFlight = React.useRef(false);
+  const loadEnding = React.useCallback(() => {
+    // One read at a time: a poll that keeps asking while a slow read is still out
+    // would stack four more calls every tick.
+    if (endingInFlight.current) return;
+    endingInFlight.current = true;
+    const gen = ++endingGen.current;
+    void Promise.allSettled([
+      auditApi.listAudit(id, { action: "run.complete" }),
+      auditApi.listAudit(id, { action: "run.kill" }),
+      auditApi.listAudit(id, { action: "run.autostop" }),
+      auditApi.listAudit(id, { action: "credential.mint" }),
+    ]).then(([done, kill, autostop, minted]) => {
+      endingInFlight.current = false;
+      if (endingGen.current !== gen) return;
+      if (done.status === "fulfilled" && kill.status === "fulfilled" && autostop.status === "fulfilled") {
+        setEndingAudit([done.value, kill.value, autostop.value].flat());
+        setEndingState("ready");
+      } else {
+        setEndingState((s) => (s === "ready" ? s : "failed"));
+      }
+      setMintAudit(minted.status === "fulfilled" ? minted.value : null);
+    });
+  }, [id]);
 
   // Core fetch — run + its grants, egress, approvals, and audit trail.
   const load = React.useCallback(
@@ -168,6 +224,10 @@ export function RunDetailScreen() {
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
         .then(([r, g, runApprovals, a, recA]) => {
+          // A run answer for a different id than this page shows is dropped:
+          // the page never renders, or acts on, a run it was not asked for.
+          // Case-insensitive: a non-canonical UUID in the URL is still this run.
+          if (r.status === "fulfilled" && r.value && r.value.id.toLowerCase() !== id.toLowerCase()) return;
           if (r.status === "rejected") {
             // The run itself is the one fetch this page cannot render without.
             // Foreground load shows the error state; a background poll blip
@@ -178,6 +238,7 @@ export function RunDetailScreen() {
             return;
           }
           setRun(r.value ?? null);
+          setGrantsReadable(g.status === "fulfilled");
           if (g.status === "fulfilled") setGrants(g.value);
           if (a.status === "fulfilled") {
             setEgress(egressFromAudit(a.value));
@@ -187,23 +248,16 @@ export function RunDetailScreen() {
           // is a belt-and-braces no-op kept so a backend that ignored the
           // predicate cannot leak another run's rows onto this page.
           if (runApprovals.status === "fulfilled")
-            setApprovals(runApprovals.value.filter((x) => x.run_id === id));
+            setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
-          // R-5: run.complete/run.kill/run.autostop cannot exist for a run
-          // that ISN'T terminal — fetching them every DETAIL_POLL_MS tick on
-          // a live run would be 3 wasted round-trips per tick, forever. Gated
-          // on THIS tick's own fresh state (not a stale last-known ref), so
-          // the exact tick a run turns terminal is the one that catches it.
-          if (r.value && isTerminalRunState(r.value.state)) {
-            // Best-effort like the allSettled above: a rejected listAudit
-            // leaves endingAudit at its last-good value, never unhandled.
-            void Promise.all([
-              auditApi.listAudit(id, { action: "run.complete" }),
-              auditApi.listAudit(id, { action: "run.kill" }),
-              auditApi.listAudit(id, { action: "run.autostop" }),
-            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
-          }
           setStatus("ready");
+          // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
+          // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live
+          // run would be wasted round-trips, forever. Gated on THIS tick's own
+          // fresh state, so the exact tick a run turns terminal is the one that
+          // catches it. DETACHED: the run has already rendered, and this poll's
+          // in-flight guard must not wait on four more calls (a hang costs 60s).
+          if (r.value && isTerminalRunState(r.value.state)) loadEnding();
         })
         .catch(() => {
           // allSettled never rejects, so this is a bug in the block above, not
@@ -211,7 +265,7 @@ export function RunDetailScreen() {
           if (foreground) setStatus("error");
         });
     },
-    [id],
+    [id, loadEnding],
   );
 
   React.useEffect(() => {
@@ -229,7 +283,6 @@ export function RunDetailScreen() {
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
-  usePoll(() => load(false), DETAIL_POLL_MS, terminal);
 
   // Lazy recording load on first Recording-tab open (and on each session pick,
   // which resets recState to "idle").
@@ -270,7 +323,8 @@ export function RunDetailScreen() {
   React.useEffect(() => () => { recRequest.current = -1; }, []);
 
   const copyLink = () => {
-    const url = `${window.location.origin}/runs/${encodeURIComponent(id)}`;
+    if (!run) return;
+    const url = `${window.location.origin}${appURL(`/runs/${encodeURIComponent(run.id)}`)}`;
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
@@ -280,12 +334,13 @@ export function RunDetailScreen() {
     });
   };
 
-  const kill = async () => {
+  // killId is what the confirm dialog NAMED; this sends exactly that id.
+  const kill = async (killId: string) => {
     try {
-      await runsApi.killRun(id);
-      toast.success(`Kill requested for ${id}`);
+      await runsApi.killRun(killId);
+      toast.success(`Kill requested for ${killId}`);
     } catch (err) {
-      toast.error(`Failed to kill ${id}`, {
+      toast.error(`Failed to kill ${killId}`, {
         description: getErrorMessage(err),
       });
     } finally {
@@ -297,8 +352,9 @@ export function RunDetailScreen() {
   // title renders in place — no reload, same `load(false)` pattern kill and
   // the decision handlers below already use.
   const rename = async (title: string) => {
+    if (!run) return;
     try {
-      await runsApi.setTitle(id, title);
+      await runsApi.setTitle(run.id, title);
       toast.success(RUN_COCKPIT.renamed);
     } catch (err) {
       toast.error(`Couldn't rename this run`, { description: getErrorMessage(err) });
@@ -369,6 +425,35 @@ export function RunDetailScreen() {
   // capped `audit` trail above dropped them — duplicates are harmless, both
   // derivations below keep the last/first matching row regardless.
   const endingEvents = [...audit, ...endingAudit];
+  // #1487: what a killed run held that Wardyn cannot take back. undefined until
+  // the terminal-run fetch has answered, so nothing says "couldn't read" for the
+  // beat before it lands.
+  const held =
+    mintAudit === undefined ? undefined : heldCredentials(grantsReadable ? grants : undefined, mintAudit ?? undefined);
+  // Kill again is offered on a KILLED run whose trail does not PROVE the
+  // teardown: the server re-kills a KILLED run (runs_lifecycle.go), and the
+  // cascade is safe to repeat — the one action that settles the doubt.
+  const killEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
+  // Kill again follows the evidence: offered once the ending facts have settled
+  // (or failed to read) and the trail does not PROVE the teardown. A failed read
+  // does not hide a row the main trail already holds, so a proven kill stays off.
+  const killAgain = run?.state === "KILLED" && endingState !== "loading" && killEvidence !== "confirmed";
+  // The outcome block of a KILLED run waits for its facts (see loadEnding). When
+  // the read failed it still shows what the main trail proves, and nothing when
+  // that holds no kill row either (no row would read as "no kill record", which a
+  // failed read cannot claim).
+  const outcomeReady = run?.state !== "KILLED" || endingState === "ready" || (endingState === "failed" && killEvidence !== "unknown");
+  // The server marks a run KILLED BEFORE it writes the run.kill row
+  // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
+  // whose trail does not yet PROVE the teardown for two minutes, counted on THIS
+  // page's clock from when it first saw such a run (a ref, so it resets on
+  // remount): the server's ended_at against our Date.now() would depend on skew.
+  // The row arrives, or the wait gives up and the person can kill again. A failed
+  // ending read is retried on the same polls (load re-calls loadEnding).
+  const unconfirmedKill = run?.state === "KILLED" && killEvidence !== "confirmed";
+  if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
+  const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
+  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -433,6 +518,7 @@ export function RunDetailScreen() {
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
+            canKillAgain={killAgain}
             onClone={view === "user" ? onClone : undefined}
             onRename={view === "user" ? rename : undefined}
           />
@@ -482,6 +568,8 @@ export function RunDetailScreen() {
               grants={grants}
               egress={egress}
               audit={endingEvents}
+              held={held}
+              outcomeReady={outcomeReady}
               pending={pending}
               recording={recording}
               recState={recState}
@@ -507,7 +595,7 @@ export function RunDetailScreen() {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} onMakePolicy={() => setProfileRunId(id)} />
+            <AuditTab events={audit} runId={run.id} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -559,6 +647,8 @@ function Cockpit({
   grants,
   egress,
   audit,
+  held,
+  outcomeReady,
   pending,
   recording,
   recState,
@@ -573,6 +663,10 @@ function Cockpit({
   grants: CredentialGrant[];
   egress: EgressDecision[];
   audit: AuditEvent[];
+  /** What a killed run held that a kill cannot revoke; undefined while loading. */
+  held: HeldCredentials | undefined;
+  /** False while a KILLED run's ending facts are still being read: no outcome block yet. */
+  outcomeReady: boolean;
   /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
    *  held count every widget reads; the decision surface itself is
    *  LiveApprovals' own poll. */
@@ -599,6 +693,7 @@ function Cockpit({
   // The SUPER-admin question, for the widget context: ConnectSSHCard reads it
   // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
   const operator = useOperator();
+  const operatorResolved = useOperatorResolved();
   // "blocked until an admin decides" is FALSE for a re-auth row (UX round B2):
   // no admin decides it, and the person who can fix it is the credential's own
   // owner. The kind is excluded from the predicate rather than the sentence
@@ -639,7 +734,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
+      {outcomeReady && <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />}
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -674,7 +769,7 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
-    operator, view, // ssh widget: owner-or-admin AND the user view (M-7).
+    operator, operatorResolved, view, // ssh widget: owner-or-admin AND the user view (M-7).
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's

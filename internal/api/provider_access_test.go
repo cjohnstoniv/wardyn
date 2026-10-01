@@ -283,7 +283,7 @@ func TestProviderAccessCheck_RowPerState(t *testing.T) {
 		{modelAccessLive, "", "ok", "Your token for this provider is connected; runs on it use your own credential.", ""},
 		{modelAccessExpiring, "Sign in again before x", "warn", "Your token for this provider may stop working soon; runs on it fail once it does.", "Sign in again before x"},
 		{modelAccessExpiredSignin, "Sign in to AWS", "warn", "Your token for this provider can no longer be used, so runs on it are refused until you sign in again.", "Sign in to AWS"},
-		{modelAccessNotConfigured, providerAccessAddTokenAction, "warn", "You have not connected your token for this provider yet, so runs on it are refused until you do.", providerAccessAddTokenAction},
+		{modelAccessNotConfigured, providerAccessAddTokenAction, "warn", "No token is available for this provider, so runs on it are refused until you connect one.", providerAccessAddTokenAction},
 		{modelAccessNotApplicable, "", "info", providerAccessMechanismDetail, bedrockMechanismFix},
 	} {
 		got := providerAccessCheck(p, SetupProviderAccess{Provider: p.ID, State: tc.state, Action: tc.action}, true)
@@ -509,5 +509,18 @@ func TestSetupProviderAccess_SourceRunIDSurvivesAuditFailure(t *testing.T) {
 	}
 	if row == nil || row.State != modelAccessLive || row.SourceRunID != runID.String() {
 		t.Fatalf("provider_access for %s = %+v; want live, naming the sign-in run %s", p.ID, row, runID)
+	}
+}
+
+// #1489: a credential that is not there looks the same whether it was never
+// added, deleted when an admin changed the provider's address, or unreadable
+// for a moment, so the console's two cause-neutral sentences say only that none
+// is available. The launch refusal's fragments read the same way.
+func TestModelCredentialUnavailableWording(t *testing.T) {
+	if got := fmt.Sprintf(providerAccessMissingDetail, "key"); got != "No key is available for this provider, so runs on it are refused until you connect one." {
+		t.Errorf("setup check sentence = %q", got)
+	}
+	if mpRunNoKey != "no key is available for it" || mpRunNoToken != "no token is available for it" {
+		t.Errorf("launch refusal fragments = %q / %q", mpRunNoKey, mpRunNoToken)
 	}
 }

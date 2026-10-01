@@ -205,6 +205,55 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
     await expect(page.getByText(ADO_PAT.OWN_CHIP_REFUSED, { exact: true })).toHaveCount(0);
   });
 
+  // #1488: Remove from Wardyn, beside Replace. It asks first, says the token is
+  // not revoked in Azure DevOps, sends the DELETE with the org, and the card
+  // reloads to Not connected. Any failure is one sentence and the card stays.
+  test("Remove from Wardyn: asks first, deletes the person's own token, then the card reads Not connected", async ({ page }) => {
+    let access: Record<string, unknown> = { ...own, state: "live", source: "own", expires_on: "2000-10-27" };
+    await spliceAccess(page, () => access);
+    const deletes: string[] = [];
+    await page.route(/\/api\/v1\/me\/scm\/azure-devops\/token\?org=/, async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      deletes.push(route.request().url());
+      access = { ...own, state: "not_configured" };
+      await route.fulfill({ status: 204 });
+    });
+    await openAccountCard(page);
+    await page.getByRole("button", { name: ADO_PAT.OWN_REMOVE }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(ADO_PAT.OWN_REMOVE_TITLE("wardyn-e2e"))).toBeVisible();
+    await expect(dialog.getByText(ADO_PAT.OWN_REMOVE_BODY)).toBeVisible();
+    await expect(dialog.getByText(ADO_PAT.OWN_REMOVE_RUNS)).toBeVisible();
+    await expect(dialog.getByRole("link", { name: ADO_PAT.OWN_OPEN_TOKENS })).toHaveAttribute(
+      "href",
+      "https://dev.azure.com/wardyn-e2e/_usersSettings/tokens",
+    );
+    expect(deletes).toHaveLength(0);
+    await dialog.getByRole("button", { name: ADO_PAT.OWN_REMOVE }).click();
+    await expect(page.getByText(ADO_PAT.OWN_REMOVED_TOAST("wardyn-e2e"))).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    expect(deletes).toHaveLength(1);
+    expect(new URL(deletes[0]).searchParams.get("org")).toBe(ORG);
+    await expect(page.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).toBeVisible();
+    await expect(page.getByRole("button", { name: ADO_PAT.OWN_REMOVE })).toHaveCount(0);
+  });
+
+  test("Remove from Wardyn: a failure says the token is still stored and leaves the card as it was", async ({ page }) => {
+    const access: Record<string, unknown> = { ...own, state: "live", source: "own", expires_on: "2000-10-27" };
+    await spliceAccess(page, () => access);
+    await page.route(/\/api\/v1\/me\/scm\/azure-devops\/token\?org=/, async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      await route.fulfill({ status: 404, json: { error: "no token", reason: "ado_own_pat_unknown_row" } });
+    });
+    await openAccountCard(page);
+    await page.getByRole("button", { name: ADO_PAT.OWN_REMOVE }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: ADO_PAT.OWN_REMOVE }).click();
+    await expect(page.getByText(ADO_PAT.OWN_REMOVE_FAILED_TOAST("wardyn-e2e"))).toBeVisible();
+    await expect(page.getByText(ADO_PAT.OWN_REMOVED_TOAST("wardyn-e2e"))).toHaveCount(0);
+    await expect(page.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
+    await expect(page.getByRole("button", { name: ADO_PAT.OWN_REMOVE })).toBeVisible();
+  });
+
   test("expiring, expired and the Server row each read as the mock draws them", async ({ page }) => {
     const soon = new Date(Date.now() + 3 * 86_400_000);
     const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;

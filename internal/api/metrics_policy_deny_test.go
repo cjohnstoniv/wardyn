@@ -12,18 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestEgressDeniesTotalCountsPolicyDeniesOnly pins F065. Every egress.Deny the
+// TestEgressDeniesTotalCountsPolicyDeniesOnly pins the series' scope. Every egress.Deny the
 // proxy ingests used to move wardyn_egress_denies_total, whose exposition
 // declares it "Egress decisions ingested with decision=deny, by reason (proxy
 // decision ingest)" (DRAFT, M2 canon pending) — the only egress counter Wardyn
 // exposes. Two large classes of Deny are not policy
 // denials at all: builtin:dial-failed (a failed upstream dial on a request
-// policy ALLOWED, emitted from four proxy sites) and the synthetic
+// policy ALLOWED, emitted from three proxy sites) and the synthetic
 // egress:dropped-decisions-<n> summary (an audit-fidelity alert about lost
 // decision records). An operator alerting on the series was paged for a flaky
 // upstream or a wedged control plane and could not read the true deny rate.
 //
-// RED on the base tree: the series reads 4 instead of 2.
+// RED on the base tree: the series reads 5 instead of 3.
 //
 // The audit half is asserted in the same test on purpose: scoping the COUNTER
 // must not stop recording the egress.deny rows those decisions still
@@ -37,6 +37,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 		"builtin:private-ip",          // a builtin GUARD deny — still a denial, counts
 		"builtin:dial-failed",         // the upstream dial lost it — must NOT count
 		"egress:dropped-decisions-42", // audit-fidelity summary — must NOT count
+		"builtin:gateway-vet-failed",  // a guard refusal of the model gateway — counts
 	} {
 		body := fmt.Sprintf(`{"request":{"host":"api.example.com","port":443,"method":"CONNECT"},`+
 			`"decision":"deny","rule_source":%q}`, rs)
@@ -49,7 +50,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("/metrics = %d, want 200", w.Code)
 	}
-	if want := "wardyn_egress_denies_total 2"; !strings.Contains(w.Body.String(), want) {
+	if want := "wardyn_egress_denies_total 3"; !strings.Contains(w.Body.String(), want) {
 		var got string
 		for _, l := range strings.Split(w.Body.String(), "\n") {
 			if strings.HasPrefix(l, "wardyn_egress_denies_total ") {
@@ -65,7 +66,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 			denies++
 		}
 	}
-	if denies != 4 {
-		t.Errorf("egress.deny audit rows = %d, want 4 — scoping the counter must not drop audit rows", denies)
+	if denies != 5 {
+		t.Errorf("egress.deny audit rows = %d, want 5 — scoping the counter must not drop audit rows", denies)
 	}
 }

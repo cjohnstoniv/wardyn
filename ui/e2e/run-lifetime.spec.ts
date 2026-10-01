@@ -77,10 +77,16 @@ test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
     // at the unit level (run-ends-row.test.tsx); here it's the real PATCH.
     await row.getByRole("button", { name: "Extend" }).click();
     await page.getByText("1 more day").click();
-    await expect(row.getByText(/^Ends /)).toBeVisible();
-    const afterExtend = await consoleAPI(page, "GET", `/api/v1/runs/${id}`);
-    const extendedEndsAt = JSON.parse(afterExtend.text).ends_at as string;
-    expect(Date.parse(extendedEndsAt)).toBeGreaterThan(Date.parse(setEndsAt));
+    // The row already read "Ends …" before the click, so wait on the stored end
+    // itself: a read that lands before the PATCH would still see the old one.
+    let extendedEndsAt = setEndsAt;
+    await expect
+      .poll(async () => {
+        const res = await consoleAPI(page, "GET", `/api/v1/runs/${id}`);
+        extendedEndsAt = JSON.parse(res.text).ends_at as string;
+        return Date.parse(extendedEndsAt);
+      })
+      .toBeGreaterThan(Date.parse(setEndsAt));
     expect(Math.abs(Date.parse(extendedEndsAt) - Date.parse(setEndsAt) - 24 * 3600_000)).toBeLessThan(60_000);
   });
 });

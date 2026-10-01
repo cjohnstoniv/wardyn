@@ -653,6 +653,9 @@ its own quota. The size you see is the allocation, not a guarantee."*
 
 Day-2 detail — backup, offboarding, the per-drive storage class — is in
 [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "User drives on Kubernetes".
+The full recovery set for a chart install (database, keys, recordings, drives,
+audit spool) is in
+[Recovery set by deployment](../../../docs/OPERATIONS.md#recovery-set-by-deployment).
 
 ### Known gaps
 

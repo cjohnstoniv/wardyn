@@ -31,7 +31,7 @@ RBAC, no shared docker socket). This tier sits below both.
   │                            NEVER from MDM       │
   │                    │                            │
   │                    ▼                            │
-  │   wardynd  ── 127.0.0.1:8080 ──▶ console        │
+  │   wardynd  ── 127.0.0.1:PORT ──▶ console        │
   │      │        (local mode: no SSO,              │
   │      │         the developer is admin)          │
   │      │                                          │
@@ -47,6 +47,10 @@ RBAC, no shared docker socket). This tier sits below both.
                                          ▼
                                  org control plane
 ```
+
+`PORT` is 8080 unless `WARDYN_UP_PORT` says otherwise, resolved process
+environment (which includes `secret.env`) first, then `wardyn.env`, then 8080;
+the launcher probes the same port compose publishes.
 
 Three properties define it:
 
@@ -403,6 +407,9 @@ of which have a wider audience than the device does.
 The failure mode of the per-device key is that losing a laptop loses that
 laptop's stored secrets. That is the intended cost, not a gap to design around.
 
+What to back up on a device, and what a restore does not bring back, is in
+[Recovery set by deployment](OPERATIONS.md#recovery-set-by-deployment).
+
 A note on the mechanism: wardynd reads the key as a **value** in
 `WARDYN_AGE_KEY`, not as a path — there is no `WARDYN_AGE_KEY_FILE`. So the
 installer writes `/etc/wardyn/age.key` and whatever launches wardynd reads that
@@ -455,7 +462,7 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 | [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root), and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk. `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both. |
 | `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`. Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up). |
 | [`wardyn.service`](../deploy/desktop/wardyn.service) + [`wardyn.timer`](../deploy/desktop/wardyn.timer) | The systemd analogue. `Type=oneshot` driven by the timer — `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does, so a `Restart=` would fight the timer. `OnBootSec` mirrors `RunAtLoad` and `OnUnitActiveSec=300s` mirrors `StartInterval`; the two platforms must not drift, and `scripts/test-desktop-profile.sh` asserts they do not. Logs to journald rather than a file, which is where a Linux operator looks and which rotates on its own. |
-| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz`, and idempotently applies `site-config.json` if MDM has delivered one. |
+| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz` on the published port (`WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080; a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key), and idempotently applies `site-config.json` if MDM has delivered one. |
 
 ### What the enrolment mint pulls
 
@@ -466,8 +473,8 @@ once, before MDM has delivered anything. Which image:
 | | |
 |---|---|
 | Default | `ghcr.io/cjohnstoniv/wardynd:latest` |
-| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run. It is **not** cosign-signed, and it is not a release. |
-| Verification | none. Nothing in this lane checks a signature or a digest, and no repo gate covers it: `scripts/check-image-pins.sh` reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
+| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run, and signs it by digest (keyless) after pushing it. The signature identity is in [VERIFY.md](VERIFY.md#the-continuous-lane). `:latest` can move, this lane has no SBOM or provenance, and it is not a release. |
+| Verification | none. Nothing in this lane verifies that signature or a digest, and no repo gate covers it: `scripts/check-image-pins.sh` reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
 | Override | `WARDYN_INSTALL_IMAGE` (also in [ENV.md](ENV.md)) — `sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh` |
 
 **A fleet should pin it**, to the same digest `wardyn.env` already pins for
@@ -502,12 +509,15 @@ run the same `install.sh`; only the path it registers differs.
 **Enrolment runs one container image, as root.** `install.sh` mints `age.key` by
 running `wardynd -gen-age-key`, and the image it pulls for that defaults to
 `ghcr.io/cjohnstoniv/wardynd:latest` — the CONTINUOUS, main-tip tag
-`.github/workflows/publish-image.yml` pushes after CI passes on `main`, which is **not**
-cosign-signed and is not the digest the envelope then pins. That is the one
+`.github/workflows/publish-image.yml` pushes after CI passes on `main` and signs
+by digest after pushing it. Nothing in this lane verifies that signature, and
+the tag is not the digest the envelope then pins. That is the one
 place on this page where a tag does move under the fleet, and it is bounded to
-first-device enrolment. A fleet that will not accept it sets
-**`WARDYN_INSTALL_IMAGE`** ([ENV.md](ENV.md)) to the release digest already
-pinned in `wardyn.env`, or to a corporate mirror of it:
+first-device enrolment. A fleet that will not accept it resolves a digest,
+verifies **that digest** with the `publish-image.yml` identity
+([VERIFY.md](VERIFY.md#the-continuous-lane)), and passes it via
+**`WARDYN_INSTALL_IMAGE`** ([ENV.md](ENV.md)) — or sets it to the release digest
+already pinned in `wardyn.env`, or to a corporate mirror of it:
 
 ```sh
 sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh

@@ -160,7 +160,8 @@ shipped behavior; none is scheduled.
   no separation of duty from a real admin user (v1.0's row, above).
 - **The SSH gateway's admin override is a bounded-stale stamp, weaker than
   the web terminal's live check.** `sshAuth` grants an admin's own registered
-  key an override — `run.created_by == principal` OR (`key.role == admin` AND
+  key an override — `run.created_by == principal` OR (the run has no personal
+  owner AND `key.role == admin` AND
   `key.role_checked_at` no older than `WARDYN_SSH_ROLE_TTL`, migrations
   `0043_ssh_key_role.sql` and `0046_ssh_key_role_checked_at.sql`). The stamp
   is no longer registration-time-only: every OIDC login re-stamps `role` and

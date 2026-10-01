@@ -516,6 +516,15 @@ after the date; both deep-link to `https://dev.azure.com/<org>/_usersSettings/to
 the token as Basic, under the same organisation pin, capability and content checks as any other
 credential.
 
+**Removing a token after your access was withdrawn.** `DELETE` works whenever you still hold a token for
+an Azure DevOps row at that address, even if an administrator has since disabled the row, denied it to
+you, or switched it away from your own token (Server rows included). Adding a token (`PUT`) and every
+use of one stay refused for such a row. The account card offers *Remove from Wardyn* on live, expiring,
+refused and expired tokens. Neither the card nor `DELETE` revokes the token in Azure DevOps. Runs already
+using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now. The bound is the
+stored-key lease (`storedKeyTTL`, 10 minutes), or the date you entered when that is sooner. A run on a
+grant that waits for approval does not refresh its lease, so it keeps the token until that date.
+
 - **A launch with no token is refused** ("you are not connected to Azure DevOps — connect and start the
   run again"), **and so is one with an expired token:** "Your runs can't reach Azure DevOps until you add
   a new token."
@@ -914,6 +923,7 @@ a Server row either. What differs:
 | A run on a `bearer` row is refused with `mint_scopes` or `scope_unknown` (audit `ado_bearer.refused_mint_scopes`) | The app holds a token permission, or Entra reported no granted scope | Remove `vso.pats` and `vso.pats_manage` from that app, or move the row to `minted_pat`; people sign in again |
 | Clones from an organisation fail after the upgrade | The upgrade turned its row off; the refusal names the row. `GET /site-config` also lists its host under `withheld_scm_hosts`, unless an enabled row names the same host (several organisations on `dev.azure.com`), when the list is empty | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
 | `ado_own_pat_identity_mismatch` on a pasted token | The token belongs to another account, or the person's sign-in has no email to match | Create the token while signed in to Azure DevOps as yourself; a sign-in with no email can't be matched |
+| `ado_own_pat_request_refused`: "Azure DevOps refused Wardyn's request, not your token. Ask your admin to report this." | Azure DevOps answered the identity check with a `400`: it refused the request itself, so nothing is known about the token and nothing was stored | Report it with the time and the organisation; the person's token is not the problem and needs no change |
 
 ---
 

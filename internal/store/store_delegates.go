@@ -34,6 +34,7 @@ type DelegateStore interface {
 	RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error)
 	MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw string, now time.Time) (types.DelegatedToken, error)
 	GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error)
+	GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error)
 }
 
 var _ DelegateStore = PG{}
@@ -148,4 +149,16 @@ func (s PG) GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Tim
 		FROM delegated_tokens t JOIN delegates d ON d.id = t.delegate_id
 		WHERE t.token_sha256 = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL`
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, hashToken(raw), now))
+}
+
+// GetDelegatedTokenByID is GetDelegatedTokenByRaw by the grant's id: live while
+// unexpired at now AND its portal still registered. A UI session opened through
+// a portal re-asks it, so the session ends with the grant (#1475). Expired rows
+// are swept on any mint, so ErrNotFound means ended.
+func (s PG) GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error) {
+	const q = `
+		SELECT ` + delegatedTokenCols + `
+		FROM delegated_tokens t JOIN delegates d ON d.id = t.delegate_id
+		WHERE t.id = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL`
+	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, id, now))
 }

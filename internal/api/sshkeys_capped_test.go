@@ -93,7 +93,9 @@ func TestSSHGateway_CappedKeyNeverOverrides(t *testing.T) {
 
 	otherRun := uuid.New()
 	ownRun := uuid.New()
-	st.putRun(types.AgentRun{ID: otherRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
+	// Operator-owned, the one run an uncapped admin key may still enter (#1476),
+	// so the cap is the only thing in the way of the capped keys below.
+	st.putRun(types.AgentRun{ID: otherRun, CreatedBy: "bob@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-bob"})
 	st.putRun(types.AgentRun{ID: ownRun, CreatedBy: memberModeAdminSub, State: types.RunRunning, SandboxRef: "sbx-own"})
 
 	cappedPriv, cappedPub := mustSSHKeypair(t)

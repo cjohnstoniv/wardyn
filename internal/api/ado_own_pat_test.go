@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -688,4 +689,239 @@ func TestADOOwnPATPut_SessionObjectIDIsNotWidenedByThePersonRow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ownPATGovernanceStore lets the admin routes below edit the door's site
+// config and grants, over the door's own capStore.
+type ownPATGovernanceStore struct{ *permStore }
+
+func (s *ownPATGovernanceStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	s.site = cfg
+	return cfg, nil
+}
+
+func (*ownPATGovernanceStore) ListSources(context.Context) ([]types.Source, error) { return nil, nil }
+
+func (d *ownPATDoor) deleteOrg(t *testing.T, org string) *httptest.ResponseRecorder {
+	t.Helper()
+	return doSSO(t, d.srv, http.MethodDelete, "/api/v1/me/scm/azure-devops/token?org="+url.QueryEscape(org), memberCookie(t), "")
+}
+
+// putBlob stores an own token for owner under rowID's sealed name, bypassing
+// the door: the fixture for a token whose row has since changed.
+func (d *ownPATDoor) putBlob(t *testing.T, owner, rowID, token string) {
+	t.Helper()
+	raw, _ := json.Marshal(adoOwnPATBlob{Token: token, Org: "contoso", ExpiresOn: ownPATNow.AddDate(0, 0, 10), StoredAt: ownPATNow})
+	if err := d.secrets.For(owner).Put(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), adoOwnPATSecretName(rowID), raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (d *ownPATDoor) holds(t *testing.T, owner, rowID string) bool {
+	t.Helper()
+	names, err := d.secrets.For(owner).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.Contains(names, adoOwnPATSecretName(rowID))
+}
+
+// setSite swaps the door's site config under it, as an admin edit would.
+func (d *ownPATDoor) setSite(rows ...types.GitProvider) {
+	d.srv.cfg.Store.(*capStore).site = adoSite(rows...)
+}
+
+func rowStateOf(t *testing.T, ev types.AuditEvent) string {
+	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	s, present := data["row_state"].(string)
+	if !present {
+		t.Fatalf("audit data %s carries no row_state", ev.Data)
+	}
+	return s
+}
+
+// A person can delete their own token after their access was withdrawn
+// (#1479): the row disabled, or a capability deny. The blob is theirs, the
+// removal only subtracts, and the audit row says what state the row was in.
+func TestRolesReviewOwnPATCleanupAfterWithdrawal(t *testing.T) {
+	for _, c := range []struct{ scenario, wantState string }{
+		{"allowed_control", ""}, {"capability_denied", "capability_denied"}, {"provider_disabled", "disabled"},
+	} {
+		t.Run(c.scenario, func(t *testing.T) {
+			d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+			d.srv.cfg.Store = &ownPATGovernanceStore{permStore: &permStore{capStore: d.srv.cfg.Store.(*capStore)}}
+			if code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10)); code != http.StatusOK {
+				t.Fatalf("initial owner connection = %d %s", code, body)
+			}
+			admin := ssoSession(t, "synthetic-cleanup-admin", "cleanup-admin@example.invalid", oidc.RoleAdmin)
+			switch c.scenario {
+			case "capability_denied":
+				body, _ := json.Marshal(grantWriteRequest{SubjectType: types.CapabilitySubjectUser, Subject: capSub,
+					Capability: capWorkspaceProvider, Value: ownPATRowID, Effect: types.CapabilityDeny})
+				if w := doSSO(t, d.srv, http.MethodPost, "/api/v1/permissions/grants", admin, string(body)); w.Code != http.StatusCreated {
+					t.Fatalf("capability withdrawal = %d %s", w.Code, w.Body)
+				}
+			case "provider_disabled":
+				row := ownPATTestRow()
+				row.Disabled = true
+				body, _ := json.Marshal(types.WorkspaceProviders{Git: []types.GitProvider{row}})
+				if w := doSSO(t, d.srv, http.MethodPut, "/api/v1/workspace-providers", admin, string(body)); w.Code != http.StatusOK {
+					t.Fatalf("provider disable = %d %s", w.Code, w.Body)
+				}
+			}
+			if _, found := d.stored(t); !found {
+				t.Fatal("governance change unexpectedly purged the personal token")
+			}
+			if c.scenario != "allowed_control" {
+				if code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10)); code != http.StatusNotFound {
+					t.Fatalf("a new connection after withdrawal = %d %s, want 404 (PUT stays strict)", code, body)
+				}
+			}
+			if w := d.deleteOrg(t, ownPATOrgKey); w.Code != http.StatusNoContent {
+				t.Fatalf("cleanup = %d %s, want 204", w.Code, w.Body)
+			}
+			if _, found := d.stored(t); found {
+				t.Fatal("the token survived its owner's cleanup")
+			}
+			rows := d.auditRows(adoPATAuditOwnDelete)
+			if len(rows) != 1 || rows[0].Outcome != "success" || rowStateOf(t, rows[0]) != c.wantState {
+				t.Fatalf("ado_pat.own.delete rows = %+v, want one success with row_state %q", rows, c.wantState)
+			}
+		})
+	}
+}
+
+// The cleanup looks at every Azure DevOps row on the address, whatever its
+// state, and deletes only what the caller's own namespace holds.
+func TestADOOwnPATDelete_OwnerCleanupShapes(t *testing.T) {
+	second := func(mut func(*types.GitProvider)) types.GitProvider {
+		r := ownPATTestRow()
+		r.ID = "ado-own-2"
+		mut(&r)
+		return r
+	}
+	t.Run("no blob on a disabled row: the same 404 as no row, nothing audited or sent", func(t *testing.T) {
+		disabled := ownPATTestRow()
+		disabled.Disabled = true
+		d := newOwnPATDoor(t, adoSite(disabled), nil)
+		missing := newOwnPATDoor(t, types.SiteConfig{}, nil)
+		w, m := d.deleteOrg(t, ownPATOrgKey), missing.deleteOrg(t, ownPATOrgKey)
+		if w.Code != http.StatusNotFound || w.Code != m.Code || w.Body.String() != m.Body.String() {
+			t.Fatalf("disabled row, no blob: %d %s / no row: %d %s — want the same 404", w.Code, w.Body, m.Code, m.Body)
+		}
+		if n := len(d.auditRows(adoPATAuditOwnDelete)); n != 0 {
+			t.Errorf("%d audit rows, want none", n)
+		}
+		if n := d.fake.Count(adofake.EndpointConnectionData); n != 0 {
+			t.Errorf("the cleanup sent a token to Azure DevOps %d times", n)
+		}
+	})
+	t.Run("two rows on one address, the blob on the disabled one: only that blob goes", func(t *testing.T) {
+		d := newOwnPATDoor(t, adoSite(ownPATTestRow(), second(func(r *types.GitProvider) { r.Disabled = true })), nil)
+		d.putBlob(t, capSub, "ado-own-2", ownPATToken)
+		d.putBlob(t, "carol", "ado-own-2", ownPATOtherToken)
+		if w := d.deleteOrg(t, ownPATOrgKey); w.Code != http.StatusNoContent {
+			t.Fatalf("cleanup = %d %s", w.Code, w.Body)
+		}
+		if d.holds(t, capSub, "ado-own-2") {
+			t.Error("the caller's blob on the disabled row survived")
+		}
+		if !d.holds(t, "carol", "ado-own-2") {
+			t.Error("another person's blob under the same name was deleted")
+		}
+		rows := d.auditRows(adoPATAuditOwnDelete)
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"provider_row":"ado-own-2"`) || rowStateOf(t, rows[0]) != "disabled" {
+			t.Fatalf("audit rows = %+v, want one for ado-own-2, disabled", rows)
+		}
+	})
+	t.Run("a row switched away from own_pat still releases the blob", func(t *testing.T) {
+		d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+		if code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10)); code != http.StatusOK {
+			t.Fatalf("PUT = %d %s", code, body)
+		}
+		bearer := ownPATTestRow()
+		bearer.Entra.TokenMode = types.ADOTokenModeBearer
+		d.setSite(bearer)
+		if w := d.deleteOrg(t, ownPATOrgKey); w.Code != http.StatusNoContent {
+			t.Fatalf("cleanup = %d %s", w.Code, w.Body)
+		}
+		rows := d.auditRows(adoPATAuditOwnDelete)
+		if _, found := d.stored(t); found || len(rows) != 1 || rowStateOf(t, rows[0]) != "not_own_token" {
+			t.Fatalf("found=%v rows=%+v, want the blob gone and row_state not_own_token", found, rows)
+		}
+	})
+	t.Run("a usable row with no blob stays an idempotent 204 and writes nothing", func(t *testing.T) {
+		d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+		if w := d.deleteOrg(t, ownPATOrgKey); w.Code != http.StatusNoContent || len(d.auditRows(adoPATAuditOwnDelete)) != 0 {
+			t.Fatalf("cleanup = %d, %d rows", w.Code, len(d.auditRows(adoPATAuditOwnDelete)))
+		}
+	})
+	t.Run("PUT on a disabled row stays 404", func(t *testing.T) {
+		disabled := ownPATTestRow()
+		disabled.Disabled = true
+		d := newOwnPATDoor(t, adoSite(disabled), nil)
+		if code, body := d.put(t, ownPATOrgKey, ownPATToken, days(10)); code != http.StatusNotFound || !strings.Contains(body, reasonADOOwnPATUnknownRow) {
+			t.Fatalf("PUT = %d %s", code, body)
+		}
+	})
+	t.Run("a store delete error is a 500 and a failure row, and the blob stays", func(t *testing.T) {
+		disabled := ownPATTestRow()
+		disabled.Disabled = true
+		d := newOwnPATDoor(t, adoSite(disabled), nil)
+		d.putBlob(t, capSub, ownPATRowID, ownPATToken)
+		d.srv.cfg.Secrets = ownPATDeleteFails{Store: d.secrets}
+		if w := d.deleteOrg(t, ownPATOrgKey); w.Code != http.StatusInternalServerError {
+			t.Fatalf("cleanup = %d %s, want 500", w.Code, w.Body)
+		}
+		rows := d.auditRows(adoPATAuditOwnDelete)
+		if len(rows) != 1 || rows[0].Outcome != "failure" || strings.Contains(string(rows[0].Data), ownPATToken) {
+			t.Fatalf("audit rows = %+v, want one failure row without the token", rows)
+		}
+		if !d.holds(t, capSub, ownPATRowID) {
+			t.Error("the blob vanished although its delete failed")
+		}
+	})
+}
+
+// ownPATDeleteFails refuses every Delete, over a real store.
+type ownPATDeleteFails struct{ secretstore.Store }
+
+func (f ownPATDeleteFails) For(owner string) secretstore.Store {
+	return ownPATDeleteFails{Store: f.Store.For(owner)}
+}
+func (ownPATDeleteFails) Delete(context.Context, string) error { return errors.New("store down") }
+
+// An Azure DevOps Server own-token row is cleaned up the same way.
+func TestADOServerOwnPATDelete_AfterWithdrawal(t *testing.T) {
+	d := newServerOwnPATDoor(t, adoServerOrgKey)
+	if code, body := d.put(t, adoServerOrgKey, adoServerToken, days(10)); code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", code, body)
+	}
+	row := adoServerTestRow(adoServerOrgKey)
+	row.Disabled = true
+	d.setSite(row)
+	if w := d.deleteOrg(t, adoServerOrgKey); w.Code != http.StatusNoContent {
+		t.Fatalf("cleanup = %d %s", w.Code, w.Body)
+	}
+	if _, found := d.stored(t); found {
+		t.Fatal("the Server token survived its owner's cleanup")
+	}
+	if rows := d.auditRows(adoPATAuditOwnDelete); len(rows) != 1 || rowStateOf(t, rows[0]) != "disabled" {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+// Credential USE stays strict: a token whose row an admin disabled mid-run is
+// refused at the resolve, never injected.
+func TestResolveADOOwnPAT_DisabledRowRefusesAfterCleanupChange(t *testing.T) {
+	f := newOwnPATRun(t)
+	f.token(t, ownPATToken, "contoso", f.now.Add(time.Hour))
+	row := ownPATTestRow()
+	row.Disabled = true
+	f.st.site = adoSite(row)
+	wantRefused(t, f.resolve(t, capSub, "dev.azure.com", ""), http.StatusForbidden, reasonScopeChanged)
 }

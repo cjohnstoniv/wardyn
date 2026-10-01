@@ -111,6 +111,8 @@ resolved at wrap time, so what it points at is the operator's call. What the
 base's content cannot reach is the host: it only ever executes later, inside the
 run's confinement tier. See threatmodel/THREAT-MODEL.md §5 (residual 13).
 
+A generated recipe is deterministic, not a lock: the base tag, the `:1` feature tags and the claude-code `/stable` channel resolve at build time, and a kept image is not refreshed. What the cache key identifies, and when an image is reused or rebuilt, is in [build-images.md](operations/build-images.md#every-generated-image-carries-claude-code-nothing-bakes-codex-cli); see threatmodel/THREAT-MODEL.md §5 (residual 13).
+
 **A BYOI base and `WARDYN_TRUSTED_CA_FILE` interact.** When the operator sets
 that knob (docs/OPERATIONS.md § "Corporate TLS-inspection root"), a run's
 sandbox env carries the corporate PEM regardless of whether Wardyn's own
@@ -186,7 +188,13 @@ and its blast radius minimised. Builder applies, by default:
   reach it does with that reachability.
 - Privileges are dropped: CapDrop ALL + no-new-privileges.
 - Resource caps (memory, swap-disabled, CPU, PID limit) bound the DoS /
-  blast-radius surface; an optional StorageOpt "size" cap
+  blast-radius surface. A build fails closed, before it starts, when the
+  Docker daemon's create response says it discarded a requested limit (a
+  warning containing "discard", as on a host without delegated cgroup
+  controllers). Builds do not honour `WARDYN_ALLOW_UNENFORCEABLE_CAPS`.
+  Residual: the check is a substring match, so a daemon that words a discard
+  differently fails open; swap ("Memory limited without swap.") is not
+  checked. An optional StorageOpt "size" cap
   (WARDYN_ENVBUILD_MAX_CONTEXT_MB) bounds the build's writable layer where
   the storage driver supports per-container quotas.
 - Input validation: a git-URL scheme allowlist (only https:// and git://;

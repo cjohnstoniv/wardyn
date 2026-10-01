@@ -22,7 +22,8 @@ import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import {
   isTerminalStatusReason,
@@ -79,6 +80,7 @@ export function SummaryHeader({
   onCopyLink,
   linkCopied = false,
   onKill,
+  canKillAgain,
   onClone,
   onRename,
 }: {
@@ -111,7 +113,10 @@ export function SummaryHeader({
   // row it lived in.
   onCopyLink?: () => void;
   linkCopied?: boolean;
-  onKill: () => void;
+  onKill: (runId: string) => void;
+  // A KILLED run whose trail does not prove the teardown (#1487): Kill stays
+  // enabled so the person can run the cascade again.
+  canKillAgain?: boolean;
   // "Start a run like this one", for EVERY terminal run — the failure block
   // only renders it for a run that ended badly (3 of the 5 terminal states),
   // so it belongs here instead. Optional so the header stays renderable
@@ -131,16 +136,15 @@ export function SummaryHeader({
   // an editable input without pushing Kill off-screen (review round 2, D2).
   const [renaming, setRenaming] = React.useState(false);
   const [draftTitle, setDraftTitle] = React.useState("");
-  // Claim "attachable" only under the SAME owner-or-admin predicate
-  // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
-  // && !owned`) — otherwise a member sees this chip promise attachability and
-  // then gets a red "requires the admin role" error the instant they open
-  // the terminal below it (OverviewTab renders <AttachTerminal> whenever
-  // `attachable`).
+  // Claim "attachable" only under the SAME entry rule AttachTerminal itself
+  // gates the connect on (lib/run-entry.ts) — otherwise a viewer sees this chip
+  // promise attachability and then gets a refusal the instant they open the
+  // terminal below it (OverviewTab renders <AttachTerminal> whenever
+  // `attachable`). #1476: the run's person, or an admin on a run no person owns.
   const operator = useOperator();
   const principal = usePrincipal();
   const owned = !!run.created_by && run.created_by === principal;
-  const canAttach = operator || owned;
+  const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked
@@ -482,7 +486,7 @@ export function SummaryHeader({
           // explicit shrink-0 so it is never the thing degrading away when the
           // group above it runs out of room.
           className="h-7 shrink-0 text-danger hover:text-danger"
-          disabled={terminal}
+          disabled={terminal && !canKillAgain}
           onClick={() => setConfirmId(run.id)}
         >
           <Skull className="size-4" /> Kill

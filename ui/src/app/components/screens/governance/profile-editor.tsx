@@ -36,7 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Mono } from "../../wardyn/code-block";
 import { CC_META } from "../../wardyn/cc-meta";
 import { FIELD_HELP } from "../../wardyn/policy-field-help";
-import { Field, Switch } from "../../wardyn/form-primitives";
+import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
 import { Segmented } from "../permissions";
 import { Note, withMono } from "./display";
@@ -468,6 +468,7 @@ function LimitDurationRow({
         <div className="flex items-center gap-2">
           <Input
             id={id}
+            aria-describedby={hint ? fieldHintId(id) : undefined}
             type="number"
             min={0}
             className="max-w-[8rem] font-mono"

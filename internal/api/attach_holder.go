@@ -417,8 +417,8 @@ func releaseAttach(release func() (announce func())) {
 //
 // Audited (session.promote) because write authority over a live sandbox moved
 // without anyone asking for it, which is the same reason session.takeover is.
-// It grants no NEW capability — every observer passed the same owner-or-admin
-// gate when it connected, and a take-over promotes only the taker's own
+// It grants no NEW capability — every observer passed the same entry rule
+// (mayEnterRun) when it connected, and a take-over promotes only the taker's own
 // socket — but "who could type into this terminal, and from when" has to be
 // answerable from the log alone.
 func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder, previous string) func() {
@@ -559,7 +559,7 @@ func (s *Server) handleAttachHolder(w http.ResponseWriter, r *http.Request) {
 //	200 {"taken_over":true,"previous_holder":"alice@example.com","previous_source":"web","promoted":false}
 //	409 nobody is attached (taking over nothing is a client bug worth surfacing)
 //
-// Same owner-or-admin gate as the read above.
+// The owner only (a super admin on a run with no personal owner), unlike the read above.
 //
 // The take-over promotes the caller's OWN read-only socket if it has one (in
 // place, no reconnect — see evictAttachHolderFor), and otherwise frees the slot
@@ -571,12 +571,13 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// ownsRunOrSuperAdmin, NOT ownsRunOrAdmin: this is the one /runs/{id} route
-	// that writes into a live sandbox instead of inspecting or stopping it, so
-	// the security tier — refused a ticket, refused the cookie attach lane,
-	// stamped `member` on its SSH keys — is refused here too, through the same
-	// byte-identical 404. See helpers.go's split.
-	if _, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSuperAdmin); !ok {
+	// The owner only (getRunForEntry), NOT ownsRunOrAdmin: this is the one
+	// /runs/{id} route that writes into a live sandbox instead of inspecting or
+	// stopping it, so the security tier — refused a ticket, refused the cookie
+	// attach lane, stamped `member` on its SSH keys — is refused here too,
+	// through the same byte-identical 404. A super admin who is not the owner
+	// gets the 403 naming why (#1476), unless the run has no personal owner.
+	if _, ok := s.getRunForEntry(w, r, id); !ok {
 		return
 	}
 

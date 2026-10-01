@@ -17,21 +17,9 @@ package workspacescan
 // UnrecognizedSamples content is scrubbed + fence-defanged before the model
 // sees it.
 //
-// Authority rules (non-negotiable): the AI NEVER overrides or deletes a
-// deterministic fact. It can only ADD to fields that are EMPTY in the base
-// profile and can only RAISE NeedsReview. AI-suggested EGRESS is treated
-// cautiously — the deterministic filename-keyed table (WorkspaceProfile.
-// EgressDomains) is the SOLE authority for auto-granted hosts and the AI never
-// writes to it at all, so a model guess cannot ride the same auto-union
-// privilege as a real marker-table hit. An AI-suggested host
-// instead lands in SuggestedEgress — the SAME advisory, content-derived,
-// never-auto-unioned lane the deterministic content scanner's own hits use
-// (profile.go, workspace_egress.go's unionWorkspaceEgress) — and ALWAYS forces
-// NeedsReview: an operator must deliberately promote it into the workspace's
-// own ApprovedEgress list before it can ever reach a run's allowlist; nothing
-// here can do that silently. On ANY error (missing binary, timeout,
-// non-zero exit, malformed output) this FAILS OPEN: the base profile is
-// returned unchanged.
+// mergeAdvice enforces advisory authority: gap-fill only, no deterministic
+// egress grants, and explicit operator promotion of suggested hosts.
+// AdviseProfile returns the base profile unchanged on any error.
 
 import (
 	"context"

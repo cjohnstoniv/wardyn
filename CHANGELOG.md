@@ -8,6 +8,129 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+Migration `0106_attach_ticket_authority` runs on the first start; it adds two nullable columns to
+`attach_tickets` and changes no existing row.
+
+- **Super admins can no longer open someone else's run interactively (#1476).** Attaching to, opening a UI
+  app in, SSHing into or taking over a run that a person started now needs that person; a super admin gets
+  `403 run_owner_only` and the security tier keeps its `404`. Kill, approve, policy, grants, revoke, audit,
+  revive, resume and end stay, and runs with no personal owner stay enterable. An owner-consented support
+  session is tracked in #1509.
+- **No role can create a token that acts as another person (#1477).** `POST /people/{principal}/tokens` now
+  answers `403 person_token_mint_removed`. Tokens an admin already created keep working until revoked: list
+  them with `GET /api/v1/tokens?minted_for_others=true` (or Admin > Credentials) and revoke them with
+  `DELETE /api/v1/tokens/{id}` or `POST /sessions/revoke`. A sign-in under a different role still revokes such
+  a token; otherwise it is re-stamped with the person's groups at that person's sign-in. Until then the person
+  should sign in once and create their own token (`POST /me/tokens`). Follow-up: #1508.
+- **UI app tabs opened before the upgrade must be reopened (#1474).**
+- **A UI app opened through a portal now ends with that portal's grant, at most 10 minutes (#1475).**
+- **The CLI and the Go SDK default client no longer follow HTTP redirects (#1490).** A redirected request now
+  fails with exit 3 (an `*APIError` in the SDK) instead of being replayed at the new location, so point `--url`
+  or the SDK `BaseURL` at the final address. A caller-supplied `HTTPClient` keeps its own redirect policy.
+- **`governance set`, `drive set`, `preset set` and `site-config set` take exactly one JSON document (#1491).**
+  Input that holds anything after the first document, a second value or trailing bytes, and a top-level
+  `null`, is refused before any request.
+- **`wardyn run --wait` and `wardyn run wait-ready` exit 124 with no request when `--timeout` is zero or
+  negative (#1492).**
+- **Environment builds fail before they start on a host whose Docker daemon cannot enforce the memory, CPU or
+  PID caps (#1497).** The error names the discarded limit. `WARDYN_ALLOW_UNENFORCEABLE_CAPS` still applies to
+  sandbox launches but not to builds.
+
+### Security
+
+- **An attach ticket minted before a session revoke can no longer open a UI session (#1474).** A ticket now
+  carries the time it was admitted and the person's verified email, so a revoke that names the email also
+  reaches open UI sessions.
+- **Revoking a portal, or its grant expiring, now ends the UI session it opened (#1475).**
+- **An admin erase of a person's credentials can no longer be undone by a renewal already in flight (#1478).**
+  An AWS renewal or an Azure DevOps refusal stamp that raced the erase used to write the credential back. An
+  unreadable Azure DevOps sign-in configuration now refuses the erase with `503`.
+- **A redirected CLI or SDK write is no longer followed (#1490).** A 307 or 308 used to replay the request body
+  (for example a secret value) and the bearer token at the redirect target, and a 302 on a write reported
+  success after the write never happened.
+- **An audit export that cannot be finished no longer looks complete (#1494).** A read failure before the first
+  byte answers `503 audit_export_read_failed`; after that the transfer is aborted so the client sees a read
+  error. A held push whose path list cannot be read fails the export. A member whose run ownership cannot be
+  checked gets `503 audit_scope_unavailable` instead of an empty query or export.
+- **`scripts/verify-release.sh` and the installer's cosign check bind the signer to the requested release tag
+  (#1496).** A signature from a different release tag is refused for the images, the SBOM attestation and the
+  checksum file. `docs/VERIFY.md` uses the exact identity in every command.
+- **Environment builds no longer start when the daemon discarded a requested resource cap (#1497).**
+
+### Added
+
+- **Admin › Credentials lists the tokens an admin created for someone else, with Revoke (#1477).**
+
+### Changed
+
+- **A killed run says only what its audit trail proves (#1487).** The run page shows confirmed, partial (a
+  teardown step failed) or no kill record, and lists a GitHub token, a git token or SSH key (with its host) and
+  an environment secret that Wardyn cannot take back. Kill is offered again when the trail does not prove the
+  teardown.
+- **Your Azure DevOps card has "Remove from Wardyn" on every state that holds your token (#1488).** It does not
+  revoke the token in Azure DevOps.
+- **Model connection wording says "No key available" / "No token available" instead of "No key added" / "No
+  token added" (#1489).** The credential may have been deleted or be unreadable. The setup check sentence and
+  the launch refusals, including the Azure DevOps own-token refusal, read the same way.
+- **A run page you cannot enter says who can open its terminal, apps and SSH (#1476).** Super admins see no
+  terminal or Attach card on another person's run.
+- **The continuous `:latest` desktop enrolment image is described as signed by digest after push but not
+  verified by the install lane (#1498).** The warning and the docs name the digest-verify route.
+- **Generated environment recipes are described as deterministic documents, not locks (#1499).**
+  `docs/operations/build-images.md` states what the cache key identifies and when a kept image is reused or
+  rebuilt.
+- **The threat model states the shipped policy floor as CC1 (#1500).** An unspecified run resolves to the
+  strongest advertised class (residual 47). The envbuild network defaults are corrected, and the CC1 Kubernetes
+  posture is split into shipped, shipped by construction and planned.
+- **The release checklist's migration pathspec names `internal/db/migrations` and proves each path exists
+  (#1501).**
+- **The Kubernetes setup skill states that `k8s.proxyImage` is required and a RuntimeClass pin is optional
+  (#1502).**
+- **`docs/OPERATIONS.md` has one recovery-set table for Compose, the managed desktop and Helm (#1503).** It says
+  no shipped tool rehearses a restore.
+- **The sign-in section states per-person lock serialisation as current behaviour (#1506).**
+
+### Fixed
+
+- **Adding your own Azure DevOps token failed on every Azure DevOps Services organisation (0.8.4).** The identity
+  check asked `connectionData?api-version=7.1`, which Services answers with a `400` for every token, and the
+  console said "Azure DevOps didn't accept this token." about a valid one. The check now asks without an
+  `api-version`, as the Azure DevOps Server check already did, so a run's background check no longer marks a
+  stored token refused for it either. A `400` from Azure DevOps is now reported as a refused request
+  (`502 ado_own_pat_request_refused`), never as a refused token.
+- **A run no longer warns "resources capped to operator maximum" when its policy names no sizes.** A policy
+  with no CPU, memory, PID or disk value takes the governance ceiling's numbers, which is the normal case and
+  cut nothing the policy asked for. The warning now appears only when a policy asked for more than the ceiling.
+- **The run page no longer shows, or acts on, a run it is not showing after you move between runs (#1483).**
+  The Kill dialog sends the id it names.
+- **The shared delete dialog sends one delete per confirm (#1484).** It disables the button while the delete
+  runs and ignores Cancel and Escape until it finishes.
+- **Copy link on a run and the CLI hint's `WARDYN_URL` keep the base path (#1485).**
+- **Field hints are announced on the real control (#1486)** in People, run limits, the branding logo and the
+  default model provider.
+- **A stale lease sweep could stop the proxy a revive had just started (#1480).** It also revoked the revived
+  run's broker credentials. The revive and the sweep's re-assertion of a kept run's stop now hold a per-run
+  lock in the daemon; the sweep skips a locked run and retries next pass, and an expired kept run is still
+  torn down.
+- **A revive cancelled after it claimed the run answered "lost" for a run the database showed as live
+  (#1481).** From the claim on, the revive finishes or compensates on its own bounded context, keeps the
+  request's audit actor and delegation, and answers "lost" only once the lost mark is stored. When the mark
+  cannot be written, the run's proxy is stopped and its broker credentials revoked anyway, and the answer is
+  `503 revive_recovery_unresolved`. A cancelled bulk restart refuses the runs still to come before their claim.
+- **A failed thaw is retried on the next keystroke (#1482).** A failed thaw, or a failed read of the paused run,
+  is retried after a backoff of one second that doubles up to the 60-second presence window; a healthy run
+  still gets one presence write per window.
+- **A person can remove their own Azure DevOps token after an admin disabled or denied the row, or switched it
+  away from own-token (#1479).**
+- **`run --wait --timeout` bounds the requests it makes (#1492).** A slow read is cut at the budget and exits
+  124. A run that finished after the budget no longer reports success, and a FAILED run whose exit code cannot
+  be read exits 1, never 0.
+- **The managed desktop launcher probes the port in `wardyn.env` (#1493).** It reads `WARDYN_UP_PORT` when the
+  shell does not set one, applies the site configuration, and stops with a message naming the key if the value
+  is not a port from 1 to 65535.
+
 ## [0.8.4] — 2026-10-01
 
 ### Before you upgrade

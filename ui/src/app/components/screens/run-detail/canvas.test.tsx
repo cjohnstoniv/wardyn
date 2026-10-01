@@ -336,24 +336,36 @@ describe("the live preset is terminal-first", () => {
   });
 });
 
-// The ssh tile's availability predicate must mirror ConnectSSHCard's own
-// gate — the card is owner OR ADMIN (run-detail-ssh.tsx:50,
-// docs/design/ui-sandboxes-prompt.md's 0.6 amendment, and
-// run-detail-ssh.test.tsx's passing admin case), not owner only. `available`
-// is what canvas.tsx and focus-mode.tsx filter on, so an admin's cockpit must
-// not drop the tile on a run they did not start — even when their SAVED
-// layout named it. This suite's default ctx is a non-owner non-admin, which
-// is exactly why a regression here needs its own coverage.
-describe("RunCanvas — the SSH tile follows the card's own owner-OR-admin gate", () => {
+// The ssh tile's availability predicate must mirror ConnectSSHCard's own gate
+// (mayEnterRun, lib/run-entry.ts, #1476): the run's person, or an admin on a
+// run no person owns. `available` is what canvas.tsx and focus-mode.tsx filter
+// on, so a super admin's cockpit drops the tile on another person's run (the
+// card would render nothing and leave a hole) and keeps it on an operator-owned
+// run — even when their SAVED layout named it. This suite's default ctx is a
+// non-owner non-admin, which is exactly why a regression here needs its own
+// coverage.
+describe("RunCanvas — the SSH tile follows the card's own entry gate", () => {
   const adminCtx = () =>
     ctx({
       operator: true,
       principal: "admin@example.com",
-      run: { ...RUN, created_by: "someone-else@example.com", state: "RUNNING" } as WidgetContext["run"],
+      run: { ...RUN, created_by: "svc", operator_owned: true, state: "RUNNING" } as WidgetContext["run"],
     });
 
-  it("says the tile is available to an admin on a run they do not own", () => {
+  it("says the tile is available to an admin on an operator-owned run", () => {
     expect(RUN_WIDGETS.ssh.available?.(adminCtx())).toBe(true);
+  });
+
+  it("keeps it away from an admin on another person's run", () => {
+    expect(
+      RUN_WIDGETS.ssh.available?.(
+        ctx({
+          operator: true,
+          principal: "admin@example.com",
+          run: { ...RUN, created_by: "someone-else@example.com", state: "RUNNING" } as WidgetContext["run"],
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("keeps it away from a viewer who is neither the owner nor an admin", () => {

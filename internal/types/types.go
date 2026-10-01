@@ -159,7 +159,7 @@ type AgentRun struct {
 	UserType        string `json:"user_type,omitempty"` // creator's resolved user type, frozen at create
 	Preset          string `json:"preset,omitempty"`    // launch preset this run was expanded from; empty for an explicit-spec run
 	PresetVersion   int    `json:"preset_version,omitempty"`
-	OperatorOwned   bool   `json:"-"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided
+	OperatorOwned   bool   `json:"operator_owned,omitempty"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided; the console reads it for the no-personal-owner entry carve-out
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored, projected only with ?include=recording_meta; HasRecording is the only "no recording" signal.

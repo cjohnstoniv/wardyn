@@ -394,7 +394,7 @@ object id. Then, signed in as an admin or `security_admin`, call
 ```
 
 which answers `201` with `"principal":"entra:<tenant id>:<object id>"`.
-Mint their token with `POST /api/v1/people/entra:<tenant id>:<object id>/tokens`.
+No token is created for them: they sign in and create their own.
 Their first sign-in becomes that principal and writes a `person.attach` audit
 row naming the pairwise `sub` it arrived with.
 

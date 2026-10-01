@@ -36,9 +36,11 @@ var endingSoonThresholds = []time.Duration{10 * time.Minute, time.Hour, 24 * tim
 const dayWarningMinLease = 48 * time.Hour
 
 // sweepRunLeases is one pass of the lease over every RUNNING run that has an
-// end or is kept. Every write it makes is a conditional UPDATE or state CAS, so
-// every replica can run it on its own tick and each warning, end and teardown
-// still happens once.
+// end or is kept. Every write it makes to the store is a conditional UPDATE or
+// state CAS, so each warning, end and teardown still happens once. Re-asserting
+// a kept run's stop is not a store write: it runs under the run's in-process
+// lock (run_oplock.go), against a revive in this same daemon, so it is the one
+// piece of the lease that assumes a single replica.
 func (s *Server) sweepRunLeases(ctx context.Context) error {
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
 	if !ok || s.cfg.Runner == nil {
@@ -62,6 +64,12 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 			return true
 		})
 	}
+	s.runOps.Range(func(id, _ any) bool {
+		if !listed[id.(uuid.UUID)] {
+			s.dropRunOp(id.(uuid.UUID))
+		}
+		return true
+	})
 	return nil
 }
 
@@ -89,8 +97,18 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		}
 		// A revive clears the lost mark before it starts the new proxy, and
 		// this pass listed the run before then: a stale row must neither stop
-		// that proxy nor revoke the revived run's broker. A failed read is
-		// retried next pass.
+		// that proxy nor revoke the revived run's broker. So the pass takes the
+		// run's lock, which a revive holds from its claim to its settle, and
+		// re-reads the row under it, holding it through the runner call below.
+		// It never waits: a run whose lock is held is skipped and retried next
+		// pass. The expiry teardown above stays outside this, so a run cannot
+		// dodge it by being revived again and again. The busy mark covers the
+		// instant between a revive's mark and its lock.
+		unlock, ok := s.tryLockRunOp(run.ID)
+		if !ok {
+			return
+		}
+		defer unlock()
 		if _, busy := s.reviving.Load(run.ID); busy {
 			return
 		}
