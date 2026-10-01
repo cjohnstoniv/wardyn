@@ -4809,7 +4809,7 @@ against the old names gets a `404`/`400` on 0.8, not a warning. History is not
 rewritten — an audit row written before 0.8 keeps its pre-0.8 action and field
 names forever; only what the server emits GOING FORWARD changed.
 
-| Surface | Pre-0.8 | 0.8 |
+| Surface | Before | After |
 |---|---|---|
 | The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin","user_type":"…"}` |
 | `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
@@ -4819,10 +4819,10 @@ names forever; only what the server emits GOING FORWARD changed.
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
 | Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` (grew a `typeID` param the same release, #835/UT-13) |
 | Go: `internal/api` | `auditMemberPolicyDrops`, `authorizeMemberDecision`, `boundMemberSpec`, `denyMemberCapability`, `denyMemberDrive`, `denyMemberGovernance`, `denyMemberRequest`, `denyMemberRunQuota`, `denyMemberSeededImage`, `denyMemberWorkspaceProviders`, `filterMemberGrants`, `handleSetMemberMode`, `memberDropsIntegration`, `memberEnvSecretIsAdminOnly`, `memberModeRequest`, `memberModelAccess`, `memberMountAllowed`, `memberMountPosture`, `memberPreviewApplies`, `memberSafeCapabilities`, `memberSafeIntegration`, `memberSafeIntegrations`, `memberSourcesAllowed`, `memberVisibleOperatorSecretNames`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember` | `auditUserPolicyDrops`, `authorizeUserDecision`, `boundUserSpec`, `denyUserCapability`, `denyUserDrive`, `denyUserGovernance`, `denyUserRequest`, `denyUserRunQuota`, `denyUserSeededImage`, `denyUserWorkspaceProviders`, `filterUserGrants`, `handleSetUserView`, `userDropsIntegration`, `userEnvSecretIsAdminOnly`, `userViewRequest`, `userModelAccess`, `userMountAllowed`, `userMountPosture`, `userPreviewApplies`, `userSafeCapabilities`, `userSafeIntegration`, `userSafeIntegrations`, `userSourcesAllowed`, `userVisibleOperatorSecretNames`, `narrowUserInlinePolicy`, `redactSetupStatusForUser`, `redactSpecForUser` |
-| CLI: approvals | `approvals list\|get`, `approve <id>`, `deny <id>` | `wardyn approval list\|get\|approve\|deny` — clean break, no alias; `--reason`, `--scope`, `--until` unchanged |
-| CLI: run logs | `logs <run-id>` | `wardyn run logs <run-id>` — clean break, no alias |
-| CLI: sessions | `sessions list\|revoke` | `wardyn session list\|revoke` — clean break, no alias; `revoke` still takes exactly one of `--sub` or `--all` |
-| CLI: upsert verb | `drive apply`, `governance apply`, `preset apply` | `wardyn drive set`, `wardyn governance set`, `wardyn preset set` — clean break, no alias; `set` is the one upsert verb, as it already is on `policy`, `secret` and `site-config` |
+| CLI: approvals | `approvals list\|get`, `approve <id>`, `deny <id>` | `wardyn approval list\|get\|approve\|deny` — clean break, no alias, 0.8.4; `--reason`, `--scope`, `--until` unchanged |
+| CLI: run logs | `logs <run-id>` | `wardyn run logs <run-id>` — clean break, no alias, 0.8.4 |
+| CLI: sessions | `sessions list\|revoke` | `wardyn session list\|revoke` — clean break, no alias, 0.8.4; `revoke` still takes exactly one of `--sub` or `--all` |
+| CLI: upsert verb | `drive apply`, `governance apply`, `preset apply` | `wardyn drive set`, `wardyn governance set`, `wardyn preset set` — clean break, no alias, 0.8.4; `set` is the one upsert verb, as it already is on `policy`, `secret` and `site-config` |
 
 `denyMemberField` — the old shared helper this table's first cut of the sweep
 named — does not appear in the 0.8 column: it is not renamed but RETIRED, folded
@@ -5291,7 +5291,7 @@ $ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
 NAME                      READY   STATUS    RESTARTS   AGE
 wardyn-66c8f746c4-2b5mq   1/1     Running   0          25s
 
-$ kubectl logs -n wardyn deploy/wardyn | grep -c "applied migration"
+$ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
 2
 ```
 
@@ -5442,7 +5442,7 @@ Taking that escape hatch — `--set secrets.allowEphemeralAgeKey=true` — rende
 broken install, which then `CrashLoopBackOff`s on boot 2 with:
 
 ```console
-$ kubectl logs -n wardyn -l app.kubernetes.io/name=wardyn --tail=2
+$ kubectl -n wardyn logs -l app.kubernetes.io/name=wardyn --tail=2
 WARN wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY public_recipient=age1qgu93czj2ksk2g3j4x3rq52kyaw5xkjetd7g38cn63gdl2az4eqsyztpgs
 ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; […] delete them (DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%') and boot with a persistent key from `wardynd -gen-age-key`"
 ```
@@ -5515,7 +5515,7 @@ scale-to-zero-and-back on the quickstart cluster:
 $ curl -s http://127.0.0.1:8080/healthz | jq -c .ssh
 {"advertise_addr":"127.0.0.1:2222","enabled":true,"host_key_fingerprint":"SHA256:JEFfrvMMhOTqAMpkJNEqFz3H0hcgoox4swhRkIYIan8"}
 
-$ kubectl logs -n wardyn deploy/wardyn | grep "ssh gateway listening"
+$ kubectl -n wardyn logs deploy/wardyn | grep "ssh gateway listening"
 INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_key_fingerprint=SHA256:JEFfrvMMhOTqAMpkJNEqFz3H0hcgoox4swhRkIYIan8
 ```
 

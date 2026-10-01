@@ -312,7 +312,7 @@ func TestDriveApply_GetApplyRoundTripIsANoOp(t *testing.T) {
 }
 
 // TestDriveApply_RejectsUnknownField pins the same strict-decode contract
-// site-config's apply has: `apply` upserts exactly what the file states, so a
+// site-config's set has: `set` upserts exactly what the file states, so a
 // typo'd key must be a parse error, not a silently dropped field.
 func TestDriveApply_RejectsUnknownField(t *testing.T) {
 	fake := newFakeDriveServer()
@@ -340,7 +340,7 @@ func TestDriveApply_RejectsUnknownField(t *testing.T) {
 // allocations one page at a time and flags the rest with X-Wardyn-Truncated.
 // `drive get` sells its output as a snapshot to restore from, so it must read
 // every page — and print nothing when the pages do not add up to grant_total,
-// rather than a document `apply` would turn into a partial restore.
+// rather than a document `set` would turn into a partial restore.
 func TestDriveGet_ReadsEveryAllocationPage(t *testing.T) {
 	const pageSize = 2
 	all := make([]sdk.UserDriveGrant, 5)

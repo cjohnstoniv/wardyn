@@ -583,7 +583,7 @@ func approvalCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			warnListTruncated(cmd, truncated, "approvals", len(aps), listOffset)
+			warnListTruncated(cmd, truncated, "approval", len(aps), listOffset)
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), aps)
 			}

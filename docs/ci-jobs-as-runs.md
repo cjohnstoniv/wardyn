@@ -146,7 +146,7 @@ wardyn governance set ci-governance.json
 The `id` is any UUID you make up. It only ties the assignment to the profile
 inside this file. Assign at the `user` tier: a user-tier row settles the ceiling
 without depending on the token's group snapshot, which is frozen when the token is
-minted and fails closed when it is missing or truncated. `apply` is an upsert by profile name, so re-running it changes nothing.
+minted and fails closed when it is missing or truncated. `set` is an upsert by profile name, so re-running it changes nothing.
 
 | Field | What it holds for CI |
 |---|---|

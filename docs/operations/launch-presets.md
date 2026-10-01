@@ -66,8 +66,8 @@ Presets round-trip declaratively, like drives:
    wardyn preset get > presets.json
    ```
 2. Edit `presets.json`.
-3. Apply it back:
+3. Set it back:
    ```sh
    wardyn preset set presets.json   # upserts by name
    ```
-   A `get` immediately followed by `apply` is a no-op.
+   A `get` immediately followed by `set` is a no-op.

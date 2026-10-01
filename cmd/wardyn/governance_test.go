@@ -287,7 +287,7 @@ func bootstrapGovernance(t *testing.T, url string) map[string]uuid.UUID {
 // TestGovernanceApply_GetApplyRoundTripIsANoOp is #1108's stated acceptance:
 // `wardyn governance get > f && wardyn governance set f` changes nothing —
 // ZERO writes, ZERO audit rows, on a populated install. Stricter than drive
-// apply's own round-trip test (which only checks the state ends up the same):
+// set's own round-trip test (which only checks the state ends up the same):
 // the real server audits every successful profile/assignment write
 // unconditionally, so an apply that blindly re-PUTs/re-POSTs unchanged rows
 // would pass a state-equality check while still spamming the audit log.

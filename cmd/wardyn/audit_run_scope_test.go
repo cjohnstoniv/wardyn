@@ -46,7 +46,7 @@ func runAuditCmd(t *testing.T, url string, args ...string) error {
 
 // TestAuditRunScopeRefusalIsNotSuccess: `wardyn audit <run-id>` must distinguish
 // "this run has no audit events" from "this run does not exist, or you cannot see
-// it" — the same way its sibling `wardyn logs` already does.
+// it" — the same way its sibling `wardyn run logs` already does.
 //
 // GET /api/v1/audit is scoped per member SERVER-SIDE by filtering rows, so an
 // unknown id and a run belonging to somebody else both answer 200 with an empty

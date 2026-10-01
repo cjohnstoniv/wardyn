@@ -543,7 +543,7 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 // carries: one already issued by GetDrives (non-nil) is REPLACED in place
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
 // > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
-// what route the re-`apply` to an update of the same rows, not a second copy
+// what route the re-`set` to an update of the same rows, not a second copy
 // under a fresh name. A grant carries no id of its own; every one is POSTed,
 // and the server's own (subject_type, subject) upsert repoints an existing
 // allocation rather than duplicating it.
