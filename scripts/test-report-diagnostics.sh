@@ -117,8 +117,12 @@ echo "ok  a panic inside a named test is not reported as outside any test"
 # A package can have BOTH a named failing test and a -timeout panic (the
 # panic kills the package after the named failure is already recorded). The
 # panic must still be surfaced, not silently dropped because the package
-# already has a named failure. Isolated in its own module: -timeout=2s must
-# not apply to the fixtures above.
+# already has a named failure. Isolated in its own module: -timeout=15s must
+# not apply to the fixtures above. The alarm is 15s, not 2s (#1303): on a
+# starved host the compile and the first test can take longer than a short
+# alarm, so it fired before TestNamedFailure was recorded and the assertion
+# below read a timeout where it expected a named failure. TestHang blocks
+# forever, so the alarm, however long, is always what ends the package.
 TMP2="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$TMP2"' EXIT
 mkdir -p "$TMP2/scripts" "$TMP2/timeoutmixpkg"
@@ -131,28 +135,25 @@ EOF
 cat > "$TMP2/timeoutmixpkg/t_test.go" <<'EOF'
 package timeoutmixpkg
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestNamedFailure(t *testing.T) {
 	t.Fatal("this test always fails")
 }
 
 func TestHang(t *testing.T) {
-	time.Sleep(5 * time.Second)
+	select {}
 }
 EOF
 
-OUT2="$( (cd "$TMP2" && ./scripts/test-report.sh fixture -timeout=2s ./... 2>&1 >/dev/null) )" && \
+OUT2="$( (cd "$TMP2" && ./scripts/test-report.sh fixture -timeout=15s ./... 2>&1 >/dev/null) )" && \
   fail "test-report.sh must exit non-zero when a package has both a named failure and a timeout panic"
 
 echo "$OUT2" | grep -q "timeoutmixpkg TestNamedFailure" \
   || fail "stderr must still name the ordinary failing test — got:
 $OUT2"
 
-echo "$OUT2" | grep -qF "panic: test timed out after 2s" \
+echo "$OUT2" | grep -qF "panic: test timed out after 15s" \
   || fail "stderr must also surface the -timeout panic that killed the package, not just its named failure — got:
 $OUT2"
 echo "ok  names both the failing test and the -timeout panic in the same package"

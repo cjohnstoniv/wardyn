@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -64,6 +63,7 @@ func TestCreateRunServerErrorDoesNotLeakDriverText(t *testing.T) {
 		t.Fatalf("embedded.New: %v", err)
 	}
 	srv := New(Config{
+		BaseCtx:     testBaseCtx(t),
 		Store:       createRunFailingStore{Store: store.NewPG(pool), err: errors.New("pgx: dial: " + secret)},
 		Identity:    idp,
 		Approvals:   newFakeApprovals(),
@@ -80,7 +80,7 @@ func TestCreateRunServerErrorDoesNotLeakDriverText(t *testing.T) {
 		ControlPlaneURL: "http://wardynd:8080",
 	})
 
-	var logged bytes.Buffer
+	var logged lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

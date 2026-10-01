@@ -42,7 +42,8 @@ import (
 // *http.Server instances sharing ONE *tls.Config would race on that mutation —
 // the exact shape of the 0.7.9 regression (a shared *tls.Config mutated by
 // HTTP/2 broke corporate-CA installs). TestListenersDoNotShareOneTLSConfig
-// pins this.
+// pins the clone; TestEveryTLSListenerGetsItsOwnConfig pins that every
+// http.Server goes through it.
 //
 // The key goes through the shared _FILE mode rule (cliutil.ReadSecretFile),
 // the same one every other secret-file setting is checked against (#1116,
@@ -73,7 +74,8 @@ func loadTLSConfig(certPath, keyPath string) (*tls.Config, error) {
 // serveAndShutdown and startUISandboxGateway) call this rather than reading
 // posture.tlsConfig directly — see loadTLSConfig's doc comment for why
 // handing the SAME *tls.Config to more than one *http.Server races.
-// TestListenersDoNotShareOneTLSConfig pins it.
+// TestListenersDoNotShareOneTLSConfig pins the clone and
+// TestEveryTLSListenerGetsItsOwnConfig pins the two call sites.
 func tlsConfigForListener(posture tlsPosture) *tls.Config {
 	return posture.tlsConfig.Clone()
 }

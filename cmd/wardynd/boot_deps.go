@@ -200,6 +200,22 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
 }
 
+// substrateDeps is the registration Deps every substrate constructor receives,
+// split out of buildRunnerFromFlags so a test can pin it (Record in particular)
+// without registering a spy substrate in the process-global registry.
+func substrateDeps(f *bootFlags, confRuntimes map[types.ConfinementClass]string, driveHostRoots []string) substrate.Deps {
+	return substrate.Deps{
+		ProxyImage:          *f.proxyImage,
+		DriveProbeImage:     *f.driveProbeImage,
+		ConfinementRuntimes: confRuntimes,
+		UserDriveHostRoots:  driveHostRoots,
+		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
+		// rather than letting the substrate hardcode Record — "off" must mean no
+		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
+		Record: substrate.RecordEnabled(*f.recordingSel),
+	}
+}
+
 // buildRunnerFromFlags resolves the optional sandbox runner: "none" (nil runner,
 // headless API-only) or any substrate registered in the substrate registry
 // (internal/runner/substrate). Substrates SELF-REGISTER at init() like every
@@ -248,16 +264,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 		}
 		return nil, "none", nil
 	}
-	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
-		ProxyImage:          *f.proxyImage,
-		DriveProbeImage:     *f.driveProbeImage,
-		ConfinementRuntimes: confRuntimes,
-		UserDriveHostRoots:  driveHostRoots,
-		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
-		// rather than letting the substrate hardcode Record — "off" must mean no
-		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
-		Record: substrate.RecordEnabled(*f.recordingSel),
-	})
+	sub, err := substrate.New(*f.runnerSel, substrateDeps(f, confRuntimes, driveHostRoots))
 	if err != nil {
 		// Discriminate WHY substrate.New failed before printing the
 		// same headline for both. A typo'd -runner or a substrate not compiled
