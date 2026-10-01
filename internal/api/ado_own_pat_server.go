@@ -150,5 +150,7 @@ func adoOwnPATTarget(row types.GitProvider) (identityURL, org string, ok bool) {
 	if !found {
 		return "", "", false
 	}
-	return adoOwnPATAPIBase + "/" + url.PathEscape(org) + "/_apis/connectionData?api-version=7.1", org, true
+	// No api-version here either: Services answers connectionData?api-version=7.1
+	// with a 400 for every token, and without one with the owner.
+	return adoOwnPATAPIBase + "/" + url.PathEscape(org) + "/_apis/connectionData", org, true
 }

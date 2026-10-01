@@ -593,6 +593,7 @@ const (
 	reasonADOOwnPATRejected         = "ado_own_pat_rejected"          // Azure DevOps did not accept the token for the organisation
 	reasonADOOwnPATIdentityMismatch = "ado_own_pat_identity_mismatch" // the token belongs to another account (never named)
 	reasonADOOwnPATCheckUnavailable = "ado_own_pat_check_unavailable" // Azure DevOps could not be asked; nothing is known
+	reasonADOOwnPATRequestRefused   = "ado_own_pat_request_refused"   // Azure DevOps answered 400: it refused the request, not the token
 )
 
 // The own-token arm of the Azure DevOps injection resolve

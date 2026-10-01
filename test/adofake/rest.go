@@ -264,6 +264,12 @@ func (s *Server) handleWorkItemsPatch(w http.ResponseWriter, r *http.Request) {
 // (authenticatedUser.properties.Account), or a canned user with no Account for
 // a token that has none.
 func (s *Server) handleConnectionData(w http.ResponseWriter, r *http.Request) {
+	// Services answers connectionData with no api-version or a -preview one, and
+	// refuses a released version (7.1, 5.0) with a 400 whatever the token.
+	if v := r.URL.Query().Get("api-version"); v != "" && !strings.HasSuffix(v, "-preview") && !strings.Contains(v, "-preview.") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "The requested version is not supported for this resource."})
+		return
+	}
 	user := map[string]any{"id": "00000000-0000-0000-0000-000000000001", "providerDisplayName": "adofake"}
 	s.mu.Lock()
 	account, ok := s.identities[tokenFromRequest(r)]
