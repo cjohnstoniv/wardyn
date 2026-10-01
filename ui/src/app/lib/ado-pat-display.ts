@@ -54,10 +54,12 @@ export function adoOrgLabel(address: string): string {
   }
 }
 
-/** Azure DevOps' own page for a person's personal access tokens. */
+/** Azure DevOps' own page for a person's personal access tokens. https only:
+ *  the address is stored data, and nothing else is ever linked. */
 export function adoTokensURL(address: string): string {
   try {
     const u = new URL(address);
+    if (u.protocol !== "https:") return "";
     const base = u.hostname === "dev.azure.com" ? `${u.origin}/${u.pathname.split("/").filter(Boolean)[0] ?? ""}` : `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
     return `${base}/_usersSettings/tokens`;
   } catch {
@@ -78,6 +80,10 @@ export interface PatCardView {
   action: "connect" | "add_token" | "replace_token" | null;
   /** Whether a connected minted card offers Disconnect. */
   disconnect: boolean;
+  /** Whether an own-token card offers Remove from Wardyn: true on every state
+   *  that holds a stored token (live, expiring, refused, expired), whatever
+   *  `action` is: expired offers add_token and still holds one (#1488). */
+  remove: boolean;
   /** Azure DevOps refused the own token before it expires (#1445): the card is
    *  drawn with a danger border and its Replace button is the primary action. */
   refused?: boolean;
@@ -115,24 +121,24 @@ export function patCardView(access: SCMAccessPAT, title: string, now: number = D
 function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
   switch (access.state) {
     case "not_configured":
-      return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NOT_CONNECTED], action: "connect", disconnect: false };
+      return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NOT_CONNECTED], action: "connect", disconnect: false, remove: false };
     case "live": {
       const body: string[] = [ADO_PAT.MEMBER_CONNECTED];
       const last = access.last_token;
       // Only a finished token has both times the line names.
       if (last?.revoked_at) body.push(ADO_PAT.MEMBER_LAST_TOKEN(formatClock(last.created_at), formatClock(last.revoked_at)));
-      return { title, chip: { label: ADO_PAT.CHIP_CONNECTED, tone: "success" }, body, action: null, disconnect: true };
+      return { title, chip: { label: ADO_PAT.CHIP_CONNECTED, tone: "success" }, body, action: null, disconnect: true, remove: false };
     }
     case "expired_signin":
       if (access.cause === "blocked") {
-        return { title, chip: { label: ADO_PAT.CHIP_BLOCKED, tone: "danger" }, body: [ADO_PAT.BLOCKED_BODY], action: null, disconnect: false };
+        return { title, chip: { label: ADO_PAT.CHIP_BLOCKED, tone: "danger" }, body: [ADO_PAT.BLOCKED_BODY], action: null, disconnect: false, remove: false };
       }
       if (access.cause === "ado_pat_needs_console_app") {
-        return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NEEDS_ADMIN], action: null, disconnect: false };
+        return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NEEDS_ADMIN], action: null, disconnect: false, remove: false };
       }
       // ended, consent_needed, permissions_missing and an unnamed cause: the
       // person signs in again (Microsoft asks for consent there if it is due).
-      return { title, chip: { label: ADO_PAT.CHIP_SIGN_IN_AGAIN, tone: "warning" }, body: [ADO_PAT.SIGN_IN_AGAIN_BODY], action: "connect", disconnect: false };
+      return { title, chip: { label: ADO_PAT.CHIP_SIGN_IN_AGAIN, tone: "warning" }, body: [ADO_PAT.SIGN_IN_AGAIN_BODY], action: "connect", disconnect: false, remove: false };
     default:
       return null;
   }
@@ -151,13 +157,13 @@ function ownCard(access: SCMAccessPAT, title: string, now: number): PatCardView 
   // the token is gone either way, and expired says what to do.
   if (access.refused_at && access.expires_on && (access.state === "live" || access.state === "expiring")) {
     const line = ADO_PAT.OWN_REFUSED_LINE(formatDay(access.refused_at), formatDay(access.expires_on));
-    return { title: cardTitle, chip: { label: ADO_PAT.OWN_CHIP_REFUSED, tone: "danger" }, body: [...serverNote, line], action: "replace_token", disconnect: false, refused: true };
+    return { title: cardTitle, chip: { label: ADO_PAT.OWN_CHIP_REFUSED, tone: "danger" }, body: [...serverNote, line], action: "replace_token", disconnect: false, remove: true, refused: true };
   }
   switch (access.state) {
     case "not_configured":
-      return { title: cardTitle, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: serverNote, action: "add_token", disconnect: false };
+      return { title: cardTitle, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: serverNote, action: "add_token", disconnect: false, remove: false };
     case "live":
-      return { title: cardTitle, chip: { label: ADO_PAT.CHIP_CONNECTED, tone: "success" }, body: [...serverNote, ...(expiryLine ? [expiryLine] : [])], action: "replace_token", disconnect: false };
+      return { title: cardTitle, chip: { label: ADO_PAT.CHIP_CONNECTED, tone: "success" }, body: [...serverNote, ...(expiryLine ? [expiryLine] : [])], action: "replace_token", disconnect: false, remove: true };
     case "expiring":
       return {
         title: cardTitle,
@@ -165,9 +171,10 @@ function ownCard(access: SCMAccessPAT, title: string, now: number): PatCardView 
         body: [...serverNote, ...(expiryLine ? [expiryLine] : [])],
         action: "replace_token",
         disconnect: false,
+        remove: true,
       };
     case "expired_signin":
-      return { title: cardTitle, chip: { label: ADO_PAT.OWN_CHIP_EXPIRED, tone: "danger" }, body: [...serverNote, ADO_PAT.OWN_EXPIRED_BODY], action: "add_token", disconnect: false };
+      return { title: cardTitle, chip: { label: ADO_PAT.OWN_CHIP_EXPIRED, tone: "danger" }, body: [...serverNote, ADO_PAT.OWN_EXPIRED_BODY], action: "add_token", disconnect: false, remove: true };
     default:
       return null;
   }
