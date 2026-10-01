@@ -5978,6 +5978,14 @@ rather than a preference:
 - **the decision-ingest `lastTouch` debounce** (`shouldTouch`,
   `internal/api/internal.go`) — per-process, so N pods can do up to N× the
   `TouchRun` writes the 30s debounce was sized for. Load, not correctness.
+- **the per-run operation lock** (`runOps`, `internal/api/run_oplock.go`) — an
+  in-process mutex per run. A revive holds it from its claim to its settle, and
+  the lease sweep's re-assertion of a kept run's stop and the watcher's reboot
+  mark take it too, so a sweep that read a run's lost mark before a revive cannot
+  stop the proxy that revive just started (#1480). It orders work inside one
+  process only: two replicas hold two locks and the race is back. A sweep never
+  waits for it, it skips a locked run until the next pass; the expiry teardown
+  does not take it, so a run that keeps being revived still expires.
 
 Six OTHER pieces are now Postgres-backed, so they survive a crash and no longer
 break under a second replica: single-use **attach tickets**, delete-on-read
