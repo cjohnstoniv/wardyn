@@ -46,6 +46,16 @@ describe("runs.getGrants — grant-record projection", () => {
     expect(g.scope).toBe('github_token {"repo":"acme/widgets"}');
   });
 
+  it("carries the scope's host (git_pat, ssh_key) and nothing else of the scope onto the host field", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([{ id: "g-9", spec: { kind: "git_pat", scope: { host: "dev.azure.com", secret: "S" } } }]),
+    );
+    const [g] = await runs.getGrants("run-9");
+    expect(g.host).toBe("dev.azure.com");
+    fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "g-8", spec: { kind: "github_token", scope: { repo: "a/b" } } }]));
+    expect((await runs.getGrants("run-8"))[0].host).toBeUndefined();
+  });
+
   it("falls back to the kind alone when no scope object is present", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "g-2", spec: { kind: "cloud_sts" } }]));
     const [g] = await runs.getGrants("run-2");

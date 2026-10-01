@@ -45,7 +45,9 @@ import {
   createRequestFromAudit,
   egressFromAudit,
   exitCodeFromAudit,
+  runEndingFromAudit,
 } from "../../lib/api/audit";
+import { heldCredentials, type HeldCredentials } from "../../lib/held-credentials";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
@@ -117,6 +119,12 @@ function RunDetailPage({ id }: { id: string }) {
   // scoped-fetched the same way session.recording.write is, so the exit code and
   // ending derivation stay known past that cap.
   const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
+  // #1487: this run's credential.mint rows, fetched with their OWN action filter
+  // (never read off the 1000-row trail above) so a kill outcome can name what
+  // the run held. undefined = not fetched yet; null = the fetch failed. Joined
+  // to `grants` for the kind and host by held-credentials.ts.
+  const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
+  const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [tab, setTab] = React.useState<Tab>("overview");
   // "Make a policy from this run" — the honest home of "write the policy from
@@ -178,7 +186,7 @@ function RunDetailPage({ id }: { id: string }) {
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
-        .then(([r, g, runApprovals, a, recA]) => {
+        .then(async ([r, g, runApprovals, a, recA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
           if (r.status === "fulfilled" && r.value && r.value.id !== id) return;
@@ -191,7 +199,33 @@ function RunDetailPage({ id }: { id: string }) {
             if (foreground) setStatus("error");
             return;
           }
+          // R-5: run.complete/run.kill/run.autostop cannot exist for a run
+          // that ISN'T terminal — fetching them every DETAIL_POLL_MS tick on
+          // a live run would be wasted round-trips, forever. Gated on THIS
+          // tick's own fresh state (not a stale last-known ref), so the exact
+          // tick a run turns terminal is the one that catches it.
+          //
+          // AWAITED, and committed with the run below: a KILLED run's outcome
+          // (#1487) is read off these rows, so setting the state first would
+          // paint "no kill record" for the beat before they land. Best-effort
+          // like the allSettled above: a rejected fetch leaves endingAudit at
+          // its last-good value, and a failed mint fetch is "couldn't read".
+          let ending: AuditEvent[] | undefined;
+          let mint: AuditEvent[] | null | undefined;
+          if (r.value && isTerminalRunState(r.value.state)) {
+            const [done, kill, autostop, minted] = await Promise.allSettled([
+              auditApi.listAudit(id, { action: "run.complete" }),
+              auditApi.listAudit(id, { action: "run.kill" }),
+              auditApi.listAudit(id, { action: "run.autostop" }),
+              auditApi.listAudit(id, { action: "credential.mint" }),
+            ]);
+            if (done.status === "fulfilled" && kill.status === "fulfilled" && autostop.status === "fulfilled") {
+              ending = [done.value, kill.value, autostop.value].flat();
+            }
+            mint = minted.status === "fulfilled" ? minted.value : null;
+          }
           setRun(r.value ?? null);
+          setGrantsReadable(g.status === "fulfilled");
           if (g.status === "fulfilled") setGrants(g.value);
           if (a.status === "fulfilled") {
             setEgress(egressFromAudit(a.value));
@@ -203,20 +237,8 @@ function RunDetailPage({ id }: { id: string }) {
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id === id));
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
-          // R-5: run.complete/run.kill/run.autostop cannot exist for a run
-          // that ISN'T terminal — fetching them every DETAIL_POLL_MS tick on
-          // a live run would be 3 wasted round-trips per tick, forever. Gated
-          // on THIS tick's own fresh state (not a stale last-known ref), so
-          // the exact tick a run turns terminal is the one that catches it.
-          if (r.value && isTerminalRunState(r.value.state)) {
-            // Best-effort like the allSettled above: a rejected listAudit
-            // leaves endingAudit at its last-good value, never unhandled.
-            void Promise.all([
-              auditApi.listAudit(id, { action: "run.complete" }),
-              auditApi.listAudit(id, { action: "run.kill" }),
-              auditApi.listAudit(id, { action: "run.autostop" }),
-            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
-          }
+          if (ending) setEndingAudit(ending);
+          if (mint !== undefined) setMintAudit(mint);
           setStatus("ready");
         })
         .catch(() => {
@@ -386,6 +408,15 @@ function RunDetailPage({ id }: { id: string }) {
   // capped `audit` trail above dropped them — duplicates are harmless, both
   // derivations below keep the last/first matching row regardless.
   const endingEvents = [...audit, ...endingAudit];
+  // #1487: what a killed run held that Wardyn cannot take back. undefined until
+  // the terminal-run fetch has answered, so nothing says "couldn't read" for the
+  // beat before it lands.
+  const held =
+    mintAudit === undefined ? undefined : heldCredentials(grantsReadable ? grants : undefined, mintAudit ?? undefined);
+  // Kill again is offered on a KILLED run whose trail does not PROVE the
+  // teardown: the server re-kills a KILLED run (runs_lifecycle.go), and the
+  // cascade is safe to repeat — the one action that settles the doubt.
+  const killAgain = !!run && run.state === "KILLED" && runEndingFromAudit(run.state, endingEvents)?.evidence !== "confirmed";
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -450,6 +481,7 @@ function RunDetailPage({ id }: { id: string }) {
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
+            canKillAgain={killAgain}
             onClone={view === "user" ? onClone : undefined}
             onRename={view === "user" ? rename : undefined}
           />
@@ -499,6 +531,7 @@ function RunDetailPage({ id }: { id: string }) {
               grants={grants}
               egress={egress}
               audit={endingEvents}
+              held={held}
               pending={pending}
               recording={recording}
               recState={recState}
@@ -576,6 +609,7 @@ function Cockpit({
   grants,
   egress,
   audit,
+  held,
   pending,
   recording,
   recState,
@@ -590,6 +624,8 @@ function Cockpit({
   grants: CredentialGrant[];
   egress: EgressDecision[];
   audit: AuditEvent[];
+  /** What a killed run held that a kill cannot revoke; undefined while loading. */
+  held: HeldCredentials | undefined;
   /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
    *  held count every widget reads; the decision surface itself is
    *  LiveApprovals' own poll. */
@@ -656,7 +692,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
+      <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />
       <TerminalPane
         run={run}
         terminal={terminal}

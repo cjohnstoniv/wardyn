@@ -43,6 +43,12 @@ import {
 // requires_approval } }) into the CredentialGrant shape the run-detail screen
 // renders. These are ELIGIBILITY records (what the run may request), not issued
 // credentials, so there is no jti/expiry; they render as "active" eligibility.
+// The host a git_pat / ssh_key grant's scope names — the one scope field the
+// kill outcome's per-kind lines carry (held-credentials.ts); never the scope.
+function grantHost(scope: unknown): string | undefined {
+  return scope != null && typeof scope === "object" ? str((scope as Record<string, unknown>).host) : undefined;
+}
+
 function grantsFromRecords(payload: unknown): CredentialGrant[] {
   return unwrapList<Record<string, unknown>>(payload).map((g) => {
     const spec = (g.spec ?? {}) as Record<string, unknown>;
@@ -62,6 +68,7 @@ function grantsFromRecords(payload: unknown): CredentialGrant[] {
       audience: kind,
       state: "active",
       minted_at: str(g.created_at),
+      host: grantHost(spec.scope),
     } satisfies CredentialGrant;
   });
 }

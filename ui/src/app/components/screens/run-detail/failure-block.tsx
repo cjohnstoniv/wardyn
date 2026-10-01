@@ -28,7 +28,8 @@
 import * as React from "react";
 import type { ReactNode } from "react";
 import { ScrollText } from "lucide-react";
-import type { AgentRun, AuditEvent, RunEndingKind } from "../../../lib/types";
+import type { AgentRun, AuditEvent, RunEnding, RunEndingKind } from "../../../lib/types";
+import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { absoluteTime } from "../../../lib/format";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
@@ -80,15 +81,6 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
       "Nothing was mounted and no credential was minted; there is nothing to clean up.",
     ],
   },
-  killed: {
-    happened: (elapsed) =>
-      `An operator killed this run ${elapsed} in. The sandbox was torn down and the run's identity revoked; any credential it held stopped working at that moment.`,
-    todo: [
-      "The audit row names who killed it and the reason they gave.",
-      "Files written to a mounted workspace are still on the host; scratch is gone.",
-      "Start a new run if the work still needs doing — a killed run cannot resume.",
-    ],
-  },
   auto_stop: {
     happened: () =>
       "Nobody attached and nothing reached out, so the run hit its idle auto-stop window and shut itself down. This is the policy working, not a fault.",
@@ -111,21 +103,69 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
   // thing the console adds is the sign-in itself (0.7.6 Finding 3).
 };
 
-// A kill whose cascade did NOT fully succeed. run.kill carries outcome
-// "failure" (plus a run.revoke/failure row) when KillSandbox, the identity
-// revoke or the broker revoke failed — internal/api/runs_lifecycle.go's HONEST
-// OUTCOME: the run IS marked KILLED, but the sandbox may still be live and a
-// minted token may still be valid until its TTL. The clean-kill copy above
-// asserts the opposite of all three, so this run gets its own.
-const KILL_INCOMPLETE: EndingCopy = {
-  happened: (elapsed) =>
-    `An operator killed this run ${elapsed} in, and a teardown step failed. The state is KILLED, but the sandbox may still be live and a credential it held may still work.`,
-  todo: [
-    "The audit row names the step that failed — read it before treating this run as contained.",
-    "Killing it again re-runs the same teardown; the cascade is safe to repeat.",
-    "Files written to a mounted workspace are still on the host; scratch is gone.",
-  ],
-};
+// What a KILLED run says, by what its trail proves (#1487; runEndingFromAudit's
+// `evidence`). Each outcome states only what Wardyn knows: a clean kill never
+// claims what a teardown it did not see would have done to an upstream secret,
+// a failed step is never paired with "scratch is gone", and a run with no kill
+// record says it cannot confirm — it does not invent who, when or how.
+const KILL_AUDIT_ROW = "The audit row names who killed it and the reason they gave.";
+const KILL_START_NEW = "Start a new run if the work still needs doing — a killed run cannot resume.";
+const KILL_AGAIN = "Kill it again to run teardown once more; the cascade is safe to repeat.";
+const KILL_SCRATCH_GONE = "Files written to a mounted workspace are still on the host; scratch is gone.";
+// run.kill carries outcome "failure" (plus a run.revoke/failure row) when
+// KillSandbox, the identity revoke or the broker revoke failed —
+// internal/api/runs_lifecycle.go's HONEST OUTCOME: the run IS marked KILLED,
+// but the sandbox may still be live and a minted token may still be valid.
+const KILL_PARTIAL_AUDIT_ROW = "The audit row names the step that failed — read it before treating this run as contained.";
+const KILL_PARTIAL_RETRY = "Killing it again re-runs the same teardown; the cascade is safe to repeat.";
+const KILL_PARTIAL_SCRATCH =
+  "Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host.";
+
+// What Wardyn cannot take back from a run it has killed: a GitHub token already
+// minted (it lives out its TTL), a git token or SSH key (stored upstream), an
+// environment secret (resolved into the sandbox at launch). Facts from
+// lib/held-credentials.ts — kind and host only.
+const GITHUB_HELD = "A GitHub token it already held stays valid until it expires, within an hour.";
+const ENV_SECRET_HELD =
+  "Wardyn can't revoke a secret this run received as an environment variable — rotate it where it was issued.";
+const HELD_UNREADABLE = "Wardyn couldn't read which credentials this run held.";
+const HELD_RANK: Record<HeldCredential["kind"], number> = { github_token: 0, git_pat: 1, ssh_key: 2, env_secret: 3 };
+
+function heldLines(held: HeldCredentials | undefined): string[] {
+  if (!held) return []; // still loading: say nothing rather than "couldn't read"
+  if (!held.readable) return [HELD_UNREADABLE];
+  return [...held.items]
+    .sort((a, b) => HELD_RANK[a.kind] - HELD_RANK[b.kind])
+    .map((c) =>
+      c.kind === "github_token"
+        ? GITHUB_HELD
+        : c.kind === "env_secret"
+          ? ENV_SECRET_HELD
+          : `Wardyn can't revoke the ${c.kind === "git_pat" ? "git token" : "SSH key"} this run used — it stays live until you rotate it on ${c.host}.`,
+    );
+}
+
+function killedCopy(evidence: RunEnding["evidence"], held: HeldCredentials | undefined): EndingCopy {
+  if (evidence === "partial") {
+    return {
+      happened: (elapsed) =>
+        `An operator killed this run ${elapsed} in, and a teardown step failed. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.`,
+      todo: [KILL_PARTIAL_AUDIT_ROW, KILL_PARTIAL_RETRY, KILL_PARTIAL_SCRATCH, ...heldLines(held)],
+    };
+  }
+  if (evidence === "unknown") {
+    return {
+      happened: () =>
+        "This run is marked KILLED, but its audit trail has no kill record, so Wardyn can't confirm who killed it or whether teardown finished.",
+      todo: [KILL_AGAIN, KILL_START_NEW],
+    };
+  }
+  return {
+    happened: (elapsed) =>
+      `An operator killed this run ${elapsed} in. Wardyn stopped and removed the sandbox and will issue it no more credentials.`,
+    todo: [KILL_AUDIT_ROW, KILL_SCRATCH_GONE, ...heldLines(held), KILL_START_NEW],
+  };
+}
 
 // The button each provider door gets on a failed run (#543, canon Table 2).
 function doorButton(t: DoorTarget): { label: string; aria: string; note: string } {
@@ -181,11 +221,14 @@ function ProviderDoor({ run, provider }: { run: AgentRun; provider: string }) {
 export function RunFailureBlock({
   run,
   audit,
+  held,
   onGoAudit,
 }: {
   run: AgentRun;
   /** The trail the run page already fetched. */
   audit: AuditEvent[];
+  /** Credentials the run held that a kill cannot revoke (#1487); absent while loading. */
+  held?: HeldCredentials;
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
 }) {
@@ -204,8 +247,7 @@ export function RunFailureBlock({
     void refresh();
   }, [credential, refresh]);
   if (!ending) return null;
-  const copy =
-    ending.kind === "killed" && ending.outcome === "failure" ? KILL_INCOMPLETE : ENDING_COPY[ending.kind];
+  const copy = ending.kind === "killed" ? killedCopy(ending.evidence, held) : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
   // (a truncated trail) fall back to the run's last update, which is what the
   // command bar's own clock freezes at.
@@ -221,6 +263,7 @@ export function RunFailureBlock({
       aria-label={HAPPENED}
       data-testid="run-failure-block"
       data-ending={ending.kind}
+      data-evidence={ending.evidence}
     >
       {(copy || run.failure_hint) && (
         <>
@@ -281,7 +324,7 @@ export function RunFailureBlock({
         {/* Wire values, so mono (CONSOLE-RULES §3): the action that carries the
             evidence, who the row names, and when. An unrecognised ending has
             no such row and states nothing here. */}
-        {ending.action && (
+        {ending.action && ending.evidence !== "unknown" && (
           <span className="min-w-0 truncate font-mono text-meta text-muted-foreground">
             {[ending.action, ending.outcome, ending.actor, ending.time && absoluteTime(ending.time)]
               .filter(Boolean)

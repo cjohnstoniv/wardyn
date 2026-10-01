@@ -201,9 +201,14 @@ function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): Aud
   return events.find(pick);
 }
 
-/** The LAST event matching `pick` — the most recent attempt, not the first. */
-function lastEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
-  return events.filter(pick).pop();
+/** The newest event matching `pick` by timestamp; a tie goes to the later row. */
+function latestEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
+  let best: AuditEvent | undefined;
+  for (const e of events) {
+    if (!pick(e)) continue;
+    if (!best || Date.parse(e.time) >= Date.parse(best.time) || Number.isNaN(Date.parse(best.time))) best = e;
+  }
+  return best;
 }
 
 // Why a run ended badly, from the trail the run page already holds. The console
@@ -227,14 +232,20 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     detail: str(e?.data?.error) ?? str(e?.data?.reason) ?? str(e?.data?.detail),
   });
   if (state === "KILLED") {
-    // The kill event carries WHO and WHEN. The LAST one, not the first: the
+    // The kill event carries WHO and WHEN. The LATEST one by its own timestamp,
+    // not the first and not "whichever the fetch happened to list last": the
     // server exempts an already-KILLED run from the terminal guard precisely so
     // a kill whose teardown failed can be retried (runs_lifecycle.go), so the
-    // most recent attempt — not the first — is this run's containment truth. A
-    // KILLED run with no run.kill row at all (an older trail, or one truncated
-    // by the 1000-row cap) still gets the block: the state alone is the fact,
-    // only the attribution is missing.
-    return from("killed", lastEvent(events, (e) => e.action === "run.kill"), "run.kill");
+    // most recent attempt is this run's containment truth. What the trail
+    // PROVES is `evidence` (#1487): a success row confirms the teardown, any
+    // other outcome says a step failed, and NO row (an older trail, or one
+    // truncated by the 1000-row cap) proves nothing — the state alone is the
+    // fact, and the block says so rather than inventing who or how.
+    const kill = latestEvent(events, (e) => e.action === "run.kill");
+    return {
+      ...from("killed", kill, "run.kill"),
+      evidence: !kill ? "unknown" : kill.outcome === "success" ? "confirmed" : "partial",
+    };
   }
   if (state === "STOPPED") {
     const stop = firstEvent(events, (e) => e.action === "run.autostop");

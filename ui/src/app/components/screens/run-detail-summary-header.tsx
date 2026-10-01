@@ -80,6 +80,7 @@ export function SummaryHeader({
   onCopyLink,
   linkCopied = false,
   onKill,
+  canKillAgain,
   onClone,
   onRename,
 }: {
@@ -113,6 +114,9 @@ export function SummaryHeader({
   onCopyLink?: () => void;
   linkCopied?: boolean;
   onKill: (runId: string) => void;
+  // A KILLED run whose trail does not prove the teardown (#1487): Kill stays
+  // enabled so the person can run the cascade again.
+  canKillAgain?: boolean;
   // "Start a run like this one", for EVERY terminal run — the failure block
   // only renders it for a run that ended badly (3 of the 5 terminal states),
   // so it belongs here instead. Optional so the header stays renderable
@@ -482,7 +486,7 @@ export function SummaryHeader({
           // explicit shrink-0 so it is never the thing degrading away when the
           // group above it runs out of room.
           className="h-7 shrink-0 text-danger hover:text-danger"
-          disabled={terminal}
+          disabled={terminal && !canKillAgain}
           onClick={() => setConfirmId(run.id)}
         >
           <Skull className="size-4" /> Kill
