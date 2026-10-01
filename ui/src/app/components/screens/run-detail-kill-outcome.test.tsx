@@ -10,7 +10,7 @@
 // from the capped general trail, and never a value). The copy itself is pinned
 // in run-detail/failure-block.test.tsx.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
@@ -200,5 +200,75 @@ describe("RunDetailScreen — what a killed run held that Wardyn cannot revoke",
     seed({ kills: [kill("success", 6)], grants: new Error("grants down"), mints: [mint("g1")] });
     renderRun();
     await waitFor(() => expect(screen.getByText("Wardyn couldn't read which credentials this run held.")).toBeInTheDocument());
+  });
+});
+
+// Review F2: the server marks a run KILLED before it writes the run.kill row, so
+// a poll can land in between. The page used to stop polling the moment the run
+// was terminal and stay on "no kill record" until a reload.
+describe("RunDetailScreen — a kill seen mid-teardown settles without a reload", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  it("no kill row on the first read, a row on the next tick: unknown becomes confirmed, then polling stops", async () => {
+    let rows: AuditEvent[] = [];
+    seed({ kills: [] });
+    getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date(Date.now() - 2_000).toISOString() });
+    listAuditMock.mockImplementation(async (_id: string, o?: { action?: string }) => (o?.action === "run.kill" ? rows : []));
+    renderRun();
+    expect(await screen.findByText(/audit trail has no kill record/)).toBeInTheDocument();
+    expect(killButton()).toBeEnabled();
+    rows = [kill("success", 0)];
+    await vi.advanceTimersByTimeAsync(4100);
+    expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
+    expect(screen.queryByText(/audit trail has no kill record/)).not.toBeInTheDocument();
+    expect(killButton()).toBeDisabled();
+    // Confirmed: nothing more to wait for.
+    const calls = getRunMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getRunMock.mock.calls.length).toBe(calls);
+  });
+
+  it("the wait is bounded: a run that ended long ago with no row is not polled forever", async () => {
+    seed({ kills: [] });
+    getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date(Date.now() - 10 * 60_000).toISOString() });
+    renderRun();
+    await screen.findByText(/audit trail has no kill record/);
+    const calls = getRunMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getRunMock.mock.calls.length).toBe(calls);
+  });
+});
+
+// Review F3: a terminal run's page used to wait on four audit calls (60s on a
+// hang) before drawing anything.
+describe("RunDetailScreen — the run renders at once; the outcome waits for its facts", () => {
+  it("one hanging run.kill read still renders the run, and the outcome block stays hidden rather than guessing", async () => {
+    seed({ kills: [] });
+    listAuditMock.mockImplementation((_id: string, o?: { action?: string }) =>
+      o?.action === "run.kill" ? new Promise(() => {}) : Promise.resolve([]),
+    );
+    renderRun();
+    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("run-failure-block")).not.toBeInTheDocument();
+    expect(screen.queryByText(/audit trail has no kill record/)).not.toBeInTheDocument();
+  });
+
+  it("the transition tick does not hold the poll's guard on those calls", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      seed({ kills: [] });
+      getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date().toISOString() });
+      listAuditMock.mockImplementation((_id: string, o?: { action?: string }) =>
+        o?.action === "run.kill" ? new Promise(() => {}) : Promise.resolve([]),
+      );
+      renderRun();
+      await screen.findAllByText(RUN.task);
+      const calls = getRunMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(getRunMock.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

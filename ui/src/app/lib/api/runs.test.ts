@@ -138,3 +138,21 @@ describe("runs.listRuns — explicit paging (#159)", () => {
     expect(got.truncated).toBe(false);
   });
 });
+
+// Review nit: takeoverAttach threw a bare HttpError, so a run_owner_only refusal
+// lost its reason and the console could not map it to its own sentence.
+describe("runs.takeoverAttach — the refusal keeps its reason", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("carries the envelope's reason on a 403", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "only the person who started this run can open it interactively", reason: "run_owner_only" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    await expect(runs.takeoverAttach("run-1")).rejects.toMatchObject({ status: 403, reason: "run_owner_only" });
+  });
+});

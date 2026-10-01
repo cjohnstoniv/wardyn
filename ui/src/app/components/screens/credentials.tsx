@@ -261,7 +261,8 @@ export function CredentialsScreen() {
         </div>
       )}
 
-      {screenStatus !== "forbidden" && <AdminMintedTokens />}
+      {/* Another admin-only read: only once the screen has resolved as allowed. */}
+      {screenStatus !== "forbidden" && screenStatus !== "loading" && <AdminMintedTokens />}
 
       <EraseDialog
         target={eraseTarget}

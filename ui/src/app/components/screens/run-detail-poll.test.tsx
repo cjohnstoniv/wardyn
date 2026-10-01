@@ -346,3 +346,19 @@ describe("RunDetailScreen — a route change drops everything run A was doing", 
     });
   });
 });
+
+// Review nit: the page drops an answer for a different run id; a non-canonical
+// (upper-case) UUID in the URL must not read as "a different run" and spin.
+describe("RunDetailScreen — a run id in the URL is matched case-insensitively", () => {
+  it("renders the run when the URL's id differs from the answer's only in case", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, id: "5f0c1a2b-aaaa-bbbb-cccc-0123456789ab" });
+    render(
+      <MemoryRouter initialEntries={["/runs/5F0C1A2B-AAAA-BBBB-CCCC-0123456789AB"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
+  });
+});

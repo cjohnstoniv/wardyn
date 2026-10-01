@@ -491,7 +491,8 @@ export const runs = {
   // evict-then-reconnect on that answer; see doTakeover in attach-terminal.tsx.
   async takeoverAttach(runId: string): Promise<{ promoted: boolean }> {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/takeover`, { method: "POST" });
-    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    // asJson, not a bare HttpError: it carries the envelope's reason, which the
+    // console maps (run_owner_only) instead of showing the wire sentence.
     return asJson<{ promoted: boolean }>(res);
   },
 

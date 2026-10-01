@@ -88,6 +88,8 @@ import type { WidgetContext } from "./run-detail/widget-registry";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
+// How long after a KILLED run ended its page keeps asking whether the kill row has landed.
+const KILL_SETTLE_MS = 120_000;
 
 type Tab = "overview" | "approvals" | "policy" | "audit" | "recording";
 
@@ -123,6 +125,7 @@ function RunDetailPage({ id }: { id: string }) {
   // (never read off the 1000-row trail above) so a kill outcome can name what
   // the run held. undefined = not fetched yet; null = the fetch failed. Joined
   // to `grants` for the kind and host by held-credentials.ts.
+  const [endingState, setEndingState] = React.useState<"loading" | "ready" | "failed">("loading");
   const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
   const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -151,6 +154,39 @@ function RunDetailPage({ id }: { id: string }) {
     action: "approve" | "deny";
     kind: ApprovalRequest["kind"];
   } | null>(null);
+
+  // How a terminal run ended, read off its own scoped audit rows (#1487): the
+  // facts that decide a KILLED run's outcome. The run page renders without them;
+  // the KILLED outcome block and the Kill-again offer wait for them rather than
+  // guess ("no kill record" before the rows landed is a claim, not a loading
+  // state). A generation counter drops an older read that answers after a newer
+  // one. Best-effort: a failed read leaves the last-good rows, and a failed mint
+  // read is "couldn't read which credentials".
+  const endingGen = React.useRef(0);
+  const endingInFlight = React.useRef(false);
+  const loadEnding = React.useCallback(() => {
+    // One read at a time: a poll that keeps asking while a slow read is still out
+    // would stack four more calls every tick.
+    if (endingInFlight.current) return;
+    endingInFlight.current = true;
+    const gen = ++endingGen.current;
+    void Promise.allSettled([
+      auditApi.listAudit(id, { action: "run.complete" }),
+      auditApi.listAudit(id, { action: "run.kill" }),
+      auditApi.listAudit(id, { action: "run.autostop" }),
+      auditApi.listAudit(id, { action: "credential.mint" }),
+    ]).then(([done, kill, autostop, minted]) => {
+      endingInFlight.current = false;
+      if (endingGen.current !== gen) return;
+      if (done.status === "fulfilled" && kill.status === "fulfilled" && autostop.status === "fulfilled") {
+        setEndingAudit([done.value, kill.value, autostop.value].flat());
+        setEndingState("ready");
+      } else {
+        setEndingState((s) => (s === "ready" ? s : "failed"));
+      }
+      setMintAudit(minted.status === "fulfilled" ? minted.value : null);
+    });
+  }, [id]);
 
   // Core fetch — run + its grants, egress, approvals, and audit trail.
   const load = React.useCallback(
@@ -186,10 +222,11 @@ function RunDetailPage({ id }: { id: string }) {
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
-        .then(async ([r, g, runApprovals, a, recA]) => {
+        .then(([r, g, runApprovals, a, recA]) => {
           // A run answer for a different id than this page shows is dropped:
           // the page never renders, or acts on, a run it was not asked for.
-          if (r.status === "fulfilled" && r.value && r.value.id !== id) return;
+          // Case-insensitive: a non-canonical UUID in the URL is still this run.
+          if (r.status === "fulfilled" && r.value && r.value.id.toLowerCase() !== id.toLowerCase()) return;
           if (r.status === "rejected") {
             // The run itself is the one fetch this page cannot render without.
             // Foreground load shows the error state; a background poll blip
@@ -198,31 +235,6 @@ function RunDetailPage({ id }: { id: string }) {
             // control-plane hiccup.
             if (foreground) setStatus("error");
             return;
-          }
-          // R-5: run.complete/run.kill/run.autostop cannot exist for a run
-          // that ISN'T terminal — fetching them every DETAIL_POLL_MS tick on
-          // a live run would be wasted round-trips, forever. Gated on THIS
-          // tick's own fresh state (not a stale last-known ref), so the exact
-          // tick a run turns terminal is the one that catches it.
-          //
-          // AWAITED, and committed with the run below: a KILLED run's outcome
-          // (#1487) is read off these rows, so setting the state first would
-          // paint "no kill record" for the beat before they land. Best-effort
-          // like the allSettled above: a rejected fetch leaves endingAudit at
-          // its last-good value, and a failed mint fetch is "couldn't read".
-          let ending: AuditEvent[] | undefined;
-          let mint: AuditEvent[] | null | undefined;
-          if (r.value && isTerminalRunState(r.value.state)) {
-            const [done, kill, autostop, minted] = await Promise.allSettled([
-              auditApi.listAudit(id, { action: "run.complete" }),
-              auditApi.listAudit(id, { action: "run.kill" }),
-              auditApi.listAudit(id, { action: "run.autostop" }),
-              auditApi.listAudit(id, { action: "credential.mint" }),
-            ]);
-            if (done.status === "fulfilled" && kill.status === "fulfilled" && autostop.status === "fulfilled") {
-              ending = [done.value, kill.value, autostop.value].flat();
-            }
-            mint = minted.status === "fulfilled" ? minted.value : null;
           }
           setRun(r.value ?? null);
           setGrantsReadable(g.status === "fulfilled");
@@ -237,9 +249,14 @@ function RunDetailPage({ id }: { id: string }) {
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id === id));
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
-          if (ending) setEndingAudit(ending);
-          if (mint !== undefined) setMintAudit(mint);
           setStatus("ready");
+          // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
+          // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live
+          // run would be wasted round-trips, forever. Gated on THIS tick's own
+          // fresh state, so the exact tick a run turns terminal is the one that
+          // catches it. DETACHED: the run has already rendered, and this poll's
+          // in-flight guard must not wait on four more calls (a hang costs 60s).
+          if (r.value && isTerminalRunState(r.value.state)) loadEnding();
         })
         .catch(() => {
           // allSettled never rejects, so this is a bug in the block above, not
@@ -247,7 +264,7 @@ function RunDetailPage({ id }: { id: string }) {
           if (foreground) setStatus("error");
         });
     },
-    [id],
+    [id, loadEnding],
   );
 
   React.useEffect(() => {
@@ -265,7 +282,6 @@ function RunDetailPage({ id }: { id: string }) {
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
-  usePoll(() => load(false), DETAIL_POLL_MS, terminal);
 
   // Lazy recording load on first Recording-tab open (and on each session pick,
   // which resets recState to "idle").
@@ -416,7 +432,19 @@ function RunDetailPage({ id }: { id: string }) {
   // Kill again is offered on a KILLED run whose trail does not PROVE the
   // teardown: the server re-kills a KILLED run (runs_lifecycle.go), and the
   // cascade is safe to repeat — the one action that settles the doubt.
-  const killAgain = !!run && run.state === "KILLED" && runEndingFromAudit(run.state, endingEvents)?.evidence !== "confirmed";
+  const killEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
+  const killAgain = run?.state === "KILLED" && (endingState === "failed" || (endingState === "ready" && killEvidence !== "confirmed"));
+  // The outcome block of a KILLED run waits for its facts (see loadEnding).
+  const outcomeReady = run?.state !== "KILLED" || endingState === "ready";
+  // The server marks a run KILLED BEFORE it writes the run.kill row
+  // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
+  // whose trail does not yet PROVE the teardown, bounded to two minutes from when
+  // it ended: the row arrives, or the wait gives up and the person can kill again.
+  const killSettling =
+    run?.state === "KILLED" &&
+    killEvidence !== "confirmed" &&
+    Date.now() - new Date(run.ended_at ?? run.updated_at).getTime() < KILL_SETTLE_MS;
+  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -532,6 +560,7 @@ function RunDetailPage({ id }: { id: string }) {
               egress={egress}
               audit={endingEvents}
               held={held}
+              outcomeReady={outcomeReady}
               pending={pending}
               recording={recording}
               recState={recState}
@@ -610,6 +639,7 @@ function Cockpit({
   egress,
   audit,
   held,
+  outcomeReady,
   pending,
   recording,
   recState,
@@ -626,6 +656,8 @@ function Cockpit({
   audit: AuditEvent[];
   /** What a killed run held that a kill cannot revoke; undefined while loading. */
   held: HeldCredentials | undefined;
+  /** False while a KILLED run's ending facts are still being read: no outcome block yet. */
+  outcomeReady: boolean;
   /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
    *  held count every widget reads; the decision surface itself is
    *  LiveApprovals' own poll. */
@@ -693,7 +725,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />
+      {outcomeReady && <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />}
       <TerminalPane
         run={run}
         terminal={terminal}

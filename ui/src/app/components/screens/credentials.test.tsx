@@ -387,3 +387,22 @@ describe("tokens an admin created for someone else (#1477)", () => {
     expect(await sec.findByText("dana@acme.io")).toBeInTheDocument();
   });
 });
+
+// Review nit: the admin-minted list is another admin-only read, so it mounts only
+// once the screen has resolved as allowed — never during the load, and never for
+// a caller the inventory has just refused.
+describe("the admin-minted tokens list waits for the screen to be allowed", () => {
+  it("is not requested for a caller the inventory refuses", async () => {
+    listInventoryMock.mockRejectedValue(new HttpError(403, "forbidden"));
+    renderScreen();
+    await screen.findByText(/admin/i);
+    expect(listMintedMock).not.toHaveBeenCalled();
+  });
+
+  it("is not requested while the inventory is still loading", async () => {
+    listInventoryMock.mockReturnValue(new Promise(() => {}));
+    renderScreen();
+    await screen.findByText("Stored credentials");
+    expect(listMintedMock).not.toHaveBeenCalled();
+  });
+});
