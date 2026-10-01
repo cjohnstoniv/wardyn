@@ -328,3 +328,17 @@ func TestSiteConfigSet_WarnsTheBrandingLogoIsPending(t *testing.T) {
 		t.Errorf("stderr = %q, want no warning without branding_logo_pending", quiet)
 	}
 }
+
+// site-config set already refuses a second document (omittedPostV066Fields
+// re-reads the whole file); pinned so the three set commands that now share
+// decodeOneJSONStrict stay consistent with it.
+func TestSiteConfigSet_RefusesATrailingDocument(t *testing.T) {
+	srv, seen := countingServer(t)
+	_, _, err := runSiteConfigSet(t, srv.URL, "{}\n{\"upstream_proxy_url\":\"http://proxy.corp:3128\"}")
+	if err == nil {
+		t.Fatal("a second document was accepted")
+	}
+	if got := seen(); len(got) != 0 {
+		t.Errorf("requests were made: %q", got)
+	}
+}

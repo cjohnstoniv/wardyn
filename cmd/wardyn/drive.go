@@ -97,9 +97,7 @@ func driveSetCmd(client clientFn) *cobra.Command {
 			// server's decodeStrict: a key this file mistypes must surface as a
 			// parse error, not silently vanish from what ApplyDrives then sends.
 			var doc sdk.DrivesDocument
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&doc); err != nil {
+			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse drives document JSON: %w", err)
 			}
 			out, err := client().ApplyDrives(cmd.Context(), doc)
