@@ -21,6 +21,22 @@ export function mayEnterRun(run: RunEntryFacts, principal: string | null | undef
   return (!!principal && run.created_by === principal) || (operator && !!run.operator_owned);
 }
 
+/**
+ * The same rule for a page that renders before it knows who is looking. When
+ * /me failed, `operator` fails open as true and the principal is a placeholder,
+ * so mayEnterRun reads false for the run's REAL owner; the page must not take
+ * their terminal on that guess. An unresolved identity defers to the server,
+ * whose ticket mint is the enforcement point (R4-F110).
+ */
+export function mayEnterRunOrUnknown(
+  run: RunEntryFacts,
+  principal: string | null | undefined,
+  operator: boolean,
+  resolved: boolean,
+): boolean {
+  return !resolved || mayEnterRun(run, principal, operator);
+}
+
 /** The server's refusal reason for interactive entry to a run the caller does not own. */
 export const RUN_OWNER_ONLY_REASON = "run_owner_only";
 

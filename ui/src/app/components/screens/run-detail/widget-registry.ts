@@ -33,7 +33,7 @@ import type {
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
-import { mayEnterRun } from "../../../lib/run-entry";
+import { mayEnterRunOrUnknown } from "../../../lib/run-entry";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import {
   CredentialsWidget,
@@ -80,6 +80,8 @@ export type WidgetContext = {
    *  (attach_ticket.go's isOperator, uigateway.go's ta.role check,
    *  sshgateway.go's admin arm), and ConnectSSHCard renders on both. */
   operator: boolean;
+  /** Whether `operator`/`principal` are /me's answer (absent = true). False defers entry to the server. */
+  operatorResolved?: boolean;
   /** M-7 (admin-member-modes-design.md §4.6): the ssh widget's gate adds
    *  "AND the user view" to owner-or-admin — the admin monitor carries no
    *  Connect-via-SSH door, even on the admin's own run. */
@@ -245,7 +247,9 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
     available: (ctx) =>
-      ctx.view === "user" && ctx.run.state === "RUNNING" && mayEnterRun(ctx.run, ctx.principal, ctx.operator),
+      ctx.view === "user" &&
+      ctx.run.state === "RUNNING" &&
+      mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
 };
 

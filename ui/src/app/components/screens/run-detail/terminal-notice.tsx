@@ -21,7 +21,7 @@ import { AttachTerminal } from "../../attach-terminal";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
-import { mayEnterRun, runEntryRefusalLine } from "../../../lib/run-entry";
+import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
@@ -51,7 +51,7 @@ export function TerminalPane({
   // command bar's "attachable" chip, the SSH card and its widget gate claim —
   // all must agree or the page promises a terminal it then refuses to open
   // (#1476: the run's person, or an admin on a run no person owns).
-  const canAttach = mayEnterRun(run, principal, operator);
+  const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
 
   if (attachable) {
@@ -145,7 +145,7 @@ export function TerminalPane({
       title={run.interactive ? "Terminal" : "Output"}
       chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
     >
-      {run.interactive && (canAttach || !resolved) ? (
+      {run.interactive && canAttach ? (
         // Not RUNNING and not coming up (e.g. waiting for confirmation): the
         // owner can attach, so the refusal would be false, and there is no
         // startup step to narrate. An empty frame keeps the hero's shape.

@@ -22,8 +22,8 @@ import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
-import { mayEnterRun } from "../../lib/run-entry";
+import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import {
   isTerminalStatusReason,
@@ -144,7 +144,7 @@ export function SummaryHeader({
   const operator = useOperator();
   const principal = usePrincipal();
   const owned = !!run.created_by && run.created_by === principal;
-  const canAttach = mayEnterRun(run, principal, operator);
+  const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked

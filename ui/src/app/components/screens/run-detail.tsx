@@ -63,7 +63,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
   RUN_COCKPIT,
@@ -652,6 +652,7 @@ function Cockpit({
   // The SUPER-admin question, for the widget context: ConnectSSHCard reads it
   // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
   const operator = useOperator();
+  const operatorResolved = useOperatorResolved();
   // "blocked until an admin decides" is FALSE for a re-auth row (UX round B2):
   // no admin decides it, and the person who can fix it is the credential's own
   // owner. The kind is excluded from the predicate rather than the sentence
@@ -727,7 +728,7 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
-    operator, view, // ssh widget: owner-or-admin AND the user view (M-7).
+    operator, operatorResolved, view, // ssh widget: owner-or-admin AND the user view (M-7).
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's

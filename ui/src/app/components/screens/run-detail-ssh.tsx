@@ -34,10 +34,10 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { basePath } from "../../lib/base-path";
-import { entryErrorMessage, mayEnterRun } from "../../lib/run-entry";
+import { entryErrorMessage, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
 
@@ -46,11 +46,12 @@ import { cn } from "../ui/utils";
 export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const operator = useOperator();
+  const resolved = useOperatorResolved();
   // The entry rule (lib/run-entry.ts, #1476): the run's person, or an admin on
   // a run no person owns. Both hooks run unconditionally — `||` on a hook CALL
   // would reorder them. False hides the card (Q1): it has no control that could
   // work, and the pane already says why.
-  const mayAttach = mayEnterRun(run, principal, operator);
+  const mayAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const running = run.state === "RUNNING";
 
   const [ssh, setSSH] = React.useState<{
