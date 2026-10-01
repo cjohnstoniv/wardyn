@@ -123,6 +123,15 @@ func TestSetupHarnessTools_ProvidersUngranted(t *testing.T) {
 	if tool := byID(setupHarnessTools(scOff, nil, nil), "claude-code"); tool.ProvidersUngranted {
 		t.Errorf("claude-code = %+v, want providers_ungranted=false — the only server is disabled (R5c's territory)", tool)
 	}
+
+	// Enabled rows only (D5): the caller is granted A, which an admin turned
+	// off, and not B, which is on. Nothing enabled serves them, so it is true.
+	b := types.ModelProvider{ID: "b", Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+	scBoth := types.SiteConfig{ModelProviders: providerBlock(off, b)}
+	grantedOff := []SetupModelProvider{{ID: "a", Disabled: true, Harnesses: []string{"claude-code"}}}
+	if tool := byID(setupHarnessTools(scBoth, nil, grantedOff), "claude-code"); !tool.ProvidersUngranted {
+		t.Errorf("claude-code = %+v, want providers_ungranted=true — granted a (disabled), not b (enabled)", tool)
+	}
 }
 
 func TestSetupHarnessTools(t *testing.T) {

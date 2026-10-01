@@ -69,6 +69,11 @@ var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
 	// credential that cannot be read refuses with the sentence alone" case
 	// pins the second.
 	"run_model_provider.go:Server.enforceRunModelProvider": {2, "both 5xx (StatusServiceUnavailable): a transient store failure is no door (multi-provider §5.8); TestProviderJoin_DoorsEveryKind and TestRunModelProviderDoors pin both reason-less"},
+	// handleRecordWorkspace's one: the record door's answer for the same unreadable
+	// provider block as enforceRunModelProvider's first site above — the bare 503
+	// sentence, byte-equal to create's. TestRecordDoorAnswersTheProviderRefusalAsCreateDoes
+	// pins "the site config cannot be read" against the create door's body.
+	"record.go:Server.handleRecordWorkspace": {1, "5xx (StatusServiceUnavailable): the create door's reason-less unreadable-provider-block sentence (mpRunUnreadable); TestRecordDoorAnswersTheProviderRefusalAsCreateDoes pins the two byte-equal"},
 	// driveBindFailure.write's own bare arm: f.reason=="" is the
 	// runner-capabilities-unreadable 503 (driveBindFailureHere); f.silent is
 	// either of driveShareBindFailure's two ctx.Err()!=nil arms, which DO

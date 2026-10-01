@@ -198,6 +198,30 @@ func (s *Server) writeProviderRefusalAs(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusUnprocessableEntity, body)
 }
 
+// writeProviderChoiceRefusal answers a refused provider choice, at the create
+// door and the record door alike, so the two cannot disagree about one choice:
+//   - asMissing: the 422 of a provider that does not exist, no kind;
+//   - notGranted: a 403, the provider named only in the authz.denied row;
+//   - any other refusal: the 422 naming the provider the refusal is about;
+//   - none of those: a chosen provider whose liveness check d refused.
+func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Request, choice runProviderChoice, d providerDenial) {
+	switch {
+	case choice.asMissing:
+		s.writeProviderRefusalAs(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal),
+			choice.providerID, "", choice.refusal, false)
+	case choice.notGranted:
+		den := authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal)
+		if choice.providerID != "" {
+			den = den.With("provider", choice.providerID)
+		}
+		s.refuse(w, r, den)
+	case choice.refusal != "":
+		s.writeProviderRefusal(w, r, choice.providerID, choice.kind, choice.refusal, false)
+	default:
+		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
+	}
+}
+
 // enforceRunModelProvider is the model-provider choice at BOTH doors, create
 // and Review, so Review answers the refusal launch would. With no provider
 // block nothing serves the run, and a request that named a provider is refused
@@ -271,19 +295,8 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	case err != nil:
 		writeServerError(w, r, "resolve capability", err)
 		return runProviderChoice{}, false
-	case choice.asMissing:
-		s.writeProviderRefusalAs(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal),
-			choice.providerID, "", choice.refusal, false)
-		return runProviderChoice{}, false
-	case choice.notGranted:
-		d := authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal)
-		if choice.providerID != "" {
-			d = d.With("provider", choice.providerID)
-		}
-		s.refuse(w, r, d)
-		return runProviderChoice{}, false
-	case choice.refusal != "":
-		s.writeProviderRefusal(w, r, choice.providerID, choice.kind, choice.refusal, false)
+	case choice.asMissing, choice.notGranted, choice.refusal != "":
+		s.writeProviderChoiceRefusal(w, r, choice, providerDenial{})
 		return runProviderChoice{}, false
 	case choice.chosen:
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
@@ -300,7 +313,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			return runProviderChoice{}, false
 		}
 		if d.msg != "" {
-			s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
+			s.writeProviderChoiceRefusal(w, r, choice, d)
 			return runProviderChoice{}, false
 		}
 	}
