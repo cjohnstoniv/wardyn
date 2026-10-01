@@ -266,3 +266,32 @@ func TestRekey_LeavesTheSeparatePlatformKeyAlone(t *testing.T) {
 		}
 	}
 }
+
+// An install upgrading from 0.7.x holds only pre-envelope rows. With the
+// platform key set at once, the refusal names the way out (start once without
+// the platform key, then adopt) before it says the row may be forged; without
+// the platform key the same rows convert, and a later conversion has nothing
+// left to refuse.
+func TestPG_ConvertV0_RefusalNamesTheUpgradePath(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id, platform := mustIdentity(t), mustIdentity(t)
+	seedV0(t, pool, id, "", signingKey, "sign")
+	seedV0(t, pool, id, "", "github-app-key", "cred")
+
+	_, err := splitStore(t, pool, id, platform).ConvertV0(ctx, id)
+	if !errors.Is(err, ErrV0BootKey) {
+		t.Fatalf("ConvertV0 over v0 rows with the platform key set = %v, want ErrV0BootKey", err)
+	}
+	msg := err.Error()
+	up, forged := strings.Index(msg, "upgrading from 0.7.x"), strings.Index(msg, "not written by Wardyn")
+	if up < 0 || forged < 0 || up > forged || !strings.Contains(msg, "WITHOUT the platform key") || !strings.Contains(msg, "-rewrap-adopt-boot-keys") {
+		t.Fatalf("the refusal %q must name the upgrade path before the tamper diagnosis", msg)
+	}
+	if n, err := splitStore(t, pool, id, nil).ConvertV0(ctx, id); err != nil || len(n) != 2 {
+		t.Fatalf("ConvertV0 without the platform key = (%d, %v), want both rows converted", len(n), err)
+	}
+	if n, err := Rewrap(ctx, pool, id, platform, true); err != nil || n != 1 {
+		t.Fatalf("adopting after the upgrade path = (%d, %v), want the signing key moved", n, err)
+	}
+}

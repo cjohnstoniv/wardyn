@@ -325,13 +325,17 @@ wrapped under the age key is refused, naming `wardynd -rewrap
 -rewrap-adopt-boot-keys`, and boot stops rather than mint over it. The file
 stays optional; nothing requires it.
 
-1. Mint the second key where only wardynd can read it (0600, off-host
+1. Boot this version once with your `WARDYN_AGE_KEY` and without
+   `WARDYN_PLATFORM_KEY_FILE`. It converts any pre-envelope rows, which an
+   install coming from 0.7.x or earlier still holds. With the platform key
+   set, a boot refuses a pre-envelope boot key.
+2. Mint the second key where only wardynd can read it (0600, off-host
    backup):
    ```sh
    umask 077
    ./bin/wardynd -gen-age-key > ~/.wardyn/platform.key
    ```
-2. Move the boot keys onto it, once, with `-rewrap -rewrap-adopt-boot-keys`
+3. Move the boot keys onto it, once, with `-rewrap -rewrap-adopt-boot-keys`
    (see "Moving data keys" below). The flag says that you have never done
    this move before; without it `-rewrap` refuses a boot key under the age key:
    ```sh
@@ -342,7 +346,7 @@ stays optional; nothing requires it.
    ```
    INFO wardynd: stored secrets rewrapped … secrets=4 platform_key_separate=true
    ```
-3. Restart every replica with `WARDYN_PLATFORM_KEY_FILE` set.
+4. Restart every replica with `WARDYN_PLATFORM_KEY_FILE` set.
 
 This move is the one step at which the age key vouches for the boot keys, which
 is why it needs `-rewrap-adopt-boot-keys`. A boot start refuses a pre-envelope
@@ -451,6 +455,10 @@ old versions:
 2. ```sh
    vault write transit/keys/wardyn/config min_decryption_version=2
    ```
+
+If a rotation lands while `-rewrap` is moving rows, the command says so and
+prints no retirement step. Run it again until it moves 0 rows, then raise
+`min_decryption_version`.
 
 A row still wrapped under a retired version is refused, naming the row,
 until `min_decryption_version` is lowered again — `-rewrap` first, then
@@ -771,6 +779,9 @@ mount, give `wardyn-platform` `update` on `transit/encrypt/<platform-key>` and
   `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or with the two roles or
   the two keys the same. With it set, a boot key still under another key is refused at boot,
   and the refusal asks whether you have adopted boot keys before.
+- On an install coming from 0.7.x or earlier, boot this version once with
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` unset first, so the pre-envelope rows
+  convert; a boot with it set refuses a pre-envelope boot key.
 - Run `wardynd -rewrap -rewrap-adopt-boot-keys` with the same settings, once,
   to move the boot keys onto it (see "Adopting boot keys" above); it touches no
   credential row. A later `-rewrap` needs no flag, changes nothing unless a

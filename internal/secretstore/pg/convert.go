@@ -60,8 +60,11 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 		for _, e := range all {
 			if secretstore.Kind(e.ownedBy, e.name) == "platform" {
 				return nil, &refusal{ErrV0BootKey, fmt.Sprintf("pg secretstore: v0 conversion REFUSED (nothing committed): %s is a pre-envelope boot key, "+
-					"but a platform key is configured, and boot keys are converted only before it is set. This row was not written by Wardyn: "+
-					"find out who wrote it (updated_at, the audit log, database access logs) and restore the boot key from a backup if it is forged", rowRef(e.ownedBy, e.name))}
+					"but a platform key is configured, and boot keys are converted only before it is set. "+
+					"If this install is upgrading from 0.7.x or earlier, start wardynd once WITHOUT the platform key so it converts its secrets, "+
+					"then set the platform key and run `wardynd -rewrap -rewrap-adopt-boot-keys`. "+
+					"If it was already running 0.8 with a platform key, this row was not written by Wardyn: "+
+					"investigate before moving anything (updated_at, the audit log, database access logs) and restore the boot key from a backup if it is forged", rowRef(e.ownedBy, e.name))}
 			}
 		}
 	}

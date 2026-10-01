@@ -48,8 +48,10 @@ runs on the first start; it adds one column with a default and changes no existi
   install with `WARDYN_PLATFORM_KEY_FILE`, or with `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` while `WARDYN_AGE_KEY` is
   still set, someone holding the age key and write access to the table could delete a boot key and insert an
   age-encrypted `enc_version=0` row of their own; the next boot sealed it under the platform key and served it.
-  The boot now refuses such a row, naming it, and commits nothing. Boot keys convert only on the boot before the
-  platform key is set, as the procedure already has it.
+  The boot now refuses such a row, naming it, and commits nothing. Boot keys convert only on a boot before the
+  platform key is set. An install upgrading from 0.7.x or earlier, which holds only pre-envelope rows, must
+  start once without the platform key first; the refusal and the procedures in
+  `docs/operations/secrets-and-keys.md` say so.
 - **`wardynd -rewrap` no longer tells you to retire the key version it just used (A-5).** A Key Vault or Transit
   rotation that landed while the run was moving rows left some rows under a newer version than the one the run
   reported, and the Key Vault instruction said to disable every other version. The run now checks each wrap
