@@ -206,7 +206,8 @@ see OPERATIONS.md for why.
 
 If your deployment sets `WARDYN_EGRESS_SECOND_HUMAN=1`, you cannot decide
 your own run's egress approval yourself. That's four-eyes working as
-intended, not a failure.
+intended, not a failure. The same holds for your own run's Azure DevOps
+access request if it sets `WARDYN_CAPABILITY_SECOND_HUMAN=1`.
 
 ## SSH keys
 

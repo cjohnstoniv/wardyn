@@ -319,6 +319,9 @@ services:
       # keeps single-human approval; local mode REFUSES it (see docs/ENV.md), so
       # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
       WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
+      # The same four-eyes rule for Azure DevOps capability escalations. Same
+      # default (unset = off) and the same local-mode refusal.
+      WARDYN_CAPABILITY_SECOND_HUMAN: "${WARDYN_CAPABILITY_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       # internal/runner.ProxySidecarEnvKnobs copies these from wardynd's
       # OWN process env into every proxy sidecar it creates (docker Env / k8s
