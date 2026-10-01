@@ -232,11 +232,7 @@ func postDriveReclaim(ctx context.Context, c *sdk.Client, driveID uuid.UUID, bod
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	resp, err := hc.Do(req)
+	resp, err := rawHTTPClient(c).Do(req)
 	if err != nil {
 		return driveReclaimResult{}, fmt.Errorf("drive reclaim: %w", err)
 	}

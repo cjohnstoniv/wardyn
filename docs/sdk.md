@@ -5,6 +5,12 @@ Import `github.com/cjohnstoniv/wardyn/pkg/client` (one non-stdlib dependency,
 through `client.*` (e.g. `client.AgentRun`, `client.ApprovalPending`), so you
 never import `internal/types`.
 
+> **Redirects.** The default client (`client.New`, or a `Client` with no `HTTPClient`) never
+> follows a redirect: a 3xx comes back as an `*APIError`, so a write that an ingress or a
+> mistyped base URL redirects fails instead of being replayed (body and bearer included) at
+> the `Location`. If you set `Client.HTTPClient`, its redirect policy is yours; set
+> `CheckRedirect` to return `http.ErrUseLastResponse` unless you mean to follow them.
+
 > **Coverage and pagination.** `pkg/client` is a curated SDK over the route families
 > external tooling automates, not a 1:1 mirror of wardynd. The exact list of what it
 > wraps and what it does not — and the `ListOpts` / `X-Wardyn-Truncated` pagination

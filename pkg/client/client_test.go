@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -991,4 +992,78 @@ func assertAPIError(t *testing.T, err error, wantStatus int) *client.APIError {
 		t.Errorf("got Status %d, want %d", apiErr.Status, wantStatus)
 	}
 	return apiErr
+}
+
+// --- #1490: writes never follow redirects ---
+
+func redirectFixture(t *testing.T, status int) (origin *httptest.Server, targetHits *atomic.Int32) {
+	t.Helper()
+	targetHits = &atomic.Int32{}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+	origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/login", status)
+	}))
+	t.Cleanup(origin.Close)
+	return origin, targetHits
+}
+
+// The SDK's default client (no HTTPClient set) returns the 3xx as an
+// *APIError and never visits Location, on a bodyless write and on a read.
+// http.DefaultClient (process-global) is left unmodified.
+func TestClientDefaultNeverFollowsRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		origin, hits := redirectFixture(t, status)
+		c := &client.Client{BaseURL: origin.URL, Token: testToken}
+		err := c.SetSecret(context.Background(), "demo", "v")
+		var ae *client.APIError
+		if !errors.As(err, &ae) || ae.Status != status {
+			t.Fatalf("status %d: SetSecret err = %v, want an *APIError with that status", status, err)
+		}
+		if _, err := c.ListSecrets(context.Background()); !errors.As(err, &ae) {
+			t.Fatalf("status %d: ListSecrets err = %v, want an *APIError", status, err)
+		}
+		if got := hits.Load(); got != 0 {
+			t.Errorf("status %d: redirect target visited %d times", status, got)
+		}
+	}
+	if http.DefaultClient.CheckRedirect != nil {
+		t.Fatal("http.DefaultClient.CheckRedirect was set by the SDK")
+	}
+}
+
+// A caller-supplied HTTPClient keeps its own redirect policy: it is theirs.
+func TestClientCallerHTTPClientKeepsItsRedirectPolicy(t *testing.T) {
+	origin, hits := redirectFixture(t, http.StatusFound)
+	c := &client.Client{BaseURL: origin.URL, Token: testToken, HTTPClient: &http.Client{}}
+	_ = c.SetSecret(context.Background(), "demo", "v")
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("a caller-owned client was rewritten: target visited %d times, want 1", got)
+	}
+}
+
+// The streamed methods shed the whole-request Timeout but keep the redirect
+// policy: a recording download of a 3xx is an error, not a followed GET.
+func TestStreamMethodsNeverFollowRedirects(t *testing.T) {
+	origin, hits := redirectFixture(t, http.StatusFound)
+	for name, hc := range map[string]*http.Client{
+		"default":    nil,
+		"cli-shaped": {Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+	} {
+		c := &client.Client{BaseURL: origin.URL, Token: testToken, HTTPClient: hc}
+		body, err := c.GetRecording(context.Background(), uuid.New())
+		if body != nil {
+			body.Close()
+		}
+		var ae *client.APIError
+		if !errors.As(err, &ae) || ae.Status != http.StatusFound {
+			t.Fatalf("%s: err = %v, want an *APIError 302", name, err)
+		}
+	}
+	if got := hits.Load(); got != 0 {
+		t.Errorf("a stream request followed a redirect (%d)", got)
+	}
 }

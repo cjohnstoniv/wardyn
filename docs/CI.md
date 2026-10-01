@@ -126,7 +126,7 @@ run inside it did:
 |---|---|
 | `0` | ok — the command succeeded (`run --wait`: the run `COMPLETED`, task/agent exited 0) |
 | `2` | auth — the control plane rejected the request as unauthenticated/unauthorized. **Also** `run --wait`: the run ended `KILLED`, `STOPPED`, or `ARCHIVED` (lifecycle termination, not a task result) |
-| `3` | client — any other non-2xx response: a 4xx (bad request, not found, conflict, ...), or an unfollowed 3xx redirect (an interposed proxy — the CLI never follows redirects) |
+| `3` | client — any other non-2xx response: a 4xx (bad request, not found, conflict, ...), or an unfollowed 3xx redirect (an interposed proxy or a mistyped `--url` — the CLI and the Go SDK never follow redirects, so a redirected write fails instead of being replayed, with its body and bearer, at the `Location`) |
 | `4` | server-5xx — the control plane returned a server error |
 | `5` | network — couldn't reach the control plane at all (DNS, connection refused, TLS) |
 | `124` | `run --wait` only: the wait timed out before the run reached a terminal state |

@@ -174,8 +174,12 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	if c.Token != "" {
 		hdr = http.Header{"Authorization": []string{"Bearer " + c.Token}}
 	}
+	// A no-redirect client with no Timeout: the handshake must not follow a
+	// redirect (it would replay the bearer at Location), and the session itself
+	// outlives any whole-request deadline.
 	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: hdr,
+		HTTPClient: noRedirectClient,
 	})
 	if err != nil {
 		// A signal caught by the NotifyContext above (or any other caller
@@ -516,11 +520,7 @@ func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string,
 	}
 	req.Header.Set("Accept", "application/json")
 
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	resp, err := hc.Do(req)
+	resp, err := rawHTTPClient(c).Do(req)
 	if err != nil {
 		return "", nil // transport-level: inconclusive, caller falls back
 	}
@@ -531,7 +531,10 @@ func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string,
 	const maxAttachTicketErrBody = 2048
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAttachTicketErrBody))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		if !json.Valid(body) {
+		// A 3xx is decisive whatever its body: it is an interposed hop (or a
+		// mistyped --url) answering, and a bare-dial fallback would send the
+		// bearer to that same hop.
+		if !json.Valid(body) && (resp.StatusCode < 300 || resp.StatusCode > 399) {
 			return "", nil // not the server's own envelope: inconclusive, fall back
 		}
 		return "", sdk.NewAPIError(resp.StatusCode, body)

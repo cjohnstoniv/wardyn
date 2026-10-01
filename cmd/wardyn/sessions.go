@@ -139,11 +139,7 @@ func listAllAPITokens(ctx context.Context, c *sdk.Client) ([]types.APIToken, err
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	req.Header.Set("Accept", "application/json")
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	resp, err := hc.Do(req)
+	resp, err := rawHTTPClient(c).Do(req)
 	if err != nil {
 		return nil, err
 	}

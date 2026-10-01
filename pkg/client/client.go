@@ -166,8 +166,8 @@ func appendListOpts(path string, opts []ListOpts) string {
 }
 
 // Client is the Wardyn SDK client. Construct it with New or by filling the
-// fields directly. BaseURL and Token are required; HTTPClient defaults to
-// http.DefaultClient when nil.
+// fields directly. BaseURL and Token are required; HTTPClient defaults to a
+// client that never follows a redirect when nil.
 //
 // All methods accept a context; the context controls cancellation and deadline
 // for the underlying HTTP call.
@@ -179,7 +179,12 @@ type Client struct {
 	// Token is the admin bearer token configured in wardynd (AdminToken).
 	Token string
 
-	// HTTPClient, when non-nil, is used instead of http.DefaultClient.
+	// HTTPClient, when non-nil, is used instead of the default client, and its
+	// redirect policy is YOURS: the default returns a 3xx as an *APIError
+	// rather than following it, but a client you supply is used as it is.
+	// Following a redirect can replay a request body (a secret value) and the
+	// Authorization bearer at wherever Location points, so a caller who sets
+	// this should set CheckRedirect to http.ErrUseLastResponse too.
 	HTTPClient *http.Client
 
 	// Principal, when non-empty, is sent as the X-Wardyn-Principal header — a
@@ -579,11 +584,20 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	return req, nil
 }
 
+// noRedirect returns the 3xx itself instead of following it. Following would
+// turn a write into a GET of wherever Location points (so the call "succeeds"
+// against a login page) and replay the body and bearer there.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// defaultHTTPClient is used when Client.HTTPClient is nil. It is a package-level
+// client of its own: http.DefaultClient is process-global and is never mutated.
+var defaultHTTPClient = &http.Client{CheckRedirect: noRedirect}
+
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
 }
 
 // streamTransport bounds everything up to and INCLUDING the response headers
