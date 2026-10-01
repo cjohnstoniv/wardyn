@@ -260,6 +260,9 @@ type bootFlags struct {
 	// rewrapRetirePlatformKey is `wardynd -rewrap -rewrap-retire-platform-key`:
 	// no env pair either.
 	rewrapRetirePlatformKey *bool
+	// rewrapAdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`: no
+	// env pair either, so a stray variable cannot arm an adoption.
+	rewrapAdoptBootKeys *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -392,7 +395,7 @@ func parseBootFlags() *bootFlags {
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
 		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
-		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/operations/secrets-and-keys.md"),
+		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap -rewrap-adopt-boot-keys once; see docs/operations/secrets-and-keys.md"),
 		proxyImage:             flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		driveProbeImage: flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),
@@ -509,6 +512,10 @@ func parseBootFlags() *bootFlags {
 			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
 			"WARDYN_KEK=transit key or the local key, then exit. Afterwards unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM. "+
 			"See docs/operations/secrets-and-keys.md (default false)"),
+		rewrapAdoptBootKeys: flag.Bool("rewrap-adopt-boot-keys", false, "with -rewrap only: you attest that no boot key has been adopted onto the platform key "+
+			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
+			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
+			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:        registerVaultFlags(),
 		hostCapacity: registerHostCapacityFlags(),
 		azure:        registerAzureFlags(),

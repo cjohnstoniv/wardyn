@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -70,6 +71,9 @@ func rewrapMode(f *bootFlags) error {
 		return err
 	}
 	retire := *f.rewrapRetirePlatformKey
+	if retire && *f.rewrapAdoptBootKeys {
+		return fmt.Errorf("refusing to rewrap: -rewrap-adopt-boot-keys adopts boot keys onto the platform key and -rewrap-retire-platform-key moves them off it; run one at a time")
+	}
 	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" {
 		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM, the key to retire")
 	}
@@ -106,6 +110,7 @@ func rewrapMode(f *bootFlags) error {
 		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes,
 	}
 	d = withPlatformKEK(d, platformSvc, retire)
+	d.AdoptBootKeys = *f.rewrapAdoptBootKeys
 	return rewrapKeys(ctx, rec, d)
 }
 
@@ -130,10 +135,14 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 		// the operator only.
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rewrapAbortAuditTimeout)
 		defer cancel()
-		emitRewrapAudit(actx, rec, res, separate, true)
+		emitRewrapAudit(actx, rec, res, separate, err)
 		return err
 	}
-	emitRewrapAudit(ctx, rec, res, separate, false)
+	emitRewrapAudit(ctx, rec, res, separate, nil)
+	if res.Rotated {
+		fmt.Fprintf(os.Stdout, "a key rotation landed while this run was moving rows, so some rows are under a newer version than the one read first; "+
+			"run `wardynd -rewrap` again until it moves 0 rows, and disable or retire no key version before then\n")
+	}
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion != "" {
@@ -156,7 +165,7 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 // other version at that service.
 func retireStep(id, v string) string {
 	if strings.HasPrefix(id, kek.AzureKeyIDPrefix) {
-		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every other version of both keys in Key Vault now retires them", id, v)
+		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
 	}
 	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
 }
@@ -179,15 +188,24 @@ const rewrapAbortAuditTimeout = 5 * time.Second
 // wraps every write, its kek_id and the key version every row is now under.
 // An aborted run's event is outcome failure, reason aborted: its count is
 // what was committed (0 — the rewrap is one transaction), and it carries no
-// key_version, since no row moved to it. Like secret.rekey it names no secret.
-func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate, aborted bool) {
+// key_version, since no row moved to it. A run refused over its boot keys is
+// reason refused with refusal mixed_boot_keys or adopt_not_requested, so a
+// rule can fire on the tamper signal. Like secret.rekey it names no secret.
+func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool, failure error) {
 	fields := map[string]any{"secrets": res.Rewrapped, "platform_key_separate": separate}
+	if res.Rotated {
+		fields["rotated"] = true
+	}
 	if res.KeyService != "" {
 		fields["key_service"] = res.KeyService
 	}
 	outcome := "success"
 	switch {
-	case aborted:
+	case errors.Is(failure, secretstorepg.ErrMixedBootKeys):
+		outcome, fields["reason"], fields["refusal"] = "failure", "refused", "mixed_boot_keys"
+	case errors.Is(failure, secretstorepg.ErrAdoptNotRequested):
+		outcome, fields["reason"], fields["refusal"] = "failure", "refused", "adopt_not_requested"
+	case failure != nil:
 		outcome, fields["reason"] = "failure", "aborted"
 	case res.KeyVersion != "":
 		fields["key_version"] = res.KeyVersion

@@ -10,6 +10,7 @@ package pg
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -134,6 +135,37 @@ func TestPlatformSplit_StolenCredentialKeyForgesNoBootKey(t *testing.T) {
 	}
 }
 
+// TestPG_ConvertV0_RefusesAForgedBootKeyBesideAPlatformKey: with the platform
+// key file set, a pre-envelope boot key (someone with the age key and the table
+// deletes the real row and inserts their own) is refused, naming the row, and
+// nothing is converted, credentials included. With no platform key the same
+// row converts, as TestPG_ConvertV0_ConvertsEveryRowOnceThenIsANoOp shows.
+func TestPG_ConvertV0_RefusesAForgedBootKeyBesideAPlatformKey(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id, platform := mustIdentity(t), mustIdentity(t)
+	s := splitStore(t, pool, id, platform)
+	if err := s.Put(ctx, signingKey, []byte("real")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM secrets WHERE owned_by='' AND name=$1`, signingKey); err != nil {
+		t.Fatal(err)
+	}
+	seedV0(t, pool, id, "", signingKey, "forged")
+	seedV0(t, pool, id, "", "github-app-key", "cred")
+	before := rawRows(t, pool)
+
+	converted, err := s.ConvertV0(ctx, id)
+	if !errors.Is(err, ErrV0BootKey) || len(converted) != 0 || !strings.Contains(err.Error(), rowRef("", signingKey)) {
+		t.Fatalf("ConvertV0 over a v0 boot key beside a platform key = (%d, %v), want ErrV0BootKey naming the row", len(converted), err)
+	}
+	for ref, r := range rawRows(t, pool) {
+		if r.version != before[ref].version || r.kekID != before[ref].kekID || !bytes.Equal(r.ct, before[ref].ct) {
+			t.Errorf("%s changed although the conversion was refused", ref)
+		}
+	}
+}
+
 // TestRewrap_MovesEveryRowOntoItsPurposeKey is the upgrade path: rows a
 // pre-split wardynd wrote, and the boot keys under the age key, move onto the
 // KEK their purpose writes with — the payload untouched — and a second run
@@ -151,7 +183,7 @@ func TestRewrap_MovesEveryRowOntoItsPurposeKey(t *testing.T) {
 	}
 	before := rawRows(t, pool)
 
-	n, err := Rewrap(ctx, pool, id, platform)
+	n, err := Rewrap(ctx, pool, id, platform, true)
 	if err != nil || n != 4 {
 		t.Fatalf("Rewrap = (%d, %v), want 4 rows", n, err)
 	}
@@ -178,7 +210,7 @@ func TestRewrap_MovesEveryRowOntoItsPurposeKey(t *testing.T) {
 	if _, err := splitStore(t, pool, id, nil).Get(ctx, signingKey); err == nil {
 		t.Error("a wardynd without the platform key still opens a boot key moved onto it")
 	}
-	if n, err := Rewrap(ctx, pool, id, platform); err != nil || n != 0 {
+	if n, err := Rewrap(ctx, pool, id, platform, true); err != nil || n != 0 {
 		t.Errorf("second Rewrap = (%d, %v), want (0, nil)", n, err)
 	}
 }
@@ -195,7 +227,7 @@ func TestRewrap_AbortsOnARowUnderAnotherKey(t *testing.T) {
 	putUnder(t, pool, stray, "", "zz-stray", "stray")
 	before := rawRows(t, pool)
 
-	n, err := Rewrap(ctx, pool, id, mustIdentity(t))
+	n, err := Rewrap(ctx, pool, id, mustIdentity(t), true)
 	if err == nil || n != 0 || !strings.Contains(err.Error(), rowRef("", "zz-stray")) || !strings.Contains(err.Error(), "nothing committed") {
 		t.Fatalf("Rewrap over a stray row = (%d, %v), want an abort naming it", n, err)
 	}
@@ -232,5 +264,34 @@ func TestRekey_LeavesTheSeparatePlatformKeyAlone(t *testing.T) {
 		if got, err := s.Get(ctx, name); err != nil || string(got) != v {
 			t.Errorf("%s after the rotation = (%q, %v)", name, got, err)
 		}
+	}
+}
+
+// An install upgrading from 0.7.x holds only pre-envelope rows. With the
+// platform key set at once, the refusal names the way out (start once without
+// the platform key, then adopt) before it says the row may be forged; without
+// the platform key the same rows convert, and a later conversion has nothing
+// left to refuse.
+func TestPG_ConvertV0_RefusalNamesTheUpgradePath(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id, platform := mustIdentity(t), mustIdentity(t)
+	seedV0(t, pool, id, "", signingKey, "sign")
+	seedV0(t, pool, id, "", "github-app-key", "cred")
+
+	_, err := splitStore(t, pool, id, platform).ConvertV0(ctx, id)
+	if !errors.Is(err, ErrV0BootKey) {
+		t.Fatalf("ConvertV0 over v0 rows with the platform key set = %v, want ErrV0BootKey", err)
+	}
+	msg := err.Error()
+	up, forged := strings.Index(msg, "upgrading from 0.7.x"), strings.Index(msg, "not written by Wardyn")
+	if up < 0 || forged < 0 || up > forged || !strings.Contains(msg, "WITHOUT the platform key") || !strings.Contains(msg, "-rewrap-adopt-boot-keys") {
+		t.Fatalf("the refusal %q must name the upgrade path before the tamper diagnosis", msg)
+	}
+	if n, err := splitStore(t, pool, id, nil).ConvertV0(ctx, id); err != nil || len(n) != 2 {
+		t.Fatalf("ConvertV0 without the platform key = (%d, %v), want both rows converted", len(n), err)
+	}
+	if n, err := Rewrap(ctx, pool, id, platform, true); err != nil || n != 1 {
+		t.Fatalf("adopting after the upgrade path = (%d, %v), want the signing key moved", n, err)
 	}
 }

@@ -72,8 +72,8 @@ type Store struct {
 	serviceWrites bool
 	// platformService is the second key service (Deps.PlatformKEK), or nil; it
 	// opens boot keys only. With platformWrites it also wraps every boot key,
-	// and a boot key under any other key is read only by `wardynd -rewrap`,
-	// which moves it here.
+	// and a boot key under any other key is read only by `wardynd -rewrap
+	// -rewrap-adopt-boot-keys`, which moves it here.
 	platformService kek.KEK
 	platformWrites  bool
 	// ext is the configured external store, or nil. Pointer rows are read
@@ -176,7 +176,7 @@ func (s *Store) reader(e envelope) (kek.KEK, error) {
 			return s.platformService, nil
 		}
 		if s.platformWrites {
-			return nil, fmt.Errorf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q (a boot key still under another key moves with `wardynd -rewrap`)", e.kekID, s.platformService.ID())
+			return nil, &refusal{ErrAdoptNotRequested, fmt.Sprintf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q. %s", e.kekID, s.platformService.ID(), adoptHint)}
 		}
 	}
 	if s.service != nil && e.kekID == s.service.ID() {
@@ -195,8 +195,37 @@ func (s *Store) reader(e envelope) (kek.KEK, error) {
 	if e.kekID == s.legacy.ID() && !(s.separate && w == s.platform) {
 		return s.legacy, nil
 	}
+	if s.separate && secretstore.Kind(e.ownedBy, e.name) == "platform" {
+		return nil, &refusal{ErrAdoptNotRequested, fmt.Sprintf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q. %s", e.kekID, w.ID(), adoptHint)}
+	}
 	return nil, fmt.Errorf("is sealed under key %q, but this wardynd opens it only under %q (a row sealed under another of this wardynd's own keys moves with `wardynd -rewrap`)", e.kekID, w.ID())
 }
+
+// adoptHint is the one instruction a boot key under the wrong key gets: adopting
+// is something an operator does once, on purpose, so a row met after that is
+// not Wardyn's.
+const adoptHint = "If you have never adopted boot keys onto the platform key, run `wardynd -rewrap -rewrap-adopt-boot-keys`. " +
+	"If you already have, these rows were not written by Wardyn: investigate before moving anything."
+
+// ErrAdoptNotRequested is a boot key under a key other than the platform key,
+// met by a `-rewrap` run that was not told to adopt boot keys.
+var ErrAdoptNotRequested = errors.New("boot key under another key and -rewrap-adopt-boot-keys not given")
+
+// ErrMixedBootKeys is a rewrap that found some boot keys under the platform key
+// and others under another key, a state no run of wardynd leaves; adopting is
+// refused even when asked for.
+var ErrMixedBootKeys = errors.New("boot keys under the platform key and under another key")
+
+// refusal is an error whose text is msg and which is kind (errors.Is), so the
+// audit row can say why a run was refused without carrying the text, which
+// names rows.
+type refusal struct {
+	kind error
+	msg  string
+}
+
+func (r *refusal) Error() string { return r.msg }
+func (r *refusal) Unwrap() error { return r.kind }
 
 // isLocal reports whether kekID names a KEK an age identity derives: "local:"
 // before the purpose split, "local/<purpose>:" after.
@@ -545,7 +574,7 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 		}
 		return to.writer(e.ownedBy, e.name)
 	}
-	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil)
+	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil, nil)
 }
 
 // RewrapResult is what RewrapKeys did.
@@ -564,13 +593,19 @@ type RewrapResult struct {
 	// key service (Deps.PlatformKEK), which wraps the boot keys alone.
 	PlatformKeyService string
 	PlatformKeyVersion string
+	// Rotated reports that a versioned key service named a newer version for
+	// a wrap than the latest one read when the run began, so a rotation landed
+	// mid-run. KeyVersion and PlatformKeyVersion are then "": run -rewrap again
+	// until it moves no row, and retire no version before then.
+	Rotated bool
 }
 
 // Rewrap is RewrapKeys over the local keys alone: identity, and the separate
-// platform identity (WARDYN_PLATFORM_KEY_FILE) or nil. It returns how many
-// rows it moved.
-func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Identity) (int, error) {
-	res, err := RewrapKeys(ctx, secretstore.Deps{Pool: pool, AgeIdentity: identity, PlatformIdentity: platform})
+// platform identity (WARDYN_PLATFORM_KEY_FILE) or nil, and whether the operator
+// asked to adopt boot keys (-rewrap-adopt-boot-keys). It returns how many rows
+// it moved.
+func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Identity, adopt bool) (int, error) {
+	res, err := RewrapKeys(ctx, secretstore.Deps{Pool: pool, AgeIdentity: identity, PlatformIdentity: platform, AdoptBootKeys: adopt})
 	return res.Rewrapped, err
 }
 
@@ -619,14 +654,15 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	// A boot key may still sit under an earlier key of its own purpose: the
 	// age key's platform KEK, the credential key service, or, for the
 	// platform key service, the key it is being moved off. Those readers
-	// serve it only here, never at a serving boot.
+	// serve it only here, never at a serving boot, and only when the operator
+	// attested to the adoption (d.AdoptBootKeys).
 	var prior []*Store
-	if s.platformWrites {
+	if d.AdoptBootKeys && s.platformWrites {
 		p := *s
 		p.platformService, p.platformWrites = nil, false
 		prior = append(prior, &p)
 	}
-	if s.separate {
+	if d.AdoptBootKeys && s.separate {
 		shared := &Store{}
 		if err := shared.setLocalKeys(d.AgeIdentity, nil); err != nil {
 			return res, fmt.Errorf("pg secretstore: rewrap: %w", err)
@@ -665,9 +701,57 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		res.PlatformKeyVersion, latest[res.PlatformKeyService] = n, n
 	}
 	target := func(e envelope) kek.KEK { return s.writer(e.ownedBy, e.name) }
-	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest)
+	// The second check, whether or not boot keys may be adopted: a boot key
+	// under another key beside any under the platform key was written there
+	// after the move. Retiring the platform key is checked too: no
+	// legitimate retire starts mixed.
+	guard := func(all []envelope) error {
+		switch {
+		case s.platformService != nil:
+			return refuseMixedBootKeys(s.platformService.ID(), all)
+		case s.separate && !s.serviceWrites:
+			return refuseMixedBootKeys(s.platform.ID(), all)
+		}
+		return nil
+	}
+	rotated := map[string]bool{}
+	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard, rotated)
 	res.Rewrapped = n
+	// A key service rotated while the run was moving rows: some rows are under
+	// a newer version than the one read first, so no version is yet safe to
+	// retire. Report none; another pass moves them and reports the truth.
+	if err == nil && len(rotated) > 0 {
+		res.Rotated = true
+		res.KeyVersion, res.PlatformKeyVersion = "", ""
+	}
 	return res, err
+}
+
+// refuseMixedBootKeys refuses a rewrap that finds a boot key under any key but
+// platformID while another is already under it. Every boot key a wardynd wrote
+// or moved sits under the platform key once one does, so the other was written
+// where it sits after the move, by whoever holds that key and can write the
+// table. It changes nothing and names the rows.
+func refuseMixedBootKeys(platformID string, all []envelope) error {
+	var under bool
+	var other []string
+	for _, e := range all {
+		if secretstore.Kind(e.ownedBy, e.name) != "platform" {
+			continue
+		}
+		if e.kekID == platformID {
+			under = true
+		} else {
+			other = append(other, fmt.Sprintf("%s under %q", rowRef(e.ownedBy, e.name), e.kekID))
+		}
+	}
+	if !under || len(other) == 0 {
+		return nil
+	}
+	return &refusal{ErrMixedBootKeys, fmt.Sprintf("pg secretstore: rewrap REFUSED (nothing changed): boot keys are already under the platform key %q, "+
+		"yet %s sit under another key, a mixed state no run of wardynd leaves. These rows were not written by Wardyn: "+
+		"find out who wrote them (updated_at, the audit log, database access logs) and restore the boot keys from a backup if they are forged",
+		platformID, strings.Join(other, ", "))}
 }
 
 // latestVersion is the version a wrap under k would name, or "" when k has no
@@ -684,8 +768,11 @@ func latestVersion(ctx context.Context, k kek.KEK) (string, error) {
 // the operation leaves alone; a row already under its target — and, when the
 // target is versioned and latest holds its kek_id, at that version — is
 // skipped. latest maps a versioned key service's kek_id to the version a wrap
-// made now would name (nil: none). op names the operation in its errors.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string) (int, error) {
+// made now would name (nil: none). op names the operation in its errors. guard,
+// when not nil, sees every selected (locked) row before any moves and may
+// refuse the whole run. rotated, when not nil, collects the kek_id of each
+// versioned target that wrapped a row under a version other than latest's.
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error, rotated map[string]bool) (int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
@@ -710,6 +797,11 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		return 0, fmt.Errorf("pg secretstore: %s scan: %w", op, err)
 	}
 
+	if guard != nil {
+		if err := guard(all); err != nil {
+			return 0, err
+		}
+	}
 	n := 0
 	for i, e := range all {
 		to := target(e)
@@ -728,6 +820,13 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		wrapped, rerr := rewrap(ctx, source, to, e)
 		if rerr != nil {
 			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), rerr)
+		}
+		if rotated != nil {
+			if was, verr := behind(to, wrapped, latest[to.ID()]); verr != nil {
+				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
+			} else if was {
+				rotated[to.ID()] = true
+			}
 		}
 		if _, uerr := tx.Exec(ctx,
 			`UPDATE secrets SET kek_id=$3, wrapped_dek=$4, updated_at=now() WHERE owned_by=$1 AND name=$2`, e.ownedBy, e.name, to.ID(), wrapped,

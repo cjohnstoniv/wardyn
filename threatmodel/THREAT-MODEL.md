@@ -2136,8 +2136,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     a second age identity from which alone the boot keys' key-encryption key is
     derived (`local/platform:` vs `local/cred:` on each row); once it is set, no
     key the age key derives opens a boot key row, so a stolen age key forges
-    nothing. It is optional, the move onto it is `wardynd -rewrap`, and that
-    move is the one moment the age key still vouches for the boot keys. Unset,
+    nothing. It is optional, the move onto it is `wardynd -rewrap
+    -rewrap-adopt-boot-keys`, and that move is the one moment the age key
+    vouches for the boot keys. A pre-envelope boot key found beside the platform
+    key is refused at boot rather than converted under it, so the only
+    adoption is the operator's. Unset,
     the residual stands and `/setup/status` shows `platform_shared`. (b) **store
     mode:** the boot keys live under `platform/` in the organisation's store;
     with ONE Vault role that separates audit and filtering only (the one token
@@ -2156,13 +2159,22 @@ hiding them would repeat the failure mode we are designed to avoid.
     Transit key that only `WARDYN_VAULT_ROLE_PLATFORM` reaches, and
     `WARDYN_VAULT_TRANSIT_KEY` wraps the credentials as the credentials role.
     A leaked credentials-side token, with or without the database, then unwraps
-    no boot key, and it cannot plant one either: wardynd opens a boot key under
-    the platform key alone and refuses one wrapped under the credential key. The
-    same holds the other way for a leaked platform token and the credentials.
+    no boot key, and a serving wardynd opens no boot key that token planted:
+    it opens a boot key under the platform key alone and refuses one wrapped
+    under the credential key. The one command that moves a boot key off
+    another key, `wardynd -rewrap`, adopts one only when the operator passes
+    `-rewrap-adopt-boot-keys`, which says that no boot key has been adopted
+    yet, so adoption is an operator step taken once. A planted row met without
+    that flag aborts the run by name, and one met beside boot keys already on
+    the platform key is refused even with it (audited as `secret.rewrap`
+    `refused`). The operator's word is the trust root: an operator who passes
+    the flag over a planted row, say after the attacker deleted the real boot
+    keys, adopts it. The same holds the other way for a leaked platform token
+    and the credentials.
     What the split does not do: the wardynd process holds both tokens, so a
     compromise of the process still reaches both; it holds only while the
     credentials role's Vault policy leaves the platform key out, which Wardyn
-    cannot check; and the move onto the platform key (`wardynd -rewrap`), like
+    cannot check; and the move onto the platform key (`wardynd -rewrap -rewrap-adopt-boot-keys`), like
     the move off it (`-rewrap-retire-platform-key`), is one more moment at which
     one key vouches for the boot keys. What neither setup lets anyone do from the
     database alone is pass one wrap off as another's: each wrap's

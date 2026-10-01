@@ -38,7 +38,13 @@ type Deps struct {
 	// Read-only, it lets `wardynd -rewrap` move the boot keys off it.
 	PlatformKEK       kek.KEK
 	PlatformKEKWrites bool
-	External          External
+	// AdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`, and only
+	// `-rewrap` reads it: the operator attests that no boot key has yet been
+	// adopted onto the platform key, so a boot key under another key (the
+	// credential key service, the age key) may be moved onto it. Without it
+	// `-rewrap` opens a boot key only under the key a boot opens it under.
+	AdoptBootKeys bool
+	External      External
 	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
 	// to External (0: its 5s default); a store-mode write is bounded at 6x it.
 	ExternalTimeout time.Duration

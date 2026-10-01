@@ -4,10 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -154,7 +160,7 @@ func TestRewrapKeys_PlatformKeyServiceIsSeparate(t *testing.T) {
 	}
 	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
 	rec := &capturingRecorder{}
-	err = rewrapKeys(t.Context(), rec, secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true})
+	err = rewrapKeys(t.Context(), rec, secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true, AdoptBootKeys: true})
 	if err != nil || len(rec.got) != 1 {
 		t.Fatalf("rewrap = %v with %d audit events", err, len(rec.got))
 	}
@@ -184,7 +190,7 @@ func seedPlatformSplit(t *testing.T, pool *pgxpool.Pool, cred *memKEK, plat plat
 			t.Fatal(err)
 		}
 	}
-	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true}
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true, AdoptBootKeys: true}
 	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
 		t.Fatal(err)
 	}
@@ -322,5 +328,320 @@ func TestWithPlatformKEK(t *testing.T) {
 	}
 	if d := withPlatformKEK(secretstore.Deps{}, nil, true); d.PlatformKEK != nil || d.PlatformKEKWrites {
 		t.Fatalf("no platform key: %+v; want none", d)
+	}
+}
+
+// Every boot key still under the credential key moves onto the platform key in
+// one -rewrap -rewrap-adopt-boot-keys (the first move), a credential stays put,
+// and a second run moves nothing. Without the flag the same run refuses, with
+// nothing moved.
+func TestRewrapKeys_FirstMoveTakesEveryBootKeyUnderTheCredentialKey(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	credStore, err := buildSecretStore(t.Context(), pool, "", nil, "", storeClients{kek: cred, kekWrites: true}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"wardyn-signing-key", "wardyn-session-key", "a-credential"}
+	for _, name := range names {
+		if err := credStore.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+		if got := rewrapKEKID(t, pool, name); got != cred.ID() {
+			t.Fatalf("%s is sealed under %q, want the credential key", name, got)
+		}
+	}
+	d := secretstore.Deps{Pool: pool, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true}
+	before := rewrapRows(t, pool)
+	rec := &capturingRecorder{}
+	if err := rewrapKeys(t.Context(), rec, d); !errors.Is(err, secretstorepg.ErrAdoptNotRequested) {
+		t.Fatalf("-rewrap without -rewrap-adopt-boot-keys = %v; want it refused", err)
+	}
+	assertRefusalAudit(t, rec, "adopt_not_requested")
+	if rewrapRows(t, pool) != before {
+		t.Fatal("a refused -rewrap changed rows")
+	}
+	d.AdoptBootKeys = true
+	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
+		t.Fatalf("first move = %v; want every boot key moved", err)
+	}
+	for name, want := range map[string]string{"wardyn-signing-key": plat.ID(), "wardyn-session-key": plat.ID(), "a-credential": cred.ID()} {
+		if got := rewrapKEKID(t, pool, name); got != want {
+			t.Fatalf("%s is sealed under %q after the move, want %q", name, got, want)
+		}
+	}
+	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
+		t.Fatalf("second run = %v; want nothing to move and no refusal", err)
+	}
+}
+
+// assertRefusalAudit checks the one secret.rewrap row a refused run wrote:
+// failure, reason refused, the refusal, and no row name.
+func assertRefusalAudit(t *testing.T, rec *capturingRecorder, refusal string) {
+	t.Helper()
+	if len(rec.got) != 1 || rec.got[0].Outcome != "failure" {
+		t.Fatalf("audit events = %+v; want one failure", rec.got)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.got[0].Data, &data); err != nil || data["reason"] != "refused" || data["refusal"] != refusal || data["secrets"] != float64(0) {
+		t.Fatalf("audit fields = %s (%v); want reason refused, refusal %q, nothing moved", rec.got[0].Data, err, refusal)
+	}
+	if strings.Contains(string(rec.got[0].Data), "wardyn-") {
+		t.Fatalf("audit fields %s name a row", rec.got[0].Data)
+	}
+}
+
+// plantUnderCredentialKey writes name under the credential key, as someone
+// holding that key's token and write access to the table can.
+func plantUnderCredentialKey(t *testing.T, pool *pgxpool.Pool, cred *memKEK, name string) {
+	t.Helper()
+	credStore, err := buildSecretStore(t.Context(), pool, "", nil, "", storeClients{kek: cred, kekWrites: true}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credStore.Put(t.Context(), name, []byte("forged")); err != nil {
+		t.Fatal(err)
+	}
+	if got := rewrapKEKID(t, pool, name); got != cred.ID() {
+		t.Fatalf("the planted row is under %q, want the credential key", got)
+	}
+}
+
+// A boot key planted under the credential key after the first move is refused
+// by -rewrap, with and without -rewrap-adopt-boot-keys (the mixed state is
+// what it reports first), and no row changes:
+// not the planted one, not the boot keys already on the platform key.
+func TestRewrapKeys_RefusesABootKeyPlantedUnderTheCredentialKey(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	id := seedPlatformSplit(t, pool, cred, plat)
+	plantUnderCredentialKey(t, pool, cred, "wardyn-session-key")
+	before := rewrapRows(t, pool)
+
+	for _, adopt := range []bool{false, true} {
+		rec := &capturingRecorder{}
+		d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true, AdoptBootKeys: adopt}
+		err := rewrapKeys(t.Context(), rec, d)
+		if !errors.Is(err, secretstorepg.ErrMixedBootKeys) || !strings.Contains(err.Error(), "wardyn-session-key") || !strings.Contains(err.Error(), "find out who wrote") {
+			t.Fatalf("-rewrap (adopt=%v) with a boot key planted under the credential key = %v; want a named refusal that says to investigate", adopt, err)
+		}
+		assertRefusalAudit(t, rec, "mixed_boot_keys")
+		if rewrapRows(t, pool) != before {
+			t.Fatalf("a refused -rewrap (adopt=%v) changed rows", adopt)
+		}
+	}
+	if got := rewrapKEKID(t, pool, "wardyn-session-key"); got != cred.ID() {
+		t.Fatalf("the planted row was promoted onto %q", got)
+	}
+}
+
+// The attacker may delete the boot keys under the platform key first, so what
+// -rewrap sees looks like the first move. Without -rewrap-adopt-boot-keys it
+// still refuses and nothing moves: only the operator, who knows whether the
+// keys were ever adopted, can say the move is a first.
+func TestRewrapKeys_RefusesDeleteThenPlantWithoutAdoptFlag(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	id := seedPlatformSplit(t, pool, cred, plat)
+	if _, err := pool.Exec(t.Context(), `DELETE FROM secrets WHERE owned_by='' AND name='wardyn-signing-key'`); err != nil {
+		t.Fatal(err)
+	}
+	plantUnderCredentialKey(t, pool, cred, "wardyn-signing-key")
+	before := rewrapRows(t, pool)
+
+	rec := &capturingRecorder{}
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true}
+	err := rewrapKeys(t.Context(), rec, d)
+	if !errors.Is(err, secretstorepg.ErrAdoptNotRequested) || !strings.Contains(err.Error(), "wardyn-signing-key") ||
+		!strings.Contains(err.Error(), "investigate before moving anything") {
+		t.Fatalf("-rewrap after delete+plant = %v; want a named refusal that says to investigate", err)
+	}
+	assertRefusalAudit(t, rec, "adopt_not_requested")
+	if rewrapRows(t, pool) != before {
+		t.Fatal("a refused -rewrap changed rows")
+	}
+}
+
+// -rewrap-retire-platform-key is checked for a mixed state too: no legitimate
+// retire starts with a boot key under the credential key beside platform ones.
+func TestRewrapKeys_RetireRefusesAMixedState(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	seedPlatformSplit(t, pool, cred, plat)
+	plantUnderCredentialKey(t, pool, cred, "wardyn-session-key")
+	before := rewrapRows(t, pool)
+
+	rec := &capturingRecorder{}
+	err := rewrapKeys(t.Context(), rec, secretstore.Deps{Pool: pool, KEK: cred, KEKWrites: true, PlatformKEK: plat})
+	if !errors.Is(err, secretstorepg.ErrMixedBootKeys) {
+		t.Fatalf("retire over a mixed state = %v; want it refused", err)
+	}
+	assertRefusalAudit(t, rec, "mixed_boot_keys")
+	if rewrapRows(t, pool) != before {
+		t.Fatal("a refused retire changed rows")
+	}
+}
+
+// The same with the local WARDYN_PLATFORM_KEY_FILE key: a boot key the age
+// key derives, planted after the boot keys moved onto the file key, is
+// refused by -rewrap with or without the flag; nothing moves.
+func TestRewrapKeys_RefusesABootKeyPlantedUnderTheAgeKeyWithAFileKey(t *testing.T) {
+	pool := envelopeDB(t)
+	id, platform := mustAgeIdentity(t), mustAgeIdentity(t)
+	split, err := buildSecretStore(t.Context(), pool, id.String(), platform, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"wardyn-signing-key", "wardyn-session-key"} {
+		if err := split.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Someone holding the age key alone overwrites one boot key.
+	ageOnly, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ageOnly.Put(t.Context(), "wardyn-session-key", []byte("forged")); err != nil {
+		t.Fatal(err)
+	}
+	before := rewrapRows(t, pool)
+
+	for _, adopt := range []bool{false, true} {
+		rec := &capturingRecorder{}
+		err := rewrapKeys(t.Context(), rec, secretstore.Deps{Pool: pool, AgeIdentity: id, PlatformIdentity: platform, AdoptBootKeys: adopt})
+		if !errors.Is(err, secretstorepg.ErrMixedBootKeys) || !strings.Contains(err.Error(), "wardyn-session-key") {
+			t.Fatalf("-rewrap (adopt=%v) with a boot key planted under the age key = %v; want a named refusal", adopt, err)
+		}
+		assertRefusalAudit(t, rec, "mixed_boot_keys")
+		if rewrapRows(t, pool) != before {
+			t.Fatalf("a refused -rewrap (adopt=%v) changed rows", adopt)
+		}
+	}
+}
+
+// -rewrap-adopt-boot-keys is a mode of -rewrap, and not of the retire.
+func TestRewrapAdoptBootKeys_Refusals(t *testing.T) {
+	f := rekeyFlags("", "", "")
+	f.rewrap = new(bool)
+	*f.rewrapAdoptBootKeys = true
+	if ran, err := maintenanceMode(f); !ran || err == nil || !strings.Contains(err.Error(), "is a mode of -rewrap") {
+		t.Fatalf("-rewrap-adopt-boot-keys alone = (%v, %v); want a refusal", ran, err)
+	}
+	f = rekeyFlags("postgres://nobody@127.0.0.1:1/nope?connect_timeout=1", "", newIdentity(t).String())
+	*f.rewrapAdoptBootKeys, *f.rewrapRetirePlatformKey = true, true
+	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "run one at a time") {
+		t.Fatalf("-rewrap-adopt-boot-keys with -rewrap-retire-platform-key = %v; want a refusal", err)
+	}
+}
+
+// rotatingKEK is a versioned key service whose key rotates once, right after
+// the run reads its latest version: the wraps that follow name version 2 while
+// the version read first, the one the run would report, was 1.
+type rotatingKEK struct {
+	*memKEK
+	cur   int
+	reads int
+}
+
+func (k *rotatingKEK) LatestVersion(context.Context) (string, error) {
+	k.reads++
+	v := strconv.Itoa(k.cur)
+	if k.reads == 1 {
+		k.cur++
+	}
+	return v, nil
+}
+
+func (k *rotatingKEK) Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]byte, error) {
+	w, err := k.memKEK.Wrap(ctx, dek, bind)
+	return append([]byte(strconv.Itoa(k.cur)+":"), w...), err
+}
+
+func (k *rotatingKEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
+	_, w, _ := bytes.Cut(wrapped, []byte(":"))
+	return k.memKEK.Unwrap(ctx, w, bind)
+}
+
+func (k *rotatingKEK) WrapVersion(wrapped []byte) (string, error) {
+	v, _, _ := bytes.Cut(wrapped, []byte(":"))
+	return string(v), nil
+}
+
+// A key rotation that lands between the run reading the latest version and its
+// wraps leaves rows under a version the run did not report. The run then
+// reports no version to retire (the instruction to disable every other version
+// would disable the one just used), says so, and the next run, which reads the
+// new latest version, moves nothing and reports it.
+func TestRewrapKeys_RotationMidRunRetiresNothing(t *testing.T) {
+	pool := envelopeDB(t)
+	id := mustAgeIdentity(t)
+	local, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a-credential", "b-credential"} {
+		if err := local.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := &rotatingKEK{memKEK: newMemKEK(), cur: 1}
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: k, KEKWrites: true}
+
+	rec := &capturingRecorder{}
+	out := captureStdout(t, func() {
+		if err := rewrapKeys(t.Context(), rec, d); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "now retires") || !strings.Contains(out, "rotation landed") || !strings.Contains(out, "again") {
+		t.Fatalf("a rewrap that saw a rotation printed %q; want no retirement instruction and a request to run again", out)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.got[0].Data, &data); err != nil || data["rotated"] != true || data["key_version"] != nil || data["secrets"] != float64(2) {
+		t.Fatalf("audit fields = %s (%v); want rotated true, 2 rows and no key_version", rec.got[0].Data, err)
+	}
+
+	rec2 := &capturingRecorder{}
+	out = captureStdout(t, func() {
+		if err := rewrapKeys(t.Context(), rec2, d); err != nil {
+			t.Fatal(err)
+		}
+	})
+	data = nil
+	if err := json.Unmarshal(rec2.got[0].Data, &data); err != nil || data["secrets"] != float64(0) || data["rotated"] != nil || data["key_version"] != "2" {
+		t.Fatalf("second run audit = %s (%v); want 0 rows, no rotation and key_version 2", rec2.got[0].Data, err)
+	}
+	if !strings.Contains(out, "version 2") {
+		t.Fatalf("second run printed %q; want the retirement step for version 2", out)
+	}
+}
+
+// captureStdout returns what f wrote to os.Stdout.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	func() {
+		defer func() { os.Stdout = old; _ = w.Close() }()
+		f()
+	}()
+	return <-done
+}
+
+// Key Vault's retirement instruction names older versions only.
+func TestRetireStep_AzureNamesOlderVersionsOnly(t *testing.T) {
+	got := retireStep(kek.AzureKeyIDPrefix+"v.vault.azure.net/k/s", "1/2")
+	if strings.Contains(got, "every other version") || !strings.Contains(got, "OLDER") {
+		t.Fatalf("retireStep = %q; want it to name older versions only", got)
 	}
 }

@@ -44,6 +44,32 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Security
 
+- **A pre-envelope boot key beside a platform key is refused at boot instead of converted (#979).** On an
+  install with `WARDYN_PLATFORM_KEY_FILE`, or with `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` while `WARDYN_AGE_KEY` is
+  still set, someone holding the age key and write access to the table could delete a boot key and insert an
+  age-encrypted `enc_version=0` row of their own; the next boot sealed it under the platform key and served it.
+  The boot now refuses such a row, naming it, and commits nothing. Boot keys convert only on a boot before the
+  platform key is set. An install upgrading from 0.7.x or earlier, which holds only pre-envelope rows, must
+  start once without the platform key first; the refusal and the procedures in
+  `docs/operations/secrets-and-keys.md` say so.
+- **`wardynd -rewrap` no longer tells you to retire the key version it just used (A-5).** A Key Vault or Transit
+  rotation that landed while the run was moving rows left some rows under a newer version than the one the run
+  reported, and the Key Vault instruction said to disable every other version. The run now checks each wrap
+  against that version; after a mid-run rotation it says so, prints no retirement step, and records `rotated`
+  in its `secret.rewrap` row. Run it again until it moves 0 rows. The Key Vault instruction now names older
+  versions only.
+- **`wardynd -rewrap` adopts a boot key from another key only when you say so (#979).** Someone holding the
+  credential key's token (or the age key) and write access to the table could plant a boot key under that key,
+  and `-rewrap` would move it onto the platform key. Moving a boot key onto `WARDYN_VAULT_TRANSIT_KEY_PLATFORM`
+  or `WARDYN_PLATFORM_KEY_FILE` now needs `wardynd -rewrap -rewrap-adopt-boot-keys`, an attestation that you
+  have never done that move before; run it once. Without the flag `-rewrap` aborts, naming the row, and moves
+  nothing. With it, `-rewrap` (and `-rewrap-retire-platform-key`) still refuse, naming the rows, when some boot
+  keys are under the platform key and others are not. A refused run is audited as `secret.rewrap` `refused`
+  with `refusal` `adopt_not_requested` or `mixed_boot_keys`. The flag does not make adoption safe: if the real
+  boot keys were deleted and a forged set planted, an operator who passes the flag adopts the forgery. The
+  boot-time refusal of such a row now asks whether you have adopted before, and says to investigate if you
+  have. **Before you upgrade:** a script that runs `wardynd -rewrap` to move boot keys onto a platform key
+  needs the flag.
 - **Four follow-ups on the 0.8.4 identity and Azure DevOps code (#1449, #1444, #155, #622).** A laptop's forwarded audit row can no longer put a false "refused" banner on the Azure DevOps row: the banner reads only rows `wardynd` wrote itself. A pasted token is bound to the sign-in's Entra object id alone, never the union with the stored one, and the `ado_pat.own.store` row says whether the token was bound by `object_id` or `name`. A browser sign-in refused for a missing or false `email_verified`, or an email outside `WARDYN_OIDC_EMAIL_DOMAINS`, now writes an `auth.fail` row (`email_verified_absent`, `email_unverified`, `email_domain`). A role-mapping change that cannot list or revoke the outstanding API tokens says so in its audit row (`tokens_revocation_failed`) and in the upsert response, instead of reporting zero revoked.
 - **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
   The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
