@@ -22,6 +22,9 @@
 -- until the build finishes. An operator with such a table can pre-build the
 -- index CONCURRENTLY out of band, with this exact name and definition, before
 -- upgrading; the IF NOT EXISTS below then finds it and does nothing.
+-- A CONCURRENTLY build that fails leaves an INVALID index under that name, which
+-- IF NOT EXISTS then skips silently: check pg_index.indisvalid for it (and drop
+-- and rebuild an invalid one) before upgrading.
 CREATE INDEX IF NOT EXISTS audit_events_device_origin_idx
     ON audit_events ((data->'device_origin'->>'device_id'), (data->'device_origin'->>'seq'), seq)
     WHERE data ? 'device_origin';

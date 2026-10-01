@@ -34,11 +34,14 @@
 #       and /healthz.proxy_hop_tls=true;
 #   -> helm upgrade --set secretFiles.enabled=true (#720): boots, carries zero
 #   secretKeyRef entries, the pre-upgrade secret is still there and no read
-#   failed; then an age-key FILE holding a DIFFERENT key must refuse boot and
-#   leave the store untouched, never come up empty;
+#   failed;
 #   -> helm rollback to v0.7.11, whose rollout must NOT become Ready (see "THE
-#   ROLLBACK ASSERTION" below), its logs and the resolved chart and image
-#   digests copied into this log (the nightly uploads only this log).
+#   ROLLBACK ASSERTION" below) and whose Deployment must really run the
+#   v0.7.11 image;
+#   -> then an age-key FILE holding a DIFFERENT key must refuse boot and
+#   leave the store untouched, never come up empty. The rollback's logs and
+#   the resolved chart and image digests are copied into this log (the
+#   nightly uploads only this log).
 #
 #   NOT BUILT, NAMED RATHER THAN FAKED:
 #     - a Dex member, a fake AWS-SSO capture, an ADO/Entra blob and a PENDING
@@ -317,6 +320,7 @@ pass "secret written under v${FROM_VERSION}"
 RETIRED_NAME="wardyn-harness-anthropic-oauth"
 step "seeding the retired managed-harness credential ${RETIRED_NAME} (#677)"
 code=$(api PUT /api/v1/setup/harness-credential/anthropic '{"token":"sk-ant-oat01-kind-upgrade-walk-retired-credential"}')
+PASTE_CODE="${code}"
 if [[ "${code}" == "200" ]]; then
   if psql_q -c "CREATE TEMP TABLE walk_copy AS SELECT * FROM secrets WHERE owned_by = '' AND name = '${RETIRED_NAME}';
     UPDATE walk_copy SET owned_by = 'kind-upgrade-walk-person';
@@ -330,6 +334,10 @@ else
 fi
 RETIRED_SEEDED="$(secret_rows "${RETIRED_NAME}")" || die "could not count ${RETIRED_NAME} rows in the walk's Postgres"
 echo "evidence: ${RETIRED_SEEDED} row(s) named ${RETIRED_NAME} before the upgrade"
+# A paste that answered 200 stored a row; none there means the seed is broken,
+# and carrying on would assert only absence of something never present.
+[[ "${PASTE_CODE}" != "200" || "${RETIRED_SEEDED}" -ge 1 ]] \
+  || fail "the paste of ${RETIRED_NAME} answered 200 but no row with that name exists"
 
 step "launching one interactive run on v${FROM_VERSION} to carry across the upgrade"
 code=$(api POST /api/v1/runs '{"agent":"claude-code","repo":"local:kind-upgrade","interactive":true,
@@ -553,7 +561,12 @@ else
   fail "expected a fresh run to succeed on tip; POST /runs answered ${code}: $(cat "${WORK}/resp.json")"
 fi
 
-# ── #720: the same age key as files, then a different key ───────────────────
+# ── #720: the same age key as files ────────────────────────────────────────
+# Every local row's kek_id is "local[/purpose]:<key fingerprint>"; the
+# fingerprint is the age key's. Taken before and after, one identical value
+# shows the rows are still under the key that sealed them.
+kek_fingerprints() { psql_q -c "SELECT string_agg(DISTINCT split_part(kek_id, ':', 2), ',') FROM secrets WHERE kek_id LIKE 'local%'"; }
+KEK_FP_BEFORE="$(kek_fingerprints)" || die "could not read the secrets' key fingerprints"
 step "helm upgrade --set secretFiles.enabled=true: the same age key, delivered as files (#720)"
 tip_helm_upgrade --set secretFiles.enabled=true || die "helm upgrade with secretFiles.enabled=true failed"
 kubectl -n "${NS}" rollout status "deployment/${RELEASE}" --timeout=180s \
@@ -570,6 +583,10 @@ jq -e '[.spec.template.spec.containers[0].env[] | select(.name == "WARDYN_AGE_KE
 # Boot opened every boot key under the file's key (an unreadable one refuses
 # boot, see loadOrCreateSecret), so a healthy boot proves it is the key the
 # store was written under; the negative below proves a different key is refused.
+KEK_FP_AFTER="$(kek_fingerprints)"
+[[ -n "${KEK_FP_BEFORE}" && "${KEK_FP_BEFORE}" != *,* && "${KEK_FP_AFTER}" == "${KEK_FP_BEFORE}" ]] \
+  && pass "every locally sealed secret row is under one key fingerprint, unchanged by the move to secretFiles" \
+  || fail "expected one unchanged key fingerprint across the secretFiles upgrade; before=${KEK_FP_BEFORE:-<none>} after=${KEK_FP_AFTER:-<none>}"
 code=$(api GET "/api/v1/secrets")
 [[ "${code}" == "200" ]] && jq -e --arg n "${SECRET_NAME}" 'any(.mine[]; . == $n)' "${WORK}/resp.json" >/dev/null \
   && [[ "$(secret_rows "${SECRET_NAME}")" == "1" ]] \
@@ -580,6 +597,55 @@ code=$(audit "action=secret.read&outcome=failure&limit=500")
   && pass "still no failed secret.read row after the secretFiles boot" \
   || fail "a secret.read row failed after the secretFiles boot: $(cat "${WORK}/resp.json")"
 
+# ── rollback: the old binary cannot read the converted store ────────────────
+# See "THE ROLLBACK ASSERTION" in this file's header. The rollout must NOT
+# become Ready; the cause goes into this log, which is all the nightly uploads.
+# It runs from a Ready tip (the secretFiles revision) so that "not Ready" can
+# only be v${FROM_VERSION}'s own doing, and it also proves the rollback applied.
+step "helm rollback to v${FROM_VERSION}: its rollout must not become Ready"
+helm rollback "${RELEASE}" 1 --namespace "${NS}" --wait --timeout 120s >"${WORK}/rollback.log" 2>&1
+rollback_helm_rc=$?
+rb_image="ghcr.io/cjohnstoniv/wardynd:${FROM_VERSION}"
+rb_pod=""
+dep_image=""
+for _ in $(seq 1 30); do
+  dep_image="$(kubectl -n "${NS}" get "deployment/${RELEASE}" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
+  rb_pod="$(kubectl -n "${NS}" get pods -l app.kubernetes.io/name=wardyn -o json 2>/dev/null \
+    | jq -r --arg i "${rb_image}" '[.items[] | select(.spec.containers[0].image == $i)] | sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty')"
+  [[ "${dep_image}" == "${rb_image}" && -n "${rb_pod}" ]] && break
+  sleep 2
+done
+rollback_ready="false"
+for _ in $(seq 1 10); do
+  kubectl -n "${NS}" rollout status "deployment/${RELEASE}" --timeout=5s >/dev/null 2>&1 && { rollback_ready="true"; break; }
+  sleep 2
+done
+if [[ -n "${rb_pod}" ]]; then
+  rb_restarts="$(kubectl -n "${NS}" get pod "${rb_pod}" -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null)"
+  {
+    kubectl -n "${NS}" logs "${rb_pod}" --tail=-1 2>&1
+    if [[ "${rb_restarts:-0}" -gt 0 ]]; then
+      echo "--- previous container ---"
+      kubectl -n "${NS}" logs "${rb_pod}" --previous --tail=-1 2>&1
+    fi
+  } >"${WORK}/rollback-pod.log"
+fi
+echo "rollback: helm exit=${rollback_helm_rc}, deployment image=${dep_image:-<unreadable>}, pod=${rb_pod:-<none>}, rollout Ready=${rollback_ready}"
+for f in rollback.log rollback-pod.log; do
+  printf -- '--- %s ---\n' "${f}"
+  cat "${WORK}/${f}" 2>/dev/null || echo "(not written)"
+  printf -- '--- end %s ---\n' "${f}"
+done
+[[ "${dep_image}" == "${rb_image}" && -n "${rb_pod}" ]] \
+  && pass "the rollback applied: the Deployment runs ${rb_image} in pod ${rb_pod}" \
+  || fail "expected the rollback to leave the Deployment on ${rb_image} with a pod running it (image=${dep_image:-<unreadable>} pod=${rb_pod:-<none>})"
+[[ "${rollback_ready}" == "false" && -n "${rb_pod}" ]] \
+  && pass "v${FROM_VERSION}'s rollout did not become Ready against the converted store" \
+  || fail "expected v${FROM_VERSION}'s rollout to stay not-Ready against the converted store (Ready=${rollback_ready}, pod=${rb_pod:-<none>})"
+
+# After the rollback, so that the crash-looping wrong-key tip pod cannot stand
+# in for the v${FROM_VERSION} pod above. This upgrades the rolled-back release
+# to tip again, with a Secret that holds some other age key.
 step "negative: an age-key file holding a DIFFERENT key must refuse boot and leave the store alone (#720)"
 WRONG_KEY="$(docker run --rm "${TIP_IMAGE}" -gen-age-key)"
 [[ "${WRONG_KEY}" == AGE-SECRET-KEY-* && "${WRONG_KEY}" != "${AGE_KEY}" ]] || die "could not mint a second, different age key"
@@ -598,9 +664,9 @@ for _ in $(seq 1 90); do
 done
 if [[ -n "${refused_pod}" ]]; then
   refusal_log="$(kubectl -n "${NS}" logs "${refused_pod}" --all-containers --tail=-1 2>&1; kubectl -n "${NS}" logs "${refused_pod}" --all-containers --previous --tail=-1 2>&1)"
-  grep -qE 'load secret|refusing to start|decrypt|no identity matched' <<<"${refusal_log}" \
+  grep -qE 'load secret "|not configured to reach' <<<"${refusal_log}" \
     && pass "the pod holding a different age key exited non-zero and said why" \
-    || fail "the pod holding a different age key exited non-zero but its log names no decrypt or refusal: $(tail -5 <<<"${refusal_log}")"
+    || fail "the pod holding a different age key exited non-zero but its log carries no key refusal: $(tail -5 <<<"${refusal_log}")"
 else
   fail "expected the pod holding a different age key to exit non-zero; it never did"
 fi
@@ -612,29 +678,6 @@ rows_after="$(psql_q -c "SELECT count(*) FROM secrets")"
 [[ "${rows_after}" == "${rows_before}" && "$(secret_rows "${SECRET_NAME}")" == "1" ]] \
   && pass "the store is untouched (${rows_after} secret rows, ${SECRET_NAME} still there): it never came up empty" \
   || fail "the refused boot changed the store: ${rows_before} -> ${rows_after} secret rows"
-
-# ── rollback: the old binary cannot read the converted store ────────────────
-# See "THE ROLLBACK ASSERTION" in this file's header. The rollout must NOT
-# become Ready; the cause goes into this log, which is all the nightly uploads.
-step "helm rollback to v${FROM_VERSION}: its rollout must not become Ready"
-helm rollback "${RELEASE}" 1 --namespace "${NS}" --wait --timeout 120s >"${WORK}/rollback.log" 2>&1
-rollback_helm_rc=$?
-rollback_ready="false"
-for _ in $(seq 1 10); do
-  kubectl -n "${NS}" rollout status "deployment/${RELEASE}" --timeout=5s >/dev/null 2>&1 && { rollback_ready="true"; break; }
-  sleep 2
-done
-rb_pod="$(kubectl -n "${NS}" get pods -l app.kubernetes.io/name=wardyn -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-[[ -n "${rb_pod}" ]] && kubectl -n "${NS}" logs "${rb_pod}" --tail=-1 >"${WORK}/rollback-pod.log" 2>&1
-echo "rollback: helm exit=${rollback_helm_rc}, rollout Ready=${rollback_ready}"
-for f in rollback.log rollback-pod.log; do
-  printf -- '--- %s ---\n' "${f}"
-  cat "${WORK}/${f}" 2>/dev/null || echo "(not written)"
-  printf -- '--- end %s ---\n' "${f}"
-done
-[[ "${rollback_ready}" == "false" ]] \
-  && pass "v${FROM_VERSION}'s rollout did not become Ready against the converted store" \
-  || fail "expected v${FROM_VERSION}'s rollout to stay not-Ready against the converted store; it became Ready"
 
 if [[ "${FAILED}" -ne 0 ]]; then
   echo "kind-upgrade-walk: FAILED" >&2
