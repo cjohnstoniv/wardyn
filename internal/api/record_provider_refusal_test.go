@@ -140,6 +140,35 @@ func TestRecordDoorAnswersTheProviderRefusalAsCreateDoes(t *testing.T) {
 		})
 	}
 
+	// A chosen provider's credential that cannot be read is no door either
+	// (multi-provider §5.8): both doors answer the same 503 and bare sentence,
+	// naming the provider in the sentence only.
+	t.Run("the credential cannot be read", func(t *testing.T) {
+		pinned := pinTo("corp")
+		var codes [2]int
+		var bodies [2]string
+		for i, record := range []bool{false, true} {
+			srv := providerRunFixture(t, twoKeys, &capStore{}, pinned)
+			bearer := providerAdminToken(srv, "sub-admit-admin")
+			srv.cfg.Secrets = wedgedSecrets{err: errors.New("age: no identity matched")}
+			if record {
+				codes[i], bodies[i] = recordDoor(t, srv, bearer, pinned, false)
+				continue
+			}
+			w := do(t, srv, http.MethodPost, "/api/v1/runs", bearer,
+				fmt.Sprintf(`{"agent":"claude-code","task":"t","workspace_id":%q}`, pinned.ID))
+			codes[i], bodies[i] = w.Code, w.Body.String()
+		}
+		if codes[0] != http.StatusServiceUnavailable || codes[1] != codes[0] || bodies[1] != bodies[0] {
+			t.Errorf("create = %d %s\nrecord = %d %s\nwant the same 503", codes[0], bodies[0], codes[1], bodies[1])
+		}
+		var b errorBody
+		_ = json.Unmarshal([]byte(bodies[1]), &b)
+		if b != (errorBody{Error: fmt.Sprintf(mpRunCredUnreadable, "corp")}) {
+			t.Errorf("record body = %+v, want only %q", b, fmt.Sprintf(mpRunCredUnreadable, "corp"))
+		}
+	})
+
 	// Create answers 503 with the bare sentence when the provider block cannot
 	// be read (TestRunModelProviderDoors drives that arm directly); the record
 	// door must too, and carry no provider or kind. The first launch is a dry

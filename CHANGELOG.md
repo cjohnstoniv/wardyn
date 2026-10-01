@@ -164,8 +164,8 @@ runs on the first start; it adds one column with a default and changes no existi
 - **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
   /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
   same choice: a provider that is off, missing or without your credential names it (with its kind), a
-  provider you are not granted is a `403` that names none, and a provider block that cannot be read is
-  the same `503`. A not-granted refusal at record was a `422` before.
+  provider you are not granted is a `403` that names none, and a provider block or a credential that
+  cannot be read is the same `503`. A not-granted refusal at record was a `422` before.
 - **A model-access door button no longer does nothing when clicked just after the setup status
   changes (#1460).** The door resolved its request against the previous status until a later effect ran,
   so a click in that gap (the owner's subscription sign-in button, for example) opened nothing.

@@ -40,6 +40,19 @@ func (e *modelProviderRefusal) Error() string {
 
 func (e *modelProviderRefusal) Is(target error) bool { return target == errModelProviderRefused }
 
+// modelProviderReadError is a chosen provider's credential that could not be
+// read: the create door's 503 naming the provider in its sentence, never a 500.
+type modelProviderReadError struct {
+	provider types.ModelProvider
+	err      error
+}
+
+func (e *modelProviderReadError) Error() string {
+	return "read model provider credential: " + e.err.Error()
+}
+
+func (e *modelProviderReadError) Unwrap() error { return e.err }
+
 // recordProviderChoice is a record session's model-provider choice — the same
 // resolution order a run makes at create (chooseModelProvider), with the
 // workspace's pin and no request, and the same liveness check on the
@@ -66,7 +79,7 @@ func (s *Server) recordProviderChoice(ctx context.Context, actor string, ws type
 	case choice.chosen:
 		_, d, cerr := s.providerLiveness(ctx, choice.provider, stepRunAgent, runIdentitySubject(ctx, actor), false)
 		if cerr != nil {
-			return runProviderChoice{}, fmt.Errorf("read model provider credential: %w", cerr)
+			return runProviderChoice{}, &modelProviderReadError{provider: choice.provider, err: cerr}
 		}
 		if d.msg != "" {
 			return runProviderChoice{}, &modelProviderRefusal{choice: choice, live: d}

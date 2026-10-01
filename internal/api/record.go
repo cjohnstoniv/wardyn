@@ -375,6 +375,14 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			s.writeProviderChoiceRefusal(w, r, mpRefusal.choice, mpRefusal.live)
 			return
 		}
+		// A chosen provider's credential that could not be read: the create
+		// door's 503, the provider named in the sentence only.
+		var readErr *modelProviderReadError
+		if errors.As(lerr, &readErr) {
+			slog.ErrorContext(r.Context(), "api: read model provider credential", slog.String("provider", readErr.provider.ID), slog.Any("err", readErr.err))
+			writeError(w, http.StatusServiceUnavailable, providerReadFailed(readErr.provider))
+			return
+		}
 		// An unreadable provider block: the bare 503 the create door answers.
 		if errors.Is(lerr, errModelProvidersUnreadable) {
 			slog.ErrorContext(r.Context(), "api: get site config for model-provider choice", slog.Any("err", lerr))
