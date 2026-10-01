@@ -425,8 +425,8 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 	return false
 }
 
-// insertAPIToken is the store half both mint routes share: a fresh plaintext
-// and the row. The returned token carries the plaintext, and the 201 that
+// insertAPIToken is the store half of the self-service mint (its only caller,
+// pinned by apitoken_mint_sites_test.go): a fresh plaintext and the row. The returned token carries the plaintext, and the 201 that
 // writes it is the ONLY response that ever does — it is not stored, so a lost
 // token is re-minted, never recovered.
 func (s *Server) insertAPIToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (types.APIToken, bool) {
@@ -482,6 +482,17 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "list api tokens", err)
 		return
 	}
+	// ?minted_for_others=true is the inventory of tokens an admin created for
+	// someone else (#1477): live ones whose minter is not their owner. The
+	// route that created them is gone; they keep working until revoked.
+	if r.URL.Query().Get("minted_for_others") == "true" {
+		tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
+			return t.MintedBy == "" || t.MintedBy == t.Principal || t.RevokedAt != nil
+		})
+		for i := range tokens {
+			tokens[i].Token = ""
+		}
+	}
 	writeJSON(w, http.StatusOK, tokens)
 }
 
@@ -531,7 +542,7 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 	// the admin lane: the actor is the admin, the subject is someone else.
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"token.revoke", revoked.ID.String(), "success",
-		mustJSON(map[string]any{"principal": revoked.Principal, "name": revoked.Name})))
+		mustJSON(map[string]any{"principal": revoked.Principal, "name": revoked.Name, "minted_by": revoked.MintedBy})))
 	w.WriteHeader(http.StatusNoContent)
 }
 

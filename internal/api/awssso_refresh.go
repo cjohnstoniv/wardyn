@@ -445,17 +445,30 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	}
 	defer unlock()
 
-	// Re-read inside the lock; a store error here is not fatal (we still hold a
-	// blob), an absent credential is (it was disconnected mid-flight). Through
-	// the SAME scope the caller read it with: re-reading the operator's row for a
-	// per_user principal would renew — and re-persist — the wrong credential.
+	// Re-read inside the lock; an absent credential is fatal (it was
+	// disconnected or erased mid-flight). Through the SAME scope the caller read
+	// it with: re-reading the operator's row for a per_user principal would renew
+	// — and re-persist — the wrong credential.
+	//
+	// A re-read that FAILS is not "absent", but nothing past it may persist: the
+	// copy in hand may predate an erase or a rotation, and storing a renewal made
+	// from it would write a credential back that an admin erased (#1478). So it
+	// renews nothing, spends nothing at AWS, and writes nothing. A token still
+	// valid is served from memory; otherwise the run is refused.
 	cur, found, rerr := s.readAWSSSOBlob(ctx, scope)
-	if rerr == nil {
-		if !found {
-			return blob, awsSSORefreshSpentSentence
+	if rerr != nil {
+		slog.WarnContext(ctx, "wardynd: could not re-read the captured AWS SSO credential under its lock; not renewing it", slog.Any("err", rerr))
+		if !blob.expired(s.cfg.Now()) {
+			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeTransportError)
+			return blob, ""
 		}
-		blob = cur
+		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
+		return blob, awsSSORefreshUnavailableSentence
 	}
+	if !found {
+		return blob, awsSSORefreshSpentSentence
+	}
+	blob = cur
 	now = s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
 		return blob, "" // another flight already renewed it
@@ -470,12 +483,10 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
 			s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
-			// Only the blob re-read under the lock is known to be the stored
-			// one: the caller's copy may predate a rotation, and deleting on its
-			// refusal would delete the pair that rotation persisted.
-			if rerr == nil {
-				s.deleteSpentAWSSSOBlob(ctx, scope)
-			}
+			// The blob was re-read under the lock, so it is the stored one: a
+			// copy that predated a rotation would delete the pair that rotation
+			// persisted, which is why a failed re-read returns above.
+			s.deleteSpentAWSSSOBlob(ctx, scope)
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))

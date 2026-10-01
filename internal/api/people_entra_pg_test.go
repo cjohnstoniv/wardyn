@@ -150,7 +150,7 @@ func TestPeopleEntra_AttachesOnlyOnExactObjectID(t *testing.T) {
 		p.Principal != entraPerson || p.Issuer != e.issuer || p.TenantID != entraTenant || p.ObjectID != entraObject {
 		t.Fatalf("create by object id: %d %s, want 201 keyed %s under %s", w.Code, w.Body.String(), entraPerson, e.issuer)
 	}
-	tok := decodeToken(t, e.mintFor(t, e.sec, entraPerson))
+	tok := e.seedLegacyToken(t, entraPerson, oidc.RoleUser, "sec")
 	untouched := func(when string) {
 		t.Helper()
 		got, err := e.st.GetPerson(ctx, entraPerson)
@@ -268,8 +268,8 @@ func TestPeopleEntra_CreateRules(t *testing.T) {
 	if _, sess := e.callback(t); sess == nil || len(e.auditRows("person.attach")) != 0 {
 		t.Errorf("tid and oid equal, issuer not: session %v, attaches %d; want its own sub, none", sess, len(e.auditRows("person.attach")))
 	}
-	if w := e.mintFor(t, e.sec, "entra:"+entraTenant+":9a8b7c6d-5e4f-3a2b-1c0d-000000000000"); w.Code != http.StatusNotFound {
-		t.Errorf("mint for an object id with no person: %d, want 404", w.Code)
+	if w := e.mintFor(t, e.sec, "entra:"+entraTenant+":9a8b7c6d-5e4f-3a2b-1c0d-000000000000"); w.Code != http.StatusForbidden || errorReason(w) != "person_token_mint_removed" {
+		t.Errorf("mint for an object id with no person: %d %s, want 403 person_token_mint_removed", w.Code, w.Body.String())
 	}
 
 	plain := newPeoplePG(t)
@@ -293,11 +293,11 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 		// check its second session must pass.
 		known func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(second *http.Cookie) bool
 	}{
-		{"confirmed by sub, with a minted token", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+		{"confirmed by sub, with a legacy minted token", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
 			if w := e.createPerson(t, e.sec, "pairwise-a", ""); w.Code != http.StatusCreated {
 				t.Fatalf("confirm by sub: %d %s", w.Code, w.Body.String())
 			}
-			tok := decodeToken(t, e.mintFor(t, e.sec, "pairwise-a"))
+			tok := e.seedLegacyToken(t, "pairwise-a", oidc.RoleUser, "sec")
 			return func(second *http.Cookie) bool { return e.seesToken(t, second, tok.ID.String()) }
 		}},
 		{"confirmed by sub only", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {

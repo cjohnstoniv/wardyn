@@ -354,10 +354,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// subtracts, and names no value back — the same shape as the revokes above.
 	"DELETE /api/v1/people/{principal}/credentials": {class: classSecurity},
 	"DELETE /api/v1/people/{principal}/ssh-keys":    {class: classSecurity},
-	// #1157: a person set up before their first sign-in, and the tokens an
-	// admin mints for them. The mint is on the security tier; the guard against
-	// a security admin minting an admin's credential is in the handler, since
-	// it depends on who the token is for.
+	// #1157: a person set up before their first sign-in. The mint route stays on
+	// the security tier so a non-admin is refused as ever; the handler refuses
+	// every caller since #1477 (no role creates a token that acts as another
+	// person), so this pin is about who reaches the refusal, not who may mint.
 	"POST /api/v1/people":                    {class: classSecurity},
 	"POST /api/v1/people/{principal}/tokens": {class: classSecurity},
 	"GET /api/v1/people/{principal}/tokens":  {class: classSecurity},
@@ -725,6 +725,11 @@ func bodyFor(method string, rc classifiedRoute) string {
 // simulate — that is each feature's own test file's job).
 func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	t.Helper()
+	// POST /people/{principal}/tokens refuses every caller that reaches its
+	// handler (#1477): that 403 is the handler's own answer, past the tier.
+	if w.Code == http.StatusForbidden && errorReason(w) == reasonPersonTokenMintRemoved {
+		return
+	}
 	if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
 		t.Errorf("%s: status = %d, want NOT 401/403; body=%s", who, w.Code, w.Body.String())
 	}

@@ -118,9 +118,10 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
-	"org":                       "DELETE /me/scm/azure-devops/token: the address of a row the caller may use (adoOwnPATRowFor); it removes the caller's own token only",
+	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
+	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"until":                     "audit time filter; narrows an already-scoped feed",

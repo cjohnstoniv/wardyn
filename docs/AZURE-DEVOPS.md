@@ -516,6 +516,15 @@ after the date; both deep-link to `https://dev.azure.com/<org>/_usersSettings/to
 the token as Basic, under the same organisation pin, capability and content checks as any other
 credential.
 
+**Removing a token after your access was withdrawn.** `DELETE` works whenever you still hold a token for
+an Azure DevOps row at that address, even if an administrator has since disabled the row, denied it to
+you, or switched it away from your own token (Server rows included). Adding a token (`PUT`) and every
+use of one stay refused for such a row. The account card offers *Remove from Wardyn* on live, expiring,
+refused and expired tokens. Neither the card nor `DELETE` revokes the token in Azure DevOps. Runs already
+using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now. The bound is the
+stored-key lease (`storedKeyTTL`, 10 minutes), or the date you entered when that is sooner. A run on a
+grant that waits for approval does not refresh its lease, so it keeps the token until that date.
+
 - **A launch with no token is refused** ("you are not connected to Azure DevOps — connect and start the
   run again"), **and so is one with an expired token:** "Your runs can't reach Azure DevOps until you add
   a new token."

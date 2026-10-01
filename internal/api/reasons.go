@@ -259,7 +259,6 @@ const (
 	// self-service mint door refuses with byte-identical sentences.
 	reasonPersonMintNoHuman    = "mint_no_human"
 	reasonAPITokenFromAPIToken = "api_token_from_api_token"
-	reasonPersonNotFound       = "person_not_found" // no person is recorded under this subject
 
 	// /api/v1/tokens (self-service) and /api/v1/sessions/revoke,
 	// /api/v1/delegation's authentication lookups.
@@ -347,10 +346,8 @@ const (
 	reasonOwnerAmbiguous  = "owner_ambiguous"
 	reasonOwnerUnresolved = "owner_unresolved"
 
-	// personMintRefusal's own closed set (people.go, POST /people/{principal}/tokens).
-	reasonPersonMintNoSignIn                 = "no_sign_in"                  // the derived role has no sign-in on this deployment
-	reasonPersonMintDefaultRoleUnknownGroups = "default_role_unknown_groups" // an elevated role rests on the default role, which the person's still-unknown groups might narrow — they must sign in once first
-	reasonPersonMintElevatedTarget           = "elevated_target"             // minting for an admin/security-admin target needs a super admin
+	// person_token_mint_removed: POST /people/{principal}/tokens refuses every caller (#1477).
+	reasonPersonTokenMintRemoved = "person_token_mint_removed"
 )
 
 // The driveRefusal* closed set (internal/api/user_drives_run.go's
