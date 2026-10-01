@@ -134,6 +134,10 @@ Use durable spool storage for repeatable backup/restore.
 
 ### Back them up
 
+The items to collect on each deployment are listed in
+[Recovery set by deployment](#recovery-set-by-deployment); the block below is the
+Compose recipe.
+
 ```sh
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
@@ -248,6 +252,46 @@ docker volume ls --filter label=wardyn.drive=<drive id>
 > (`scripts/up.sh` `cmd_reset`): Postgres, recordings and the audit sink all go,
 > with no backup counterpart. It leaves `.env` — and so the age key — alone.
 > `make compose-down` stops the stack and keeps the volumes.
+
+### Recovery set by deployment
+
+A recovery set is five items, and each deployment keeps them in different places.
+Take them together, with the writer stopped ("Back them up" step 0 for Compose;
+the equivalents below). This table says what to collect and where it lives; the
+commands are the ones in "Back them up" and "Restore them", and in
+[Kubernetes: day-2](#kubernetes-day-2) for the chart.
+
+| Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
+|---|---|---|---|---|---|
+| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in `deploy/compose/docker-compose.yaml`). |
+| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in `deploy/desktop/wardyn-desktop.sh`). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
+| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
+
+**Rules for every row.**
+
+- **Custody.** Keep the keys apart from the data, in a secret manager, never in
+  the same archive as the dump. Everything else here is sensitive in plaintext
+  too (a dump holds the audit trail and sealed secrets; recordings and drives
+  hold whatever the agent saw), so write mode-restricted tarballs.
+- **Order.** Stop the writer, preserve ownership and modes, restore the key
+  first, load with `ON_ERROR_STOP=1`. The cursor identifies spool bytes, not a
+  database snapshot: never pair a newer cursor with an older dump.
+- **Older dump.** Restoring an older dump rolls back `audit_events`. Export the
+  live trail first.
+- **Drives.** Record the volume to drive id to person map at backup time. After
+  a restore, a volume you recreate by hand is adopted by name, so the
+  `wardyn.drive=<id>` label is the only check that it belongs to the right drive.
+  A volume recreated without that label is adopted unchecked, so set the label when you
+  recreate it (`driveVolumeAdoptable`, `internal/runner/docker/driver_volumes.go`).
+- **Hybrid desktop.** A device re-enrols with a fresh enrolment token. Never
+  restore a revoked device.
+
+**What is not proven.** The commands in the day-2 section were exercised once
+against a throwaway kind cluster. No shipped tool rehearses a restore (that is
+issue #1514), so none of the above has been validated end to end. Loading a dump
+into a scratch database proves the SQL loads, and nothing more: a row count does
+not show that the key works, and it does not show that the drive bytes are
+intact.
 
 ### The audit log can't quietly rot
 
@@ -3274,12 +3318,10 @@ deployment already does (see "Bedrock on a private endpoint" below).
 **The invariant, stated once:** the sandbox's dials — and the sidecar's forward dials on the
 sandbox's behalf, MITM re-origination included — follow `SiteConfig.upstream_proxy_url`; wardynd's
 own dials follow `WARDYN_DAEMON_PROXY_URL` ("wardynd behind a corporate proxy", next); every
-outbound path belongs to exactly one of those two. An operator field report found this class of bug
-reported three separate times because nothing said so in one place: "Each time a NEW outbound path
-was added, it did not inherit the operator's proxy configuration. A checklist item for anything that
-dials — 'does this path honour `upstream_proxy_url`?' — would have caught all three." See
-[docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md) for the full
-report and the maintainer's analysis of what the code actually does today.
+outbound path belongs to exactly one of those two, so a new path that dials must
+say which. See
+[docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md) for
+what the code does today.
 
 **A TLS-intercepting corporate proxy needs its CA on both sides of this lane, asymmetrically.**
 Every sandbox image bakes `corp-ca.pem` at build (`install_mitm_ca`, "Corporate TLS-inspection root"
@@ -4035,9 +4077,9 @@ always a distinguishable PERSON: on an install with no OIDC, the shared admin-to
 local-mode caller's principal are one shared credential, so two humans using that credential
 supersede each other's sign-ins (`docs/AUDIT-ACTIONS.md`'s `run.kill` row).
 
-This exists because an abandoned sign-in used to survive: the sandbox runs `aws sso login` itself, so
-a sign-in nobody is watching still completes when the person approves it in an old browser tab, and
-its (legitimate) capture then lands after the one they just made. The console would report *"The
+Superseding keeps an old browser tab from winning: the sandbox runs `aws sso login` itself, so a
+sign-in nobody is watching still completes when the person approves it in an old tab. Its
+(legitimate) capture would land after the one they just made, and the console would report *"The
 sandbox reported a capture the server does not have"* for a sign-in that had, in fact, worked.
 
 Consequences worth knowing:
@@ -4059,24 +4101,24 @@ Consequences worth knowing:
   Kubernetes it waits for the pod to actually go away. None of that holds the sign-in POST open: a
   client that gives up (a closed tab, a proxy timeout) has already gotten its answer either way.
   Nothing is lost and nothing is stuck — start the sign-in again.
-- **Two sign-ins started at once almost always leave one.** A double-click, or the console and a
-  `wdn_` token driving the route for the same person, used to leave BOTH sandboxes alive: each
-  launch checks for live sign-ins before its own run row exists, so neither could see the other. The
-  launch now re-checks once its row exists and ends only the caller's OLDER sign-ins — an order every
-  replica computes the same way, with no lock — and a launch never ends up with nothing signed in.
-  It is not absolute: a run's timestamp is stamped a moment before it is written, so on a
-  multi-replica install with clock skew (or after a stall between the two) the run carrying the
-  EARLIER timestamp can be written after the other's re-check, and both stay alive. Neither is
-  killed, so the upload refusal below does not separate them either. The next sign-in clears it.
-  Closing the last case needs a per-person lock around the write. **Still open at 0.8.**
-- **A sandbox superseded mid-upload almost never wins.** The upload door
-  re-reads the run's state immediately before it stores, so a capture that was uploading when the
-  person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refuse` /
-  `reason = run_killed`) instead of overwriting the newer session. The re-read is the last statement
-  before the write, not a lock: a supersede landing between those two statements still loses to the
-  old capture, and the next sign-in replaces it. Whoever is watching the old
-  sandbox sees "this sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes
-  in the new one.
+- **Two sign-ins started at once leave one.** A double-click, or the console and a `wdn_` token
+  driving the route for the same person, are serialized by a per-person lock
+  (`lockLoginSupersede`) held across both supersede passes and the new run's insert, so the second
+  launch sees the first and ends the caller's older sign-in. A lock not taken within about 5 seconds
+  answers 503 and starts nothing; the person signs in again. A pass is unserialized
+  whenever the pool cannot spare two connections at that moment (see the `WARDYN_PG_DSN` row in
+  [ENV.md](ENV.md)): on every call at `pool_max_conns=2`, and transiently on a busy larger pool.
+  Each such pass proceeds and writes an `auth.signin_unserialized` audit
+  row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#auth)). Unserialized, two launches racing across replicas
+  with clock skew can leave both sandboxes alive, and the next sign-in clears it.
+- **A sandbox superseded mid-upload does not win.** A capture takes the same per-person lock as a
+  launch and re-reads the run's state before it stores, so a capture from a sandbox the person's next
+  sign-in replaced is refused (`harness.credential.refuse` / `reason = run_killed`) instead of
+  overwriting the newer session. A capture that cannot get the lock within about 5 seconds is refused
+  with `reason = signin_busy` and stores nothing. Whoever is watching the old sandbox sees "this
+  sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one. At
+  an unserialized pass (every call at `pool_max_conns=2`) there is no lock, so a supersede landing between the re-read and the write can
+  still lose to the old capture; the next sign-in replaces it.
 
 ### What the sign-in pane's waiting messages mean
 
@@ -4101,11 +4143,10 @@ bounds it is the server, below.
 
 ### What a starting run is waiting on
 
-A run sits in `STARTING` for the whole of `CreateSandbox` — there is no sandbox reference until it
-returns, so nothing outside the runner could previously be asked what the substrate was doing. Since
-0.7.6 the runner reports it while it waits: every poll of the proxy pod and of the agent pod computes
-one line and, when that line CHANGES, writes it to `agent_runs.status_detail` (migration
-`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row, in
+A run sits in `STARTING` for the whole of `CreateSandbox`, and there is no sandbox reference until it
+returns, so the runner reports what the substrate is doing while it waits: every poll of the proxy pod
+and of the agent pod computes one line and, when that line CHANGES, writes it to
+`agent_runs.status_detail`. The console renders it on the run header, on the Runs board row, in
 the run page's terminal pane while the run is Pending or Starting, and in the sign-in pane (below).
 
 The line is the substrate's own words, in the shape `<component>: <Reason>[: <message>]`:
