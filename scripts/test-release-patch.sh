@@ -186,7 +186,9 @@ mkfix() {  # mkfix <name>: sets FIX WK OR; origin has main, release/0.8 (+tags v
 # rp <ENV=VAL>...: run the command in the fixture work tree; leaves RC and the
 # combined output in $FIX/out.txt
 rp() {
-  (cd "$WK" && env PATH="$WORK/bin:$PATH" WAIT_INTERVAL=0 RUN_POLL_INTERVAL=0 "$@" ./scripts/release-patch.sh) >"$FIX/out.txt" 2>&1
+  # GITHUB_REPOSITORY is pinned: on a hosted runner it names the real repository, and the
+  # script (rightly) honours it, which would miss every canned acme/wardyn answer.
+  (cd "$WK" && env -u GH_TOKEN -u GITHUB_TOKEN GITHUB_REPOSITORY=acme/wardyn PATH="$WORK/bin:$PATH" WAIT_INTERVAL=0 RUN_POLL_INTERVAL=0 "$@" ./scripts/release-patch.sh) >"$FIX/out.txt" 2>&1
   RC=$?
 }
 lines() { [ -f "$1" ] && wc -l <"$1" | tr -d ' ' || echo 0; }
@@ -471,6 +473,14 @@ mkfix V
 echo "fails=3" >"$FIX/verify.out"
 rp V=0.8.4
 check "V: exit 0 from verify-release without fails=0 still fails" bash -c "[ '$RC' != 0 ] && grep -q 'did not end fails=0' '$FIX/out.txt'"
+keep_pushes
+
+# ── W. the repository comes from GITHUB_REPOSITORY, else from gh repo view ──
+mkfix W
+rp V=0.8.4 PHASE=prepare GITHUB_REPOSITORY=other/repo
+check "W: GITHUB_REPOSITORY is honoured" log_has gh.log 'repos/other/repo/actions/workflows/nightly\.yml/runs'
+rp V=0.8.4 PHASE=prepare GITHUB_REPOSITORY=
+check "W: without it, gh repo view names the repository" log_has gh.log '^repo view '
 keep_pushes
 
 # ── Q. the script text and every recorded push ───────────────────────────────
