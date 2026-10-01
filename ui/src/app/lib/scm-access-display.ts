@@ -12,7 +12,7 @@ import { ADO_PAT, gettingStartedOwnChip } from "./ado-pat-copy";
 import { adoOrgLabel, daysLeft, formatDay } from "./ado-pat-display";
 import type { SCMAccess } from "./types";
 
-// A person's own token (token_mode own_pat) has four states beyond "not added",
+// A person's own token (token_mode own_pat) has four states beyond "no token stored",
 // graded the way ado-pat-display.ts's Settings card grades them: expired is
 // expired_signin and wins; refused_at on a live or expiring row is Refused and
 // wins over both; the wire's expiring is Expiring; live is Connected.
@@ -101,9 +101,9 @@ export function scmAccessNeedsConnect(state?: string, cause?: string): boolean {
 }
 
 // scmOwnTokenAction is the line and the one button an own-token row offers on
-// Getting started, in Settings' words: Add for a token not added or expired,
+// Getting started, in Settings' words: Add for no token stored or an expired one,
 // Replace for one expiring or refused, and nothing for a live one. `line` is ""
-// for a token not added. null for every other row, which keeps scmAccessCause
+// when no token is stored. null for every other row, which keeps scmAccessCause
 // and scmAccessNeedsConnect.
 export function scmOwnTokenAction(access: SCMAccess): { line: string; button: "add" | "replace" } | null {
   if (access.token_mode !== "own_pat") return null;

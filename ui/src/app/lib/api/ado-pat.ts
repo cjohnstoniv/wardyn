@@ -71,6 +71,17 @@ export const adoPat = {
     return asJson<ADORunToken[]>(res);
   },
 
+  // DELETE /api/v1/me/scm/azure-devops/token?org=<address> (#1479): deletes the
+  // CALLER'S OWN stored token for that organisation, and nothing else. The
+  // request carries no token and no subject: the signed-in person is the
+  // subject. 204 on success (a stale card whose token is already gone is a
+  // success too); any other answer, including a 404 from a daemon without the
+  // route, is an HttpError and never a removal that did not happen.
+  async removeOwnToken(org: string): Promise<void> {
+    const res = await wfetch(`/me/scm/azure-devops/token?org=${encodeURIComponent(org)}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+  },
+
   // PUT /api/v1/me/scm/azure-devops/token: checks the pasted token belongs to
   // the caller, then seals it. The 2xx answer is the row's fresh /me/scm-access
   // entry, which the caller ignores in favour of one reload. Refusals carry the

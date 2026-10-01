@@ -13,6 +13,10 @@ import type { AgentRun, AuditEvent, RunState } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
+import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
+
+const ENV_SECRET_LINE = "Wardyn can't revoke a secret this run received as an environment variable — rotate it where it was issued.";
+const UNREADABLE_LINE = "Wardyn couldn't read which credentials this run held.";
 
 // The "killed: names how far into the run..." test below asserts an exact
 // "26m 0s" elapsed (ending.time or run.updated_at, minus run.created_at —
@@ -83,14 +87,34 @@ describe("runEndingFromAudit — the state picks the family, the audit picks the
     });
   });
 
-  it("a KILLED run with no run.kill row still reports the kill — only the attribution is missing", () => {
+  it("a KILLED run with no run.kill row still reports the kill — only the attribution is missing, and the evidence is unknown", () => {
     expect(runEndingFromAudit("KILLED", [])).toEqual({
       kind: "killed",
       action: "run.kill",
       outcome: undefined,
       actor: undefined,
       time: undefined,
+      evidence: "unknown",
     });
+  });
+
+  // #1487: the LATEST kill row decides, by its own timestamp — not by where a
+  // concatenated fetch happened to put it.
+  it("evidence follows the latest run.kill row: failure then success is confirmed, success then failure is partial", () => {
+    const early = new Date(NOW_MS - 120_000).toISOString();
+    const late = new Date(NOW_MS - 60_000).toISOString();
+    const fail = ev("run.kill", "failure", { time: early });
+    const ok = ev("run.kill", "success", { time: late });
+    expect(runEndingFromAudit("KILLED", [fail, ok])).toMatchObject({ evidence: "confirmed", outcome: "success" });
+    expect(runEndingFromAudit("KILLED", [ok, fail])).toMatchObject({ evidence: "confirmed", outcome: "success" });
+    const okFirst = ev("run.kill", "success", { time: early });
+    const failLast = ev("run.kill", "failure", { time: late });
+    expect(runEndingFromAudit("KILLED", [okFirst, failLast])).toMatchObject({ evidence: "partial", outcome: "failure" });
+    expect(runEndingFromAudit("KILLED", [failLast, okFirst])).toMatchObject({ evidence: "partial", outcome: "failure" });
+  });
+
+  it("only a KILLED ending carries evidence", () => {
+    expect(runEndingFromAudit("FAILED", [ev("run.build", "failure")])).not.toHaveProperty("evidence");
   });
 
   // An interactive BYOI run's selftest is warn-only (runs_dispatch.go's
@@ -164,6 +188,120 @@ describe("RunFailureBlock", () => {
     expect(screen.getByText(/An operator killed this run 26m 0s in\./)).toBeInTheDocument();
     expect(screen.getByText(/a killed run cannot resume/)).toBeInTheDocument();
     expect(screen.getByText(/run\.kill · success · alice/)).toBeInTheDocument();
+  });
+
+  // #1487: three outcomes, each saying only what Wardyn knows.
+  it("killed, teardown confirmed: says what Wardyn did and claims nothing about upstream secrets", () => {
+    renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
+    expect(
+      screen.getByText(
+        "An operator killed this run 26m 0s in. Wardyn stopped and removed the sandbox and will issue it no more credentials.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The audit row names who killed it and the reason they gave.")).toBeInTheDocument();
+    expect(screen.getByText("Files written to a mounted workspace are still on the host; scratch is gone.")).toBeInTheDocument();
+    expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+    expect(screen.queryByText(/torn down|stopped working at that moment|identity revoked/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirmed");
+  });
+
+  // Ported from the review probe: a kill that failed partway printed "may
+  // still be live" and "scratch is gone" together.
+  it("killed with a runner failure: partial copy, teardown unconfirmed, and no scratch-is-gone claim", () => {
+    renderBlock("KILLED", [
+      ev("run.kill", "failure", { actor: "alice", actor_type: "human", data: { error: "runner_error: connection refused" } }),
+    ]);
+    expect(
+      screen.getByText(
+        "An operator killed this run 26m 0s in, and a teardown step failed. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("runner_error: connection refused")).toHaveClass("font-mono");
+    expect(screen.getByText("The audit row names the step that failed — read it before treating this run as contained.")).toBeInTheDocument();
+    expect(screen.getByText("Killing it again re-runs the same teardown; the cascade is safe to repeat.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/scratch is gone/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/torn down/)).not.toBeInTheDocument();
+    expect(screen.getByText(/run\.kill · failure · alice/)).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
+  });
+
+  // Ported from the review probe: a KILLED run whose trail has no run.kill row
+  // invented the ending from the state alone and printed the clean claim.
+  it("KILLED with no kill record: says it cannot confirm, with no actor, elapsed time or run.kill line", () => {
+    renderBlock("KILLED", []);
+    expect(
+      screen.getByText(
+        "This run is marked KILLED, but its audit trail has no kill record, so Wardyn can't confirm who killed it or whether teardown finished.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Kill it again to run teardown once more; the cascade is safe to repeat.")).toBeInTheDocument();
+    expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+    expect(screen.queryByText(/An operator killed this run/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scratch is gone|torn down|stopped and removed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/run\.kill/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "unknown");
+  });
+
+  describe("per-kind credential lines", () => {
+    const kill = (outcome: "success" | "failure") => [ev("run.kill", outcome, { actor: "alice", actor_type: "human" })];
+    const held = (items: HeldCredential[]): HeldCredentials => ({ readable: true, items });
+    const withHeld = (state: RunState, audit: AuditEvent[], h: HeldCredentials | undefined) =>
+      render(<RunFailureBlock run={run(state)} audit={audit} held={h} onGoAudit={vi.fn()} />);
+
+    it("a GitHub token it held: stays valid until it expires, on a confirmed kill", () => {
+      withHeld("KILLED", kill("success"), held([{ kind: "github_token" }]));
+      expect(screen.getByText("A GitHub token it already held stays valid until it expires, within an hour.")).toBeInTheDocument();
+    });
+
+    it("a git token and an SSH key name the kind and the host, and appear on a partial kill too", () => {
+      withHeld(
+        "KILLED",
+        kill("failure"),
+        held([
+          { kind: "git_pat", host: "dev.azure.com" },
+          { kind: "ssh_key", host: "github.com" },
+        ]),
+      );
+      expect(
+        screen.getByText("Wardyn can't revoke the git token this run used — it stays live until you rotate it on dev.azure.com."),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Wardyn can't revoke the SSH key this run used — it stays live until you rotate it on github.com."),
+      ).toBeInTheDocument();
+    });
+
+    it("an environment secret gets the rotation line", () => {
+      withHeld("KILLED", kill("success"), held([{ kind: "env_secret" }]));
+      expect(screen.getByText(ENV_SECRET_LINE)).toBeInTheDocument();
+    });
+
+    it("no held credential of those kinds: no per-kind line at all", () => {
+      withHeld("KILLED", kill("success"), held([]));
+      expect(screen.queryByText(/stays valid until it expires|can't revoke|rotate/)).not.toBeInTheDocument();
+      expect(screen.queryByText(UNREADABLE_LINE)).not.toBeInTheDocument();
+    });
+
+    it("facts that could not be read say so, on confirmed and partial", () => {
+      withHeld("KILLED", kill("success"), { readable: false });
+      expect(screen.getByText("Wardyn couldn't read which credentials this run held.")).toBeInTheDocument();
+      cleanup();
+      withHeld("KILLED", kill("failure"), { readable: false });
+      expect(screen.getByText(UNREADABLE_LINE)).toBeInTheDocument();
+    });
+
+    it("facts still loading render no credential line", () => {
+      withHeld("KILLED", kill("success"), undefined);
+      expect(screen.queryByText(UNREADABLE_LINE)).not.toBeInTheDocument();
+    });
+
+    it("an unknown outcome has no per-kind lines: the trail it would read is the thing in doubt", () => {
+      withHeld("KILLED", [], held([{ kind: "github_token" }]));
+      expect(screen.queryByText(/stays valid until it expires/)).not.toBeInTheDocument();
+    });
   });
 
   it("auto_stop: framed as the policy working, and names the field that sets it", () => {

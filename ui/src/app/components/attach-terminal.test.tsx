@@ -122,6 +122,7 @@ import { RUN_COCKPIT } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
 import { HttpError } from "../lib/api/core";
 import { aheadByHours } from "../lib/test-clock";
+import { RUN_OWNER_ONLY } from "../lib/run-entry";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -333,7 +334,7 @@ describe("AttachTerminal — role-aware attach", () => {
         <AttachTerminal runId="run_1" createdBy="bob@example.com" />
       </OperatorProvider>,
     );
-    expect(await screen.findByText(/attaching to a live sandbox requires the admin role/i)).toBeInTheDocument();
+    expect(await screen.findByText(RUN_OWNER_ONLY)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
@@ -357,7 +358,7 @@ describe("AttachTerminal — role-aware attach", () => {
     );
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(attachTicket).toHaveBeenCalledWith("run_1");
-    expect(screen.queryByText(/attaching to a live sandbox requires the admin role/i)).toBeNull();
+    expect(screen.queryByText(RUN_OWNER_ONLY)).toBeNull();
   });
 
   it("operator (today's default, no provider needed): connects normally", () => {
@@ -407,12 +408,44 @@ describe("AttachTerminal — role-aware attach", () => {
     expect(FakeWebSocket.instances[0].url).toContain("ticket=tic_ok");
   });
 
-  it("a RESOLVED admin keeps the cookie lane — no ticket, exactly today's behaviour", () => {
+  // #1476: entry is the owner's. A resolved super admin on another PERSON's
+  // run is refused before any ticket or socket, with the owner-only sentence.
+  it("a RESOLVED admin on another person's run: no ticket, no socket, the owner-only sentence", async () => {
     const attachTicket = vi.mocked(runs.attachTicket);
     attachTicket.mockReset();
     render(
       <OperatorProvider operator={true} operatorResolved={true} principal="admin@example.com">
         <AttachTerminal runId="run_1" createdBy="alice@example.com" />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(RUN_OWNER_ONLY)).toBeInTheDocument();
+    expect(attachTicket).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  // The server's lowercase wire sentence is never shown: the ticket refusal is
+  // mapped from its reason.
+  it("a run_owner_only ticket refusal reads in console words, not the server's lowercase text", async () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    attachTicket.mockRejectedValueOnce(
+      new HttpError(403, "only the person who started this run can open it interactively", "run_owner_only"),
+    );
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(RUN_OWNER_ONLY)).toBeInTheDocument();
+    expect(screen.queryByText(/only the person who started this run/)).toBeNull();
+  });
+
+  it("a RESOLVED admin keeps the cookie lane on an operator-owned run — no ticket", () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    render(
+      <OperatorProvider operator={true} operatorResolved={true} principal="admin@example.com">
+        <AttachTerminal runId="run_1" createdBy="svc" operatorOwned />
       </OperatorProvider>,
     );
     expect(FakeWebSocket.instances).toHaveLength(1);
@@ -430,7 +463,7 @@ describe("AttachTerminal — role-aware attach", () => {
         <AttachTerminal runId="run_1" createdBy="bob@example.com" />
       </OperatorProvider>,
     );
-    expect(await screen.findByText(/attaching to a live sandbox requires the admin role/i)).toBeInTheDocument();
+    expect(await screen.findByText(RUN_OWNER_ONLY)).toBeInTheDocument();
     expect(attachTicket).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
   });

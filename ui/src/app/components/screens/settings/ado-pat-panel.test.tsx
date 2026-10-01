@@ -22,11 +22,26 @@ vi.mock("../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({ connecting: false, connect: connectMock, connectFallback: connectMock, blockedUrl: null }),
 }));
 
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) },
+}));
+
 const disconnectMock = vi.fn();
 const storeMock = vi.fn();
+const removeMock = vi.fn();
 vi.mock("../../../lib/api/ado-pat", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/ado-pat")>("../../../lib/api/ado-pat");
-  return { ...actual, adoPat: { ...actual.adoPat, disconnect: () => disconnectMock(), storeOwnToken: (b: unknown) => storeMock(b) } };
+  return {
+    ...actual,
+    adoPat: {
+      ...actual.adoPat,
+      disconnect: () => disconnectMock(),
+      storeOwnToken: (b: unknown) => storeMock(b),
+      removeOwnToken: (o: unknown) => removeMock(o),
+    },
+  };
 });
 
 import { AdoConnectionCard } from "./ado-connection";
@@ -61,6 +76,9 @@ beforeEach(() => {
   connectMock.mockReset();
   disconnectMock.mockReset();
   storeMock.mockReset();
+  removeMock.mockReset();
+  toastSuccess.mockReset();
+  toastError.mockReset();
 });
 
 describe("a row that creates a token for each run", () => {
@@ -280,6 +298,114 @@ describe("a row where each person adds their own token", () => {
     await expandCard(ADO_PAT.OWN_SERVER_TITLE);
     expect(screen.getByText(ADO_PAT.OWN_SERVER_NOTE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
+  });
+});
+
+// #1488: Remove from Wardyn, beside Replace or Add, outline, on the own-token
+// states that hold a token. Never on the minted card, whose Disconnect is its own.
+describe("Remove from Wardyn (own token)", () => {
+  const own: Partial<SCMAccessPAT> = { token_mode: "own_pat", max_days: 30, token_scopes: ["Code (Read & write)"] };
+  const remove = () => screen.getByRole("button", { name: ADO_PAT.OWN_REMOVE });
+
+  it("is offered on a live card, as an outline button beside Replace token", async () => {
+    renderCard({ ...own, state: "live", source: "own", expires_on: "2000-10-27" });
+    await expandCard("Azure DevOps");
+    expect(remove()).toHaveClass("border");
+    expect(remove()).not.toHaveClass("bg-primary");
+    expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
+  });
+
+  it("is offered on expiring, refused and expired cards (Add stays the action on expired)", async () => {
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/account"]}>
+        <AdoConnectionCard status={status({ ...own, state: "expiring", expires_on: "2000-10-27" })} onChanged={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await expandCard("Azure DevOps");
+    expect(remove()).toBeInTheDocument();
+    unmount();
+    const refused_at = new Date(2000, 9, 2, 9, 30).toISOString();
+    const second = render(
+      <MemoryRouter initialEntries={["/account"]}>
+        <AdoConnectionCard status={status({ ...own, state: "live", expires_on: "2000-10-27", refused_at })} onChanged={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await expandCard("Azure DevOps");
+    expect(remove()).toBeInTheDocument();
+    second.unmount();
+    renderCard({ ...own, state: "expired_signin", cause: "token_expired" });
+    await expandCard("Azure DevOps");
+    expect(remove()).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).toBeInTheDocument();
+  });
+
+  it("is absent with no token stored and on the minted card", async () => {
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/account"]}>
+        <AdoConnectionCard status={status({ ...own, state: "not_configured" })} onChanged={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await expandCard("Azure DevOps");
+    expect(screen.queryByRole("button", { name: ADO_PAT.OWN_REMOVE })).not.toBeInTheDocument();
+    unmount();
+    renderCard({ token_mode: "minted_pat", state: "live", source: "org" });
+    await expandCard("Azure DevOps");
+    expect(screen.queryByRole("button", { name: ADO_PAT.OWN_REMOVE })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT })).toBeInTheDocument();
+  });
+
+  async function openConfirm(access: Partial<SCMAccessPAT> = { ...own, state: "live", source: "own", expires_on: "2000-10-27" }) {
+    const onChanged = renderCard(access);
+    await expandCard("Azure DevOps");
+    await userEvent.click(remove());
+    return { onChanged, dialog: await screen.findByRole("alertdialog") };
+  }
+
+  it("asks first, in the approved words, and links to this organisation's token page", async () => {
+    const { dialog } = await openConfirm();
+    expect(within(dialog).getByText(ADO_PAT.OWN_REMOVE_TITLE("wardyn-live-test"))).toBeInTheDocument();
+    expect(within(dialog).getByText(ADO_PAT.OWN_REMOVE_BODY)).toBeInTheDocument();
+    expect(within(dialog).getByText(ADO_PAT.OWN_REMOVE_RUNS)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Your runs can't reach Azure DevOps until you add a new token.")).not.toBeInTheDocument();
+    const link = within(dialog).getByRole("link", { name: ADO_PAT.OWN_OPEN_TOKENS });
+    expect(link).toHaveAttribute("href", "https://dev.azure.com/wardyn-live-test/_usersSettings/tokens");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(removeMock).not.toHaveBeenCalled();
+  });
+
+  it("Cancel leaves the token alone", async () => {
+    const { dialog } = await openConfirm();
+    await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_REMOVE_CANCEL }));
+    expect(removeMock).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("success: shows Removing… while it runs, then closes, toasts, and reloads once", async () => {
+    let settle!: () => void;
+    removeMock.mockImplementation(() => new Promise<void>((r) => (settle = r)));
+    const { onChanged, dialog } = await openConfirm();
+    await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_REMOVE }));
+    const pending = within(await screen.findByRole("alertdialog")).getByRole("button", { name: ADO_PAT.OWN_REMOVE_PENDING });
+    expect(pending).toBeDisabled();
+    expect(removeMock).toHaveBeenCalledWith(ORG);
+    expect(toastSuccess).not.toHaveBeenCalled();
+    settle();
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(ADO_PAT.OWN_REMOVED_TOAST("wardyn-live-test")));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(removeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("any failure, including a 404 from an older daemon: one sentence, no false removal, card left as it was", async () => {
+    removeMock.mockRejectedValue(new HttpError(404, "ado_own_pat_unknown_row", "ado_own_pat_unknown_row"));
+    const { onChanged, dialog } = await openConfirm();
+    await userEvent.click(within(dialog).getByRole("button", { name: ADO_PAT.OWN_REMOVE }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(ADO_PAT.OWN_REMOVE_FAILED_TOAST("wardyn-live-test")));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+    // The card is as it was: the button is still there to try again.
+    expect(remove()).toBeInTheDocument();
   });
 });
 

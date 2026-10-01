@@ -123,6 +123,15 @@ describe("AccessPanel — states", () => {
   });
 });
 
+// #1486: Field wired aria-describedby onto its child, but the child is a
+// DirectoryCombobox that dropped the prop, so the real input announced no hint.
+describe("AccessPanel — the Value field's hint", () => {
+  it("the Value input's accessible description is the hint", () => {
+    renderPanel(baseAccess());
+    expect(screen.getByLabelText(PEOPLE.FIELD_VALUE)).toHaveAccessibleDescription(PEOPLE.VALUE_HINT);
+  });
+});
+
 describe("AccessPanel — merged table (Variant A)", () => {
   it("renders a chart row read-only with its hint, and a console row with a Delete affordance", () => {
     renderPanel(baseAccess());

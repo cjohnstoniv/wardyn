@@ -160,6 +160,15 @@ describe("ProfileEditor — the seven run-limit rows", () => {
     gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
   });
 
+  // #1486: the duration row's real control is an <Input> inside a flex div, so
+  // Field's cloned aria-describedby landed on the div, not the input.
+  it("a duration row's input is described by its hint", () => {
+    renderEditor();
+    expect(within(screen.getByTestId("governance-limit-max-end")).getByRole("spinbutton")).toHaveAccessibleDescription(
+      RL.MAX_END_HINT,
+    );
+  });
+
   it("renders every label and hint", () => {
     renderEditor();
 
