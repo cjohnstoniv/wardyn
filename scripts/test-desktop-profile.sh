@@ -469,10 +469,12 @@ grep -q 'site-config set' "${md}/docker.log" || fail "site-config was never appl
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
 f1493_run "${md}" WARDYN_UP_PORT=8098 || fail "launcher failed with a shell WARDYN_UP_PORT (#1493)"
 f1493_probed "${md}" | grep -q '127.0.0.1:8098/healthz' || fail "a shell WARDYN_UP_PORT no longer beats the envelope (#1493): $(f1493_probed "${md}")"
-# an empty shell value falls through to the envelope, as unset does.
+# a SET-but-empty process value (a blank line in secret.env under set -a) wins
+# over the envelope and means 8080, because compose's ${WARDYN_UP_PORT:-8080}
+# sees the shell variable first and treats empty as unset.
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097')"
 f1493_run "${md}" WARDYN_UP_PORT= || fail "launcher failed with an empty shell WARDYN_UP_PORT (#1493)"
-f1493_probed "${md}" | grep -q '127.0.0.1:8097/healthz' || fail "an empty shell WARDYN_UP_PORT did not fall through to the envelope (#1493): $(f1493_probed "${md}")"
+f1493_probed "${md}" | grep -q '127.0.0.1:8080/healthz' || fail "a set-but-empty WARDYN_UP_PORT did not resolve to 8080 as compose does (#1493): $(f1493_probed "${md}")"
 # secret.env is part of the process environment, so its value wins over the envelope.
 md="$(f1493_fixture 'WARDYN_UP_PORT=8097' 'WARDYN_UP_PORT=8099')"
 f1493_run "${md}" || fail "launcher failed with a secret.env WARDYN_UP_PORT (#1493)"

@@ -342,3 +342,21 @@ func TestSiteConfigSet_RefusesATrailingDocument(t *testing.T) {
 		t.Errorf("requests were made: %q", got)
 	}
 }
+
+// A top-level null is not a document: it decodes to the zero SiteConfig and
+// the PUT would replace the stored baseline with nothing (`wardyn site-config
+// get | jq .missing | wardyn site-config set -`). Refused with no request.
+func TestSiteConfigSet_RefusesNull(t *testing.T) {
+	for name, doc := range map[string]string{"null": "null", "null with whitespace": " null\n"} {
+		t.Run(name, func(t *testing.T) {
+			srv, seen := countingServer(t)
+			_, _, err := runSiteConfigSet(t, srv.URL, doc)
+			if err == nil || !strings.Contains(err.Error(), "exactly one document") {
+				t.Fatalf("err = %v, want the exactly-one-document refusal", err)
+			}
+			if got := seen(); len(got) != 0 {
+				t.Errorf("requests were made: %q", got)
+			}
+		})
+	}
+}

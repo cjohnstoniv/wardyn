@@ -200,10 +200,15 @@ fi
 # environment (secret.env is sourced into it above), then the envelope, then
 # 8080. compose reads wardyn.env itself as --env-file, so this shell has to read
 # the same key or it probes a port nothing publishes. env_get, never `.`: the
-# envelope is not shell code and is not sourced. An empty value counts as unset,
-# and it is checked before compose is asked to publish it.
-PORT="${WARDYN_UP_PORT:-}"
-[ -n "${PORT}" ] || PORT="$(env_get "${ENV_FILE}" WARDYN_UP_PORT)"
+# envelope is not shell code and is not sourced. A variable that is SET but
+# empty (a blank line in secret.env under set -a) still wins over the envelope,
+# as it does in compose, where ${WARDYN_UP_PORT:-8080} then gives 8080. It is
+# checked before compose is asked to publish it.
+if [ -n "${WARDYN_UP_PORT+x}" ]; then
+  PORT="${WARDYN_UP_PORT}"
+else
+  PORT="$(env_get "${ENV_FILE}" WARDYN_UP_PORT)"
+fi
 PORT="${PORT:-8080}"
 case "${PORT}" in
   ''|*[!0-9]*) die "wardyn-desktop.sh: WARDYN_UP_PORT is '${PORT}' — it must be a port number from 1 to 65535 (set in ${ENV_FILE} or secret.env)" ;;

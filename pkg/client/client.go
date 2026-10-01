@@ -184,7 +184,7 @@ type Client struct {
 	// rather than following it, but a client you supply is used as it is.
 	// Following a redirect can replay a request body (a secret value) and the
 	// Authorization bearer at wherever Location points, so a caller who sets
-	// this should set CheckRedirect to http.ErrUseLastResponse too.
+	// this should set a CheckRedirect func that returns http.ErrUseLastResponse.
 	HTTPClient *http.Client
 
 	// Principal, when non-empty, is sent as the X-Wardyn-Principal header — a
