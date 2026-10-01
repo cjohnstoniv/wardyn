@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -131,15 +132,15 @@ func TestTransit_Versions(t *testing.T) {
 	ctx := t.Context()
 	w1, _ := tr.Wrap(ctx, testDEK(), kek.Bind("", "k"))
 	f.rotateTransit()
-	if n, err := tr.LatestVersion(ctx); err != nil || n != 2 {
-		t.Fatalf("LatestVersion = (%d, %v), want 2", n, err)
+	if n, err := tr.LatestVersion(ctx); err != nil || n != "2" {
+		t.Fatalf("LatestVersion = (%q, %v), want 2", n, err)
 	}
-	if n, err := tr.WrapVersion(w1); err != nil || n != 1 {
-		t.Fatalf("WrapVersion(w1) = (%d, %v), want 1", n, err)
+	if n, err := tr.WrapVersion(w1); err != nil || n != "1" {
+		t.Fatalf("WrapVersion(w1) = (%q, %v), want 1", n, err)
 	}
 	w2, _ := tr.Wrap(ctx, testDEK(), kek.Bind("", "k"))
-	if n, _ := tr.WrapVersion(w2); n != 2 {
-		t.Fatalf("a wrap after the rotation names v%d, want v2", n)
+	if n, _ := tr.WrapVersion(w2); n != "2" {
+		t.Fatalf("a wrap after the rotation names v%s, want v2", n)
 	}
 	if _, err := tr.Unwrap(ctx, w1, kek.Bind("", "k")); err != nil {
 		t.Fatalf("v1 wrap after a rotation: %v", err)
@@ -186,7 +187,7 @@ func TestTransit_KEKConformance(t *testing.T) {
 		return tr
 	}, kektest.Hooks{
 		Rotate: func(*testing.T) { f.rotateTransit() },
-		Retire: func(_ *testing.T, n int) { set(func() { f.transit.minDecrypt = n }) },
+		Retire: func(t *testing.T, keep string) { set(func() { f.transit.minDecrypt = minDecryption(t, keep) }) },
 		Unreachable: func(*testing.T) func() {
 			set(func() { f.force = slices.Repeat([]int{http.StatusServiceUnavailable}, 100) })
 			return func() { set(func() { f.force = nil }) }
@@ -243,4 +244,18 @@ func TestNewPlatformTransit_RefusalsNameThePlatformSettings(t *testing.T) {
 	if _, err = NewTransit(t.Context(), cfg, "transit", "a/b"); err == nil || !strings.Contains(err.Error(), "WARDYN_VAULT_TRANSIT_KEY \"a/b\"") {
 		t.Fatalf("a bad credential key = %v", err)
 	}
+}
+
+// minDecryption is the min_decryption_version that refuses every version but
+// keep, the kektest Retire hook's contract: Vault always wraps at the latest
+// version, so no newer one exists. keep "" (undo) is 1.
+func minDecryption(t *testing.T, keep string) int {
+	if keep == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(keep)
+	if err != nil {
+		t.Fatalf("Retire(%q): not a Transit version", keep)
+	}
+	return n
 }

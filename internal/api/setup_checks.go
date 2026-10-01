@@ -305,8 +305,8 @@ func ageKeyCheck(durable bool) SetupCheck {
 }
 
 // secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
-// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}") when a key service wraps every data
-// key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}" or "Key Vault {vault}") when a key
+// service wraps every data key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
 // reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
 // the age key then also forges run identities and sessions).
 func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
@@ -315,9 +315,13 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
 	}
 	if keyService != "" {
+		unlock := "a Transit decrypt in Vault's audit log"
+		if strings.HasPrefix(keyService, "Key Vault") {
+			unlock = "an unwrap in Key Vault's logs"
+		}
 		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
 			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
-				" and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log."}}
+				" and never leaves it. Wardyn holds no copy; each unlock is " + unlock + "."}}
 	}
 	checks := []SetupCheck{ageKeyCheck(durable)}
 	if durable && multiUser {
@@ -339,8 +343,8 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 
 // credentialStorageMode names the kind of store this deployment keeps
 // people's credentials in, for /setup/status's credential_storage field
-// (design F-3, packet F): "local" | "key_service" | "vault" | "key_vault" —
-// never a host, path or vault name. external and keyService are the same two
+// (design F-3, packet F): "local" | "key_service" | "key_service_key_vault" |
+// "vault" | "key_vault" — never a host, path or vault name. external and keyService are the same two
 // Server-config strings secretStoreChecks (above) grades; the store kind rides
 // on which of the store's two Describe() spellings external carries ("Vault
 // at …" for vaultkv, "Key Vault …" for azurekv, secretstore/vaultkv and
@@ -351,6 +355,8 @@ func credentialStorageMode(external, keyService string) string {
 		return "key_vault"
 	case external != "":
 		return "vault"
+	case strings.HasPrefix(keyService, "Key Vault"):
+		return "key_service_key_vault"
 	case keyService != "":
 		return "key_service"
 	default:

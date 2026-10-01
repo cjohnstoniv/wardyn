@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,9 +33,9 @@ const rewrapActor = "wardyn/rewrap"
 // one transaction, and exit (secretstorepg.RewrapKeys). That is the local key
 // of the row's purpose (design §2.13 c) — the rows written before the purpose
 // split, and, once WARDYN_PLATFORM_KEY_FILE is set, the boot keys still under
-// the age key — or, with WARDYN_KEK=transit, the Vault Transit key at its
-// latest version (design §2.3); with WARDYN_KEK=local and the Transit key
-// still named, the rows under it move back to the local key. No value is
+// the age key — or, with WARDYN_KEK=transit or azurekv, the key service's key
+// at its latest version (design §2.3); with WARDYN_KEK=local and the key
+// service still named, the rows under it move back to the local key. No value is
 // decrypted. It takes the rekey lock, so it never runs beside a
 // -rotate-age-key.
 //
@@ -53,8 +54,8 @@ func rewrapMode(f *bootFlags) error {
 		if id, err = age.ParseX25519Identity(ageKey); err != nil {
 			return fmt.Errorf("parse the age identity (WARDYN_AGE_KEY): %w", err)
 		}
-	case strings.TrimSpace(*f.vault.kek) != kekTransit:
-		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q", kekTransit)
+	case !slices.Contains([]string{kekTransit, kekAzure}, strings.TrimSpace(*f.vault.kek)):
+		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q or %q", kekTransit, kekAzure)
 	}
 	platform, err := readPlatformKey(*f.platformKeyFile, ageKey)
 	if err != nil {
@@ -64,7 +65,7 @@ func rewrapMode(f *bootFlags) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// The key service (buildKEK) keeps its Vault token alive until ctx ends.
-	svc, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
+	svc, writes, err := buildKEK(ctx, f.vault, f.azure, *f.trustedCAFile)
 	if err != nil {
 		return err
 	}
@@ -135,20 +136,29 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 	emitRewrapAudit(ctx, rec, res, separate, false)
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
-	if res.KeyVersion > 0 {
+	if res.KeyVersion != "" {
 		what := "secret"
 		if d.PlatformKEKWrites {
 			what = "credential" // the boot keys are under the platform key, reported below
 		}
-		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", what, res.KeyService, res.KeyVersion, res.KeyVersion)
+		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s\n", what, retireStep(res.KeyService, res.KeyVersion))
 	}
 	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
 		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM and restart every replica\n", d.PlatformKEK.ID())
 	}
-	if res.PlatformKeyVersion > 0 {
-		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %d; raising that Transit key's min_decryption_version to %d now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
+	if res.PlatformKeyVersion != "" {
+		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %s; raising that Transit key's min_decryption_version to %s now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
 	}
 	return nil
+}
+
+// retireStep names the key service id at version v, and what retires every
+// other version at that service.
+func retireStep(id, v string) string {
+	if strings.HasPrefix(id, kek.AzureKeyIDPrefix) {
+		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every other version of both keys in Key Vault now retires them", id, v)
+	}
+	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
 }
 
 // optionalIdentity is the platform identity as the interface the store takes:
@@ -179,7 +189,7 @@ func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.
 	switch {
 	case aborted:
 		outcome, fields["reason"] = "failure", "aborted"
-	case res.KeyVersion > 0:
+	case res.KeyVersion != "":
 		fields["key_version"] = res.KeyVersion
 	}
 	data, _ := json.Marshal(fields)

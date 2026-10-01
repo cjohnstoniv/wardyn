@@ -250,7 +250,7 @@ type MigrateResult struct {
 func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (MigrateResult, error) {
 	var res MigrateResult
 	if target == MigrateLocal && s.kek == nil && !s.serviceWrites {
-		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY or WARDYN_KEK=transit")
+		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY or a WARDYN_KEK key service (transit or azurekv)")
 	}
 	if target != MigrateLocal && !s.reachable(target) {
 		return res, fmt.Errorf("pg secretstore: migration target %q is not configured", target)

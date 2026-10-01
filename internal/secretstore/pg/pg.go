@@ -510,8 +510,9 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 // platform is the separate platform identity (WARDYN_PLATFORM_KEY_FILE), or
 // nil: boot keys under it stay as they are.
 //
-// Pointer rows (store mode) and rows under a key service (Transit) hold
-// nothing under the age key and are left alone; `wardynd -rewrap` moves those.
+// Pointer rows (store mode) and rows under a key service (Transit, Key Vault)
+// hold nothing under the age key and are left alone; `wardynd -rewrap` moves
+// those.
 //
 // ALL-OR-NOTHING: one transaction, and any row that is not a v1 row under the
 // old keys, or whose data key does not unwrap, aborts the whole thing with
@@ -536,10 +537,10 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 	if err := to.setLocalKeys(newID, platform); err != nil {
 		return 0, fmt.Errorf("pg secretstore: rekey new identity: %w", err)
 	}
-	// A row under Transit holds nothing under the age key: left alone. A row
-	// under any key no provider claims aborts, naming it (from.reader).
+	// A row under a key service holds nothing under the age key: left alone.
+	// A row under any key no provider claims aborts, naming it (from.reader).
 	target := func(e envelope) kek.KEK {
-		if e.version == encVersion && strings.HasPrefix(e.kekID, "transit:") {
+		if e.version == encVersion && kek.IsServiceID(e.kekID) {
 			return nil
 		}
 		return to.writer(e.ownedBy, e.name)
@@ -552,16 +553,17 @@ type RewrapResult struct {
 	// Rewrapped is how many rows' data keys moved.
 	Rewrapped int
 	// KeyService is the kek_id of the key service every write now uses
-	// (WARDYN_KEK=transit), or "" when the local keys do.
+	// (WARDYN_KEK=transit or azurekv), or "" when the local keys do.
 	KeyService string
 	// KeyVersion is the key version every row under a versioned key service
-	// (Transit) is now wrapped under, else 0: raising Transit's
-	// min_decryption_version to it retires every older version.
-	KeyVersion int
+	// is now wrapped under, else "": retiring every other version at the
+	// service (Transit's min_decryption_version, disabling Key Vault
+	// versions) is then safe.
+	KeyVersion string
 	// PlatformKeyService and PlatformKeyVersion are the same for the platform
 	// key service (Deps.PlatformKEK), which wraps the boot keys alone.
 	PlatformKeyService string
-	PlatformKeyVersion int
+	PlatformKeyVersion string
 }
 
 // Rewrap is RewrapKeys over the local keys alone: identity, and the separate
@@ -581,8 +583,9 @@ func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Iden
 //   - between the local keys and a key service: with d.KEKWrites
 //     (WARDYN_KEK=transit) every row moves to the key service, and with the
 //     key service read-only every row under it moves back to the local keys;
-//   - onto a versioned key service's latest version, so older versions can be
-//     retired (Transit's min_decryption_version).
+//   - onto a versioned key service's latest version, so every other version
+//     can be retired (Transit's min_decryption_version, disabled Key Vault
+//     versions).
 //   - with d.PlatformKEK writing (d.PlatformKEKWrites), every boot key moves
 //     to the platform key service, at its latest version, from wherever it
 //     sits (the credential key service, the age key, the separate platform
@@ -610,7 +613,7 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	}
 	s.withKEK(d)
 	if s.kek == nil && !s.serviceWrites {
-		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or WARDYN_KEK=transit")
+		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit or azurekv)")
 	}
 	source := s.reader
 	// A boot key may still sit under an earlier key of its own purpose: the
@@ -644,7 +647,7 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 			return k, err
 		}
 	}
-	latest := map[string]int{}
+	latest := map[string]string{}
 	if s.serviceWrites {
 		res.KeyService = s.service.ID()
 		n, err := latestVersion(ctx, s.service)
@@ -667,13 +670,13 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	return res, err
 }
 
-// latestVersion is the version a wrap under k would name, or 0 when k has no
+// latestVersion is the version a wrap under k would name, or "" when k has no
 // versions.
-func latestVersion(ctx context.Context, k kek.KEK) (int, error) {
+func latestVersion(ctx context.Context, k kek.KEK) (string, error) {
 	if v, ok := k.(kek.Versioned); ok {
 		return v.LatestVersion(ctx)
 	}
-	return 0, nil
+	return "", nil
 }
 
 // rewrapAll rewraps, in one transaction, every sealed row's data key from the
@@ -682,7 +685,7 @@ func latestVersion(ctx context.Context, k kek.KEK) (int, error) {
 // target is versioned and latest holds its kek_id, at that version — is
 // skipped. latest maps a versioned key service's kek_id to the version a wrap
 // made now would name (nil: none). op names the operation in its errors.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]int) (int, error) {
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string) (int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
@@ -740,17 +743,17 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 }
 
 // behind reports whether wrapped, made under the versioned KEK to, names a
-// version older than latest. Unversioned, or with latest 0, it never is.
-func behind(to kek.KEK, wrapped []byte, latest int) (bool, error) {
+// version other than latest. Unversioned, or with latest "", it never does.
+func behind(to kek.KEK, wrapped []byte, latest string) (bool, error) {
 	v, ok := to.(kek.Versioned)
-	if !ok || latest == 0 {
+	if !ok || latest == "" {
 		return false, nil
 	}
 	n, err := v.WrapVersion(wrapped)
 	if err != nil {
 		return false, err
 	}
-	return n < latest, nil
+	return n != latest, nil
 }
 
 // rewrap moves one row's data key from the KEK source names for it to to.
