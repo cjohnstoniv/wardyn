@@ -142,6 +142,9 @@ func TestADOOwnPATPut_StoresTheCallersOwnToken(t *testing.T) {
 	if len(rows) != 1 || rows[0].Outcome != "success" || rows[0].Actor != capSub {
 		t.Fatalf("ado_pat.own.store rows = %+v, want one success by the caller", rows)
 	}
+	if !strings.Contains(string(rows[0].Data), `"bound_by":"name"`) {
+		t.Errorf("success row %s, want bound_by name (the sign-in carries no object id)", rows[0].Data)
+	}
 	for _, ev := range d.audit.snapshot() {
 		if strings.Contains(string(ev.Data), ownPATToken) || strings.Contains(ev.Target, ownPATToken) {
 			t.Fatalf("the token reached audit row %s", ev.Action)
@@ -617,6 +620,70 @@ func TestADOOwnPATPut_BindsBySessionObjectID(t *testing.T) {
 			for _, s := range seen {
 				if strings.Contains(strings.ToLower(s), oid) {
 					t.Errorf("the object id reached a response or audit row: %s", s)
+				}
+			}
+		})
+	}
+}
+
+// SECURITY (#1444): when the sign-in carries an object id, that is the only
+// one the token's owner is compared with. A person row holding a different
+// object id (an older sign-in, an edited row) must not add a second identity
+// the token could bind to. The success row says which basis bound it, never
+// the id.
+func TestADOOwnPATPut_SessionObjectIDIsNotWidenedByThePersonRow(t *testing.T) {
+	const sessionOID, personOID = "0a1b2c3d-1111-2222-3333-444455556666", "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	cookie := func(oid string) *http.Cookie {
+		payload, err := json.Marshal(oidc.Session{
+			V: oidc.SessionCodecVersion, Sub: capSub, Email: capEmail, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
+			ObjectID: oid, Expiry: time.Now().UTC().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signedSessionCookie(payload)
+	}
+	for _, tc := range []struct {
+		name, sessionOID, originID string
+		wantCode                   int
+		wantBoundBy                string
+	}{
+		{"owner is the person row's id, the session has another", sessionOID, personOID, http.StatusForbidden, ""},
+		{"owner is the session's id", sessionOID, sessionOID, http.StatusOK, "object_id"},
+		{"no session id falls back to the person row's", "", personOID, http.StatusOK, "object_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/contoso/_apis/connectionData":
+					_, _ = w.Write([]byte(`{"authenticatedUser":{"subjectDescriptor":"aad.abc","properties":{"Account":{"$value":"someone.else@corp.example"}}}}`))
+				case "/contoso/_apis/graph/users/aad.abc":
+					_, _ = w.Write([]byte(`{"originId":"` + tc.originID + `"}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(fake.Close)
+			d := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+			d.srv.cfg.Store = ownPATPeople{Store: d.srv.cfg.Store, oid: personOID}
+			prevAPI, prevGraph := adoOwnPATAPIBase, adoOwnPATGraphBase
+			adoOwnPATAPIBase, adoOwnPATGraphBase = fake.URL, fake.URL
+			t.Cleanup(func() { adoOwnPATAPIBase, adoOwnPATGraphBase = prevAPI, prevGraph })
+
+			code, body := d.putAs(t, cookie(tc.sessionOID), ownPATOrgKey, ownPATToken, days(10))
+			if code != tc.wantCode {
+				t.Fatalf("PUT = %d %s, want %d", code, body, tc.wantCode)
+			}
+			if tc.wantBoundBy == "" {
+				return
+			}
+			rows := d.auditRows(adoPATAuditOwnStore)
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"bound_by":"`+tc.wantBoundBy+`"`) {
+				t.Fatalf("store rows = %+v, want one with bound_by %s", rows, tc.wantBoundBy)
+			}
+			for _, oid := range []string{sessionOID, personOID} {
+				if strings.Contains(strings.ToLower(string(rows[0].Data)), oid) {
+					t.Errorf("the object id reached the audit row: %s", rows[0].Data)
 				}
 			}
 		})

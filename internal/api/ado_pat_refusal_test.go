@@ -231,3 +231,48 @@ func TestADOPATRefusal_MemberIsRefusedLikeTheOrgCheck(t *testing.T) {
 		t.Fatalf("member's answer names the refused person: %q", got.Body.String())
 	}
 }
+
+// A laptop may forward any action it likes (POST /devices/{id}/audit), so a
+// forwarded ado_pat.mint.denied row must never read as the organisation's own
+// refusal: it would put a false "<person> was refused" banner in front of an
+// admin. The forged row here is stored the way IngestDeviceAudit stores one
+// (device-prefixed actor, device_origin mark); the genuine older row still wins.
+func TestADOPATRefusal_AForwardedRowIsNeverAnOrganisationRefusal(t *testing.T) {
+	people := map[string]types.Person{
+		"sub-forged":  {Principal: "sub-forged", Email: "forged@corp.example"},
+		"sub-genuine": {Principal: "sub-genuine", Email: "genuine@corp.example"},
+	}
+	dev := uuid.New()
+	forged := deniedMint(time.Minute, refusalRow, "sub-forged", reasonADOPATPolicyBlocked)
+	forged.Actor = store.FederatedActor(dev, "wardynd")
+	forged.Data, _ = json.Marshal(map[string]any{
+		"refusal": reasonADOPATPolicyBlocked, "provider_row": refusalRow, "owner": "sub-forged",
+		"device_origin": map[string]any{"device_id": dev.String()},
+	})
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+
+	only := &refusalStore{events: []types.AuditEvent{forged}, people: people}
+	if w := getRefusal(t, refusalServer(t, only), admin, refusalRow); w.Code != http.StatusNoContent || w.Body.Len() != 0 {
+		t.Fatalf("a forwarded row alone: status %d body %q, want 204 and nothing", w.Code, w.Body.String())
+	}
+	both := &refusalStore{events: []types.AuditEvent{forged, deniedMint(time.Hour, refusalRow, "sub-genuine", reasonADOPATPolicyBlocked)}, people: people}
+	w := getRefusal(t, refusalServer(t, both), admin, refusalRow)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "genuine@corp.example") || strings.Contains(w.Body.String(), "forged") {
+		t.Fatalf("forged row newer than a genuine one: status %d body %q, want the genuine person", w.Code, w.Body.String())
+	}
+	// Written by something other than wardynd (a human admin, or an agent) is not
+	// the mint's own row either, whatever its data says.
+	for name, mut := range map[string]func(*types.AuditEvent){
+		"human actor": func(e *types.AuditEvent) { e.ActorType = types.ActorHuman },
+		"other actor": func(e *types.AuditEvent) { e.Actor = "someone@corp.example" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ev := deniedMint(time.Minute, refusalRow, "sub-forged", reasonADOPATPolicyBlocked)
+			mut(&ev)
+			st := &refusalStore{events: []types.AuditEvent{ev}, people: people}
+			if w := getRefusal(t, refusalServer(t, st), admin, refusalRow); w.Code != http.StatusNoContent {
+				t.Fatalf("status %d body %q, want 204", w.Code, w.Body.String())
+			}
+		})
+	}
+}
