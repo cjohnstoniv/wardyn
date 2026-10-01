@@ -574,7 +574,7 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 		}
 		return to.writer(e.ownedBy, e.name)
 	}
-	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil)
+	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil, nil)
 }
 
 // RewrapResult is what RewrapKeys did.
@@ -593,6 +593,11 @@ type RewrapResult struct {
 	// key service (Deps.PlatformKEK), which wraps the boot keys alone.
 	PlatformKeyService string
 	PlatformKeyVersion string
+	// Rotated reports that a versioned key service named a newer version for
+	// a wrap than the latest one read when the run began, so a rotation landed
+	// mid-run. KeyVersion and PlatformKeyVersion are then "": run -rewrap again
+	// until it moves no row, and retire no version before then.
+	Rotated bool
 }
 
 // Rewrap is RewrapKeys over the local keys alone: identity, and the separate
@@ -709,8 +714,16 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		}
 		return nil
 	}
-	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard)
+	rotated := map[string]bool{}
+	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard, rotated)
 	res.Rewrapped = n
+	// A key service rotated while the run was moving rows: some rows are under
+	// a newer version than the one read first, so no version is yet safe to
+	// retire. Report none; another pass moves them and reports the truth.
+	if err == nil && len(rotated) > 0 {
+		res.Rotated = true
+		res.KeyVersion, res.PlatformKeyVersion = "", ""
+	}
 	return res, err
 }
 
@@ -757,8 +770,9 @@ func latestVersion(ctx context.Context, k kek.KEK) (string, error) {
 // skipped. latest maps a versioned key service's kek_id to the version a wrap
 // made now would name (nil: none). op names the operation in its errors. guard,
 // when not nil, sees every selected (locked) row before any moves and may
-// refuse the whole run.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error) (int, error) {
+// refuse the whole run. rotated, when not nil, collects the kek_id of each
+// versioned target that wrapped a row under a version other than latest's.
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error, rotated map[string]bool) (int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
@@ -806,6 +820,13 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		wrapped, rerr := rewrap(ctx, source, to, e)
 		if rerr != nil {
 			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), rerr)
+		}
+		if rotated != nil {
+			if was, verr := behind(to, wrapped, latest[to.ID()]); verr != nil {
+				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
+			} else if was {
+				rotated[to.ID()] = true
+			}
 		}
 		if _, uerr := tx.Exec(ctx,
 			`UPDATE secrets SET kek_id=$3, wrapped_dek=$4, updated_at=now() WHERE owned_by=$1 AND name=$2`, e.ownedBy, e.name, to.ID(), wrapped,

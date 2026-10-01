@@ -139,6 +139,10 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 		return err
 	}
 	emitRewrapAudit(ctx, rec, res, separate, nil)
+	if res.Rotated {
+		fmt.Fprintf(os.Stdout, "a key rotation landed while this run was moving rows, so some rows are under a newer version than the one read first; "+
+			"run `wardynd -rewrap` again until it moves 0 rows, and disable or retire no key version before then\n")
+	}
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion != "" {
@@ -161,7 +165,7 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 // other version at that service.
 func retireStep(id, v string) string {
 	if strings.HasPrefix(id, kek.AzureKeyIDPrefix) {
-		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every other version of both keys in Key Vault now retires them", id, v)
+		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
 	}
 	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
 }
@@ -189,6 +193,9 @@ const rewrapAbortAuditTimeout = 5 * time.Second
 // rule can fire on the tamper signal. Like secret.rekey it names no secret.
 func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool, failure error) {
 	fields := map[string]any{"secrets": res.Rewrapped, "platform_key_separate": separate}
+	if res.Rotated {
+		fields["rotated"] = true
+	}
 	if res.KeyService != "" {
 		fields["key_service"] = res.KeyService
 	}

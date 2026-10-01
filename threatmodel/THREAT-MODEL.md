@@ -2136,8 +2136,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     a second age identity from which alone the boot keys' key-encryption key is
     derived (`local/platform:` vs `local/cred:` on each row); once it is set, no
     key the age key derives opens a boot key row, so a stolen age key forges
-    nothing. It is optional, the move onto it is `wardynd -rewrap`, and that
-    move is the one moment the age key still vouches for the boot keys. Unset,
+    nothing. It is optional, the move onto it is `wardynd -rewrap
+    -rewrap-adopt-boot-keys`, and that move is the one moment the age key
+    vouches for the boot keys. A pre-envelope boot key found beside the platform
+    key is refused at boot rather than converted under it, so the only
+    adoption is the operator's. Unset,
     the residual stands and `/setup/status` shows `platform_shared`. (b) **store
     mode:** the boot keys live under `platform/` in the organisation's store;
     with ONE Vault role that separates audit and filtering only (the one token
@@ -2171,7 +2174,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     What the split does not do: the wardynd process holds both tokens, so a
     compromise of the process still reaches both; it holds only while the
     credentials role's Vault policy leaves the platform key out, which Wardyn
-    cannot check; and the move onto the platform key (`wardynd -rewrap`), like
+    cannot check; and the move onto the platform key (`wardynd -rewrap -rewrap-adopt-boot-keys`), like
     the move off it (`-rewrap-retire-platform-key`), is one more moment at which
     one key vouches for the boot keys. What neither setup lets anyone do from the
     database alone is pass one wrap off as another's: each wrap's

@@ -10,6 +10,7 @@ package pg
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -131,6 +132,37 @@ func TestPlatformSplit_StolenCredentialKeyForgesNoBootKey(t *testing.T) {
 	putUnder(t, pool, legacy, "", "github-app-key", "cred")
 	if got, err := separate.Get(ctx, "github-app-key"); err != nil || string(got) != "cred" {
 		t.Fatalf("a pre-split credential row under the split = (%q, %v), want it read", got, err)
+	}
+}
+
+// TestPG_ConvertV0_RefusesAForgedBootKeyBesideAPlatformKey: with the platform
+// key file set, a pre-envelope boot key (someone with the age key and the table
+// deletes the real row and inserts their own) is refused, naming the row, and
+// nothing is converted, credentials included. With no platform key the same
+// row converts, as TestPG_ConvertV0_ConvertsEveryRowOnceThenIsANoOp shows.
+func TestPG_ConvertV0_RefusesAForgedBootKeyBesideAPlatformKey(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id, platform := mustIdentity(t), mustIdentity(t)
+	s := splitStore(t, pool, id, platform)
+	if err := s.Put(ctx, signingKey, []byte("real")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM secrets WHERE owned_by='' AND name=$1`, signingKey); err != nil {
+		t.Fatal(err)
+	}
+	seedV0(t, pool, id, "", signingKey, "forged")
+	seedV0(t, pool, id, "", "github-app-key", "cred")
+	before := rawRows(t, pool)
+
+	converted, err := s.ConvertV0(ctx, id)
+	if !errors.Is(err, ErrV0BootKey) || len(converted) != 0 || !strings.Contains(err.Error(), rowRef("", signingKey)) {
+		t.Fatalf("ConvertV0 over a v0 boot key beside a platform key = (%d, %v), want ErrV0BootKey naming the row", len(converted), err)
+	}
+	for ref, r := range rawRows(t, pool) {
+		if r.version != before[ref].version || r.kekID != before[ref].kekID || !bytes.Equal(r.ct, before[ref].ct) {
+			t.Errorf("%s changed although the conversion was refused", ref)
+		}
 	}
 }
 

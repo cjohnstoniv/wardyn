@@ -4,10 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -527,5 +532,115 @@ func TestRewrapAdoptBootKeys_Refusals(t *testing.T) {
 	*f.rewrapAdoptBootKeys, *f.rewrapRetirePlatformKey = true, true
 	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "run one at a time") {
 		t.Fatalf("-rewrap-adopt-boot-keys with -rewrap-retire-platform-key = %v; want a refusal", err)
+	}
+}
+
+// rotatingKEK is a versioned key service whose key rotates once, right after
+// the run reads its latest version: the wraps that follow name version 2 while
+// the version read first, the one the run would report, was 1.
+type rotatingKEK struct {
+	*memKEK
+	cur   int
+	reads int
+}
+
+func (k *rotatingKEK) LatestVersion(context.Context) (string, error) {
+	k.reads++
+	v := strconv.Itoa(k.cur)
+	if k.reads == 1 {
+		k.cur++
+	}
+	return v, nil
+}
+
+func (k *rotatingKEK) Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]byte, error) {
+	w, err := k.memKEK.Wrap(ctx, dek, bind)
+	return append([]byte(strconv.Itoa(k.cur)+":"), w...), err
+}
+
+func (k *rotatingKEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
+	_, w, _ := bytes.Cut(wrapped, []byte(":"))
+	return k.memKEK.Unwrap(ctx, w, bind)
+}
+
+func (k *rotatingKEK) WrapVersion(wrapped []byte) (string, error) {
+	v, _, _ := bytes.Cut(wrapped, []byte(":"))
+	return string(v), nil
+}
+
+// A key rotation that lands between the run reading the latest version and its
+// wraps leaves rows under a version the run did not report. The run then
+// reports no version to retire (the instruction to disable every other version
+// would disable the one just used), says so, and the next run, which reads the
+// new latest version, moves nothing and reports it.
+func TestRewrapKeys_RotationMidRunRetiresNothing(t *testing.T) {
+	pool := envelopeDB(t)
+	id := mustAgeIdentity(t)
+	local, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a-credential", "b-credential"} {
+		if err := local.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := &rotatingKEK{memKEK: newMemKEK(), cur: 1}
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: k, KEKWrites: true}
+
+	rec := &capturingRecorder{}
+	out := captureStdout(t, func() {
+		if err := rewrapKeys(t.Context(), rec, d); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "now retires") || !strings.Contains(out, "rotation landed") || !strings.Contains(out, "again") {
+		t.Fatalf("a rewrap that saw a rotation printed %q; want no retirement instruction and a request to run again", out)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rec.got[0].Data, &data); err != nil || data["rotated"] != true || data["key_version"] != nil || data["secrets"] != float64(2) {
+		t.Fatalf("audit fields = %s (%v); want rotated true, 2 rows and no key_version", rec.got[0].Data, err)
+	}
+
+	rec2 := &capturingRecorder{}
+	out = captureStdout(t, func() {
+		if err := rewrapKeys(t.Context(), rec2, d); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := json.Unmarshal(rec2.got[0].Data, &data); err != nil || data["secrets"] != float64(0) || data["rotated"] != nil || data["key_version"] != "2" {
+		t.Fatalf("second run audit = %s (%v); want 0 rows, no rotation and key_version 2", rec2.got[0].Data, err)
+	}
+	if !strings.Contains(out, "version 2") {
+		t.Fatalf("second run printed %q; want the retirement step for version 2", out)
+	}
+}
+
+// captureStdout returns what f wrote to os.Stdout.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	func() {
+		defer func() { os.Stdout = old; _ = w.Close() }()
+		f()
+	}()
+	return <-done
+}
+
+// Key Vault's retirement instruction names older versions only.
+func TestRetireStep_AzureNamesOlderVersionsOnly(t *testing.T) {
+	got := retireStep(kek.AzureKeyIDPrefix+"v.vault.azure.net/k/s", "1/2")
+	if strings.Contains(got, "every other version") || !strings.Contains(got, "OLDER") {
+		t.Fatalf("retireStep = %q; want it to name older versions only", got)
 	}
 }

@@ -344,7 +344,9 @@ stays optional; nothing requires it.
    ```
 3. Restart every replica with `WARDYN_PLATFORM_KEY_FILE` set.
 
-The one moment the age key still vouches for the boot keys is this move.
+This move is the one step at which the age key vouches for the boot keys, which
+is why it needs `-rewrap-adopt-boot-keys`. A boot start refuses a pre-envelope
+boot key once the platform key is set; those convert only on the boot before it.
 Run it from a host you trust, not after a suspected leak of the age key.
 (After a leak, replace the boot keys instead: delete their rows and
 restart, which mints new ones — console sessions end and SSH clients see
@@ -568,7 +570,8 @@ refuses to start with both named.
    unwrapped and wrapped again, bound to its row.
 3. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an
    automatic rotation, during step 2 can leave a row on an older version.
-   Repeat until it reports 0.
+   When a rotation lands mid-run, the command says so and prints no
+   retirement step. Repeat until it reports 0.
 4. Disable every older version of both keys:
    `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
 5. Restart every replica, so none keeps an older signing version cached.
