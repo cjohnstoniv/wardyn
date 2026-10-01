@@ -670,7 +670,8 @@ ref at all, is not available through this lane.
   only.** Wardyn forwards it with the person's own credential, and Azure DevOps' branch policies
   and permissions decide: a protected `main` still rejects someone who lacks the permission to
   push to it. Each such git push is recorded as `brokered:git:branch-ns-off`, as on the GitHub
-  lanes; a REST ref move keeps the ordinary `brokered:ado` row (see
+  lanes; a REST ref move outside the run's branch keeps its `brokered:ado` row and, once forwarded,
+  adds a `brokered:git:branch-ns-off` row beside it (see
   [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
 - **`policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy: true`**,
   the one request whose body asks Azure DevOps to skip its own policies. The switch does not touch
