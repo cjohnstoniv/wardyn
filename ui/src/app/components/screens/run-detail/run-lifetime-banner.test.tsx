@@ -14,6 +14,7 @@ import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
+import { weekdayClock } from "./run-ends-row";
 
 const reviveRunMock = vi.fn();
 const setRunEndAndWaitMock = vi.fn();
@@ -154,7 +155,7 @@ describe("RunLifetimeBanner — lost (outage): F5, one sentence, no contradictio
 });
 
 describe("RunLifetimeBanner — a lease-ended run", () => {
-  it("ENDED_TITLE, ONLY the approved no-date sentence (R2-1 — #1320 gates the real date), never the lost copy", () => {
+  it("ENDED_TITLE, ONLY the approved no-date sentence when the server sent no kept_until (R2-1), never the lost copy", () => {
     const run = detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true });
     renderBanner(run);
     expect(screen.getByText("This run ended at its end time")).toBeInTheDocument();
@@ -164,6 +165,23 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(screen.getByRole("button", { name: "Extend and revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
     expect(screen.queryByText("This run's sandbox stopped")).not.toBeInTheDocument();
+  });
+
+  it("#1320: an interactive run with kept_until says until when its files are kept, from the server's date", () => {
+    const keptUntil = new Date(NOW + 5 * 24 * 3600_000).toISOString();
+    const run = detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, kept_until: keptUntil });
+    renderBanner(run);
+    expect(
+      screen.getByText(`It has no network. Its files are kept until ${weekdayClock(keptUntil)}. Extend to revive it.`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("It has no network. Extend to revive it.")).not.toBeInTheDocument();
+  });
+
+  it("#1320: a task run keeps ENDED_BODY_TASK even when kept_until is present", () => {
+    const keptUntil = new Date(NOW + 5 * 24 * 3600_000).toISOString();
+    renderBanner(detail({ lost_reason: "ended", interactive: false, kept_until: keptUntil }));
+    expect(screen.getByText("It has no network.")).toBeInTheDocument();
+    expect(screen.queryByText(/files are kept until/)).not.toBeInTheDocument();
   });
 
   it("Extend and revive sets a fresh future end BEFORE reviving, in order", async () => {

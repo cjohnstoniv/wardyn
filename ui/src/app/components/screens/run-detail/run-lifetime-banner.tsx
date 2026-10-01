@@ -205,7 +205,7 @@ export function RunLifetimeBanner({
           data-testid="run-lifetime-ended"
           tone="plain"
           title={RL.ENDED_TITLE}
-          body={run.interactive ? RL.ENDED_BODY_NO_DATE : RL.ENDED_BODY_TASK}
+          body={run.interactive ? (run.kept_until ? RL.endedBody(weekdayClock(run.kept_until)) : RL.ENDED_BODY_NO_DATE) : RL.ENDED_BODY_TASK}
         >
           {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">

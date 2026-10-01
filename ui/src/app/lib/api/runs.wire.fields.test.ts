@@ -337,7 +337,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, and the launching portal's name over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, and the ended run's kept_until over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -346,7 +346,13 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "model_provider_name",
       "model_provider_deleted",
       "created_via_name",
+      "kept_until",
     ]);
+  });
+
+  it("RunEndWaitResult's keys are exactly runEndWaitResponse's json tags (PATCH /runs/{id}, run_end_wait.go)", () => {
+    const endWaitGo = readFileSync(join(root, "internal/api/run_end_wait.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunEndWaitResult").sort()).toEqual(goJSONTags(endWaitGo, "runEndWaitResponse").sort());
   });
 
   it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {

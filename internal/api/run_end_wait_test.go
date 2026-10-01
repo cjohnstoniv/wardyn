@@ -4,10 +4,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -316,6 +319,137 @@ func TestPatchRunEnds_ExtendsALostRun(t *testing.T) {
 		f.st.mu.Unlock()
 		if code, _ := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(24*time.Hour))); code != http.StatusConflict {
 			t.Errorf("status = %d, want 409", code)
+		}
+	})
+}
+
+// profileErrStore is the reclamp store whose profile list can fail.
+type profileErrStore struct {
+	*reclampStore
+	err error
+}
+
+func (s profileErrStore) ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.reclampStore.ListGovernanceProfiles(ctx)
+}
+
+// patchRaw is patch with the response body as sent, for what it must not carry.
+func (f *endWaitFixture) patchRaw(t *testing.T, cookie *http.Cookie, body string) (int, map[string]any, string) {
+	t.Helper()
+	w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), cookie, body)
+	var m map[string]any
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	}
+	return w.Code, m, w.Body.String()
+}
+
+// #1322: a PATCH the run's captured cap cut back says when the admin has since
+// loosened the launch profile, so the toast can say so. Display only: the cap
+// that binds stays the captured one.
+func TestSetRunEnd_CapLoosenedIsToldNotApplied(t *testing.T) {
+	captured := types.RunLimits{MaxEndAheadSec: 2 * 86400, MaxWaitSec: 3600, UserChangesLimits: true}
+	const liveSec = 29*86400 + 7 // a number the response must never carry
+	for _, tc := range []struct {
+		name    string
+		profile *types.RunLimits // nil: no profile row
+		listErr error
+		atCap   bool // the run already ends at the cap: nothing is written, so no owner re-check reads the profile
+		want    bool
+	}{
+		{name: "loosened", profile: ptr(types.RunLimits{MaxEndAheadSec: liveSec}), want: true},
+		{name: "loosened to no limit", profile: ptr(types.RunLimits{}), want: true},
+		{name: "tightened", profile: ptr(types.RunLimits{MaxEndAheadSec: 86400})},
+		{name: "unchanged", profile: ptr(types.RunLimits{MaxEndAheadSec: 2 * 86400})},
+		{name: "deleted", profile: nil, atCap: true},
+		{name: "unreadable", profile: ptr(types.RunLimits{MaxEndAheadSec: liveSec}), listErr: errors.New("db down"), atCap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endsIn := day
+			if tc.atCap {
+				endsIn = 2 * day
+			}
+			f, st, profileID := newReclampFixture(t, captured, endsIn, 1800)
+			if tc.profile != nil {
+				st.setProfile(profileID, *tc.profile)
+			}
+			f.srv.cfg.Store = profileErrStore{reclampStore: st, err: tc.listErr}
+			code, m, raw := f.patchRaw(t, ownerSession(t), endsAtBody(f.now.Add(10*day)))
+			if code != http.StatusOK {
+				t.Fatalf("PATCH = %d %s, want 200 at the captured cap whatever the profile read said", code, raw)
+			}
+			if got, _ := m["ends_cap_loosened"].(bool); got != tc.want {
+				t.Errorf("ends_cap_loosened = %v, want %v (%s)", m["ends_cap_loosened"], tc.want, raw)
+			}
+			if _, present := m["ends_cap_loosened"]; present != tc.want {
+				t.Errorf("ends_cap_loosened present = %v, want %v: only ever sent true", present, tc.want)
+			}
+			if strings.Contains(raw, "2505607") {
+				t.Errorf("response carries the live profile's number: %s", raw)
+			}
+			if end, _ := f.stored(); end == nil || !end.Equal(f.now.Add(2*day)) {
+				t.Errorf("stored end = %v, want the captured bound %v", end, f.now.Add(2*day))
+			}
+			if tc.atCap {
+				return
+			}
+			rows := f.rows(t, "run.end.set")
+			if len(rows) != 1 {
+				t.Fatalf("run.end.set rows = %d, want 1", len(rows))
+			}
+			data := leaseAuditData(t, rows[0])
+			if _, present := data["ends_cap_loosened"]; present != tc.want || data["capped"] != true {
+				t.Errorf("run.end.set data = %v; want ends_cap_loosened present only when true, capped", data)
+			}
+		})
+	}
+
+	t.Run("an over-ask made after the loosening still stores the captured bound", func(t *testing.T) {
+		f, st, profileID := newReclampFixture(t, captured, day, 1800)
+		st.setProfile(profileID, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+		for i := 0; i < 2; i++ {
+			if code, out := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(20*day))); code != http.StatusOK ||
+				out.EndsAt == nil || !out.EndsAt.Equal(f.now.Add(2*day)) {
+				t.Fatalf("over-ask %d = %d %+v, want the captured %v", i, code, out, f.now.Add(2*day))
+			}
+		}
+	})
+
+	t.Run("only the wait capped", func(t *testing.T) {
+		f, st, profileID := newReclampFixture(t, captured, day, 1800)
+		st.setProfile(profileID, types.RunLimits{MaxEndAheadSec: 30 * 86400, MaxWaitSec: 8 * 3600})
+		code, m, raw := f.patchRaw(t, ownerSession(t), `{"wait_budget_sec":7200}`)
+		if code != http.StatusOK || len(m["capped"].([]any)) != 1 || m["capped"].([]any)[0] != "wait_budget_sec" {
+			t.Fatalf("PATCH = %d %s, want 200 with only the wait capped", code, raw)
+		}
+		if _, present := m["ends_cap_loosened"]; present {
+			t.Errorf("ends_cap_loosened sent when only the wait was capped: %s", raw)
+		}
+	})
+
+	t.Run("an exempt caller", func(t *testing.T) {
+		f, st, profileID := newReclampFixture(t, captured, day, 1800)
+		st.setProfile(profileID, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+		admin := ssoSession(t, endWaitOwner, "admin@corp.example", oidc.RoleAdmin)
+		code, m, raw := f.patchRaw(t, admin, endsAtBody(f.now.Add(100*365*day)))
+		if code != http.StatusOK || len(m["capped"].([]any)) != 1 {
+			t.Fatalf("PATCH = %d %s, want 200 capped at the deployment's bound", code, raw)
+		}
+		if _, present := m["ends_cap_loosened"]; present {
+			t.Errorf("ends_cap_loosened sent to a caller the run's limits never bound: %s", raw)
+		}
+	})
+
+	t.Run("a run with no launch profile", func(t *testing.T) {
+		f := newEndWaitFixture(t, captured)
+		code, m, raw := f.patchRaw(t, ownerSession(t), endsAtBody(f.now.Add(10*day)))
+		if _, present := m["ends_cap_loosened"]; code != http.StatusOK || present || len(m["capped"].([]any)) != 1 {
+			t.Errorf("PATCH = %d %s, want 200 capped, not loosened", code, raw)
 		}
 	})
 }
