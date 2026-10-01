@@ -7,7 +7,7 @@
 // CS-6 PR #1164 — internal/api/credential_inventory.go) and erasing a
 // person's whole namespace (CS-5, design F-5/F-6 — internal/api/credential_erase.go).
 // Both admin tiers read/act (K5-A); a member is refused at the route.
-import { asJson, errText, HttpError, wfetch } from "./core";
+import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export interface CredentialRow {
   person: string;
@@ -29,6 +29,20 @@ export interface CredentialInventory {
   counts: { people: number; credentials: number; by_provider: Record<string, number> };
 }
 
+/** One token an admin created for another person (#1477): metadata only, never a value. */
+export interface AdminMintedToken {
+  id: string;
+  principal: string;
+  /** The owner's email; absent when none is known. */
+  email?: string;
+  /** The token's name. */
+  name: string;
+  /** The admin who created it. */
+  minted_by: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
 export interface EraseResult {
   count: number;
   store?: string;
@@ -46,6 +60,23 @@ export const credentials = {
       throw new HttpError(res.status, await errText(res));
     }
     return asJson<CredentialInventory>(res);
+  },
+
+  // GET /api/v1/tokens?minted_for_others=true (#1477): the unrevoked tokens an
+  // admin created for someone else, newest-agnostic, metadata only — the
+  // response never carries a token value. Both admin tiers read it.
+  async listAdminMintedTokens(): Promise<AdminMintedToken[]> {
+    const res = await wfetch("/tokens?minted_for_others=true", { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return unwrapList<AdminMintedToken>(await asJson<unknown>(res));
+  },
+
+  // DELETE /api/v1/tokens/{id}: revoke anyone's token (the existing admin
+  // power). 204; any other answer throws, so a token that is still live is
+  // never reported revoked.
+  async revokeToken(id: string): Promise<void> {
+    const res = await wfetch(`/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 
   // DELETE /api/v1/people/{principal}/credentials -> the erase result.
