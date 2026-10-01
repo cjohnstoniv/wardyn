@@ -186,7 +186,13 @@ and its blast radius minimised. Builder applies, by default:
   reach it does with that reachability.
 - Privileges are dropped: CapDrop ALL + no-new-privileges.
 - Resource caps (memory, swap-disabled, CPU, PID limit) bound the DoS /
-  blast-radius surface; an optional StorageOpt "size" cap
+  blast-radius surface. A build fails closed, before it starts, when the
+  Docker daemon's create response says it discarded a requested limit (a
+  warning containing "discard", as on a host without delegated cgroup
+  controllers). Builds do not honour `WARDYN_ALLOW_UNENFORCEABLE_CAPS`.
+  Residual: the check is a substring match, so a daemon that words a discard
+  differently fails open; swap ("Memory limited without swap.") is not
+  checked. An optional StorageOpt "size" cap
   (WARDYN_ENVBUILD_MAX_CONTEXT_MB) bounds the build's writable layer where
   the storage driver supports per-container quotas.
 - Input validation: a git-URL scheme allowlist (only https:// and git://;

@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
 
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -135,12 +136,7 @@ func classToRuntime(class types.ConfinementClass, info system.Info) (runtimeName
 // Docker-compat API); the create-time discard warning is authoritative on both engines (verified).
 // Mirrors classToRuntime's fail-closed contract (invariant 5).
 func verifyCapsEnforced(createWarnings []string) error {
-	var discarded []string
-	for _, w := range createWarnings {
-		if strings.Contains(strings.ToLower(w), "discard") {
-			discarded = append(discarded, strings.TrimSpace(w))
-		}
-	}
+	discarded := dockerutil.DiscardedLimits(createWarnings)
 	if len(discarded) == 0 {
 		return nil
 	}

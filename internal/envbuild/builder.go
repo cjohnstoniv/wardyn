@@ -224,6 +224,15 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	}
 	containerID := created.ID
 	defer b.liveBuilds.track(containerID)() // see reaper.go
+	// A daemon that accepted the create but discarded a requested limit would run this untrusted build uncapped.
+	// Builds always run with their caps, so they take no WARDYN_ALLOW_UNENFORCEABLE_CAPS override.
+	if lims := dockerutil.DiscardedLimits(created.Warnings); len(lims) > 0 {
+		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer rmCancel()
+		_, _ = b.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true})
+		return "", fmt.Errorf("environment build refused: the Docker daemon discarded %s; builds always run with their caps: %w",
+			strings.Join(lims, "; "), dockerutil.ErrCapsDiscarded)
+	}
 	if contextTar != nil {
 		if _, err := b.cli.CopyToContainer(ctx, containerID, client.CopyToContainerOptions{
 			DestinationPath: contextTarDest, Content: contextTar,
@@ -374,7 +383,7 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 			"SETGID", "SETUID", "SETFCAP", "MKNOD",
 		},
 
-		// Resource caps bound the DoS/blast-radius surface of untrusted build code. Always applied.
+		// Resource caps bound the DoS/blast-radius surface of untrusted build code. Always requested; the create response is checked for a discarded limit (a swap-only "limited without swap" warning is not).
 		Resources: container.Resources{
 			Memory:     mem,
 			MemorySwap: mem, // == Memory disables swap growth on top of the RAM cap
