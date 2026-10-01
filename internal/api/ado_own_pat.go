@@ -277,8 +277,22 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, access)
 }
 
-// handleDeleteADOOwnPAT deletes the caller's own token for the row at ?org=.
-// Wardyn cannot revoke it in Azure DevOps; the person does that themselves.
+// handleDeleteADOOwnPAT deletes the caller's own token for the address at
+// ?org=. Wardyn cannot revoke it in Azure DevOps; the person does that
+// themselves.
+//
+// It is a cleanup, not a use (#1479), so it does not ask whether the row may
+// still take a token: it looks at EVERY Azure DevOps row on that address,
+// whatever its state — disabled, denied to the caller, switched away from
+// own-token, a Server row — and deletes the caller's sealed name for each row
+// whose name appears in the caller's OWN list. It never parses a blob and never
+// reads through For(subject).Get, which falls back to the operator's row. A
+// person whose access was withdrawn can therefore still remove what they hold;
+// the paste (PUT) and every credential use stay strict.
+//
+// Answers: 204 when something was deleted, or when a row the caller may use
+// holds nothing of theirs (removal is idempotent); otherwise the same 404 an
+// address with no row gives, with no audit row.
 func (s *Server) handleDeleteADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	subject := oidcHumanFromContext(ctx)
@@ -286,28 +300,75 @@ func (s *Server) handleDeleteADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
-	row, org, _, ok := s.adoOwnPATDoorRow(w, r, r.URL.Query().Get("org"))
-	if !ok {
+	org := r.URL.Query().Get("org")
+	if s.cfg.Store == nil || s.cfg.Secrets == nil {
+		writeErrorReason(w, http.StatusNotFound, reasonADOOwnPATUnknownRow, adoOwnPATUnknownRowRefusal)
 		return
 	}
-	// Held across the read and the delete, like the paste's write: a stamp
-	// mid-rewrite must not put the removed token back.
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		writeServerError(w, r, "read site config", err)
+		return
+	}
+	var rows []types.GitProvider
+	var states []string
+	for _, row := range gitProviderRows(sc) {
+		if row.Kind == types.GitProviderAzureDevOps && adoEntraValidRowID(row.ID) && adoOrgDisplay(row) == org {
+			rows = append(rows, row)
+			states = append(states, s.adoOwnPATRowState(ctx, row))
+		}
+	}
+	// Held across the read and the deletes, like the paste's write: a stamp
+	// mid-rewrite must not put a removed token back.
 	adoOwnPATWriteMu.Lock()
 	defer adoOwnPATWriteMu.Unlock()
-	_, found, err := s.readADOOwnPAT(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, row.ID)
+	view := s.cfg.Secrets.For(subject)
+	held, err := view.List(secretstore.WithPurpose(ctx, secretstore.PurposeStatus))
 	if err != nil {
-		writeServerError(w, r, "read the Azure DevOps token", err)
+		writeServerError(w, r, "list the Azure DevOps token", err)
 		return
 	}
-	if found {
-		if err := s.cfg.Secrets.For(subject).Delete(ctx, adoOwnPATSecretName(row.ID)); err != nil {
+	deleted := false
+	for i, row := range rows {
+		name := adoOwnPATSecretName(row.ID)
+		if !slices.Contains(held, name) {
+			continue
+		}
+		data := map[string]any{"provider_row": row.ID, "organisation": org, "row_state": states[i]}
+		if err := view.Delete(ctx, name); err != nil && !errors.Is(err, secretstore.ErrNotFound) {
+			data["reason"] = "store_error"
+			s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnDelete, row.ID, "failure", data)
 			writeServerError(w, r, "delete the Azure DevOps token", err)
 			return
 		}
-		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnDelete, row.ID, "success",
-			map[string]any{"provider_row": row.ID, "organisation": org})
+		s.auditADOOwnPAT(ctx, subject, adoPATAuditOwnDelete, row.ID, "success", data)
+		deleted = true
+	}
+	if !deleted {
+		if _, usable, err := s.adoOwnPATRowFor(ctx, org); err != nil || !usable {
+			if err != nil {
+				writeServerError(w, r, "read site config", err)
+				return
+			}
+			writeErrorReason(w, http.StatusNotFound, reasonADOOwnPATUnknownRow, adoOwnPATUnknownRowRefusal)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// adoOwnPATRowState is what the cleanup's audit row says about the row it
+// deleted a token for: "" when the caller may still use it, else why not.
+func (s *Server) adoOwnPATRowState(ctx context.Context, row types.GitProvider) string {
+	switch {
+	case row.Disabled:
+		return "disabled"
+	case !isADOOwnTokenRow(row):
+		return "not_own_token"
+	case len(capVisible(ctx, s, capWorkspaceProvider, []types.GitProvider{row}, func(r types.GitProvider) string { return r.ID })) == 0:
+		return "capability_denied"
+	}
+	return ""
 }
 
 // adoOwnPATDoorRow resolves the row both doors act on, its organisation (a
@@ -526,15 +587,19 @@ func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outco
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, actor, action, adoOwnPATSecretName(rowID), outcome, mustJSON(data)))
 }
 
-// adoOwnPATWriteMu orders the three writers of a stored own token in this
-// process — a paste (handlePutADOOwnPAT), a removal (handleDeleteADOOwnPAT) and
-// the refusal stamp — so a stamp never writes an old token back over a fresh
-// paste, nor a removed one back into the store. The stamp reads and writes under
-// it and only ever rewrites a record it just found, so it cannot create one.
-// The secret store has no compare-and-set or tombstone, so a second replica can
-// still interleave: a stamp there can resurrect a token removed here, or leave
-// one stale informational stamp the next paste clears. Closing that needs a
-// compare-and-set or a delete tombstone in the secret store.
+// adoOwnPATWriteMu orders the four writers of a stored own token in this
+// process — a paste (handlePutADOOwnPAT), a removal (handleDeleteADOOwnPAT), the
+// refusal stamp, and an admin's erase of the person's whole namespace
+// (eraseLocked) — so a stamp never writes an old token back over a fresh paste,
+// nor a removed or erased one back into the store. The stamp reads and writes
+// under it and only ever rewrites a record it just found, so it cannot create
+// one. It is the INNERMOST of the three locks the erase takes (AWS owner lock,
+// Entra redemption lock, this), and none of its holders takes either of the
+// others while holding it; keep that, or the erase can deadlock. The secret
+// store has no compare-and-set or tombstone, so a second replica can still
+// interleave: a stamp there can resurrect a token removed or erased here, or
+// leave one stale informational stamp the next paste clears. Closing that
+// needs a compare-and-set or a delete tombstone in the secret store (#1511).
 var adoOwnPATWriteMu sync.Mutex
 
 // stampADOOwnPATRefused records, once, that Azure DevOps refused owner's own

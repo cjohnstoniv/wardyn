@@ -1,9 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// People an admin sets up before their first sign-in, and API tokens an admin
-// mints for them (#1157) — the interim path for an install whose members never
-// open the console, until delegation (#1142) lands.
+// People an admin sets up before their first sign-in (#1157). The admin-minted
+// token that once rode with them is gone (#1477): a person signs in and creates
+// their own, and a token already minted that way is listed for revocation.
 //
 // The keying rule is the one sign-in already uses: a person's principal IS the
 // identity provider's `sub`, exact and case-sensitive (oidc's CallbackHandler
@@ -37,10 +37,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// mountPeopleRoutes is the pre-created identity and admin-mint family, all on
-// securityOps: the issue's tier. The guard against a security admin minting an
-// admin's credential lives in the mint handler, because it depends on WHO the
-// token is for, not on the route.
+// mountPeopleRoutes is the pre-created identity family, all on securityOps: the
+// issue's tier. The mint route stays mounted so a non-admin is refused as ever
+// and an admin hears why it no longer mints (handleMintPersonAPIToken).
 func (s *Server) mountPeopleRoutes(securityOps chi.Router) {
 	// The sign-in half of the family: both sign-in doors (the callback and a
 	// portal's token exchange) resolve an Entra person through it.
@@ -229,34 +228,28 @@ func personCollision(directory []principalIdentity, principal, email string) str
 }
 
 // personMintNoHumanRefusal is the 403 for a caller with no signed-in human
-// behind them: minted_by must name a person.
+// behind them. The refusal below no longer needs a minter, but the two no-store
+// guards keep their reasons: an API token or the shared admin token still hears
+// why it is refused, and the shared reason pins stay what they were.
 const personMintNoHumanRefusal = "minting a token for a person needs a signed-in admin — the admin token and local mode name no one to record as its minter"
 
-// handleMintPersonAPIToken is POST /api/v1/people/{principal}/tokens: mint a
-// wdn_ token OWNED by a pre-created person, stamped with the role and user type
-// their sign-in would derive from what is knowable before it, and return the
-// plaintext once.
+// personTokenMintRemovedRefusal is the packet's wording, verbatim (#1477).
+const personTokenMintRemovedRefusal = "No one can create a token that acts as another person. They sign in and create their own."
+
+// handleMintPersonAPIToken is POST /api/v1/people/{principal}/tokens, which no
+// longer mints (#1477, ROLE-01): a token an admin created for someone else acted
+// as that person while the admin held its plaintext, so no role may create one
+// and no flag, environment variable or role turns it back on. A person signs
+// in and creates their own with POST /me/tokens.
 //
-// The stamp. Before a first sign-in the person's roles and groups claims do not
-// exist, so the role is derived from their recorded email alone, through the
-// same PreviewRole a login's derivation uses, and the group snapshot is stamped
-// UNKNOWN (nil, truncated): every group-tier ceiling, drive and deny grant
-// fails closed for the token exactly as it does for a truncated session. The
-// person's sign-in re-stamps it (store.RefreshAPITokenIdentity), and revokes it
-// instead if the real role differs — see that method.
-//
-// The guards, in order: a signed-in human caller who is not itself a token
-// (the /me/tokens rules, for the same reasons); a person record for exactly
-// this subject; a derivation that admits a sign-in at all and does not rest on
-// an elevated default role their unseen groups might have narrowed; and a
-// target on the admin or security-admin tier only for a super admin caller.
+// The route stays on securityOps, so a non-admin caller is refused before this
+// handler with no audit row. Here the two no-store guards answer first, in the
+// order they always did, and every other caller gets the same 403 whether the
+// subject exists or not: the handler reads no body and looks no one up.
+// Tokens minted before this change stay valid until revoked (listed by GET
+// /tokens?minted_for_others=true); store.RefreshAPITokenIdentity still revokes
+// one whose person signs in under a different role.
 func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request) {
-	// Admission time, before the body is read — handleCreateAPIToken says why.
-	authorizedAt := s.cfg.Now().UTC()
-	var req createAPITokenRequest
-	if !decodeStrict(w, r, &req) {
-		return
-	}
 	ctx := r.Context()
 	caller := oidcHumanFromContext(ctx)
 	if caller == "" || s.cfg.OIDC == nil {
@@ -267,83 +260,14 @@ func (s *Server) handleMintPersonAPIToken(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromAPIToken, "an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
-	ps, ok := s.personStoreOr501(w)
-	if !ok {
-		return
+	target := principalParam(r)
+	if len(target) > 256 {
+		target = target[:256]
 	}
-	name, ok := apiTokenName(w, req.Name)
-	if !ok {
-		return
-	}
-	principal := principalParam(r)
-	p, err := ps.GetPerson(ctx, principal)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && s.isReservedPrincipal(p.Principal)) {
-		writeErrorReason(w, http.StatusNotFound, reasonPersonNotFound, "no person is recorded under this subject — create or confirm them with POST /api/v1/people first")
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "get person", err)
-		return
-	}
-	d, err := s.cfg.OIDC.PreviewRole(ctx, nil, nil, p.Email)
-	if err != nil {
-		writeServerError(w, r, "derive role", err)
-		return
-	}
-	if status, reason, msg := s.personMintRefusal(ctx, d); status != 0 {
-		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), caller,
-			"person.token.create", p.Principal, "denied", mustJSON(map[string]any{"reason": reason, "role": d.Role})))
-		writeErrorReason(w, status, reason, msg)
-		return
-	}
-	if s.apiTokenCapReached(w, r, p.Principal) {
-		return
-	}
-	// The caller's own session may have been cut off while this was in flight
-	// (handleCreateAPIToken's late re-check, for the same instant).
-	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, caller, oidcEmailFromContext(ctx), authorizedAt)
-		if rerr != nil {
-			writeServerError(w, r, "create api token", rerr)
-			return
-		}
-		if revoked {
-			writeErrorReason(w, http.StatusForbidden, reasonPersonMintNoHuman, personMintNoHumanRefusal)
-			return
-		}
-	}
-	unknown := true
-	created, ok := s.insertAPIToken(w, r, types.APIToken{
-		Principal: p.Principal, Email: p.Email, Role: d.Role, UserType: d.UserType,
-		GroupsTruncated: &unknown, Name: name, CreatedAt: authorizedAt, MintedBy: caller,
-	})
-	if !ok {
-		return
-	}
-	// Both parties: the actor is the minter, principal the owner.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), caller,
-		"person.token.create", created.ID.String(), "success",
-		mustJSON(map[string]any{"principal": created.Principal, "name": created.Name, "role": created.Role, "user_type": created.UserType})))
-	writeJSON(w, http.StatusCreated, created)
-}
-
-// personMintRefusal is the derivation half of the mint guards: status 0 when
-// the mint may proceed. The tiers are asked through roleSnapshotCtx, never
-// re-derived from a role comparison (http.go's rule).
-func (s *Server) personMintRefusal(ctx context.Context, d oidc.Derivation) (status int, reason, msg string) {
-	elevated := s.isSecurityOperator(roleSnapshotCtx(d.Role))
-	switch {
-	case !d.OK():
-		return http.StatusConflict, reasonPersonMintNoSignIn,
-			"this person's email derives no sign-in on this deployment (" + d.Denial + "), so there is no role to mint a token under"
-	case elevated && slices.ContainsFunc(d.Matches, func(m oidc.Match) bool { return m.Source == oidc.MatchSourceDefaultRole }):
-		return http.StatusConflict, reasonPersonMintDefaultRoleUnknownGroups,
-			"this person's role would come from the elevated default role, which their groups could narrow once known — they must sign in once first"
-	case elevated && !s.isOperator(ctx):
-		return http.StatusForbidden, reasonPersonMintElevatedTarget,
-			"only a super admin may mint a token for an admin or a security admin"
-	}
-	return 0, "", ""
+		"person.token.create", target, "denied",
+		mustJSON(map[string]any{"reason": reasonPersonTokenMintRemoved, "target": target})))
+	writeErrorReason(w, http.StatusForbidden, reasonPersonTokenMintRemoved, personTokenMintRemovedRefusal)
 }
 
 // handleListPersonAPITokens is GET /api/v1/people/{principal}/tokens: one

@@ -675,6 +675,9 @@ const (
 const (
 	reasonCredentialErasePrincipalRequired = "credential_erase_principal_required"
 	reasonCredentialEraseOperatorNamespace = "credential_erase_operator_namespace"
+	// The Azure DevOps sign-in's configuration could not be read, so the erase
+	// could not take the sign-in's lock and refused (#1478).
+	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
 // GET /permissions/explain (capabilities_explain.go).

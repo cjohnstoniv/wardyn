@@ -166,28 +166,29 @@ func (s *Server) forgetADOSignIn(ctx context.Context, owner, rowID string) (remo
 // under the redemption lock for rowID, and forgets the access tokens cached
 // for owner before releasing it. A redemption in flight either finishes first
 // (and del deletes its rotated refresh token, the forget its cached token) or
-// starts after, reads the store under the lock and finds nothing. rowID ""
-// takes no lock: no sign-in row is configured, so none can be redeemed.
+// starts after, reads the store under the lock and finds nothing. The lock is
+// taken even when rowID is "" (no sign-in row configured): the key is then
+// merely unshared, and every caller takes it in the same place in the order
+// (see eraseLocked).
 func (s *Server) eraseADOSignIn(owner, rowID string, del func() error) error {
-	if rowID != "" {
-		unlock := s.adoEntra.lock(owner, rowID)
-		defer unlock()
-	}
+	unlock := s.adoEntra.lock(owner, rowID)
+	defer unlock()
 	defer s.adoEntraTokens.forget(owner) // runs before the unlock
 	return del()
 }
 
 // adoSignInRowID is the row this deployment's Azure DevOps sign-in redeems
-// for, "" when none is configured or the configuration cannot be read.
-func (s *Server) adoSignInRowID(ctx context.Context) string {
+// for: "" with no error when none is configured, and an error when the
+// configuration cannot be read, which an erase must not proceed past.
+func (s *Server) adoSignInRowID(ctx context.Context) (string, error) {
 	if s.cfg.ADOEntra == nil {
-		return ""
+		return "", nil
 	}
 	cfg, found, err := s.cfg.ADOEntra(ctx)
 	if err != nil || !found {
-		return ""
+		return "", err
 	}
-	return cfg.RowID
+	return cfg.RowID, nil
 }
 
 // adoSignInEnds counts, per person, the disconnects and erases of their

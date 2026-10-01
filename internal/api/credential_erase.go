@@ -66,22 +66,30 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
+	data := map[string]any{}
+	// The sign-in's row id is read BEFORE anything is erased, because the erase
+	// must hold the redemption lock for it: a configuration that cannot be read
+	// refuses the erase rather than proceeding without the lock.
+	rowID, cfgErr := s.adoSignInRowID(r.Context())
+	if cfgErr != nil {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialEraseSignInConfigUnreadable,
+			"The Azure DevOps sign-in configuration could not be read, so nothing was erased. Try again.")
+		return
+	}
 	// Revoke the person's live Azure DevOps tokens first: the erase takes the
-	// sign-in that revoking them needs.
-	// Under the sign-in's redemption lock (eraseADOSignIn), so a redemption in
-	// flight cannot store it again; the cache is forgotten even on a partial
-	// erase, which may have removed the sign-in.
+	// sign-in that revoking them needs. That runs BEFORE and OUTSIDE the three
+	// locks below, because its paths take the Entra redemption lock themselves
+	// (ado_pat_client.go) and a nested take would deadlock.
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
 	var rep secretstore.EraseReport
 	err := func() error {
 		defer s.adoSignInEnds.begin(owner, adoPATRevokeOffboarding)()
 		s.revokeOwnerRunPATs(r.Context(), owner, adoPATRevokeOffboarding)
-		return s.eraseADOSignIn(owner, s.adoSignInRowID(r.Context()), func() (err error) {
-			rep, err = secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)
-			return err
-		})
+		return s.eraseLocked(r.Context(), owner, rowID, &rep)
 	}()
-	data := map[string]any{"count": rep.Count}
+	data["count"] = rep.Count
 	if rep.Store != "" {
 		data["store"], data["purged"] = rep.Store, rep.Purged
 		if !rep.Purged && rep.RecoverableDays > 0 {
@@ -102,6 +110,42 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"credential.erase", owner, "success", withSecretOwner(data, owner, known)))
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// eraseLocked deletes every credential in owner's namespace under the three
+// locks that order every other writer of a stored credential, taken in this
+// order and nowhere nested the other way round (#1478):
+//
+//  1. lockAWSSSOOwner(owner): an AWS SSO renewal in flight finishes and
+//     persists first, then is erased with the rest. The erase waits at most the
+//     renewal's own bound, 2 x awsSSORefreshTimeout plus its retry delay, about
+//     21 seconds.
+//  2. The Entra redemption lock (inside eraseADOSignIn), taken even when no
+//     sign-in row is configured, so the order never depends on configuration.
+//  3. adoOwnPATWriteMu, innermost, held only around EraseOwner (the deletes
+//     and the re-list). It is process-global, so an erase briefly serialises
+//     every person's own-token writes. That is accepted.
+//
+// No holder of any of the three takes another of them while holding it, which
+// is what makes this order safe; keep it so. EraseOwner still re-lists and
+// fails if anything remains, as well as the locks: the success row is written
+// by the caller only after the locks are released and the re-list was empty.
+//
+// Writers outside these locks are reconnects, which a person or a sign-in is
+// entitled to make after an erase: a model-provider credential
+// (model_provider_credentials.go), a secret write (secrets.go), a provider
+// sign-in capture (provider_signin.go), an own-token paste's first write
+// (ado_own_pat.go, which takes only adoOwnPATWriteMu), and the AWS capture
+// (ssotoken.go), which a held AWS lock serialises. A run that already holds a
+// credential in memory keeps it; the erase does not reach into a running run.
+func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secretstore.EraseReport) error {
+	defer s.lockAWSSSOOwner(owner)()
+	return s.eraseADOSignIn(owner, rowID, func() (err error) {
+		adoOwnPATWriteMu.Lock()
+		defer adoOwnPATWriteMu.Unlock()
+		*rep, err = secretstore.EraseOwner(ctx, s.cfg.Secrets, owner)
+		return err
+	})
 }
 
 // expiredSweeper is the store that can delete the rows whose expiry has

@@ -69,12 +69,15 @@ var kernelDoors = map[string][]string{
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.
-	"handleListPolicies":             {"capPolicy"},
-	"handleSetupStatus":              {"capAgent"},
-	"setupModelProviders":            {"capAgent"},
-	"setupModelProviderState":        {"capModelProvider"},
-	"computeSCMAccessRowsFor":        {"capWorkspaceProvider"},
-	"adoOwnPATRowFor":                {"capWorkspaceProvider"}, // PUT/DELETE /me/scm/azure-devops/token (D-6)
+	"handleListPolicies":      {"capPolicy"},
+	"handleSetupStatus":       {"capAgent"},
+	"setupModelProviders":     {"capAgent"},
+	"setupModelProviderState": {"capModelProvider"},
+	"computeSCMAccessRowsFor": {"capWorkspaceProvider"},
+	"adoOwnPATRowFor":         {"capWorkspaceProvider"}, // PUT/DELETE /me/scm/azure-devops/token (D-6)
+	// DELETE /me/scm/azure-devops/token's audit row_state: whether the caller
+	// may still use a row whose token they are removing (#1479).
+	"adoOwnPATRowState":              {"capWorkspaceProvider"},
 	"userVisibleOperatorSecretNames": {"capSecret"},
 	// #1267: GET /workspaces' and GET /workspaces/{id}'s per-row
 	// available_to_you, over the two values that apply to EVERY run type —
