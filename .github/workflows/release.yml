@@ -199,6 +199,7 @@ jobs:
       contents: read
       actions: read
       packages: read # the staged digests are read from ghcr.io/cjohnstoniv/staging
+      attestations: read # gh attestation verify lists the nightly's build provenance
     outputs:
       path: ${{ steps.path.outputs.path }}
       tree: ${{ steps.green.outputs.tree }}
@@ -707,6 +708,16 @@ jobs:
             dockerfile: deploy/images/novnc/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # An empty or malformed DIGEST would make every later step fail on a ref
+      # that no longer names a digest; fail here, by name, instead.
+      - name: Check the staged digest
+        env:
+          NAME: ${{ matrix.name }}
+        run: |
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "preflight-green passed no valid staged digest for ${NAME} (got '${DIGEST}')"
+            exit 1
+          fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: "v2.6.4"
@@ -742,7 +753,12 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       # A copy moves the manifest bytes as they are, so the digest cannot change;
-      # the check after each copy is what proves it did not.
+      # the check after each copy is what proves it did not. --force is needed
+      # because cosign copy refuses to move a tag that already holds a different
+      # digest, and :latest already exists on the three float-latest rows. It is
+      # safe: staging is unsigned (nightly.yml signs nothing there), so there is
+      # no release signature on the source for it to overwrite, and the equality
+      # check below proves the tag ended up on $DIGEST.
       - name: Copy the verified digest to the release tags (no rebuild)
         if: inputs.dry_run != true
         env:
@@ -752,7 +768,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
-            cosign copy "ghcr.io/cjohnstoniv/staging/${NAME}@${DIGEST}" "$tag"
+            cosign copy --force "ghcr.io/cjohnstoniv/staging/${NAME}@${DIGEST}" "$tag"
             got="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             test "$got" = "$DIGEST" || { echo "$tag is $got after the copy, expected $DIGEST"; exit 1; }
             echo "copied $tag -> $DIGEST"

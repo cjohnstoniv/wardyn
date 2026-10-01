@@ -592,15 +592,18 @@ else
         [ "$promote_got" = "$build_got" ] \
             || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
     fi
-    staging_run="$(yq -r '.jobs["preflight-green"].steps[] | select(.id == "staging") | .run' "$REL")"
-    for marker in 'gh attestation verify' '--signer-workflow' '--source-digest' 'org.opencontainers.image.revision' '86400'; do
-        printf '%s' "$staging_run" | grep -qF -- "$marker" \
-            || { bad "$REL: preflight-green's staging step no longer contains '$marker' — a promoted digest would lose part of its proof (attestation, source commit, revision label, age limit)"; stage_fail=1; }
+    # Whole-line comments are dropped first, so a marker named only in a comment
+    # proves nothing; each pattern is anchored to the command it must be.
+    nocomment() { sed -E '/^[[:space:]]*#/d'; }
+    staging_run="$(yq -r '.jobs["preflight-green"].steps[] | select(.id == "staging") | .run' "$REL" | nocomment)"
+    for pat in '^[[:space:]]*gh attestation verify ' '^[[:space:]]*--signer-workflow ' '^[[:space:]]*--source-digest ' 'org\.opencontainers\.image\.revision' '\-gt 86400 \]'; do
+        printf '%s' "$staging_run" | grep -qE -- "$pat" \
+            || { bad "$REL: preflight-green's staging step no longer has a command matching '$pat' — a promoted digest would lose part of its proof (attestation call, signer workflow, source commit, revision label, 86400-second age limit)"; stage_fail=1; }
     done
-    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL")"
-    printf '%s' "$promote_copy" | grep -qF 'cosign copy' \
+    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
+    printf '%s' "$promote_copy" | grep -qE '^[[:space:]]*cosign copy --force ' \
         && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \
-        || { bad "$REL: the promote job's copy step must run cosign copy and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
+        || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
