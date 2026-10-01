@@ -260,6 +260,9 @@ type bootFlags struct {
 	// rewrapRetirePlatformKey is `wardynd -rewrap -rewrap-retire-platform-key`:
 	// no env pair either.
 	rewrapRetirePlatformKey *bool
+	// rewrapAdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`: no
+	// env pair either, so a stray variable cannot arm an adoption.
+	rewrapAdoptBootKeys *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -509,6 +512,10 @@ func parseBootFlags() *bootFlags {
 			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
 			"WARDYN_KEK=transit key or the local key, then exit. Afterwards unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM. "+
 			"See docs/operations/secrets-and-keys.md (default false)"),
+		rewrapAdoptBootKeys: flag.Bool("rewrap-adopt-boot-keys", false, "with -rewrap only: you attest that no boot key has been adopted onto the platform key "+
+			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
+			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
+			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:        registerVaultFlags(),
 		hostCapacity: registerHostCapacityFlags(),
 		azure:        registerAzureFlags(),

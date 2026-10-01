@@ -335,7 +335,9 @@ func TestPlatformKEK_RewrapBothWaysIsIdempotent(t *testing.T) {
 
 	rewrap := func(writes bool) secretstorepg.RewrapResult {
 		t.Helper()
-		res, err := secretstorepg.RewrapKeys(ctx, platformKeys(pool, cred, plat, writes))
+		d := platformKeys(pool, cred, plat, writes)
+		d.AdoptBootKeys = true // the first run onto the platform key is the adoption
+		res, err := secretstorepg.RewrapKeys(ctx, d)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -335,7 +335,7 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 		checks = append(checks, SetupCheck{
 			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
 			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
-			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
+			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap -rewrap-adopt-boot-keys` once (it says you have never moved the boot keys before), then restart wardynd with it set.",
 		})
 	}
 	return checks

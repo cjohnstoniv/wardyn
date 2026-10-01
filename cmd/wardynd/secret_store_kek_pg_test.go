@@ -186,7 +186,8 @@ func TestRewrapMode_KeyServiceBothWays(t *testing.T) {
 
 	k := newMemKEK()
 	rec := &recAudit{}
-	if err := rewrapKeys(ctx, rec, secretstore.Deps{Pool: pool, AgeIdentity: id, PlatformIdentity: platform, KEK: k, KEKWrites: true}); err != nil {
+	// The boot keys leave the age key's platform KEK for the key service: an adoption.
+	if err := rewrapKeys(ctx, rec, secretstore.Deps{Pool: pool, AgeIdentity: id, PlatformIdentity: platform, KEK: k, KEKWrites: true, AdoptBootKeys: true}); err != nil {
 		t.Fatalf("-rewrap onto the key service: %v", err)
 	}
 	for n, got := range rowKEKs(t, pool) {

@@ -151,7 +151,7 @@ func TestRewrap_MovesEveryRowOntoItsPurposeKey(t *testing.T) {
 	}
 	before := rawRows(t, pool)
 
-	n, err := Rewrap(ctx, pool, id, platform)
+	n, err := Rewrap(ctx, pool, id, platform, true)
 	if err != nil || n != 4 {
 		t.Fatalf("Rewrap = (%d, %v), want 4 rows", n, err)
 	}
@@ -178,7 +178,7 @@ func TestRewrap_MovesEveryRowOntoItsPurposeKey(t *testing.T) {
 	if _, err := splitStore(t, pool, id, nil).Get(ctx, signingKey); err == nil {
 		t.Error("a wardynd without the platform key still opens a boot key moved onto it")
 	}
-	if n, err := Rewrap(ctx, pool, id, platform); err != nil || n != 0 {
+	if n, err := Rewrap(ctx, pool, id, platform, true); err != nil || n != 0 {
 		t.Errorf("second Rewrap = (%d, %v), want (0, nil)", n, err)
 	}
 }
@@ -195,7 +195,7 @@ func TestRewrap_AbortsOnARowUnderAnotherKey(t *testing.T) {
 	putUnder(t, pool, stray, "", "zz-stray", "stray")
 	before := rawRows(t, pool)
 
-	n, err := Rewrap(ctx, pool, id, mustIdentity(t))
+	n, err := Rewrap(ctx, pool, id, mustIdentity(t), true)
 	if err == nil || n != 0 || !strings.Contains(err.Error(), rowRef("", "zz-stray")) || !strings.Contains(err.Error(), "nothing committed") {
 		t.Fatalf("Rewrap over a stray row = (%d, %v), want an abort naming it", n, err)
 	}

@@ -31,6 +31,9 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 	if *f.rewrapRetirePlatformKey && !*f.rewrap {
 		return true, fmt.Errorf("refusing to run: -rewrap-retire-platform-key is a mode of -rewrap; run `wardynd -rewrap -rewrap-retire-platform-key`")
 	}
+	if *f.rewrapAdoptBootKeys && !*f.rewrap {
+		return true, fmt.Errorf("refusing to run: -rewrap-adopt-boot-keys is a mode of -rewrap; run `wardynd -rewrap -rewrap-adopt-boot-keys`")
+	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
 	}

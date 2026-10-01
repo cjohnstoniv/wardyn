@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -37,7 +38,10 @@ func TestPG_BootWithAPlatformKeyNeedsRewrapOnce(t *testing.T) {
 		t.Fatalf("boot with the platform key over a pre-split signing key = %v, want a refusal naming -rewrap", err)
 	}
 
-	if n, err := secretstorepg.Rewrap(ctx, pool, id, platform); err != nil || n != 1 {
+	if n, err := secretstorepg.Rewrap(ctx, pool, id, platform, false); err == nil || n != 0 || !errors.Is(err, secretstorepg.ErrAdoptNotRequested) {
+		t.Fatalf("Rewrap without -rewrap-adopt-boot-keys = (%d, %v), want it refused", n, err)
+	}
+	if n, err := secretstorepg.Rewrap(ctx, pool, id, platform, true); err != nil || n != 1 {
 		t.Fatalf("Rewrap = (%d, %v)", n, err)
 	}
 	got, err := loadOrCreateSigningKey(ctx, unlocked(split))
