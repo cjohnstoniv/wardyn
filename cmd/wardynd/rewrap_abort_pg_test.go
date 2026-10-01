@@ -324,3 +324,76 @@ func TestWithPlatformKEK(t *testing.T) {
 		t.Fatalf("no platform key: %+v; want none", d)
 	}
 }
+
+// Every boot key still under the credential key moves onto the platform key in
+// one -rewrap (the first move), a credential stays put, and a second run moves
+// nothing.
+func TestRewrapKeys_FirstMoveTakesEveryBootKeyUnderTheCredentialKey(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	credStore, err := buildSecretStore(t.Context(), pool, "", nil, "", storeClients{kek: cred, kekWrites: true}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"wardyn-signing-key", "wardyn-session-key", "a-credential"}
+	for _, name := range names {
+		if err := credStore.Put(t.Context(), name, []byte("v-"+name)); err != nil {
+			t.Fatal(err)
+		}
+		if got := rewrapKEKID(t, pool, name); got != cred.ID() {
+			t.Fatalf("%s is sealed under %q, want the credential key", name, got)
+		}
+	}
+	d := secretstore.Deps{Pool: pool, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true}
+	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
+		t.Fatalf("first move = %v; want every boot key moved", err)
+	}
+	for name, want := range map[string]string{"wardyn-signing-key": plat.ID(), "wardyn-session-key": plat.ID(), "a-credential": cred.ID()} {
+		if got := rewrapKEKID(t, pool, name); got != want {
+			t.Fatalf("%s is sealed under %q after the move, want %q", name, got, want)
+		}
+	}
+	if err := rewrapKeys(t.Context(), &capturingRecorder{}, d); err != nil {
+		t.Fatalf("second run = %v; want nothing to move and no refusal", err)
+	}
+}
+
+// A boot key planted under the credential key after the first move — by
+// someone holding the credential key's token and write access to the table —
+// is refused by -rewrap, which changes no row: not the planted one, not the
+// boot keys already on the platform key.
+func TestRewrapKeys_RefusesABootKeyPlantedUnderTheCredentialKey(t *testing.T) {
+	pool := envelopeDB(t)
+	cred, plat := newMemKEK(), platformMemKEK{newMemKEK()}
+	id := seedPlatformSplit(t, pool, cred, plat)
+	credStore, err := buildSecretStore(t.Context(), pool, "", nil, "", storeClients{kek: cred, kekWrites: true}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credStore.Put(t.Context(), "wardyn-session-key", []byte("forged")); err != nil {
+		t.Fatal(err)
+	}
+	if got := rewrapKEKID(t, pool, "wardyn-session-key"); got != cred.ID() {
+		t.Fatalf("the planted row is under %q, want the credential key", got)
+	}
+	before := rewrapRows(t, pool)
+
+	rec := &capturingRecorder{}
+	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEK: cred, KEKWrites: true, PlatformKEK: plat, PlatformKEKWrites: true}
+	err = rewrapKeys(t.Context(), rec, d)
+	if err == nil || !strings.Contains(err.Error(), "REFUSED") || !strings.Contains(err.Error(), "wardyn-session-key") || !strings.Contains(err.Error(), "planted") {
+		t.Fatalf("-rewrap with a boot key planted under the credential key = %v; want a named refusal naming the row", err)
+	}
+	if strings.Contains(err.Error(), "rerun") {
+		t.Fatalf("the refusal %q tells the operator to rerun -rewrap", err)
+	}
+	if after := rewrapRows(t, pool); before != after {
+		t.Fatal("a refused -rewrap changed rows")
+	}
+	if got := rewrapKEKID(t, pool, "wardyn-session-key"); got != cred.ID() {
+		t.Fatalf("the planted row was promoted onto %q", got)
+	}
+	if len(rec.got) != 1 || rec.got[0].Outcome != "failure" {
+		t.Fatalf("audit events = %+v; want one failure", rec.got)
+	}
+}

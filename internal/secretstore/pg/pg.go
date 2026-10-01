@@ -176,7 +176,9 @@ func (s *Store) reader(e envelope) (kek.KEK, error) {
 			return s.platformService, nil
 		}
 		if s.platformWrites {
-			return nil, fmt.Errorf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q (a boot key still under another key moves with `wardynd -rewrap`)", e.kekID, s.platformService.ID())
+			return nil, fmt.Errorf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q; if this install predates the platform key, "+
+				"`wardynd -rewrap` moves its boot keys onto it, but if any boot key already sits under %q this row may have been planted by someone holding %q, "+
+				"so find out who wrote it (the row's updated_at, the audit log) before moving anything", e.kekID, s.platformService.ID(), s.platformService.ID(), e.kekID)
 		}
 	}
 	if s.service != nil && e.kekID == s.service.ID() {
@@ -545,7 +547,7 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 		}
 		return to.writer(e.ownedBy, e.name)
 	}
-	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil)
+	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil)
 }
 
 // RewrapResult is what RewrapKeys did.
@@ -665,9 +667,41 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		res.PlatformKeyVersion, latest[res.PlatformKeyService] = n, n
 	}
 	target := func(e envelope) kek.KEK { return s.writer(e.ownedBy, e.name) }
-	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest)
+	var guard func([]envelope) error
+	if s.platformWrites {
+		guard = func(all []envelope) error { return refuseMixedBootKeys(s.platformService.ID(), all) }
+	}
+	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard)
 	res.Rewrapped = n
 	return res, err
+}
+
+// refuseMixedBootKeys is the first-move rule for the platform key service
+// (platformID): boot keys move onto it only while none is under it yet. Once
+// one is, every boot key a wardynd wrote or moved sits under it, so a boot key
+// under any other key was written there after the move, by whoever holds that
+// key and can write the table; promoting it would hand that writer the boot
+// keys. The refusal changes nothing and names the rows.
+func refuseMixedBootKeys(platformID string, all []envelope) error {
+	var under bool
+	var other []string
+	for _, e := range all {
+		if secretstore.Kind(e.ownedBy, e.name) != "platform" {
+			continue
+		}
+		if e.kekID == platformID {
+			under = true
+		} else {
+			other = append(other, fmt.Sprintf("%s under %q", rowRef(e.ownedBy, e.name), e.kekID))
+		}
+	}
+	if !under || len(other) == 0 {
+		return nil
+	}
+	return fmt.Errorf("pg secretstore: rewrap REFUSED (nothing changed): boot keys are already under the platform key %q, "+
+		"yet %s sit under another key — a mixed state a rewrap never leaves, so these rows may have been planted by someone holding that other key. "+
+		"Do not promote them: find out who wrote them (updated_at, the audit log, database access logs), and restore the boot keys from a backup if they are forged",
+		platformID, strings.Join(other, ", "))
 }
 
 // latestVersion is the version a wrap under k would name, or "" when k has no
@@ -684,8 +718,10 @@ func latestVersion(ctx context.Context, k kek.KEK) (string, error) {
 // the operation leaves alone; a row already under its target — and, when the
 // target is versioned and latest holds its kek_id, at that version — is
 // skipped. latest maps a versioned key service's kek_id to the version a wrap
-// made now would name (nil: none). op names the operation in its errors.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string) (int, error) {
+// made now would name (nil: none). op names the operation in its errors. guard,
+// when not nil, sees every selected (locked) row before any moves and may
+// refuse the whole run.
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error) (int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
@@ -710,6 +746,11 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		return 0, fmt.Errorf("pg secretstore: %s scan: %w", op, err)
 	}
 
+	if guard != nil {
+		if err := guard(all); err != nil {
+			return 0, err
+		}
+	}
 	n := 0
 	for i, e := range all {
 		to := target(e)

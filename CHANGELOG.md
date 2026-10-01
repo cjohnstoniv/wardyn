@@ -27,6 +27,11 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Security
 
+- **`wardynd -rewrap` no longer promotes a boot key planted under the credential key (#979).** With
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` set, `-rewrap` moves the boot keys onto the platform key only while none
+  is under it yet. Once one is, a boot key under any other key is refused, with nothing changed and the rows
+  named, because someone holding the credential key and write access to the table could have planted it. The
+  boot-time refusal of such a row no longer says to run `-rewrap`; it says to find out who wrote it first.
 - **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
   The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
   skipped it, so three of the four baked GitHub keys loaded. It is replaced with the key GitHub
