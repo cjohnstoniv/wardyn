@@ -4,8 +4,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2549,5 +2552,151 @@ func TestSessionsListCmd_APIError(t *testing.T) {
 	}
 	if ae.Status != http.StatusForbidden {
 		t.Errorf("Status = %d, want 403", ae.Status)
+	}
+}
+
+// --------------------------------------------------------------------------
+// #1492: --timeout bounds the requests, not just the gaps between them
+// --------------------------------------------------------------------------
+
+// timedRunServer answers GET /runs/{id} after getDelay with the given state,
+// and the audit reads after auditDelay. Every request is counted.
+func timedRunServer(t *testing.T, runID uuid.UUID, state types.RunState, getDelay, auditDelay time.Duration, audit []types.AuditEvent) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			time.Sleep(auditDelay)
+			_ = json.NewEncoder(w).Encode(audit)
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			_, _ = w.Write([]byte(`{"vcs":"none","path":"/workspace"}`))
+		default:
+			time.Sleep(getDelay)
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: state})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+// TestOperatorWaitTimeoutDoesNotBoundRequests is #1492's reproduction,
+// flipped: a read that outlasts --timeout used to be waited for in full, and
+// a run that was done when it returned was reported as success after the
+// budget. Both wait paths now exit 124 at the budget.
+func TestOperatorWaitTimeoutDoesNotBoundRequests(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint("ready=", ready), func(t *testing.T) {
+			id := uuid.New()
+			state := types.RunCompleted
+			if ready {
+				state = types.RunRunning
+			}
+			srv, _ := timedRunServer(t, id, state, 500*time.Millisecond, 0, nil)
+			c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+			start := time.Now()
+			var err error
+			if ready {
+				_, err = waitForRunReady(context.Background(), io.Discard, c, id, timeout, false)
+			} else {
+				err = waitForRun(context.Background(), io.Discard, c, id, timeout)
+			}
+			elapsed := time.Since(start)
+			if code := exitCodeOf(err); code != 124 {
+				t.Fatalf("exit = %d (err=%v), want 124: a response after the deadline must not be accepted", code, err)
+			}
+			if elapsed > timeout+50*time.Millisecond {
+				t.Errorf("elapsed = %v, want under %v: the request must be cut at the deadline", elapsed, timeout+50*time.Millisecond)
+			}
+		})
+	}
+}
+
+// A run that is FAILED inside the budget but whose audit read is cut off by
+// the deadline must still fail: never exit 0, and the code is the documented
+// fallback 1.
+func TestWaitForRun_FailedWithCutAuditReadIsNeverZero(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	id := uuid.New()
+	srv, _ := timedRunServer(t, id, types.RunFailed, 0, 2*time.Second, nil)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	err := waitForRun(context.Background(), io.Discard, c, id, 150*time.Millisecond)
+	if code := exitCodeOf(err); code != 1 {
+		t.Fatalf("exit = %d (err=%v), want 1: FAILED with an unreadable exit code is never 0", code, err)
+	}
+}
+
+// An in-budget FAILED reports run.complete's own exit code.
+func TestWaitForRun_InBudgetFailedReportsTheTaskCode(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	id := uuid.New()
+	srv, _ := timedRunServer(t, id, types.RunFailed, 0, 0, []types.AuditEvent{
+		{Action: "run.complete", Data: json.RawMessage(`{"exit_code":7}`)},
+	})
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	err := waitForRun(context.Background(), io.Discard, c, id, 5*time.Second)
+	if code := exitCodeOf(err); code != 7 {
+		t.Fatalf("exit = %d (err=%v), want 7", code, err)
+	}
+}
+
+// --timeout <= 0 exits 124 with no request, on every wait path (a clean
+// break: it used to mean "poll once, then time out").
+func TestWait_NonPositiveTimeoutExits124WithNoRequest(t *testing.T) {
+	for _, timeout := range []string{"0", "-1s"} {
+		for _, args := range [][]string{
+			{"run", "--agent", "claude-code", "--wait", "--timeout", timeout},
+			{"run", "wait-ready", uuid.New().String(), "--timeout", timeout},
+		} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				srv, n := timedRunServer(t, uuid.New(), types.RunCompleted, 0, 0, nil)
+				_, err := operatorCommand(t, srv.URL, "", args...)
+				if code := exitCodeOf(err); code != 124 {
+					t.Fatalf("exit = %d (err=%v), want 124", code, err)
+				}
+				if got := n.Load(); got != 0 {
+					t.Errorf("%d request(s) made for a non-positive timeout", got)
+				}
+			})
+		}
+	}
+}
+
+// An external cancel is a cancel, not a timeout.
+func TestWaitForRun_ParentCancelIsNotATimeout(t *testing.T) {
+	id := uuid.New()
+	srv, _ := timedRunServer(t, id, types.RunRunning, 0, 0, nil)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	err := waitForRun(ctx, io.Discard, c, id, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if code := exitCodeOf(err); code == 124 {
+		t.Fatalf("an external cancel reported as a timeout (124)")
+	}
+}
+
+// Negative: transient poll errors inside the budget are still tolerated.
+func TestWaitForRun_TransientErrorsStillTolerated(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	id := uuid.New()
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if polls.Add(1) <= 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(types.AgentRun{ID: id, State: types.RunCompleted})
+	}))
+	t.Cleanup(srv.Close)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	if err := waitForRun(context.Background(), io.Discard, c, id, 5*time.Second); err != nil {
+		t.Fatalf("err = %v, want success after transient 502s", err)
 	}
 }
