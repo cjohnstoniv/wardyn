@@ -418,6 +418,18 @@ func TestDocsOpsContinuousImageLaneDocumentedHonestly(t *testing.T) {
 	if signs && regexp.MustCompile(`publish-image\.yml(?s).{0,600}?\bUnsigned\.`).MatchString(releasing) {
 		t.Error(`RELEASING.md still calls the continuous lane "Unsigned." — publish-image.yml runs cosign sign on the pushed digest`)
 	}
+	// install.sh and DESKTOP.md describe this lane to the person running the
+	// enrolment mint. When the workflow signs, neither may call the image
+	// unsigned: that is the same false claim RELEASING.md carried. Signing is not
+	// verification either, so they say that nothing in the lane checks it.
+	if signs {
+		calledUnsigned := regexp.MustCompile(`(?i)not[^.\n]{0,40}cosign-signed|unsigned (main-tip|continuous|code|image)|:latest[^.\n]{0,60}\bunsigned\b`)
+		for _, rel := range [][]string{{"deploy", "desktop", "install.sh"}, {"docs", "DESKTOP.md"}} {
+			if m := calledUnsigned.FindString(readOpsDoc(t, rel...)); m != "" {
+				t.Errorf("%s calls the continuous image unsigned (%q) — publish-image.yml runs cosign sign on the pushed digest; say that nothing in the install lane verifies the signature instead", filepath.Join(rel...), m)
+			}
+		}
+	}
 	if !attests {
 		if !strings.Contains(verify, "publish-image.yml") {
 			t.Error("docs/VERIFY.md never mentions publish-image.yml — its :latest/:sha- tags carry no SBOM and no provenance, and the release identity regexp on that page structurally cannot verify them")

@@ -434,8 +434,9 @@ echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #
 # install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag
-# publish-image.yml pushes after CI passes on main and never cosign-signs, and
-# it runs AS ROOT to mint the device's age identity. The envelope pins
+# publish-image.yml pushes after CI passes on main and signs by digest, but
+# nothing in this lane verifies that signature, and it runs AS ROOT to mint the
+# device's age identity. The envelope pins
 # WARDYN_WARDYND_IMAGE by digest, so a reader of DESKTOP.md would reasonably
 # assume the whole lane is pinned. scripts/check-image-pins.sh pins the console
 # warning; this pins the doc.
@@ -444,8 +445,10 @@ grep -q 'WARDYN_INSTALL_IMAGE' "${DESKTOP_MD}" \
   || fail "docs/DESKTOP.md never names WARDYN_INSTALL_IMAGE — the one override that pins the enrolment image is undiscoverable from the tier's own doc (F113/F184)"
 grep -q 'wardynd:latest' "${DESKTOP_MD}" \
   || fail "docs/DESKTOP.md does not state that the enrolment default is the :latest tag (F113/F184)"
-grep -qi 'not.*cosign-signed' "${DESKTOP_MD}" \
-  || fail "docs/DESKTOP.md does not say the enrolment image is unsigned — the envelope pins a digest, so a reader assumes the whole lane is verified (F113/F184)"
+grep -qi 'nothing in this lane verifies that signature' "${DESKTOP_MD}" \
+  || fail "docs/DESKTOP.md does not say that nothing in this lane verifies the continuous image's signature — the envelope pins a digest, so a reader assumes the whole lane is verified (F113/F184)"
+grep -qi 'echo ".*nothing in this lane verifies that signature' "${DESK_DIR}/install.sh" \
+  || fail "deploy/desktop/install.sh does not tell the console that that nothing in this lane verifies the continuous image's signature (F113/F184)"
 grep -qF 'is a MUTABLE tag, not a digest' "${DESK_DIR}/install.sh" \
   || fail "deploy/desktop/install.sh no longer warns at the console when the enrolment ref floats — the person who needs that is the one RUNNING it, not the one reading the source (F113/F184)"
 echo "test-desktop-profile: enrolment-image disclosure PASS"

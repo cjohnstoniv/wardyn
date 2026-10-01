@@ -55,8 +55,11 @@ const EnvAsCodeDockerfilePath = genDockerfilePath
 const genBaseImage = "mcr.microsoft.com/devcontainers/base:ubuntu"
 
 // genLangFeatures maps a WorkspaceProfile.Languages value to its official
-// devcontainers feature ref; absent languages contribute nothing. Pinned to
-// major tag (":1") for reproducible builds.
+// devcontainers feature ref; absent languages contribute nothing.
+// Deterministic generated document; the base image tag, the `:1` feature tags
+// and the claude-code `/stable` channel resolve at build time, and the
+// installer's checksum comes from the same origin as the binary (integrity, not
+// a pin).
 var genLangFeatures = map[string]string{
 	"Go":         "ghcr.io/devcontainers/features/go:1",
 	"JavaScript": "ghcr.io/devcontainers/features/node:1",

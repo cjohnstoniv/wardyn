@@ -163,8 +163,15 @@ flowchart LR
    ```sh
    git log --oneline vX.Y.(Z-1)..release/X.Y   # only cherry-picks + the release commit
    git diff --name-only vX.Y.(Z-1) release/X.Y # only the files the issues name
-   git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/store/migrations ui/src go.mod go.sum
+   git cat-file -e release/X.Y:internal/db/migrations && git cat-file -e release/X.Y:ui/src && git cat-file -e release/X.Y:go.mod && git cat-file -e release/X.Y:go.sum &&
+     git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/db/migrations ui/src go.mod go.sum
    ```
+
+   A non-zero exit stops the tag. `git diff --quiet` on a path that does not
+   exist exits 0, so the `git cat-file -e` chain first proves each pathspec is
+   real on `release/X.Y`; no release helper runs this check, so you run it. A
+   `.sql` change under `internal/db/migrations` is a hard stop, as in the 0.7
+   guard below.
 
 **Evidence is certified against a SHA.** A walk, a conformance run or a gate
 proves the commit it ran on. Any commit after it — a fix, a rebase, the release

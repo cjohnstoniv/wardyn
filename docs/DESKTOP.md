@@ -466,8 +466,8 @@ once, before MDM has delivered anything. Which image:
 | | |
 |---|---|
 | Default | `ghcr.io/cjohnstoniv/wardynd:latest` |
-| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run. It is **not** cosign-signed, and it is not a release. |
-| Verification | none. Nothing in this lane checks a signature or a digest, and no repo gate covers it: `scripts/check-image-pins.sh` reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
+| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run, and signs it by digest (keyless) after pushing it. The signature identity is in [VERIFY.md](VERIFY.md#the-continuous-lane). `:latest` can move, this lane has no SBOM or provenance, and it is not a release. |
+| Verification | none. Nothing in this lane verifies that signature or a digest, and no repo gate covers it: `scripts/check-image-pins.sh` reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
 | Override | `WARDYN_INSTALL_IMAGE` (also in [ENV.md](ENV.md)) — `sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh` |
 
 **A fleet should pin it**, to the same digest `wardyn.env` already pins for
@@ -502,12 +502,15 @@ run the same `install.sh`; only the path it registers differs.
 **Enrolment runs one container image, as root.** `install.sh` mints `age.key` by
 running `wardynd -gen-age-key`, and the image it pulls for that defaults to
 `ghcr.io/cjohnstoniv/wardynd:latest` — the CONTINUOUS, main-tip tag
-`.github/workflows/publish-image.yml` pushes after CI passes on `main`, which is **not**
-cosign-signed and is not the digest the envelope then pins. That is the one
+`.github/workflows/publish-image.yml` pushes after CI passes on `main` and signs
+by digest after pushing it. Nothing in this lane verifies that signature, and
+the tag is not the digest the envelope then pins. That is the one
 place on this page where a tag does move under the fleet, and it is bounded to
-first-device enrolment. A fleet that will not accept it sets
-**`WARDYN_INSTALL_IMAGE`** ([ENV.md](ENV.md)) to the release digest already
-pinned in `wardyn.env`, or to a corporate mirror of it:
+first-device enrolment. A fleet that will not accept it resolves a digest,
+verifies **that digest** with the `publish-image.yml` identity
+([VERIFY.md](VERIFY.md#the-continuous-lane)), and passes it via
+**`WARDYN_INSTALL_IMAGE`** ([ENV.md](ENV.md)) — or sets it to the release digest
+already pinned in `wardyn.env`, or to a corporate mirror of it:
 
 ```sh
 sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh
