@@ -56,6 +56,19 @@ test.describe("served under WARDYN_BASE_PATH", () => {
     expect(failed).toEqual([]);
   });
 
+  // #1485: Copy link built the bare origin plus /runs/<id>, so under a base
+  // path the pasted link missed the console. The button shows from 2xl up.
+  test("Copy link carries the base path", async ({ page, context, baseURL }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.setViewportSize({ width: 1536, height: 900 });
+    const id = await runningFixtureId(page);
+    await page.goto(`runs/${id}`);
+    await page.getByRole("button", { name: "Copy link to this run" }).click();
+    await expect(page.getByText("Link copied")).toBeVisible();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toBe(`${new URL(baseURL!).origin}${BASE}/runs/${id}`);
+  });
+
   test("a deep link survives a refresh", async ({ page }) => {
     const id = await runningFixtureId(page);
     await page.goto(`runs/${id}`);

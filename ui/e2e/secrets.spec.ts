@@ -266,6 +266,35 @@ test.describe("Secrets screen", () => {
     await expect(page.getByRole("row").filter({ hasText: victim })).toHaveCount(0);
   });
 
+  // #1484: a second click while the first delete was pending sent a second
+  // DELETE (the button never disabled). One confirm, one request.
+  test("a double-click on Delete secret sends one DELETE and disables the button while it runs", async ({ page }) => {
+    const victim = `e2e-delonce-${Date.now()}`;
+    const resp = await page.request.put(`/api/v1/secrets/${encodeURIComponent(victim)}`, {
+      headers: { Authorization: "Bearer wardyn-e2e-token", "Content-Type": "application/json" },
+      data: { value: "to-be-deleted-once" },
+    });
+    expect(resp.ok()).toBeTruthy();
+    await openSecrets(page);
+
+    let deletes = 0;
+    await page.route(`**/api/v1/secrets/${encodeURIComponent(victim)}`, async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      deletes += 1;
+      // Slow enough that the second click lands while the first is in flight.
+      await new Promise((r) => setTimeout(r, 1200));
+      await route.continue();
+    });
+
+    await openRowDeleteMenu(page, victim);
+    const confirm = page.getByRole("alertdialog");
+    const button = confirm.getByRole("button", { name: "Delete secret" });
+    await button.dblclick();
+    await expect(button).toBeDisabled();
+    await expect(page.getByRole("row").filter({ hasText: victim })).toHaveCount(0);
+    expect(deletes).toBe(1);
+  });
+
   test("a delete FAILURE surfaces toast.error and keeps the secret (the medium fix)", async ({
     page,
   }) => {

@@ -259,7 +259,9 @@ export function RunFailureBlock({
     <section
       // Hairline, not a warning tint: the state badge and the failure hint one
       // row above already carry the tone, and auto-stop is not a fault at all.
-      className="shrink-0 rounded-lg border border-border bg-card p-3"
+      // Taller than the tile it sits in (a partial kill with credential lines in
+      // a narrow tile), it scrolls rather than clipping the audit button.
+      className="scroll-thin max-h-[60%] shrink-0 overflow-y-auto rounded-lg border border-border bg-card p-3"
       aria-label={HAPPENED}
       data-testid="run-failure-block"
       data-ending={ending.kind}
