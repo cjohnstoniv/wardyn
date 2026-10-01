@@ -241,6 +241,10 @@ export interface AgentRun {
   // run was launched through on its owner's behalf. Absent for a run its
   // owner launched themselves.
   created_via?: string;
+  // AgentRun.OperatorOwned (#1476): the run's owner is the operator itself
+  // (admin token, local mode), not a person. A super admin may still open it
+  // interactively; on a person's run only the owner may. Absent when false.
+  operator_owned?: boolean;
   // internal/types/attention.go's RunAttention (#1197) — what this LIVE
   // run is waiting on and who (in the caller's own console view) can clear
   // it, projected only when the caller's GET /runs (or GET /me/attention)

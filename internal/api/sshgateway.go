@@ -208,14 +208,17 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 }
 
 // sshAuth is the gateway's auth+authz DECISION (ServerConfig's
-// PublicKeyCallback): registered public keys only, OWNER-OR-ADMIN
-// authorization — run.CreatedBy == the key's principal, OR the key's own
-// stored role is oidc.RoleAdmin and it is not capped (migration 0070).
+// PublicKeyCallback): registered public keys only, OWNER authorization —
+// run.CreatedBy == the key's principal, OR the key's own stored role is
+// oidc.RoleAdmin, it is not capped (migration 0070) AND the run has no personal
+// owner (run.OperatorOwned, #1476). A fresh admin key opens no shell in a
+// person's run.
 // Username = the target run's UUID (conn.User()) — SSH has no cookie, so the
 // run id IS the addressing the client supplies, the same way `ssh host` names
 // a machine.
 //
-// The admin override reads the key's ROLE COLUMN (migration 0043), stamped at
+// The admin override — now the operator-owned carve-out alone — reads the key's
+// ROLE COLUMN (migration 0043), stamped at
 // REGISTRATION time by handleAddSSHKey and REFRESHED on every OIDC login for
 // that principal's keys (oidc.Config.OnLogin, migration 0046) — deliberately
 // NOT a live role check, because SSH offers no session for requireOperator to
@@ -287,14 +290,21 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	override := run.CreatedBy != rec.Principal
 	if override {
-		if reason := s.sshOverrideRefusal(rec); reason != "" {
+		reason := s.sshOverrideRefusal(rec)
+		if reason == "" && !run.OperatorOwned {
+			// A fresh admin key still opens no shell in a person's run (#1476).
+			reason = runOwnerOnlyReason
+		}
+		if reason != "" {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
 			return nil, errors.New("ssh: not authorized for this run")
 		}
 	}
 	// deny_interactive on the profile the run was created under closes SSH
 	// for all but a super admin (a fresh, uncapped admin key), as the terminal
-	// attach does (governance_run_doors.go).
+	// attach does (governance_run_doors.go). A super admin reaches this point
+	// only on their own run or an operator-owned one, so the exemption cannot
+	// reach a person's run.
 	if s.sshOverrideRefusal(rec) != "" {
 		name, err := s.interactiveDeniedProfile(ctx, run)
 		if err != nil {
@@ -507,7 +517,22 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 		return reason
 	}
 	if permissions.Extensions["override"] == "true" {
-		return s.sshOverrideRefusal(key)
+		if reason := s.sshOverrideRefusal(key); reason != "" {
+			return reason
+		}
+		// The override is the operator-owned carve-out only (#1476), re-read
+		// from the run: an open connection must not outlive that.
+		runID, err := uuid.Parse(permissions.Extensions["run_id"])
+		if err != nil {
+			return "SSH run lookup failed"
+		}
+		run, err := s.cfg.Store.GetRun(ctx, runID)
+		if err != nil {
+			return "SSH run lookup failed"
+		}
+		if !run.OperatorOwned {
+			return runOwnerOnlyReason
+		}
 	}
 	return ""
 }

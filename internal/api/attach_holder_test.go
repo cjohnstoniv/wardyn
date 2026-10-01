@@ -244,11 +244,24 @@ func holderTestServerWithAudit(t *testing.T, rec audit.Recorder) (*Server, *touc
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, State: types.RunRunning, SandboxRef: "sbx-1"}
+	// Operator-owned, so the second human these tests bring (a super admin) may
+	// enter it: the holder mechanics under test are independent of the entry rule
+	// (run_entry.go), which has its own tests on a person-owned run.
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
 	ast.mu.Lock()
 	ast.runs[run.ID] = run
 	ast.mu.Unlock()
 	return srv, st, fr, run
+}
+
+// holderPersonOwned makes the run a person's (not the operator's), the shape on
+// which a super admin may not enter.
+func holderPersonOwned(st *touchCountingStore, runID uuid.UUID) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	r := st.runs[runID]
+	r.OperatorOwned = false
+	st.runs[runID] = r
 }
 
 const (
@@ -871,35 +884,45 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 }
 
 // TestAttachTakeover_OwnerOrSuperAdminOnly is the take-over PREDICATE table
-// (ownsRunOrSuperAdmin, helpers.go). Take-over is the one /runs/{id} route that
+// (getRunForEntry, run_entry.go). Take-over is the one /runs/{id} route that
 // WRITES into a live sandbox rather than inspecting or stopping it, so it does
 // NOT ride ownsRunOrAdmin's isSecurityOperator arm: a security_admin is refused
-// the same byte-identical 404 a non-owning member gets — never a 403, which
-// would confirm the run exists — and the refusal displaces nobody and audits no
-// take-over. The security tier is refused an attach ticket, refused the cookie
-// attach lane and stamped `member` on its SSH keys; a tier that can reach no
-// terminal on a foreign run must not be able to end one on it either.
+// the same byte-identical 404 a non-owning member gets — which would otherwise
+// confirm the run exists — and the refusal displaces nobody and audits no
+// take-over. The super admin is refused too (#1476): a 403 naming why, since they
+// can already see the run, unless the run has no personal owner. The security
+// tier is refused an attach ticket, refused the cookie attach lane and stamped
+// `member` on its SSH keys; a tier that can reach no terminal on a foreign run
+// must not be able to end one on it either.
 func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		session func(*testing.T) *http.Cookie
-		want    int
+		name     string
+		session  func(*testing.T) *http.Cookie
+		personal bool // the run is a person's; false = operator-owned
+		want     int
+		wantBody string
 	}{
 		{"owner", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
-		}, http.StatusOK},
-		{"super admin", func(t *testing.T) *http.Cookie {
+		}, true, http.StatusOK, ""},
+		{"super admin on a person's run", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-		}, http.StatusOK},
+		}, true, http.StatusForbidden, `"reason":"run_owner_only"`},
+		{"super admin on an operator-owned run", func(t *testing.T) *http.Cookie {
+			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+		}, false, http.StatusOK, ""},
 		{"security admin", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
-		}, http.StatusNotFound},
+		}, true, http.StatusNotFound, "run not found"},
 		{"member, not the owner", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
-		}, http.StatusNotFound},
+		}, true, http.StatusNotFound, "run not found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _, _, audit, run := holderTestServer(t)
+			srv, st, _, audit, run := holderTestServer(t)
+			if tc.personal {
+				holderPersonOwned(st, run.ID)
+			}
 			displaced := make(chan string, 1)
 			held := &attachHolder{
 				principal: holderOwner, source: attachSourceWeb, since: time.Now(),
@@ -925,10 +948,14 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 				}
 				return
 			}
-			// Refused: the byte-identical 404 (no existence oracle), nobody
-			// displaced, nothing audited as a take-over.
-			if !strings.Contains(w.Body.String(), "run not found") {
-				t.Errorf("refusal body = %s, want the byte-identical run-not-found 404", w.Body.String())
+			// Refused: the 404 a missing run gets, or the 403 naming why for a
+			// super admin; nobody displaced, nothing audited as a take-over.
+			if !strings.Contains(w.Body.String(), tc.wantBody) {
+				t.Errorf("refusal body = %s, want %s", w.Body.String(), tc.wantBody)
+			}
+			if tc.want == http.StatusForbidden && !strings.Contains(w.Body.String(),
+				`"error":"only the person who started this run can open it interactively"`) {
+				t.Errorf("403 body = %s, want the approved sentence", w.Body.String())
 			}
 			if ev != nil {
 				t.Errorf("a refused take-over was audited as a success: %s", ev.Data)

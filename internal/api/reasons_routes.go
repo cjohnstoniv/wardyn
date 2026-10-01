@@ -779,4 +779,8 @@ const (
 	uiDeniedReasonNotAuthorized         = "not_authorized"
 	uiDeniedReasonRevoked               = "revoked"
 	uiDeniedReasonRevocationUnavailable = "revocation_unavailable"
+	// A session opened through a portal ends with that portal's grant (#1475):
+	// the portal was revoked or the grant expired, or the store could not say.
+	uiDeniedReasonDelegationEnded       = "delegation_ended"
+	uiDeniedReasonDelegationUnavailable = "delegation_unavailable"
 )

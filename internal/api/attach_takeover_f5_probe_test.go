@@ -179,7 +179,8 @@ func f5Server(t *testing.T) (*Server, *gatedRunner, *sshTestRecorder, types.Agen
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, State: types.RunRunning, SandboxRef: "sbx-f5"}
+	// Operator-owned, as holderTestServer's run is: the taker is a super admin.
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-f5"}
 	ast.mu.Lock()
 	ast.runs[run.ID] = run
 	ast.mu.Unlock()

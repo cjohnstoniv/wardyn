@@ -442,6 +442,7 @@ above under a *different* refusal that deliberately shares the same string
 | `grant_pairing_not_eligible` | The named capability grant is not eligible to pair with the request it was offered against. |
 | `model_provider_unavailable` | `POST /runs`' model-provider choice, and the record door's (`POST /workspaces/{id}/record`) (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
 | `run_kept` | The run is kept (ended or lost); its agent is stopped and nothing may act on it as if it were live. |
+| `run_owner_only` | Interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run whose owner is a person, asked by a super admin who is not that person (#1476): `403`, with `error` "only the person who started this run can open it interactively". Unlike `not_owner` it is not hidden — the admin can already see the run. A run with no personal owner (operator-owned) stays enterable; kill, approve, policy, grants, revoke, audit, revive and resume are unchanged. |
 | `run_quota` | The acting principal's governance profile run-count or concurrency limit is at its cap. Not audited on its own (`Audit: false` in the registry): a caller who IS authorized and simply hit a limit should not look like an attacker in the audit trail. |
 | `run_terminal` | The run has already reached a terminal state; the requested action no longer applies. |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN`'s own gate (and `WARDYN_CAPABILITY_SECOND_HUMAN`'s, for an Azure DevOps capability escalation): the deciding principal is the same one who raised the approval. |
@@ -454,6 +455,7 @@ its own closed values, distinct from the connect-time reasons above:
 
 | Reason | Meaning |
 |---|---|
+| `delegation_ended` / `delegation_unavailable` | The same re-check, and the ticket redemption that opens a session (#1475), for a session a portal opened: the portal was revoked or its grant expired, or the grant store could not be read (fails closed, 503). A redemption refused for `delegation_ended`, `revoked` or a pre-0.8.5 ticket answers the bad-ticket `403`; an unreadable store answers `503`. |
 | `not_authorized` / `revoked` / `revocation_unavailable` | An already-open UI relay session's periodic re-check (every 30s): the run is no longer this session's owner's, the session was explicitly revoked, or the revocation store could not be read (fails closed, 503). The re-check's fourth cause, the run itself becoming unreadable, reuses `run_unreadable` (above) rather than a second name for the same fact. |
 
 `PUT /api/v1/branding` (`branding.go`, super-admin only) validates each field

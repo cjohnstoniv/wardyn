@@ -250,6 +250,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "run_owner_only",
+    "target": "run.ID.String()",
+    "sentence": "\"only the person who started this run can open it interactively\" (registry)"
+  },
+  {
     "reason": "run_quota",
     "target": "\"runs.quota\"",
     "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Profile.Name, active)"

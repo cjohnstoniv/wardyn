@@ -1201,7 +1201,8 @@ migration `0050`)** are the second and third owned nouns after runs.
   nothing else. In order:
   1. Disable the person in the identity provider, so no new sign-in succeeds.
   2. `POST /sessions/revoke` with their subject or email: ends their console
-     sessions and revokes every `wdn_` API token they hold (its
+     sessions, refuses a UI-app session at its next re-check (an attach ticket
+     minted before the revoke is refused at redemption) and revokes every `wdn_` API token they hold (its
      `tokens_revoked` count is the receipt; see "Per-user API tokens: stop
      sharing the admin token").
   3. Remove their registered SSH keys and end established SSH connections:
@@ -2202,7 +2203,9 @@ its own.
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also
-revokes their API tokens and removes their registered SSH keys. The `all` arm
+revokes their API tokens, removes their registered SSH keys, and refuses their
+UI-app sessions at the next re-check, whether the revoke names the subject or
+the email. The `all` arm
 applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
 revoke.
@@ -2514,8 +2517,15 @@ the same way and refuses new exchanges of tokens issued before it. A disable
 done only at the identity provider takes effect at the next exchange, so at
 most ten minutes. An open `GET /runs/{id}/events` stream re-checks its token at
 each keepalive (about every 15 seconds) and ends when the portal has been revoked
-or the token has expired, rather than at its five-minute hold. Runs a portal
-launched keep running after it is revoked: they are the person's runs.
+or the token has expired, rather than at its five-minute hold. A UI-app session
+a portal opened (through an attach ticket) is a credential derived from that
+grant and is bounded by it: redemption and every 30-second re-check ask whether
+the portal is registered and the grant unexpired, and the session cookie is
+capped at the grant's expiry, so it lasts at most about ten minutes. Revoking the
+portal ends it at the next re-check. Open WebSocket streams are the exception: a
+terminal or relayed socket already established keeps working until it closes or
+the run ends. Runs a portal launched keep running after it is revoked: they are
+the person's runs.
 
 ### Three roles, and who sets the walls
 
@@ -2611,7 +2621,9 @@ create, keyed on the profile the run was created under as it stands now, so a
 limit set later reaches runs already going (a deleted profile binds nothing).
 `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the
 console terminal) and every SSH-gateway connection into any run under the
-profile, exec runs and the run's owner included; the attach is an `authz.denied`
+profile, exec runs and the run's owner included (a super admin enters only a
+run of their own or one with no personal owner, so the exemption below reaches no
+person's run); the attach is an `authz.denied`
 row (`governance_profile`, target `runs.attach`), the SSH refusal an
 `ssh.authenticate` failure naming the profile. The harness sign-in run is exempt,
 as it is at create. `deny_ui_apps` strips `ui_apps` from a run at create, with a
@@ -2765,7 +2777,8 @@ admin walking the member path, not an incident.
 | `admin_view` | an admin in the user view launched a run (`POST /runs` or `POST /runs/preflight`) after the type the view looks through was deleted. Not audited on its own — the cause row is `user_view_type_deleted`, which the launch response answered; see that row for the shape and the marker | ⛔ `409` |
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
-| `attach_ticket_foreign_run` | a caller who is not the super admin — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
+| `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
+| `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
 | `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
@@ -2824,9 +2837,11 @@ policy that bounds them
 (`threatmodel/THREAT-MODEL.md` residual #14, still open).
 
 The SSH gateway's admin override is a **bounded-stale stamp**, not a live role
-check: since migration `0043` a key authorizes when `run.created_by == the key's
-principal` OR the key's `role` column reads `admin` AND its `role_checked_at`
-(migration `0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). The
+check, and since 0.8.5 it reaches only runs with no personal owner
+(`operator_owned`; a fresh admin key on a person's run is refused
+`run_owner_only`): since migration `0043` a key authorizes when `run.created_by == the key's
+principal` OR (the run is operator-owned AND the key's `role` column reads `admin` AND its `role_checked_at`
+(migration `0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`)). The
 stamp is written at `POST /me/ssh-keys` time from the registering session's role
 and RE-stamped — both columns — on every OIDC login for that principal, across
 every key they hold. The gateway never reads the role live at connect time (SSH

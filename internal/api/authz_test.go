@@ -158,6 +158,11 @@ const (
 	// warrant behind it at all (PATCH /runs/{id}/title, #1197 L2 — a display
 	// field, not a lease, a live PTY or a workspace write).
 	tierOwnerOnly ownerTier = "owner-only"
+	// tierEntry: interactive entry to a run (#1476). A SUPER admin on a FOREIGN
+	// run gets a 403 run_owner_only (they can already see the run, so there is
+	// no existence to hide); a security_admin and a non-owning member get the
+	// byte-identical 404, as on tierSuper.
+	tierEntry ownerTier = "entry"
 )
 
 type classifiedRoute struct {
@@ -612,12 +617,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// incident-response warrant behind it. See run_title.go's doc comment.
 	"PATCH /api/v1/runs/{id}/title":           {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
-	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
 	// 0.8 route names (#658); the dash/bare forms above and below are the chi
 	// aliases kept for one minor — same handler, same classification, both
 	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
-	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/kill":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Thawing a paused run keeps its sandbox busy: a write, so not the
 	// security tier's inspect-or-stop.
@@ -638,7 +643,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// (an owner may reclaim their own run's PTY, and the act is audited as
 	// session.takeover) — NOT classMember, which would let anyone displace
 	// anyone.
-	"POST /api/v1/runs/{id}/attach/takeover": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/attach/takeover": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"GET /api/v1/approvals/{id}/paths":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
@@ -1065,7 +1070,7 @@ func TestAuthzMatrix(t *testing.T) {
 				// it cannot be classified, because the answer is not derivable
 				// from the class. Fatal here rather than defaulted, so
 				// the omission is a failure and not a silent tierSuper.
-				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity && rc.ownerTier != tierOwnerOnly {
+				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity && rc.ownerTier != tierOwnerOnly && rc.ownerTier != tierEntry {
 					t.Fatalf("classOwner route %q has no ownerTier set (want tierSuper, tierSecurity or "+
 						"tierOwnerOnly) — the tiers do not nest, so 'may an admin bypass ownership here' has more "+
 						"than one answer", key)
@@ -1094,6 +1099,12 @@ func TestAuthzMatrix(t *testing.T) {
 					if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code != http.StatusNotFound {
 						t.Errorf("admin on a FOREIGN entity, tierOwnerOnly route: status = %d, want 404 "+
 							"(no admin bypass at all); body=%s", w.Code, w.Body.String())
+					}
+				} else if rc.ownerTier == tierEntry {
+					if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code != http.StatusForbidden ||
+						!strings.Contains(w.Body.String(), `"reason":"run_owner_only"`) {
+						t.Errorf("admin on a FOREIGN entity, tierEntry route: status = %d, want 403 run_owner_only; body=%s",
+							w.Code, w.Body.String())
 					}
 				} else if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
 					t.Errorf("admin on a FOREIGN entity: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
@@ -1268,7 +1279,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 				}
 				w := doSSO(t, srv, method, buildPath(pattern, foreignID.String()), sec, bodyFor(method, rc))
 				switch rc.ownerTier {
-				case tierSuper:
+				case tierSuper, tierEntry:
 					// The byte-identical 404 a non-owner gets: no existence
 					// oracle, and no ladder — a security admin does not reach a
 					// live PTY, a recording replay or a workspace write on
