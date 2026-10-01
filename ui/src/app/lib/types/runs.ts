@@ -271,6 +271,10 @@ export interface RunEndWaitResult {
   capped: string[];
   latest_end?: string;
   max_wait_sec?: number;
+  // True only when the end was capped by the limit the run captured at launch
+  // while the launch profile's own limit has since been loosened (#1322).
+  // Display only; never sent as false.
+  ends_cap_loosened?: boolean;
 }
 
 // POST /runs/{id}/revive's response (internal/api/run_revive.go's
@@ -348,11 +352,22 @@ export interface AdminRestartResponse {
 // answers them for every viewer, so the page never infers "removed" from a
 // setup status that lists just what the viewer's own agents use. Absent when
 // the run names no provider or the server could not tell.
+//
+// created_via_name (#1234) is the display name of AgentRun.created_via, the
+// portal that launched the run, resolved at read time (a revoked portal keeps
+// its name) so a member who cannot read the portal registry still sees it.
+// Absent for a self-launched run, or a portal the registry no longer holds.
+//
+// kept_until (#1320) is when an ended run's files are torn down, for the Ended
+// banner. Present only while the run is RUNNING, ended by its own end and kept
+// under a grace above 0; absent after a stop, a kill, a revive or a reboot.
 export interface RunDetail extends AgentRun {
   ui_apps?: UIApp[];
   user_type_name?: string;
   model_provider_name?: string;
   model_provider_deleted?: boolean;
+  created_via_name?: string;
+  kept_until?: string;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's

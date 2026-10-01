@@ -8,6 +8,275 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-10-01
+
+### Before you upgrade
+
+Four changes can break a setup, a script or an upgrade path that worked before. Migration `0105_branding_logo_from_file`
+runs on the first start; it adds one column with a default and changes no existing row.
+
+- **A pre-envelope boot key beside a platform key now stops the boot (#979).** Going straight from 0.7.11 or
+  earlier to 0.8.4 with `WARDYN_PLATFORM_KEY_FILE` (or `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` with the age key
+  still set) holds only pre-envelope boot keys, and the boot refuses them, naming the row, and commits
+  nothing. Start once without the platform key first, then set it. See Security below.
+- **`wardynd -rewrap` no longer moves boot keys off the age key unless you pass `-rewrap-adopt-boot-keys`
+  (#979).** A script or runbook that ran a plain `wardynd -rewrap` to move them onto a platform key now
+  aborts, naming the row, and moves nothing. See Security below.
+- **A host may appear on workspace-provider rows of one kind only (#1450).** A save, in the console or
+  through `wardyn site-config set`, that puts one host on rows of two kinds (a GitHub row and an Azure
+  DevOps row, for example) is refused with a `400`, disabled rows included. Rows already stored are not
+  re-checked until the next save or apply (an MDM file is applied at each boot).
+- **The CLI commands below are renamed to one noun-verb shape (#206).** These names are a clean break with no alias: an
+  old spelling now answers `unknown command` and a non-zero exit, so a script or CI job that types one
+  must change before it runs against 0.8.4. A few plural and short aliases remain for now (`runs`,
+  `sources`, `workspaces`, `ls` and `rm`). Flags, arguments and guards are unchanged, including
+  `--reason`, `--scope` and `--until` on a decision and the `--sub`-or-`--all` rule on `session revoke`.
+
+  | Before | Now |
+  |---|---|
+  | `wardyn approvals list`, `wardyn approvals get` | `wardyn approval list`, `wardyn approval get` |
+  | `wardyn approve <id>`, `wardyn deny <id>` | `wardyn approval approve <id>`, `wardyn approval deny <id>` |
+  | `wardyn logs <run-id>` | `wardyn run logs <run-id>` |
+  | `wardyn sessions list`, `wardyn sessions revoke` | `wardyn session list`, `wardyn session revoke` |
+  | `wardyn drive apply [file]` | `wardyn drive set [file]` |
+  | `wardyn governance apply [file]` | `wardyn governance set [file]` |
+  | `wardyn preset apply [file]` | `wardyn preset set [file]` |
+
+  The git credential helper's "already minted" hint now names `wardyn approval approve <id> --scope run`.
+
+### Security
+
+- **A pre-envelope boot key beside a platform key is refused at boot instead of converted (#979).** On an
+  install with `WARDYN_PLATFORM_KEY_FILE`, or with `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` while `WARDYN_AGE_KEY` is
+  still set, someone holding the age key and write access to the table could delete a boot key and insert an
+  age-encrypted `enc_version=0` row of their own; the next boot sealed it under the platform key and served it.
+  The boot now refuses such a row, naming it, and commits nothing. Boot keys convert only on a boot before the
+  platform key is set. An install upgrading from 0.7.x or earlier, which holds only pre-envelope rows, must
+  start once without the platform key first; the refusal and the procedures in
+  `docs/operations/secrets-and-keys.md` say so.
+- **`wardynd -rewrap` no longer tells you to retire the key version it just used (A-5).** A Key Vault or Transit
+  rotation that landed while the run was moving rows left some rows under a newer version than the one the run
+  reported, and the Key Vault instruction said to disable every other version. The run now checks each wrap
+  against that version; after a mid-run rotation it says so, prints no retirement step, and records `rotated`
+  in its `secret.rewrap` row. Run it again until it moves 0 rows. The Key Vault instruction now names older
+  versions only.
+- **`wardynd -rewrap` adopts a boot key from another key only when you say so (#979).** Someone holding the
+  credential key's token (or the age key) and write access to the table could plant a boot key under that key,
+  and `-rewrap` would move it onto the platform key. Moving a boot key onto `WARDYN_VAULT_TRANSIT_KEY_PLATFORM`
+  or `WARDYN_PLATFORM_KEY_FILE` now needs `wardynd -rewrap -rewrap-adopt-boot-keys`, an attestation that you
+  have never done that move before; run it once. Without the flag `-rewrap` aborts, naming the row, and moves
+  nothing. With it, `-rewrap` (and `-rewrap-retire-platform-key`) still refuse, naming the rows, when some boot
+  keys are under the platform key and others are not. A refused run is audited as `secret.rewrap` `refused`
+  with `refusal` `adopt_not_requested` or `mixed_boot_keys`. The flag does not make adoption safe: if the real
+  boot keys were deleted and a forged set planted, an operator who passes the flag adopts the forgery. The
+  boot-time refusal of such a row now asks whether you have adopted before, and says to investigate if you
+  have.
+- **Four follow-ups on the 0.8.4 identity and Azure DevOps code (#1449, #1444, #155, #622).** A laptop's forwarded audit row can no longer put a false "refused" banner on the Azure DevOps row: the banner reads only rows `wardynd` wrote itself. A pasted token is bound to one Entra object id, the sign-in's (or the person row's when the sign-in has none), never the union of the two, and the `ado_pat.own.store` row says whether the token was bound by `object_id` or `name`. A browser sign-in refused for a missing or false `email_verified`, or an email outside `WARDYN_OIDC_EMAIL_DOMAINS`, now writes an `auth.fail` row (`email_verified_absent`, `email_unverified`, `email_domain`). A role-mapping change that cannot list or revoke the outstanding API tokens says so in its audit row (`tokens_revocation_failed`) and in the upsert response, instead of reporting zero revoked.
+- **The baked GitHub `ssh-rsa` host key now parses in `agent-base`, and so in every image built on it.**
+  The `github.com` `ssh-rsa` line in `/etc/ssh/ssh_known_hosts` did not parse: `ssh-keygen` exited 0 and
+  skipped it, so three of the four baked GitHub keys loaded. It is replaced with the key GitHub
+  publishes at `api.github.com/meta`, and the `agent-base` build (and the unpublished `claude-code`
+  build) now fails if any baked `known_hosts` line does not parse.
+- **The AWS CLI in `agent-aws-sso` is 2.37.1 (it was 2.31.13) and code-server in `agent-vscode` is
+  4.138.0 (it was 4.133.0).** 2.31.13 bundled `wheel` 0.45.1 (CVE-2026-24049); 2.37.1 bundles 0.46.3.
+  code-server 4.133.0 bundled `js-yaml` 4.3.0 and `tar` 7.5.20, each with HIGH CVEs; 4.138.0 clears both.
+  Its bundled `undici` 7.29.0 is still flagged by the scanner (CVE-2026-19534, CVE-2026-84961; fixed
+  in 7.29.1) and stays open.
+- **The `claude-code` and `full` images, which Wardyn does not publish, build on Debian 13 like the
+  published ones.** `claude-code` moved to `node:24-trixie-slim` (the digest `agent-base` uses) and runs
+  `apt-get upgrade`; `full` moved to `rust:1.98.0-slim-trixie` and Adoptium's trixie apt suite.
+- **A development-only dependency pin.** The console's dev dependencies now pin `brace-expansion` 5 to
+  5.0.12 for GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (`ui/package.json` overrides; development
+  tooling only).
+- **A push-size check that cannot run now refuses the push, and an Azure DevOps REST ref move outside the
+  run's branch is audited as `brokered:git:branch-ns-off` (#1273, #1372).** A failed `max_file_size_mib` claim
+  was dropped, which read as no file being over the limit; it is refused as `brokered:git:push-uninspectable`.
+  The REST door allowed such a move under `git_push_any_branch` with only the `brokered:ado` row; once forwarded it now
+  adds a `brokered:git:branch-ns-off` row, as the git door does.
+
+### Added
+
+- **An operator can require a second person for Azure DevOps capability escalations
+  (`WARDYN_CAPABILITY_SECOND_HUMAN`).** Off by default. When on, the person who created a run cannot
+  approve or deny that run's Azure DevOps capability escalation, admin-class capabilities included; a
+  different administrator decides, and the admin token stays the audited break-glass. It is
+  `WARDYN_EGRESS_SECOND_HUMAN`'s twin, with the same refusal, the same `approval.second_human.bypass`
+  row (its `switch` field names which setting was bypassed) and the same local-mode behaviour: with
+  local mode on, every Azure DevOps capability decision is refused with a `503`, and boot warns.
+  A run's "needs you" attention state follows the setting, as it does for egress, and a refused
+  decision is shown the server's refusal. See docs/ENV.md.
+- **Azure Key Vault can hold the key that unlocks stored credentials (`WARDYN_KEK=azurekv`, #587).**
+  Credentials stay sealed in Postgres; each data key is wrapped by a Key Vault RSA key
+  (`WARDYN_AZURE_KEK_KEY`) and every wrap is signed by a second, EC P-256 key
+  (`WARDYN_AZURE_KEK_SIGNING_KEY`), so a database writer holding the public key cannot plant a row.
+  wardynd proves both keys at boot, reuses the `WARDYN_AZURE_*` identity, rotates with
+  `wardynd -rewrap`, and refuses a Transit key named beside it. Chart: `kek.provider=azurekv`,
+  `kek.azurekv.key`, `kek.azurekv.signingKey`. The `secret.rewrap` audit field `key_version` is now a
+  string (it was an int before 0.8.4). See docs/operations/secrets-and-keys.md "Key service: Azure
+  Key Vault".
+- **A second Transit key and Vault role for wardynd's own boot keys (`WARDYN_VAULT_TRANSIT_KEY_PLATFORM`,
+  #979).** With the key set (flag `-vault-transit-key-platform`, chart
+  `secretStore.vault.transitKeyPlatform`, which needs `secretStore.vault.rolePlatform` and
+  `kek.provider=transit`), wardynd wraps its signing, session and SSH host keys under it, reached as
+  `WARDYN_VAULT_ROLE_PLATFORM`; `WARDYN_VAULT_TRANSIT_KEY` then wraps only credentials, so a leaked
+  credentials token unwraps no boot key. A boot key found under any other key is refused at boot, and
+  `wardynd -rewrap` moves them onto it. Boot also refuses the setting with `WARDYN_KEK=local`, without
+  `WARDYN_VAULT_ROLE_PLATFORM`, with token-file auth, or when the two roles, or the two keys, are the same. The way back is
+  new: `wardynd -rewrap -rewrap-retire-platform-key` reads the boot keys under the platform key
+  (read-only) and writes them under the key a write uses today (the credential Transit key, or the local
+  key with `WARDYN_KEK=local`), after which the setting can be removed. See
+  docs/operations/secrets-and-keys.md "Two Vault roles".
+- **`push_rules.max_file_size_mib` refuses a push that introduces a file over the limit (#1273).** The
+  brokered git push path refuses it with a `403` (`brokered:git:push-rules`) like a `deny_paths` match,
+  and also refuses a file whose size the pack does not carry when the forge cannot show it unchanged.
+  The size limit can read an untouched file's size only on github.com. On Azure DevOps and other
+  `git_pat` hosts it refuses any push that builds on history, and a size-only rule also refuses Azure
+  DevOps REST content routes that name no paths. Set it only on github.com lanes.
+  `0` or absent is off; the value is bounded to 0 to 1024 at write time. Under an operator ceiling the
+  smaller non-zero limit wins: a proposal can neither raise a ceiling's limit nor turn it off with `0`.
+  `push_rules.deny_new_executables` is on the policy wire type but a policy that sets it `true` is
+  refused with a `400` ("not supported yet"), because the broker cannot yet tell an added executable
+  from an edit; a ceiling's `true` still cannot be switched off. See docs/POLICIES.md.
+- **`WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` applies the `email_verified` check without a domain list
+  (#155).** Default off. When on, an ID token with no `email_verified` claim counts as unverified and is
+  refused (`auth_error=email_verified_absent`), `false` is refused (`email_unverified`), and `true`
+  signs in; the sign-in refusal codes and copy are the ones `WARDYN_OIDC_EMAIL_DOMAINS` already used.
+  **Do not turn it on with Entra, which never sends the claim: it would refuse every sign-in.** The
+  People page's email-key badge now follows whether sign-in enforces `email_verified` by either
+  setting, an `email_verified=false` refusal is logged like an absent one, and the compose file passes
+  the variable through (empty is off).
+- **A site configuration can deliver the console logo (`branding.logo_path`, #1215).** `wardyn
+  site-config set` and the MDM file name a `.svg` or `.png` file as wardynd sees it; wardynd reads it at
+  each apply, checks it as an upload is checked (512 KB, a PNG that decodes, an SVG rebuilt from the
+  allowlist), and stores it as the branding logo. A bad file refuses the whole apply (`400`,
+  `site_config_invalid`). With no branding saved yet the apply succeeds with
+  `branding_logo_pending: true` (`wardyn site-config set` prints a warning, and the SDK has
+  `PutSiteConfigResult`), and the logo attaches on the next apply after the card is saved. Taking
+  `logo_path` out of the block (`"branding": {}`) removes a logo the file delivered, never an uploaded
+  one. `GET /branding/settings` carries the read-only `logo_from_file`, and `remove_logo` on such a logo
+  is refused (`logo_from_site_config`). `site_config.write` audit rows record `branding_logo_path` and
+  `branding_logo_sha256` when the body names `branding`. Migration `0105_branding_logo_from_file`. The
+  Branding card gains **Remove logo** and **Remove branding** (`DELETE /branding/settings`, which
+  already existed), each behind a confirmation. See docs/operations/console-branding.md.
+- **The run page says which portal launched the run (#1234).** `GET /runs/{id}` carries
+  `created_via_name` beside `created_via`, resolved from the portal registry at read time and never
+  stored on the run (a revoked portal keeps its name; an unknown one gives an empty name). The page
+  shows one muted line under the header, "Launched via {portal name}", only when `created_via` is set.
+- **A person's own Azure DevOps token is bound by Entra object id, and a token Azure DevOps refuses
+  before its expiry is reported (#1444, #1445).** An Entra sign-in now carries the person's object id
+  (`oid`) in the session cookie under its existing MAC; a cookie without one still signs in. A pasted
+  token binds by it where Wardyn holds the person's object id (from the sign-in, or from the person row)
+  and the token carries `vso.graph`, which the add-token dialog now asks for: Wardyn asks Azure DevOps'
+  Graph API who owns the token and binds when the owner's `originId` matches. Otherwise, or when Graph
+  refuses the token, the account-name or email match applies as before; a token without `vso.graph`
+  is still accepted. When a run's proxy
+  re-resolves a stored token after a `401` and the entered expiry is still ahead, Wardyn first asks
+  Azure DevOps whether it still accepts the token, and only if not stamps the token once. `GET
+  /me/scm-access` gains `refused_at`; `state` is unchanged and the token is used until its expiry. The
+  stamp is audited once as `ado_pat.own.store` with `reason: upstream_refused`, and a new paste
+  clears it. The own-token card reads "Refused" in danger with "Azure DevOps refused this token on
+  {date}, before it expires on {expiry}. Replace it." and a primary Replace token button; the Getting
+  started Azure DevOps chip uses the same words (Connected, Expires in N days, Refused, Expired) and
+  its Replace token or Add your personal access token button opens the Settings dialog rather than an
+  Entra sign-in. Removing the token now takes the lock the paste and the stamp share, so a stamp
+  cannot write a removed token back.
+- **An administrator sees which person the organisation refused a token for (#1449).** The Azure
+  DevOps row shows the existing refusal banner, with no check run, when a member's launch was refused
+  because the organisation restricts who may create tokens. `GET
+  /workspace-providers/git/{id}/ado-pat-refusal` (administrators only) answers the newest such refusal
+  from the last seven days, from the `ado_pat.mint.denied` audit rows, as the person's email and the
+  time, or `204`. A person with no email on file is passed over, never named by subject. No audit
+  action, reason or migration is added. The read filters in the store, so enough newer denials of other
+  kinds can no longer push the refusal out of view.
+- **The Ended banner says until when an ended run's files are kept, and a capped end says when the
+  admin has since loosened the limit (#1320, #1322).** `GET /runs/{id}` carries `kept_until` while a run
+  its own end stopped is still kept, and the `PATCH /runs/{id}` response carries `ends_cap_loosened` when
+  the launch profile now allows a later end than the run captured. Both are display only, and the
+  captured limit still binds.
+
+### Changed
+
+- **A disabled git provider row now says why its host is missing.** `GET /site-config` returns a
+  read-only `withheld_scm_hosts` beside `effective_scm_hosts`: each host a disabled row claims that the
+  effective list leaves out, as `{host, provider_id, provider_kind}`. The host stays out of run egress and
+  a launch on it is still refused naming the row; a `PUT` ignores the new field. The comment in migration
+  `0103` now states this instead of saying only that the row "still claims its hosts".
+
+- **Release tooling (#1461).** For the maintainers who cut a release; nothing here changes what
+  runs for a user.
+  - `make release-patch V=x.y.z` (`scripts/release-patch.sh`) runs prepare, wait and publish for a patch,
+    each step resuming from what already exists, and prints a table of the seconds each step took.
+    `DRY_RUN=1` rehearses without a release commit, PR, `release/*` push, tag or Release; it still
+    pushes the candidate branch and dispatches `nightly.yml` and the promote dry run. RELEASING.md
+    documents it, with the manual steps as the fallback.
+  - A release accepts CI and nightly evidence by tree, not by commit
+    (`scripts/green-by-tree.sh`). CI uploads a `ci-full-tree-<tree>` marker; only a dispatched nightly
+    qualifies, the newest one decides, and `ci.yml` no longer runs on pushes to `release/**`. A release
+    PR's DCO range excludes commits already on `main`, and the exemption for GitHub-made merge
+    commits now also checks GitHub's signing key id.
+  - A dispatched nightly builds the release image set once, multi-arch and unsigned, with build
+    provenance, into `ghcr.io/cjohnstoniv/staging/<image>:run-<run_id>`. `release.yml` gains a `path`
+    input (`build`, the default, or `promote`): promote copies those digests to the release tags,
+    refusing staging older than 24 hours or one whose revision label or attestation does not match,
+    then signs, scans and attests them. A tag push still builds. The age is the run's `created_at`
+    here and in `release-patch`: `gh run rerun --failed` refreshes `updated_at` but keeps the old
+    image jobs, so a stale nightly needs a fresh dispatch.
+  - `release-commit.sh` and `verify-release.sh` are new in `scripts/`; `release-commit.sh` is tested (a repeated `--apply`
+    refuses with exit 4 instead of duplicating the CHANGELOG section, and `--expect-tip` takes any unique
+    7 to 40 hex prefix), and `verify-release.sh` is only stubbed in `test-release-patch.sh`.
+  - A test that passes only on a retry fails the e2e gate unless `ui/e2e/quarantine.txt` lists it with an
+    issue, an owner and an expiry at most 14 days out; listed tests pass with a warning, expired or
+    malformed entries fail every run, and every flake is written to `test/reports/e2e/flaky.tsv`.
+    A new `notify-flaky` CI job opens or updates one issue per flaky test.
+  - The managed-settings drift probe now checks arm64 and the behaviour of the frozen documents, and
+    joins the nightly's notifications and the release gate.
+- **The nightly's published-image scan restores the trivy database cache,** and its issue now says the
+  scan failed, instead of claiming a published image has a CRITICAL vulnerability when the failure may
+  be a database download or an empty release list.
+
+### Fixed
+
+- **A failed console-logo write no longer hides a committed site-config save from the audit log.**
+  `PUT /site-config` stored the document, then answered `500` before it wrote the `site_config.write` row
+  when the logo write failed. The row is now written first and carries `branding_logo_failed: true`; the
+  response is still the `500`, and the same apply repeated finishes the logo.
+- **A rate-limited Azure DevOps token revoke is retried, including on a running run.** An HTTP 429 (or 408 or
+  425) on a run token's revoke was treated as a permanent refusal: the record was closed and the token stayed
+  valid to its expiry. It now stays recorded and the sweep retries it. The sweep also retries a revoke that failed
+  transiently on a run that is still running (a drift refusal, or a pause revoke followed by a resume); a token a
+  renewal or widening kept, with no failed revoke, is still left to its expiry.
+- **Azure DevOps Disconnect forgets the sign-in row it names, and Connect works for a person created by
+  object id.** With an own-token row listed before the Entra sign-in row, Disconnect picked the own-token
+  row, answered `204` and kept the real refresh token (the audit row named the wrong row too); it now
+  skips own-token rows. A person an admin set up by tenant and object id signs in as `entra:<tid>:<oid>`,
+  so the Connect callback refused them with `identity_binding`; it now resolves the verified token through
+  the same exact issuer, tenant and object id key as the console sign-in, never an email.
+- **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
+  /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
+  same choice: a provider that is off, missing or without your credential names it (with its kind), a
+  provider you are not granted is a `403` that names none, and a provider block or a credential that
+  cannot be read is the same `503`. A not-granted refusal at record was a `422` before.
+- **A model-access door button no longer does nothing when clicked just after the setup status
+  changes (#1460).** The door resolved its request against the previous status until a later effect ran,
+  so a click in that gap (the owner's subscription sign-in button, for example) opened nothing.
+- **The run page's idle sampler waits out every Sandbox-widget read, and its sandbox-gone answer is
+  logged and accurate (#1402).** A read refused its disk walk still ran the rest of its script inside
+  the sampler's window; every read is now counted, and a read whose request ended stays counted for
+  2 s while its `du` may still run. The `409` for a sandbox that is gone is logged at info level, and for
+  a run whose state has not yet flipped reads "the sandbox is gone; the run is finishing" rather than
+  that it has finished.
+- **A long portal name wraps on the run page's "Launched via" line (#1234).**
+- **The `WARDYN_ORG_URL` row of `docs/ENV.md` no longer says a revoked device may get a 410 (#701).**
+  The organisation answers a revoked device and an unknown one alike with a 401 carrying the device
+  realm, and no route sends a 410. The device client still accepts one. Migration `0078`'s comment now
+  says its plain `CREATE INDEX` blocks audit writes while it builds, and that a large install can build
+  the index `CONCURRENTLY` beforehand.
+- **The User view no longer offers a security admin a link to Setup, and the Secrets step counts model
+  providers (#1335, #1421).** A security admin in the User view saw "Set up a barrier", which opens
+  the member recap; `GET /me` now carries `user_view_super_admin` (true only for a super admin inside the
+  view) and the link needs it. The Secrets step's badge and auto-skip read the server's enabled model
+  providers rather than stored key secrets, and the retired model-key rows are gone from the console.
+
 ## [0.8.3] — 2026-09-30
 
 ### Security

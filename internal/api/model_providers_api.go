@@ -45,7 +45,8 @@ func (s *Server) mountModelProviderRoutes(r, operatorOnly chi.Router) {
 // door on r — as one line in routes(), which sits at its funlen ratchet.
 func (s *Server) mountProviderRoutes(r, operatorOnly chi.Router) {
 	s.mountWorkspaceProviderRoutes(operatorOnly)
-	s.mountADOOrgCheckRoute(operatorOnly) // ado_pat_orgcheck.go
+	s.mountADOOrgCheckRoute(operatorOnly)   // ado_pat_orgcheck.go
+	s.mountADOPATRefusalRoute(operatorOnly) // ado_pat_refusal.go
 	s.mountAgentProviderRoutes(operatorOnly)
 	s.mountModelProviderRoutes(r, operatorOnly)
 }
@@ -139,6 +140,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	candidate := existing
 	candidate.ModelProviders = block
 	candidate.EffectiveScmHosts = nil
+	candidate.WithheldScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)

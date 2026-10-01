@@ -312,6 +312,16 @@ spec:
             - name: WARDYN_VAULT_KV_MAX_VERSIONS
               value: {{ .vault.maxVersions | quote }}
             {{- end }}
+            {{- with .vault }}
+            {{- with .transitKeyPlatform }}
+            # A second Transit key, reached as rolePlatform, wraps wardynd's own
+            # signing, session and SSH host keys (docs/operations/secrets-and-keys.md
+            # "Two Vault roles"); kek.transit.key then wraps only the credentials.
+            - name: WARDYN_VAULT_TRANSIT_KEY_PLATFORM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key
@@ -325,13 +335,34 @@ spec:
             - name: WARDYN_VAULT_TRANSIT_KEY
               value: {{ .transit.key | quote }}
             {{- end }}
+            {{- if eq .provider "azurekv" }}
+            # Data keys wrapped by Azure Key Vault (docs/operations/secrets-and-keys.md
+            # "Key service: Azure Key Vault").
+            - name: WARDYN_KEK
+              value: "azurekv"
+            {{- end }}
+            {{- if $azkek.key }}
+            - name: WARDYN_AZURE_KEK_KEY
+              value: {{ $azkek.key | quote }}
+            - name: WARDYN_AZURE_KEK_SIGNING_KEY
+              value: {{ $azkek.signingKey | quote }}
+            {{- end }}
             {{- end }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/operations/secrets-and-keys.md "Store mode:
-            # credentials in Azure Key Vault"). With workload identity the
-            # webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
+            # credentials in Azure Key Vault").
             - name: WARDYN_AZURE_KV_URL
               value: {{ .azure.vaultUrl | quote }}
+            - name: WARDYN_AZURE_KV_PREFIX
+              value: {{ .azure.prefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_AZURE_KV_MAX_VERSIONS
+              value: {{ .azure.maxVersions | quote }}
+            - name: WARDYN_AZURE_KV_PURGE
+              value: {{ .azure.purge | quote }}
+            {{- end }}
+            {{- if and .azure (or .azure.vaultUrl $azkek.key) }}
+            # The Entra identity the Key Vault store and KEK share. With workload
+            # identity the webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
             - name: WARDYN_AZURE_AUTH
               value: {{ .azure.auth | quote }}
             {{- with .azure.tenantId }}
@@ -346,12 +377,6 @@ spec:
             - name: WARDYN_AZURE_AUTHORITY_HOST
               value: {{ . | quote }}
             {{- end }}
-            - name: WARDYN_AZURE_KV_PREFIX
-              value: {{ .azure.prefix | default $.Release.Namespace | quote }}
-            - name: WARDYN_AZURE_KV_MAX_VERSIONS
-              value: {{ .azure.maxVersions | quote }}
-            - name: WARDYN_AZURE_KV_PURGE
-              value: {{ .azure.purge | quote }}
             {{- end }}
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}

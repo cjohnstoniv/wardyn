@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -375,5 +376,46 @@ func TestADOServerLane_ProxyContract(t *testing.T) {
 	if resp.Header != "Authorization" || resp.Value != adoOwnPATHeaderValue(adoServerToken) || resp.ExpiresAt == 0 ||
 		resp.ExpiresAt > f.now.Add(3*time.Hour).UnixMilli() || resp.JTI == "" {
 		t.Errorf("resolved = %+v", resp)
+	}
+}
+
+// roundTripFunc is an http.RoundTripper made of a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// SECURITY (#1444): a Server row has no Graph door. Even a person whose
+// sign-in carries an object id, and a collection whose connectionData names a
+// subjectDescriptor, never has the token sent to the Graph host; the token is
+// judged by its Mail alone.
+func TestADOServerOwnPATPut_NeverReachesTheGraphHost(t *testing.T) {
+	var graphs int
+	d := newServerOwnPATDoor(t, adoServerOrgKey)
+	base := adoOwnPATTransport
+	adoOwnPATTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/_apis/graph/") {
+			graphs++
+			return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Request: r, Body: http.NoBody}, nil
+		}
+		if !strings.HasSuffix(r.URL.Path, "/_apis/connectionData") {
+			return base.RoundTrip(r)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Request: r, Body: io.NopCloser(strings.NewReader(
+			`{"authenticatedUser":{"subjectDescriptor":"s-1-5-21-1","properties":{"Account":{"$value":"CORP\\carol"},"Mail":{"$value":"carol@corp.example"}}}}`))}, nil
+	})
+	t.Cleanup(func() { adoOwnPATTransport = base })
+	payload, err := json.Marshal(oidc.Session{
+		V: oidc.SessionCodecVersion, Sub: capSub, Email: capEmail, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
+		ObjectID: "0a1b2c3d-1111-2222-3333-444455556666", Expiry: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := d.putAs(t, signedSessionCookie(payload), adoServerOrgKey, adoServerToken, days(10))
+	if graphs != 0 {
+		t.Fatalf("a Server row's token reached the Graph host %d times, want none", graphs)
+	}
+	if code != http.StatusForbidden {
+		t.Fatalf("PUT = %d %s, want 403: Mail is carol's, and the Graph door is not consulted", code, body)
 	}
 }

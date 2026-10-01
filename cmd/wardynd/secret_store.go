@@ -59,21 +59,29 @@ func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) 
 	if err != nil {
 		return storeClients{}, err
 	}
-	k, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
+	k, writes, err := buildKEK(ctx, f.vault, f.azure, *f.trustedCAFile)
 	if err != nil {
 		return storeClients{}, err
 	}
-	return storeClients{ext: ext, kek: k, kekWrites: writes, timeout: *f.vault.timeout}, nil
+	pk, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, false)
+	if err != nil {
+		return storeClients{}, err
+	}
+	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, timeout: *f.vault.timeout}, nil
 }
 
 // storeClients are the configured clients a secret store is built over.
 type storeClients struct {
 	// ext is the external store client, or nil.
 	ext secretstore.External
-	// kek is the key service (Vault Transit), or nil; kekWrites says whether
-	// it wraps new rows (WARDYN_KEK=transit) or only reads its own.
+	// kek is the key service (Vault Transit, Key Vault), or nil; kekWrites
+	// says whether it wraps new rows (WARDYN_KEK=transit or azurekv) or only
+	// reads its own.
 	kek       kek.KEK
 	kekWrites bool
+	// platformKEK is the second key service that wraps the boot keys alone
+	// (WARDYN_VAULT_TRANSIT_KEY_PLATFORM), or nil.
+	platformKEK kek.KEK
 	// timeout bounds each call to ext.
 	timeout time.Duration
 }
@@ -173,6 +181,10 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 		}
 	}
 	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites}
+	// Only a platform key that is actually set: a typed nil reads as a key.
+	if c.platformKEK != nil {
+		deps.PlatformKEK, deps.PlatformKEKWrites = c.platformKEK, true
+	}
 	// A typed nil in the interface would read as "a key is configured".
 	if id != nil {
 		deps.AgeIdentity = id
@@ -257,7 +269,7 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 }
 
 // refuseIdleAgeKey refuses boot when a key service wraps every write
-// (WARDYN_KEK=transit) and WARDYN_AGE_KEY is set with no stored row left under
+// (WARDYN_KEK=transit or azurekv) and WARDYN_AGE_KEY is set with no stored row left under
 // it: the key then only lets whoever also holds the database forge a row the
 // store still reads under it — Wardyn's boot keys among them.
 func refuseIdleAgeKey(ctx context.Context, ps *secretstorepg.Store) error {
@@ -269,7 +281,7 @@ func refuseIdleAgeKey(ctx context.Context, ps *secretstorepg.Store) error {
 		return err
 	}
 	if n == 0 {
-		return errors.New("refusing to start: WARDYN_KEK=transit and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys")
+		return fmt.Errorf("refusing to start: every write is wrapped by %s and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys", ps.KeyService())
 	}
 	return nil
 }
@@ -286,34 +298,40 @@ type vaultFlags struct {
 	// kek is WARDYN_KEK; transitMount and transitKey name the Transit key it
 	// selects (or, with kek=local, reads).
 	kek, transitMount, transitKey *string
+	// transitKeyPlatform is the second Transit key the boot keys alone are
+	// wrapped under, reached as rolePlatform.
+	transitKeyPlatform *string
 }
 
 func registerVaultFlags() vaultFlags {
 	return vaultFlags{
-		addr:         flagEnv("vault-addr", "WARDYN_VAULT_ADDR", "", "Vault (or OpenBao) address for the vaultkv secret store, https://; http:// only to a loopback host. Empty = no Vault client"),
-		namespace:    flagEnv("vault-namespace", "WARDYN_VAULT_NAMESPACE", "", "Vault Enterprise/HCP namespace, sent as X-Vault-Namespace; empty = none"),
-		auth:         flagEnv("vault-auth", "WARDYN_VAULT_AUTH", vaultkv.AuthKubernetes, `Vault auth method: "kubernetes" (a projected service-account token) or "token-file" (a Vault Agent sink or CSI file)`),
-		authMount:    flagEnv("vault-auth-mount", "WARDYN_VAULT_AUTH_MOUNT", "kubernetes", "mount path of Vault's Kubernetes auth method"),
-		role:         flagEnv("vault-role", "WARDYN_VAULT_ROLE", "", "Vault Kubernetes-auth role wardynd logs in as"),
-		rolePlatform: flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/operations/secrets-and-keys.md"),
-		k8sTokenFile: flagEnv("vault-k8s-token-file", "WARDYN_VAULT_K8S_TOKEN_FILE", "", "path of the projected service-account token (audience vault) for Kubernetes auth; re-read at every login"),
-		tokenFile:    flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read on every 403"),
-		caCertFile:   flagEnv("vault-cacert-file", "WARDYN_VAULT_CACERT_FILE", "", "PEM bundle added to the system roots for the Vault client only; empty = WARDYN_TRUSTED_CA_FILE, else system roots"),
-		kvMount:      flagEnv("vault-kv-mount", "WARDYN_VAULT_KV_MOUNT", "wardyn", "Vault KV v2 mount the vaultkv store writes under"),
-		kvPrefix:     flagEnv("vault-kv-prefix", "WARDYN_VAULT_KV_PREFIX", "wardyn", "path prefix under the mount for this install (the chart sets the release namespace)"),
-		maxVersions:  flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
-		timeout:      flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
-		kek:          flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY) or "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client)`),
-		transitMount: flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
-		transitKey:   flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
+		addr:               flagEnv("vault-addr", "WARDYN_VAULT_ADDR", "", "Vault (or OpenBao) address for the vaultkv secret store, https://; http:// only to a loopback host. Empty = no Vault client"),
+		namespace:          flagEnv("vault-namespace", "WARDYN_VAULT_NAMESPACE", "", "Vault Enterprise/HCP namespace, sent as X-Vault-Namespace; empty = none"),
+		auth:               flagEnv("vault-auth", "WARDYN_VAULT_AUTH", vaultkv.AuthKubernetes, `Vault auth method: "kubernetes" (a projected service-account token) or "token-file" (a Vault Agent sink or CSI file)`),
+		authMount:          flagEnv("vault-auth-mount", "WARDYN_VAULT_AUTH_MOUNT", "kubernetes", "mount path of Vault's Kubernetes auth method"),
+		role:               flagEnv("vault-role", "WARDYN_VAULT_ROLE", "", "Vault Kubernetes-auth role wardynd logs in as"),
+		rolePlatform:       flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/operations/secrets-and-keys.md"),
+		k8sTokenFile:       flagEnv("vault-k8s-token-file", "WARDYN_VAULT_K8S_TOKEN_FILE", "", "path of the projected service-account token (audience vault) for Kubernetes auth; re-read at every login"),
+		tokenFile:          flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read on every 403"),
+		caCertFile:         flagEnv("vault-cacert-file", "WARDYN_VAULT_CACERT_FILE", "", "PEM bundle added to the system roots for the Vault client only; empty = WARDYN_TRUSTED_CA_FILE, else system roots"),
+		kvMount:            flagEnv("vault-kv-mount", "WARDYN_VAULT_KV_MOUNT", "wardyn", "Vault KV v2 mount the vaultkv store writes under"),
+		kvPrefix:           flagEnv("vault-kv-prefix", "WARDYN_VAULT_KV_PREFIX", "wardyn", "path prefix under the mount for this install (the chart sets the release namespace)"),
+		maxVersions:        flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
+		timeout:            flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
+		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity)`),
+		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
+		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
+		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),
 	}
 }
 
-// azureFlags configure the Azure Key Vault external store (docs/ENV.md).
-// VaultURL empty means no Key Vault client at all.
+// azureFlags configure the Azure Key Vault external store and the Key Vault
+// KEK (docs/ENV.md), which share the identity settings. VaultURL empty means
+// no Key Vault store client; kekKey empty, no Key Vault KEK.
 type azureFlags struct {
 	vaultURL, auth, tenantID, clientID, federatedTokenFile, authorityHost, prefix, purge *string
 	maxVersions                                                                          *int
+	kekKey, kekSigningKey                                                                *string
 }
 
 func registerAzureFlags() azureFlags {
@@ -327,6 +345,8 @@ func registerAzureFlags() azureFlags {
 		prefix:             flagEnv("azure-kv-prefix", "WARDYN_AZURE_KV_PREFIX", "wardyn", "prefix of every secret name this install writes (the chart sets the release namespace)"),
 		maxVersions:        flagIntEnv("azure-kv-max-versions", "WARDYN_AZURE_KV_MAX_VERSIONS", 100, "versions a secret holds before the next write starts a new name and deletes the old one"),
 		purge:              flagEnv("azure-kv-purge", "WARDYN_AZURE_KV_PURGE", azurekv.PurgeAuto, `"auto": purge a deleted secret when the vault allows it; "never": leave it soft-deleted for the vault's retention`),
+		kekKey:             flagEnv("azure-kek-key", "WARDYN_AZURE_KEK_KEY", "", "versionless id (https://<vault>.vault.azure.net/keys/<name>) of the Key Vault RSA 3072/4096 key, key_ops wrapKey and unwrapKey only, not exportable, that wraps data keys with WARDYN_KEK=azurekv; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
+		kekSigningKey:      flagEnv("azure-kek-signing-key", "WARDYN_AZURE_KEK_SIGNING_KEY", "", "versionless id of the EC P-256 key, sign and verify only, in the same vault, that signs every wrap WARDYN_AZURE_KEK_KEY makes; set together with it"),
 	}
 }
 
@@ -334,19 +354,35 @@ func registerAzureFlags() azureFlags {
 const (
 	kekLocal   = "local"
 	kekTransit = "transit"
+	kekAzure   = "azurekv"
 )
 
 // buildKEK returns the configured key service, or nil, and whether it wraps
-// new rows. WARDYN_KEK=transit writes under the Vault Transit key; with
-// WARDYN_KEK=local a named Transit key is built read-only, so the rows sealed
-// under it stay readable while `wardynd -rewrap` moves them back. The key is
-// proven at boot (vaultkv.NewTransit): a key service that cannot be reached,
+// new rows. WARDYN_KEK=transit writes under the Vault Transit key and
+// WARDYN_KEK=azurekv under the Key Vault keys; with WARDYN_KEK=local a named
+// key service is built read-only, so the rows sealed under it stay readable
+// while `wardynd -rewrap` moves them back. One key service at a time: a move
+// between the two goes through the local key. The key is proven at boot
+// (vaultkv.NewTransit, azurekv.NewKEK): a key service that cannot be reached,
 // or that does not bind a wrap to its row, fails boot (design K6).
-func buildKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (kek.KEK, bool, error) {
+func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string) (kek.KEK, bool, error) {
 	sel := strings.TrimSpace(*v.kek)
 	key := strings.TrimSpace(*v.transitKey)
+	azKey, azSig := strings.TrimSpace(*az.kekKey), strings.TrimSpace(*az.kekSigningKey)
+	azureNamed := azKey != "" || azSig != ""
+	switch {
+	case azureNamed && (key != "" || strings.TrimSpace(*v.transitKeyPlatform) != ""):
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_AZURE_KEK_KEY and WARDYN_VAULT_TRANSIT_KEY (or WARDYN_VAULT_TRANSIT_KEY_PLATFORM) both name a key service; configure one — a move between Transit and Key Vault goes through the local key (docs/operations/secrets-and-keys.md)")
+	case sel == kekAzure && (azKey == "" || azSig == ""):
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK=azurekv needs WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY")
+	case azureNamed && (azKey == "" || azSig == ""):
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY are set together or not at all")
+	}
 	switch sel {
 	case "", kekLocal:
+		if azureNamed {
+			return buildAzureKEK(ctx, v, az, trustedCAFile, false)
+		}
 		if key == "" {
 			return nil, false, nil
 		}
@@ -354,8 +390,10 @@ func buildKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (kek.KEK,
 		if key == "" {
 			return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK=transit needs WARDYN_VAULT_TRANSIT_KEY")
 		}
+	case kekAzure:
+		return buildAzureKEK(ctx, v, az, trustedCAFile, true)
 	default:
-		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK is %q; want %q or %q", sel, kekLocal, kekTransit)
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK is %q; want %q, %q or %q", sel, kekLocal, kekTransit, kekAzure)
 	}
 	if strings.TrimSpace(*v.addr) == "" {
 		return nil, false, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY is set but WARDYN_VAULT_ADDR is not")
@@ -365,6 +403,64 @@ func buildKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (kek.KEK,
 		return nil, false, fmt.Errorf("refusing to start: %w", err)
 	}
 	return t, sel == kekTransit, nil
+}
+
+// buildAzureKEK builds the Key Vault KEK over the store's identity settings.
+// It needs no WARDYN_AZURE_KV_URL: the vault is the one the keys name.
+func buildAzureKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string, writes bool) (kek.KEK, bool, error) {
+	k, err := azurekv.NewKEK(ctx, azurekv.KEKConfig{
+		Key: strings.TrimSpace(*az.kekKey), SigningKey: strings.TrimSpace(*az.kekSigningKey),
+		Auth: strings.TrimSpace(*az.auth), TenantID: strings.TrimSpace(*az.tenantID), ClientID: strings.TrimSpace(*az.clientID),
+		FederatedTokenFile: strings.TrimSpace(*az.federatedTokenFile), AuthorityHost: strings.TrimSpace(*az.authorityHost),
+		CACertFile: strings.TrimSpace(trustedCAFile), Timeout: *v.timeout,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("refusing to start: %w", err)
+	}
+	return k, writes, nil
+}
+
+// buildPlatformKEK returns the Transit key the boot keys alone are wrapped
+// under (WARDYN_VAULT_TRANSIT_KEY_PLATFORM), or nil when none is named. It is
+// reached as WARDYN_VAULT_ROLE_PLATFORM, so a token that reaches the
+// credential key never reaches it. Like buildKEK it is proven at boot.
+//
+// retire is `wardynd -rewrap-retire-platform-key` alone: the key is built to be
+// read, for the boot keys still under it, so it does not need WARDYN_KEK=transit
+// (the boot keys may be moving back to the local key). A normal start and a
+// plain -rewrap never pass it.
+func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string, retire bool) (kek.KEK, error) {
+	key := strings.TrimSpace(*v.transitKeyPlatform)
+	if key == "" {
+		return nil, nil
+	}
+	if sel := strings.TrimSpace(*v.kek); sel != kekTransit && !retire {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_KEK=transit")
+	}
+	if strings.TrimSpace(*v.addr) == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM is set but WARDYN_VAULT_ADDR is not")
+	}
+	if strings.TrimSpace(*v.rolePlatform) == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_ROLE_PLATFORM")
+	}
+	// A token-file login ignores the role: the platform key would be reached
+	// with the credential token, which separates nothing.
+	if strings.TrimSpace(*v.auth) != vaultkv.AuthKubernetes {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM needs WARDYN_VAULT_AUTH=%s", vaultkv.AuthKubernetes)
+	}
+	if strings.TrimSpace(*v.rolePlatform) == strings.TrimSpace(*v.role) {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_ROLE_PLATFORM is the same role as WARDYN_VAULT_ROLE, which separates nothing; name the second role")
+	}
+	if key == strings.TrimSpace(*v.transitKey) {
+		return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM is the same key as WARDYN_VAULT_TRANSIT_KEY, which separates nothing; name a second key")
+	}
+	cfg := vaultConfig(v, trustedCAFile)
+	cfg.Role, cfg.RolePlatform = cfg.RolePlatform, ""
+	t, err := vaultkv.NewPlatformTransit(ctx, cfg, strings.TrimSpace(*v.transitMount), key)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: %w", err)
+	}
+	return t, nil
 }
 
 // vaultConfig is the Vault client configuration both the KV store and the
@@ -427,7 +523,7 @@ func storesExternally(s secretstore.Store) string {
 }
 
 // keyService describes the key service that wraps every write ("Vault
-// Transit at vault.example:8200"), or "" when the local key does (the
+// Transit at vault.example:8200", "Key Vault myvault"), or "" when the local key does (the
 // kek_service setup row). The audited store forwards it.
 func keyService(s secretstore.Store) string {
 	if d, ok := s.(interface{ KeyService() string }); ok {

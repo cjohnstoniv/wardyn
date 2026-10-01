@@ -39,7 +39,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -368,11 +367,26 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
-		// The model-provider choice: the create door's 422 and sentence, without
-		// its provider/kind/reason fields yet (#797) — the same generic bucket
-		// run_model_provider.go's own non-credential refusals carry.
-		if errors.Is(lerr, errModelProviderRefused) {
-			writeErrorReason(w, http.StatusUnprocessableEntity, string(authz.ReasonModelProviderUnavailable), strings.TrimPrefix(lerr.Error(), errModelProviderRefused.Error()+": "))
+		// The model-provider choice: written by the create door's own writer
+		// (writeProviderChoiceRefusal), so the status, body and authz.denied
+		// row are the ones POST /runs answers for the same choice.
+		var mpRefusal *modelProviderRefusal
+		if errors.As(lerr, &mpRefusal) {
+			s.writeProviderChoiceRefusal(w, r, mpRefusal.choice, mpRefusal.live)
+			return
+		}
+		// A chosen provider's credential that could not be read: the create
+		// door's 503, the provider named in the sentence only.
+		var readErr *modelProviderReadError
+		if errors.As(lerr, &readErr) {
+			slog.ErrorContext(r.Context(), "api: read model provider credential", slog.String("provider", readErr.provider.ID), slog.Any("err", readErr.err))
+			writeError(w, http.StatusServiceUnavailable, providerReadFailed(readErr.provider))
+			return
+		}
+		// An unreadable provider block: the bare 503 the create door answers.
+		if errors.Is(lerr, errModelProvidersUnreadable) {
+			slog.ErrorContext(r.Context(), "api: get site config for model-provider choice", slog.Any("err", lerr))
+			writeError(w, http.StatusServiceUnavailable, mpRunUnreadable)
 			return
 		}
 		// Provider admission, the roster refusal's sibling and mapped the

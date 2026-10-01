@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -318,6 +318,15 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@echo "nightly.yml's multi-arch build — confirm CI is green on the commit, and"
 	@echo "the multi-arch build green on it, before tagging (RELEASING.md)."
 
+# One command from "fixes ready" to "published and verified": scripts/release-patch.sh
+# (RELEASING.md, "The patch command"). Variables given on the make command line reach
+# it as environment: V (required), BRANCH, MERGE, NOTES, BODY, HIGHLIGHTS, ISSUES,
+# PHASE, DRY_RUN. DRY_RUN=1 makes no release commit, PR, release/* push, tag or
+# Release, but it still pushes the candidate branch, dispatches nightly.yml (which
+# pushes public staging images) and dispatches release.yml's promote dry run.
+release-patch: ## Cut a patch release: make release-patch V=x.y.z (DRY_RUN=1 rehearses)
+	@./scripts/release-patch.sh
+
 # 20m, not 10m: this suite is no longer the runner-contract cases alone. 0.7.5's
 # boot-egress measurement boots the REAL claude-code image, walks its first screens
 # through a PTY and then waits out two fixed settle sleeps on the proxy's decision
@@ -341,7 +350,8 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "previously only ran in nightly.yml's docker-tagged-live job; a regression here would not"
 	@echo "surface until the next nightly run. Scoped to just these three by -run: the rest of"
 	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
-	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
+	@echo "Run through test-report.sh (l0-docker): a rename or a skip of the three fails the job."
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
 
 # The key-service suite against real servers (T-33): the Vault Transit KEK and the
 # Vault KV store on the official hashicorp/vault and openbao/openbao dev images, and
@@ -592,9 +602,11 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-desktop-profile.sh
 	./scripts/test-e2e-lane-kill-tree.sh
 	./scripts/test-e2e-live-base-url.sh
+	./scripts/test-e2e-quarantine.sh
 	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
+	./scripts/test-green-by-tree.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
@@ -603,6 +615,8 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-release-check.sh
+	./scripts/test-release-commit.sh
+	./scripts/test-release-patch.sh
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
@@ -870,6 +884,15 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=azurekv --set secretStore.azure.vaultUrl=https://kv1.vault.azure.net 2>&1 | grep -q "needs secretStore.azure.tenantId" || { echo "chart no longer refuses workload identity with no tenant or client id"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.azure.vaultUrl=https://kv1.vault.azure.net --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "not both" || { echo "chart no longer refuses two external secret stores"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true | grep -q "azure.workload.identity" && { echo "a pg install carries workload identity markers"; exit 1; } || true
+	@# Key Vault KEK (#587): WARDYN_KEK=azurekv and both keys render with the shared identity and workload identity, no age key is required, and a missing key, one key alone, or two key services at once, is a render refusal.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set kek.azurekv.key=https://kv1.vault.azure.net/keys/wardyn-kek --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/wardyn-kek-sig --set secretStore.azure.tenantId=tenant-1 --set secretStore.azure.clientId=client-1) || { echo "kek.provider=azurekv with an external DSN and no age key no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_KEK$$" | grep -q 'value: "azurekv"' || { echo "kek.provider=azurekv did not render WARDYN_KEK"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AZURE_KEK_SIGNING_KEY" | grep -q 'wardyn-kek-sig' || { echo "kek.azurekv.signingKey did not render WARDYN_AZURE_KEK_SIGNING_KEY"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AZURE_CLIENT_ID" | grep -q 'client-1' || { echo "the Key Vault KEK did not render the Azure identity"; exit 1; }; \
+	echo "$$out" | grep -q 'azure.workload.identity/use: "true"' || { echo "the Key Vault KEK did not label the pod for workload identity"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AZURE_KV_URL" && { echo "the Key Vault KEK rendered the store's WARDYN_AZURE_KV_URL"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c 2>&1 | grep -q "kek.provider=azurekv needs kek.azurekv.key and kek.azurekv.signingKey" || { echo "chart no longer refuses kek.provider=azurekv with no keys"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.azurekv.key=https://kv1.vault.azure.net/keys/k --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/s --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c --set kek.transit.key=wardyn --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "both name a key service; configure one" || { echo "chart no longer refuses a Key Vault KEK beside a Transit key"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
@@ -1303,17 +1326,22 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 DCO_RANGE ?= origin/main..HEAD
 # 1 only where GitHub itself makes merge commits (push, merge_group): its
 # "Merge pull request" commits (committer GitHub <noreply@github.com>, 2+
-# parents) carry no Signed-off-by. PR ranges end at the PR head instead and
-# never pass this flag — every commit in a PR's own range, merges included,
-# must carry Signed-off-by, even a GitHub-committed one (e.g. from "Update
-# branch") landed on the branch itself (#1070).
+# parents) carry no Signed-off-by. They carry GitHub's web-flow signature, so the
+# exemption also wants that key id (%GK, which git prints from the signature
+# even when the key is not in the keyring): setting GIT_COMMITTER_EMAIL alone no
+# longer forges it. The key id is not a verification, since a copied signature
+# block names the same key; branch protection is what keeps a forged merge off
+# main. A missing gpg leaves %GK empty and fails the exemption closed. PR ranges
+# end at the PR head instead and never pass this flag — every commit in a PR's
+# own range, merges included, must carry Signed-off-by, even a GitHub-committed
+# one (e.g. from "Update branch") landed on the branch itself (#1070).
 DCO_ALLOW_GITHUB_MERGES ?= 0
 dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
-	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
+	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%GK%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
 	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
 	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' -v gh=$(DCO_ALLOW_GITHUB_MERGES) \
-	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" {next} $$4 !~ /.+ <.+@.+>/ {print $$1}'); \
+	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" && $$4=="B5690EEEBB952194" {next} $$5 !~ /.+ <.+@.+>/ {print $$1}'); \
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 

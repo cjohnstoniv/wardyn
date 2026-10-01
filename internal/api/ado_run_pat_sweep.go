@@ -158,15 +158,17 @@ func (s *Server) deleteRunPAT(ctx context.Context, p store.RunPAT) (transient bo
 	case err == nil, errors.As(err, &pe) && pe.Status == http.StatusNotFound:
 		return false, nil
 	case pe != nil:
-		return pe.Status >= 500, err
+		return adoPATTransientStatus(pe.Status), err
 	}
 	return true, err
 }
 
 // sweepRunPATs is the backstop: at most once per adoRunPATSweepEvery it
 // revokes the tokens of every run that has ended, is kept after its end, is
-// paused or is gone, and closes the rows of tokens past their validTo. A
-// live run's older tokens are left to their validTo.
+// paused or is gone, and closes the rows of tokens past their validTo. On a
+// live run it also retries a token whose revoke failed transiently (a drift
+// refusal, or a pause revoke followed by a resume); its other older tokens, kept
+// by a renewal or a widening, are left to their validTo.
 func (s *Server) sweepRunPATs(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.RunPATStore)
 	if !ok || !s.adoRunPATs.sweepDue(s.cfg.Now()) {
@@ -196,14 +198,26 @@ func (s *Server) sweepRunPATs(ctx context.Context) error {
 		case run.PausedAt != nil:
 			s.revokeRunPATs(ctx, runID, adoPATRevokePause)
 		default:
-			for _, p := range byRun[runID] {
-				if !p.ValidTo.After(s.cfg.Now()) {
-					s.closeRunPAT(ctx, st, p, adoPATRevokeExpired, p.LastError)
-				}
-			}
+			s.sweepLiveRunPATs(ctx, st, runID, byRun[runID])
 		}
 	}
 	return nil
+}
+
+// sweepLiveRunPATs closes the expired rows of a live run and retries, under
+// the run's lock, each unexpired row whose earlier revoke failed transiently
+// (LastError is only ever set by that failure on an open row). A row without
+// one is a renewal's or a widening's older token and is left alone.
+func (s *Server) sweepLiveRunPATs(ctx context.Context, st store.RunPATStore, runID uuid.UUID, rows []store.RunPAT) {
+	_, unlock := s.adoRunPATs.lock(runID)
+	defer unlock()
+	for _, p := range rows {
+		if !p.ValidTo.After(s.cfg.Now()) {
+			s.closeRunPAT(ctx, st, p, adoPATRevokeExpired, p.LastError)
+		} else if p.LastError != "" {
+			s.revokeRunPAT(ctx, st, p, adoPATRevokeSweep)
+		}
+	}
 }
 
 // sweepDue reports whether a sweep is due at now, and if so claims it.

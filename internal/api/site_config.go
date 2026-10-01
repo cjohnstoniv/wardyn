@@ -340,6 +340,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// server state this deliberately pure function has no access to — the boot
 	// agent-image map, and WARDYN_ALLOW_TEST_ENDPOINTS for a Bedrock base URL.
 	// Both doors run each, so the "one validator, two doors" property is the same.
+	if err := validateSiteBranding(cfg.Branding); err != nil {
+		return err
+	}
 	return validateWorkspaceProviders(cfg.WorkspaceProviders, false)
 }
 
@@ -542,6 +545,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// effective_scm_hosts: the read-only union (workspace_providers.go) — ONE
 	// spelling of the claim rule, in Go, so the console never re-implements it.
 	cfg.EffectiveScmHosts = effectiveScmHosts(cfg)
+	cfg.WithheldScmHosts = withheldScmHosts(cfg)
 	// workspace_providers.git_pat_broker_enabled: the SAME projection GET
 	// /workspace-providers does, and for the same reason (#381) — this door
 	// returns the identical nested block, so a console reading site-config
@@ -575,7 +579,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // have decided which side of this line it sits on.
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
-	"model_providers", "sign_in_help_text", "sign_in_help_url",
+	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -633,10 +637,17 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	if !present["sign_in_help_url"] {
 		cfg.SignInHelpURL = existing.SignInHelpURL
 	}
+	// branding (#1215), on the same terms: a file written before the key existed
+	// must not drop the logo_path the org named (an absent key also leaves the
+	// stored logo untouched — only a body that names the block acts on it).
+	if !present["branding"] {
+		cfg.Branding = existing.Branding
+	}
 	// effective_scm_hosts is NOT carried forward: it is server-owned and
 	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing
 	// to preserve — the write clears it instead.
 	cfg.EffectiveScmHosts = nil
+	cfg.WithheldScmHosts = nil
 	// git_pat_broker_enabled (nested in workspace_providers) takes the SAME
 	// treatment, and for the same reason (#381 F1): it is projected on read
 	// from the deployment's own env switch, never stored. Without this line a
@@ -716,6 +727,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
 	cfg.ModelProviders = normalizeModelProviders(cfg.ModelProviders)
+	cfg.Branding = normalizeSiteBranding(cfg.Branding)
 	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
@@ -733,6 +745,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateModelProviders(cfg.ModelProviders, s.cfg.AllowTestEndpoints); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
+		return
+	}
+	// The logo file (#1215) is read and checked BEFORE anything is written, so a
+	// bad file refuses the apply whole — after the shape rule above, and before
+	// the lock, since a read of the host filesystem has no business inside it.
+	siteLogo, brandStore, ok := s.readSiteBrandingLogo(w, present["branding"], cfg.Branding)
+	if !ok {
 		return
 	}
 	imageOK := s.claudeSignInImageOK(r.Context(), cfg.ModelProviders)
@@ -824,6 +843,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "put site config", err)
 		return
 	}
+	// The logo follows the document just saved (siteBrandingLogo's doc). The
+	// document is already stored; a failure here is a 500, and the same apply
+	// repeated finishes it. The 500 waits until the audit row below is written.
+	logoPending, logoErr := s.followSiteBranding(r, present["branding"], brandStore, siteLogo)
 	logWarnInternalHostsDeclared(saved.InternalHosts)
 	sshWideRows := sshLaneWidePastPathRows(saved.WorkspaceProviders)
 	logWarnSSHLaneWidePastPath(sshWideRows)
@@ -862,6 +885,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
+	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
 	// Only once a provider block exists, so a deployment without one writes the
 	// row it always wrote.
 	if saved.ModelProviders != nil {
@@ -876,10 +900,15 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"site_config.write", "site_config", "success", mustJSON(datum)))
+	if logoErr != nil {
+		writeServerError(w, r, "apply site config branding logo", logoErr)
+		return
+	}
 	w.Header().Set("ETag", computeETag(saved))
 	// Projected onto the response for the same reason GET projects it — and
 	// AFTER the ETag above, which must hash the stored document.
 	saved.EffectiveScmHosts = effectiveScmHosts(saved)
+	saved.WithheldScmHosts = withheldScmHosts(saved)
 	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
 	// `site-config set` (or the console's own PUT round trip) sees the live
 	// switch immediately rather than a dropped field until the next GET. A
@@ -903,6 +932,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		AppliesFrom:                  siteConfigAppliesFromNextDispatch,
 		SourcesNoLongerAdmitted:      narrowed,
 		SSHLaneWidePastPath:          sshWideRows,
+		BrandingLogoPending:          logoPending,
 	})
 }
 
@@ -952,6 +982,12 @@ type siteConfigPutResponse struct {
 	// logWarnSSHLaneWidePastPath) so the drop from "refused" to "admitted +
 	// warned" is never silent, the same shape DanglingSecretRefs takes.
 	SSHLaneWidePastPath []string `json:"ssh_lane_wide_past_path,omitempty"`
+	// BrandingLogoPending (#1215) reports a branding.logo_path that was valid
+	// but NOT attached: the console has no branding record yet (the name and
+	// colours are set on the Branding card), so there is nothing to hold the
+	// logo. Reported, not refused — see site_config_branding.go — and the next
+	// apply after the card is saved attaches it.
+	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
 }
 
 // siteConfigAppliesFromNextDispatch is the ONE value AppliesFrom takes today:

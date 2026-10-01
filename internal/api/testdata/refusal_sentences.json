@@ -257,7 +257,12 @@
   {
     "reason": "second_human_required",
     "target": "id.String()",
-    "sentence": "envEgressSecondHuman + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its Azure DevOps access\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
   },
   {
     "reason": "security_admin_surface",

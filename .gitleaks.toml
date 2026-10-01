@@ -29,6 +29,10 @@ regexes = [
     # STRIPS it before the request reaches the sandbox. Its whole job is to be
     # a value that must never come back — never a credential.
     '''MUST-NOT-LEAK''',
+    # The key-service mode setting named in docs (WARDYN_KEK=transit / azurekv /
+    # local / vault): generic-api-key reads the mode name as a secret value. It is a
+    # documented enum, never a credential.
+    '''WARDYN_KEK=(transit|azurekv|local|vault)\b''',
     # internal/secretstore/pg's AAD domain-separation label: a constant string
     # shaped like generic-api-key, not a secret. Regex- not path-scoped: the
     # file it lives in stores real secret envelopes and must stay scannable.

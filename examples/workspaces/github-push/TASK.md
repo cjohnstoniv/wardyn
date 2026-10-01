@@ -40,7 +40,7 @@ PR from it. Demonstrating that refusal is a stronger property than the PR.)
 
 ### Demo (no GitHub App): approve path still shows fail-closed
 
-    wardyn approve <approval-id>
+    wardyn approval approve <approval-id>
 
 After approval, wardynd attempts the mint but finds no GitHub App credentials.
 A `credential.mint` event with `outcome=failure` is emitted and the push fails.  This is

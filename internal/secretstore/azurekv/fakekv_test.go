@@ -67,6 +67,13 @@ type fakeKV struct {
 	// the answer reaches wardynd: a test holds a caller there to replay an
 	// interleaving.
 	after func(r *http.Request)
+
+	// keys are the Key Vault keys (fakekeys_test.go), by lowercase name;
+	// keyOps logs each crypto call as "<op> <alg>"; shortUnwrap makes
+	// unwrapkey answer one byte short.
+	keys        map[string]*fakeKey
+	keyOps      []string
+	shortUnwrap bool
 }
 
 type kvSecret struct {
@@ -182,6 +189,8 @@ func (f *fakeKV) serve(w http.ResponseWriter, r *http.Request) {
 		f.list(w, r)
 	case len(seg) == 1 && seg[0] == "deletedsecrets" && r.Method == http.MethodGet:
 		f.listDeleted(w, r)
+	case len(seg) >= 2 && seg[0] == "keys":
+		f.key(w, r, seg[1:])
 	case len(seg) >= 2 && seg[0] == "secrets":
 		name := strings.ToLower(seg[1])
 		if !kvNameRE.MatchString(seg[1]) {

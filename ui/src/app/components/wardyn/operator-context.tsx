@@ -72,6 +72,14 @@ export interface MeIdentity {
   // no provider above it). Never "harden" this default to false either.
   securityOperator: boolean;
 
+  // Whether the person inside the User view is STAMPED a super admin (GET
+  // /api/v1/me's `user_view_super_admin`, #1335). `operator` is clamped to
+  // false in the view, so it cannot say whether /admin/setup would open for
+  // them; this can. Default FALSE — fail CLOSED, unlike the tier defaults above:
+  // it only gates an offered link, and an unresolved /me, a failed fetch or an
+  // unwrapped test must not offer a route the server may refuse.
+  userViewSuperAdmin: boolean;
+
   // The signed-in principal (GET /api/v1/me's `principal`), for UX that
   // needs to compare "is this MY run/resource" (e.g. the run-detail
   // "Connect via SSH" card, owner-only like the gateway itself). Default
@@ -199,6 +207,7 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   operator: true,
   operatorResolved: true,
   securityOperator: true,
+  userViewSuperAdmin: false,
   principal: "",
   memberLocalDirRoot: null,
   userDrive: NO_USER_DRIVE,
@@ -213,6 +222,7 @@ export function OperatorProvider({
   operator,
   operatorResolved = true,
   securityOperator = true,
+  userViewSuperAdmin = false,
   principal = "",
   memberLocalDirRoot = null,
   userDrive = null,
@@ -232,6 +242,9 @@ export function OperatorProvider({
   // `operator` keeps today's fail-open behavior rather than silently becoming
   // the restricted case.
   securityOperator?: boolean;
+  /** GET /me's `user_view_super_admin` — see MeIdentity.userViewSuperAdmin.
+   *  Optional, defaulting false (fail closed). */
+  userViewSuperAdmin?: boolean;
   principal?: string;
   memberLocalDirRoot?: string | null;
   userDrive?: MeUserDrive | null;
@@ -271,6 +284,7 @@ export function OperatorProvider({
       operator,
       operatorResolved,
       securityOperator,
+      userViewSuperAdmin,
       principal,
       memberLocalDirRoot,
       userDrive: drive,
@@ -278,7 +292,7 @@ export function OperatorProvider({
       confinementPosture,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, principal, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, principal, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -333,6 +347,12 @@ export function useOperatorResolved(): boolean {
 // exactly — see internal/api/http.go.
 export function useSecurityOperator(): boolean {
   return React.useContext(MeIdentityContext).securityOperator;
+}
+
+// Whether the person in the User view is stamped a super admin — see
+// MeIdentity.userViewSuperAdmin above.
+export function useUserViewSuperAdmin(): boolean {
+  return React.useContext(MeIdentityContext).userViewSuperAdmin;
 }
 
 // The signed-in principal — see MeIdentity.principal above.

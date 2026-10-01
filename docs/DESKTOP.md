@@ -349,7 +349,7 @@ admin-access limits verbatim.
 | `/etc/wardyn/wardyn.env` | **MDM** | `0644` | the non-secret envelope — `WARDYN_LOCAL_MODE`, `WARDYN_LOCAL_OPERATOR`, `WARDYN_DEFAULT_POLICY`, `WARDYN_AGENT_IMAGES`, `WARDYN_LISTEN`, `WARDYN_RUNNER`, `WARDYN_WORKSPACES_ROOT`, `WARDYN_TRUSTED_CA_FILE` | fleet-uniform, non-sensitive; readable is fine and makes support tractable — a CA cert is public, unlike the age key below |
 | `/etc/wardyn/secret.env` | **MDM** | `0600` | secret-bearing variables — `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM `bearer_token`), and `WARDYN_OIDC_CLIENT_SECRET` on the SSO variant | these are org credentials, uniform across the fleet, so MDM is the right delivery path — but they are not per-device secrets and `0600` does not make them ones |
 | `/etc/wardyn/policy.json` | **MDM** | `0644` | the default `RunPolicySpec` — confinement class, allowed egress, eligible grant kinds ([POLICIES.md](POLICIES.md)) | this file *is* the managed ceiling; it is the reason the tier is called managed |
-| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts — and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) | environment-shaped, identical across the fleet, and re-applied after a reset |
+| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts — and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) — and, since 0.8.4, `branding.logo_path`, a logo file under `/etc/wardyn` ([Console branding](operations/console-branding.md)) | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
 
 **The two provider blocks, and why an old MDM file cannot delete them.**
@@ -764,8 +764,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.8.3|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.8.3|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.8.4|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.8.4|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

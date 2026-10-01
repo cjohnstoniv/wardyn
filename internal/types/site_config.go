@@ -94,11 +94,23 @@ type SiteConfig struct {
 	// URL is http(s) only.
 	SignInHelpText string `json:"sign_in_help_text,omitempty"`
 	SignInHelpURL  string `json:"sign_in_help_url,omitempty"`
+	// Branding is the part of the console branding (#1215) a site config can
+	// carry: today only the logo, as a file wardynd reads when this document is
+	// applied. A POINTER for the same byte-identical-GET reason as the provider
+	// blocks; nil is "the site config says nothing about branding". Name and
+	// colours stay with the Branding card (PUT /branding/settings).
+	Branding *SiteBranding `json:"branding,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
 	// DisallowUnknownFields. PUT ignores a submitted value; never stored.
 	EffectiveScmHosts []string `json:"effective_scm_hosts,omitempty"`
+	// WithheldScmHosts is READ-ONLY, SERVER-OWNED, on the same terms as
+	// EffectiveScmHosts: each host a DISABLED provider row claims that
+	// EffectiveScmHosts therefore leaves out, with the row that withholds it, so
+	// an admin is told why a host is missing rather than left to look for it.
+	// Projected on read, ignored on PUT, never stored.
+	WithheldScmHosts []WithheldScmHost `json:"withheld_scm_hosts,omitempty"`
 	// OnboardingCompletedAt records when an operator finished (or left) the
 	// Getting Started funnel on THIS INSTALL. Nil until then.
 	//
@@ -109,6 +121,15 @@ type SiteConfig struct {
 	// value and carries the stored one forward; a dropped value is reported
 	// as onboarding_completed_at_ignored.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+}
+
+// SiteBranding is SiteConfig.Branding. LogoPath is an absolute path on the
+// wardynd host to an SVG or PNG file; it is read, checked as a console upload
+// is, and stored as the branding logo at every apply. Naming it makes the file
+// the logo's owner: the console offers no Remove logo while it is set. Taking
+// it out of the document (and applying) removes the logo it delivered.
+type SiteBranding struct {
+	LogoPath string `json:"logo_path,omitempty"`
 }
 
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.
@@ -163,4 +184,13 @@ type EgressRedirect struct {
 	// ("npm"|"pip"|"cargo"|"maven"|"go"|"nuget") this redirect ALSO emits a
 	// config file for. Empty means NETWORK-ONLY: no config file is emitted.
 	Ecosystem string `json:"ecosystem,omitempty"`
+}
+
+// WithheldScmHost is one entry of SiteConfig.WithheldScmHosts: a host kept out
+// of the effective set because the named provider row is turned off. The row is
+// named the way a refused clone names it, by kind and id.
+type WithheldScmHost struct {
+	Host         string          `json:"host"`
+	ProviderID   string          `json:"provider_id"`
+	ProviderKind GitProviderKind `json:"provider_kind"`
 }

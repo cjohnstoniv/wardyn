@@ -139,14 +139,14 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 }
 
 // secondHumanAllows mirrors requireSecondHuman's verdict, given ap/run
-// already in hand (no re-fetch, no response write): only egress_domain is
-// governed, off by default (envEgressSecondHuman), the admin-token
-// break-glass always passes, LocalMode can never satisfy it (both operands
+// already in hand (no re-fetch, no response write): only the kinds
+// secondHumanGate maps to a switch are governed, each off by default, the
+// admin-token break-glass always passes, LocalMode can never satisfy it (both operands
 // of "a second human decided" are client-supplied there — see
 // requireSecondHuman's own doc), and otherwise it refuses only when the
 // asking principal IS the run's own creator.
 func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, run types.AgentRun) bool {
-	if !envEnabled(envEgressSecondHuman) || ap.Kind != types.ApprovalEgressDomain {
+	if _, on := secondHumanGate(ap); !on {
 		return true
 	}
 	actorType, principal := actorFromRequest(r)

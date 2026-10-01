@@ -9,8 +9,14 @@ import userEvent from "@testing-library/user-event";
 
 const getSettings = vi.fn();
 const save = vi.fn();
+const remove = vi.fn();
 vi.mock("../../../lib/api/branding", () => ({
-  branding: { getSettings: () => getSettings(), save: (b: unknown) => save(b) },
+  branding: { getSettings: () => getSettings(), save: (b: unknown) => save(b), remove: () => remove() },
+}));
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (m: string) => toastSuccess(m), error: (m: string, o?: unknown) => toastError(m, o) },
 }));
 
 import { ThemeProvider } from "../../wardyn/theme-provider";
@@ -52,6 +58,9 @@ const saveButton = () => screen.getByRole("button", { name: BRANDING.SAVE });
 afterEach(() => {
   getSettings.mockReset();
   save.mockReset();
+  remove.mockReset();
+  toastSuccess.mockReset();
+  toastError.mockReset();
 });
 
 describe("Branding card (#1125)", () => {
@@ -140,5 +149,101 @@ describe("Branding card (#1125)", () => {
     expect(await screen.findByDisplayValue("Example Corp")).toBeInTheDocument();
     expect(screen.getByDisplayValue("#a78bfa")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Wardyn for Example Corp/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // #1215 — Remove logo / Remove branding, approved 2026-09-30.
+  const STORED = {
+    org_name: "Acme", name_format: "suffix", primary: "#1d4ed8", primary_text: "#ffffff",
+    dark_custom: true, dark_primary: "#93c5fd", dark_primary_text: "#0a0a0a", support_url: "https://status.acme.example",
+    logo_url: "/api/v1/branding/logo?v=abc", icon_url: "/api/v1/branding/logo?v=abc",
+  };
+
+  async function storedCard(extra: Record<string, unknown> = {}) {
+    getSettings.mockResolvedValue({ ...STORED, ...extra });
+    renderCard();
+    await expandCard(BRANDING.TITLE);
+    await screen.findByTestId("branding-stored-logo");
+  }
+
+  it("offers neither removal on a console with no branding", async () => {
+    await validDraft();
+    expect(screen.queryByRole("button", { name: BRANDING.REMOVE_LOGO })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BRANDING.REMOVE_BRANDING })).not.toBeInTheDocument();
+  });
+
+  it("Remove logo: confirms in the approved words, then removes only the logo and toasts", async () => {
+    await storedCard();
+    save.mockResolvedValue({ ...STORED, logo_url: undefined });
+    await userEvent.click(screen.getByRole("button", { name: BRANDING.REMOVE_LOGO }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(BRANDING.REMOVE_LOGO_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(BRANDING.REMOVE_LOGO_BODY("Acme"))).toBeInTheDocument();
+    expect(BRANDING.REMOVE_LOGO_BODY("Acme")).toBe(
+      "The header and the browser tab show Acme’s initials instead. The name and colours stay.");
+    expect(save).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: BRANDING.REMOVE_LOGO_CONFIRM }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    // The STORED record plus remove_logo — never a half-typed form.
+    expect(save.mock.calls[0][0]).toEqual({
+      org_name: "Acme", name_format: "suffix", primary: "#1d4ed8", primary_text: "#ffffff",
+      support_url: "https://status.acme.example", dark_primary: "#93c5fd", dark_primary_text: "#0a0a0a", remove_logo: true,
+    });
+    expect(remove).not.toHaveBeenCalled();
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(BRANDING.REMOVE_LOGO_TOAST));
+    expect(BRANDING.REMOVE_LOGO_TOAST).toBe("Logo removed.");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    // The logo row is gone and the file chooser is back; the initials tile is the preview's mark.
+    expect(screen.queryByTestId("branding-stored-logo")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BRANDING.REMOVE_LOGO })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(BRANDING.LOGO_LABEL)).toBeInTheDocument();
+    expect(within(screen.getByTestId("branding-preview")).getByText("A")).toBeInTheDocument();
+  });
+
+  it("Cancel leaves the logo alone", async () => {
+    await storedCard();
+    await userEvent.click(screen.getByRole("button", { name: BRANDING.REMOVE_LOGO }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getByTestId("branding-stored-logo")).toBeInTheDocument();
+  });
+
+  it("Remove branding: confirms in the approved words, deletes everything and toasts", async () => {
+    await storedCard();
+    remove.mockResolvedValue(undefined);
+    await userEvent.click(screen.getByRole("button", { name: BRANDING.REMOVE_BRANDING }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_BODY)).toBeInTheDocument();
+    // A logo a person uploaded has no site-configuration line.
+    expect(within(dialog).queryByText(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING)).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: BRANDING.REMOVE_BRANDING_CONFIRM }));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(BRANDING.REMOVE_BRANDING_TOAST));
+    expect(BRANDING.REMOVE_BRANDING_TOAST).toBe("Branding removed.");
+    // Back to a first visit: empty name, Save held, no removal offered.
+    await waitFor(() => expect(screen.queryByRole("button", { name: BRANDING.REMOVE_BRANDING })).not.toBeInTheDocument());
+    expect(screen.getByLabelText(BRANDING.ORG_NAME_LABEL)).toHaveValue("");
+    expect(saveButton()).toBeDisabled();
+  });
+
+  it("a refused removal toasts the failure and keeps the dialog open", async () => {
+    await storedCard();
+    remove.mockRejectedValue(new Error("nope"));
+    await userEvent.click(screen.getByRole("button", { name: BRANDING.REMOVE_BRANDING }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: BRANDING.REMOVE_BRANDING_CONFIRM }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(BRANDING.REMOVE_BRANDING_FAILED, expect.anything()));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("a logo from the site configuration: the note, no Remove logo, no chooser, and Remove branding says the logo returns", async () => {
+    await storedCard({ logo_from_file: true });
+    expect(screen.getByText(BRANDING.FILE_LOGO_NOTE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BRANDING.REMOVE_LOGO })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(BRANDING.LOGO_LABEL)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: BRANDING.REMOVE_BRANDING }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_BODY)).toBeInTheDocument();
+    expect(within(dialog).getByText(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING)).toBeInTheDocument();
+    expect(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING).toBe("The logo from your site configuration comes back once branding is set up again.");
   });
 });

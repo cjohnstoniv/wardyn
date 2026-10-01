@@ -301,3 +301,185 @@ func TestADOResolveArms_DoNotCross(t *testing.T) {
 		t.Fatalf("the Entra arm served an own-token grant: %d %s", w.Code, w.Body)
 	}
 }
+
+// Azure DevOps refusing a token before its expiry reaches the owner's
+// /me/scm-access as refused_at while the state stays live: the proxy's
+// re-resolve after the 401 (stale_jti) stamps the stored token once, never
+// again, audits it on the own-token store action, and still injects.
+func TestResolveADOOwnPAT_StampsARefusalBeforeExpiryOnce(t *testing.T) {
+	f := newOwnPATRun(t)
+	ownPATConfirm(t, http.StatusUnauthorized)
+	f.token(t, ownPATToken, "contoso", f.now.Add(30*24*time.Hour))
+	row := ownPATTestRow()
+	if w := f.resolve(t, capSub, "dev.azure.com", ""); w.Code != http.StatusOK {
+		t.Fatalf("plain resolve = %d %s", w.Code, w.Body)
+	}
+	if got := f.audit.find(adoPATAuditOwnStore); len(got) != 0 {
+		t.Fatalf("a plain resolve stamped a refusal: %+v", got)
+	}
+
+	if w := f.resolve(t, capSub, "dev.azure.com", "?stale_jti=jti-old"); w.Code != http.StatusOK {
+		t.Fatalf("resolve after a refusal = %d %s, want the token still injected", w.Code, w.Body)
+	}
+	blob, found, err := f.srv.readADOOwnPAT(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), capSub, ownPATRowID)
+	if err != nil || !found || blob.RefusedAt == nil || !blob.RefusedAt.Equal(f.now) {
+		t.Fatalf("stored = %+v (found %v, err %v), want refused_at = now", blob, found, err)
+	}
+	rows := f.audit.find(adoPATAuditOwnStore)
+	if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), `"reason":"upstream_refused"`) ||
+		strings.Contains(string(rows[0].Data), ownPATToken) {
+		t.Fatalf("ado_pat.own.store rows = %+v, want one failure with reason upstream_refused and no token", rows)
+	}
+	access, err := f.srv.scmAccessForOwnPAT(context.Background(), row, capSub)
+	if err != nil || access.State != modelAccessLive || access.RefusedAt != f.now.UTC().Format(time.RFC3339) {
+		t.Fatalf("access = %+v (err %v), want live with refused_at", access, err)
+	}
+
+	// Refused again later: the first stamp stands and no second row is written.
+	f.now = f.now.Add(time.Hour)
+	if w := f.resolve(t, capSub, "dev.azure.com", "?stale_jti=jti-older"); w.Code != http.StatusOK {
+		t.Fatalf("second resolve = %d %s", w.Code, w.Body)
+	}
+	if again, _, _ := f.srv.readADOOwnPAT(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), capSub, ownPATRowID); again.RefusedAt == nil || !again.RefusedAt.Equal(*blob.RefusedAt) {
+		t.Errorf("the stamp moved: %v -> %v", blob.RefusedAt, again.RefusedAt)
+	}
+	if rows := f.audit.find(adoPATAuditOwnStore); len(rows) != 1 {
+		t.Errorf("%d audit rows after the second refusal, want 1", len(rows))
+	}
+}
+
+// A token past its expiry is not stamped: expiry, not refusal, is its state.
+func TestResolveADOOwnPAT_NoStampOnAnExpiredToken(t *testing.T) {
+	f := newOwnPATRun(t)
+	f.token(t, ownPATToken, "contoso", f.now.Add(-time.Hour))
+	f.resolve(t, capSub, "dev.azure.com", "?stale_jti=jti-old")
+	blob, _, _ := f.srv.readADOOwnPAT(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), capSub, ownPATRowID)
+	if blob.RefusedAt != nil || len(f.audit.find(adoPATAuditOwnStore)) != 0 {
+		t.Errorf("an expired token was stamped: %+v", blob)
+	}
+}
+
+// ownPATConfirm points the stamp's connectionData confirm at a fake answering
+// status, and counts the calls it gets.
+func ownPATConfirm(t *testing.T, status int) *int {
+	t.Helper()
+	calls := new(int)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls++
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = w.Write([]byte(`{"authenticatedUser":{"properties":{"Account":{"$value":"bob@corp.example"}}}}`))
+		}
+	}))
+	prev := adoOwnPATAPIBase
+	adoOwnPATAPIBase = fake.URL
+	t.Cleanup(func() { adoOwnPATAPIBase = prev; fake.Close() })
+	return calls
+}
+
+// A 401 on one request can be a missing scope. The stamp is made only when
+// connectionData also rejects the token; one that still authenticates, or a
+// check that could not complete, is not stamped, and a stamped token is not
+// asked about again.
+func TestResolveADOOwnPAT_StampsOnlyWhenTheTokenItselfIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		wantStamp bool
+	}{
+		{"the token still authenticates", http.StatusOK, false},
+		{"azure devops is unavailable", http.StatusServiceUnavailable, false},
+		{"the token is refused", http.StatusUnauthorized, true},
+		{"the answer is the sign-in page", http.StatusNonAuthoritativeInfo, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOwnPATRun(t)
+			calls := ownPATConfirm(t, tc.status)
+			f.token(t, ownPATToken, "contoso", f.now.Add(30*24*time.Hour))
+			if w := f.resolve(t, capSub, "dev.azure.com", "?stale_jti=jti-old"); w.Code != http.StatusOK {
+				t.Fatalf("resolve = %d %s, want the token still injected", w.Code, w.Body)
+			}
+			blob, _, _ := f.srv.readADOOwnPAT(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), capSub, ownPATRowID)
+			if stamped := blob.RefusedAt != nil; stamped != tc.wantStamp {
+				t.Errorf("stamped = %v, want %v", stamped, tc.wantStamp)
+			}
+			if got := len(f.audit.find(adoPATAuditOwnStore)); (got == 1) != tc.wantStamp || got > 1 {
+				t.Errorf("%d audit rows, want stamp = %v", got, tc.wantStamp)
+			}
+			if *calls != 1 {
+				t.Errorf("%d confirm calls, want exactly 1", *calls)
+			}
+			if tc.wantStamp {
+				f.resolve(t, capSub, "dev.azure.com", "?stale_jti=jti-older")
+				if *calls != 1 {
+					t.Errorf("a stamped token was confirmed again (%d calls)", *calls)
+				}
+			}
+		})
+	}
+}
+
+// hookedSecrets runs afterGet after every Get that succeeds, so a test can
+// interleave another writer between a read and the write that follows it.
+type hookedSecrets struct {
+	secretstore.Store
+	afterGet *func(name string)
+}
+
+func (h hookedSecrets) For(owner string) secretstore.Store {
+	return hookedSecrets{Store: h.Store.For(owner), afterGet: h.afterGet}
+}
+
+func (h hookedSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	v, err := h.Store.Get(ctx, name)
+	if err == nil && *h.afterGet != nil {
+		(*h.afterGet)(name)
+	}
+	return v, err
+}
+
+// The person removes their token (DELETE) while the refusal stamp is between
+// its read and its write. The removal takes the same lock, so it lands after
+// the stamp and the token stays removed; without it the stamp wrote the
+// removed token back and it kept being injected.
+func TestResolveADOOwnPAT_StampDoesNotResurrectARemovedToken(t *testing.T) {
+	f := newOwnPATRun(t)
+	inner := f.srv.cfg.Secrets
+	var hook func(string)
+	f.srv.cfg.Secrets = hookedSecrets{Store: inner, afterGet: &hook}
+	f.token(t, ownPATToken, "contoso", f.now.Add(30*24*time.Hour))
+	// The door the person removes the token through shares the run's store.
+	door := newOwnPATDoor(t, adoSite(ownPATTestRow()), nil)
+	door.srv.cfg.Secrets = inner
+	ownPATConfirm(t, http.StatusUnauthorized) // after the door, which points the same base at its own fake
+
+	var removed chan struct{}
+	gets := 0
+	hook = func(string) {
+		if gets++; gets != 2 { // the resolve's own read is #1; the stamp's, under the lock, is #2
+			return
+		}
+		removed = make(chan struct{})
+		go func() {
+			defer close(removed)
+			if w := doSSO(t, door.srv, http.MethodDelete, "/api/v1/me/scm/azure-devops/token?org="+url.QueryEscape(ownPATOrgKey), memberCookie(t), ""); w.Code != http.StatusNoContent {
+				t.Errorf("DELETE = %d %s", w.Code, w.Body)
+			}
+		}()
+		select {
+		case <-removed:
+		case <-time.After(200 * time.Millisecond): // queued behind the stamp, as it must be
+		}
+	}
+	if w := f.resolve(t, capSub, "dev.azure.com", "?stale_jti=jti-old"); w.Code != http.StatusOK {
+		t.Fatalf("resolve = %d %s", w.Code, w.Body)
+	}
+	hook = nil
+	if removed == nil {
+		t.Fatal("the stamp never read the token")
+	}
+	<-removed
+	if _, found, err := f.srv.readADOOwnPAT(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), capSub, ownPATRowID); err != nil || found {
+		t.Fatalf("the token the person removed is in the store (found=%v, err=%v)", found, err)
+	}
+}

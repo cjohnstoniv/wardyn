@@ -363,6 +363,7 @@ const (
 	maxPushRulesPathBytes      = 256
 	maxPushRulesInspectPackMiB = 64
 	maxPushRulesHoldSeconds    = 600
+	maxPushRulesFileSizeMiB    = 1024
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
@@ -388,6 +389,12 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	}
 	if pr.HoldSeconds < 0 || pr.HoldSeconds > maxPushRulesHoldSeconds {
 		return fmt.Errorf("push_rules.hold_seconds must be between 0 and %d, got %d", maxPushRulesHoldSeconds, pr.HoldSeconds)
+	}
+	if pr.MaxFileSizeMiB < 0 || pr.MaxFileSizeMiB > maxPushRulesFileSizeMiB {
+		return fmt.Errorf("push_rules.max_file_size_mib must be between 0 and %d, got %d", maxPushRulesFileSizeMiB, pr.MaxFileSizeMiB)
+	}
+	if pr.DenyNewExecutables {
+		return errors.New("push_rules.deny_new_executables is not supported yet")
 	}
 	return nil
 }

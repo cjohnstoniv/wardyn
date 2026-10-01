@@ -183,6 +183,28 @@ test.describe("the person's Azure DevOps card, a row where each person adds thei
     await expect(page.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
   });
 
+  test("refused before expiry (#1445): Refused, the one refusal line, Replace primary, and a new paste reads Connected", async ({ page }) => {
+    let access: Record<string, unknown> = { ...own, state: "live", source: "own", expires_on: "2000-10-27", refused_at: new Date(2000, 9, 2, 9, 30).toISOString() };
+    await spliceAccess(page, () => access);
+    await page.route("**/api/v1/me/scm/azure-devops/token", async (route) => {
+      access = { ...own, state: "live", source: "own", expires_on: "2000-11-20" };
+      await route.fulfill({ json: { state: "live", org: ORG } });
+    });
+    await openAccountCard(page);
+    await expect(page.getByText(ADO_PAT.OWN_CHIP_REFUSED, { exact: true })).toBeVisible();
+    await expect(page.getByText(ADO_PAT.OWN_REFUSED_LINE("2 October", "27 October"))).toBeVisible();
+    await expect(page.getByText(ADO_PAT.OWN_EXPIRING_LINE("wardyn-e2e", "27 October"))).toHaveCount(0);
+    await expect(page.getByText("Connected", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: ADO_PAT.OWN_REPLACE }).click();
+    const dialog = page.getByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE });
+    await dialog.getByLabel(ADO_PAT.OWN_FIELD_TOKEN).fill("pasted-secret");
+    await dialog.getByLabel(ADO_PAT.OWN_FIELD_EXPIRES).fill("2000-11-20");
+    await dialog.getByRole("button", { name: ADO_PAT.OWN_DIALOG_ADD }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByText(ADO_PAT.OWN_EXPIRING_LINE("wardyn-e2e", "20 November"))).toBeVisible();
+    await expect(page.getByText(ADO_PAT.OWN_CHIP_REFUSED, { exact: true })).toHaveCount(0);
+  });
+
   test("expiring, expired and the Server row each read as the mock draws them", async ({ page }) => {
     const soon = new Date(Date.now() + 3 * 86_400_000);
     const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;

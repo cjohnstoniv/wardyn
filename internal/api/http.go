@@ -460,7 +460,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// The display name rides along for /me only — outside
 			// withHumanIdentity on purpose: the token lane, which shares that
 			// function, has no name to publish and must not grow a fake one.
-			ctx = withOIDCName(ctx, oidc.NameFromContext(r.Context()))
+			ctx = withOIDCObjectID(withOIDCName(ctx, oidc.NameFromContext(r.Context())), oidc.ObjectIDFromContext(r.Context()))
 			// The session expiry rides along so /me can warn ahead of it —
 			// There is no refresh, so the alternative is a silent 401
 			// that wipes mid-work console state back to the sign-in gate.

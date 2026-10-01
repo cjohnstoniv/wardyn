@@ -85,7 +85,7 @@ export function AdoPatBody({
           </Button>
         )}
         {view.action === "replace_token" && (
-          <Button size="sm" variant="outline" onClick={() => setTokenDialog(true)}>
+          <Button size="sm" variant={view.refused ? "default" : "outline"} onClick={() => setTokenDialog(true)}>
             {ADO_PAT.OWN_REPLACE}
           </Button>
         )}

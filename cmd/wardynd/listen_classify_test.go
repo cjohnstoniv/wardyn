@@ -155,17 +155,24 @@ func TestSecondHumanBootWarningFiresOnlyForTheBrokenCombination(t *testing.T) {
 		localMode bool
 		switchOn  bool
 		wantWarn  bool
+		env       string // the switch under test; "" means the egress one
 	}{
-		{"local mode + switch on: the broken combination", true, true, true},
-		{"local mode, switch off: nothing to say", true, false, false},
-		{"switch on, NOT local mode: the switch works normally", false, true, false},
-		{"neither", false, false, false},
+		{"local mode + capability switch on: the same broken combination", true, true, true, "WARDYN_CAPABILITY_SECOND_HUMAN"},
+		{"capability switch on, NOT local mode: works normally", false, true, false, "WARDYN_CAPABILITY_SECOND_HUMAN"},
+		{"local mode + switch on: the broken combination", true, true, true, ""},
+		{"local mode, switch off: nothing to say", true, false, false, ""},
+		{"switch on, NOT local mode: the switch works normally", false, true, false, ""},
+		{"neither", false, false, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			env := c.env
+			if env == "" {
+				env = "WARDYN_EGRESS_SECOND_HUMAN"
+			}
 			if c.switchOn {
-				t.Setenv("WARDYN_EGRESS_SECOND_HUMAN", "1")
+				t.Setenv(env, "1")
 			} else {
-				t.Setenv("WARDYN_EGRESS_SECOND_HUMAN", "")
+				t.Setenv(env, "")
 			}
 			var buf bytes.Buffer
 			prev := slog.Default()

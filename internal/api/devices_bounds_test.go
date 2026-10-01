@@ -8,7 +8,6 @@ package api
 // what never reaches a log or a row.
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -194,7 +193,7 @@ func TestDevices_RevokedBetweenAuthAndIngestIsReportedAsRevoked(t *testing.T) {
 // Raw tokens and their hashes never reach the log or an audit row, on the
 // mint, enrol, replayed-token, bad-token and store-error paths.
 func TestDevices_SecretsNeverReachLogsOrAuditRows(t *testing.T) {
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -231,7 +230,7 @@ func TestDevices_SecretsNeverReachLogsOrAuditRows(t *testing.T) {
 			t.Errorf("%s appears in an audit row", name)
 		}
 	}
-	t.Logf("checked %d log bytes and %d audit rows for 4 secret strings", logs.Len(), len(rec.events))
+	t.Logf("checked %d log bytes and %d audit rows for 4 secret strings", len(logs.String()), len(rec.events))
 }
 
 // Deeply nested JSON is refused promptly, and a full 500-row batch under the

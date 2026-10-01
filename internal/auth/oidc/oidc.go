@@ -61,6 +61,10 @@ type Config struct {
 	// one of the listed values case-insensitively, AND requires email_verified=true. Entra tokens
 	// typically omit email_verified, fail-closing every Entra login — prefer Entra App Roles instead.
 	AllowedEmailDomains []string
+	// RequireEmailVerified (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false) applies the same
+	// email_verified gate AllowedEmailDomains implies, without a domain list: an ID token with no
+	// email_verified claim counts as unverified and is refused, false is refused, true passes.
+	RequireEmailVerified bool
 	// ExtraScopes is WARDYN_OIDC_EXTRA_SCOPES (CSV), appended to the fixed "openid profile email"
 	// request. Validated at boot against discovery scopes_supported, so an unadvertised scope
 	// refuses boot by name instead of locking every human out at login with invalid_scope.
@@ -125,9 +129,14 @@ type Session struct {
 	Email string `json:"email"`
 	// Name is the IdP's display-name claim, for the console header ONLY — gates nothing, keys
 	// nothing, never logged. omitempty: an absent key falls back to email (fail-safe).
-	Name   string    `json:"name,omitempty"`
-	Role   string    `json:"role"`
-	Expiry time.Time `json:"expiry"`
+	Name string `json:"name,omitempty"`
+	// ObjectID is the Entra object id (`oid`) the ID token named, stamped only on an Entra sign-in.
+	// It is an identity INPUT (ObjectIDFromContext: an own Azure DevOps token is bound to the person
+	// by it), never logged and never echoed. omitempty: a cookie without it is still a session and
+	// the reader falls back to the person row or the email, so its absence is never a refusal.
+	ObjectID string    `json:"oid,omitempty"`
+	Role     string    `json:"role"`
+	Expiry   time.Time `json:"expiry"`
 	// UserType is stamped beside the tier at sign-in; everyone carries "standard" until the role
 	// map names custom ones.
 	UserType string `json:"ut"`

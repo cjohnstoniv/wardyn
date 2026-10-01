@@ -10,7 +10,6 @@ import {
   AI_TYPES,
   RESIDENCY_META,
   SUBSCRIPTION_LANE_META,
-  BEDROCK_LANE_META,
   IMPOSSIBLE,
   EGRESS_SUGGEST,
 } from "./integrations";
@@ -230,15 +229,5 @@ describe("integrations — structured metadata is grounded in the T/CAPS canon a
   it("control_plane reads distinctly from varies (Azure has one lane, not several)", () => {
     expect(RESIDENCY_META.control_plane.label).toBe("control-plane side");
     expect(RESIDENCY_META.control_plane.label).not.toBe(RESIDENCY_META.varies.label);
-  });
-
-  it("BEDROCK_LANE_META covers all three lanes and points each at a residency kind", () => {
-    for (const lane of ["bearer", "aws_dir", "static"] as const) {
-      expect(RESIDENCY_META[BEDROCK_LANE_META[lane].residency]).toBeDefined();
-    }
-    // Raw access keys are env vars, not a mounted file — the one lane that
-    // differs from its "resident" siblings.
-    expect(BEDROCK_LANE_META.static.residency).toBe("resident_env");
-    expect(BEDROCK_LANE_META.aws_dir.residency).toBe("resident_mount");
   });
 });

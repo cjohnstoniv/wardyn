@@ -117,7 +117,10 @@ describe("health — site-config integrations round-trip", () => {
       agent_providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       // The model-provider block, for the agent roster's reason.
       model_providers: { providers: [{ id: "corp-gateway", kind: "custom_endpoint", base_url: "https://gw.corp.example" }] },
+      // #1215: a stale spread would re-read (and could fail on) a logo file the save never meant to touch.
+      branding: { logo_path: "/etc/wardyn/branding/logo.svg" },
       effective_scm_hosts: ["github.com"],
+      withheld_scm_hosts: [{ host: "dev.azure.com", provider_id: "ado", provider_kind: "azure_devops" }],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));
     const got = await health.getSiteConfig();

@@ -406,7 +406,7 @@ test.describe("drives — the editor offers what this deployment can mount, and 
     await expect(page.getByText(DRIVES.EMPTY_TITLE)).toBeVisible();
   });
 
-  test("the OTHER target's backend is refused on the WIRE, where `wardyn drive apply` meets it", async ({
+  test("the OTHER target's backend is refused on the WIRE, where `wardyn drive set` meets it", async ({
     page,
   }) => {
     const { runner_target: target } = await snapshot(page);

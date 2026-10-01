@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,8 +13,45 @@ import (
 )
 
 // errModelProviderRefused marks a record launch refused by its model-provider
-// choice, so the handler answers the create door's 422 with the sentence alone.
+// choice. The error itself is a *modelProviderRefusal, which carries the whole
+// choice so the handler answers exactly as the create door does.
 var errModelProviderRefused = errors.New("model provider refused")
+
+// errModelProvidersUnreadable marks a site config the provider choice could not
+// read: the create door's 503 and bare sentence, never a 500 with driver text.
+var errModelProvidersUnreadable = errors.New("model providers unreadable")
+
+// modelProviderRefusal is a record launch's refused provider choice: the
+// choice as chooseModelProvider made it, and the liveness verdict when the
+// choice was made and its credential was not. Wrapping the choice, rather than
+// copying a provider id off it, keeps notGranted and asMissing in force: the
+// not-granted arms set providerID for the audit row only, and answering with it
+// would name a provider the caller is not granted (#1018).
+type modelProviderRefusal struct {
+	choice runProviderChoice
+	live   providerDenial
+}
+
+func (e *modelProviderRefusal) sentence() string { return cmp.Or(e.choice.refusal, e.live.msg) }
+
+func (e *modelProviderRefusal) Error() string {
+	return errModelProviderRefused.Error() + ": " + e.sentence()
+}
+
+func (e *modelProviderRefusal) Is(target error) bool { return target == errModelProviderRefused }
+
+// modelProviderReadError is a chosen provider's credential that could not be
+// read: the create door's 503 naming the provider in its sentence, never a 500.
+type modelProviderReadError struct {
+	provider types.ModelProvider
+	err      error
+}
+
+func (e *modelProviderReadError) Error() string {
+	return "read model provider credential: " + e.err.Error()
+}
+
+func (e *modelProviderReadError) Unwrap() error { return e.err }
 
 // recordProviderChoice is a record session's model-provider choice — the same
 // resolution order a run makes at create (chooseModelProvider), with the
@@ -23,7 +61,7 @@ var errModelProviderRefused = errors.New("model provider refused")
 func (s *Server) recordProviderChoice(ctx context.Context, actor string, ws types.Workspace) (runProviderChoice, error) {
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return runProviderChoice{}, fmt.Errorf("read model providers: %w", err)
+		return runProviderChoice{}, fmt.Errorf("%w: %w", errModelProvidersUnreadable, err)
 	}
 	var pin string
 	if ws.LLMCred != nil {
@@ -35,19 +73,16 @@ func (s *Server) recordProviderChoice(ctx context.Context, actor string, ws type
 	if err != nil {
 		return runProviderChoice{}, fmt.Errorf("resolve capability: %w", err)
 	}
-	refuse := func(msg string) (runProviderChoice, error) {
-		return runProviderChoice{}, fmt.Errorf("%w: %s", errModelProviderRefused, msg)
-	}
 	switch {
 	case choice.refusal != "":
-		return refuse(choice.refusal)
+		return runProviderChoice{}, &modelProviderRefusal{choice: choice}
 	case choice.chosen:
 		_, d, cerr := s.providerLiveness(ctx, choice.provider, stepRunAgent, runIdentitySubject(ctx, actor), false)
 		if cerr != nil {
-			return runProviderChoice{}, fmt.Errorf("read model provider credential: %w", cerr)
+			return runProviderChoice{}, &modelProviderReadError{provider: choice.provider, err: cerr}
 		}
 		if d.msg != "" {
-			return refuse(d.msg)
+			return runProviderChoice{}, &modelProviderRefusal{choice: choice, live: d}
 		}
 	}
 	return choice, nil

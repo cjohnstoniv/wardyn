@@ -223,6 +223,10 @@ export interface PushRulesSpec {
   max_inspect_pack_mib?: number;
   require_review_paths?: string[];
   hold_seconds?: number;
+  // Not supported yet: the server refuses true at write time.
+  deny_new_executables?: boolean;
+  // Refuses a push introducing a file over this many MiB; 0/absent = off, max 1024.
+  max_file_size_mib?: number;
 }
 
 // pushRulesIsSet moved to new-run-rail.tsx (bundle-split fix, #181): its only

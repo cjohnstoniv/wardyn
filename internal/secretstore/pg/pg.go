@@ -70,6 +70,12 @@ type Store struct {
 	// new data key, boot keys included.
 	service       kek.KEK
 	serviceWrites bool
+	// platformService is the second key service (Deps.PlatformKEK), or nil; it
+	// opens boot keys only. With platformWrites it also wraps every boot key,
+	// and a boot key under any other key is read only by `wardynd -rewrap
+	// -rewrap-adopt-boot-keys`, which moves it here.
+	platformService kek.KEK
+	platformWrites  bool
 	// ext is the configured external store, or nil. Pointer rows are read
 	// through it in every mode; writeExt says whether Put writes there
 	// (store mode) or seals locally.
@@ -97,6 +103,9 @@ func New(pool *pgxpool.Pool, identity age.Identity) (*Store, error) {
 func (s *Store) withKEK(d secretstore.Deps) {
 	if d.KEK != nil {
 		s.service, s.serviceWrites = d.KEK, d.KEKWrites
+	}
+	if d.PlatformKEK != nil {
+		s.platformService, s.platformWrites = d.PlatformKEK, d.PlatformKEKWrites
 	}
 }
 
@@ -133,8 +142,12 @@ func x25519(identity age.Identity) (*age.X25519Identity, error) {
 }
 
 // writer is the KEK a new envelope for (owner, name) is wrapped under: the
-// key service when it writes, else the local KEK of the row's purpose.
+// platform key service for a boot key when there is one, else the key service
+// when it writes, else the local KEK of the row's purpose.
 func (s *Store) writer(owner, name string) kek.KEK {
+	if s.platformWrites && secretstore.Kind(owner, name) == "platform" {
+		return s.platformService
+	}
 	if s.serviceWrites {
 		return s.service
 	}
@@ -154,8 +167,18 @@ func (s *Store) localWriter(owner, name string) kek.KEK {
 // fallback: the key service for its own rows; for a local row, the local KEK
 // its purpose writes with, or the pre-split KEK — except a platform row once
 // the platform key is separate, which only the platform key opens (anything
-// the age key derives could otherwise forge a boot key).
+// the age key derives could otherwise forge a boot key). With a platform key
+// service the same holds for every other key, the credential key service
+// included: a boot key opens under the platform key service alone.
 func (s *Store) reader(e envelope) (kek.KEK, error) {
+	if s.platformService != nil && secretstore.Kind(e.ownedBy, e.name) == "platform" {
+		if e.kekID == s.platformService.ID() {
+			return s.platformService, nil
+		}
+		if s.platformWrites {
+			return nil, &refusal{ErrAdoptNotRequested, fmt.Sprintf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q. %s", e.kekID, s.platformService.ID(), adoptHint)}
+		}
+	}
 	if s.service != nil && e.kekID == s.service.ID() {
 		return s.service, nil
 	}
@@ -172,8 +195,37 @@ func (s *Store) reader(e envelope) (kek.KEK, error) {
 	if e.kekID == s.legacy.ID() && !(s.separate && w == s.platform) {
 		return s.legacy, nil
 	}
+	if s.separate && secretstore.Kind(e.ownedBy, e.name) == "platform" {
+		return nil, &refusal{ErrAdoptNotRequested, fmt.Sprintf("is a boot key sealed under key %q, but this wardynd opens boot keys only under %q. %s", e.kekID, w.ID(), adoptHint)}
+	}
 	return nil, fmt.Errorf("is sealed under key %q, but this wardynd opens it only under %q (a row sealed under another of this wardynd's own keys moves with `wardynd -rewrap`)", e.kekID, w.ID())
 }
+
+// adoptHint is the one instruction a boot key under the wrong key gets: adopting
+// is something an operator does once, on purpose, so a row met after that is
+// not Wardyn's.
+const adoptHint = "If you have never adopted boot keys onto the platform key, run `wardynd -rewrap -rewrap-adopt-boot-keys`. " +
+	"If you already have, these rows were not written by Wardyn: investigate before moving anything."
+
+// ErrAdoptNotRequested is a boot key under a key other than the platform key,
+// met by a `-rewrap` run that was not told to adopt boot keys.
+var ErrAdoptNotRequested = errors.New("boot key under another key and -rewrap-adopt-boot-keys not given")
+
+// ErrMixedBootKeys is a rewrap that found some boot keys under the platform key
+// and others under another key, a state no run of wardynd leaves; adopting is
+// refused even when asked for.
+var ErrMixedBootKeys = errors.New("boot keys under the platform key and under another key")
+
+// refusal is an error whose text is msg and which is kind (errors.Is), so the
+// audit row can say why a run was refused without carrying the text, which
+// names rows.
+type refusal struct {
+	kind error
+	msg  string
+}
+
+func (r *refusal) Error() string { return r.msg }
+func (r *refusal) Unwrap() error { return r.kind }
 
 // isLocal reports whether kekID names a KEK an age identity derives: "local:"
 // before the purpose split, "local/<purpose>:" after.
@@ -487,8 +539,9 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 // platform is the separate platform identity (WARDYN_PLATFORM_KEY_FILE), or
 // nil: boot keys under it stay as they are.
 //
-// Pointer rows (store mode) and rows under a key service (Transit) hold
-// nothing under the age key and are left alone; `wardynd -rewrap` moves those.
+// Pointer rows (store mode) and rows under a key service (Transit, Key Vault)
+// hold nothing under the age key and are left alone; `wardynd -rewrap` moves
+// those.
 //
 // ALL-OR-NOTHING: one transaction, and any row that is not a v1 row under the
 // old keys, or whose data key does not unwrap, aborts the whole thing with
@@ -513,15 +566,15 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 	if err := to.setLocalKeys(newID, platform); err != nil {
 		return 0, fmt.Errorf("pg secretstore: rekey new identity: %w", err)
 	}
-	// A row under Transit holds nothing under the age key: left alone. A row
-	// under any key no provider claims aborts, naming it (from.reader).
+	// A row under a key service holds nothing under the age key: left alone.
+	// A row under any key no provider claims aborts, naming it (from.reader).
 	target := func(e envelope) kek.KEK {
-		if e.version == encVersion && strings.HasPrefix(e.kekID, "transit:") {
+		if e.version == encVersion && kek.IsServiceID(e.kekID) {
 			return nil
 		}
 		return to.writer(e.ownedBy, e.name)
 	}
-	return rewrapAll(ctx, pool, "rekey", from.reader, target, 0)
+	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil, nil)
 }
 
 // RewrapResult is what RewrapKeys did.
@@ -529,19 +582,30 @@ type RewrapResult struct {
 	// Rewrapped is how many rows' data keys moved.
 	Rewrapped int
 	// KeyService is the kek_id of the key service every write now uses
-	// (WARDYN_KEK=transit), or "" when the local keys do.
+	// (WARDYN_KEK=transit or azurekv), or "" when the local keys do.
 	KeyService string
 	// KeyVersion is the key version every row under a versioned key service
-	// (Transit) is now wrapped under, else 0: raising Transit's
-	// min_decryption_version to it retires every older version.
-	KeyVersion int
+	// is now wrapped under, else "": retiring every other version at the
+	// service (Transit's min_decryption_version, disabling Key Vault
+	// versions) is then safe.
+	KeyVersion string
+	// PlatformKeyService and PlatformKeyVersion are the same for the platform
+	// key service (Deps.PlatformKEK), which wraps the boot keys alone.
+	PlatformKeyService string
+	PlatformKeyVersion string
+	// Rotated reports that a versioned key service named a newer version for
+	// a wrap than the latest one read when the run began, so a rotation landed
+	// mid-run. KeyVersion and PlatformKeyVersion are then "": run -rewrap again
+	// until it moves no row, and retire no version before then.
+	Rotated bool
 }
 
 // Rewrap is RewrapKeys over the local keys alone: identity, and the separate
-// platform identity (WARDYN_PLATFORM_KEY_FILE) or nil. It returns how many
-// rows it moved.
-func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Identity) (int, error) {
-	res, err := RewrapKeys(ctx, secretstore.Deps{Pool: pool, AgeIdentity: identity, PlatformIdentity: platform})
+// platform identity (WARDYN_PLATFORM_KEY_FILE) or nil, and whether the operator
+// asked to adopt boot keys (-rewrap-adopt-boot-keys). It returns how many rows
+// it moved.
+func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Identity, adopt bool) (int, error) {
+	res, err := RewrapKeys(ctx, secretstore.Deps{Pool: pool, AgeIdentity: identity, PlatformIdentity: platform, AdoptBootKeys: adopt})
 	return res.Rewrapped, err
 }
 
@@ -554,8 +618,14 @@ func Rewrap(ctx context.Context, pool *pgxpool.Pool, identity, platform age.Iden
 //   - between the local keys and a key service: with d.KEKWrites
 //     (WARDYN_KEK=transit) every row moves to the key service, and with the
 //     key service read-only every row under it moves back to the local keys;
-//   - onto a versioned key service's latest version, so older versions can be
-//     retired (Transit's min_decryption_version).
+//   - onto a versioned key service's latest version, so every other version
+//     can be retired (Transit's min_decryption_version, disabled Key Vault
+//     versions).
+//   - with d.PlatformKEK writing (d.PlatformKEKWrites), every boot key moves
+//     to the platform key service, at its latest version, from wherever it
+//     sits (the credential key service, the age key, the separate platform
+//     key); with it read-only, every boot key under it moves back to the key
+//     a write would use.
 //
 // The rewrap is CLIENT-SIDE: each data key is unwrapped under the row's own
 // KEK and wrapped again under the target, both bound to the row. Transit's
@@ -578,44 +648,153 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	}
 	s.withKEK(d)
 	if s.kek == nil && !s.serviceWrites {
-		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or WARDYN_KEK=transit")
+		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit or azurekv)")
 	}
 	source := s.reader
-	if s.separate {
+	// A boot key may still sit under an earlier key of its own purpose: the
+	// age key's platform KEK, the credential key service, or, for the
+	// platform key service, the key it is being moved off. Those readers
+	// serve it only here, never at a serving boot, and only when the operator
+	// attested to the adoption (d.AdoptBootKeys).
+	var prior []*Store
+	if d.AdoptBootKeys && s.platformWrites {
+		p := *s
+		p.platformService, p.platformWrites = nil, false
+		prior = append(prior, &p)
+	}
+	var agePlatformID string // the platform KEK the age key alone derives
+	if d.AdoptBootKeys && s.separate {
 		shared := &Store{}
 		if err := shared.setLocalKeys(d.AgeIdentity, nil); err != nil {
 			return res, fmt.Errorf("pg secretstore: rewrap: %w", err)
 		}
+		prior = append(prior, shared)
+		agePlatformID = shared.platform.ID()
+	}
+	if len(prior) > 0 {
 		source = func(e envelope) (kek.KEK, error) {
 			k, err := s.reader(e)
-			if err != nil && secretstore.Kind(e.ownedBy, e.name) == "platform" {
-				return shared.reader(e)
+			if err == nil || secretstore.Kind(e.ownedBy, e.name) != "platform" {
+				return k, err
+			}
+			for _, p := range prior {
+				if k, err = p.reader(e); err == nil {
+					break
+				}
 			}
 			return k, err
 		}
 	}
+	latest := map[string]string{}
 	if s.serviceWrites {
 		res.KeyService = s.service.ID()
-		if v, ok := s.service.(kek.Versioned); ok {
-			n, err := v.LatestVersion(ctx)
-			if err != nil {
-				return res, fmt.Errorf("pg secretstore: rewrap: read the latest version of %s: %w", res.KeyService, err)
-			}
-			res.KeyVersion = n
+		n, err := latestVersion(ctx, s.service)
+		if err != nil {
+			return res, fmt.Errorf("pg secretstore: rewrap: read the latest version of %s: %w", res.KeyService, err)
 		}
+		res.KeyVersion, latest[res.KeyService] = n, n
+	}
+	if s.platformWrites {
+		res.PlatformKeyService = s.platformService.ID()
+		n, err := latestVersion(ctx, s.platformService)
+		if err != nil {
+			return res, fmt.Errorf("pg secretstore: rewrap: read the latest version of %s: %w", res.PlatformKeyService, err)
+		}
+		res.PlatformKeyVersion, latest[res.PlatformKeyService] = n, n
 	}
 	target := func(e envelope) kek.KEK { return s.writer(e.ownedBy, e.name) }
-	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, res.KeyVersion)
+	// The second check, whether or not boot keys may be adopted: a boot key
+	// under another key beside any under the platform key was written there
+	// after the move. Retiring the platform key is checked too: no
+	// legitimate retire starts mixed.
+	guard := func(all []envelope) error {
+		switch {
+		case s.platformService != nil:
+			return refuseMixedBootKeys(s.platformService.ID(), all)
+		case s.separate && !s.serviceWrites:
+			return refuseMixedBootKeys(s.platform.ID(), all)
+		case s.separate && agePlatformID != "":
+			// A key service writes beside the platform file, and the age
+			// reader is armed: a boot key under the age-derived platform KEK
+			// is adopted only while no boot key has moved onto the service
+			// or the file key yet.
+			return refuseMixed(s.service.ID(), all,
+				func(id string) bool { return id == s.service.ID() || id == s.platform.ID() },
+				func(id string) bool { return id == agePlatformID })
+		}
+		return nil
+	}
+	rotated := map[string]bool{}
+	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard, rotated)
 	res.Rewrapped = n
+	// A key service rotated while the run was moving rows: some rows are under
+	// a newer version than the one read first, so no version is yet safe to
+	// retire. Report none; another pass moves them and reports the truth.
+	if err == nil && len(rotated) > 0 {
+		res.Rotated = true
+		res.KeyVersion, res.PlatformKeyVersion = "", ""
+	}
 	return res, err
+}
+
+// refuseMixedBootKeys refuses a rewrap that finds a boot key under any key but
+// platformID while another is already under it. Every boot key a wardynd wrote
+// or moved sits under the platform key once one does, so the other was written
+// where it sits after the move, by whoever holds that key and can write the
+// table. It changes nothing and names the rows.
+func refuseMixedBootKeys(platformID string, all []envelope) error {
+	return refuseMixed(platformID, all,
+		func(id string) bool { return id == platformID },
+		func(id string) bool { return id != platformID })
+}
+
+// refuseMixed is that check for a given split of the boot keys' kek_ids: it
+// refuses when some boot key is under a key moved accepts and another is under
+// a key planted accepts. A key service writing beside a platform file leaves
+// boot keys under the service or the file key legitimately, and only a key the
+// age key alone derives is what its holder can plant.
+func refuseMixed(platformID string, all []envelope, moved, planted func(kekID string) bool) error {
+	var under bool
+	var other []string
+	for _, e := range all {
+		if secretstore.Kind(e.ownedBy, e.name) != "platform" {
+			continue
+		}
+		switch {
+		case moved(e.kekID):
+			under = true
+		case planted(e.kekID):
+			other = append(other, fmt.Sprintf("%s under %q", rowRef(e.ownedBy, e.name), e.kekID))
+		}
+	}
+	if !under || len(other) == 0 {
+		return nil
+	}
+	return &refusal{ErrMixedBootKeys, fmt.Sprintf("pg secretstore: rewrap REFUSED (nothing changed): boot keys are already under the platform key %q, "+
+		"yet %s sit under another key, a mixed state no run of wardynd leaves. These rows were not written by Wardyn: "+
+		"find out who wrote them (updated_at, the audit log, database access logs) and restore the boot keys from a backup if they are forged",
+		platformID, strings.Join(other, ", "))}
+}
+
+// latestVersion is the version a wrap under k would name, or "" when k has no
+// versions.
+func latestVersion(ctx context.Context, k kek.KEK) (string, error) {
+	if v, ok := k.(kek.Versioned); ok {
+		return v.LatestVersion(ctx)
+	}
+	return "", nil
 }
 
 // rewrapAll rewraps, in one transaction, every sealed row's data key from the
 // KEK source names for it to the one target names. target is nil for a row
 // the operation leaves alone; a row already under its target — and, when the
-// target is versioned and latest is set, at that version — is skipped. op
-// names the operation in its errors.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest int) (int, error) {
+// target is versioned and latest holds its kek_id, at that version — is
+// skipped. latest maps a versioned key service's kek_id to the version a wrap
+// made now would name (nil: none). op names the operation in its errors. guard,
+// when not nil, sees every selected (locked) row before any moves and may
+// refuse the whole run. rotated, when not nil, collects the kek_id of each
+// versioned target that wrapped a row under a version other than latest's.
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error, rotated map[string]bool) (int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
@@ -640,6 +819,11 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		return 0, fmt.Errorf("pg secretstore: %s scan: %w", op, err)
 	}
 
+	if guard != nil {
+		if err := guard(all); err != nil {
+			return 0, err
+		}
+	}
 	n := 0
 	for i, e := range all {
 		to := target(e)
@@ -647,7 +831,7 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 			continue
 		}
 		if e.version == encVersion && e.kekID == to.ID() {
-			old, verr := behind(to, e.wrapped, latest)
+			old, verr := behind(to, e.wrapped, latest[to.ID()])
 			if verr != nil {
 				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
 			}
@@ -658,6 +842,13 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		wrapped, rerr := rewrap(ctx, source, to, e)
 		if rerr != nil {
 			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), rerr)
+		}
+		if rotated != nil {
+			if was, verr := behind(to, wrapped, latest[to.ID()]); verr != nil {
+				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
+			} else if was {
+				rotated[to.ID()] = true
+			}
 		}
 		if _, uerr := tx.Exec(ctx,
 			`UPDATE secrets SET kek_id=$3, wrapped_dek=$4, updated_at=now() WHERE owned_by=$1 AND name=$2`, e.ownedBy, e.name, to.ID(), wrapped,
@@ -673,17 +864,17 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 }
 
 // behind reports whether wrapped, made under the versioned KEK to, names a
-// version older than latest. Unversioned, or with latest 0, it never is.
-func behind(to kek.KEK, wrapped []byte, latest int) (bool, error) {
+// version other than latest. Unversioned, or with latest "", it never does.
+func behind(to kek.KEK, wrapped []byte, latest string) (bool, error) {
 	v, ok := to.(kek.Versioned)
-	if !ok || latest == 0 {
+	if !ok || latest == "" {
 		return false, nil
 	}
 	n, err := v.WrapVersion(wrapped)
 	if err != nil {
 		return false, err
 	}
-	return n < latest, nil
+	return n != latest, nil
 }
 
 // rewrap moves one row's data key from the KEK source names for it to to.

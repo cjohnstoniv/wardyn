@@ -26,7 +26,7 @@
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret
-//   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
+//   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance

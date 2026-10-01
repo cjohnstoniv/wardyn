@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -572,6 +573,69 @@ func TestEffectiveScmHosts(t *testing.T) {
 			got := effectiveScmHosts(tc.sc)
 			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 				t.Errorf("effectiveScmHosts() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWithheldScmHosts pins the "say why" half of a disabled row: its host stays
+// out of effectiveScmHosts (fail-closed) and is named here instead, with the row.
+func TestWithheldScmHosts(t *testing.T) {
+	w := func(host, id string, kind types.GitProviderKind) types.WithheldScmHost {
+		return types.WithheldScmHost{Host: host, ProviderID: id, ProviderKind: kind}
+	}
+	for _, tc := range []struct {
+		name          string
+		sc            types.SiteConfig
+		wantEffective []string
+		want          []types.WithheldScmHost
+	}{
+		{"no providers withholds nothing",
+			providersConfig(nil, "github.example.com"),
+			[]string{"github.example.com"}, nil},
+		{"a disabled row's host is out of effective and named here",
+			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}),
+			nil, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"an enabled row's host is in effective only",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			[]string{"github.com"}, nil},
+		{"a host a disabled row claims but another enabled row admits is not withheld",
+			providersConfig([]types.GitProvider{
+				githubRow("off", true, "https://git.corp.example/a"),
+				githubRow("on", false, "https://git.corp.example/b"),
+			}),
+			[]string{"git.corp.example"}, nil},
+		{"a legacy scm_hosts entry a disabled row claims is withheld",
+			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}, "github.com"),
+			nil, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"an unclaimed legacy host is effective, not withheld",
+			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}, "gitlab.corp.example"),
+			[]string{"gitlab.corp.example"}, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"a disabled GHES row withholds a legacy github.com host it claims kind-wide",
+			providersConfig([]types.GitProvider{githubRow("ghes", true, "https://git.corp.example/acme")}, "github.com"),
+			nil, []types.WithheldScmHost{
+				w("git.corp.example", "ghes", types.GitProviderGitHub),
+				w("github.com", "ghes", types.GitProviderGitHub),
+			}},
+		{"a host named by two disabled rows is listed once, under the first",
+			providersConfig([]types.GitProvider{
+				githubRow("a", true, "https://git.corp.example/a"),
+				githubRow("b", true, "https://git.corp.example/b"),
+			}),
+			nil, []types.WithheldScmHost{w("git.corp.example", "a", types.GitProviderGitHub)}},
+		{"each disabled row's hosts are listed, enabled rows' are not",
+			providersConfig([]types.GitProvider{
+				adoRow("ado", true, "https://dev.azure.com/acme"),
+				githubRow("ghes", false, "https://git.corp.example/acme"),
+			}),
+			[]string{"git.corp.example"}, []types.WithheldScmHost{w("dev.azure.com", "ado", types.GitProviderAzureDevOps)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveScmHosts(tc.sc); strings.Join(got, ",") != strings.Join(tc.wantEffective, ",") {
+				t.Errorf("effectiveScmHosts() = %v, want %v", got, tc.wantEffective)
+			}
+			if got := withheldScmHosts(tc.sc); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("withheldScmHosts() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}
@@ -1171,10 +1235,15 @@ func TestSiteConfigGetProjectsEffectiveScmHosts(t *testing.T) {
 	if strings.Join(got.EffectiveScmHosts, ",") != "git.corp.example" {
 		t.Errorf("effective_scm_hosts = %v, want [git.corp.example]", got.EffectiveScmHosts)
 	}
+	// ...and it is not simply missing: the disabled row that withholds it is named.
+	if want := []types.WithheldScmHost{{Host: "github.com", ProviderID: "gh", ProviderKind: types.GitProviderGitHub}}; !reflect.DeepEqual(got.WithheldScmHosts, want) {
+		t.Errorf("withheld_scm_hosts = %+v, want %+v", got.WithheldScmHosts, want)
+	}
 	// The ETag hashes the STORED document: a projection-inclusive hash would be
 	// one no If-Match could satisfy.
 	etag := w.Header().Get("ETag")
-	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{}`,
+	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+		`{"withheld_scm_hosts":[{"host":"x.example","provider_id":"gh","provider_kind":"github"}]}`,
 		map[string]string{"If-Match": etag})
 	if w.Code != http.StatusOK {
 		t.Fatalf("the GET's own ETag did not satisfy the PUT (= %d) — the projection leaked into the hash; "+
@@ -1183,6 +1252,10 @@ func TestSiteConfigGetProjectsEffectiveScmHosts(t *testing.T) {
 	if fake.putSeen.EffectiveScmHosts != nil {
 		t.Errorf("effective_scm_hosts = %v was persisted; it is server-owned and read-only",
 			fake.putSeen.EffectiveScmHosts)
+	}
+	if fake.putSeen.WithheldScmHosts != nil {
+		t.Errorf("withheld_scm_hosts = %+v was persisted; it is server-owned and read-only",
+			fake.putSeen.WithheldScmHosts)
 	}
 }
 
@@ -1200,4 +1273,57 @@ func TestSiteConfigGetIsByteIdenticalWithoutProviders(t *testing.T) {
 			"effective_scm_hosts) — a value struct's omitempty is a no-op, which is why the field is a pointer",
 			body)
 	}
+}
+
+// providersOnHostTwoKinds / providersOnHostOneKind are the two blocks #1450's
+// door tests PUT: one host on a GitHub Enterprise row and a (disabled) Azure
+// DevOps Server row, and the same host on rows of one kind.
+const (
+	providersOnHostTwoKinds = `{"git":[` +
+		`{"id":"ghes","kind":"github","base_urls":["https://git.corp.example/acme"]},` +
+		`{"id":"ados","kind":"azure_devops","lanes":["pat"],"credential_source":"per_user","disabled":true,` +
+		`"base_urls":["https://git.corp.example/acme"]}]}`
+	// Two hosts whose secret-name slugs collide (tfs-corp.example and
+	// tfs.corp.example both slug to tfs-corp-example) are one host to the rule.
+	providersOnSlugTwoKinds = `{"git":[` +
+		`{"id":"ghes","kind":"github","base_urls":["https://tfs-corp.example/acme"]},` +
+		`{"id":"ados","kind":"azure_devops","lanes":["pat"],"credential_source":"per_user",` +
+		`"base_urls":["https://tfs.corp.example/Collection"]}]}`
+	providersOnHostOneKind = `{"git":[` +
+		`{"id":"ghes","kind":"github","base_urls":["https://git.corp.example/acme"]},` +
+		`{"id":"ghes2","kind":"github","base_urls":["https://git.corp.example/other"]}]}`
+)
+
+// TestPutWorkspaceProviders_HostOnRowsOfOneKindOnly pins #1450 at the console
+// door: two kinds on one host is a 400 carrying the sentence (disabled rows
+// count); the same host on one kind only still saves.
+func TestPutWorkspaceProviders_HostOnRowsOfOneKindOnly(t *testing.T) {
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, _ := newProvidersHarness(t, fake)
+	want := fmt.Sprintf(providers400HostTwoKind, 1, "git.corp.example", "github")
+	w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnHostTwoKinds)
+	if w.Code != http.StatusBadRequest || !strings.Contains(decodedError(t, w), want) {
+		t.Fatalf("two kinds = %d %s, want 400 carrying %q", w.Code, w.Body.String(), want)
+	}
+	slug := fmt.Sprintf(providers400HostTwoKind, 1, "tfs.corp.example", "github")
+	w = do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnSlugTwoKinds)
+	if w.Code != http.StatusBadRequest || !strings.Contains(decodedError(t, w), slug) {
+		t.Fatalf("two kinds on one slug = %d %s, want 400 carrying %q", w.Code, w.Body.String(), slug)
+	}
+	w = do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, providersOnHostOneKind)
+	if w.Code != http.StatusOK {
+		t.Fatalf("one kind = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// decodedError returns the JSON error field of a response, unescaped.
+func decodedError(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v; body=%s", err, w.Body.String())
+	}
+	return body.Error
 }

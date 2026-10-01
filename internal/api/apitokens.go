@@ -685,13 +685,15 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // before/after edit and reaches a token only at its holder's next sign-in
 // (THREAT-MODEL #38).
 //
-// Best effort by contract, like the counter: the mapping edit is already
-// durable when this runs, so a store failure is logged at WARN and reported as
-// zero — never turned into a 500 that would misdescribe what happened.
-func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping, userTypes []types.UserType) int {
+// The mapping edit is already durable when this runs, so a store failure is
+// logged at WARN and returned beside the count actually revoked — never turned
+// into a 500 that would misdescribe what happened, and never reported as a
+// quiet zero (#622): the caller says in the audit row and the response that
+// the change has not reached the outstanding tokens.
+func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping, userTypes []types.UserType) (int, error) {
 	ctx := r.Context()
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
-		return 0
+		return 0, nil
 	}
 	was := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, []string{value}, "")
 	now := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, []string{value}, "")
@@ -700,13 +702,13 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 	// old type for a token to carry.
 	retyped := was.UserType != "" && was.UserType != now.UserType
 	if !demoted && !retyped {
-		return 0
+		return 0, nil
 	}
 	toks, err := s.cfg.Store.ListAPITokens(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "api: could not list api tokens to revoke a demoted or re-typed role snapshot; the change is NOT yet effective for outstanding tokens",
 			"value", value, "error", err)
-		return 0
+		return 0, err
 	}
 	var principals []string
 	for _, t := range toks {
@@ -722,12 +724,14 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 		}
 	}
 	revoked := 0
+	var failed error
 	for _, p := range principals {
 		n, rerr := s.revokeAPITokensFor(r, p)
 		revoked += n
 		if rerr != nil {
 			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted or re-typed principal",
 				"principal", p, "value", value, "revoked", n, "error", rerr)
+			failed = errors.Join(failed, rerr)
 		}
 	}
 	if revoked > 0 {
@@ -735,7 +739,7 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 			"value", value, "was", was.Role, "now", now.Role, "was_user_type", was.UserType, "now_user_type", now.UserType,
 			"tokens_revoked", revoked, "principals", len(principals))
 	}
-	return revoked
+	return revoked, failed
 }
 
 // tokenLosesTier reports whether the edit from before to after takes a tier

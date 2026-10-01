@@ -124,3 +124,15 @@ func TestParsePush(t *testing.T) {
 		}
 	}
 }
+
+// The Azure DevOps REST push path (egress/proxy/ado_content.go) applies the
+// push content rules' path matching but not push_rules.max_file_size_mib: it
+// relies on refusing any body larger than MaxBodyPeek, which is below the
+// smallest limit a policy can set (1 MiB). Raising MaxBodyPeek past that would
+// let a REST push carry a file the size rule never saw; apply the size rule
+// there first.
+func TestMaxBodyPeekStaysBelowTheSmallestPushSizeLimit(t *testing.T) {
+	if MaxBodyPeek > 1<<20 {
+		t.Fatalf("MaxBodyPeek = %d, above the 1 MiB smallest push_rules.max_file_size_mib; the REST push path would skip the size rule", MaxBodyPeek)
+	}
+}

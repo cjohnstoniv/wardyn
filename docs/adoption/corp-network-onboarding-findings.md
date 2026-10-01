@@ -259,7 +259,7 @@ model, not just the feature). B3 still needs a maintainer design call.
   reuse across git ops in that run, revoke at run end. A lease widens what one approval authorizes,
   so the audit event must say so explicitly.
   **SHIPPED (v0.6), opt-in per decision.** Approve with `decision_scope=run`
-  (`wardyn approve <id> --scope run`) and `broker.leaseCoversRemint` lets that one decision re-mint
+  (`wardyn approval approve <id> --scope run`) and `broker.leaseCoversRemint` lets that one decision re-mint
   the grant for the rest of the run; every other scope, and every legacy decision, stays single-use.
   "Revoke at run end" is real rather than aspirational: a leased re-mint still runs the whole mint
   transaction, so `runRevoked` kills it the moment the kill-switch cascade commits. The audit event

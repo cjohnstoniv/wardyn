@@ -101,20 +101,30 @@ const runDiskRootTTL = time.Minute
 // probeWait is how often beginSample looks for the walks it is waiting out.
 const probeWait = 10 * time.Millisecond
 
-// beginWalk reports whether run id's disk walk may start: not while an idle
-// sample is under way. A true return must be paired with endWalk.
-func (c *pauseClocks) beginWalk(id uuid.UUID) bool {
+// beginWalk tallies one Sandbox-widget read of run id and reports whether it
+// may walk a disk tree: not while an idle sample is under way. The read is
+// counted either way, so a sample that opens after it waits it out. Always
+// paired with endWalk.
+func (c *pauseClocks) beginWalk(id uuid.UUID) (mayWalk bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p := c.probe(id)
-	if p.samples > 0 {
-		return false
-	}
 	p.walks++
-	return true
+	return p.samples == 0
 }
 
-func (c *pauseClocks) endWalk(id uuid.UUID) {
+// abandonedWalkGrace is how long a read whose request ended (a closed tab, the
+// exec deadline) stays tallied: its `timeout 2 du` may still be running in the
+// sandbox, so the sample waits that out too.
+var abandonedWalkGrace = 2 * time.Second
+
+// endWalk ends a read beginWalk counted. abandoned is true when the request
+// ended before the read did.
+func (c *pauseClocks) endWalk(id uuid.UUID, abandoned bool) {
+	if abandoned {
+		time.AfterFunc(abandonedWalkGrace, func() { c.endWalk(id, false) })
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p := c.probe(id)

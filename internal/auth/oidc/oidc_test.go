@@ -1614,6 +1614,7 @@ func doCallbackVia(t *testing.T, auth *writoidc.Authenticator, callback http.Han
 			Role:     writoidc.RoleFromContext(r.Context()),
 			UserType: writoidc.UserTypeFromContext(r.Context()),
 			Groups:   writoidc.GroupsFromContext(r.Context()),
+			ObjectID: writoidc.ObjectIDFromContext(r.Context()),
 		}
 	})
 	checkReq := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -175,7 +175,7 @@ func runDriveGet(t *testing.T, url string) (stdout string, err error) {
 	return out.String(), err
 }
 
-// runDriveApply marshals doc to a temp file, runs `drive apply` on it, and
+// runDriveApply marshals doc to a temp file, runs `drive set` on it, and
 // returns what it printed and any error (see runDriveGet).
 func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout string, err error) {
 	t.Helper()
@@ -189,7 +189,7 @@ func runDriveApply(t *testing.T, url string, doc sdk.DrivesDocument) (stdout str
 	}
 	root := rootCmd()
 	out := &strings.Builder{}
-	root.SetArgs([]string{"drive", "apply", path, "--url", url, "--token", "tok"})
+	root.SetArgs([]string{"drive", "set", path, "--url", url, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	err = root.Execute()
@@ -232,7 +232,7 @@ func seedGrants(driveByName map[string]uuid.UUID) []sdk.UserDriveGrant {
 }
 
 // TestDriveApply_GetApplyRoundTripIsANoOp is the issue's stated acceptance:
-// `wardyn drive get > f && wardyn drive apply f` changes nothing. It proves
+// `wardyn drive get > f && wardyn drive set f` changes nothing. It proves
 // this over a document that exercises every backend (docker_volume,
 // host_path, k8s_pvc, k8s_pvc_static) and every subject tier (user, group,
 // all), against a fake server that enforces the real conflict rules — so a
@@ -312,7 +312,7 @@ func TestDriveApply_GetApplyRoundTripIsANoOp(t *testing.T) {
 }
 
 // TestDriveApply_RejectsUnknownField pins the same strict-decode contract
-// site-config's apply has: `apply` upserts exactly what the file states, so a
+// site-config's set has: `set` upserts exactly what the file states, so a
 // typo'd key must be a parse error, not a silently dropped field.
 func TestDriveApply_RejectsUnknownField(t *testing.T) {
 	fake := newFakeDriveServer()
@@ -324,7 +324,7 @@ func TestDriveApply_RejectsUnknownField(t *testing.T) {
 		t.Fatalf("write doc: %v", err)
 	}
 	root := rootCmd()
-	root.SetArgs([]string{"drive", "apply", path, "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"drive", "set", path, "--url", srv.URL, "--token", "tok"})
 	root.SetOut(&strings.Builder{})
 	root.SetErr(&strings.Builder{})
 	err := root.Execute()
@@ -340,7 +340,7 @@ func TestDriveApply_RejectsUnknownField(t *testing.T) {
 // allocations one page at a time and flags the rest with X-Wardyn-Truncated.
 // `drive get` sells its output as a snapshot to restore from, so it must read
 // every page — and print nothing when the pages do not add up to grant_total,
-// rather than a document `apply` would turn into a partial restore.
+// rather than a document `set` would turn into a partial restore.
 func TestDriveGet_ReadsEveryAllocationPage(t *testing.T) {
 	const pageSize = 2
 	all := make([]sdk.UserDriveGrant, 5)
