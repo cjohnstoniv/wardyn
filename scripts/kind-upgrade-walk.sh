@@ -666,7 +666,7 @@ for _ in $(seq 1 90); do
 done
 if [[ -n "${refused_pod}" ]]; then
   refusal_log="$(kubectl -n "${NS}" logs "${refused_pod}" --all-containers --tail=-1 2>&1; kubectl -n "${NS}" logs "${refused_pod}" --all-containers --previous --tail=-1 2>&1)"
-  grep -qE 'load secret "|not configured to reach' <<<"${refusal_log}" \
+  grep -qE 'load secret \\?"|not configured to reach' <<<"${refusal_log}" \
     && pass "the pod holding a different age key exited non-zero and said why" \
     || fail "the pod holding a different age key exited non-zero but its log carries no key refusal: $(tail -5 <<<"${refusal_log}")"
 else
