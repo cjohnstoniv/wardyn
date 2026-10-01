@@ -37,8 +37,8 @@ func (k *abortingRewrapKEK) Wrap(ctx context.Context, dek []byte, bind map[strin
 	return k.memKEK.Wrap(ctx, dek, bind)
 }
 
-func (k *abortingRewrapKEK) LatestVersion(context.Context) (int, error) { return 2, nil }
-func (k *abortingRewrapKEK) WrapVersion([]byte) (int, error)            { return 1, nil }
+func (k *abortingRewrapKEK) LatestVersion(context.Context) (string, error) { return "2", nil }
+func (k *abortingRewrapKEK) WrapVersion([]byte) (string, error)            { return "1", nil }
 
 type rewrapAuditRecorder struct {
 	store.Recorder

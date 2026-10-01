@@ -129,7 +129,7 @@ func TestTransitKEK_OnlineMigrationBothWays(t *testing.T) {
 		}
 	}
 	res, err := secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, true))
-	if err != nil || res.Rewrapped != 2 || res.KeyService != tr.ID() || res.KeyVersion != 1 {
+	if err != nil || res.Rewrapped != 2 || res.KeyService != tr.ID() || res.KeyVersion != "1" {
 		t.Fatalf("Rewrap = (%+v, %v), want 2 rows to %s v1", res, err, tr.ID())
 	}
 	if n, _ := both.LocalRows(ctx); n != 0 {
@@ -153,7 +153,7 @@ func TestTransitKEK_OnlineMigrationBothWays(t *testing.T) {
 
 	// Back: the key service read-only, the local key writing.
 	res, err = secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, false))
-	if err != nil || res.Rewrapped != 3 || res.KeyService != "" || res.KeyVersion != 0 {
+	if err != nil || res.Rewrapped != 3 || res.KeyService != "" || res.KeyVersion != "" {
 		t.Fatalf("Rewrap back = (%+v, %v), want 3 rows to the local key", res, err)
 	}
 	for _, n := range []string{"a", "b", "c"} {
@@ -192,7 +192,7 @@ func TestTransitKEK_RewrapRetiresOldVersions(t *testing.T) {
 	f.transit.minDecrypt = 0
 	f.mu.Unlock()
 	res, err := secretstorepg.RewrapKeys(ctx, keys(pool, nil, tr, true))
-	if err != nil || res.Rewrapped != 2 || res.KeyVersion != 2 {
+	if err != nil || res.Rewrapped != 2 || res.KeyVersion != "2" {
 		t.Fatalf("Rewrap after a rotation = (%+v, %v), want 2 rows to v2", res, err)
 	}
 	f.mu.Lock()
@@ -353,7 +353,7 @@ func TestPlatformKEK_RewrapBothWaysIsIdempotent(t *testing.T) {
 	}
 
 	// Onto the platform key.
-	if res := rewrap(true); res.Rewrapped != 1 || res.PlatformKeyService != plat.ID() || res.PlatformKeyVersion != 1 || res.KeyService != cred.ID() || res.KeyVersion != 1 {
+	if res := rewrap(true); res.Rewrapped != 1 || res.PlatformKeyService != plat.ID() || res.PlatformKeyVersion != "1" || res.KeyService != cred.ID() || res.KeyVersion != "1" {
 		t.Fatalf("rewrap onto the platform key = %+v", res)
 	}
 	check(plat.ID())
@@ -365,7 +365,7 @@ func TestPlatformKEK_RewrapBothWaysIsIdempotent(t *testing.T) {
 	// A rotation of the platform key alone moves the boot key to v2 once; the
 	// credential key, still at v1, is not chased.
 	fp.rotateTransit()
-	if res := rewrap(true); res.Rewrapped != 1 || res.PlatformKeyVersion != 2 {
+	if res := rewrap(true); res.Rewrapped != 1 || res.PlatformKeyVersion != "2" {
 		t.Fatalf("rewrap after rotating the platform key = %+v", res)
 	}
 	if res := rewrap(true); res.Rewrapped != 0 {
@@ -394,7 +394,7 @@ func TestPlatformKEK_UnsetKeepsOneKey(t *testing.T) {
 		t.Fatalf("boot key = (%q, %q), want a wrap under the credential key", k, w)
 	}
 	res, err := secretstorepg.RewrapKeys(t.Context(), keys(pool, nil, cred, true))
-	if err != nil || res.Rewrapped != 0 || res.PlatformKeyService != "" || res.PlatformKeyVersion != 0 || res.KeyService != cred.ID() || res.KeyVersion != 1 {
+	if err != nil || res.Rewrapped != 0 || res.PlatformKeyService != "" || res.PlatformKeyVersion != "" || res.KeyService != cred.ID() || res.KeyVersion != "1" {
 		t.Fatalf("rewrap = (%+v, %v)", res, err)
 	}
 	mustGet(t, s, "", bootKey, "boot")

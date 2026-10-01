@@ -354,7 +354,7 @@ export interface SetupStatus {
   // host, path or vault name (design F-3). Kept through redactSetupStatusForUser,
   // unlike `checks`: every signed-in person reads it, not just an admin.
   // Optional: absent on an older daemon that predates the field.
-  credential_storage?: "local" | "key_service" | "vault" | "key_vault";
+  credential_storage?: "local" | "key_service" | "key_service_key_vault" | "vault" | "key_vault";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
   // Masked host-proxy detection (see HostProxyDetection). Optional for the same
