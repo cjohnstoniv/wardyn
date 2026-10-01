@@ -626,6 +626,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-setup-launch.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
+	./scripts/test-verify-release.sh
 	./scripts/test-workflow-artifacts.sh
 
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
