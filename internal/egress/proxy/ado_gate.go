@@ -85,7 +85,14 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	if !ok {
 		return src
 	}
-	msg, held := adoCheck(r, host, grant, p.adoRunBranchRule)
+	// A ref move outside the run's branch that gets this far was let through by
+	// git_push_any_branch (the rule refuses it otherwise): it is audited as the
+	// git door audits it.
+	outside := false
+	msg, held := adoCheck(r, host, grant, func(refs []string) string {
+		outside = p.adoOutsideRunBranch(refs)
+		return p.adoRunBranchRule(refs)
+	})
 	// Push rules sit between hard refusals and the one liftable refusal: a
 	// content write is judged before anyone is asked to grant a capability.
 	if msg != "" && held == nil {
@@ -97,6 +104,11 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	}
 	if msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
 		return ""
+	}
+	if outside && p.sink != nil {
+		// A second row, not the forward's source: the upstream-refusal and
+		// credential-heal paths key on ruleSourceADO.
+		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceGitNSOff))
 	}
 	return ruleSourceADO
 }

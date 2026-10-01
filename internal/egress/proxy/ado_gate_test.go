@@ -392,3 +392,39 @@ func TestADOGate_DiscoveryNeedsOnlyAGrant(t *testing.T) {
 		t.Errorf("OPTIONS location discovery under wiki_read was refused: %s", log)
 	}
 }
+
+// A ref move outside the run's own branch that is forwarded under
+// git_push_any_branch is audited as branch-ns-off, as the git door audits it;
+// a move inside the branch is not, and with the switch off it is refused.
+func TestADOGate_RESTOutOfBranchMoveIsAuditedAsBranchNSOff(t *testing.T) {
+	const target = "/acme/proj/_apis/git/repositories/app/refs?api-version=7.1"
+	move := func(ref func(uuid.UUID) string, anyBranch bool) (*adoHarness, *httptest.ResponseRecorder) {
+		h := newADOHarness(t, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+		h.p.policy = CompilePolicy(types.RunPolicySpec{GitPushAnyBranch: anyBranch})
+		body := `[{"name":"` + ref(h.p.runID) + `","oldObjectId":"` + zeroOID + `","newObjectId":"` + zeroOID + `"}]`
+		return h, h.do(t, http.MethodPost, target, body, nil)
+	}
+	main := func(uuid.UUID) string { return "refs/heads/main" }
+	own := func(runID uuid.UUID) string { return BranchNSPrefix(runID) + "work" }
+
+	h, rec := move(main, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("any-branch move to main: status = %d, want 200. body=%s", rec.Code, rec.Body.String())
+	}
+	if log := h.log(); !strings.Contains(log, `"`+ruleSourceGitNSOff+`"`) || strings.Contains(log, ruleSourceADODenied) {
+		t.Errorf("any-branch move to main is not audited as %s: %s", ruleSourceGitNSOff, log)
+	}
+
+	for _, anyBranch := range []bool{false, true} {
+		h, rec := move(own, anyBranch)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("move inside the run's branch (any-branch=%v): status = %d, want 200", anyBranch, rec.Code)
+		}
+		if log := h.log(); strings.Contains(log, ruleSourceGitNSOff) || !strings.Contains(log, `"`+ruleSourceADO+`"`) {
+			t.Errorf("move inside the run's branch (any-branch=%v) must stay %s: %s", anyBranch, ruleSourceADO, log)
+		}
+	}
+
+	h, rec = move(main, false)
+	h.mustRefuse(t, rec, "this run may push only to its own branch")
+}
