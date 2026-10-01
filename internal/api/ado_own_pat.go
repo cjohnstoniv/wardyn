@@ -368,7 +368,7 @@ var (
 // name (an email on Services, DOMAIN\user on Server), and Mail, the account's
 // email where the directory has one. It returns the ones present, and the
 // owner's subjectDescriptor when Azure DevOps gave one. Any answer but a 200
-// naming at least one is a refusal, except a 429 or a 5xx, which say nothing
+// naming at least one is a refusal, except a transient status (adoPATTransientStatus), which say nothing
 // about the token.
 func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) (adoOwnPATOwnerInfo, error) {
 	resp, err := adoOwnPATGet(ctx, identityURL, token)
@@ -376,7 +376,7 @@ func (s *Server) adoOwnPATOwner(ctx context.Context, identityURL, token string) 
 		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: %w", errADOOwnPATUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+	if adoPATTransientStatus(resp.StatusCode) {
 		return adoOwnPATOwnerInfo{}, fmt.Errorf("%w: HTTP %d", errADOOwnPATUnavailable, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {

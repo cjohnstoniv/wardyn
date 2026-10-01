@@ -391,8 +391,8 @@ than the newest.
   when the row's access changes under a running run so the run's request is refused (`drift`), when
   the person disconnects, and when an admin erases the person's credentials. A sweep at boot and every five minutes revokes any token
   a crash left behind, and closes the records of tokens past their expiry without a revoke call.
-- **If a revoke fails**, Wardyn records `ado_pat.revoke.failed`. A revoke that could not complete stays
-  recorded, and the sweep retries it until the token expires. One that Azure DevOps refused for good,
+- **If a revoke fails**, Wardyn records `ado_pat.revoke.failed`. A revoke that could not complete (a timeout, an HTTP 408, 425 or 429, or a 5xx) stays
+  recorded, and the sweep retries it until the token expires, for a run that has ended and for one that is still running. One that Azure DevOps refused for good,
   or whose sign-in has ended, is closed, and the token stops working at its own expiry, at most
   `pat_max_hours` after it was created. An Azure DevOps Project Collection Administrator can revoke it
   earlier through the Token Administration API, which can take up to an hour to apply. Revoking a PAT
