@@ -306,6 +306,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	// EffectiveScmHosts is projected on read and never stored — a value that rode
 	// in on a GET-spread body would otherwise be persisted into the JSONB.
 	candidate.EffectiveScmHosts = nil
+	candidate.WithheldScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)

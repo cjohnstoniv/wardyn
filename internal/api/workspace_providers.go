@@ -833,9 +833,9 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "count sources this block refuses", err)
 		return
 	}
-	// EffectiveScmHosts is projected on read and never stored — a value that
-	// rode in on a GET-spread body would otherwise be persisted into the JSONB.
-	candidate.EffectiveScmHosts = nil
+	// EffectiveScmHosts and WithheldScmHosts are projected on read and never
+	// stored — a value on a GET-spread body would otherwise reach the JSONB.
+	candidate.EffectiveScmHosts, candidate.WithheldScmHosts = nil, nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)

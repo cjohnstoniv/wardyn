@@ -140,6 +140,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	candidate := existing
 	candidate.ModelProviders = block
 	candidate.EffectiveScmHosts = nil
+	candidate.WithheldScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)

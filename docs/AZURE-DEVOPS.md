@@ -561,9 +561,10 @@ In order:
    loses `pat` and `ssh`. Any other row is **turned off**: a row on `dev.azure.com` or `*.visualstudio.com`
    becomes an `entra` row in `own_pat` mode with a read-only ceiling (`project_read`, `code_read`), and a
    row for any other host becomes a `pat` row with `credential_source: per_user` and no `entra` block.
-   A turned-off row still claims its hosts, so **clones from those organisations fail with a reason
-   until an administrator acts**, and the setup checklist carries a non-blocking warning
-   (`ado_rows_off`) until they do.
+   A turned-off row's hosts are withdrawn from `effective_scm_hosts` and from run egress, so **clones
+   from those organisations fail with a reason that names the row until an administrator acts**.
+   `GET /site-config` lists each withdrawn host under `withheld_scm_hosts`, with the row that withholds
+   it, and the setup checklist carries a non-blocking warning (`ado_rows_off`) until they do.
 4. Open **Settings → Workspace providers → Azure DevOps**, choose how people connect, follow the
    [setup order](#for-per-run-tokens-minted_pat) (enable, sign in, **Check organisation settings**), and
    turn the row on.
@@ -908,7 +909,7 @@ a Server row either. What differs:
 | `ado_pat_policy_blocked` | The organisation restricts who may create PATs | Add the person, or their group, to the allow list under **Policies → Restrict personal access token (PAT) creation** |
 | `ado_pat_lifespan_policy` | The row's longest token life is above the organisation's maximum | Lower **Longest token life**; **Check organisation settings** names the limit it saw |
 | A run on a `bearer` row is refused with `mint_scopes` or `scope_unknown` (audit `ado_bearer.refused_mint_scopes`) | The app holds a token permission, or Entra reported no granted scope | Remove `vso.pats` and `vso.pats_manage` from that app, or move the row to `minted_pat`; people sign in again |
-| Clones from an organisation fail after the upgrade | The upgrade turned its row off | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
+| Clones from an organisation fail after the upgrade | The upgrade turned its row off; `GET /site-config` names the row under `withheld_scm_hosts` | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
 | `ado_own_pat_identity_mismatch` on a pasted token | The token belongs to another account, or the person's sign-in has no email to match | Create the token while signed in to Azure DevOps as yourself; a sign-in with no email can't be matched |
 
 ---

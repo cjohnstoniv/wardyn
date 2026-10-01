@@ -119,6 +119,11 @@ export interface SiteConfig {
   // and a client mirror of that table would drift. Older daemons omit it — read
   // it as `effective_scm_hosts ?? scm_hosts`.
   readonly effective_scm_hosts?: string[];
+  // RESPONSE-ONLY, never-PUT: each host a DISABLED provider row claims that
+  // `effective_scm_hosts` therefore leaves out, with the row that withholds it
+  // (internal/api/workspace_providers.go's withheldScmHosts). Absent when no
+  // disabled row withholds anything, and on older daemons.
+  readonly withheld_scm_hosts?: WithheldScmHost[];
   // RESPONSE-ONLY, never-PUT, exactly like `integrations` above: when the
   // operator finished (or deliberately left) the Getting Started funnel on
   // THIS INSTALL. Mirrors types.SiteConfig.OnboardingCompletedAt
@@ -129,6 +134,13 @@ export interface SiteConfig {
   // precisely so health.putSiteConfig can strip it — an untyped key rides
   // invisibly through the GET-spread idiom every writer uses.
   readonly onboarding_completed_at?: string;
+}
+
+// types.WithheldScmHost (internal/types/site_config.go), the json tags verbatim.
+export interface WithheldScmHost {
+  host: string;
+  provider_id: string;
+  provider_kind: GitProviderKind;
 }
 
 // types.SiteBranding (internal/types/site_config.go), the json tags verbatim.
@@ -159,6 +171,7 @@ export const SERVER_OWNED_SITE_CONFIG_KEYS = [
   "model_providers",
   "branding",
   "effective_scm_hosts",
+  "withheld_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
 
 // The org's agent roster. Hand-maintained mirror of Go's types.AgentProviders

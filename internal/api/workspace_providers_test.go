@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -572,6 +573,63 @@ func TestEffectiveScmHosts(t *testing.T) {
 			got := effectiveScmHosts(tc.sc)
 			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 				t.Errorf("effectiveScmHosts() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWithheldScmHosts pins the "say why" half of a disabled row: its host stays
+// out of effectiveScmHosts (fail-closed) and is named here instead, with the row.
+func TestWithheldScmHosts(t *testing.T) {
+	w := func(host, id string, kind types.GitProviderKind) types.WithheldScmHost {
+		return types.WithheldScmHost{Host: host, ProviderID: id, ProviderKind: kind}
+	}
+	for _, tc := range []struct {
+		name          string
+		sc            types.SiteConfig
+		wantEffective []string
+		want          []types.WithheldScmHost
+	}{
+		{"no providers withholds nothing",
+			providersConfig(nil, "github.example.com"),
+			[]string{"github.example.com"}, nil},
+		{"a disabled row's host is out of effective and named here",
+			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}),
+			nil, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"an enabled row's host is in effective only",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			[]string{"github.com"}, nil},
+		{"a host a disabled row claims but another enabled row admits is not withheld",
+			providersConfig([]types.GitProvider{
+				githubRow("off", true, "https://git.corp.example/a"),
+				githubRow("on", false, "https://git.corp.example/b"),
+			}),
+			[]string{"git.corp.example"}, nil},
+		{"a legacy scm_hosts entry a disabled row claims is withheld",
+			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}, "github.com"),
+			nil, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"an unclaimed legacy host is effective, not withheld",
+			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}, "gitlab.corp.example"),
+			[]string{"gitlab.corp.example"}, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"a host named by two disabled rows is listed once, under the first",
+			providersConfig([]types.GitProvider{
+				githubRow("a", true, "https://git.corp.example/a"),
+				githubRow("b", true, "https://git.corp.example/b"),
+			}),
+			nil, []types.WithheldScmHost{w("git.corp.example", "a", types.GitProviderGitHub)}},
+		{"each disabled row's hosts are listed, enabled rows' are not",
+			providersConfig([]types.GitProvider{
+				adoRow("ado", true, "https://dev.azure.com/acme"),
+				githubRow("ghes", false, "https://git.corp.example/acme"),
+			}),
+			[]string{"git.corp.example"}, []types.WithheldScmHost{w("dev.azure.com", "ado", types.GitProviderAzureDevOps)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveScmHosts(tc.sc); strings.Join(got, ",") != strings.Join(tc.wantEffective, ",") {
+				t.Errorf("effectiveScmHosts() = %v, want %v", got, tc.wantEffective)
+			}
+			if got := withheldScmHosts(tc.sc); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("withheldScmHosts() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}
@@ -1171,10 +1229,15 @@ func TestSiteConfigGetProjectsEffectiveScmHosts(t *testing.T) {
 	if strings.Join(got.EffectiveScmHosts, ",") != "git.corp.example" {
 		t.Errorf("effective_scm_hosts = %v, want [git.corp.example]", got.EffectiveScmHosts)
 	}
+	// ...and it is not simply missing: the disabled row that withholds it is named.
+	if want := []types.WithheldScmHost{{Host: "github.com", ProviderID: "gh", ProviderKind: types.GitProviderGitHub}}; !reflect.DeepEqual(got.WithheldScmHosts, want) {
+		t.Errorf("withheld_scm_hosts = %+v, want %+v", got.WithheldScmHosts, want)
+	}
 	// The ETag hashes the STORED document: a projection-inclusive hash would be
 	// one no If-Match could satisfy.
 	etag := w.Header().Get("ETag")
-	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{}`,
+	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+		`{"withheld_scm_hosts":[{"host":"x.example","provider_id":"gh","provider_kind":"github"}]}`,
 		map[string]string{"If-Match": etag})
 	if w.Code != http.StatusOK {
 		t.Fatalf("the GET's own ETag did not satisfy the PUT (= %d) — the projection leaked into the hash; "+
@@ -1183,6 +1246,10 @@ func TestSiteConfigGetProjectsEffectiveScmHosts(t *testing.T) {
 	if fake.putSeen.EffectiveScmHosts != nil {
 		t.Errorf("effective_scm_hosts = %v was persisted; it is server-owned and read-only",
 			fake.putSeen.EffectiveScmHosts)
+	}
+	if fake.putSeen.WithheldScmHosts != nil {
+		t.Errorf("withheld_scm_hosts = %+v was persisted; it is server-owned and read-only",
+			fake.putSeen.WithheldScmHosts)
 	}
 }
 
