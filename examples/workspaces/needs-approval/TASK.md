@@ -22,7 +22,7 @@ while the agent waits.)
 
 Click Approve in the UI (or via CLI):
 
-    wardyn approve <approval-id>
+    wardyn approval approve <approval-id>
 
 Then observe:
 - Audit: approval.decide outcome=approved + egress.allow for example.com.
@@ -32,7 +32,7 @@ Then observe:
 
 Click Deny in the UI (or via CLI):
 
-    wardyn deny <approval-id>
+    wardyn approval deny <approval-id>
 
 Then observe:
 - Audit: approval.decide outcome=denied + egress.deny for example.com.

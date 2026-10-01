@@ -1206,7 +1206,7 @@ lease.** Every other scope on a `credential` approval is a `400`, and so is any
 scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
 credential helper git invokes on every operation
 (`docs/adoption/corp-network-onboarding-findings.md` B2). Approving with
-`decision_scope=run` (`wardyn approve <id> --scope run`) makes that one decision
+`decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision
 re-mintable for the rest of the run. Three things bound it:
 **`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key` is
 materialized once and wiped, `api_key` never leaves the broker, so none has the
@@ -2110,7 +2110,7 @@ its own.
 | `GET /api/v1/tokens` | admin or `security_admin` | every token in the deployment |
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
-Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
+Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also
 revokes their API tokens and removes their registered SSH keys. The `all` arm
 applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
@@ -4512,7 +4512,7 @@ browser bundle or an old CLI, so:
 | 0.7.5 proxy sidecar, 0.7.6 daemon | No hold. The 423 is an unrecognised status, the re-resolve fails closed, and the run's model call fails as it did in 0.7.5. The approval row is still raised and still visible. |
 | 0.7.6 proxy sidecar, 0.7.5 daemon | No 423 is ever answered, so the hold never opens. Byte-identical to 0.7.5. |
 | 0.7.5 console, 0.7.6 daemon | The row renders through `WIRE_TO_COPY`'s fallback (the raw kind string in the chip) and the screen does not crash; the Approve/Deny pair is offered and the server answers 409. Tell people on an old bundle to reload. |
-| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; `wardyn approvals list` prints it verbatim. |
+| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; the 0.7.5 `approvals list` prints it verbatim. |
 
 ### Internal model gateway
 
@@ -4809,7 +4809,7 @@ against the old names gets a `404`/`400` on 0.8, not a warning. History is not
 rewritten — an audit row written before 0.8 keeps its pre-0.8 action and field
 names forever; only what the server emits GOING FORWARD changed.
 
-| Surface | Pre-0.8 | 0.8 |
+| Surface | Before | After |
 |---|---|---|
 | The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin","user_type":"…"}` |
 | `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
@@ -4819,6 +4819,10 @@ names forever; only what the server emits GOING FORWARD changed.
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
 | Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` (grew a `typeID` param the same release, #835/UT-13) |
 | Go: `internal/api` | `auditMemberPolicyDrops`, `authorizeMemberDecision`, `boundMemberSpec`, `denyMemberCapability`, `denyMemberDrive`, `denyMemberGovernance`, `denyMemberRequest`, `denyMemberRunQuota`, `denyMemberSeededImage`, `denyMemberWorkspaceProviders`, `filterMemberGrants`, `handleSetMemberMode`, `memberDropsIntegration`, `memberEnvSecretIsAdminOnly`, `memberModeRequest`, `memberModelAccess`, `memberMountAllowed`, `memberMountPosture`, `memberPreviewApplies`, `memberSafeCapabilities`, `memberSafeIntegration`, `memberSafeIntegrations`, `memberSourcesAllowed`, `memberVisibleOperatorSecretNames`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember` | `auditUserPolicyDrops`, `authorizeUserDecision`, `boundUserSpec`, `denyUserCapability`, `denyUserDrive`, `denyUserGovernance`, `denyUserRequest`, `denyUserRunQuota`, `denyUserSeededImage`, `denyUserWorkspaceProviders`, `filterUserGrants`, `handleSetUserView`, `userDropsIntegration`, `userEnvSecretIsAdminOnly`, `userViewRequest`, `userModelAccess`, `userMountAllowed`, `userMountPosture`, `userPreviewApplies`, `userSafeCapabilities`, `userSafeIntegration`, `userSafeIntegrations`, `userSourcesAllowed`, `userVisibleOperatorSecretNames`, `narrowUserInlinePolicy`, `redactSetupStatusForUser`, `redactSpecForUser` |
+| CLI: approvals | `approvals list\|get`, `approve <id>`, `deny <id>` | `wardyn approval list\|get\|approve\|deny` — clean break, no alias, 0.8.4; `--reason`, `--scope`, `--until` unchanged |
+| CLI: run logs | `logs <run-id>` | `wardyn run logs <run-id>` — clean break, no alias, 0.8.4 |
+| CLI: sessions | `sessions list\|revoke` | `wardyn session list\|revoke` — clean break, no alias, 0.8.4; `revoke` still takes exactly one of `--sub` or `--all` |
+| CLI: upsert verb | `drive apply`, `governance apply`, `preset apply` | `wardyn drive set`, `wardyn governance set`, `wardyn preset set` — clean break, no alias, 0.8.4; `set` is the one upsert verb, as it already is on `policy`, `secret` and `site-config` |
 
 `denyMemberField` — the old shared helper this table's first cut of the sweep
 named — does not appear in the 0.8 column: it is not renamed but RETIRED, folded

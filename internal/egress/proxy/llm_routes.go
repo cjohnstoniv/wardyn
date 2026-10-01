@@ -143,7 +143,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	if blocked {
 		return
 	}
-	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, hdr.name, ruleSourceLLM, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, hdr.name, ruleSourceLLM, false, bodyReader, scanSummary)
 }
 
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the
@@ -170,7 +170,7 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 // every sandbox-supplied credential header then inject; hdr == nil: preserve
 // the agent's own resident credential, inspect-only), records the allow
 // decision, and streams the response back.
-func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ownedHeader string, ruleSource string, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
+func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ownedHeader string, ruleSource string, nsOff bool, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
 	scheme, defaultPort := p.upstreamSchemeFor(host, port)
 	hostport := host
 	if port != defaultPort {
@@ -217,6 +217,10 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 			return nil, false
 		}
 		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
+		if nsOff { // once, however many times a credential heal sends
+			p.emitLLMDecision(r, host, port, egress.Allow, ruleSourceGitNSOff, nil)
+			nsOff = false
+		}
 		return resp, true
 	}
 	resp, ok := send(bodyReader, hdr)

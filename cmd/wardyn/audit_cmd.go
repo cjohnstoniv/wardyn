@@ -54,7 +54,7 @@ func auditCmd(client clientFn) *cobra.Command {
 				opts = []sdk.ListOpts{{Limit: limit, Offset: offset}}
 			}
 			c := client()
-			// GetRun FIRST, in BOTH modes — the guard the sibling logsCmd
+			// GetRun FIRST, in BOTH modes — the guard the sibling runLogsCmd
 			// carries and explains: /api/v1/audit is member-scoped by FILTERING
 			// ROWS, so an unknown or unowned id answers 200 [] exactly like a
 			// real run with no events (audit_run_scope_test.go).

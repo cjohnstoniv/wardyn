@@ -371,7 +371,8 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if !p.isLLMHost(host) {
 		mitmSource = ruleSourceArtifactMITM
 	}
-	if mitmSource = p.gateADO(w, r, host, port, mitmSource); mitmSource == "" {
+	mitmSource, nsOff := p.gateADO(w, r, host, port, mitmSource)
+	if mitmSource == "" {
 		return
 	}
 	rearmBodyDeadline(w) // the gate may have held the request (awaitADOCapability)
@@ -488,7 +489,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	}
 	// Forwards over the pinned transport; DialContext dials the vetted target from
 	// the request context, so the host is never re-resolved.
-	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, ownedHeader, mitmSource, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, ownedHeader, mitmSource, nsOff, bodyReader, scanSummary)
 }
 
 // oneConnListener hands a single already-accepted conn to http.Server.Serve and

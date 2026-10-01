@@ -4,6 +4,8 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -49,6 +51,12 @@ type runEndWaitResponse struct {
 	LatestEnd *time.Time `json:"latest_end,omitempty"`
 	// MaxWaitSec is the longest wait allowed; absent is no limit.
 	MaxWaitSec int `json:"max_wait_sec,omitempty"`
+	// EndsCapLoosened is true when the end was capped by the limit this run
+	// captured at launch while the launch profile's own limit has since been
+	// loosened (#1322). Display only: the captured limit still binds, and no
+	// number from the profile is sent, since profiles are readable only at the
+	// security-ops tier.
+	EndsCapLoosened bool `json:"ends_cap_loosened,omitempty"`
 }
 
 // endWaitPlan is a PATCH decided against the run as read: what to write, or
@@ -124,6 +132,9 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, p.status, p.refusalReason, p.refusal)
 		return
 	}
+	if !exempt && slices.Contains(p.resp.Capped, "ends_at") {
+		p.resp.EndsCapLoosened = s.endsCapLoosened(r.Context(), run)
+	}
 	if p.endChanged && (p.resp.EndsAt == nil || (run.EndsAt != nil && p.resp.EndsAt.After(*run.EndsAt))) {
 		if ref := s.extendRefusal(r, run); ref != nil {
 			s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
@@ -145,11 +156,15 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged {
+		data := map[string]any{
+			"from": run.EndsAt, "to": p.resp.EndsAt, "max": run.RunLimits.MaxEndAheadSec,
+			"capped": slices.Contains(p.resp.Capped, "ends_at"), "limits_exempt": exempt,
+		}
+		if p.resp.EndsCapLoosened {
+			data["ends_cap_loosened"] = true
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
-			"success", mustJSON(map[string]any{
-				"from": run.EndsAt, "to": p.resp.EndsAt, "max": run.RunLimits.MaxEndAheadSec,
-				"capped": slices.Contains(p.resp.Capped, "ends_at"), "limits_exempt": exempt,
-			})))
+			"success", mustJSON(data)))
 	}
 	if p.waitChanged {
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.wait_budget.set", run.ID.String(),
@@ -159,6 +174,31 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			})))
 	}
 	writeJSON(w, http.StatusOK, p.resp)
+}
+
+// endsCapLoosened reports whether the profile this run launched under now
+// allows a later end than the limit the run captured (#1322); 0 is no limit.
+// It reads the launch profile, never the owner's current assignment. A read
+// that fails or a profile that is gone says false: the PATCH answers as it
+// would have without this, never a 500 and never a looser check.
+func (s *Server) endsCapLoosened(ctx context.Context, run types.AgentRun) bool {
+	captured := run.RunLimits.MaxEndAheadSec
+	if run.GovernanceProfileID == nil || captured <= 0 {
+		return false
+	}
+	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: reading a run's launch profile for its end cap failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return false
+	}
+	for _, p := range profiles {
+		if p.ID == *run.GovernanceProfileID {
+			live := p.Limits.RunLimits.MaxEndAheadSec
+			return live == 0 || live > captured
+		}
+	}
+	return false
 }
 
 // planRunEndWait decides a PATCH against the bounds the run captured at

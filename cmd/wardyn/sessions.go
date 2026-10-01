@@ -18,14 +18,14 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// sessionsCmd is D16's admin surface for "revoke a human now" — see
+// sessionCmd is D16's admin surface for "revoke a human now" — see
 // pkg/client's RevokeSessions doc comment and internal/api/sessions.go's
 // handleRevokeSessions for what actually happens server-side (a stateless
 // OIDC session cookie has no row to delete, so this stamps a cutoff the
 // server checks on every authenticated request going forward).
-func sessionsCmd(client clientFn) *cobra.Command {
+func sessionCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "sessions",
+		Use:   "session",
 		Short: "Manage active OIDC/console sessions",
 	}
 
@@ -66,11 +66,11 @@ func sessionsCmd(client clientFn) *cobra.Command {
 	revoke.Flags().StringVar(&sub, "sub", "", "revoke this principal's active sessions (the OIDC sub/email)")
 	revoke.Flags().BoolVar(&all, "all", false, "revoke every active session, for every principal")
 
-	cmd.AddCommand(revoke, sessionsListCmd(client))
+	cmd.AddCommand(revoke, sessionListCmd(client))
 	return subcommandGroup(cmd)
 }
 
-// sessionsListCmd lists every API token in the deployment — the nearest
+// sessionListCmd lists every API token in the deployment — the nearest
 // enumerable stand-in for "active sessions" that exists: an OIDC session
 // cookie is a stateless signed value with no server-side row (see this file's
 // own doc comment), so there is nothing to list there, but `revoke`'s own
@@ -81,7 +81,7 @@ func sessionsCmd(client clientFn) *cobra.Command {
 // /api/v1/tokens among the admin-tier families it deliberately does not
 // wrap. attach.go's mintAttachTicket follows the same pattern for its own
 // deliberately-unwrapped family.
-func sessionsListCmd(client clientFn) *cobra.Command {
+func sessionListCmd(client clientFn) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -123,10 +123,10 @@ func sessionsListCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-// listAllAPITokens fetches GET /api/v1/tokens directly — see sessionsListCmd's
+// listAllAPITokens fetches GET /api/v1/tokens directly — see sessionListCmd's
 // doc comment for why this bypasses the SDK. Mirrors mintAttachTicket's own
 // direct-request shape (attach.go), but a non-2xx here is always decisive
-// (this route exists on every deployment new enough to have `sessions`), so
+// (this route exists on every deployment new enough to have `session`), so
 // it is always returned as an *sdk.APIError rather than treated as
 // inconclusive.
 func listAllAPITokens(ctx context.Context, c *sdk.Client) ([]types.APIToken, error) {
