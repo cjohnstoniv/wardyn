@@ -121,7 +121,7 @@ export interface SiteConfig {
   readonly effective_scm_hosts?: string[];
   // RESPONSE-ONLY, never-PUT: each host a DISABLED provider row claims that
   // `effective_scm_hosts` therefore leaves out, with the row that withholds it
-  // (internal/api/workspace_providers.go's withheldScmHosts). Absent when no
+  // (internal/api/workspace_providers_withheld.go's withheldScmHosts). Absent when no
   // disabled row withholds anything, and on older daemons.
   readonly withheld_scm_hosts?: WithheldScmHost[];
   // RESPONSE-ONLY, never-PUT, exactly like `integrations` above: when the

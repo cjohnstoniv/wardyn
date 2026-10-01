@@ -7,10 +7,12 @@
 -- migration rewrites every stored Azure DevOps provider row that still names a
 -- shared lane, and turns it OFF. It deletes nothing: the row keeps its
 -- addresses and its id, and an admin turns it back on once they have chosen how
--- their people connect. Until then the row's hosts are withdrawn from
--- effective_scm_hosts and from run egress, a launch on them is refused with a
--- reason that names the row, and GET /site-config lists them under
--- withheld_scm_hosts with the row that withholds each.
+-- their people connect. Until then a launch into the row's organisation is
+-- refused at admission with a reason that names the row. Its hosts are
+-- withdrawn from effective_scm_hosts and from run egress, and listed by
+-- GET /site-config under withheld_scm_hosts with the row that withholds each,
+-- only when no enabled row also names the same host (dev.azure.com stays
+-- effective while another organisation's row on it is enabled).
 --
 -- A row is "shared" when its lanes name pat or ssh, or are empty (an empty list
 -- read as the legacy pat, ssh and app lanes). For each such row, in order:

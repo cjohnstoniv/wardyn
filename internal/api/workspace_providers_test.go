@@ -611,6 +611,12 @@ func TestWithheldScmHosts(t *testing.T) {
 		{"an unclaimed legacy host is effective, not withheld",
 			providersConfig([]types.GitProvider{githubRow("gh", true, "https://github.com/acme")}, "gitlab.corp.example"),
 			[]string{"gitlab.corp.example"}, []types.WithheldScmHost{w("github.com", "gh", types.GitProviderGitHub)}},
+		{"a disabled GHES row withholds a legacy github.com host it claims kind-wide",
+			providersConfig([]types.GitProvider{githubRow("ghes", true, "https://git.corp.example/acme")}, "github.com"),
+			nil, []types.WithheldScmHost{
+				w("git.corp.example", "ghes", types.GitProviderGitHub),
+				w("github.com", "ghes", types.GitProviderGitHub),
+			}},
 		{"a host named by two disabled rows is listed once, under the first",
 			providersConfig([]types.GitProvider{
 				githubRow("a", true, "https://git.corp.example/a"),
