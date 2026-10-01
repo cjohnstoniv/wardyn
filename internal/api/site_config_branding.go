@@ -188,28 +188,35 @@ func (s *Server) readSiteBrandingLogo(w http.ResponseWriter, named bool, b *type
 
 // followSiteBranding is the second step, after the document is stored: make the
 // logo follow it (applySiteBrandingLogo). pending is the response's
-// branding_logo_pending.
-func (s *Server) followSiteBranding(w http.ResponseWriter, r *http.Request, named bool, bs store.BrandingStore, logo *siteBrandingLogo) (pending, ok bool) {
+// branding_logo_pending. It answers nothing itself: the caller records the
+// site_config.write audit row first and only then reports a failure, so a
+// committed document is never left without its audit event.
+func (s *Server) followSiteBranding(r *http.Request, named bool, bs store.BrandingStore, logo *siteBrandingLogo) (pending bool, err error) {
 	if !named || bs == nil {
-		return false, true
+		return false, nil
 	}
-	pending, err := applySiteBrandingLogo(r.Context(), bs, logo, principalFromRequest(r))
+	pending, err = applySiteBrandingLogo(r.Context(), bs, logo, principalFromRequest(r))
 	if err != nil {
-		writeServerError(w, r, "apply site config branding logo", err)
-		return false, false
+		return false, err
 	}
 	if pending {
 		slog.Warn("site config names branding.logo_path but the console has no branding yet; the logo is attached at the next apply after the Branding card is saved")
 	}
-	return pending, true
+	return pending, nil
 }
 
 // auditSiteBranding adds the branding keys to the site_config.write datum, only
 // when the body NAMED branding: the file is the logo's owner from then on, so
-// who delivered which bytes is reviewable from the log alone.
-func auditSiteBranding(datum map[string]any, named bool, saved *types.SiteBranding, logo *siteBrandingLogo) {
+// who delivered which bytes is reviewable from the log alone. logoFailed is the
+// logo write having errored after the document committed: the row says so
+// (branding_logo_failed) and carries no digest, as no bytes were stored.
+func auditSiteBranding(datum map[string]any, named bool, saved *types.SiteBranding, logo *siteBrandingLogo, logoFailed bool) {
 	if !named {
 		return
+	}
+	if logoFailed {
+		datum["branding_logo_failed"] = true
+		logo = nil
 	}
 	datum["branding_logo_path"] = ""
 	if saved != nil {

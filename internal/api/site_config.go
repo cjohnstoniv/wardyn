@@ -843,11 +843,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// The logo follows the document just saved (siteBrandingLogo's doc). The
 	// document is already stored; a failure here is a 500, and the same apply
-	// repeated finishes it.
-	logoPending, ok := s.followSiteBranding(w, r, present["branding"], brandStore, siteLogo)
-	if !ok {
-		return
-	}
+	// repeated finishes it. The 500 waits until the audit row below is written.
+	logoPending, logoErr := s.followSiteBranding(r, present["branding"], brandStore, siteLogo)
 	logWarnInternalHostsDeclared(saved.InternalHosts)
 	sshWideRows := sshLaneWidePastPathRows(saved.WorkspaceProviders)
 	logWarnSSHLaneWidePastPath(sshWideRows)
@@ -886,7 +883,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
-	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo)
+	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil)
 	// Only once a provider block exists, so a deployment without one writes the
 	// row it always wrote.
 	if saved.ModelProviders != nil {
@@ -901,6 +898,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"site_config.write", "site_config", "success", mustJSON(datum)))
+	if logoErr != nil {
+		writeServerError(w, r, "apply site config branding logo", logoErr)
+		return
+	}
 	w.Header().Set("ETag", computeETag(saved))
 	// Projected onto the response for the same reason GET projects it — and
 	// AFTER the ETag above, which must hash the stored document.
