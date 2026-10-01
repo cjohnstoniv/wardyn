@@ -403,6 +403,9 @@ of which have a wider audience than the device does.
 The failure mode of the per-device key is that losing a laptop loses that
 laptop's stored secrets. That is the intended cost, not a gap to design around.
 
+What to back up on a device, and what a restore does not bring back, is in
+[Recovery set by deployment](OPERATIONS.md#recovery-set-by-deployment).
+
 A note on the mechanism: wardynd reads the key as a **value** in
 `WARDYN_AGE_KEY`, not as a path — there is no `WARDYN_AGE_KEY_FILE`. So the
 installer writes `/etc/wardyn/age.key` and whatever launches wardynd reads that

@@ -134,6 +134,10 @@ Use durable spool storage for repeatable backup/restore.
 
 ### Back them up
 
+The items to collect on each deployment are listed in
+[Recovery set by deployment](#recovery-set-by-deployment); the block below is the
+Compose recipe.
+
 ```sh
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
@@ -248,6 +252,45 @@ docker volume ls --filter label=wardyn.drive=<drive id>
 > (`scripts/up.sh` `cmd_reset`): Postgres, recordings and the audit sink all go,
 > with no backup counterpart. It leaves `.env` — and so the age key — alone.
 > `make compose-down` stops the stack and keeps the volumes.
+
+### Recovery set by deployment
+
+A recovery set is five items, and each deployment keeps them in different places.
+Take them together, with the writer stopped ("Back them up" step 0 for Compose;
+the equivalents below). This table says what to collect and where it lives; the
+commands are the ones in "Back them up" and "Restore them", and in
+[Kubernetes: day-2](#kubernetes-day-2) for the chart.
+
+| Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
+|---|---|---|---|---|---|
+| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`docker-compose.yaml:432`, `:605`). |
+| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (`wardyn-desktop.sh:179`). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
+| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), or `secrets.ageKey`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
+
+**Rules for every row.**
+
+- **Custody.** Keep the keys apart from the data, in a secret manager, never in
+  the same archive as the dump. Everything else here is sensitive in plaintext
+  too (a dump holds the audit trail and sealed secrets; recordings and drives
+  hold whatever the agent saw), so write mode-restricted tarballs.
+- **Order.** Stop the writer, preserve ownership and modes, restore the key
+  first, load with `ON_ERROR_STOP=1`. The cursor identifies spool bytes, not a
+  database snapshot: never pair a newer cursor with an older dump.
+- **Older dump.** Restoring an older dump rolls back `audit_events`. Export the
+  live trail first.
+- **Drives.** Record the volume to drive id to person map at backup time. After
+  a restore, a volume you recreate by hand is adopted by name, so the
+  `wardyn.drive=<id>` label is the only check that it belongs to the right drive
+  (`internal/runner/docker/driver_volumes.go:118-147`).
+- **Hybrid desktop.** A device re-enrols with a fresh enrolment token. Never
+  restore a revoked device.
+
+**What is not proven.** The commands in the day-2 section were exercised once
+against a throwaway kind cluster. No shipped tool rehearses a restore (that is
+issue #1514), so none of the above has been validated end to end. Loading a dump
+into a scratch database proves the SQL loads, and nothing more: a row count does
+not show that the key works, and it does not show that the drive bytes are
+intact.
 
 ### The audit log can't quietly rot
 
