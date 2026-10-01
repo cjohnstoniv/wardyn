@@ -43,7 +43,7 @@ import (
 //
 // DRAFT (M2 canon pending)
 const (
-	adoOwnPATNotAddedRefusal = "The person who launched this run has not added their own Azure DevOps token — add it under Settings, then relaunch"
+	adoOwnPATNotAddedRefusal = "The person who launched this run has no Azure DevOps token available in Wardyn — add it under Settings, then relaunch"
 	adoOwnPATExpiredRefusal  = "The Azure DevOps token behind this run has reached the expiry its owner entered — add a new token under Settings, then relaunch"
 	adoOwnPATOtherOrgRefusal = "The Azure DevOps token its owner added is for a different organisation than this run's — add one for this organisation, then relaunch"
 )

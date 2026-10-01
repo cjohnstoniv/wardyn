@@ -25,7 +25,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
-import { Field, OptionCard } from "../../wardyn/form-primitives";
+import { Field, fieldHintId, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useThemeName } from "../../wardyn/theme-provider";
@@ -282,7 +282,7 @@ export function BrandingCard() {
               {brand?.logo_from_file ? (
                 <p className="rounded-md bg-surface-2 px-2.5 py-2 text-xs text-muted-foreground">{BRANDING.FILE_LOGO_NOTE}</p>
               ) : (
-                <Input id="brand-logo" type="file" accept="image/svg+xml,image/png"
+                <Input id="brand-logo" aria-describedby={fieldHintId("brand-logo")} type="file" accept="image/svg+xml,image/png"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     set({ logo: file ? { name: file.name, size: file.size, type: file.type, file } : null });

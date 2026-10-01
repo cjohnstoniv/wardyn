@@ -20,8 +20,9 @@ import type { AgentRun, Recording } from "../../../lib/types";
 import { AttachTerminal } from "../../attach-terminal";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { Chip } from "../../wardyn/primitives";
-import { useOperator, usePrincipal } from "../../wardyn/operator-context";
-import { OPERATOR_ONLY_REASON, RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
+import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
+import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
+import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 
@@ -45,16 +46,18 @@ export function TerminalPane({
 }) {
   const operator = useOperator();
   const principal = usePrincipal();
-  // Same owner-or-admin predicate AttachTerminal gates its own connect on, and
-  // the same one the command bar's "attachable" chip claims — all three must
-  // agree or the page promises a terminal it then refuses to open.
-  const canAttach = operator || (!!run.created_by && run.created_by === principal);
+  const resolved = useOperatorResolved();
+  // The same entry rule AttachTerminal gates its own connect on, and the one the
+  // command bar's "attachable" chip, the SSH card and its widget gate claim —
+  // all must agree or the page promises a terminal it then refuses to open
+  // (#1476: the run's person, or an admin on a run no person owns).
+  const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
 
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} />;
+    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} />;
   }
 
   // Finished run: the pane becomes the replay surface in place rather than a
@@ -104,7 +107,7 @@ export function TerminalPane({
   // next; an interactive run this caller can never attach to has none, and
   // keeps the operator-only note beneath the list.
   //
-  // F1-F1: OPERATOR_ONLY_REASON stays reserved for the caller who genuinely
+  // F1-F1: The refusal line stays reserved for the caller who genuinely
   // cannot attach, at any state.
   if (run.state === "PENDING" || run.state === "STARTING") {
     // Same precedence as the pane chip below: an exec run is also non-interactive.
@@ -118,7 +121,7 @@ export function TerminalPane({
         <StartupProgress run={run} lastStep={lastStep}>
           {lastStep === null && (
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
-              <p className="text-sm text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
+              <p className="text-sm text-muted-foreground">{runEntryRefusalLine(run)}</p>
               <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
                 Watch the captured session →
               </button>
@@ -149,7 +152,7 @@ export function TerminalPane({
         <div className="min-h-0 flex-1" />
       ) : (
         <PaneNotice
-          text={run.interactive ? OPERATOR_ONLY_REASON : RUN_MODE.autonomous.blurb}
+          text={run.interactive ? runEntryRefusalLine(run) : RUN_MODE.autonomous.blurb}
           action={
             <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
               Watch the captured session →

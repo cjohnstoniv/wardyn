@@ -91,7 +91,7 @@ const (
 	providerAccessLiveDetail     = "Your %s for this provider is connected; runs on it use your own credential."
 	providerAccessExpiringDetail = "Your %s for this provider may stop working soon; runs on it fail once it does."
 	providerAccessExpiredDetail  = "Your %s for this provider can no longer be used, so runs on it are refused until you sign in again."
-	providerAccessMissingDetail  = "You have not connected your %s for this provider yet, so runs on it are refused until you do."
+	providerAccessMissingDetail  = "No %s is available for this provider, so runs on it are refused until you connect one."
 	// providerAccessMechanismDetail: the shared admin token under OIDC.
 	providerAccessMechanismDetail = "This request arrived on the shared admin token, which owns no model credential — a person's own console session answers this row."
 	// providerAccessLLMLiveDetail: %s = the provider ids this caller can run on.

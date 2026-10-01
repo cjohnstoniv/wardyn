@@ -22,8 +22,9 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 - Multi-user semantics (admin vs member, ownership scoping, the shared
   admin-token ceiling) and the k8s known-gaps detail behind the chart
   README's summary: `docs/OPERATIONS.md`.
-- SSH gateway setup/use once the cluster is up (owner **or admin** — the
-  admin override re-checks the key's role every `WARDYN_SSH_ROLE_TTL`;
+- SSH gateway setup/use once the cluster is up (the run's **owner**, or an
+  admin on a run with no personal owner — the admin override re-checks the key's
+  role every `WARDYN_SSH_ROLE_TTL`;
   see this skill's troubleshooting table): `docs/SSH.md`.
 
 ## Recipe
@@ -64,9 +65,10 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      chart REFUSES to render `k8s.enabled` without the automount flip (the
      substrate drives the apiserver directly via client-go, which needs the
      pod's own projected token).
-   - **Images**: `k8s.proxyImage` (required in practice — empty boots
-     wardynd fine but every run then fails closed; also what the egress
-     canary itself launches) and `image.repository`/`image.tag` for wardynd.
+   - **Images**: `k8s.proxyImage` (required — the chart refuses to render
+     with `k8s.enabled` and no `k8s.proxyImage`, `templates/deployment.yaml`; also
+     what the egress canary itself launches) and `image.repository`/`image.tag`
+     for wardynd.
    - **`runtimeClasses`**: `k8s.runtimeClasses.CC2`/`.CC3` pin a Confinement
      Class to a RuntimeClass NAME already registered in the cluster (e.g.
      `CC2: gvisor`) — unlike Docker's well-known runtime family names, a
@@ -196,16 +198,13 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      --set k8s.runtimeClasses.CC2="<your gVisor RuntimeClass>" \
      -f my-k8s-values.yaml   # the SSO/SSH/runtimeClasses block from step 2-3
    ```
-   The pasted `--set k8s.runtimeClasses.CC2=…` above is what makes this render
-   as pasted — the chart refuses `k8s.enabled=true` with no
-   `k8s.runtimeClasses.CC2`/`.CC3` pin AND no `defaultPolicy`/
-   `env.WARDYN_DEFAULT_POLICY` override, since the substrate then advertises
-   only `[CC1]` while the image's baked-in default policy floors at CC2. Use
-   the gVisor (or Kata) RuntimeClass name from step 2 (a duplicate of the
-   pin in `my-k8s-values.yaml` is harmless). A cluster with NO RuntimeClass
-   yet can stand in `--set-file defaultPolicy=examples/policies/demo.json`
-   instead — that is a CC1-only floor, disclosed, to be dropped once a real
-   RuntimeClass exists. `postgres.dsn.secretRef` is a PERSISTENT DSN, so the age identity riding in
+   No CC2/CC3 pin and no `defaultPolicy` override is needed to render this: the
+   shipped policy floor is CC1, so a stock install clears it with the bare
+   `[CC1]` the substrate advertises. The `--set k8s.runtimeClasses.CC2=…` above
+   is optional hardening — pin the gVisor (or Kata) RuntimeClass name from step 2
+   to advertise a stronger class (a duplicate of the pin in `my-k8s-values.yaml`
+   is harmless). A stronger floor with no matching RuntimeClass fails closed at
+   dispatch. `postgres.dsn.secretRef` is a PERSISTENT DSN, so the age identity riding in
    the SAME Secret (`age-key`, via `-gen-age-key`) is required, not optional —
    without it wardynd generates a fresh identity every boot and cannot decrypt
    what the previous boot encrypted (crash-loops on the SECOND restart). Keep
@@ -237,7 +236,7 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 | wardynd refuses to boot: `egress canary phase A (no NetworkPolicy) did not confirm baseline apiserver reachability` (W27-S1-6) | Phase A applies no NetworkPolicy of its own — it only proves the cluster is reachable at all. This is indistinguishable from `k8s.runsNamespace` already carrying a default-deny NetworkPolicy from something ELSE (a cluster-wide baseline, another operator's policy), which blocks the canary pod too. | Use a namespace with no ambient default-deny for `k8s.runsNamespace`, or exempt Wardyn's pods from **that policy's own `podSelector`** (a `matchExpressions` entry with `key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`) so it stops selecting them. **Do NOT add a separate allow policy for `wardyn.managed=true`** — NetworkPolicy allows are additive and both the agent and proxy pods carry that label, so it would widen every sandbox pod's egress past Wardyn's per-run deny+proxy-only policy and flip the canary's phase B to "not enforcing". |
 | Setup check `k8s_egress_containment` reads **Not enforcing** | The boot-time canary proved this cluster's CNI does not enforce `NetworkPolicy`, and the operator accepted that via `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` — every sandbox has unconfined egress. | Unset `env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and install a NetworkPolicy-enforcing CNI (step 1) to restore real confinement. |
 | Runner never reaches `RUNNING` / pods stuck `Pending` | Often `k8s.runtimeClasses.CC2`/`.CC3` names a RuntimeClass that doesn't exist in the cluster yet, or the namespace lacks the Pod Security Standard level the substrate's pods need. | Confirm `kubectl get runtimeclass` lists the name you pinned; confirm the runs namespace isn't blocking the substrate's restricted `securityContext` (PSS `restricted` is what CI's own conformance namespace uses). |
-| wardynd crash-loops at boot with `unknown -runner "k8s" (want "none" or a registered substrate; the docker substrate requires a wardynd built with -tags docker)` | Misleading pre-fix headline (W27-S1-3) — ignore the `-tags docker` framing, it never applies here. The `k8s` substrate IS registered; its CONSTRUCTOR refused to start, most often the boot-time egress canary (`k8s: refusing to boot: ...`) or a missing `k8s.proxyImage`. | Read past the headline to the wrapped `-runner "k8s" failed to start: ...` cause; check the canary verdict (`k8s_egress_containment` rows above) and confirm `k8s.proxyImage` is set. |
+| wardynd crash-loops at boot with `unknown -runner "k8s" (want "none" or a registered substrate; the docker substrate requires a wardynd built with -tags docker)` | Misleading pre-fix headline (W27-S1-3) — ignore the `-tags docker` framing, it never applies here. The `k8s` substrate IS registered; its CONSTRUCTOR refused to start, most often the boot-time egress canary (`k8s: refusing to boot: ...`) or, on a non-chart install, a missing `k8s.proxyImage` (the chart refuses to render without one). | Read past the headline to the wrapped `-runner "k8s" failed to start: ...` cause; check the canary verdict (`k8s_egress_containment` rows above) and, on a non-chart install, confirm `k8s.proxyImage` is set. |
 | SSH connection refused | Either the gateway was never turned on (`WARDYN_SSH_LISTEN` unset — `ssh.enabled=false` is the chart's own default, and NOTHING generates a host key until it's on), or a client is dialing the wrong port/Service. | Set `ssh.enabled=true` plus `ssh.advertiseHost`; confirm `/healthz`'s `ssh.enabled` reads `true`; if SSH is split onto its own Service (LoadBalancer, etc. — see the chart README), confirm that Service's `targetPort` is `ssh`, matching the Deployment's named containerPort. |
 | Role mapping added on the People step, but the user's access didn't change | Role derivation runs once, at login, and is stamped into the session cookie — a console row change is never applied to an already-signed-in session. | Tell the person to sign out and back in. Their next login re-derives the role against the now-current merged map. |
 | Sign-in redirects with **"your sign-in is too old to verify this change"** while adding/removing a People-step mapping | The acting admin's own session snapshot (`groups`) is nil (a pre-0.6 cookie) or was truncated at the 2048-byte cap, so the server can't re-derive whether THEY currently hold admin from it — refused rather than risk a false lockout claim either way. | Sign out and back in to refresh the snapshot, then retry the write. |

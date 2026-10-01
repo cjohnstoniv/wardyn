@@ -44,6 +44,12 @@ type AttachTicket struct {
 	// Via is the delegated lane the ticket was minted on (#1142), nil
 	// otherwise; the ticket lane replays it onto the rows it writes.
 	Via *types.DelegationVia
+	// AuthorizedAt is when the minting request was admitted, and Email the
+	// verified email a session revoke may name ("" on the admin-token and local
+	// lanes). Redemption checks both against the revoke cutoff (#1474). A zero
+	// AuthorizedAt is a row written before the column existed: never exempt.
+	AuthorizedAt time.Time
+	Email        string
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -61,9 +67,10 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 	}
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $9)`,
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11)`,
 		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
+		t.AuthorizedAt, t.Email,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -83,12 +90,14 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 	var t AttachTicket
 	var actorType string
 	var viaDelegate, viaGrant *uuid.UUID
+	var authorizedAt *time.Time
+	var email *string
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
@@ -96,6 +105,12 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 		return AttachTicket{}, false, fmt.Errorf("store: consume attach ticket: %w", err)
 	}
 	t.ActorType = types.ActorType(actorType)
+	if authorizedAt != nil {
+		t.AuthorizedAt = *authorizedAt
+	}
+	if email != nil {
+		t.Email = *email
+	}
 	if viaDelegate != nil && viaGrant != nil {
 		t.Via = &types.DelegationVia{Delegate: *viaDelegate, Grant: *viaGrant}
 	}

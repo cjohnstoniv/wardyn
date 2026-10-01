@@ -92,8 +92,8 @@ const defaultUISessionTTL = 8 * time.Hour
 // single-use ticket was redeemed, and Port is captured there from the run's
 // EFFECTIVE policy so no later request can name a different port.
 //
-// Principal/Role/IssuedAt are what make it re-checkable rather than final: see
-// uiSessionStillAuthorized.
+// Principal/Role/AuthorizedAt are what make it re-checkable rather than final:
+// see uiSessionStillAuthorized.
 type uiSession struct {
 	Run       uuid.UUID `json:"r"`
 	App       string    `json:"a"`
@@ -103,11 +103,17 @@ type uiSession struct {
 	Expires   int64     `json:"e"`
 	// IssuedAt is when the ticket was redeemed, in Unix seconds. It is the
 	// staleness bound the TTL knob re-applies to an already-minted cookie, and
-	// the timestamp SessionRevocations compares against a revoke cutoff — the
-	// same role oidc.Session.IssuedAt plays for the console session. Absent
-	// (a pre-0.7.4 cookie) is refused, not tolerated: neither of those checks
-	// can be made without it.
+	// keys the re-assert debounce. Absent (a pre-0.7.4 cookie) is refused, not
+	// tolerated.
 	IssuedAt int64 `json:"i"`
+	// AuthorizedAt is when the ticket was admitted, in Unix seconds: the time of
+	// the authority the session derives from, and the timestamp
+	// SessionRevocations compares against a revoke cutoff (#1474). It is NOT the
+	// redemption time: a redemption after a revoke would renew the authority the
+	// revoke cancelled. Absent (a cookie from before 0.8.5) is refused. Email is
+	// the verified identity's, for a revoke that names it.
+	AuthorizedAt int64  `json:"t"`
+	Email        string `json:"m,omitempty"`
 	// Via is the portal the entry ticket was minted through (#1142), nil
 	// otherwise. The relay audits on the daemon's context, so the session
 	// carries it onto every row it writes after the entry (#1234).
@@ -229,15 +235,15 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	// only at mint is the whole point of the knob: shortening it has to bind
 	// the cookies already sitting in browsers, whose signed Expires was
 	// computed under the old, longer bound.
-	if sess.IssuedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTL() {
+	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTL() {
 		return uiSession{}, false
 	}
 	return sess, true
 }
 
 // uiSessionStillAuthorized is the re-check run against freshly-loaded state,
-// and the reason the cookie carries a principal, a role and an issued-at at
-// all. It returns the typed refusal so both callers — uiDial, which needs it as
+// and the reason the cookie carries a principal, a role and an authority time
+// at all. It returns the typed refusal so both callers — uiDial, which needs it as
 // a transport error, and handleUIRelay, which writes it straight to the
 // browser — refuse identically.
 //
@@ -245,13 +251,16 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // human to lose the run or be revoked outright inside one session. The console
 // session stops on its very next request when an admin revokes it, attach
 // re-checks per connect behind a 30s ticket, and SSH bounds a stale admin
-// override with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
+// stamp with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
 // "authorized at enter" meant "authorized until the cookie expires", while
 // holding an editor with an in-sandbox terminal.
 //
-// Both halves are needed: the ownership re-assert catches a handed-over run but
-// NOT an off-boarded owner (they still equal run.CreatedBy), and the revoke
-// cutoff is what catches that one.
+// Three arms are needed: the ownership re-assert catches a handed-over run but
+// NOT an off-boarded owner (they still equal run.CreatedBy), the revoke cutoff
+// is what catches that one, and a session opened through a portal is also
+// bound to the portal's grant (#1475). The ownership rule is mayEnterRun's, so
+// an admin cookie minted before the entry rule narrowed dies on a person's run
+// at its next re-assert.
 //
 // NOT covered, deliberately: a ROLE demotion. sess.Role is the cookie's
 // login-time snapshot and is never re-derived, exactly as the console session's
@@ -263,25 +272,30 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // able to see in the trail, and it is otherwise invisible between that
 // session's last ui.open and its ui.close.
 func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
-	if sess.Role != oidc.RoleAdmin && run.CreatedBy != sess.Principal {
+	// First, ahead of the revocation store being configured at all: a session
+	// opened through a portal ends with that portal's grant (#1475).
+	if sess.Via != nil {
+		switch _, v := s.delegationLive(ctx, *sess.Via); v {
+		case verdictDelegationEnded:
+			return s.uiDenyReassert(sess, uiDeniedReasonDelegationEnded,
+				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		case verdictDelegationUnavailable:
+			return s.uiDenyReassert(sess, uiDeniedReasonDelegationUnavailable,
+				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		}
+	}
+	if !mayEnterRun(run, sess.Principal, sess.Role == oidc.RoleAdmin) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
 	}
-	// The principal a relay session carries is ALWAYS the OIDC sub: it comes
-	// from the attach ticket, which stamps actorFromRequest's principal, which
-	// on the OIDC lane is the sub — the email rides a separate context key the
-	// ticket has no column for. IsSessionRevoked takes both identities, so the
-	// sub goes in both slots and its two arms collapse into one. CONSEQUENCE,
-	// stated because it is a real gap: a revoke that names the email does not
-	// reach an open relay session, though it does stop the same human's console
-	// session. Name the sub, or use all:true — the reserved global cutoff
-	// always reaches this. Closing it properly means carrying the email on
-	// store.AttachTicket, a schema change.
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sess.Principal, sess.Principal,
-		time.Unix(sess.IssuedAt, 0).UTC())
+	// The cutoff is compared against the ticket's authority time, never the
+	// redemption time, and both identities ride the cookie, so a revoke that
+	// names the email reaches an open relay session as it does the console's.
+	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sess.Principal, sess.Email,
+		time.Unix(sess.AuthorizedAt, 0).UTC())
 	if err != nil {
 		// Fail CLOSED. A revocation lookup that cannot answer is the one case
 		// where continuing would serve the credential the admin just cancelled,

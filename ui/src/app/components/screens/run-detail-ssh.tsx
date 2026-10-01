@@ -33,9 +33,11 @@ import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
+import { basePath } from "../../lib/base-path";
+import { entryErrorMessage, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
 
@@ -44,9 +46,12 @@ import { cn } from "../ui/utils";
 export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const operator = useOperator();
-  // Owner OR admin: the same two-armed gate every lane's server handler uses.
-  // Both hooks run unconditionally — `||` on a hook CALL would reorder them.
-  const mayAttach = (!!principal && run.created_by === principal) || operator;
+  const resolved = useOperatorResolved();
+  // The entry rule (lib/run-entry.ts, #1476): the run's person, or an admin on
+  // a run no person owns. Both hooks run unconditionally — `||` on a hook CALL
+  // would reorder them. False hides the card (Q1): it has no control that could
+  // work, and the pane already says why.
+  const mayAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const running = run.state === "RUNNING";
 
   const [ssh, setSSH] = React.useState<{
@@ -185,7 +190,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
       }
     } catch (err) {
-      setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
+      setAppError({ app: app.name, message: entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e))) });
     } finally {
       setOpeningApp(null);
     }
@@ -193,9 +198,11 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
 
   // The console already knows the address it is served from, so the env line is
   // this deployment's real URL rather than a placeholder the operator has to
-  // translate. Omitted when it matches the CLI's own default.
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const cliEnv = origin && origin !== "http://localhost:8080" ? `WARDYN_URL=${origin} ` : "";
+  // translate. Omitted when it matches the CLI's own default. The base path
+  // rides along: the API is served beneath it, and a bare origin would aim
+  // the CLI's bearer token at whatever else owns the host root.
+  const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
+  const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
   const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
 
   return (

@@ -91,6 +91,8 @@ export interface CredentialGrant {
   minted_at?: string;
   expires_at?: string;
   jti?: string;
+  /** The host the grant's scope names (git_pat, ssh_key); absent for other kinds. */
+  host?: string;
 }
 
 export interface EgressDecision {
@@ -119,7 +121,7 @@ export interface EgressDecision {
 export type RunEndingKind =
   | "image" // run.build failed: the sandbox image could not be built, so nothing ran
   | "selftest" // run.selftest failed CLOSED: the wrapped image was refused before any task
-  | "killed" // an operator killed it
+  | "killed" // an operator killed it (see RunEnding.evidence for what the trail proves)
   | "auto_stop" // the idle reaper stopped it — the policy working, not a fault
   // the dispatch-time model-credential refusal (0.7.6 Finding 3): the declared
   // model-access lane could not carry this run. The SERVER's sentence is the
@@ -149,4 +151,10 @@ export interface RunEnding {
    * #532). A provider run's door is keyed by this alone (#543).
    */
   provider?: string;
+  /**
+   * For `killed`: what the trail proves about the kill (#1487). The LATEST
+   * run.kill row decides — success is `confirmed`, any other outcome is
+   * `partial` (a teardown step failed), and no row at all is `unknown`.
+   */
+  evidence?: "confirmed" | "partial" | "unknown";
 }

@@ -18,7 +18,7 @@ cover the rest of `providerWhatWord`'s vocabulary — "key" (`anthropic_api_key`
 
 | Id | String | Example | Why |
 |---|---|---|---|
-| `RAIL_PROVIDER.NO_KEY(name)` | `You haven't added your key for {name}.` | `You haven't added your key for Direct Anthropic.` / `You haven't added your key for Direct OpenAI.` | One sentence for both key kinds (D2) — mirrors `NO_TOKEN`'s shape exactly, swapping "token" for "key", the same word `providerWhatWord`/`RAIL_PROVIDER.OPTION` already use for both. |
+| `RAIL_PROVIDER.NO_KEY(name)` | `No key is available for {name}.` | `No key is available for Direct Anthropic.` / `No key is available for Direct OpenAI.` | One sentence for both key kinds (D2) — mirrors `NO_TOKEN`'s shape exactly, swapping "token" for "key", the same word `providerWhatWord`/`RAIL_PROVIDER.OPTION` already use for both. |
 | `RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE(name)` | `You're not signed in to Claude for {name}.` | `You're not signed in to Claude for Personal Claude.` | Mirrors `NOT_SIGNED_IN`'s shape, swapping "AWS" for "Claude" — the mechanism word `RAIL_CREDENTIAL.SANDBOX_SUBSCRIPTION` already uses. Keeps "for {name}" (D3): this string sits beside `NOT_SIGNED_IN`/`NO_TOKEN` in the same object, both of which name the provider so two candidates of the same kind read differently. The wording matches the server's own refusal vocabulary already shipped in `docs/design/model-providers-mock/canon.html`'s `LLM_PROVIDER_REFUSAL` states ("you are not signed in to Claude for it"), contracted to `RAIL_PROVIDER`'s existing tone. |
 
 Both reuse buttons already canon in `ui/src/app/components/wardyn/copy/door.ts`'s

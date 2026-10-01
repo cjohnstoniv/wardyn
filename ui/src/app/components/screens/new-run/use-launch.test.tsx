@@ -52,7 +52,7 @@ beforeEach(() => {
 
 describe("useLaunch — a failure after the screen is gone (B9)", () => {
   it("hands back the server's sentence verbatim", async () => {
-    const sentence = "This run's model provider is Corp gateway, and you have not added your token for it.";
+    const sentence = "This run's model provider is Corp gateway, and no token is available for it.";
     await expect(failAfterUnmount(new HttpError(422, sentence))).resolves.toBe(sentence);
   });
 

@@ -370,6 +370,8 @@ describe("AgentsTab — the default model provider (G1–G4)", () => {
     const select = within(claude).getByRole("combobox", { name: `${AGENTS.FIELD_DEFAULT_PROVIDER} — Claude Code` });
     expect(select).toHaveTextContent("Corp gateway · Your own endpoint");
     expect(within(claude).getByText(AGENTS.DEFAULT_HINT)).toBeInTheDocument();
+    // #1486: the select trigger is the real control, so the hint describes IT.
+    expect(select).toHaveAccessibleDescription(AGENTS.DEFAULT_HINT);
     await userEvent.click(select);
     // Every provider serving the agent, the name once where it equals the kind label.
     const options = (await screen.findAllByRole("option")).map((o) => o.textContent);

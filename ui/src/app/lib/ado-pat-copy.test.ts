@@ -131,3 +131,27 @@ describe("Getting started's own-token chip labels", () => {
     expect(gettingStartedOwnChip("expired")).toBe("Azure DevOps · Expired");
   });
 });
+
+// #1488: the approved Remove strings, character for character. The confirm's
+// second line is the owner's 2026-10-01 ruling, replacing the packet's.
+describe("ADO_PAT remove canon", () => {
+  it("strings", () => {
+    expect(ADO_PAT.OWN_REMOVE).toBe("Remove from Wardyn");
+    expect(ADO_PAT.OWN_REMOVE_TITLE("wardyn-live-test")).toBe("Remove your token for wardyn-live-test?");
+    expect(ADO_PAT.OWN_REMOVE_BODY).toBe(
+      "This deletes Wardyn's copy of your token. It does not revoke the token in Azure DevOps, so revoke it there too.",
+    );
+    expect(ADO_PAT.OWN_OPEN_TOKENS).toBe("Open Azure DevOps tokens");
+    expect(ADO_PAT.OWN_REMOVE_RUNS).toBe(
+      "Runs already using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now.",
+    );
+    expect(ADO_PAT.OWN_REMOVE_CANCEL).toBe("Cancel");
+    expect(ADO_PAT.OWN_REMOVE_PENDING).toBe("Removing…");
+    expect(ADO_PAT.OWN_REMOVED_TOAST("wardyn-live-test")).toBe(
+      "Your token for wardyn-live-test was removed from Wardyn. It isn't revoked in Azure DevOps.",
+    );
+    expect(ADO_PAT.OWN_REMOVE_FAILED_TOAST("wardyn-live-test")).toBe(
+      "Couldn't remove your token for wardyn-live-test. It's still stored in Wardyn. Try again.",
+    );
+  });
+});

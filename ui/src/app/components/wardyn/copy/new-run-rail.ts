@@ -77,7 +77,7 @@ export const RAIL_PROVIDER = {
   OPTION: (name: string, what: string, state: string) => `${name} — your ${what} · ${state}`,
   PLACEHOLDER: "Choose a model provider",
   NOT_SIGNED_IN: (name: string) => `You're not signed in to AWS for ${name}.`,
-  NO_TOKEN: (name: string) => `You haven't added your token for ${name}.`,
+  NO_TOKEN: (name: string) => `No token is available for ${name}.`,
   LAUNCH_HINT: "Choose a model provider to launch.",
   CHANGED: (next: string, prev: string, harness: string) =>
     `Model provider changed to ${next} — ${prev} isn't available to ${harness}.`,
@@ -85,7 +85,7 @@ export const RAIL_PROVIDER = {
   // missing kinds)") — the other two credential kinds ProviderNotConnectedLine
   // had no branch for: a stored key (anthropic_api_key/openai_api_key) and the
   // non-Bedrock sign-in kind (anthropic_subscription).
-  NO_KEY: (name: string) => `You haven't added your key for ${name}.`,
+  NO_KEY: (name: string) => `No key is available for ${name}.`,
   NOT_SIGNED_IN_CLAUDE: (name: string) => `You're not signed in to Claude for ${name}.`,
   // canon.md's "R5b — granted none": no candidate serves this person for this
   // harness at all. UNUSED for now (Opus review round 2, #542): the console

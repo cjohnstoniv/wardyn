@@ -212,7 +212,8 @@ forms is honored per request.
 
 Both forms run the **same** consume-then-re-check path: the ticket is consumed,
 then everything it cannot prove on its own is re-checked against
-freshly-loaded state — owner-or-admin for this run, the governance profile the
+freshly-loaded state — the run's owner (or a super admin, on a run with no
+personal owner), the governance profile the
 run was created under not carrying `deny_ui_apps` (a super admin is exempt; a
 limit set later stops new sessions but does not end one already open), the run
 still `RUNNING` with a sandbox, and the app actually declared in the run's
@@ -380,9 +381,15 @@ the admin bearer token, because the caller on this origin may be
 sandbox-authored JavaScript. Every cookie failure — absent, malformed, forged,
 expired — answers the same 403, so there is no oracle to probe.
 
-**Ticket.** Single-use, 30s TTL, owner-or-admin at mint
-(`POST /runs/{id}/attach/ticket`). A stale or already-redeemed ticket is a 403
-with a `ui.authorize` denial in the log.
+**Ticket.** Single-use, 30s TTL, run owner at mint
+(`POST /runs/{id}/attach/ticket`); a super admin gets one only for a run with
+no personal owner (an operator-owned service or local run), and is otherwise
+refused `403` `run_owner_only`. The ticket carries the time it was admitted and
+the person's verified email, so redemption is refused (`403`, the bad-ticket
+body, no cookie, a `ui.authorize` denial naming the person) when their sessions
+were revoked since, and a ticket written before 0.8.5 is refused outright. A
+stale or already-redeemed ticket is a 403 with a `ui.authorize` denial in the
+log.
 
 **Only declared ports.** The port is captured from the effective policy when
 the ticket is redeemed and lives in the signed cookie, so no later request can
@@ -394,27 +401,31 @@ replacement for the first.
 **Bounded staleness, not a frozen bearer.** The cookie carries its own
 issued-at, so `WARDYN_UI_SANDBOX_SESSION_TTL` applies to sessions already in
 browsers — shortening it takes effect at once. On top of that, the relay
-re-asserts owner-or-admin against the freshly-loaded run and consults the
-revoke cutoff `POST /sessions/revoke` stamps **on every new connection, and at
-least every 30 seconds on a reused one** — relay connections are pooled, so a
+re-asserts the owner rule against the freshly-loaded run and consults the
+revoke cutoff `POST /sessions/revoke` stamps, against the time the ticket was
+**admitted** (not redeemed), by `sub` or by email, **on every new connection,
+and at least every 30 seconds on a reused one** — relay connections are pooled, so a
 busy tab can ride one warm connection for a long time and the request-path
 check is what bounds it. An off-boarded or revoked human therefore stops being
 able to use the app within 30 seconds. `WARDYN_UI_SANDBOX_SESSION_TTL` is the
 hard ceiling behind both.
 
-Two things that check does **not** catch, by design:
+A session opened through a [portal](OPERATIONS.md#delegated-run-management-portals)
+is bound to that portal's grant as well: redemption and every re-check ask
+whether the portal is still registered and the grant unexpired, and the cookie's
+lifetime is capped at the grant's, so such a session lasts at most about ten
+minutes. Revoking the portal ends it within 30 seconds on a reused connection,
+at once on a new one, and an unreadable grant store fails closed (`503`).
+
+One thing that check does **not** catch, by design:
 
 - a **role demotion**. `role` is the cookie's login-time snapshot and is never
   re-derived, exactly as the console session's own role is not; the TTL is the
-  bound on it, the same way `WARDYN_SSH_ROLE_TTL` bounds the SSH admin
-  override.
-- a **revoke that names the human's email**. A relay session carries the OIDC
-  `sub` (that is what the attach ticket stamps), so revoke by `sub` — or
-  `all: true`, which always reaches it — is what stops one.
+  bound on it, the same way `WARDYN_SSH_ROLE_TTL` bounds the SSH admin stamp.
 
 And a connection already established (a relayed WebSocket) keeps working until
-it closes: killing the run is what ends an in-flight session, the same bound
-attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
+it closes, including after a portal revoke: killing the run is what ends an
+in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
 `ui.authorize` / `denied` row naming the reason.
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared

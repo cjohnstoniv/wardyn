@@ -46,6 +46,7 @@ docker-compose.override.yml
 
 # compiled binaries at repo root
 /wardyn
+/cmd/wardyn/wardyn
 /wardynd
 /wardyn-proxy
 /wardyn-rec

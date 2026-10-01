@@ -618,8 +618,10 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 	st := newSSHMemStore()
 	bobRun := uuid.New()
 	adminRun := uuid.New()
+	serviceRun := uuid.New()
 	st.putRun(types.AgentRun{ID: bobRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
 	st.putRun(types.AgentRun{ID: adminRun, CreatedBy: "root@example.com", State: types.RunRunning, SandboxRef: "sbx-root"})
+	st.putRun(types.AgentRun{ID: serviceRun, CreatedBy: "admin-token", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-svc"})
 
 	now := time.Now()
 	adminPriv, adminPub := mustSSHKeypair(t)
@@ -641,16 +643,26 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
-	t.Run("admin key reaches a run it does not own, audited as an override", func(t *testing.T) {
-		client, err := sshDial(t, h, bobRun.String(), adminPriv)
+	t.Run("a fresh admin key is refused on a person's run, audited as run_owner_only", func(t *testing.T) {
+		if _, err := sshDial(t, h, bobRun.String(), adminPriv); err == nil {
+			t.Fatal("admin key opened a shell in another person's run, want refused (#1476)")
+		}
+		ev := waitForAudit(t, h.audit, bobRun, "ssh.authenticate", "failure")
+		if ev == nil || ev.Actor != "root@example.com" || !strings.Contains(string(ev.Data), "run_owner_only") {
+			t.Fatalf("failure row = %+v, want the admin named with reason run_owner_only; events=%s", ev, auditDump(h.audit.snapshot(), bobRun))
+		}
+	})
+
+	t.Run("admin key reaches a run with no personal owner, audited as an override", func(t *testing.T) {
+		client, err := sshDial(t, h, serviceRun.String(), adminPriv)
 		if err != nil {
-			t.Fatalf("admin dial for another human's run failed: %v", err)
+			t.Fatalf("admin dial for an operator-owned run failed: %v", err)
 		}
 		defer client.Close()
 
-		ev := waitForAudit(t, h.audit, bobRun, "ssh.authenticate", "success")
+		ev := waitForAudit(t, h.audit, serviceRun, "ssh.authenticate", "success")
 		if ev == nil {
-			t.Fatalf("no successful ssh.authenticate event for the admin override; events=%s", auditDump(h.audit.snapshot(), bobRun))
+			t.Fatalf("no successful ssh.authenticate event for the admin override; events=%s", auditDump(h.audit.snapshot(), serviceRun))
 		}
 		if ev.Actor != "root@example.com" {
 			t.Errorf("ssh.authenticate success actor = %q, want root@example.com (the admin, not the run's owner)", ev.Actor)
@@ -708,7 +720,9 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 	st := newSSHMemStore()
 	run := uuid.New()
-	st.putRun(types.AgentRun{ID: run, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-bob"})
+	// Operator-owned: WARDYN_SSH_ROLE_TTL now bounds only the no-personal-owner
+	// carve-out, the one run an admin key may still enter (#1476).
+	st.putRun(types.AgentRun{ID: run, CreatedBy: "bob@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-bob"})
 
 	fresh := time.Now()
 	stale := time.Now().Add(-48 * time.Hour) // past the 24h default TTL

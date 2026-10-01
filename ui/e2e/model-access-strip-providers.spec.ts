@@ -92,6 +92,9 @@ test.describe("the shell strip under a provider block (design §5.5, #540)", () 
     await navToRoute(page, "/runs");
 
     await expect(page.getByText(BANNER.B4("Codex CLI", P.gateway.name, true))).toBeVisible();
+    // #1489: cause-neutral — a missing credential is "not available", never
+    // "you haven't added", because it may have been deleted or be unreadable.
+    await expect(page.getByText("Codex CLI runs use Corp gateway, and no token is available.")).toBeVisible();
     await page.getByRole("button", { name: CONNECTIONS.ADD_TOKEN }).click();
     await expect(page.getByRole("dialog", { name: KEY_DOOR.TITLE(true, P.gateway.name) })).toBeVisible();
   });
