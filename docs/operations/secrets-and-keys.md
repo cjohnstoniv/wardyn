@@ -460,6 +460,127 @@ wrap that does not unwrap for its row, or a retired version is
 *definitive*.
 
 
+## Key service: Azure Key Vault
+
+With `WARDYN_KEK=azurekv`, each stored credential is still sealed in
+Postgres (AES-256-GCM under its own data key). Two keys in your Azure Key
+Vault protect the data key, and neither ever leaves the vault:
+
+| Key | Setting | Type | `key_ops` | Does |
+|---|---|---|---|---|
+| wrapping key | `WARDYN_AZURE_KEK_KEY` | RSA 3072 or 4096 (RSA-HSM on Premium) | wrapKey, unwrapKey | `wrapkey` / `unwrapkey` the data key with RSA-OAEP-256 |
+| signing key | `WARDYN_AZURE_KEK_SIGNING_KEY` | EC P-256 (EC-HSM on Premium) | sign, verify | `sign` each wrap with ES256, over the row's owner and name, both key versions and the ciphertext |
+
+- **Why two keys.** Anyone with the RSA public key (Key Vault Reader is
+  enough) can wrap a data key of their own locally. The signature needs
+  the private EC key, so a database writer cannot plant a row.
+- **A moved or forged wrap costs no Key Vault call.** wardynd checks the
+  signature for the row before any `unwrapkey`, so every unwrap in the
+  vault's `AuditEvent` log is one Key Vault itself signed for that row.
+- **Only these calls:** `GET` on the two keys, `wrapkey`, `sign` and
+  `unwrapkey`, with the algorithm fixed. No Azure SDK; plain HTTPS.
+- The database alone decrypts nothing; neither does the database plus
+  anything on the Wardyn host, once no row is sealed under the age key
+  and `WARDYN_AGE_KEY` is unset.
+- Wardyn's boot keys are wrapped the same way, under the same keys, so
+  **do not restart wardynd during a Key Vault outage**.
+- Public-cloud Key Vault only: a Managed HSM or sovereign-cloud vault is
+  refused at boot, by name.
+
+**Keys.** One key pair per Wardyn deployment. Two Wardyn databases on the
+same vault and key names accept each other's rows for the same owner and
+name. A shared vault is fine; shared key names are not.
+
+```sh
+az keyvault key create --vault-name <vault> --name wardyn-kek     --kty RSA --size 3072  --ops wrapKey unwrapKey
+az keyvault key create --vault-name <vault> --name wardyn-kek-sig --kty EC  --curve P-256 --ops sign verify
+# Premium vault: --kty RSA-HSM / EC-HSM. Leave --exportable unset.
+```
+
+Set the versionless ids, `https://<vault>.vault.azure.net/keys/wardyn-kek`
+and `…/keys/wardyn-kek-sig`. Each write reads both keys' latest versions
+and refuses, by name, a version that is:
+
+- the wrong type, size or curve, or with wider `key_ops` (`decrypt` on the
+  RSA key would open data keys too);
+- exportable, disabled, not yet valid (`nbf`) or expired (`exp`).
+
+**Role.** A custom role, assigned **at the scope of a vault dedicated to
+Wardyn**. Each key's own `key_ops` stops the wrapping key from signing
+and the signing key from wrapping.
+
+```json
+{"Name": "Wardyn Key Service User", "Actions": [], "NotDataActions": [],
+ "DataActions": ["Microsoft.KeyVault/vaults/keys/read", "Microsoft.KeyVault/vaults/keys/wrap/action",
+                 "Microsoft.KeyVault/vaults/keys/unwrap/action", "Microsoft.KeyVault/vaults/keys/sign/action"],
+ "AssignableScopes": ["/subscriptions/<subscription-id>"]}
+```
+
+- **`keys/sign` is as sensitive as `keys/unwrap`.** With the database, a
+  signature plants a boot key, which forges admin sessions and reaches
+  every credential.
+- Every principal with `sign` on this vault is credential-equivalent:
+  this role, Key Vault Crypto User and Crypto Officer alike. That is why
+  the dedicated vault matters.
+- Crypto Officer is full trust: it can also import, rotate and disable keys.
+- **Fallback:** the built-in Key Vault Crypto User, which also grants
+  encrypt, decrypt, update, backup and verify.
+- **Legacy access policy:** get, wrapKey, unwrapKey, sign.
+- **Turn on purge protection.** Deleting the wrapping key loses every
+  credential.
+- **Egress:** NetworkPolicy must allow the vault host and the Entra
+  authority, as in store mode.
+
+**Identity.** The Entra identity settings are the store's
+(`WARDYN_AZURE_AUTH`, `_TENANT_ID`, `_CLIENT_ID`, `_FEDERATED_TOKEN_FILE`,
+`_AUTHORITY_HOST`); see [Store mode: credentials in Azure Key
+Vault](#store-mode-credentials-in-azure-key-vault). There is no client
+secret. `WARDYN_AZURE_KV_URL` is not needed: the vault is the one the keys
+name. On Helm set `kek.provider=azurekv`, `kek.azurekv.key` and
+`kek.azurekv.signingKey`, with `secretStore.azure` for the identity.
+
+**Boot.** wardynd wraps a probe data key, unwraps it, and tries it under
+another row. If the probe does not round-trip, or opens under the other
+row, or Key Vault is unreachable, **wardynd refuses to start**.
+
+**Moving an install to Key Vault, and back.** As for Transit, above:
+
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the
+   Postgres dump (see Backup).
+2. Set `WARDYN_KEK=azurekv`, both key ids and the identity settings,
+   keep `WARDYN_AGE_KEY`, and restart.
+3. Run `wardynd -rewrap` with the same settings. Expected output:
+   `every sealed secret is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
+4. Unset `WARDYN_AGE_KEY` and restart.
+
+**Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep both key ids
+so Key Vault still reads its rows, restart, and run `wardynd -rewrap`.
+A move between Transit and Key Vault goes through the local key: wardynd
+refuses to start with both named.
+
+**Rotating either key.**
+
+1. `az keyvault key rotate --vault-name <vault> --name wardyn-kek` (or
+   `wardyn-kek-sig`). New writes name the new version at once, with no
+   restart.
+2. Run `wardynd -rewrap`. Every row not at the latest versions is
+   unwrapped and wrapped again, bound to its row.
+3. Run `wardynd -rewrap` again. **It must report 0 rows.** A write, or an
+   automatic rotation, during step 2 can leave a row on an older version.
+   Repeat until it reports 0.
+4. Disable every older version of both keys:
+   `az keyvault key set-attributes --vault-name <vault> --name <key> --version <v> --enabled false`.
+5. Restart every replica, so none keeps an older signing version cached.
+
+A row still wrapped under a disabled wrapping version is refused, naming
+the row, until that version is enabled again.
+
+**When Key Vault is unavailable.** Throttling (429), a 5xx or an
+unreachable vault is *transient* (the sink answers 503). A 401, a 403, a
+deleted key or version, or a wrap that does not verify for its row is
+*definitive*.
+
+
 ## Moving data keys: `wardynd -rewrap`
 
 `wardynd -rewrap` is the one command that moves stored secrets' data keys
@@ -473,17 +594,19 @@ it runs with:
   rows a pre-0.8 wardynd wrote (`local:`), and, once `WARDYN_PLATFORM_KEY_FILE`
   is set, the boot keys still under the age key ("Separating the platform
   keys" above).
-- **The key service**, with `WARDYN_KEK=transit`, at the Transit key's latest
-  version: every local row, and every Transit row wrapped under an older
-  version ("Key service: Vault Transit" above). It then prints the
-  `min_decryption_version` that retires the older versions.
+- **The key service**, with `WARDYN_KEK=transit` or `azurekv`, at its latest
+  version: every local row, and every key-service row wrapped under any
+  other version ("Key service: Vault Transit" and "Key service: Azure Key
+  Vault" above). It then prints what retires the other versions:
+  Transit's `min_decryption_version`, or disabling Key Vault versions.
 - **Back to the local key**, with `WARDYN_KEK=local` and
-  `WARDYN_VAULT_TRANSIT_KEY` still set: every row under Transit.
+  `WARDYN_VAULT_TRANSIT_KEY` or `WARDYN_AZURE_KEK_KEY` still set: every row
+  under that key service.
 
 Run it with the same `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`,
-`WARDYN_KEK` and `WARDYN_VAULT_*` settings the daemon uses
-(`WARDYN_AGE_KEY` may be unset only with `WARDYN_KEK=transit`, once no
-row is under it).
+`WARDYN_KEK`, `WARDYN_VAULT_*` and `WARDYN_AZURE_*` settings the daemon uses
+(`WARDYN_AGE_KEY` may be unset only with `WARDYN_KEK=transit` or `azurekv`,
+once no row is under it).
 
 Properties:
 
@@ -504,10 +627,10 @@ Properties:
 - **Pointer rows** (store mode) hold no data key and are never touched.
 
 Restart every replica with the settings it ran with afterwards. After a move
-onto Transit, the last step is: **unset `WARDYN_AGE_KEY`; wardynd refuses to
-start until you do.** With `WARDYN_KEK=transit` and no stored row left under the
-age key, the key could only let whoever also holds the database forge a row
-wardynd still reads under it, its own boot keys among them.
+onto a key service, the last step is: **unset `WARDYN_AGE_KEY`; wardynd refuses to
+start until you do.** Once no stored row is left under the age key, it
+could only let whoever also holds the database forge a row wardynd still
+reads under it, its own boot keys among them.
 
 
 ## Store mode: credentials in Vault

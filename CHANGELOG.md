@@ -8,6 +8,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Azure Key Vault can hold the key that unlocks stored credentials (`WARDYN_KEK=azurekv`, #587).**
+  Credentials stay sealed in Postgres; each data key is wrapped by a Key Vault RSA key
+  (`WARDYN_AZURE_KEK_KEY`) and every wrap is signed by a second, EC P-256 key
+  (`WARDYN_AZURE_KEK_SIGNING_KEY`), so a database writer holding the public key cannot plant a row.
+  wardynd proves both keys at boot, reuses the `WARDYN_AZURE_*` identity, rotates with
+  `wardynd -rewrap`, and refuses a Transit key named beside it. Chart: `kek.provider=azurekv`,
+  `kek.azurekv.key`, `kek.azurekv.signingKey`. The `secret.rewrap` audit field `key_version` is now a
+  string (it was an int before 0.8.4). See docs/operations/secrets-and-keys.md "Key service: Azure
+  Key Vault".
+
 ## [0.8.3] — 2026-09-30
 
 ### Security

@@ -65,6 +65,8 @@ function credNoticeLine2(storage: SetupStatus["credential_storage"]): string {
   switch (storage) {
     case "key_service":
       return CRED_NOTICE.KEY_SERVICE("Vault");
+    case "key_service_key_vault":
+      return CRED_NOTICE.KEY_SERVICE("Key Vault");
     case "vault":
       return CRED_NOTICE.KEK("Vault");
     case "key_vault":

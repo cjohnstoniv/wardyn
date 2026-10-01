@@ -593,6 +593,15 @@ func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
 		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Vault Transit at vault.example:8200 and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log." {
 		t.Fatalf("key service rows = %+v", chks)
 	}
+	// SETUP_CHECK.KEK_SERVICE, Azure (owner decision 2026-09-30), byte for byte.
+	chks = secretStoreChecks("", "Key Vault myvault", true, true, false)
+	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
+		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Key Vault myvault and never leaves it. Wardyn holds no copy; each unlock is an unwrap in Key Vault's logs." {
+		t.Fatalf("Key Vault key service rows = %+v", chks)
+	}
+	if got := credentialStorageMode("", "Key Vault myvault"); got != "key_service_key_vault" {
+		t.Fatalf("credentialStorageMode with a Key Vault key service = %q, want key_service_key_vault", got)
+	}
 	chks = secretStoreChecks("", "", true, true, true)
 	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
 		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {

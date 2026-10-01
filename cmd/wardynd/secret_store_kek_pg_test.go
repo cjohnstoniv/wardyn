@@ -88,7 +88,7 @@ func TestBuildSecretStore_KeyServiceNeedsNoAgeKey(t *testing.T) {
 // left), no age key, and WARDYN_KEK=local (the key service read-only) all
 // boot.
 func TestBuildSecretStore_TransitRefusesAnIdleAgeKey(t *testing.T) {
-	const want = "refusing to start: WARDYN_KEK=transit and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys"
+	const want = "refusing to start: every write is wrapped by Vault Transit at test and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys"
 	id, _ := age.GenerateX25519Identity()
 	k := newMemKEK()
 	transit := storeClients{kek: k, kekWrites: true}
