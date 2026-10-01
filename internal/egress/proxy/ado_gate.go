@@ -76,18 +76,19 @@ var adoGitVerbs = []string{"info/refs", "git-upload-pack", "git-receive-pack"}
 
 // gateADO is the hook serveMITMRequest calls. It returns the rule source to
 // forward under — brokered:ado for a gated host, src unchanged for any other —
-// or "" when it has already refused the request.
-func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, port int, src string) string {
+// or "" when it has already refused the request. nsOff is true for a ref move
+// outside the run's branch that git_push_any_branch let through: the forward
+// audits it as the git door does, once it has happened.
+func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, port int, src string) (_ string, nsOff bool) {
 	if p.adoGrants == nil {
-		return src
+		return src, false
 	}
 	grant, ok := p.adoGrants.ADOGrantFor(host)
 	if !ok {
-		return src
+		return src, false
 	}
 	// A ref move outside the run's branch that gets this far was let through by
-	// git_push_any_branch (the rule refuses it otherwise): it is audited as the
-	// git door audits it.
+	// git_push_any_branch (the rule refuses it otherwise).
 	outside := false
 	msg, held := adoCheck(r, host, grant, func(refs []string) string {
 		outside = p.adoOutsideRunBranch(refs)
@@ -97,20 +98,17 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	// content write is judged before anyone is asked to grant a capability.
 	if msg != "" && held == nil {
 		p.refuseADO(w, r, host, port, msg, nil)
-		return ""
+		return "", false
 	}
 	if !p.governADOContent(w, r, host, port, grant) {
-		return ""
+		return "", false
 	}
 	if msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
-		return ""
+		return "", false
 	}
-	if outside && p.sink != nil {
-		// A second row, not the forward's source: the upstream-refusal and
-		// credential-heal paths key on ruleSourceADO.
-		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceGitNSOff))
-	}
-	return ruleSourceADO
+	// The source stays ruleSourceADO: the upstream-refusal and credential-heal
+	// paths key on it.
+	return ruleSourceADO, outside
 }
 
 // refuseADOPlain refuses, on the plain forward lane, every request to a host
