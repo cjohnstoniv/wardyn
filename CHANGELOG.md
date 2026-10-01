@@ -46,8 +46,8 @@ runs on the first start; it adds one column with a default and changes no existi
 - **A push-size check that cannot run now refuses the push, and an Azure DevOps REST ref move outside the
   run's branch is audited as `brokered:git:branch-ns-off` (#1273, #1372).** A failed `max_file_size_mib` claim
   was dropped, which read as no file being over the limit; it is refused as `brokered:git:push-uninspectable`.
-  The REST door allowed such a move under `git_push_any_branch` with only the `brokered:ado` row; once forwarded it now adds
-  a `brokered:git:branch-ns-off` row, as the git door does.
+  The REST door allowed such a move under `git_push_any_branch` with only the `brokered:ado` row; once forwarded it now
+  adds a `brokered:git:branch-ns-off` row, as the git door does.
 
 ### Added
 
