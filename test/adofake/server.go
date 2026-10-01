@@ -476,7 +476,7 @@ func (s *Server) handler() http.Handler {
 	// is modelled here. Do not change either row until the observed values
 	// come back.
 	mux.HandleFunc("GET /{org}/_apis/connectionData",
-		s.requireScope(EndpointConnectionData, ScopeProjectRead, s.handleConnectionData))
+		connectionDataVersionGate(s.requireScope(EndpointConnectionData, ScopeProjectRead, s.handleConnectionData)))
 	mux.HandleFunc("GET /{org}/_apis/projects",
 		s.requireScope(EndpointProjectsGet, ScopeProjectRead, s.handleProjectsGet))
 	mux.HandleFunc("GET /{org}/{project}/_apis/git/repositories",

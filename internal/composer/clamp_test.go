@@ -661,8 +661,9 @@ func TestClamp_UIApps(t *testing.T) {
 
 // TestClamp_Resources is HIGH-2: each field caps at the ceiling's when the
 // ceiling sets one; an unset (<=0) proposed field is the PERMISSIVE state here
-// (filled in by the driver's own default later) and is capped down exactly like
-// an explicit value that exceeds the ceiling.
+// (filled in by the driver's own default later) and is set to the ceiling exactly
+// like an explicit value that exceeds it. Only the explicit request was cut, so
+// only it warns: a fill is the normal case for a policy that names no sizes.
 func TestClamp_Resources(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.Resources = &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}
@@ -672,18 +673,21 @@ func TestClamp_Resources(t *testing.T) {
 	if got.Resources == nil || got.Resources.CPUMillis != 2000 || got.Resources.MemoryMiB != 4096 {
 		t.Errorf("resources = %+v, want the ceiling's caps", got.Resources)
 	}
-	if !hasWarn(warns, "resources capped") {
-		t.Errorf("expected a resources warning, got %v", warns)
+	if hasWarn(warns, "resources capped") {
+		t.Errorf("a policy that names no sizes was warned as capped: %v", warns)
 	}
 
 	// Proposal exceeds the ceiling on one field, stays under on another, and
-	// leaves PidsLimit unset (0) — only CPUMillis should move.
-	got, _ = Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 1024}}, ceiling, 0)
+	// leaves PidsLimit unset (0) — only CPUMillis should move, and that warns.
+	got, warns = Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 1024}}, ceiling, 0)
 	if got.Resources.CPUMillis != 2000 {
 		t.Errorf("CPUMillis = %d, want capped to 2000", got.Resources.CPUMillis)
 	}
 	if got.Resources.MemoryMiB != 1024 {
 		t.Errorf("MemoryMiB = %d, want the proposal's own 1024 (already under the cap)", got.Resources.MemoryMiB)
+	}
+	if !hasWarn(warns, "resources capped") {
+		t.Errorf("an explicit CPU request above the ceiling was cut without a warning: %v", warns)
 	}
 
 	// No ceiling opinion: falls back to the platform defaults —
@@ -696,8 +700,8 @@ func TestClamp_Resources(t *testing.T) {
 		got.Resources.PidsLimit != int(runner.DefaultPidsLimit) {
 		t.Errorf("resources = %+v, want the platform defaults (no ceiling opinion must not mean uncapped)", got.Resources)
 	}
-	if !hasWarn(warns, "resources capped") {
-		t.Errorf("expected a resources warning falling back to platform defaults, got %v", warns)
+	if hasWarn(warns, "resources capped") {
+		t.Errorf("falling back to the platform defaults is not a cap: %v", warns)
 	}
 }
 
