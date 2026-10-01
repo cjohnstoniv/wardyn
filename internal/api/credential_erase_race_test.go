@@ -221,7 +221,9 @@ func TestAWSRefresh_FailedReReadPersistsNothing(t *testing.T) {
 		expiresIn time.Duration
 		wantMsg   string
 	}{
-		{"still valid: served from memory", 5 * time.Minute, ""},
+		{"above the serve floor: served from memory", 5 * time.Minute, ""},
+		{"just above the serve floor: served from memory", awsSSORefreshServeFloor + 10*time.Second, ""},
+		{"20s left, below the serve floor: refused", 20 * time.Second, awsSSORefreshUnavailableSentence},
 		{"expired: refused", -time.Minute, awsSSORefreshUnavailableSentence},
 	} {
 		t.Run(c.name, func(t *testing.T) {

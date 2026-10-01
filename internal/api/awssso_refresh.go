@@ -453,12 +453,12 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// A re-read that FAILS is not "absent", but nothing past it may persist: the
 	// copy in hand may predate an erase or a rotation, and storing a renewal made
 	// from it would write a credential back that an admin erased (#1478). So it
-	// renews nothing, spends nothing at AWS, and writes nothing. A token still
-	// valid is served from memory; otherwise the run is refused.
+	// renews nothing, spends nothing at AWS, and writes nothing. A token with at
+	// least the serve floor left is served from memory; otherwise the run is refused.
 	cur, found, rerr := s.readAWSSSOBlob(ctx, scope)
 	if rerr != nil {
 		slog.WarnContext(ctx, "wardynd: could not re-read the captured AWS SSO credential under its lock; not renewing it", slog.Any("err", rerr))
-		if !blob.expired(s.cfg.Now()) {
+		if blob.servableFor(s.cfg.Now(), awsSSORefreshServeFloor) {
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeTransportError)
 			return blob, ""
 		}
