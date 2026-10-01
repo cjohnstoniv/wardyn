@@ -96,3 +96,22 @@ func TestPresetGetApplyRoundTrip(t *testing.T) {
 		t.Errorf("presets = %+v, want version 1 and the applied request", after.Presets)
 	}
 }
+
+// A lone valid document with surrounding whitespace still applies.
+func TestPresetSet_SingleDocumentWithTrailingNewlineApplies(t *testing.T) {
+	var puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			puts++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"presets":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := operatorCommand(t, srv.URL, "\n"+`{"presets":[{"name":"new","request":{"agent":"claude-code"}}]}`+"\n\n", "preset", "set", "-"); err != nil {
+		t.Fatalf("a single document with surrounding whitespace: %v", err)
+	}
+	if puts == 0 {
+		t.Error("no write was issued for a valid single document")
+	}
+}

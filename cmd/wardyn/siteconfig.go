@@ -123,9 +123,7 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			// stored one is deleted. The server can never catch the typo — it
 			// only ever sees the fields that survived this decode.
 			var cfg types.SiteConfig
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&cfg); err != nil {
+			if err := decodeOneJSONStrict(bytes.NewReader(raw), &cfg); err != nil {
 				return fmt.Errorf("parse site config JSON: %w", err)
 			}
 			// PutSiteConfig strips Integrations before the request (the server

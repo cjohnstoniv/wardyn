@@ -70,10 +70,20 @@ sandbox to an external tool over the SSH gateway.
 			return nil
 		},
 	}
-	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "give up after this long (exit 124)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "give up after this long (exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends. Must be positive")
 	cmd.Flags().BoolVar(&expectGit, "expect-git", false, "also require a git work tree in the workspace (automatic when the run names a repo)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {id, state, workspace:{vcs, path}} as JSON (progress goes to stderr)")
 	return cmd
+}
+
+// errWaitTimeout is the cause of a wait's own deadline context, so a deadline
+// that fired is told apart from a parent cancelled from outside.
+var errWaitTimeout = errors.New("wait deadline exceeded")
+
+// errNonPositiveTimeout is the 124 a --timeout of zero or less gets without a
+// request: a wait that is out of budget before it starts.
+func errNonPositiveTimeout(timeout time.Duration) error {
+	return &exitError{code: 124, err: fmt.Errorf("--timeout %s leaves no time to wait: give a positive duration", timeout)}
 }
 
 // waitForRunReady polls until the run is RUNNING and GET /runs/{id}/files
@@ -82,17 +92,33 @@ sandbox to an external tool over the SSH gateway.
 // 409 from files (no sandbox yet) and transient 5xx keep waiting; any other
 // 4xx and 501 are permanent and fail immediately. With wantGit it additionally
 // waits for vcs:"git". Exit codes mirror waitForRun: FAILED→1, other terminal
-// states→2, timeout→124.
+// states→2, timeout→124. Like waitForRun, timeout bounds every request: they
+// run on a context that dies at the deadline.
 func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.UUID, timeout time.Duration, wantGit bool) (waitReadyResult, error) {
-	fmt.Fprintf(errW, "waiting for run %s to be ready (timeout %s)\n", runID, timeout)
-	deadline := time.Now().Add(timeout)
 	var res waitReadyResult
 	res.ID = runID
+	if timeout <= 0 {
+		return res, errNonPositiveTimeout(timeout)
+	}
+	fmt.Fprintf(errW, "waiting for run %s to be ready (timeout %s)\n", runID, timeout)
+	deadline := time.Now().Add(timeout)
+	waitCtx, cancel := context.WithDeadlineCause(ctx, deadline, errWaitTimeout)
+	defer cancel()
 	consecutiveErrs := 0
 	var lastFilesErr error
+	timedOut := func() error {
+		msg := fmt.Sprintf("timed out after %s waiting for run %s to be ready (last state %s, workspace vcs %q)", timeout, runID, res.State, res.Workspace.VCS)
+		if lastFilesErr != nil {
+			msg += ": last files error: " + lastFilesErr.Error()
+		}
+		return &exitError{code: 124, err: errors.New(msg)}
+	}
 	for {
-		run, err := c.GetRun(ctx, runID)
+		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if context.Cause(waitCtx) == errWaitTimeout {
+				return res, timedOut()
+			}
 			consecutiveErrs++
 			if consecutiveErrs >= 5 {
 				return res, fmt.Errorf("polling run %s failed %d times in a row: %w", runID, consecutiveErrs, err)
@@ -103,7 +129,7 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 			if run.State.IsTerminal() {
 				if run.State == types.RunFailed {
 					msg := fmt.Sprintf("run %s FAILED before it was ready", runID)
-					if reason := runFailureReason(ctx, c, runID); reason != "" {
+					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
 						msg += ": " + reason
 					}
 					return res, &exitError{code: 1, err: errors.New(msg)}
@@ -114,7 +140,10 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 				if run.Repo != "" {
 					wantGit = true
 				}
-				files, ferr := c.RunFiles(ctx, runID)
+				files, ferr := c.RunFiles(waitCtx, runID)
+				if ferr != nil && context.Cause(waitCtx) == errWaitTimeout {
+					return res, timedOut()
+				}
 				switch {
 				case ferr == nil:
 					lastFilesErr = nil
@@ -142,14 +171,13 @@ func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID u
 			}
 		}
 		if time.Now().After(deadline) {
-			msg := fmt.Sprintf("timed out after %s waiting for run %s to be ready (last state %s, workspace vcs %q)", timeout, runID, res.State, res.Workspace.VCS)
-			if lastFilesErr != nil {
-				msg += ": last files error: " + lastFilesErr.Error()
-			}
-			return res, &exitError{code: 124, err: errors.New(msg)}
+			return res, timedOut()
 		}
 		select {
-		case <-ctx.Done():
+		case <-waitCtx.Done():
+			if context.Cause(waitCtx) == errWaitTimeout {
+				return res, timedOut()
+			}
 			return res, ctx.Err()
 		case <-time.After(waitPollInterval):
 		}

@@ -4,7 +4,8 @@
 #
 # Post-release verification (RELEASING step 6), READ-ONLY against the published release:
 #   V=X.Y.Z scripts/verify-release.sh      (or: scripts/verify-release.sh X.Y.Z)
-# Every release image is cosign-verified BY INDEX DIGEST, the asset NAMES are compared with the expected set,
+# Every release image is cosign-verified BY INDEX DIGEST against the release workflow run for THIS tag (an exact
+# certificate identity, so another tag's signature is refused), the asset NAMES are compared with the expected set,
 # the SHA256SUMS blob is verified, the install.sh URL is fetched and the helm chart is shown. It never creates,
 # edits, deletes or retags a release or image.
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
@@ -14,6 +15,9 @@
 # Exit status = the number of failures (capped at 255).
 set -uo pipefail
 V=${1:-${V:-}}; [ -n "$V" ] || { echo "usage: V=X.Y.Z $0   (or $0 X.Y.Z)" >&2; exit 2; }
+# $V names the tag the signer is bound to below, so it must be a plain version before anything
+# runs: no network call, no interpolation of an arbitrary string into an identity.
+[[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a release version (X.Y.Z or X.Y.Z-suffix): $V" >&2; exit 2; }
 TAG=v$V
 RELEASE_YML="$(cd "$(dirname "$0")/.." && pwd)/.github/workflows/release.yml"
 [ -r "$RELEASE_YML" ] || { echo "cannot read $RELEASE_YML" >&2; exit 2; }
@@ -23,14 +27,16 @@ WANT=$(sed -n '/for want in/,/; do/p' "$RELEASE_YML" | sed -e 's/.*for want in//
 OUT=$(mktemp -d)
 export DOCKER_CONFIG="$OUT/dockercfg"; mkdir -p "$DOCKER_CONFIG"; echo '{}' > "$DOCKER_CONFIG/config.json"
 fails=0
-ID='^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v'
+# The EXACT identity of the release workflow run for the requested tag: an image or checksum file signed
+# by any other tag's run is refused. (A promotion adds its own signature at the target tag: RELEASING.md.)
+ID="https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/$TAG"
 ISS=https://token.actions.githubusercontent.com
 for img in $IMAGES; do
   ref="ghcr.io/cjohnstoniv/$img:$V"
   digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
   plats=$(docker buildx imagetools inspect "$ref" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null)
   if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; fails=$((fails+1)); continue; fi
-  if cosign verify "ghcr.io/cjohnstoniv/$img@$digest" --certificate-identity-regexp "$ID" --certificate-oidc-issuer "$ISS" >"$OUT/cosign-$img.json" 2>"$OUT/cosign-$img.err"; then
+  if cosign verify "ghcr.io/cjohnstoniv/$img@$digest" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" >"$OUT/cosign-$img.json" 2>"$OUT/cosign-$img.err"; then
     echo "OK   $img@$digest  [$plats]"
   else echo "FAIL $img cosign verify"; tail -3 "$OUT/cosign-$img.err"; fails=$((fails+1)); fi
 done
@@ -49,9 +55,9 @@ if [[ -f "$OUT/dl/SHA256SUMS" ]]; then
   bundle=$(ls "$OUT/dl"/SHA256SUMS.* 2>/dev/null | head -5 | tr '\n' ' ')
   echo "signature material: $bundle"
   if [[ -f "$OUT/dl/SHA256SUMS.bundle" ]]; then
-    cosign verify-blob "$OUT/dl/SHA256SUMS" --bundle "$OUT/dl/SHA256SUMS.bundle" --certificate-identity-regexp "$ID" --certificate-oidc-issuer "$ISS" && echo "OK   SHA256SUMS verify-blob (bundle)" || { echo "FAIL verify-blob"; fails=$((fails+1)); }
+    cosign verify-blob "$OUT/dl/SHA256SUMS" --bundle "$OUT/dl/SHA256SUMS.bundle" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" && echo "OK   SHA256SUMS verify-blob (bundle)" || { echo "FAIL verify-blob"; fails=$((fails+1)); }
   elif [[ -f "$OUT/dl/SHA256SUMS.sig" && -f "$OUT/dl/SHA256SUMS.pem" ]]; then
-    cosign verify-blob "$OUT/dl/SHA256SUMS" --signature "$OUT/dl/SHA256SUMS.sig" --certificate "$OUT/dl/SHA256SUMS.pem" --certificate-identity-regexp "$ID" --certificate-oidc-issuer "$ISS" && echo "OK   SHA256SUMS verify-blob (sig+pem)" || { echo "FAIL verify-blob"; fails=$((fails+1)); }
+    cosign verify-blob "$OUT/dl/SHA256SUMS" --signature "$OUT/dl/SHA256SUMS.sig" --certificate "$OUT/dl/SHA256SUMS.pem" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" && echo "OK   SHA256SUMS verify-blob (sig+pem)" || { echo "FAIL verify-blob"; fails=$((fails+1)); }
   else echo "FAIL no signature material for SHA256SUMS"; fails=$((fails+1)); fi
   (cd "$OUT/dl" && sha256sum --ignore-missing -c SHA256SUMS) || { echo "FAIL checksum"; fails=$((fails+1)); }
 else echo "FAIL SHA256SUMS missing"; fails=$((fails+1)); fi

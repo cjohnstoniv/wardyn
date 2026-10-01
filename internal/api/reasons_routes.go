@@ -511,6 +511,8 @@ const (
 const (
 	reasonAuditInvalidRunID                = "audit_invalid_run_id"
 	reasonAuditExportStoreUnavailable      = "audit_export_store_unavailable"
+	reasonAuditExportReadFailed            = "audit_export_read_failed"
+	reasonAuditScopeUnavailable            = "audit_scope_unavailable"
 	reasonAuditChainVerifyStoreUnavailable = "audit_chain_verify_store_unavailable"
 	reasonAuditChainVerifyBusy             = "audit_chain_verify_busy"
 	reasonAuditChainSweepFailed            = "audit_chain_sweep_failed"

@@ -57,14 +57,19 @@ which repository, at which tag* produced the image.
 
 ```sh
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}"
 ```
 
-Read the identity regexp before you copy it. It is the whole check: it says the
-image was built by *this repo's release workflow, from a tag*. A signature that
-verifies against some other identity is not the same claim.
+Read the identity before you copy it. It is the whole check: it says the image
+was signed by *this repo's release workflow, run for exactly the tag you are
+verifying* (`v${WARDYN_VERSION}`). It is an exact match, not a pattern, so a
+signature made for any other release tag does not verify, and neither does one
+verified against some other identity. A release promoted from an earlier build
+carries a signature for its own tag, because a promotion is dispatched on the
+release tag; if a command here fails for a tag you trust, do not loosen the
+identity to a pattern, report it.
 
 ## 2. Read the SBOM
 
@@ -72,7 +77,7 @@ The image's own component inventory, attested to its digest:
 
 ```sh
 cosign verify-attestation --type cyclonedx \
-  --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}" \
   | jq -r '.payload' | base64 -d | jq '.predicate.components[] | {name, version, licenses}'
@@ -96,7 +101,7 @@ The chart is an OCI artifact signed by the same workflow:
 
 ```sh
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "ghcr.io/cjohnstoniv/charts/wardyn:${WARDYN_VERSION}"
 ```
@@ -130,7 +135,7 @@ gh release download "v${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
 sha256sum -c SHA256SUMS
 cosign verify-blob \
   --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
-  --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 ```
@@ -216,9 +221,9 @@ different identity:
   `attest-build-provenance` step, so §2 and §3 above have nothing to fetch for
   these tags — `cosign verify-attestation` finds no attestation, which is the
   expected answer, not a tampering signal.
-- **A different certificate identity.** The regexp every command on this page
-  uses is pinned to `release.yml@refs/tags/v.*` and structurally cannot match a
-  `main`-push signature. Verify a continuous tag with its own:
+- **A different certificate identity.** The identity every command on this page
+  uses is pinned to `release.yml@refs/tags/v${WARDYN_VERSION}` and structurally
+  cannot match a `main`-push signature. Verify a continuous tag with its own:
 
   ```sh
   cosign verify ghcr.io/cjohnstoniv/wardynd:latest \
