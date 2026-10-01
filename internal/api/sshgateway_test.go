@@ -384,6 +384,7 @@ func newSSHTestHarness(t *testing.T, st store.Store, fr *sshFakeRunner, configur
 		Broker:        &fakeBroker{},
 		Audit:         audit,
 		Runner:        fr,
+		BaseCtx:       testBaseCtx(t),
 		AdminToken:    adminToken,
 		TrustDomain:   "wardyn.local",
 		DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
