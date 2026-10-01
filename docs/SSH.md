@@ -3,10 +3,11 @@
 `wardynd` can serve native SSH directly into a running sandbox's tmux
 session — the same one the browser terminal (run detail's "Live terminal" /
 `wardyn run attach`) shows. It authenticates registered **public keys only** (no
-passwords) and is **owner-or-admin**: a human may SSH into a run they
-created, or — if their key was registered while they held the admin role —
-into anyone's. That admin half is a bounded-stale stamp, not a live role
-check; see [Bounds](#bounds) for the ceiling that comes with it.
+passwords) and is **owner-only**: a human may SSH into a run they
+created. A super admin's key reaches a run only when it has no personal owner
+(an operator-owned service or local run); it opens no shell in a person's run
+(`run_owner_only`, #1476). That admin carve-out is a bounded-stale stamp, not a
+live role check; see [Bounds](#bounds) for the ceiling that comes with it.
 
 The gateway is off by default. It exists only when `WARDYN_SSH_LISTEN` is
 set — see [docs/ENV.md](ENV.md) for both variables (`WARDYN_SSH_LISTEN`,
@@ -35,11 +36,12 @@ gateway's owner check (below) will ever match against a run you created. A
 key added here is capped: it never carries the admin override, even for a
 super admin — see [Bounds](#bounds).
 
-**Registering an override key that reaches other people's runs (break-glass)
-is a separate, admin-view-only door:** Admin view → Settings → **Admin SSH
-keys** — super admins only. It reuses the same Add-key dialog; the server
-stamps the key `admin` because the Admin view session isn't clamped to user
-rights, exactly as [Bounds](#bounds) describes.
+**An admin key no longer reaches other people's runs.** Admin view → Settings →
+**Admin SSH keys** (super admins only) still registers a key stamped `admin`,
+but that stamp now opens only runs with no personal owner. There is no
+break-glass key into a person's run: until the owner-consented support session
+(#1509) a super admin who needs one asks its owner. Kill, approve, policy,
+grants, revoke and audit stay with the admin.
 
 **Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
 registers the key against the shared, non-human `admin-token` principal, not
@@ -120,7 +122,7 @@ For incident response or offboarding:
    keys through **Your account** (`/account`), `wardyn ssh-key delete <fingerprint>`,
    or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
 4. End existing access with `wardyn run kill <run-id>` and verify teardown
-   succeeded. Include foreign runs reached through an admin override. Key
+   succeeded. Include operator-owned runs reached through an admin override. Key
    deletion prevents new authentication and new `session` or `direct-tcpip`
    channels on an established connection; an already-open shell, transfer or
    forward continues until it closes or the run is torn down.
@@ -134,8 +136,10 @@ The gateway rechecks the authenticated registration before each new channel.
 A missing, changed, cut-off or unreadable key is refused; an unreadable
 session cutoff also refuses access. Registering the same public
 key again does not restore an old connection. Admin override role, cap and
-freshness checks apply at this point too. `WARDYN_SSH_ROLE_TTL` still bounds
-only the admin override, not access to runs the key's principal owns.
+freshness checks apply at this point too, and so does the owner rule: an
+override connection on a run that is not operator-owned is refused. `WARDYN_SSH_ROLE_TTL`
+still bounds only the admin override (now the operator-owned carve-out), not
+access to runs the key's principal owns.
 
 The `ssh_key.add`, `ssh_key.delete`, `session.revoke`, `ssh.authenticate` and
 `ssh.channel.reject` events identify registrations, completed revocations and
@@ -356,7 +360,7 @@ forwards) draw from the **same** per-run cap —
 editor holding open a shell, an sftp session and two `-L` forwards has used
 the whole budget; a fifth channel of any kind is refused, not queued.
 
-**Under SSO, register the key as yourself.** Authorization is owner-or-admin
+**Under SSO, register the key as yourself.** Authorization is owner-only
 (above): the run has to be created by the **same principal** that registered
 the key, and a key registered with the deployment's admin token can never
 satisfy that for a human's run — `POST /me/ssh-keys` 422s the attempt
@@ -414,12 +418,16 @@ the clear until retention deletes it.
 username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
-**Owner-or-admin, and the admin half is a bounded-stale stamp — weaker than
+**Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
 the web terminal's, but no longer unboundedly so.** SSH authorization is
-`run.created_by == the key's registered principal`, OR the key's `role`
-column (migration `0043`) reads `admin` AND its `role_checked_at` (migration
-`0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`). A member's key
-never satisfies the override — only the owner check does, same as before. The
+`run.created_by == the key's registered principal`, OR the run has no personal
+owner (`operator_owned`) AND the key's `role` column (migration `0043`) reads
+`admin` AND its `role_checked_at` (migration `0046`) is no older than
+`WARDYN_SSH_ROLE_TTL` (default `24h`). A fresh admin key on a person's run is
+refused with reason `run_owner_only`, at connect and again at every new channel
+of an open connection. A member's key never satisfies the override — only the
+owner check does, same as before. Existing admin-stamped keys are not revoked:
+they keep working on the runs they own and on operator-owned ones. The
 `role` column is stamped at `POST /me/ssh-keys` time, from the role the
 registering session actually held **then** — but it is now also RE-stamped,
 along with `role_checked_at`, on every OIDC login for that principal
@@ -460,10 +468,10 @@ stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role
 `user`, the database refuses a capped row that reads `admin`, and the gateway
 refuses the override for a capped key before it reads the role. The refusal is
 audited as `ssh.authenticate`, `outcome=failure`, reason "capped key (registered in the
-user view): no admin override". The key still reaches its owner's own runs. A
-break-glass key that reaches other people's runs is registered outside the
-user view, from the Admin SSH keys card (Admin view → Settings, super admins
-only — [§1](#1-register-a-public-key)). The `ssh_key.add` audit row marks a
+user view): no admin override". The key still reaches its owner's own runs. An
+uncapped admin key is registered outside the user view, from the Admin SSH keys
+card (Admin view → Settings, super admins only — [§1](#1-register-a-public-key));
+it reaches only runs with no personal owner. The `ssh_key.add` audit row marks a
 capped key with `capped: true`.
 
 **Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`

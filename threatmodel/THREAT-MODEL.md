@@ -1069,8 +1069,10 @@ hiding them would repeat the failure mode we are designed to avoid.
 15. **SSH gateway's admin override is a bounded-stale stamp, not a live role
     check.** Since `0043_ssh_key_role.sql` (v0.6), SSH authorization
     (`docs/SSH.md`) is `run.created_by == the connecting key's registered principal`
-    OR the key's `role` column reads `admin` (`internal/api/sshgateway.go`'s
-    `sshAuth`) — but `role` is stamped at `POST /me/ssh-keys` time from the
+    OR (since 0.8.5, #1476, only on a run with no personal owner — an
+    operator-owned service or local run) the key's `role` column reads `admin`
+    (`internal/api/sshgateway.go`'s `sshAuth`; a fresh admin key on a person's
+    run is refused `run_owner_only`) — but `role` is stamped at `POST /me/ssh-keys` time from the
     registering session's role, and `sshAuth` never consults the CURRENT role live.
     `0046_ssh_key_role_checked_at.sql` narrows the staleness from unbounded to
     bounded: every successful OIDC login re-stamps BOTH `role` and
@@ -2397,9 +2399,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     `revoked_at`; the person's cutoff is `IsSessionRevoked`); a disable made
     ONLY at the identity provider is seen at the next exchange, so it lags by
     at most the ten-minute token lifetime (`delegatedTokenTTL`), not the
-    subject token's own. A portal registered under the wrong identity-provider
-    client id acts for whoever that client's tokens name, which is why only a
-    super admin registers one and why it may never be Wardyn's own client id.
+    subject token's own. A UI-app session a portal opens through an attach
+    ticket is a credential derived from the grant and is bounded by it (0.8.5,
+    #1475): redemption and every 30-second re-check resolve the grant by id, so
+    revoking the portal or the grant expiring ends it, and the session cookie is
+    capped at the grant's expiry (about ten minutes). The exception is a stream
+    already open — a terminal WebSocket or a relayed socket — which keeps working
+    until it closes or the run ends. A portal registered under the wrong
+    identity-provider client id acts for whoever that client's tokens name,
+    which is why only a super admin registers one and why it may never be
+    Wardyn's own client id.
 
 62. **Azure DevOps per-run tokens put a token-CREATING credential in the store,
     and what bounds it is a secret, a policy and a revocation — not a scope

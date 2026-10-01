@@ -22,8 +22,9 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 - Multi-user semantics (admin vs member, ownership scoping, the shared
   admin-token ceiling) and the k8s known-gaps detail behind the chart
   README's summary: `docs/OPERATIONS.md`.
-- SSH gateway setup/use once the cluster is up (owner **or admin** — the
-  admin override re-checks the key's role every `WARDYN_SSH_ROLE_TTL`;
+- SSH gateway setup/use once the cluster is up (the run's **owner**, or an
+  admin on a run with no personal owner — the admin override re-checks the key's
+  role every `WARDYN_SSH_ROLE_TTL`;
   see this skill's troubleshooting table): `docs/SSH.md`.
 
 ## Recipe

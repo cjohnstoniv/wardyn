@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -254,7 +256,7 @@ func TestAttach_RefusesAKeptRun(t *testing.T) {
 
 	run, endedAt := uuid.New(), time.Now()
 	ast.mu.Lock()
-	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1",
 		LostAt: &endedAt, LostReason: types.LostEnded}
 	ast.mu.Unlock()
 
@@ -271,4 +273,160 @@ func TestAttach_RefusesAKeptRun(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), refused) {
 		t.Errorf("attach: code=%d body=%q, want 409 %q", w.Code, w.Body.String(), refused)
 	}
+}
+
+// TestAttachWS_TicketMintedBeforeCutoffIsRefused is the terminal lane's twin of
+// the UI gateway's: a ticket admitted before a revoke is refused at consume
+// with the bad-ticket 403, and the refusal leaves a denied session.attach row
+// naming the ticket's principal.
+func TestAttachWS_TicketMintedBeforeCutoffIsRefused(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	rev := newCutoffRevocations()
+	cfg.SessionRevocations = rev
+	srv := New(cfg)
+
+	run := uuid.New()
+	ast.mu.Lock()
+	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Unlock()
+
+	issued := time.Now()
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, issued)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	rev.nowFunc = func() time.Time { return issued.Add(time.Second) }
+	if err := rev.RevokeSub(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket="+tok, "", "")
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "invalid, expired, or already-used attach ticket") {
+		t.Fatalf("a ticket minted before the cutoff: %d %s, want the 403 bad-ticket body", w.Code, w.Body.String())
+	}
+	var denied []types.AuditEvent
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "session.attach" && ev.Outcome == "failure" {
+			denied = append(denied, ev)
+		}
+	}
+	if len(denied) != 1 || denied[0].Actor != "alice" || !strings.Contains(string(denied[0].Data), `"reason":"revoked"`) {
+		t.Fatalf("denied rows = %+v, want one naming alice with reason revoked", denied)
+	}
+}
+
+// TestAttachWS_TicketAuthority: the terminal lane redeems through the same helper
+// as the UI gateway, so the same authority checks bind it (#1474, #1475). Every
+// refusal is the bad-ticket 403 but for an unanswerable lookup, which is a 503.
+func TestAttachWS_TicketAuthority(t *testing.T) {
+	type setup struct {
+		name    string
+		ticket  func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string
+		want    int
+		reason  string // the session.attach failure row's reason ("" = no row expected)
+		cfgMods func(*authzStore, *Config)
+	}
+	now := time.Now()
+	viaTicket := func(t *testing.T, ast *authzStore, run uuid.UUID, principal string, revoke bool) string {
+		t.Helper()
+		_, via := seedDelegation(t, ast.fakeDelegateStore, principal)
+		if revoke {
+			if _, err := ast.RevokeDelegate(context.Background(), via.Delegate, now); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), ast, run, types.ActorHuman, principal, oidc.RoleUser, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	for _, tc := range []setup{
+		{name: "an email-named revoke after the mint",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				tok, err := mintAttachTicket(withOIDCEmail(context.Background(), "alice@corp.example"), ast, run, types.ActorHuman, "alice", oidc.RoleUser, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rev.nowFunc = func() time.Time { return now.Add(time.Second) }
+				_ = rev.RevokeSub(context.Background(), "alice@corp.example")
+				return tok
+			}, want: http.StatusForbidden, reason: "revoked"},
+		{name: "an unreadable revocation store",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				tok, _ := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, now)
+				rev.err = errors.New("store unreachable")
+				return tok
+			}, want: http.StatusServiceUnavailable, reason: "revocation_unavailable"},
+		{name: "a row with no authority time",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				ast.mu.Lock()
+				defer ast.mu.Unlock()
+				ast.tickets["legacy"] = store.AttachTicket{RunID: run, ActorType: types.ActorHuman, Principal: "alice", Role: oidc.RoleUser}
+				return "legacy"
+			}, want: http.StatusForbidden},
+		{name: "a portal revoked after the mint",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				return viaTicket(t, ast, run, "alice", true)
+			}, want: http.StatusForbidden, reason: "delegation_ended"},
+		{name: "a portal whose store cannot answer",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				return viaTicket(t, ast, run, "alice", false)
+			}, want: http.StatusServiceUnavailable, reason: "delegation_unavailable",
+			cfgMods: func(ast *authzStore, cfg *Config) { cfg.Store = &delegationErrAuthzStore{ast} }},
+		{name: "a live portal grant is admitted past the authority checks",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				return viaTicket(t, ast, run, "alice", false)
+			}, want: http.StatusUpgradeRequired},
+		{name: "a ticket with no email and no revoke is admitted",
+			ticket: func(t *testing.T, ast *authzStore, rev *cutoffRevocations, run uuid.UUID) string {
+				tok, _ := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, now)
+				return tok
+			}, want: http.StatusUpgradeRequired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ast := newAuthzStore()
+			h := newHarness(t)
+			cfg := baseTestConfig(h, ast)
+			cfg.Runner = &fakeRunner{}
+			rev := newCutoffRevocations()
+			cfg.SessionRevocations = rev
+			if tc.cfgMods != nil {
+				tc.cfgMods(ast, &cfg)
+			}
+			srv := New(cfg)
+			run := uuid.New()
+			ast.mu.Lock()
+			ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1"}
+			ast.mu.Unlock()
+
+			tok := tc.ticket(t, ast, rev, run)
+			w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket="+tok, "", "")
+			if w.Code != tc.want {
+				t.Fatalf("code = %d %s, want %d", w.Code, w.Body.String(), tc.want)
+			}
+			var rows []types.AuditEvent
+			for _, ev := range h.audit.snapshot() {
+				if ev.Action == "session.attach" && ev.Outcome == "failure" {
+					rows = append(rows, ev)
+				}
+			}
+			if tc.reason == "" {
+				return
+			}
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"`+tc.reason+`"`) {
+				t.Fatalf("session.attach failure rows = %+v, want one with reason %s", rows, tc.reason)
+			}
+		})
+	}
+}
+
+// delegationErrAuthzStore is authzStore with an unanswerable portal grant lookup.
+type delegationErrAuthzStore struct{ *authzStore }
+
+func (delegationErrAuthzStore) GetDelegatedTokenByID(context.Context, uuid.UUID, time.Time) (types.DelegatedToken, error) {
+	return types.DelegatedToken{}, errors.New("store unreachable")
 }

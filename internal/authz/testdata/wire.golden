@@ -34,3 +34,4 @@ reason model_provider_unavailable
 reason run_kept
 reason delegation_scope
 reason event_stream_cap
+reason run_owner_only
