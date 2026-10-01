@@ -342,7 +342,7 @@ func TestHandleMe_UserViewSuperAdmin(t *testing.T) {
 		r.Header.Set("X-"+key, "true")
 		r.AddCookie(memberModeSSOSession(t, "sub-usa-3", "usa3@corp.example", oidc.RoleSecurityAdmin, false))
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /me = %d: %s", w.Code, w.Body.String())
 		}
