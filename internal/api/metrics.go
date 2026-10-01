@@ -328,17 +328,14 @@ func (m *metrics) egressDenied() {
 // when nothing was denied by policy at all:
 //
 //   - builtin:dial-failed — emitted from exactly three sites in
-//     internal/egress/proxy, all genuine dial failures on a request policy
-//     ALLOWED, where the network lost it: proxy.go's forward-path round trip,
-//     proxy.go's CONNECT tunnel dial, and llm_routes.go's brokered-LLM round
-//     trip. RESOLVED (F065-gatewayvet): a fourth site — llm_routes.go's
-//     gatewayTarget arm, on errGatewayVet, vetTrustedHost's GUARD refusal of the
-//     configured model gateway — carries its own rule_source
-//     (ruleSourceGatewayVetFailed, egress lane) rather than reusing this same
-//     source, which would file a config problem the operator's own gateway can
-//     never satisfy alongside failures the network actually caused. It is
-//     DELIBERATELY absent from the exclusion list below — a guard refusal counts
-//     as a denial like any other.
+//     internal/egress/proxy (proxy.go:890, upstream_protocol.go:405 and
+//     llm_routes.go:213), all genuine dial failures on a request policy
+//     ALLOWED, where the network lost it. A guard refusal of the configured
+//     model gateway (errGatewayVet, from vetTrustedHost) is not one of them: it
+//     carries its own rule_source (ruleSourceGatewayVetFailed), because it is a
+//     config problem the operator's own gateway can never satisfy, not a
+//     failure the network caused. That source is DELIBERATELY absent from the
+//     exclusion list below — a guard refusal counts as a denial like any other.
 //   - builtin:upstream-protocol-mismatch — a round trip that GOT AN ANSWER: an
 //     HTTP/2 frame on a connection that negotiated no ALPN, which the proxy
 //     could not complete over HTTP/2 either (internal/egress/proxy's
@@ -378,7 +375,7 @@ const (
 // brokered:git-pat:denied, scan:blocked, site-config:*, …) and a new one is one
 // feature away. An allowlist would silently UNDERCOUNT real denials — a security
 // counter failing quiet — while this list fails toward counting: a source nobody
-// classified still moves the series, and only the two known non-denials do not.
+// classified still moves the series, and only the three known non-denials do not.
 func isPolicyDeny(ruleSource string) bool {
 	return ruleSource != ruleSourceDialFailed &&
 		ruleSource != ruleSourceCredentialReauthTimeout &&
