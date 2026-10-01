@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-10-01
+
 ### Before you upgrade
 
 Four changes can break a setup, a script or an upgrade path that worked before. Migration `0105_branding_logo_from_file`
