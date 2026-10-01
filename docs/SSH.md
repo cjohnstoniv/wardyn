@@ -323,8 +323,11 @@ sources include a repo) automatically waits for `vcs:"git"`; pass `--expect-git`
 to require that for a workspace-sourced run too. A terminal state reached
 before ready fails fast — FAILED exits `1` (with the dispatch failure reason
 when audit carries one, the same lookup `run --wait` uses), any other
-terminal state exits `2` — and `--timeout` (default `5m`) exits `124` rather
-than hanging a script forever.
+terminal state exits `2` — and `--timeout` (default `5m`, must be positive)
+exits `124` rather than hanging a script forever. The timeout bounds the
+requests too, and does not stop the run: on a `124` the run keeps running and
+holds its sandbox and credentials until it ends (see
+[ci-jobs-as-runs.md](ci-jobs-as-runs.md), "On `124`, kill the run").
 
 **`wardyn run ssh <run-id> --json`** (`cmd/wardyn/ssh.go`) is the same `/healthz`
 read `--print`/`--config` use, shaped for a program instead of a terminal:

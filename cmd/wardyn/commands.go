@@ -123,6 +123,9 @@ func runCmd(client clientFn) *cobra.Command {
 			if dryRun && wait {
 				return fmt.Errorf("--dry-run and --wait are mutually exclusive (a dry run launches nothing to wait for)")
 			}
+			if wait && timeout <= 0 {
+				return errNonPositiveTimeout(timeout) // before the run is created, not after
+			}
 			body := sdk.CreateRunRequest{
 				Agent: agent, Repo: repo, Task: task,
 				Title: title, Description: description,
@@ -218,7 +221,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, and the operator's model access is not auto-injected; an explicit policy grant or a workspace's declared secret still applies)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
@@ -385,18 +388,43 @@ func runGrantsCmd(client clientFn) *cobra.Command {
 // waitPollInterval is how often --wait polls the run state (var for tests).
 var waitPollInterval = 2 * time.Second
 
+// errWaitTimeout is the cause of a wait's own deadline context, so a deadline
+// that fired is told apart from a parent cancelled from outside.
+var errWaitTimeout = errors.New("wait deadline exceeded")
+
+// errNonPositiveTimeout is the 124 a --timeout of zero or less gets without a
+// request: a wait that is out of budget before it starts.
+func errNonPositiveTimeout(timeout time.Duration) error {
+	return &exitError{code: 124, err: fmt.Errorf("--timeout %s leaves no time to wait: give a positive duration", timeout)}
+}
+
 // waitForRun polls the run until it is terminal and maps the outcome to the
 // CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
 // run.complete audit event (fallback 1), KILLED/STOPPED/ARCHIVED→2, timeout→124.
+//
+// timeout bounds the whole wait, requests included: every read below runs on a
+// context that dies at the deadline, so a slow read is cut there (124) instead
+// of being waited for and reported late. A terminal state read inside the
+// budget still reports its real outcome; if the follow-up reads are cut off, a
+// FAILED run keeps the fallback exit 1, never 0. A parent context cancelled
+// from outside returns its own error, not 124.
 func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.UUID, timeout time.Duration) error {
+	if timeout <= 0 {
+		return errNonPositiveTimeout(timeout)
+	}
 	// Progress goes to stderr so `run --json` keeps stdout to a single object.
 	fmt.Fprintf(errW, "waiting for run %s (timeout %s)\n", runID, timeout)
 	deadline := time.Now().Add(timeout)
+	waitCtx, cancel := context.WithDeadlineCause(ctx, deadline, errWaitTimeout)
+	defer cancel()
 	consecutiveErrs := 0
 	var lastState types.RunState
 	for {
-		run, err := c.GetRun(ctx, runID)
+		run, err := c.GetRun(waitCtx, runID)
 		if err != nil {
+			if context.Cause(waitCtx) == errWaitTimeout {
+				return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
+			}
 			// Tolerate transient poll blips (a CI stack mid-restart shouldn't
 			// fail the pipeline); a persistent error still aborts fast.
 			consecutiveErrs++
@@ -407,12 +435,17 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 			consecutiveErrs = 0
 			lastState = run.State
 			if run.State.IsTerminal() {
-				code := agentExitCode(ctx, c, runID)
+				code := agentExitCode(waitCtx, c, runID)
 				if run.State == types.RunFailed && code == 0 {
 					// The terminal state commits just before the run.complete
-					// audit write; one retry covers that tiny window.
-					time.Sleep(waitPollInterval)
-					code = agentExitCode(ctx, c, runID)
+					// audit write; one retry covers that tiny window. The sleep
+					// ends at the deadline too; the read after it is then cut,
+					// and the fallback 1 below applies.
+					select {
+					case <-waitCtx.Done():
+					case <-time.After(waitPollInterval):
+					}
+					code = agentExitCode(waitCtx, c, runID)
 				}
 				fmt.Fprintf(errW, "run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
 				switch run.State {
@@ -425,7 +458,7 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 					// Surface WHY, not just the exit code — a dispatch/image-pull
 					// failure has no agent exit and would otherwise read as an
 					// opaque "FAILED (agent exit code 1)".
-					if reason := runFailureReason(ctx, c, runID); reason != "" {
+					if reason := runFailureReason(waitCtx, c, runID); reason != "" {
 						fmt.Fprintf(errW, "  reason: %s\n", reason)
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
@@ -438,7 +471,10 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 			return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
 		}
 		select {
-		case <-ctx.Done():
+		case <-waitCtx.Done():
+			if context.Cause(waitCtx) == errWaitTimeout {
+				return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
+			}
 			return ctx.Err()
 		case <-time.After(waitPollInterval):
 		}
