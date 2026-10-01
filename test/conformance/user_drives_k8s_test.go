@@ -78,16 +78,23 @@ func k8sDriveFixture(t *testing.T, cs kubernetes.Interface, ns, image string) *c
 }
 
 // lockDriveAs2000 runs a one-shot uid-2000 pod on the drive's claim that makes
-// the locked directory, and waits for it to succeed.
+// the locked directory, and waits for it to succeed. The pod is pinned to the
+// node the agent pod runs on: a node-bound ReadWriteOnce claim (local-path, a
+// zonal CSI disk) cannot be mounted from any other node, so an unpinned pod
+// would sit Pending and read as a red test. The agent pod is found by the claim
+// it mounts: Lock receives no run id, and the claim is the one thing that ties
+// the pod to THIS drive.
 func lockDriveAs2000(t *testing.T, cs kubernetes.Interface, ns, image, claim string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	name := "wardyn-conformance-drivelock-" + uuid.NewString()[:8]
 	d := "/d/" + conformance.UserDriveLockedDir
+	node := agentNodeMounting(ctx, t, cs, ns, claim)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: corev1.PodSpec{
+			NodeName:                     node,
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: ptr(false),
 			Containers: []corev1.Container{{
@@ -127,4 +134,27 @@ func lockDriveAs2000(t *testing.T, cs kubernetes.Interface, ns, image, claim str
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// agentNodeMounting returns the node of the Running agent pod that mounts claim,
+// and fails the test when there is none: an unpinned lock pod is the false red
+// this exists to prevent, so it is never the fallback.
+func agentNodeMounting(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, claim string) string {
+	t.Helper()
+	pods, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "wardyn.component=agent"})
+	if err != nil {
+		t.Fatalf("list the agent pods to pin the drive-lock pod: %v", err)
+	}
+	for _, p := range pods.Items {
+		if p.Status.Phase != corev1.PodRunning || p.Spec.NodeName == "" {
+			continue
+		}
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim {
+				return p.Spec.NodeName
+			}
+		}
+	}
+	t.Fatalf("no Running agent pod (wardyn.component=agent) in namespace %s mounts claim %s, so the drive-lock pod cannot be pinned to its node", ns, claim)
+	return ""
 }

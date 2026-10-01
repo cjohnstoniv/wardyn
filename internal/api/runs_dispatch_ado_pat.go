@@ -207,8 +207,9 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	return pat, nil
 }
 
-// adoRunPATRefusal maps a failed mint onto its answer. A 503 is transient: the
-// proxy keeps its last-good header and asks again.
+// adoRunPATRefusal maps a failed mint onto its answer. A transient status
+// (adoPATTransientStatus) is a 503: the proxy keeps its last-good header and
+// asks again.
 func adoRunPATRefusal(err error) (status int, reason, body string) {
 	var pe *adoPATError
 	switch {
@@ -224,7 +225,7 @@ func adoRunPATRefusal(err error) (status int, reason, body string) {
 		return http.StatusServiceUnavailable, reasonRunUnreadable, adoRunPATRunUnread
 	case errors.As(err, &pe):
 		status = http.StatusForbidden
-		if pe.Status >= 500 {
+		if adoPATTransientStatus(pe.Status) {
 			status = http.StatusServiceUnavailable
 		}
 		switch reason = pe.Reason(); reason {

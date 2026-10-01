@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -31,9 +34,9 @@ const rewrapActor = "wardyn/rewrap"
 // one transaction, and exit (secretstorepg.RewrapKeys). That is the local key
 // of the row's purpose (design §2.13 c) — the rows written before the purpose
 // split, and, once WARDYN_PLATFORM_KEY_FILE is set, the boot keys still under
-// the age key — or, with WARDYN_KEK=transit, the Vault Transit key at its
-// latest version (design §2.3); with WARDYN_KEK=local and the Transit key
-// still named, the rows under it move back to the local key. No value is
+// the age key — or, with WARDYN_KEK=transit or azurekv, the key service's key
+// at its latest version (design §2.3); with WARDYN_KEK=local and the key
+// service still named, the rows under it move back to the local key. No value is
 // decrypted. It takes the rekey lock, so it never runs beside a
 // -rotate-age-key.
 //
@@ -52,8 +55,8 @@ func rewrapMode(f *bootFlags) error {
 		if id, err = age.ParseX25519Identity(ageKey); err != nil {
 			return fmt.Errorf("parse the age identity (WARDYN_AGE_KEY): %w", err)
 		}
-	case strings.TrimSpace(*f.vault.kek) != kekTransit:
-		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q", kekTransit)
+	case !slices.Contains([]string{kekTransit, kekAzure}, strings.TrimSpace(*f.vault.kek)):
+		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q or %q", kekTransit, kekAzure)
 	}
 	platform, err := readPlatformKey(*f.platformKeyFile, ageKey)
 	if err != nil {
@@ -63,7 +66,18 @@ func rewrapMode(f *bootFlags) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// The key service (buildKEK) keeps its Vault token alive until ctx ends.
-	svc, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
+	svc, writes, err := buildKEK(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	retire := *f.rewrapRetirePlatformKey
+	if retire && *f.rewrapAdoptBootKeys {
+		return fmt.Errorf("refusing to rewrap: -rewrap-adopt-boot-keys adopts boot keys onto the platform key and -rewrap-retire-platform-key moves them off it; run one at a time")
+	}
+	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" {
+		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM, the key to retire")
+	}
+	platformSvc, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, retire)
 	if err != nil {
 		return err
 	}
@@ -92,16 +106,28 @@ func rewrapMode(f *bootFlags) error {
 		defer func() { _ = fan.Close() }()
 	}
 
-	return rewrapKeys(ctx, rec, secretstore.Deps{
+	d := secretstore.Deps{
 		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes,
-	})
+	}
+	d = withPlatformKEK(d, platformSvc, retire)
+	d.AdoptBootKeys = *f.rewrapAdoptBootKeys
+	return rewrapKeys(ctx, rec, d)
+}
+
+// withPlatformKEK adds the platform key service to d. Retiring reads it and
+// writes nowhere under it: the boot keys move to the key a write uses today.
+func withPlatformKEK(d secretstore.Deps, k kek.KEK, retire bool) secretstore.Deps {
+	if k != nil {
+		d.PlatformKEK, d.PlatformKEKWrites = k, !retire
+	}
+	return d
 }
 
 // rewrapKeys is -rewrap's work once its inputs are checked and its lock held:
 // the rewrap under d's keys, its secret.rewrap event, and what to do next.
 func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) error {
 	res, err := secretstorepg.RewrapKeys(ctx, d)
-	separate := d.PlatformIdentity != nil
+	separate := d.PlatformIdentity != nil || d.PlatformKEKWrites
 	if err != nil {
 		// An abort is audited like secret.migrate's, even when ctx is what
 		// ended the run: under Transit it has already made decrypt calls that
@@ -109,16 +135,39 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 		// the operator only.
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rewrapAbortAuditTimeout)
 		defer cancel()
-		emitRewrapAudit(actx, rec, res, separate, true)
+		emitRewrapAudit(actx, rec, res, separate, err)
 		return err
 	}
-	emitRewrapAudit(ctx, rec, res, separate, false)
+	emitRewrapAudit(ctx, rec, res, separate, nil)
+	if res.Rotated {
+		fmt.Fprintf(os.Stdout, "a key rotation landed while this run was moving rows, so some rows are under a newer version than the one read first; "+
+			"run `wardynd -rewrap` again until it moves 0 rows, and disable or retire no key version before then\n")
+	}
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
 		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
-	if res.KeyVersion > 0 {
-		fmt.Fprintf(os.Stdout, "every sealed secret is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", res.KeyService, res.KeyVersion, res.KeyVersion)
+	if res.KeyVersion != "" {
+		what := "secret"
+		if d.PlatformKEKWrites {
+			what = "credential" // the boot keys are under the platform key, reported below
+		}
+		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s\n", what, retireStep(res.KeyService, res.KeyVersion))
+	}
+	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
+		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM and restart every replica\n", d.PlatformKEK.ID())
+	}
+	if res.PlatformKeyVersion != "" {
+		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %s; raising that Transit key's min_decryption_version to %s now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
 	}
 	return nil
+}
+
+// retireStep names the key service id at version v, and what retires every
+// other version at that service.
+func retireStep(id, v string) string {
+	if strings.HasPrefix(id, kek.AzureKeyIDPrefix) {
+		return fmt.Sprintf("%s at versions %s (wrapping/signing); disabling every OLDER version of both keys in Key Vault (never a newer one) now retires them", id, v)
+	}
+	return fmt.Sprintf("%s version %s; raising the Transit key's min_decryption_version to %s now retires the older versions", id, v, v)
 }
 
 // optionalIdentity is the platform identity as the interface the store takes:
@@ -139,17 +188,26 @@ const rewrapAbortAuditTimeout = 5 * time.Second
 // wraps every write, its kek_id and the key version every row is now under.
 // An aborted run's event is outcome failure, reason aborted: its count is
 // what was committed (0 — the rewrap is one transaction), and it carries no
-// key_version, since no row moved to it. Like secret.rekey it names no secret.
-func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate, aborted bool) {
+// key_version, since no row moved to it. A run refused over its boot keys is
+// reason refused with refusal mixed_boot_keys or adopt_not_requested, so a
+// rule can fire on the tamper signal. Like secret.rekey it names no secret.
+func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool, failure error) {
 	fields := map[string]any{"secrets": res.Rewrapped, "platform_key_separate": separate}
+	if res.Rotated {
+		fields["rotated"] = true
+	}
 	if res.KeyService != "" {
 		fields["key_service"] = res.KeyService
 	}
 	outcome := "success"
 	switch {
-	case aborted:
+	case errors.Is(failure, secretstorepg.ErrMixedBootKeys):
+		outcome, fields["reason"], fields["refusal"] = "failure", "refused", "mixed_boot_keys"
+	case errors.Is(failure, secretstorepg.ErrAdoptNotRequested):
+		outcome, fields["reason"], fields["refusal"] = "failure", "refused", "adopt_not_requested"
+	case failure != nil:
 		outcome, fields["reason"] = "failure", "aborted"
-	case res.KeyVersion > 0:
+	case res.KeyVersion != "":
 		fields["key_version"] = res.KeyVersion
 	}
 	data, _ := json.Marshal(fields)

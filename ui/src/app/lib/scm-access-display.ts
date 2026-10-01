@@ -8,7 +8,21 @@
 // connected panel lives in (Getting started, Settings), so they cannot
 // render the state differently. Pure: no React, no fetch.
 import { ADO } from "./ado-entra-copy";
-import { ADO_PAT } from "./ado-pat-copy";
+import { ADO_PAT, gettingStartedOwnChip } from "./ado-pat-copy";
+import { adoOrgLabel, daysLeft, formatDay } from "./ado-pat-display";
+import type { SCMAccess } from "./types";
+
+// A person's own token (token_mode own_pat) has four states beyond "not added",
+// graded the way ado-pat-display.ts's Settings card grades them: expired is
+// expired_signin and wins; refused_at on a live or expiring row is Refused and
+// wins over both; the wire's expiring is Expiring; live is Connected.
+function ownTokenKind(access: SCMAccess): "connected" | "expiring" | "refused" | "expired" | null {
+  if (access.token_mode !== "own_pat") return null;
+  if (access.state === "expired_signin") return "expired";
+  if (access.state !== "live" && access.state !== "expiring") return null;
+  if (access.refused_at && access.expires_on) return "refused";
+  return access.state === "expiring" ? "expiring" : "connected";
+}
 
 // scmAccessChip follows modelAccessChip's own "say nothing rather than
 // invent" rule (member-getting-started.tsx): a state this console does not
@@ -21,7 +35,16 @@ export function scmAccessChip(
   state: string,
   source?: string,
   cause?: string,
-): { label: string; tone: "success" | "warning" } | null {
+  // The whole answer, for a row where the person adds their own token.
+  access?: SCMAccess,
+  now: number = Date.now(),
+): { label: string; tone: "success" | "warning" | "danger" } | null {
+  const own = access ? ownTokenKind(access) : null;
+  if (access && own) {
+    const days = own === "expiring" && access.expires_on ? daysLeft(access.expires_on, now) : 0;
+    const tone = { connected: "success", expiring: "warning", refused: "danger", expired: "danger" } as const;
+    return { label: gettingStartedOwnChip(own, days), tone: tone[own] };
+  }
   switch (state) {
     case "live":
       if (source === "org") return { label: ADO.ACCESS_LIVE_ORG, tone: "success" };
@@ -75,4 +98,25 @@ export function scmAccessCause(cause?: string): string {
 export function scmAccessNeedsConnect(state?: string, cause?: string): boolean {
   if (cause === "blocked" || cause === "ado_pat_needs_console_app" || cause === "token_expired") return false;
   return state === "not_configured" || state === "expired_signin";
+}
+
+// scmOwnTokenAction is the line and the one button an own-token row offers on
+// Getting started, in Settings' words: Add for a token not added or expired,
+// Replace for one expiring or refused, and nothing for a live one. `line` is ""
+// for a token not added. null for every other row, which keeps scmAccessCause
+// and scmAccessNeedsConnect.
+export function scmOwnTokenAction(access: SCMAccess): { line: string; button: "add" | "replace" } | null {
+  if (access.token_mode !== "own_pat") return null;
+  if (access.state === "not_configured") return { line: "", button: "add" };
+  const org = adoOrgLabel(access.org ?? "");
+  switch (ownTokenKind(access)) {
+    case "expired":
+      return { line: ADO_PAT.OWN_EXPIRED_BODY, button: "add" };
+    case "refused":
+      return { line: ADO_PAT.OWN_REFUSED_LINE(formatDay(access.refused_at!), formatDay(access.expires_on!)), button: "replace" };
+    case "expiring":
+      return { line: access.expires_on ? ADO_PAT.OWN_EXPIRING_LINE(org, formatDay(access.expires_on)) : "", button: "replace" };
+    default:
+      return null;
+  }
 }

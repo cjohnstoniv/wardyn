@@ -391,8 +391,8 @@ than the newest.
   when the row's access changes under a running run so the run's request is refused (`drift`), when
   the person disconnects, and when an admin erases the person's credentials. A sweep at boot and every five minutes revokes any token
   a crash left behind, and closes the records of tokens past their expiry without a revoke call.
-- **If a revoke fails**, Wardyn records `ado_pat.revoke.failed`. A revoke that could not complete stays
-  recorded, and the sweep retries it until the token expires. One that Azure DevOps refused for good,
+- **If a revoke fails**, Wardyn records `ado_pat.revoke.failed`. A revoke that could not complete (a timeout, an HTTP 408, 425 or 429, or a 5xx) stays
+  recorded, and the sweep retries it until the token expires, for a run that has ended and for one that is still running. One that Azure DevOps refused for good,
   or whose sign-in has ended, is closed, and the token stops working at its own expiry, at most
   `pat_max_hours` after it was created. An Azure DevOps Project Collection Administrator can revoke it
   earlier through the Token Administration API, which can take up to an hour to apply. Revoking a PAT
@@ -446,6 +446,9 @@ create checks again. When the administrator's own **Check organisation settings*
 policy, the row shows a banner naming them ("Azure DevOps refused to create a token for {person}: your
 organisation restricts who can create personal access tokens. Add the people who use Wardyn to that
 policy's allow list, or switch to Entra sign-in.") with a button that switches the row to Entra sign-in.
+The row shows the same banner, with no check run, naming the person whose launch the organisation refused
+in the last seven days: the administrator sees it when the row opens, after a member's mint is refused and
+not only after their own check.
 The simplest fix is the allow list: one Project Collection
 Administrator action, adding the people who use Wardyn or their group. Switching the row to `bearer` is
 the alternative, and it needs the Entra changes above (the app must drop the token permissions), which
@@ -476,15 +479,36 @@ removes Wardyn's copy. Before storing it, in this order, Wardyn:
   longer expiry would promise what Azure DevOps will not keep;
 - asks Azure DevOps (`connectionData`, with the token itself) whether it accepts the token for this
   organisation, and refuses one it does not accept: "Azure DevOps didn't accept this token.";
-- checks whose it is: the account Azure DevOps names for the token must match the email of the
+- checks whose it is. Where Wardyn holds the person's Entra object id (from their Entra sign-in, or a
+  person set up by object id; a session from before the upgrade has none) and the token carries `vso.graph`, Wardyn asks Azure DevOps' Graph API who owns the token and binds it
+  when the owner's `originId` is that object id, whatever email the account shows. Otherwise, or when
+  Graph refuses the token, the account Azure DevOps names for the token must match the email of the
   person's own sign-in. Another account's token is refused, and the other account is never named:
   "This token belongs to a different Azure DevOps account than yours." A sign-in with no email address
   cannot be matched and is refused too.
+
+The scopes the dialog asks the person to tick include **Graph (Read)** (`vso.graph`), which the bind by
+object id uses; a token without it is still accepted, and is matched by name.
+
+The pasted token's `vso.graph` is wider than the row's ceiling: it reads the organisation's users, and
+the `identity_read` capability that covers that read is not in the default profile. Wardyn makes the one
+Graph lookup itself, at paste time; the proxy holds every run to the row's ceiling and the run's own
+capabilities, so a run never gets that read from the token. Where the sign-in carries an Entra object id,
+the owner's `originId` is compared with that id alone; the person's stored id is used only when the sign-in
+has none. The `ado_pat.own.store` audit row says which basis bound the token (`bound_by`: `object_id` or
+`name`), never the id.
 
 The token is stored sealed in the person's own namespace, readable only by them, with no fallback to an
 administrator's or another person's copy. Wardyn cannot read a pasted token's scopes or its expiry, so
 it trusts the date the person entered, and stops using the token from the start of that day (UTC). The
 run's capabilities are held by the proxy's request check exactly as in every other mode.
+
+**A token Azure DevOps refuses before its expiry** is noted, not stopped. When the proxy has to ask for the
+token again because Azure DevOps answered it with a 401 and the date the person entered is still ahead,
+Wardyn asks Azure DevOps once whether it still accepts the token (the check a paste runs); only if it
+does not, Wardyn stamps the stored token once (`refused_at` on `GET /api/v1/me/scm-access`, which still reads
+`live`) and audits it once. A 401 answers a revoked token, an expired one and a missing scope alike, so
+Wardyn keeps using the token until its date; adding a new token clears the stamp.
 
 **Wardyn cannot revoke a pasted PAT.** `DELETE` removes only Wardyn's copy; only the person can revoke
 it, in Azure DevOps. The Settings card reads *Expires in N days* for the last seven days, and *Expired*
@@ -500,7 +524,8 @@ credential.
 - A token stored for one organisation is not used for another.
 - Storing and removing are audited as `ado_pat.own.store` and `ado_pat.own.delete`; a refusal of
   another account's token is `ado_pat.own.store` with outcome `failure` and `reason:
-  identity_mismatch`. None carries the token, and none names the other account.
+  identity_mismatch`, and Azure DevOps refusing a stored token before its expiry is the same action
+  with `reason: upstream_refused`. None carries the token, and none names the other account.
 
 ## Upgrading
 
@@ -536,9 +561,13 @@ In order:
    loses `pat` and `ssh`. Any other row is **turned off**: a row on `dev.azure.com` or `*.visualstudio.com`
    becomes an `entra` row in `own_pat` mode with a read-only ceiling (`project_read`, `code_read`), and a
    row for any other host becomes a `pat` row with `credential_source: per_user` and no `entra` block.
-   A turned-off row still claims its hosts, so **clones from those organisations fail with a reason
-   until an administrator acts**, and the setup checklist carries a non-blocking warning
-   (`ado_rows_off`) until they do.
+   **Clones from a turned-off row's organisation fail with a reason that names the row until an
+   administrator acts.** Its hosts are withdrawn from `effective_scm_hosts` and from run egress, and
+   `GET /site-config` lists each under `withheld_scm_hosts` with the row that withholds it, but only
+   when no enabled row also names the same host. With several organisations on `dev.azure.com`, one off
+   and another on, the host stays effective and in egress, `withheld_scm_hosts` is empty, and only the
+   launch into the off organisation is refused. The setup checklist carries a non-blocking warning
+   (`ado_rows_off`) until the row is turned on.
 4. Open **Settings → Workspace providers → Azure DevOps**, choose how people connect, follow the
    [setup order](#for-per-run-tokens-minted_pat) (enable, sign in, **Check organisation settings**), and
    turn the row on.
@@ -645,7 +674,8 @@ ref at all, is not available through this lane.
   only.** Wardyn forwards it with the person's own credential, and Azure DevOps' branch policies
   and permissions decide: a protected `main` still rejects someone who lacks the permission to
   push to it. Each such git push is recorded as `brokered:git:branch-ns-off`, as on the GitHub
-  lanes; a REST ref move keeps the ordinary `brokered:ado` row (see
+  lanes; a REST ref move outside the run's branch keeps its `brokered:ado` row and, once forwarded,
+  adds a `brokered:git:branch-ns-off` row beside it (see
   [POLICIES.md](POLICIES.md#git_push_any_branch-the-per-run-opt-out)).
 - **`policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy: true`**,
   the one request whose body asks Azure DevOps to skip its own policies. The switch does not touch
@@ -882,7 +912,7 @@ a Server row either. What differs:
 | `ado_pat_policy_blocked` | The organisation restricts who may create PATs | Add the person, or their group, to the allow list under **Policies → Restrict personal access token (PAT) creation** |
 | `ado_pat_lifespan_policy` | The row's longest token life is above the organisation's maximum | Lower **Longest token life**; **Check organisation settings** names the limit it saw |
 | A run on a `bearer` row is refused with `mint_scopes` or `scope_unknown` (audit `ado_bearer.refused_mint_scopes`) | The app holds a token permission, or Entra reported no granted scope | Remove `vso.pats` and `vso.pats_manage` from that app, or move the row to `minted_pat`; people sign in again |
-| Clones from an organisation fail after the upgrade | The upgrade turned its row off | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
+| Clones from an organisation fail after the upgrade | The upgrade turned its row off; the refusal names the row. `GET /site-config` also lists its host under `withheld_scm_hosts`, unless an enabled row names the same host (several organisations on `dev.azure.com`), when the list is empty | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
 | `ado_own_pat_identity_mismatch` on a pasted token | The token belongs to another account, or the person's sign-in has no email to match | Create the token while signed in to Azure DevOps as yourself; a sign-in with no email can't be matched |
 
 ---

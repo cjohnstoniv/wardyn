@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -23,7 +22,7 @@ import (
 // The assertion is the BOOT LINE, because boot is the only moment the daemon
 // can tell an operator which durability they actually bought.
 func TestAuditSpoolEphemeralWarnsAtBoot(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })

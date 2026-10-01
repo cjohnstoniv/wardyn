@@ -193,12 +193,15 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 
 // clampPushRules only narrows push_rules: a silent ceiling passes the proposal through unclamped;
 // when the ceiling sets one, an unset proposal inherits it wholesale, a set proposal gets the
-// ceiling's deny_paths unioned in (see unionPaths) and max_inspect_pack_mib capped.
+// ceiling's deny_paths unioned in (see unionPaths), max_inspect_pack_mib and max_file_size_mib capped
+// (a proposal can neither raise a ceiling's limit nor turn it off with 0), and deny_new_executables kept on.
 //
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
 func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	if !ceiling.PushRules.IsSet() {
+	// deny_new_executables is not in IsSet (nothing enforces it yet) but a ceiling's true must
+	// still reach the merged spec, so a proposal can never switch it off.
+	if !ceiling.PushRules.IsSet() && (ceiling.PushRules == nil || !ceiling.PushRules.DenyNewExecutables) {
 		return warns
 	}
 	if out.PushRules == nil {
@@ -220,6 +223,11 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
 		merged.MaxInspectPackMiB = ceil
 	}
+	if ceil := ceiling.PushRules.MaxFileSizeMiB; ceil > 0 && (merged.MaxFileSizeMiB <= 0 || merged.MaxFileSizeMiB > ceil) {
+		warns = append(warns, fmt.Sprintf("push_rules.max_file_size_mib capped to operator maximum %d", ceil))
+		merged.MaxFileSizeMiB = ceil
+	}
+	merged.DenyNewExecutables = merged.DenyNewExecutables || ceiling.PushRules.DenyNewExecutables
 	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
 		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
 	}

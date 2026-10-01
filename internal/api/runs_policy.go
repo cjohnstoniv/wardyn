@@ -239,10 +239,32 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		UserTypeName         string        `json:"user_type_name,omitempty"`
 		ModelProviderName    string        `json:"model_provider_name,omitempty"`
 		ModelProviderDeleted bool          `json:"model_provider_deleted,omitempty"`
+		CreatedViaName       string        `json:"created_via_name,omitempty"`
+		// KeptUntil (#1320) is when an ended run's files are torn down. A
+		// projection for display only, never a field of types.AgentRun.
+		KeptUntil *time.Time `json:"kept_until,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
+		CreatedViaName: s.runCreatedViaName(r.Context(), run),
+		KeptUntil:      s.endedRunKeptUntil(run),
 	})
+}
+
+// endedRunKeptUntil is when a run its own end stopped, and kept, is torn down:
+// only a RUNNING run still marked ended, under a grace that keeps files at all.
+// A run that was stopped at its end, killed, revived or lost to a reboot has no
+// such date, and the grace itself is never sent. The date is keptUntil's, the
+// one the run.ended row records.
+func (s *Server) endedRunKeptUntil(run types.AgentRun) *time.Time {
+	if run.State != types.RunRunning || run.LostReason != types.LostEnded || run.LostAt == nil || s.cfg.EndedRunGrace <= 0 {
+		return nil
+	}
+	until, ok := s.keptUntil(run)
+	if !ok {
+		return nil
+	}
+	return &until
 }
 
 // runModelProviderFacts names the model provider a run chose and says whether
@@ -303,6 +325,35 @@ func (s *Server) runUserTypeName(r *http.Request, id string) string {
 		return ""
 	}
 	return t.Name
+}
+
+// runCreatedViaName is the display name of the portal that launched a run, for
+// the run page's "Launched via {portal}" (#1234). It rides the run read because
+// the portal registry's list route is security-operator only, so a member
+// reading their own run could not resolve created_via themselves. A revoked
+// portal is a soft delete, so its name still resolves. Empty for a run nobody
+// delegated, a portal the registry no longer holds, or a registry that cannot
+// be read; the page then says "Launched via a portal". Only the name leaves
+// the registry row.
+func (s *Server) runCreatedViaName(ctx context.Context, run types.AgentRun) string {
+	if run.CreatedVia == nil {
+		return ""
+	}
+	ds, ok := s.cfg.Store.(store.DelegateStore)
+	if !ok {
+		return ""
+	}
+	list, err := ds.ListDelegates(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "api: could not read the portal registry for the run's created_via", "run_id", run.ID, "error", err)
+		return ""
+	}
+	for _, d := range list {
+		if d.ID == *run.CreatedVia {
+			return d.Name
+		}
+	}
+	return ""
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
@@ -582,7 +633,7 @@ func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 //
 // The "trusted single-dev machine" premise the header override rests on
 // (actorFromRequest's case 1) is one this codebase already refuses to rely on
-// elsewhere: approvals.go's requireSecondHuman answers 503 rather than compare
+// elsewhere: approvals_second_human.go's requireSecondHuman answers 503 rather than compare
 // two client-supplied operands precisely because Config.LocalTrustForwarder
 // documents LocalMode as the compose/team topology too. The exposure this
 // closes is a deployment whose secrets table already carries member-owned rows

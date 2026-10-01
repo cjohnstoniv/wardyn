@@ -44,12 +44,12 @@ USER root
 # the equivalent bar: a version bump means re-downloading the new tarball,
 # recomputing its sha256, and updating both entries below; a mismatch fails
 # the build closed, never silently).
-ARG CODE_SERVER_VERSION=4.133.0
+ARG CODE_SERVER_VERSION=4.138.0
 ARG TARGETARCH
 RUN set -eu; \
 	case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-		amd64) plat=amd64; sum=a4e0f8f8c76e7de8e7424289f74e507af4c97bfe104c3e8ee272b8cc7b46c6f1;; \
-		arm64) plat=arm64; sum=d999d8b0256e5537f3b62e6c09f624220026e19107a04a876c0cef62d1c71147;; \
+		amd64) plat=amd64; sum=5d63f26c5dabc2acd29610b9b27f413b016aa67019e2cfcdf54031625e18f535;; \
+		arm64) plat=arm64; sum=fbebf4b18e97a5a48b7b105be0161d411e54ccfb53a1ffb1673c16518024fa30;; \
 		*) echo "unsupported arch '${TARGETARCH:-unknown}' for code-server" >&2; exit 1;; \
 	esac; \
 	url="https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${plat}.tar.gz"; \

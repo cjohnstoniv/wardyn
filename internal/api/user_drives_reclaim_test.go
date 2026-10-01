@@ -53,7 +53,7 @@ func reclaimServer(t *testing.T, d types.UserDrive, g *types.UserDriveGrant, rn 
 		st.grants[g.ID] = *g
 	}
 	audit := &recRecorder{}
-	srv := New(Config{Store: st, Audit: audit, Runner: rn, RunnerTarget: "docker", LocalMode: true})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: audit, Runner: rn, RunnerTarget: "docker", LocalMode: true})
 	return srv, st, audit
 }
 

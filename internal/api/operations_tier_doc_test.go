@@ -66,6 +66,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/workspace-providers", "`GET /workspace-providers`"},
 	{"PUT /api/v1/workspace-providers", "`PUT /workspace-providers`"},
 	{"POST /api/v1/workspace-providers/git/{id}/org-check", "`POST /workspace-providers/git/{id}/org-check`"},
+	{"GET /api/v1/workspace-providers/git/{id}/ado-pat-refusal", "`GET /workspace-providers/git/{id}/ado-pat-refusal`"},
 	// The agent roster (0.7.2), separate tokens per verb for the same reason as
 	// the two rows above: the READ is the half a later member-safe projection
 	// could widen, and that must red here rather than pass on the write's row.

@@ -154,6 +154,8 @@ export const ADO_PAT = {
   OWN_CHIP_EXPIRING: (days: number) => `Expires in ${days} days`,
   OWN_CHIP_EXPIRED: "Expired",
   OWN_EXPIRING_LINE: (org: string, date: string) => `Your token for ${org} expires on ${date}.`,
+  OWN_CHIP_REFUSED: "Refused",
+  OWN_REFUSED_LINE: (date: string, expiry: string) => `Azure DevOps refused this token on ${date}, before it expires on ${expiry}. Replace it.`,
   OWN_REPLACE: "Replace token",
   OWN_EXPIRED_BODY: "Your runs can't reach Azure DevOps until you add a new token.",
   OWN_SERVER_TITLE: "Azure DevOps Server",
@@ -167,3 +169,17 @@ export const ADO_PAT = {
   CONVERTED_CEILING: (names: string) => `Read-only, carried over from the retired token: ${names}.`,
   CONVERTED_SAVE_ON: "Save and turn on",
 } as const;
+
+// Getting started's chip row prefixes every Azure DevOps chip with the
+// connection's name, so a person's own token reads in Settings' chip words after
+// it (the approved own-token chip packet). One helper over OWN_CHIP_* and
+// CHIP_CONNECTED: rewording a word there reaches both screens.
+export function gettingStartedOwnChip(kind: "connected" | "expiring" | "refused" | "expired", days = 0): string {
+  const word = {
+    connected: ADO_PAT.CHIP_CONNECTED,
+    expiring: ADO_PAT.OWN_CHIP_EXPIRING(days),
+    refused: ADO_PAT.OWN_CHIP_REFUSED,
+    expired: ADO_PAT.OWN_CHIP_EXPIRED,
+  }[kind];
+  return `Azure DevOps · ${word}`;
+}

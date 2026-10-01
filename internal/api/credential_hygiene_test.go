@@ -257,8 +257,9 @@ func (p lostWriteSecrets) For(owner string) secretstore.Store {
 // credential. Its refresh token used to be retired at the exchange and swept
 // an hour later, unmasked while still in use.
 func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
-	// #659 Q2: both failures now redirect to the console's error path
-	// (adoSignInErrorPath) rather than a bare 403/500 text page.
+	// #659 Q2: every failure redirects to the console's error path
+	// (adoSignInErrorPath) rather than a bare 403/500 text page. The two
+	// unusable_grant rows are #1327's triggers.
 	for _, tc := range []struct {
 		name    string
 		breakIt func(*adoFixture)
@@ -268,6 +269,8 @@ func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
 		{"store write lost", func(f *adoFixture) {
 			f.srv.cfg.Secrets = lostWriteSecrets{f.srv.cfg.Secrets.(*memSecrets)}
 		}, "store_error"},
+		{unusableGrant[0].name, unusableGrant[0].breakIt, reasonADOCallbackUnusableGrant},
+		{unusableGrant[1].name, unusableGrant[1].breakIt, reasonADOCallbackUnusableGrant},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newADOFixture(t)
@@ -276,6 +279,7 @@ func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
 				t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
 			}
 			held, _ := f.stored(t, subject)
+			heldRaw := f.storedRaw(t, subject)
 			tc.breakIt(f)
 			w := f.capture(t, subject)
 			if w.Code != http.StatusFound {
@@ -283,6 +287,9 @@ func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
 			}
 			if got, want := w.Header().Get("Location"), adoSignInErrorPath+tc.reason; got != want {
 				t.Errorf("Location = %q; want %q", got, want)
+			}
+			if got := f.storedRaw(t, subject); !bytes.Equal(got, heldRaw) {
+				t.Error("the stored sign-in changed")
 			}
 			f.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(time.Hour))
 			if !slices.ContainsFunc(f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil), func(v []byte) bool { return string(v) == held.RefreshToken }) {

@@ -711,7 +711,7 @@ func TestMintedPAT_ConcurrentResolvesCreateOneToken(t *testing.T) {
 
 // No token value reaches a row, an audit row or a log line.
 func TestMintedPAT_NoTokenInRowsLogsOrAudit(t *testing.T) {
-	var logs syncBuffer
+	var logs lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -754,24 +754,6 @@ func TestADORunPATValidTo(t *testing.T) {
 			t.Errorf("%s: validTo = %v, want %v", name, got, tc.want)
 		}
 	}
-}
-
-// syncBuffer is a bytes.Buffer safe for the log handler's writers.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  strings.Builder
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.String()
 }
 
 // The lane end to end through the real token API client (vsspsPATClient)

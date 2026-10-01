@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, 'release/**', 'feature/**']
+    # No `release/**`: release.yml accepts CI by tree (#1461), and a release
+    # branch only ever fast-forwards to a tree its own pull request run tested.
+    branches: [main, master, 'feature/**']
   # No branches filter: `branches:` matches the PR's BASE, and the 0.8
   # working-practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90),
   # not on main — a filtered trigger gave a stacked PR no checks at all
@@ -69,9 +71,10 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]]; then
+          if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
             echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: running everything"
             printf 'code=true\nbackend=true\n' >> "$GITHUB_OUTPUT"
             exit 0
@@ -92,6 +95,32 @@ jobs:
           done <<< "$changed"
           echo "code=$code backend=$backend"
           printf 'code=%s\nbackend=%s\n' "$code" "$backend" >> "$GITHUB_OUTPUT"
+      # A run that runs everything records the tree it tested, so a release will
+      # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). On a pull_request HEAD
+      # is GitHub's merge commit, so this is the tree actually tested — the run
+      # API's head_commit.tree_id is the PR head's tree, which differs whenever
+      # the base has moved.
+      - name: Record the tree this run tests (release evidence)
+        id: tree
+        if: steps.classify.outputs.code == 'true' && steps.classify.outputs.backend == 'true'
+        run: |
+          set -euo pipefail
+          t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
+      - name: Upload the tested-tree marker
+        id: upload_tree
+        if: steps.tree.outcome == 'success'
+        # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
+        # (#372). The step below says so loudly.
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-full-tree-${{ steps.tree.outputs.tree }}
+          path: tested-tree.txt
+          retention-days: 90
+          if-no-files-found: error
+      - name: Say so if ci-full-tree did not upload
+        if: always() && steps.upload_tree.outcome == 'failure'
+        run: echo "::warning title=Release evidence missing::ci-full-tree did not upload; this run's result stands on its tests, but a release cannot accept it by tree."
 
   # ── Go: build, lint and the three tag-set suites, in parallel (#932) ──────
   # One leg per tag set, plus one for build + tidy + lint, each on its own
@@ -503,6 +532,15 @@ jobs:
       - name: Say so if playwright-report did not upload
         if: always() && steps.upload_playwright_report.outcome == 'failure'
         run: echo "::warning title=Reports missing::playwright-report did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+      # One line per flaky test (scripts/run-ui-e2e.sh); notify-flaky reads it.
+      - name: Upload the flaky-test list
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: e2e-flaky
+          path: test/reports/e2e/flaky.tsv
+          if-no-files-found: ignore
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -659,13 +697,15 @@ jobs:
       # secrets.ageKeyFromSecret is turned off (it also reads that Secret, as
       # env). A live Vault Agent proving the CSI/Vault-Agent shape end to end
       # is an owner-gated walk on the owner's own cluster, out of scope here.
+      # defaultMode=288 is 0440 in decimal, the mode the chart's own boot-secrets
+      # mount uses (deployment.yaml), so this stand-in reads files as the chart's do.
       - name: helm install + boot proof, WARDYN_PG_DSN_FILE/WARDYN_AGE_KEY_FILE via extraVolumes (T-60, #720)
         if: needs.changes.outputs.backend != 'false'
         run: |
           make helm-install-test \
             HELM_TEST_NAMESPACE=wardyn-test-vaultagent \
             HELM_TEST_RELEASE=wardyn-test-vaultagent \
-            HELM_TEST_SET="--set postgres.dsn.secretRef.name= --set secrets.ageKeyFromSecret=false --set env.WARDYN_PG_DSN_FILE=/mnt/secrets-store/dsn --set env.WARDYN_AGE_KEY_FILE=/mnt/secrets-store/age-key --set extraVolumes[0].name=boot-secrets --set extraVolumes[0].secret.secretName=wardyn-postgres-dsn --set extraVolumeMounts[0].name=boot-secrets --set extraVolumeMounts[0].mountPath=/mnt/secrets-store --set extraVolumeMounts[0].readOnly=true"
+            HELM_TEST_SET="--set postgres.dsn.secretRef.name= --set secrets.ageKeyFromSecret=false --set env.WARDYN_PG_DSN_FILE=/mnt/secrets-store/dsn --set env.WARDYN_AGE_KEY_FILE=/mnt/secrets-store/age-key --set extraVolumes[0].name=boot-secrets --set extraVolumes[0].secret.secretName=wardyn-postgres-dsn --set extraVolumes[0].secret.defaultMode=288 --set extraVolumeMounts[0].name=boot-secrets --set extraVolumeMounts[0].mountPath=/mnt/secrets-store --set extraVolumeMounts[0].readOnly=true"
       - name: Lay down a CI-local managed envelope at /etc/wardyn
         run: |
           set -euo pipefail
@@ -1221,10 +1261,12 @@ jobs:
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
-  # the agent image actually ships. agent-claude-code is the scan target
-  # because it is by far the fattest image we publish (trixie + node + npm +
-  # git/ssh/tmux/socat); wardynd and wardyn-proxy are distroless-static, which
-  # carries essentially no OS package surface to scan.
+  # the agent images actually ship. The scan targets are the seven images the
+  # release publishes (the matrix below): wardynd and wardyn-proxy, plus the five
+  # agent images (agent-base, agent-codex-cli, agent-aws-sso, agent-vscode,
+  # agent-novnc). wardynd and wardyn-proxy are distroless-static, which carries
+  # essentially no OS package surface; the agent images (trixie + node/python +
+  # git/ssh/tmux/socat) are where the OS findings land.
   #
   # --severity CRITICAL --exit-code 1: only CRITICAL fails the build. Anything
   # broader on a Debian base is a gate that is red every week for findings
@@ -1486,7 +1528,10 @@ jobs:
             # the exemption applies only where GitHub itself makes the merge (push,
             # merge_group below) — every commit in a PR's own range, merges included, must
             # carry Signed-off-by (#1070).
-            make dco DCO_RANGE="$BASE..$PR_HEAD"
+            # ^origin/main: commits already on main passed main's own gate (every PR
+            # commit is checked; a push exempts only GitHub's merges). Without it a
+            # release PR that merges main re-judges GitHub's merge commits (the 0.8.2 cut).
+            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main"
           elif [ -n "$BASE" ]; then
             # merge_group: the queue's own merge commits are committed by GitHub
             # and carry no Signed-off-by — exempt only those.
@@ -1509,6 +1554,61 @@ jobs:
             fi
           fi
 
+  # ── every flaky e2e test gets an issue ─────────────────────────────────────
+  # scripts/run-ui-e2e.sh lists each test that passed only on a retry in
+  # flaky.tsv (`spec<TAB>title<TAB>new|quarantined`). One issue per test, found by
+  # exact title, so a test that keeps flaking appends to one issue. continue-on-error:
+  # a notifier error must not fail the run the release gate reads. Never on a fork,
+  # whose token cannot write issues.
+  notify-flaky:
+    needs: [ui-e2e]
+    if: ${{ !cancelled() && needs.ui-e2e.result != 'skipped' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      actions: read
+    steps:
+      - name: Download the flaky-test list
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-flaky
+          path: flaky
+      - name: Open or update one issue per flaky test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          [ -s flaky/flaky.tsv ] || { echo "no flaky tests"; exit 0; }
+          while IFS=$'\t' read -r spec name state; do
+            [ -n "$spec" ] || continue
+            title="flaky: ${spec} › ${name}"
+            title="${title//\"/}"
+            existing="$(gh issue list --state open --search "\"$title\" in:title" --json number,title | jq -r --arg t "$title" 'map(select(.title == $t))[0].number // empty')"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Flaked again ($state): $RUN_URL" || echo "::warning::could not comment on #$existing"
+            else
+              body=$(printf '%s\n' \
+                "A Playwright test passed only on a retry." \
+                "" \
+                "Run: $RUN_URL" \
+                "Spec: $spec" \
+                "State: $state" \
+                "" \
+                "A flake that is not quarantined fails the e2e gate. Fix it, or quarantine it in ui/e2e/quarantine.txt with this issue, an owner and an expiry at most 14 days out.")
+              # One failed call (a bot actor as assignee, an API blip) must not
+              # cost every later flaky test its issue.
+              gh issue create --title "${title:0:250}" --body "$body" --assignee "$ACTOR" \
+                || gh issue create --title "${title:0:250}" --body "$body" \
+                || echo "::warning::could not open an issue for $spec"
+            fi
+          done < flaky/flaky.tsv
+
   # ── the notification a red push run on main never had ──────────────────────
   # A PR's red run blocks only that PR — the required-checks gate at the branch
   # protection layer already tells its author. A push run on main blocks
@@ -1518,7 +1618,7 @@ jobs:
   # run trips it; scoped to push-to-main only (`if:`, not the trigger list) so
   # a red PR or merge-queue run never opens one.
   main-red:
-    needs: [changes, go, build, diagrams, ui, ui-e2e, helm, helm-install-test, compose, conformance, conformance-k8s, envbuild-integration, test-pg, trivy, notices, gates, dco]
+    needs: [changes, go, build, diagrams, ui, ui-e2e, notify-flaky, helm, helm-install-test, compose, conformance, conformance-k8s, envbuild-integration, test-pg, trivy, notices, gates, dco]
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

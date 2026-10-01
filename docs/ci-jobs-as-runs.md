@@ -18,7 +18,7 @@ in [POLICIES.md](POLICIES.md); this page does not repeat them.
 | Piece | What it fixes | Who sets it | Where |
 |---|---|---|---|
 | Deployment default policy | The policy for every principal no profile binds, and the grant eligibility a profile can only narrow (which secret a grant may name) | Operator, at boot | `WARDYN_DEFAULT_POLICY` |
-| Governance profile | The CI principal's ceiling: egress list, confinement floor, eligible grants; no interactive runs, no user drive, a cap on concurrent runs | Admin | `wardyn governance apply` |
+| Governance profile | The CI principal's ceiling: egress list, confinement floor, eligible grants; no interactive runs, no user drive, a cap on concurrent runs | Admin | `wardyn governance set` |
 | Image capability | The one custom image the CI principal may launch | Admin | `/permissions` |
 | Runner token | Stored by the CI principal, delivered to the run as an `env_secret` grant | CI principal | `wardyn secret set` |
 | Run policy | This job's own egress list and grants, inside the ceiling | Your repo | `--policy-file` |
@@ -140,13 +140,13 @@ cat > ci-governance.json <<EOF
   ]
 }
 EOF
-wardyn governance apply ci-governance.json
+wardyn governance set ci-governance.json
 ```
 
 The `id` is any UUID you make up. It only ties the assignment to the profile
 inside this file. Assign at the `user` tier: a user-tier row settles the ceiling
 without depending on the token's group snapshot, which is frozen when the token is
-minted and fails closed when it is missing or truncated. `apply` is an upsert by profile name, so re-running it changes nothing.
+minted and fails closed when it is missing or truncated. `set` is an upsert by profile name, so re-running it changes nothing.
 
 | Field | What it holds for CI |
 |---|---|

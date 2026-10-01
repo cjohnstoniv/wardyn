@@ -210,3 +210,60 @@ func TestClamp_PushRulesReviewPathsAndHold(t *testing.T) {
 		t.Error("clamp aliased the ceiling's own PushRules.RequireReviewPaths backing array")
 	}
 }
+
+// TestClamp_PushRulesFileSizeCapsLikeACeiling: when both set max_file_size_mib
+// the smaller non-zero wins; a proposal can neither raise a ceiling's limit
+// nor turn it off with 0; a ceiling alone is kept, inherited or merged.
+func TestClamp_PushRulesFileSizeCapsLikeACeiling(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.PushRules = &types.PushRulesSpec{MaxFileSizeMiB: 10}
+	for _, tc := range []struct {
+		name     string
+		proposed *types.PushRulesSpec
+		want     int
+	}{
+		{"a larger proposal is capped", &types.PushRulesSpec{MaxFileSizeMiB: 50}, 10},
+		{"off (0) is capped to the ceiling's limit", &types.PushRulesSpec{DenyPaths: []string{"infra/**"}}, 10},
+		{"a smaller proposal keeps its own", &types.PushRulesSpec{MaxFileSizeMiB: 2}, 2},
+		{"no proposal rules inherits the ceiling's", nil, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := Clamp(types.RunPolicySpec{PushRules: tc.proposed}, ceiling, 0)
+			if got.PushRules == nil || got.PushRules.MaxFileSizeMiB != tc.want {
+				t.Errorf("push_rules = %+v, want max_file_size_mib %d", got.PushRules, tc.want)
+			}
+		})
+	}
+
+	// A silent ceiling leaves the proposal's own limit alone.
+	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 50}}, operatorCeiling(t), 0)
+	if got.PushRules == nil || got.PushRules.MaxFileSizeMiB != 50 {
+		t.Errorf("push_rules = %+v, want the proposal's own 50 untouched", got.PushRules)
+	}
+}
+
+// TestClamp_PushRulesDenyNewExecutablesCannotBeTurnedOff: a ceiling's true
+// reaches the merged spec even though it alone is not a rule the broker
+// enforces yet (PushRulesSpec.IsSet), and a proposal's true stays true.
+func TestClamp_PushRulesDenyNewExecutablesCannotBeTurnedOff(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.PushRules = &types.PushRulesSpec{DenyNewExecutables: true}
+	for name, proposed := range map[string]*types.PushRulesSpec{
+		"no proposal rules":       nil,
+		"proposal says false":     {DenyPaths: []string{"infra/**"}},
+		"proposal sets it itself": {DenyNewExecutables: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, _ := Clamp(types.RunPolicySpec{PushRules: proposed}, ceiling, 0)
+			if got.PushRules == nil || !got.PushRules.DenyNewExecutables {
+				t.Errorf("push_rules = %+v, want deny_new_executables kept on", got.PushRules)
+			}
+		})
+	}
+
+	// A silent ceiling leaves a proposal's own value alone.
+	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyNewExecutables: true}}, operatorCeiling(t), 0)
+	if got.PushRules == nil || !got.PushRules.DenyNewExecutables {
+		t.Errorf("push_rules = %+v, want the proposal's own true untouched", got.PushRules)
+	}
+}

@@ -200,7 +200,9 @@ export function ModelAccessProvider({
   const [target, setTarget] = React.useState<DoorTarget | null>(null);
   const targetRef = React.useRef<DoorTarget | null>(null);
   const statusRef = React.useRef(status);
-  React.useEffect(() => {
+  // A layout effect: a click that lands after the commit but before passive
+  // effects must see the new status, not the previous one.
+  React.useLayoutEffect(() => {
     statusRef.current = status;
   }, [status]);
   const [focusSeq, setFocusSeq] = React.useState(0);

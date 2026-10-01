@@ -118,8 +118,9 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// adoDisconnectRow is the per-user Azure DevOps row the caller may use, the
-// same selection /me/scm-access makes; ok=false when there is none.
+// adoDisconnectRow is the Entra sign-in row the caller may use; ok=false when
+// there is none. An own-token row is never it: its stored token is deleted on
+// its own route, and choosing it would forget the wrong secret.
 func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 	if s.cfg.Store == nil {
 		return "", false, nil
@@ -132,6 +133,7 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	all = slices.DeleteFunc(all, func(pr perUserADORow) bool { return isADOOwnTokenRow(pr.row) })
 	rows := capVisible(ctx, s, capWorkspaceProvider, all, func(pr perUserADORow) string { return pr.row.ID })
 	if len(rows) == 0 {
 		return "", false, nil

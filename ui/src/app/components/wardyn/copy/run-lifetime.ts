@@ -29,13 +29,12 @@ export function endsLocked(days: number): string {
 export function endsCapped(days: number): string {
   return `That's as far as your admin allows (${days} day${days === 1 ? "" : "s"}). You can extend again later.`;
 }
-// ENDS_CAPPED_LOOSENED (packet:268, design:312) is defined for completeness
-// but UNUSED: nothing on the wire distinguishes "still capped by the live
-// policy" from "capped by a now-stale captured value the admin has since
-// loosened" — run.run_limits is captured once at create and never updated
-// (run_limits_reclamp.go's own comment: "Loosening never reaches a live
-// run"). Filed as issue #1322 (a companion to #1319/#1320) rather than
-// guessed at.
+// ENDS_CAPPED_LOOSENED (packet:268, design:312) is shown in place of endsCapped
+// when the PATCH response says ends_cap_loosened (#1322): the end was capped by
+// the limit this run captured at launch, and the launch profile's own limit has
+// since been loosened. A live run's captured limit is tightened by the sweep
+// (run_limits_reclamp.go) but never loosened, so a new run is what picks the
+// new limit up.
 export const ENDS_CAPPED_LOOSENED =
   "Your admin loosened this after the run started. Start a new run to get the new limit.";
 export function endsTightened(dateText: string): string {
@@ -109,13 +108,11 @@ export const ENDED_TITLE = "This run ended at its end time";
 export function endedBody(dateText: string): string {
   return `It has no network. Its files are kept until ${dateText}. Extend to revive it.`;
 }
-// F4/R2-1 (PR #1317 review, rounds 1-2): the grace deadline is lost_at +
-// Config.EndedRunGrace, and EndedRunGrace is server-only config, never on the
-// wire (filed as #1320). Rendering endedBody(lost_at) would print the moment
-// the run ENDED, not the moment its files go away — a wrong, not just a
-// missing, date. R2-1 rejected the first interim wording ("...before its
-// files are cleaned up") as unapproved copy nobody drew — this renders only
-// the two approved sentences that need no date at all, until #1320 lands.
+// F4/R2-1 (PR #1317 review, rounds 1-2): endedBody renders the server's
+// kept_until (#1320), the moment the files go away, never lost_at, which is the
+// moment the run ENDED. ENDED_BODY_NO_DATE is what an interactive run shows when
+// the response carries no kept_until (a grace of 0, or a run not kept): it
+// renders only the two approved sentences that need no date.
 export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it.";
 // R2-2 (PR #1317 round-2 review, F9 rejected): a task run's own agent ran
 // once, at dispatch — reviveEligible always refuses one ("task run's agent

@@ -839,6 +839,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the workspace-provider policy — `GET /workspace-providers` and `PUT /workspace-providers`: which git hosts (and which org paths on them) a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings. Both verbs, because a provider's allowed addresses name the org's forge hosts and org paths — corporate topology, the same reason the `/site-config` reads above are gated. A member is told the provider KIND in a refusal, never the addresses | ⛔ admin only |
 | the Azure DevOps organisation check — `POST /workspace-providers/git/{id}/org-check`: on a `minted_pat` row, it uses the caller's own Azure DevOps connection to create and at once revoke two short tokens, to learn whether the app registration holds the token permissions and whether the organisation's maximum token lifespan is on. Beside the rows it checks, and it creates tokens in the caller's name | ⛔ admin only |
+| the Azure DevOps token refusal — `GET /workspace-providers/git/{id}/ado-pat-refusal`: the newest launch in the last seven days refused because the organisation restricts who may create tokens, as the refused person's email (from their People record or an API token of theirs; a person with neither is passed over) and the time, or 204 for none. Beside the rows it explains; it names a person other than the caller | ⛔ admin only |
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, whether each is on, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Since 0.8 a row carries no model credential: model access is a model provider. Both verbs, for the sibling row's reason: the block names the org's model-provider choices. A member is served a narrower document instead — the `enabled` field on `GET /setup/status`'s harness rows | ⛔ admin only |
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
@@ -901,6 +902,14 @@ blocking) until one is disabled. Rows in `own_pat` mode sign nobody in, so any n
 enabled at once. A `minted_pat` row must name the console's own OIDC application and the console must
 hold a client secret (`WARDYN_OIDC_CLIENT_SECRET`), or it is refused at write and left unusable at
 boot (an error in the daemon log naming `ado_pat_needs_console_app`).
+
+**A disabled row stays closed, and says so.** A launch into a disabled git provider row's organisation
+is refused naming the row. Its hosts are left out of `effective_scm_hosts` and out of run egress only
+when no enabled row also names the same host: with several organisations on `dev.azure.com`, one off and
+another on, the host stays effective. `GET /site-config` also returns `withheld_scm_hosts`, read-only
+like `effective_scm_hosts` (a `PUT` ignores it, and it is never stored): one
+`{host, provider_id, provider_kind}` entry per host a disabled row claims that `effective_scm_hosts`
+omits. A host an enabled row also names is not listed. The list is absent when nothing is withheld.
 
 **The upgrade that retired the shared Azure DevOps credentials (0.8.2).** Migration
 `0103_retire_ado_shared_credentials` rewrites the stored rows (a row left with no per-person lane is
@@ -1189,6 +1198,19 @@ mode can prove a second human decided. Configure SSO to use this switch, or
 leave it unset. The refusal is scoped to `egress_domain` decisions, so nothing
 else in local mode changes.
 
+**Optional: the same for Azure DevOps capability escalations.** A member may decide
+an Azure DevOps capability escalation on a run they own, and ownership is the whole
+member rule, so a run's creator can approve their own escalation, admin-class
+capabilities included. Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who
+creates the run can neither approve nor deny its Azure DevOps escalation; a
+different administrator decides. It is a separate switch, off by default, with
+every rule above: the same `403` / `second_human_required`, the approval left
+`PENDING`, the `503` in local mode (plus a boot warning), and the `admin-token`
+break-glass, whose `approval.second_human.bypass` row names this switch in its
+`switch` field. Each switch governs only its own kind. A run's attention state
+follows the setting, as it does for egress: it stops naming the creator as the
+person who can act.
+
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
 shared token carries no per-human identity — there is no second human to compare
@@ -1205,7 +1227,7 @@ lease.** Every other scope on a `credential` approval is a `400`, and so is any
 scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
 credential helper git invokes on every operation
 (`docs/adoption/corp-network-onboarding-findings.md` B2). Approving with
-`decision_scope=run` (`wardyn approve <id> --scope run`) makes that one decision
+`decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision
 re-mintable for the rest of the run. Three things bound it:
 **`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key` is
 materialized once and wiped, `api_key` never leaves the broker, so none has the
@@ -2109,7 +2131,7 @@ its own.
 | `GET /api/v1/tokens` | admin or `security_admin` | every token in the deployment |
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
-Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
+Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also
 revokes their API tokens and removes their registered SSH keys. The `all` arm
 applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
@@ -2683,8 +2705,8 @@ admin walking the member path, not an incident.
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; `internal/api/governance_run_doors.go`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` (`internal/api/select_by_tier.go`), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
-| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
-| `model_provider_unavailable` | #987: at create and Review alike (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
+| `model_provider_unavailable` | #987: at create and Review alike, and at the admin record door (`POST /workspaces/{id}/record`, the same writer) (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
@@ -2942,10 +2964,16 @@ do for you:
 `WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
 **unset** value is not "deny all", it fails **open** — any account the IdP
 authenticates gets a session, and without the domains list the `email_verified`
-claim is not checked at all (both checks live inside the domains branch —
-`AllowedEmailDomains`, `internal/auth/oidc/oidc.go`). Compose already pins it
+claim is not checked at all unless `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is on
+(the domain check lives inside the domains branch — `AllowedEmailDomains`,
+`internal/auth/oidc/oidc.go`). Compose already pins it
 to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as
 shipped; re-point it when you swap Dex for a corporate IdP.
+
+`WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED=true` applies the `email_verified` check
+without a domains list (default off): a missing claim counts as unverified and is
+refused, exactly as below, so on an IdP that never sends it (Entra) it denies every
+login.
 
 With the domains list set, `email_verified` **absent** from the id_token and
 `email_verified: false` are two different denials, logged and coded separately
@@ -4505,7 +4533,7 @@ browser bundle or an old CLI, so:
 | 0.7.5 proxy sidecar, 0.7.6 daemon | No hold. The 423 is an unrecognised status, the re-resolve fails closed, and the run's model call fails as it did in 0.7.5. The approval row is still raised and still visible. |
 | 0.7.6 proxy sidecar, 0.7.5 daemon | No 423 is ever answered, so the hold never opens. Byte-identical to 0.7.5. |
 | 0.7.5 console, 0.7.6 daemon | The row renders through `WIRE_TO_COPY`'s fallback (the raw kind string in the chip) and the screen does not crash; the Approve/Deny pair is offered and the server answers 409. Tell people on an old bundle to reload. |
-| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; `wardyn approvals list` prints it verbatim. |
+| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; the 0.7.5 `approvals list` prints it verbatim. |
 
 ### Internal model gateway
 
@@ -4802,7 +4830,7 @@ against the old names gets a `404`/`400` on 0.8, not a warning. History is not
 rewritten — an audit row written before 0.8 keeps its pre-0.8 action and field
 names forever; only what the server emits GOING FORWARD changed.
 
-| Surface | Pre-0.8 | 0.8 |
+| Surface | Before | After |
 |---|---|---|
 | The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin","user_type":"…"}` |
 | `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
@@ -4812,6 +4840,10 @@ names forever; only what the server emits GOING FORWARD changed.
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
 | Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` (grew a `typeID` param the same release, #835/UT-13) |
 | Go: `internal/api` | `auditMemberPolicyDrops`, `authorizeMemberDecision`, `boundMemberSpec`, `denyMemberCapability`, `denyMemberDrive`, `denyMemberGovernance`, `denyMemberRequest`, `denyMemberRunQuota`, `denyMemberSeededImage`, `denyMemberWorkspaceProviders`, `filterMemberGrants`, `handleSetMemberMode`, `memberDropsIntegration`, `memberEnvSecretIsAdminOnly`, `memberModeRequest`, `memberModelAccess`, `memberMountAllowed`, `memberMountPosture`, `memberPreviewApplies`, `memberSafeCapabilities`, `memberSafeIntegration`, `memberSafeIntegrations`, `memberSourcesAllowed`, `memberVisibleOperatorSecretNames`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember` | `auditUserPolicyDrops`, `authorizeUserDecision`, `boundUserSpec`, `denyUserCapability`, `denyUserDrive`, `denyUserGovernance`, `denyUserRequest`, `denyUserRunQuota`, `denyUserSeededImage`, `denyUserWorkspaceProviders`, `filterUserGrants`, `handleSetUserView`, `userDropsIntegration`, `userEnvSecretIsAdminOnly`, `userViewRequest`, `userModelAccess`, `userMountAllowed`, `userMountPosture`, `userPreviewApplies`, `userSafeCapabilities`, `userSafeIntegration`, `userSafeIntegrations`, `userSourcesAllowed`, `userVisibleOperatorSecretNames`, `narrowUserInlinePolicy`, `redactSetupStatusForUser`, `redactSpecForUser` |
+| CLI: approvals | `approvals list\|get`, `approve <id>`, `deny <id>` | `wardyn approval list\|get\|approve\|deny` — clean break, no alias, 0.8.4; `--reason`, `--scope`, `--until` unchanged |
+| CLI: run logs | `logs <run-id>` | `wardyn run logs <run-id>` — clean break, no alias, 0.8.4 |
+| CLI: sessions | `sessions list\|revoke` | `wardyn session list\|revoke` — clean break, no alias, 0.8.4; `revoke` still takes exactly one of `--sub` or `--all` |
+| CLI: upsert verb | `drive apply`, `governance apply`, `preset apply` | `wardyn drive set`, `wardyn governance set`, `wardyn preset set` — clean break, no alias, 0.8.4; `set` is the one upsert verb, as it already is on `policy`, `secret` and `site-config` |
 
 `denyMemberField` — the old shared helper this table's first cut of the sweep
 named — does not appear in the 0.8 column: it is not renamed but RETIRED, folded

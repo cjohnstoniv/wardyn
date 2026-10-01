@@ -421,3 +421,42 @@ func TestADODisconnect_RevokesATokenMintedDuringIt(t *testing.T) {
 		t.Errorf("ado_pat.revoke reasons = %v, want [disconnect]", got)
 	}
 }
+
+// An own-token row listed before the Entra sign-in row must not take the
+// disconnect: it forgets the sign-in row's stored sign-in, names that row in
+// the audit, and leaves the next resolve with nothing to redeem.
+func TestADOPATConsole_DisconnectSkipsOwnTokenRows(t *testing.T) {
+	fx := newADOConsoleLane(t, true)
+	own := ownPATTestRow()
+	own.ID = "own-first"
+	own.BaseURLs = []string{"https://dev.azure.com/otherorg"}
+	fx.st.site.WorkspaceProviders.Git = append([]types.GitProvider{own}, fx.st.site.WorkspaceProviders.Git...)
+	if err := validateOneEntraRow(fx.st.site.WorkspaceProviders.Git); err != nil {
+		t.Fatal(err)
+	}
+	signInRow := fx.st.site.WorkspaceProviders.Git[1].ID
+
+	if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNoContent {
+		t.Fatalf("disconnect status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if _, stored := fx.stored(t, fx.subject); stored {
+		t.Error("the Entra sign-in is still stored after disconnect")
+	}
+	if w, _ := fx.resolve(t, "dev.azure.com", nil); w.Code == http.StatusOK {
+		t.Error("a run still minted a token after disconnect")
+	}
+	rows := fx.audit.find(adoPATAuditDisconnect)
+	if len(rows) != 1 || rows[0].Target != signInRow || !strings.Contains(string(rows[0].Data), `"removed":true`) {
+		t.Errorf("disconnect audit = %+v, want one removed row naming %q", rows, signInRow)
+	}
+}
+
+// With only an own-token row configured there is no Entra sign-in to
+// disconnect: the same 404 as no row at all.
+func TestADOPATConsole_DisconnectOwnTokenRowOnlyIsUnconfigured(t *testing.T) {
+	fx := newADOConsoleLane(t, false)
+	fx.st.site.WorkspaceProviders.Git = []types.GitProvider{ownPATTestRow()}
+	if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNotFound {
+		t.Fatalf("disconnect status = %d, want 404: %s", w.Code, w.Body.String())
+	}
+}

@@ -393,19 +393,6 @@ export const SUBSCRIPTION_LANE_META: Record<SubscriptionLane, SubscriptionLaneMe
   resident_host: { title: "Host CLI login", residency: "resident_mount", tooltip: T.HOSTCLI_LINE },
 };
 
-export type BedrockLane = "bearer" | "aws_dir" | "static";
-export interface BedrockLaneMeta {
-  title: string;
-  residency: ResidencyKind;
-  extra?: string;
-}
-export const BEDROCK_LANE_META: Record<BedrockLane, BedrockLaneMeta> = {
-  bearer: { title: "Bearer token", residency: "proxy_injected" },
-  aws_dir: { title: "Host ~/.aws profile", residency: "resident_mount", extra: "boot config" },
-  // Raw access keys are exported as environment variables, not a mounted file.
-  static: { title: "Access keys", residency: "resident_env" },
-};
-
 // ---- Impossible-as-fact map (never a toggle) ----
 // Derived straight from CAPS' own `fact` rows above (type → capability →
 // verbatim T.X_* reason) so the impossibility text can't drift from the

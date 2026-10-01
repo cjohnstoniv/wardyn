@@ -216,14 +216,30 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
+	res, err := c.PutSiteConfigResult(ctx, cfg)
+	return res.SiteConfig, res.DanglingSecretRefs, res.OnboardingCompletedAtIgnored, err
+}
+
+// SiteConfigPutResult is PUT /site-config's answer: the stored document plus
+// the write's advisory signals. A field is added here rather than a return
+// value to PutSiteConfig, whose signature is public.
+type SiteConfigPutResult struct {
+	types.SiteConfig
+	DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
+	OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
+	// BrandingLogoPending (#1215): branding.logo_path was valid but not attached,
+	// because the console has no branding record yet. Apply again after saving
+	// the Branding card.
+	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+}
+
+// PutSiteConfigResult is PutSiteConfig with every advisory signal, including
+// the ones added after its signature was fixed. PUT /api/v1/site-config.
+func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
 	cfg.Integrations = nil
-	var resp struct {
-		types.SiteConfig
-		DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
-		OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
-	}
-	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
-	return resp.SiteConfig, resp.DanglingSecretRefs, resp.OnboardingCompletedAtIgnored, err
+	var resp SiteConfigPutResult
+	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
+	return resp, err
 }
 
 // SetupStatus returns the first-run setup checklist as raw JSON (the response is
@@ -526,8 +542,8 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 // bulk-write route, and none is added. A drive is routed by the id doc
 // carries: one already issued by GetDrives (non-nil) is REPLACED in place
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
-// > f && wardyn drive apply f` a no-op: the ids `get` wrote back are exactly
-// what route the re-`apply` to an update of the same rows, not a second copy
+// > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
+// what route the re-`set` to an update of the same rows, not a second copy
 // under a fresh name. A grant carries no id of its own; every one is POSTed,
 // and the server's own (subject_type, subject) upsert repoints an existing
 // allocation rather than duplicating it.
@@ -686,7 +702,7 @@ func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
 // assignment doc does not name (assignments first, since a profile still
 // referenced by a to-be-pruned assignment fails the FK restrict). Without it —
 // the default — nothing present server-side but absent from doc is touched,
-// matching drive apply's own "nothing the file omits is touched" rule.
+// matching drive set's own "nothing the file omits is touched" rule.
 //
 // Every write's saved row replaces the caller's copy of doc in place, so a
 // partial failure (returned as the second value) leaves doc's earlier entries

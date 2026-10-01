@@ -319,6 +319,9 @@ services:
       # keeps single-human approval; local mode REFUSES it (see docs/ENV.md), so
       # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
       WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
+      # The same four-eyes rule for Azure DevOps capability escalations. Same
+      # default (unset = off) and the same local-mode refusal.
+      WARDYN_CAPABILITY_SECOND_HUMAN: "${WARDYN_CAPABILITY_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       # internal/runner.ProxySidecarEnvKnobs copies these from wardynd's
       # OWN process env into every proxy sidecar it creates (docker Env / k8s
@@ -456,6 +459,9 @@ services:
       # is the loud failure; the 8080 hard-code was the silent one.
       WARDYN_OIDC_REDIRECT_URL: "${WARDYN_OIDC_REDIRECT_URL:-http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback}"
       WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
+      # Refuse a sign-in whose id_token lacks email_verified=true (an absent claim
+      # counts as unverified). Empty = off; see docs/ENV.md.
+      WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED: "${WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED:-}"
       # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
       # = every authenticated human is an operator (unchanged). Set it to a
       # comma-separated list of full addresses and every other signed-in human

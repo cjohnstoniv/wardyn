@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -243,6 +244,11 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), runResourcesExecTimeout)
 	defer cancel()
 
+	// Every read is tallied, walking or not: the script's other readings spawn
+	// processes too, and an idle sample must wait them out like a walk. A read
+	// begun inside a sample may not walk, but it is still counted.
+	mayWalk := s.pause.beginWalk(id)
+	defer func() { s.pause.endWalk(id, ctx.Err() != nil) }()
 	enforced := enforcedDiskWord(ctx, s.cfg.Runner, run.DiskMiB)
 	arm, cachedKB := enforced, ""
 	if enforced != types.StorageEnforcementFilesystem { // the other two arms walk a tree
@@ -252,14 +258,10 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 				arm, cachedKB = diskArmSkip, kb
 			}
 		}
-		if arm != diskArmSkip {
-			if s.pause.beginWalk(id) {
-				defer s.pause.endWalk(id)
-			} else {
-				arm = diskArmSkip
-				if enforced == "" {
-					cachedKB, _ = s.pause.rootSample(id, now)
-				}
+		if arm != diskArmSkip && !mayWalk {
+			arm = diskArmSkip
+			if enforced == "" {
+				cachedKB, _ = s.pause.rootSample(id, now)
 			}
 		}
 	}
@@ -269,7 +271,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 			// The pod went between the run's last state write and this read
 			// (a finishing run's teardown): the same answer the flipped state
 			// gets a moment later, not a fault and not an audit row.
-			writeRunInspectGone(w, run)
+			writeRunInspectSandboxGone(w, run)
 			return
 		}
 		// Audit on FAILURE only — the console polls this endpoint, so an audit
@@ -312,9 +314,22 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeRunInspectGone is the run page widgets' 409 for a run whose sandbox no
-// longer exists, whether its state says so yet or not.
+// longer exists, whether its state says so yet or not. A run still in a live
+// state is finishing, not finished, and the sentence says which.
 func writeRunInspectGone(w http.ResponseWriter, run types.AgentRun) {
+	if !run.State.IsTerminal() {
+		writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "the sandbox is gone; the run is finishing (state="+string(run.State)+")")
+		return
+	}
 	writeErrorReason(w, http.StatusConflict, reasonRunInspectTerminal, "run has finished; its sandbox is gone (state="+string(run.State)+")")
+}
+
+// writeRunInspectSandboxGone is writeRunInspectGone for a sandbox the runner
+// reported gone (ErrSandboxGone), logged so a misclassification that persists
+// is not silent.
+func writeRunInspectSandboxGone(w http.ResponseWriter, run types.AgentRun) {
+	slog.Info("run inspect: sandbox gone", "run", run.ID, "state", run.State)
+	writeRunInspectGone(w, run)
 }
 
 // enforcedDiskWord is the word that binds this run's disk cap, `filesystem` or

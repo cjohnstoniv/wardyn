@@ -90,10 +90,11 @@ func isConcurrentMigrateRace(err error) bool {
 // package shares. Mirrors throwawayDatabase
 // (internal/store/store_workspace_migration_pg_test.go) — this package can't
 // import that test-only helper across packages, so this is its minimum local
-// twin, for the one test here that mutates a live trigger on the audit table
-// (#1301: TestMigrateRestoresADisabledChainTrigger disabling the chain
-// trigger on the SHARED database left a trap for any whole-chain verifier
-// that later ran against it, even though this test itself always restored it).
+// twin. Every test here that mutates a trigger on the audit table, or rewrites
+// the shared schema_migrations table, uses it (#1301, #1318): disabling the
+// chain trigger on the SHARED database left a trap for any whole-chain
+// verifier that later ran against it, even though the test itself always
+// restored it.
 func pgPoolIsolated(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("WARDYN_TEST_PG")
@@ -415,7 +416,7 @@ func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
 // schema), so replaying it at boot to fix one trigger is a bigger blast radius
 // than refusing — but the process must not continue silently either.
 func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	const name = "audit_events_no_update"
 	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events DISABLE TRIGGER `+name); err != nil {
@@ -423,7 +424,7 @@ func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE TRIGGER `+name); err != nil {
-			t.Errorf("re-enable %s: %v — the shared audit_events table is left writable", name, err)
+			t.Errorf("re-enable %s: %v — the throwaway database's audit_events is left writable", name, err)
 		}
 	})
 	err := Migrate(ctx, pool)
@@ -461,7 +462,7 @@ func auditTriggerState(t *testing.T, pool *pgxpool.Pool, name string) string {
 // ensureAuditTriggers: the chain trigger's arm restores, the append-only arm
 // refuses.
 func TestMigrateLeavesAnAlwaysTriggerAlone(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	for _, name := range append([]string{auditChainTrigger}, auditAppendOnlyTriggers...) {
 		t.Run(name, func(t *testing.T) {
@@ -534,7 +535,7 @@ func unapplyMigrations(t *testing.T, pool *pgxpool.Pool, names []string) {
 // logged — and the boot check that follows read the resulting 'O' as the normal
 // shipped state. docs/OPERATIONS.md promises this never happens.
 func TestMigrateKeepsAnAlwaysTriggerAcrossAnUpgrade(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	pending := chainTriggerMigrations(t)
 

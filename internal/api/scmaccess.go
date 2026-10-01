@@ -140,6 +140,11 @@ type SCMAccess struct {
 	// GitOnly is set on an Azure DevOps Server row: its token carries git and
 	// nothing else (ado_own_pat_server.go).
 	GitOnly bool `json:"git_only,omitempty"`
+	// RefusedAt (RFC 3339) is when Azure DevOps first refused the token before
+	// the expiry the person entered (a 401 answers a revoked token, an expired
+	// one and a missing scope alike). Informational: State is unchanged and
+	// the token is still used until ExpiresOn. A new token clears it.
+	RefusedAt string `json:"refused_at,omitempty"`
 
 	// ADOPATAccess adds the token console's facts (ado_pat_console.go).
 	ADOPATAccess
@@ -339,6 +344,9 @@ func (s *Server) scmAccessForOwnPAT(ctx context.Context, row types.GitProvider, 
 	}
 	now := s.cfg.Now()
 	out.Source, out.ExpiresOn = scmAccessSourceOwn, blob.ExpiresOn.Format(time.DateOnly)
+	if blob.RefusedAt != nil {
+		out.RefusedAt = blob.RefusedAt.UTC().Format(time.RFC3339)
+	}
 	switch {
 	case blob.expired(now):
 		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseTokenExpired

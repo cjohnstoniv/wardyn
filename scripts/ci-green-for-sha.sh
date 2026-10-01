@@ -9,9 +9,12 @@
 # pull request's run tested a merge commit, and a fork's run is not ours) on
 # <branch>, and every such run for <sha> must have finished with success. No
 # run, a run still going, a red, cancelled or skipped run: all mean "not
-# green". The branch matters because a release fast-forwards the same commit
-# onto main and release/X.Y: main's run must not wait on the release branch's.
-# An empty branch (a dispatch on a tag ref) counts the runs on every branch.
+# green". The branch matters because the same commit can run on more than one
+# branch (main, master, feature/**): main's run must not wait on another's. ci.yml
+# has no push run on release/** since #1461, because a release is judged by tree
+# (scripts/green-by-tree.sh, which counts a pull request's run too); this script
+# guards only the main-tip :latest. An empty branch (a dispatch on a tag ref)
+# counts the runs on every branch.
 #
 # Exit 0 = green. Exit 1 = not green (the caller skips the publish).
 # Exit 2 = could not tell (API or usage error); the caller must not publish.

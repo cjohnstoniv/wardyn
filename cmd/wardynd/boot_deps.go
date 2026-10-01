@@ -200,6 +200,22 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
 }
 
+// substrateDeps is the registration Deps every substrate constructor receives,
+// split out of buildRunnerFromFlags so a test can pin it (Record in particular)
+// without registering a spy substrate in the process-global registry.
+func substrateDeps(f *bootFlags, confRuntimes map[types.ConfinementClass]string, driveHostRoots []string) substrate.Deps {
+	return substrate.Deps{
+		ProxyImage:          *f.proxyImage,
+		DriveProbeImage:     *f.driveProbeImage,
+		ConfinementRuntimes: confRuntimes,
+		UserDriveHostRoots:  driveHostRoots,
+		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
+		// rather than letting the substrate hardcode Record — "off" must mean no
+		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
+		Record: substrate.RecordEnabled(*f.recordingSel),
+	}
+}
+
 // buildRunnerFromFlags resolves the optional sandbox runner: "none" (nil runner,
 // headless API-only) or any substrate registered in the substrate registry
 // (internal/runner/substrate). Substrates SELF-REGISTER at init() like every
@@ -248,16 +264,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 		}
 		return nil, "none", nil
 	}
-	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
-		ProxyImage:          *f.proxyImage,
-		DriveProbeImage:     *f.driveProbeImage,
-		ConfinementRuntimes: confRuntimes,
-		UserDriveHostRoots:  driveHostRoots,
-		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
-		// rather than letting the substrate hardcode Record — "off" must mean no
-		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
-		Record: substrate.RecordEnabled(*f.recordingSel),
-	})
+	sub, err := substrate.New(*f.runnerSel, substrateDeps(f, confRuntimes, driveHostRoots))
 	if err != nil {
 		// Discriminate WHY substrate.New failed before printing the
 		// same headline for both. A typo'd -runner or a substrate not compiled
@@ -387,17 +394,18 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		// background ctx per its doc), so an unreachable/stalled IdP must fail
 		// boot loudly inside the boot budget instead of hanging wardynd forever.
 		authn, err := oidc.New(bootCtx, oidc.Config{
-			IssuerURL:           *f.oidcIssuer,
-			InternalIssuerURL:   *f.oidcInternalIss,
-			ClientID:            *f.oidcClientID,
-			ClientSecret:        *f.oidcClientSecret,
-			RedirectURL:         *f.oidcRedirectURL,
-			BasePath:            *f.basePath,
-			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
-			ExtraScopes:         splitCSV(*f.oidcExtraScopes),
-			SecureCookies:       secureCookies,
-			RoleMap:             roleMap,
-			DefaultRole:         defaultRole,
+			IssuerURL:            *f.oidcIssuer,
+			InternalIssuerURL:    *f.oidcInternalIss,
+			ClientID:             *f.oidcClientID,
+			ClientSecret:         *f.oidcClientSecret,
+			RedirectURL:          *f.oidcRedirectURL,
+			BasePath:             *f.basePath,
+			AllowedEmailDomains:  splitCSV(*f.oidcEmailDomains),
+			RequireEmailVerified: *f.oidcRequireEmailVerified,
+			ExtraScopes:          splitCSV(*f.oidcExtraScopes),
+			SecureCookies:        secureCookies,
+			RoleMap:              roleMap,
+			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS
 			// keeps working as an admin allowlist with zero re-configuration
 			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
@@ -450,8 +458,8 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// that lets users self-assert email lets them claim an operator's
 			// address. Warn, don't fail: failing would break the additive
 			// unset-changes-nothing guarantee for the domains knob.
-			if len(splitCSV(*f.oidcEmailDomains)) == 0 {
-				slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but WARDYN_OIDC_EMAIL_DOMAINS is not — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list too")
+			if len(splitCSV(*f.oidcEmailDomains)) == 0 && !*f.oidcRequireEmailVerified {
+				slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but neither WARDYN_OIDC_EMAIL_DOMAINS nor WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list or the require flag too")
 			}
 		} else {
 			slog.Warn("wardynd: NOTE a first-class packaged team deployment (SAML/SCIM, per-user tokens) does not exist yet; " +
@@ -582,15 +590,16 @@ func warnRoleMapPosture(roleMap map[string]string, f *bootFlags, defaultRole str
 		if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
 			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = user); set a role map to derive admin/user from SSO roles/groups instead")
 		}
-	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
+	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 && !*f.oidcRequireEmailVerified {
 		// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
 		// (~:270), fired independently since either var can be set without
 		// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
 		// email-keyed privilege source riding an unverified IdP claim —
-		// email_verified is enforced only when the domains list is set.
+		// email_verified is enforced only when the domains list is set or
+		// WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is on.
 		for k := range roleMap {
 			if strings.Contains(k, "@") {
-				slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but WARDYN_OIDC_EMAIL_DOMAINS is not set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list too")
+				slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but neither WARDYN_OIDC_EMAIL_DOMAINS nor WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list or the require flag too")
 				break
 			}
 		}
