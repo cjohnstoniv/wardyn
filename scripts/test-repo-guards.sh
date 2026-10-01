@@ -600,6 +600,10 @@ else
         printf '%s' "$staging_run" | grep -qE -- "$pat" \
             || { bad "$REL: preflight-green's staging step no longer has a command matching '$pat' — a promoted digest would lose part of its proof (attestation call, signer workflow, source commit, revision label, 86400-second age limit)"; stage_fail=1; }
     done
+    # The age is the run's created_at: updated_at moves on `gh run rerun --failed`
+    # while the image jobs it keeps stay as old as they were.
+    printf '%s' "$staging_run" | grep -qE -- '--jq \.created_at' && ! printf '%s' "$staging_run" | grep -q 'updated_at' \
+        || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
     promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
     printf '%s' "$promote_copy" | grep -qE '^[[:space:]]*cosign copy --force ' \
         && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \

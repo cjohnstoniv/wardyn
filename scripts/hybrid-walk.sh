@@ -3,17 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # T-41 (#701): hybrid federation beyond Postgres — the laptop-compose-to-
-# org-kind walk. What IngestDeviceAudit itself does (the batch-splice refusal,
-# duplicate-name MintEnrolmentToken/CreateDevice 23505 arms) is ALREADY
-# PROVEN, hermetically, by test/apie2e/federation_test.go against a real
-# server on both ends (#1117) — this walk does not repeat it. bootHybrid's
-# ResetFederation-after-Put ordering (including every crash-recovery
-# permutation) is ALREADY PROVEN by cmd/wardynd/boot_hybrid_test.go's own
-# table (TestBootHybrid_ResumesResetAfterCrashBeforeReset and neighbours) —
-# not repeated here either. The migration-0078 (formerly numbered 0070 before
-# a later renumbering) CONCURRENTLY question is answered in that file's own
-# comment, not here. The macOS launchd smoke is OWNER (a real laptop, not a
-# CI runner).
+# org-kind walk. What IngestDeviceAudit itself does is ALREADY PROVEN,
+# hermetically, against a real Postgres: the batch-splice refusal by
+# TestPG_Devices_IngestBatchSpliceRefused
+# (internal/store/store_devices_federation_pg_test.go:499) and the duplicate
+# token/credential hash (23505) arms of MintEnrolmentToken/CreateDevice by
+# TestPG_Devices_DuplicateCredentialsAreConflicts
+# (internal/store/store_devices_pg_test.go:175) — this walk does not repeat
+# them. bootHybrid's ResetFederation-after-Put ordering (including every
+# crash-recovery permutation) is ALREADY PROVEN by
+# cmd/wardynd/boot_hybrid_test.go's own table
+# (TestBootHybrid_ResumesResetAfterCrashBeforeReset and neighbours) — not
+# repeated here either. The migration-0078 (formerly numbered 0070 before a
+# later renumbering) CONCURRENTLY question is answered in that migration's own
+# comment (internal/db/migrations/0078_audit_events_device_origin_idx.sql), not
+# here. The macOS launchd smoke is OWNER (a real laptop, not a CI runner).
 #
 # What is left, and what THIS walk proves: two REAL wardynd processes, never
 # faked — the "org" is `make kind-quickstart` on a real (Calico-enforced) kind
@@ -331,6 +335,44 @@ stop_relay() {
   docker stop "${RELAY_CONTAINER}" >/dev/null 2>&1 || true
 }
 
+# #701: the evidence this walk uploads must hold no credential. The log is the
+# one the nightly tees this script's output into (WARDYN_HYBRID_WALK_LOG
+# overrides where); the evidence directory is everything else it uploads. The
+# prefixes are the ones Wardyn issues (enrolment token, device credential, API
+# token, delegated token, delegate credential) and an age identity; the org
+# admin token has no prefix, so it is matched as a fixed string read from a
+# pipe, never from an argument. Binary files are scanned as text. Only file
+# NAMES are printed, never a matching line, and no message spells a pattern, so
+# this scan cannot trip on its own output. A read error fails the scan, and a
+# flagged file is deleted: the nightly uploads these paths under `if: always()`,
+# so failing alone would not keep the material out of the artifact.
+WALK_LOG="${WARDYN_HYBRID_WALK_LOG:-${ROOT}/test/reports/e2e/hybrid-walk.log}"
+scan_evidence_for_secrets() {
+  local targets=("${EVIDENCE_DIR}") hits="" found rc f
+  [[ -f "${WALK_LOG}" ]] && targets+=("${WALK_LOG}")
+  found="$(grep -rlaE 'wde_|wdd_|wdn_|wdg_|wdp_|AGE-SECRET-KEY-' "${targets[@]}" 2>/dev/null)"; rc=$?
+  if [[ ${rc} -gt 1 ]]; then
+    echo "hybrid-walk: FAILED — the evidence scan could not read every uploaded file (grep exit ${rc})" >&2
+    return 1
+  fi
+  hits="${found}"
+  if [[ -n "${ORG_ADMIN_TOKEN:-}" ]]; then
+    found="$(grep -rlaF -f <(printf '%s\n' "${ORG_ADMIN_TOKEN}") "${targets[@]}" 2>/dev/null)"; rc=$?
+    if [[ ${rc} -gt 1 ]]; then
+      echo "hybrid-walk: FAILED — the evidence scan could not read every uploaded file (grep exit ${rc})" >&2
+      return 1
+    fi
+    hits="$(printf '%s\n%s\n' "${hits}" "${found}" | sed '/^$/d' | sort -u)"
+  fi
+  if [[ -n "${hits}" ]]; then
+    echo "hybrid-walk: FAILED — credential material in the uploaded evidence; these files were deleted so the upload cannot publish them:" >&2
+    echo "${hits}" >&2
+    while IFS= read -r f; do rm -f -- "${f}"; done <<<"${hits}"
+    return 1
+  fi
+  echo "evidence scan: no credential material in ${#targets[@]} uploaded location(s)"
+}
+
 teardown() {
   compose logs wardynd >"${EVIDENCE_DIR}/wardynd.log" 2>&1 || true
   docker logs "${RELAY_CONTAINER}" >"${EVIDENCE_DIR}/relay.log" 2>&1 || true
@@ -346,6 +388,7 @@ teardown() {
     org_api DELETE "/api/v1/admin/devices/${DEVICE_ID}" >/dev/null 2>&1 || true
   fi
   rm -rf "${TMPDIR}"
+  scan_evidence_for_secrets || exit 1
 }
 trap teardown EXIT
 

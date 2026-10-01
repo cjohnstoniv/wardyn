@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 )
 
@@ -78,6 +79,15 @@ type adoPATError struct {
 	Status        int
 	ServiceError  string
 	PatTokenError string
+}
+
+// adoPATTransientStatus reports whether an HTTP status says nothing about the
+// token and the same request may succeed later: a timeout (408), too early
+// (425), rate limited (429) or a server error. Every PAT request path reads
+// transience from here.
+func adoPATTransientStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooEarly ||
+		status == http.StatusTooManyRequests || status >= 500
 }
 
 func (e *adoPATError) Error() string {

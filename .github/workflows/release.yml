@@ -275,11 +275,13 @@ jobs:
           NIGHTLY_SHA: ${{ steps.green.outputs.nightly_sha }}
         run: |
           set -euo pipefail
-          # A fresh build carries Debian fixes that a stale one lacks.
-          updated="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${NIGHTLY_RUN}" --jq .updated_at)"
-          age=$(( $(date +%s) - $(date -d "${updated}" +%s) ))
+          # A fresh build carries Debian fixes that a stale one lacks. The age is the
+          # run's created_at: updated_at moves on `gh run rerun --failed`, which
+          # keeps the image jobs it did not rerun.
+          created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${NIGHTLY_RUN}" --jq .created_at)"
+          age=$(( $(date +%s) - $(date -d "${created}" +%s) ))
           if [ "${age}" -gt 86400 ]; then
-            echo "nightly run ${NIGHTLY_RUN} finished ${updated}, more than 24 hours ago: dispatch a fresh nightly on the candidate"
+            echo "nightly run ${NIGHTLY_RUN} was created ${created}, more than 24 hours ago: dispatch a fresh nightly on the candidate"
             exit 1
           fi
           digests='{}'

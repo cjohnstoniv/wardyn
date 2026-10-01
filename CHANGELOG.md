@@ -199,7 +199,9 @@ runs on the first start; it adds one column with a default and changes no existi
     provenance, into `ghcr.io/cjohnstoniv/staging/<image>:run-<run_id>`. `release.yml` gains a `path`
     input (`build`, the default, or `promote`): promote copies those digests to the release tags,
     refusing staging older than 24 hours or one whose revision label or attestation does not match,
-    then signs, scans and attests them. A tag push still builds.
+    then signs, scans and attests them. A tag push still builds. The age is the run's `created_at`
+    here and in `release-patch`: `gh run rerun --failed` refreshes `updated_at` but keeps the old
+    image jobs, so a stale nightly needs a fresh dispatch.
   - `release-commit.sh` and `verify-release.sh` move into `scripts/`, tested; a repeated `--apply`
     refuses (exit 4) instead of duplicating the CHANGELOG section, and `--expect-tip` takes any unique
     7 to 40 hex prefix.
@@ -215,6 +217,21 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Fixed
 
+- **A failed console-logo write no longer hides a committed site-config save from the audit log.**
+  `PUT /site-config` stored the document, then answered `500` before it wrote the `site_config.write` row
+  when the logo write failed. The row is now written first and carries `branding_logo_failed: true`; the
+  response is still the `500`, and the same apply repeated finishes the logo.
+- **A rate-limited Azure DevOps token revoke is retried, including on a running run.** An HTTP 429 (or 408 or
+  425) on a run token's revoke was treated as a permanent refusal: the record was closed and the token stayed
+  valid to its expiry. It now stays recorded and the sweep retries it. The sweep also retries a revoke that failed
+  transiently on a run that is still running (a drift refusal, or a pause revoke followed by a resume); a token a
+  renewal or widening kept, with no failed revoke, is still left to its expiry.
+- **Azure DevOps Disconnect forgets the sign-in row it names, and Connect works for a person created by
+  object id.** With an own-token row listed before the Entra sign-in row, Disconnect picked the own-token
+  row, answered `204` and kept the real refresh token (the audit row named the wrong row too); it now
+  skips own-token rows. A person an admin set up by tenant and object id signs in as `entra:<tid>:<oid>`,
+  so the Connect callback refused them with `identity_binding`; it now resolves the verified token through
+  the same exact issuer, tenant and object id key as the console sign-in, never an email.
 - **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
   /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
   same choice: a provider that is off, missing or without your credential names it (with its kind), a
@@ -230,6 +247,11 @@ runs on the first start; it adds one column with a default and changes no existi
   a run whose state has not yet flipped reads "the sandbox is gone; the run is finishing" rather than
   that it has finished.
 - **A long portal name wraps on the run page's "Launched via" line (#1234).**
+- **The `WARDYN_ORG_URL` row of `docs/ENV.md` no longer says a revoked device may get a 410 (#701).**
+  The organisation answers a revoked device and an unknown one alike with a 401 carrying the device
+  realm, and no route sends a 410. The device client still accepts one. Migration `0078`'s comment now
+  says its plain `CREATE INDEX` blocks audit writes while it builds, and that a large install can build
+  the index `CONCURRENTLY` beforehand.
 - **The User view no longer offers a security admin a link to Setup, and the Secrets step counts model
   providers (#1335, #1421).** A security admin in the User view saw "Set up a barrier", which opens
   the member recap; `GET /me` now carries `user_view_super_admin` (true only for a super admin inside the
