@@ -1109,3 +1109,90 @@ func TestADOCapture_UnusableGrantWritesNoPATConnectRow(t *testing.T) {
 		t.Errorf("control: %d %s rows, want one — the absence above would otherwise prove nothing", len(rows), adoPATAuditConnect)
 	}
 }
+
+// adoPersonStore is the person lookup a sign-in's Entra principal needs, with
+// no Postgres: people by exact principal, and nothing else owned by anyone.
+type adoPersonStore struct {
+	*personMintFakeStore
+}
+
+func (adoPersonStore) ListAPITokensByPrincipal(context.Context, string) ([]types.APIToken, error) {
+	return nil, nil
+}
+func (adoPersonStore) ListSSHKeysByPrincipal(context.Context, string) ([]types.SSHPublicKey, error) {
+	return nil, nil
+}
+func (adoPersonStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
+
+// withPreCreatedEntraPerson makes the fixture's console person the one an admin
+// set up by object id, keyed by the token's own issuer, and returns the
+// principal such a person signs in as.
+func (f *adoFixture) withPreCreatedEntraPerson(tid, oid string) string {
+	principal := "entra:" + tid + ":" + oid
+	f.srv.cfg.Store = adoPersonStore{&personMintFakeStore{people: map[string]types.Person{
+		principal: {Principal: principal, Issuer: f.fake.Issuer(), TenantID: tid, ObjectID: oid},
+	}}}
+	return principal
+}
+
+// The fake's signed token carries this object id.
+const adoFakeObjectID = "00000000-1111-2222-3333-444444444444"
+
+// A person pre-created by tenant and object id signs in to the console as
+// entra:<tid>:<oid>, not as their pairwise sub; their Connect still binds, since
+// the callback resolves the token through the same exact key.
+func TestADOSignIn_PreCreatedEntraPersonCanConnect(t *testing.T) {
+	f := newADOFixture(t)
+	person := f.withPreCreatedEntraPerson(f.fake.TenantID(), adoFakeObjectID)
+	w := f.capture(t, person)
+	if got := w.Header().Get("Location"); strings.Contains(got, adoSignInErrorPath) {
+		t.Fatalf("callback redirected to the error path %q, want the sign-in stored", got)
+	}
+	if _, stored := f.stored(t, person); !stored {
+		t.Fatal("the pre-created person's sign-in was not stored under their principal")
+	}
+}
+
+// The resolution is exact: a pre-created person keyed by another object id, by
+// another issuer, or a session claiming an arbitrary entra: principal, is
+// refused with identity_binding and stores nothing.
+func TestADOSignIn_PreCreatedEntraPersonBindingIsExact(t *testing.T) {
+	const otherOID = "99999999-8888-7777-6666-555555555555"
+	const otherTID = "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb"
+	for _, tc := range []struct {
+		name    string
+		session func(f *adoFixture) string
+	}{
+		{"another object id", func(f *adoFixture) string {
+			return f.withPreCreatedEntraPerson(f.fake.TenantID(), otherOID)
+		}},
+		{"another tenant", func(f *adoFixture) string {
+			f.withPreCreatedEntraPerson(f.fake.TenantID(), adoFakeObjectID)
+			return "entra:" + otherTID + ":" + adoFakeObjectID
+		}},
+		{"an entra: principal no person is keyed by", func(f *adoFixture) string {
+			f.srv.cfg.Store = adoPersonStore{&personMintFakeStore{people: map[string]types.Person{}}}
+			return "entra:" + f.fake.TenantID() + ":" + adoFakeObjectID
+		}},
+		{"another issuer", func(f *adoFixture) string {
+			p := f.withPreCreatedEntraPerson(f.fake.TenantID(), adoFakeObjectID)
+			ps := f.srv.cfg.Store.(adoPersonStore)
+			row := ps.people[p]
+			row.Issuer = "https://login.microsoftonline.com/" + f.fake.TenantID() + "/v2.0"
+			ps.people[p] = row
+			return p
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newADOFixture(t)
+			session := tc.session(f)
+			w := f.capture(t, session)
+			if got := w.Header().Get("Location"); !strings.HasSuffix(got, adoSignInErrorPath+reasonADOCallbackIdentityBinding) {
+				t.Fatalf("callback Location = %q, want the identity_binding error path", got)
+			}
+			if _, stored := f.stored(t, session); stored {
+				t.Error("a refused callback stored a sign-in")
+			}
+		})
+	}
+}

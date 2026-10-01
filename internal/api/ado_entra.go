@@ -58,6 +58,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -780,6 +782,7 @@ func (s *Server) bindADOEntraIdentity(ctx context.Context, cfg ADOEntraConfig, r
 	}
 	var claims struct {
 		TenantID string `json:"tid"`
+		ObjectID string `json:"oid"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return "the identity token's claims could not be read", false
@@ -787,9 +790,27 @@ func (s *Server) bindADOEntraIdentity(ctx context.Context, cfg ADOEntraConfig, r
 	if !strings.EqualFold(claims.TenantID, cfg.TenantID) {
 		return adoSignInWrongTenantRefusal, false
 	}
+	// The principal the console signs this token's holder in as: their raw
+	// subject, or the person an admin set up by exactly this issuer, tenant
+	// and object id (the sign-in's own resolution, never an email).
+	principal := idToken.Subject
+	if ps, ok := s.cfg.Store.(store.PersonStore); ok && idToken.Subject != "" {
+		who, refused, err := peopleKeying{s: s, ps: ps}.PrincipalFor(ctx, oidc.Subject{
+			Issuer: idToken.Issuer, Sub: idToken.Subject, TenantID: claims.TenantID, ObjectID: claims.ObjectID,
+		})
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: resolving the azure devops sign-in person failed",
+				slog.String("row", cfg.RowID), slog.Any("err", err))
+			return "the person this identity token names could not be looked up, so this sign-in could not be bound to your session", false
+		}
+		if refused {
+			who = ""
+		}
+		principal = who
+	}
 	// Constant time, and on the RAW subjects: a subject is opaque IdP output,
 	// so it is compared byte for byte and never case-folded or trimmed.
-	if idToken.Subject == "" || subtle.ConstantTimeCompare([]byte(idToken.Subject), []byte(subject)) != 1 {
+	if principal == "" || subtle.ConstantTimeCompare([]byte(principal), []byte(subject)) != 1 {
 		slog.WarnContext(ctx, "wardynd: refused an azure devops sign-in whose identity token subject is not the session's",
 			slog.String("row", cfg.RowID))
 		return adoSignInSubjectMismatchRefusal, false

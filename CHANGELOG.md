@@ -189,6 +189,12 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Fixed
 
+- **Azure DevOps Disconnect forgets the sign-in row it names, and Connect works for a person created by
+  object id.** With an own-token row listed before the Entra sign-in row, Disconnect picked the own-token
+  row, answered `204` and kept the real refresh token (the audit row named the wrong row too); it now
+  skips own-token rows. A person an admin set up by tenant and object id signs in as `entra:<tid>:<oid>`,
+  so the Connect callback refused them with `identity_binding`; it now resolves the verified token through
+  the same exact issuer, tenant and object id key as the console sign-in, never an email.
 - **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
   /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
   same choice: a provider that is off, missing or without your credential names it (with its kind), a
