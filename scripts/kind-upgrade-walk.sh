@@ -500,7 +500,9 @@ code=$(curl -sS --max-time "${CURL_MAX_TIME}" -o /dev/null -w '%{http_code}' -X 
 # reaches the audit trail.
 probe_host="walk-denied.kind-upgrade.invalid"
 probe_out="$(kubectl -n wardyn-runs exec "${AGENT_POD}" -- curl -sS -m 10 -o /dev/null -w '%{http_code}' "https://${probe_host}/" 2>&1)"
-[[ "${probe_out}" == 000* ]] \
+# curl's stderr ("CONNECT tunnel failed, response 403") lands before the -w code, so
+# the refusal is either a 000 code anywhere in the output or the proxy's 403 on CONNECT.
+[[ "${probe_out}" == *000* || "${probe_out}" == *"CONNECT tunnel failed, response 403"* ]] \
   && pass "the carried proxy refused the probe to ${probe_host}: no response came back through it" \
   || fail "expected the probe through the carried proxy to be refused; got: ${probe_out}"
 probe_logged=""
