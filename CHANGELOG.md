@@ -189,6 +189,11 @@ runs on the first start; it adds one column with a default and changes no existi
 
 ### Fixed
 
+- **A rate-limited Azure DevOps token revoke is retried, including on a running run.** An HTTP 429 (or 408 or
+  425) on a run token's revoke was treated as a permanent refusal: the record was closed and the token stayed
+  valid to its expiry. It now stays recorded and the sweep retries it. The sweep also retries a revoke that failed
+  transiently on a run that is still running (a drift refusal, or a pause revoke followed by a resume); a token a
+  renewal or widening kept, with no failed revoke, is still left to its expiry.
 - **Recording a workspace refuses a model-provider choice the way a run does (#797).** `POST
   /workspaces/{id}/record` now answers the same status, body and `authz.denied` row as `POST /runs` for the
   same choice: a provider that is off, missing or without your credential names it (with its kind), a
