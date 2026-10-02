@@ -93,6 +93,9 @@ type fakeEnvbuilderDocker struct {
 	lastCapDrop []string
 	// lastLabels records cfg.Labels given to ContainerCreate.
 	lastLabels map[string]string
+	// createWarnings is returned as ContainerCreateResult.Warnings, the way a
+	// daemon reports a requested limit it discarded.
+	createWarnings []string
 
 	// listItems is what ContainerList returns — a test seeds it to simulate
 	// containers left over from a prior process (the orphan-sweep scenario).
@@ -265,7 +268,7 @@ func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.Co
 		f.lastCapAdd = opts.HostConfig.CapAdd
 		f.lastCapDrop = opts.HostConfig.CapDrop
 	}
-	return client.ContainerCreateResult{ID: "fake-build-container"}, nil
+	return client.ContainerCreateResult{ID: "fake-build-container", Warnings: append([]string(nil), f.createWarnings...)}, nil
 }
 
 // CopyToContainer records the staged build-context tar (drained so callers'

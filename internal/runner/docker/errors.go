@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 )
 
 // errRuntimeUnavailable is the fail-closed sentinel when a policy's required
@@ -25,7 +27,7 @@ var errProxyImageUnset = errors.New("wardyn-proxy image not configured")
 // the CPU/memory/pids caps a sandbox needs (an undelegated cgroup controller,
 // classically cgroup v1 under rootless Docker). Override on a trusted host
 // via WARDYN_ALLOW_UNENFORCEABLE_CAPS=1.
-var errCapsUnenforceable = errors.New("resource caps not enforceable on this host")
+var errCapsUnenforceable = fmt.Errorf("resource caps not enforceable on this host: %w", dockerutil.ErrCapsDiscarded)
 
 // errTeardownUnresolved: teardown removed the agent container but could not
 // resolve its run id, so the sibling proxy/network can't be located —

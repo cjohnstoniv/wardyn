@@ -154,8 +154,18 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 		if before != nil {
 			cr = *before
 		}
+		// An unset (<=0) field is FILLED from the ceiling silently: the policy
+		// asked for no particular size, so nothing it asked for was cut. Only a
+		// positive request above the ceiling is a cap, and only a cap warns.
+		exceeded := false
 		capField := func(proposed *int, ceil int) {
-			if ceil > 0 && (*proposed <= 0 || *proposed > ceil) {
+			if ceil <= 0 {
+				return
+			}
+			if *proposed > ceil {
+				exceeded = true
+			}
+			if *proposed <= 0 || *proposed > ceil {
 				*proposed = ceil
 			}
 		}
@@ -164,10 +174,14 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 		capField(&cr.PidsLimit, effCeilingResources.PidsLimit)
 		capField(&cr.DiskMiB, effCeilingResources.DiskMiB)
 		// Governance limit folded into the same warning; bounds a non-zero request only (see CapDiskMiB).
-		cr.DiskMiB = CapDiskMiB(cr.DiskMiB, maxEphemeralDiskMiB)
+		if capped := CapDiskMiB(cr.DiskMiB, maxEphemeralDiskMiB); capped != cr.DiskMiB {
+			cr.DiskMiB, exceeded = capped, true
+		}
 		if before == nil || cr != *before {
-			warns = append(warns, WarnResourcesCapped)
 			out.Resources = &cr
+		}
+		if exceeded {
+			warns = append(warns, WarnResourcesCapped)
 		}
 	}
 

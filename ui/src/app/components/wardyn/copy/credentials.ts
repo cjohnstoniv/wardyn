@@ -71,3 +71,30 @@ export const ERASE = {
   FAILED: (person: string) =>
     `The erase didn't finish, so some of ${person}'s credentials may still be stored. Try again — erasing twice is safe.`,
 } as const;
+
+// #1477: the read-only list of tokens an admin created for another person
+// (console-085-packet, approved 2026-10-01, Q4–Q6). Strings are the packet's,
+// character for character. The singular forms (CHIP/COUNT at 1) are the
+// regular pluralisation of the packet's plural lines.
+export const MINTED = {
+  TITLE: "Tokens an admin created for someone else",
+  CHIP: (n: number) => (n === 1 ? "1 still works" : `${n} still work`),
+  COUNT: (n: number) =>
+    n === 1
+      ? "1 token was created by an admin for another person. It keeps working until revoked. Values are never shown."
+      : `${n} tokens were created by an admin for another person. They keep working until revoked. Values are never shown.`,
+  NOTE: "No one can create a token that acts as another person. They sign in and create their own.",
+  EMPTY: "No admin has created a token for someone else.",
+  COL_PERSON: "Person",
+  COL_TOKEN: "Token",
+  COL_CREATED_BY: "Created by",
+  COL_ADDED: "Added",
+  COL_LAST_USED: "Last used",
+  NEVER: "Never",
+  REVOKE: "Revoke",
+  REVOKE_TITLE: (token: string, person: string) => `Revoke ${token} for ${person}?`,
+  REVOKE_BODY: (person: string) => `It stops working now. ${person} can create their own after signing in.`,
+  REVOKE_CANCEL: "Cancel",
+  REVOKE_CONFIRM: "Revoke token",
+  REVOKED_TOAST: "Token revoked.",
+} as const;

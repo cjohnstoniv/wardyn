@@ -318,14 +318,14 @@ done < <(grep -h -v '^[[:space:]]*#' ./deploy/images/*/Dockerfile 2>/dev/null \
 # refs are pinned by the RELEASE TAG the run resolved. That reasoning does NOT
 # carry to deploy/desktop/install.sh, whose default enrolment image is the
 # CONTINUOUS `:latest` publish-image.yml pushes after CI passes on main and
-# never cosign-signs — and it runs AS ROOT to mint the device's age identity
+# signs by digest, which nothing in that lane verifies — and it runs AS ROOT to mint the device's age identity
 # (F113/F184). Hard-failing on the default itself would need a release digest,
 # which is a network value this gate cannot resolve; what IS checkable offline is
 # that the installer still tells the person running it.
 DESKTOP_INSTALL=./deploy/desktop/install.sh
 if [ -f "$DESKTOP_INSTALL" ]; then
   grep -qF 'is a MUTABLE tag, not a digest' "$DESKTOP_INSTALL" \
-    || { echo "FAIL: $DESKTOP_INSTALL no longer warns that a non-digest WARDYN_INSTALL_IMAGE floats. Its default is the unsigned continuous :latest, run AS ROOT to mint the device's age identity, and no pin gate can catch a \`docker run\` in a shell script — the warning is the only control there is (F113/F184)." >&2; fail=1; }
+    || { echo "FAIL: $DESKTOP_INSTALL no longer warns that a non-digest WARDYN_INSTALL_IMAGE floats. Its default is the continuous :latest, whose signature nothing in that lane verifies, run AS ROOT to mint the device's age identity, and no pin gate can catch a \`docker run\` in a shell script — the warning is the only control there is (F113/F184)." >&2; fail=1; }
 fi
 
 if ((fail)); then

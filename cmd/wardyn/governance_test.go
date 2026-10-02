@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -477,5 +478,86 @@ func TestGovernanceApply_Prune(t *testing.T) {
 		if p.Name != "eng-default" {
 			t.Errorf("prune left an unexpected profile %q", p.Name)
 		}
+	}
+}
+
+// countingServer fails the test on nothing by itself; it only counts requests
+// of any method, so a test can assert that a refused input made none.
+func countingServer(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+// TestOperatorGovernanceTrailingDocumentPrunes is #1491's reproduction,
+// flipped. `{}` followed by the real document used to be read as "the desired
+// state is empty", and --prune then deleted every profile and assignment. The
+// input is now refused before ANY request, a read included.
+func TestOperatorGovernanceTrailingDocumentPrunes(t *testing.T) {
+	p := sdk.GovernanceProfile{ID: uuid.New(), Name: "retain-this"}
+	a := sdk.GovernanceAssignment{ID: uuid.New(), SubjectType: "all", Subject: "*", ProfileID: p.ID}
+	desired, err := json.Marshal(sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{p}, Assignments: []sdk.GovernanceAssignment{a}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]string{
+		"second document":      "{}\n" + string(desired),
+		"trailing junk":        string(desired) + "\n}garbage",
+		"trailing second null": string(desired) + "\nnull",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, seen := countingServer(t)
+			_, err := operatorCommand(t, srv.URL, in, "governance", "set", "-", "--prune")
+			if err == nil || !strings.Contains(err.Error(), "exactly one document") {
+				t.Fatalf("err = %v, want the exactly-one-document refusal", err)
+			}
+			if got := seen(); len(got) != 0 {
+				t.Errorf("requests were made before the input was refused: %q", got)
+			}
+		})
+	}
+}
+
+// Negatives: a lone `{}` with --prune still prunes (the documented empty
+// semantics); null and empty input are refused with no request.
+func TestOperatorGovernanceSingleDocumentStillApplies(t *testing.T) {
+	fake := newFakeGovernanceServer()
+	p := sdk.GovernanceProfile{ID: uuid.New(), Name: "retain-this"}
+	fake.profiles[p.ID] = p
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	if _, err := operatorCommand(t, srv.URL, "{}\n\n", "governance", "set", "-", "--prune"); err != nil {
+		t.Fatalf("a lone {} with --prune: %v", err)
+	}
+	if len(fake.profiles) != 0 {
+		t.Errorf("a lone {} with --prune did not prune: %v", fake.profiles)
+	}
+}
+
+func TestOperatorGovernanceRefusesNullAndEmpty(t *testing.T) {
+	for name, in := range map[string]string{"null": "null", "empty": "", "whitespace": " \n\t"} {
+		t.Run(name, func(t *testing.T) {
+			srv, seen := countingServer(t)
+			_, err := operatorCommand(t, srv.URL, in, "governance", "set", "-", "--prune")
+			if err == nil {
+				t.Fatal("input was accepted")
+			}
+			if got := seen(); len(got) != 0 {
+				t.Errorf("requests were made: %q", got)
+			}
+		})
 	}
 }

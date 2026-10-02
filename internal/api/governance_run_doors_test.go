@@ -158,7 +158,11 @@ func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
 	})
 
 	t.Run("a super admin is not bound", func(t *testing.T) {
+		// On a run with no personal owner: the entry rule (#1476) keeps a super
+		// admin out of a person's run before this door is reached.
 		h := setup(t, profile)
+		h.run.OperatorOwned = true
+		h.store.putRun(h.run)
 		if rec := enter(h, "root", oidc.RoleAdmin); rec.Code != http.StatusFound {
 			t.Fatalf("admin enter = %d, want 302: %s", rec.Code, rec.Body.String())
 		}
@@ -212,6 +216,10 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 	execRun := func(profileID *uuid.UUID, task string) types.AgentRun {
 		return types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
 			Task: task, GovernanceProfileID: profileID}
+	}
+	operatorOwned := func(r types.AgentRun) types.AgentRun {
+		r.OperatorOwned = true
+		return r
 	}
 	attach := func(t *testing.T, srv *Server, st *profileListStore, run types.AgentRun, principal, role string) *httptest.ResponseRecorder {
 		tok, err := mintAttachTicket(context.Background(), st, run.ID, types.ActorHuman, principal, role, time.Now())
@@ -272,7 +280,9 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		principal, role string
 		profiles        []types.GovernanceProfile
 	}{
-		{"a super admin is not bound", execRun(&profile.ID, "make test"), "root", oidc.RoleAdmin, []types.GovernanceProfile{profile}},
+		// An operator-owned run: the entry rule (#1476) keeps a super admin out of
+		// a person's run before this door is reached.
+		{"a super admin is not bound", operatorOwned(execRun(&profile.ID, "make test")), "root", oidc.RoleAdmin, []types.GovernanceProfile{profile}},
 		{"the harness sign-in run is exempt", execRun(&profile.ID, harnessLoginTask), "alice", oidc.RoleUser, []types.GovernanceProfile{profile}},
 		{"a run under no profile is not bound", execRun(nil, "make test"), "alice", oidc.RoleUser, nil},
 		{"a deleted profile binds nothing", execRun(&profile.ID, "make test"), "alice", oidc.RoleUser, nil},
@@ -314,6 +324,8 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(adminPub), Principal: "root@example.com",
 		PublicKey: string(ssh.MarshalAuthorizedKey(adminPub)), Role: oidc.RoleAdmin, RoleCheckedAt: &now})
 	secPriv, secPub := mustSSHKeypair(t)
+	adminRun := uuid.New() // operator-owned: the entry rule keeps a super admin out of a person's run
+	st.putRun(types.AgentRun{ID: adminRun, CreatedBy: "alice@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-4", GovernanceProfileID: &profile.ID})
 	secRun := uuid.New() // its own run, so the audit row below can only be this key's
 	st.putRun(types.AgentRun{ID: secRun, CreatedBy: "sec@example.com", State: types.RunRunning, SandboxRef: "sbx-3", GovernanceProfileID: &profile.ID})
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(secPub), Principal: "sec@example.com",
@@ -334,7 +346,7 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 	})
 
 	t.Run("a super admin is not bound", func(t *testing.T) {
-		client, err := sshDial(t, h, deniedRun.String(), adminPriv)
+		client, err := sshDial(t, h, adminRun.String(), adminPriv)
 		if err != nil {
 			t.Fatalf("admin ssh refused: %v", err)
 		}

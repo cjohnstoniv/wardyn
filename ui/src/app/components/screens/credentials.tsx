@@ -29,6 +29,7 @@ import { PageHeader } from "../wardyn/page-header";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { MODEL_PROVIDERS } from "../../lib/model-providers-copy";
 import { INVENTORY, ERASE } from "../wardyn/copy/credentials";
+import { AdminMintedTokens } from "./credentials-minted-tokens";
 
 // The server's canon 503 (credInventoryNoMeta, internal/api/credential_inventory.go)
 // — its own empty card, no Retry, distinguished from every other read failure.
@@ -259,6 +260,9 @@ export function CredentialsScreen() {
           )}
         </div>
       )}
+
+      {/* Another admin-only read: only once the screen has resolved as allowed. */}
+      {screenStatus !== "forbidden" && screenStatus !== "loading" && <AdminMintedTokens />}
 
       <EraseDialog
         target={eraseTarget}

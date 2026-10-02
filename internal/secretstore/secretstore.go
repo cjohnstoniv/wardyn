@@ -258,6 +258,12 @@ var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is no
 // retry resumes. It never reports success with a row left behind: every
 // failure is returned, and a namespace not empty afterwards (a write racing
 // the erase) is an error naming how many remain.
+//
+// The re-list is a backstop, not the coordination: it cannot see a write that
+// lands after it. The caller (internal/api, handleErasePersonCredentials) holds
+// the locks that serialise the writers of a stored credential across the
+// delete and this re-list, so a refresh or stamp already in flight cannot
+// write back behind a success.
 func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
 	rep := EraseReport{Purged: true}
 	if owner == "" {

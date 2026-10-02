@@ -16,6 +16,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { decideKey } from "./attach-terminal-keys";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
+import { entryErrorMessage } from "../lib/run-entry";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
 export type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -67,7 +68,10 @@ export interface UseAttachSessionArgs {
   signedOut: boolean;
   operator: boolean;
   operatorResolved: boolean;
-  owned: boolean;
+  /** The one entry rule (lib/run-entry.ts), decided by the caller. */
+  mayEnter: boolean;
+  /** What to say when it is false. */
+  refusal: string;
   tokenOnlyMode: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   panelRef: React.RefObject<HTMLDivElement | null>;
@@ -94,7 +98,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     signedOut,
     operator,
     operatorResolved,
-    owned,
+    mayEnter,
+    refusal,
     tokenOnlyMode,
     containerRef,
     panelRef,
@@ -121,9 +126,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator on a run
     // whose stated creator is somebody else skips straight to the reason below,
     // before creating a terminal or a socket.
-    if (signedOut || (!operator && !owned)) {
+    if (signedOut || !mayEnter) {
       setConnState(signedOut ? "closed" : "error");
-      setErrorMsg(signedOut ? "" : "Attaching to a live sandbox requires the admin role or ownership of this run.");
+      setErrorMsg(signedOut ? "" : refusal);
       return;
     }
 
@@ -246,7 +251,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
             if (disposed) return;
             setConnState("error");
             setErrorMsg(
-              `Could not mint an attach ticket: ${e instanceof Error ? e.message : String(e)}`,
+              entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`),
             );
             onCloseRef.current?.();
           });
@@ -531,7 +536,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-    // operator/owned are added deliberately: in the single-operator/default
+    // operator/mayEnter are added deliberately: in the single-operator/default
     // case they never change value, so this never causes an extra run there —
     // today's behavior is untouched. They matter for the (rare) case where
     // /me resolves to a non-owning viewer shortly after an optimistic mount;
@@ -541,5 +546,5 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // late, the lane the socket picked on the fail-open default must be
     // re-decided against the answer.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller); these deps are unchanged from the effect this hook was extracted from
-  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, owned, signedOut]);
+  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, mayEnter, refusal, signedOut]);
 }

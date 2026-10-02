@@ -292,7 +292,7 @@ describe("NewRunScreen — R6 (QC-4): no default among several candidates — La
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
 
     await user.click(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL }));
-    await user.click(await screen.findByRole("option", { name: RAIL_PROVIDER.OPTION("Anthropic API key", "key", "not added") }));
+    await user.click(await screen.findByRole("option", { name: RAIL_PROVIDER.OPTION("Anthropic API key", "key", "not available") }));
 
     expect(screen.queryByText(RAIL_PROVIDER.LAUNCH_HINT)).toBeNull();
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();

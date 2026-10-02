@@ -90,6 +90,19 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     expect((await sentReq).postDataJSON().model_provider).toBe(GATEWAY.id);
   });
 
+  // #1489: the picker word and the line say only that none is available.
+  test("a candidate with no credential reads 'not available', and says no token is available for it", async ({ page }) => {
+    await mockProviders(page, [
+      { provider: BEDROCK, state: "live" },
+      { provider: GATEWAY, state: "not_configured" },
+    ]);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("combobox", { name: RAIL_PROVIDER.LABEL }).click();
+    await page.getByRole("option", { name: "Corp gateway — your token · not available" }).click();
+    await expect(page.getByText("No token is available for Corp gateway.")).toBeVisible();
+  });
+
   test("R1: a sole candidate needs no picker, and its id still reaches the wire", async ({ page }) => {
     await mockProviders(page, [{ provider: BEDROCK, defaultFor: ["claude-code"], state: "live" }]);
     await page.route("**/api/v1/runs", async (route) => {

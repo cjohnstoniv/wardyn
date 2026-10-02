@@ -21,7 +21,7 @@
 // The listener has exactly ONE authentication mechanism and never falls
 // through to the console's session cookie or admin bearer:
 //
-//	POST /runs/{id}/attach/ticket  (existing, owner-or-admin, single-use, 30s)
+//	POST /runs/{id}/attach/ticket  (existing, run owner, single-use, 30s)
 //	  → POST <ui-origin>/__wardyn/bind (console fetch; binds the ticket to
 //	    this browser, uigateway_bind.go)
 //	  → POST <ui-origin>/__wardyn/enter (form: run, app, ticket; or the GET form)
@@ -226,8 +226,9 @@ func (s *Server) UIGatewayHandler() http.Handler {
 //
 // Both consume the single-use attach ticket (the SAME one the web terminal
 // uses — no second ticket type), then RE-CHECK everything the ticket cannot
-// prove on its own against freshly-loaded state: owner-or-admin for THIS run
-// (the ticket's stamped role/principal, as handleAttachWS does), the run still
+// prove on its own against freshly-loaded state: the owner of THIS run, or a
+// super admin on one with no personal owner (the ticket's stamped
+// role/principal, as handleAttachWS does), the run still
 // RUNNING with a sandbox, and the app actually declared in the run's EFFECTIVE
 // policy. Only then does a cookie exist. uiEnterCommon holds that one path;
 // this function only extracts the three fields from the right place and picks
@@ -237,7 +238,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 // CSRF, in two halves. The ticket stops a page that does not hold a
 // freshly-minted, still-valid ticket for THIS run from forging a session for
 // someone ELSE's run — it is single-use, ~30s-TTL, bound to one run and one
-// principal, and mintable only by an already-authenticated owner-or-admin call
+// principal, and mintable only by an already-authenticated run-owner call
 // to POST /runs/{id}/attach/ticket (behind the console's own CSRF guard).
 // csrf.go (this package) says explicitly that its same-origin guard does not,
 // and is not meant to, cover this listener.
@@ -301,7 +302,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 		return
 	}
-	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, ticket, runID, s.cfg.Now())
+	ta, v, err := s.redeemAttachTicket(r.Context(), ticket, runID)
 	if err != nil {
 		// A store failure is not a bad ticket (attach_ticket.go's own rule):
 		// say so, log it, and never leak the database error to a caller who has
@@ -310,10 +311,8 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
 		return
 	}
-	if !ok {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "invalid, expired, or already-used ticket"})
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
+	if v != verdictOK {
+		s.refuseUITicket(w, runID, app, ta, v)
 		return
 	}
 
@@ -325,16 +324,24 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
-	// Owner-or-admin, re-checked against the just-loaded run: this lane never
+	// The run's owner, or a super admin on a run with no personal owner
+	// (mayEnterRun), re-checked against the just-loaded run: this lane never
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !superAdmin && run.CreatedBy != ta.principal {
+	if !mayEnterRun(run, ta.principal, superAdmin) {
+		if superAdmin {
+			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
+			return
+		}
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "not the run owner"}))
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
+	// superAdmin is true past this point only on the admin's own run or an
+	// operator-owned one, so the governance exemption below cannot reach a
+	// person's run.
 	if !superAdmin && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
 		return
 	}
@@ -370,11 +377,12 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	now, ttl := s.cfg.Now(), s.uiSessionTTL()
+	now := s.cfg.Now()
+	expires := ta.sessionExpiry(now, s.uiSessionTTL())
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
-		Principal: ta.principal, Role: ta.role,
-		Expires: now.Add(ttl).Unix(), IssuedAt: now.Unix(), Via: ta.via,
+		Principal: ta.principal, Role: ta.role, Email: ta.email,
+		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), Via: ta.via,
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -383,7 +391,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.cfg.OIDCSecureCookies,
-		Expires:  now.Add(ttl),
+		Expires:  expires,
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
 		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))

@@ -446,12 +446,12 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // are NOT inspect-or-stop, so neither may use this predicate —
 //
 //   - the attach-ticket mint, which hands out an interactive shell in a foreign
-//     sandbox: handleAttachTicket carries its OWN explicit strict re-check
-//     against isOperator (attach_ticket.go). That guard is load-bearing, not
+//     sandbox: handleAttachTicket carries its OWN explicit entry check
+//     (mayEnterRun, run_entry.go). That guard is load-bearing, not
 //     belt-and-braces: without it this one-word change silently grants a PTY.
 //   - POST /runs/{id}/attach/takeover, which ENDS another human's live terminal
 //     and frees the writer slot on a sandbox holding that run's injected
-//     credentials: it authorizes on ownsRunOrSuperAdmin below.
+//     credentials: it loads the run through getRunForEntry (run_entry.go).
 func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 	return s.isSecurityOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
 }
@@ -459,8 +459,12 @@ func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 // ownsRunOrSuperAdmin is ownsRunOrAdmin's strict twin: the run's owner, or a
 // SUPER admin (isOperator) — never a security_admin.
 //
-// It exists for the one route that WRITES into a live PTY rather than reading or
-// stopping it (handleAttachTakeover). The security tier is refused an attach
+// Since 0.8.5 (#1476) it is only the first gate on take-over, the one route that
+// WRITES into a live PTY: getRunForEntry (run_entry.go) narrows it with
+// mayEnterRun, because a super admin is refused a shell in a person's run. Its
+// other callers — revive, resume, end-wait — open no shell and re-check the
+// owner's capabilities, so super admins keep them (until the owner-consented
+// support session). The security tier is refused an attach
 // ticket (attach_ticket.go), refused the cookie attach lane (ticketOrHumanAuth →
 // requireOperator) and stamped `member` on its SSH keys (sshkeys.go), so a tier
 // that can reach no terminal on a foreign run must not be able to END one on it

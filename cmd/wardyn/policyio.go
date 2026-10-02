@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -40,4 +41,34 @@ func policyToJSON(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("re-encode policy as JSON: %w", err)
 	}
 	return out, nil
+}
+
+// errNotOneDocument is what decodeOneJSONStrict returns for anything but a
+// single JSON value followed by end of input.
+var errNotOneDocument = errors.New("input must contain exactly one document")
+
+// decodeOneJSONStrict decodes exactly one JSON value from r into v, rejecting
+// unknown fields, a top-level null, and anything after the value (a second
+// document or trailing bytes, valid or not). It exists because a decoder that
+// stops after the first value reads `{}` + the real document as "the desired
+// state is empty", and a --prune then deletes everything the real document
+// named. Empty or whitespace-only input is a parse error (io.EOF).
+func decodeOneJSONStrict(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	var first json.RawMessage
+	if err := dec.Decode(&first); err != nil {
+		return err
+	}
+	if bytes.Equal(bytes.TrimSpace(first), []byte("null")) {
+		return errNotOneDocument
+	}
+	// The next read must hit the end of input: any value or any junk is a
+	// second document, and junk fails Decode with a syntax error, not io.EOF.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errNotOneDocument
+	}
+	strict := json.NewDecoder(bytes.NewReader(first))
+	strict.DisallowUnknownFields()
+	return strict.Decode(v)
 }

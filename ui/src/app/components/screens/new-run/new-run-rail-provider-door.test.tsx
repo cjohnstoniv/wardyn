@@ -86,7 +86,7 @@ afterEach(() => window.history.pushState({}, "", "/"));
 
 describe("state 4 — a New Run refusal opens its own provider's door", () => {
   it("a Codex CLI run on the gateway refused over its token opens the token door, not AWS (#146 defect 2)", async () => {
-    const sentence = `This run's model provider is ${gateway.name}, and you have not added your token for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.`;
+    const sentence = `This run's model provider is ${gateway.name}, and no token is available for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.`;
     renderRail({ refusedProvider: gateway.id, error: sentence });
     expect(await screen.findByRole("dialog", { name: KEY_DOOR.TITLE(true, gateway.name) })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeNull();

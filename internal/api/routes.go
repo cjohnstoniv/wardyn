@@ -221,7 +221,9 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach-holder", s.handleAttachHolder)
 			// The one WRITE in that set: displacing whoever currently holds the
 			// run's tmux PTY. Audited (session.takeover, actor + previous holder)
-			// because it takes a live session away from another human.
+			// because it takes a live session away from another human. The run's
+			// OWNER only, or a super admin on a run with no personal owner
+			// (mayEnterRun); any other super admin gets 403 run_owner_only.
 			r.Post("/runs/{id}/attach/takeover", s.handleAttachTakeover)
 
 			// Single-use WS attach tickets: browsers cannot put the admin
@@ -229,12 +231,14 @@ func (s *Server) routes() chi.Router {
 			// (through THIS authenticated group) and presents the returned
 			// 30s ticket as ?ticket= on the attach WS below.
 			//
-			// OWNER-OR-ADMIN rather than operator-only: the ticket
-			// mints a live interactive PTY inside a RUNNING sandbox — injected
+			// The run's OWNER rather than operator-only: the ticket mints a live
+			// interactive PTY (or UI session) inside a RUNNING sandbox — injected
 			// keystrokes and whatever the agent's injected credentials left on
-			// screen — which is strictly more than "launch a run", but a member
-			// may still hold one for a run THEY created (handleAttachTicket's
-			// getRunAuthorized gate; a foreign run 404s, no existence oracle).
+			// screen — which is strictly more than "launch a run", and a member may
+			// hold one for a run THEY created (handleAttachTicket's getRunAuthorized
+			// gate; a foreign run 404s, no existence oracle). A super admin gets one
+			// only for a run with no personal owner (mayEnterRun); on a person's run
+			// they get 403 run_owner_only (#1476).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
 			// The three lines above are each issue #658's pre-0.8 alias; their
 			// 0.8 names (mounted alongside, same handlers, kept one minor —
@@ -665,7 +669,7 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// comment for why this stays a separate route.
 	r.Patch("/runs/{id}/title", s.handleSetRunTitle)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
-	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
+	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
 }
 
 // mountAccountRoutes registers the caller's own account surfaces — per-user

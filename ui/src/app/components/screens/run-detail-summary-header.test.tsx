@@ -67,10 +67,31 @@ describe("SummaryHeader — attachable chip predicate", () => {
     expect(screen.queryByText("Interactive — attachable")).toBeNull();
   });
 
-  it("shows 'Interactive — attachable' for an operator on a RUNNING interactive run", () => {
+  it("shows 'Interactive — attachable' for the run's own person, admin or not", () => {
     renderHeader(
-      <OperatorProvider operator={true}>
+      <OperatorProvider operator={true} principal="me">
         <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();
+  });
+
+  // #1476: entry is owner-gated, so a super admin on someone else's run is
+  // not promised a terminal the server will refuse.
+  it("a super admin on ANOTHER person's run gets the plain 'Interactive' chip", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="sam@acme.io">
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Interactive")).toBeInTheDocument();
+    expect(screen.queryByText("Interactive — attachable")).toBeNull();
+  });
+
+  it("a super admin keeps 'attachable' on an operator-owned run", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="sam@acme.io">
+        <SummaryHeader run={{ ...runningInteractive, operator_owned: true } as AgentRun} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
     expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();

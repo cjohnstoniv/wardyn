@@ -38,6 +38,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.8.2** | **Per-person Azure DevOps tokens**: Wardyn creates a short-lived personal access token for each run in the person's name, with only that run's access, renewed near expiry and revoked when the run ends, pauses or the person disconnects (the existing Entra app gains `vso.pats` and `vso.pats_manage`); where Entra sign-in isn't available each person adds their own token, on Azure DevOps Services or Server. The shared Azure DevOps token and SSH key are retired, and Azure DevOps capabilities are split per area. Also: a run shows its sandbox's startup progress and the policy it actually got, the attach card scrolls, and the operator-held model credentials are retired in favour of each person's own model provider connection | **Shipped (pre-alpha)** — `v0.8.2`, 2026-09-30 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.8.3** | Security patch: the agent images move to Debian 13, clearing three CRITICAL Perl vulnerabilities Debian 12 does not fix, and every agent image build takes current security updates; CI fails on any CRITICAL in a published image, fixed or not, and the nightly scans the images already published | **Shipped (pre-alpha)** — `v0.8.3`, 2026-09-30 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.8.4** | Azure DevOps per-person tokens and admin visibility, Azure Key Vault and a separate Transit platform key, push-rule size limits, opt-in four-eyes for Azure DevOps capability escalations, one noun-verb CLI, and a tree-keyed release path | **Shipped (pre-alpha)** — `v0.8.4`, 2026-10-01 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.8.5** | Azure DevOps Services own-token fix, owner-only interactive entry to a run, no admin-minted person tokens, revive and lease-sweep fixes, an honest kill outcome in the console, CLI redirect and strict-JSON hardening, and tag-bound release verification | **Shipped (pre-alpha)** — `v0.8.5`, 2026-10-02 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
@@ -160,7 +161,8 @@ shipped behavior; none is scheduled.
   no separation of duty from a real admin user (v1.0's row, above).
 - **The SSH gateway's admin override is a bounded-stale stamp, weaker than
   the web terminal's live check.** `sshAuth` grants an admin's own registered
-  key an override — `run.created_by == principal` OR (`key.role == admin` AND
+  key an override — `run.created_by == principal` OR (the run has no personal
+  owner AND `key.role == admin` AND
   `key.role_checked_at` no older than `WARDYN_SSH_ROLE_TTL`, migrations
   `0043_ssh_key_role.sql` and `0046_ssh_key_role_checked_at.sql`). The stamp
   is no longer registration-time-only: every OIDC login re-stamps `role` and

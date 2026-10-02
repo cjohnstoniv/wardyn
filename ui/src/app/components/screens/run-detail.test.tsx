@@ -125,6 +125,20 @@ function renderRun(run: Record<string, unknown>) {
   );
 }
 
+// The run's own person, as the shell's /me would provide them.
+function renderOwn(run: Record<string, unknown>) {
+  getRunMock.mockResolvedValue(run);
+  return render(
+    <MemoryRouter initialEntries={["/runs/run-1"]}>
+      <OperatorProvider operator={true} principal="me">
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("RunDetailScreen — 'Run not found' names lack-of-access as a real reason", () => {
   it("mentions not having access alongside archived/deleted/stale-link", async () => {
     getRunMock.mockResolvedValue(undefined);
@@ -211,8 +225,8 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
 // STARTING told its own OWNER the operator-only refusal plus a dead "Watch
 // the captured session →" link to a recording that cannot exist yet.
 describe("RunDetailScreen — a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
-  it("an operator on a STARTING interactive run sees the starting notice, never the admin-role refusal", async () => {
-    renderRun({ ...RUN, state: "STARTING", interactive: true });
+  it("the run's own person on a STARTING interactive run sees the starting notice, never a refusal", async () => {
+    renderOwn({ ...RUN, state: "STARTING", interactive: true });
     // #1419: the step list replaces the retired "hasn't started yet" sentence;
     // the last row says the terminal is what comes next.
     const list = await screen.findByTestId("run-startup-progress");
@@ -221,9 +235,10 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
     expect(screen.queryByText(/Watch the captured session/)).not.toBeInTheDocument();
   });
 
-  // Neg: a member who does NOT own this run and isn't an operator still gets
-  // the real refusal — canAttach must stay false for them regardless of state.
-  it("a member who neither owns nor operates a RUNNING run still gets the admin-role refusal", async () => {
+  // Neg: a member who does NOT own this run still gets the real refusal —
+  // entry must stay false for them regardless of state. #1476: the line names
+  // the person who may open it, not the admin role.
+  it("a member who does not own a RUNNING run gets the owner line, not the admin-role one", async () => {
     getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING", interactive: true, created_by: "someone-else" });
     render(
       <MemoryRouter initialEntries={["/runs/run-1"]}>
@@ -234,15 +249,67 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
         </OperatorProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText("Requires the admin role.")).toBeInTheDocument();
+    expect(await screen.findByText("Only someone-else can open this run's terminal, apps and SSH.")).toBeInTheDocument();
+    expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
     expect(screen.queryByTestId("run-startup-progress")).not.toBeInTheDocument();
+  });
+
+  // #1476: a super admin keeps Kill/Approve/Policy on another person's run and
+  // loses the terminal; the pane says so once, and the replay link stays.
+  it("a super admin on another person's RUNNING run sees the owner line and Watch link, no terminal", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING", interactive: true, created_by: "priya@acme.io" });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={true} principal="sam@acme.io">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Only priya@acme.io can open this run's terminal, apps and SSH.")).toBeInTheDocument();
+    expect(screen.getByText(/Watch the captured session/)).toBeInTheDocument();
+    expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Attach from your terminal")).not.toBeInTheDocument();
+    // Kill stays.
+    expect(screen.getByRole("button", { name: /^Kill/ })).toBeEnabled();
+  });
+
+  it("a super admin on an operator-owned run keeps entry: no owner line, no refusal", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "STARTING", interactive: true, created_by: "svc", operator_owned: true });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={true} principal="sam@acme.io">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const list = await screen.findByTestId("run-startup-progress");
+    expect(list).toHaveTextContent(RUN_STARTUP.STEP_TERMINAL);
+    expect(screen.queryByText(/can open this run's terminal/)).not.toBeInTheDocument();
+  });
+
+  it("a non-admin on an operator-owned run keeps the admin-role line, which is still true there", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING", interactive: true, created_by: "svc", operator_owned: true });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Requires the admin role.")).toBeInTheDocument();
   });
 });
 
 describe("RunDetailScreen — a STARTING interactive run seen by someone who cannot attach", () => {
   // #1419: the list is about the run, so they see it; no "Opening the terminal"
   // row is promised to them, and today's refusal and link stay under it.
-  it("shows the step list without the terminal row, then the admin-role refusal", async () => {
+  it("shows the step list without the terminal row, then the owner line", async () => {
     getRunMock.mockResolvedValue({ ...RUN, state: "STARTING", interactive: true, created_by: "someone-else" });
     render(
       <MemoryRouter initialEntries={["/runs/run-1"]}>
@@ -256,7 +323,7 @@ describe("RunDetailScreen — a STARTING interactive run seen by someone who can
     const list = await screen.findByTestId("run-startup-progress");
     expect(list).toHaveTextContent(RUN_STARTUP.STEP_START);
     expect(list).not.toHaveTextContent(RUN_STARTUP.STEP_TERMINAL);
-    expect(screen.getByText("Requires the admin role.")).toBeInTheDocument();
+    expect(screen.getByText("Only someone-else can open this run's terminal, apps and SSH.")).toBeInTheDocument();
   });
 });
 
@@ -614,5 +681,41 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
     renderRun({ ...RUN, state: "WAITING_FOR_CONFIRMATION" });
     await screen.findByTestId("run-summary-header");
     expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
+  });
+});
+
+// #1485: Copy link built `${origin}/runs/…` with no base path, so under
+// WARDYN_BASE_PATH the pasted link missed the console. The id is encoded.
+describe("RunDetailScreen — Copy link keeps the base path", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.wardynBase;
+  });
+
+  async function copied(base: string | undefined): Promise<string> {
+    if (base) document.documentElement.dataset.wardynBase = base;
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    getRunMock.mockResolvedValue({ ...RUN, id: "a/b c" });
+    render(
+      <MemoryRouter initialEntries={["/runs/a%2Fb%20c"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findAllByText(RUN.task);
+    await user.click(screen.getByRole("button", { name: "Copy link to this run" }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    return write.mock.calls[0][0];
+  }
+
+  it("with a base path: origin + base + /runs/<encoded id>", async () => {
+    const url = await copied("/wardyn");
+    expect(url).toBe(`${window.location.origin}/wardyn/runs/a%2Fb%20c`);
+    expect(url).not.toContain("/wardyn/wardyn");
+  });
+
+  it("without one: origin + /runs/<encoded id>", async () => {
+    expect(await copied(undefined)).toBe(`${window.location.origin}/runs/a%2Fb%20c`);
   });
 });

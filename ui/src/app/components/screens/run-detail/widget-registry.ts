@@ -33,6 +33,7 @@ import type {
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
+import { mayEnterRunOrUnknown } from "../../../lib/run-entry";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import {
   CredentialsWidget,
@@ -79,6 +80,8 @@ export type WidgetContext = {
    *  (attach_ticket.go's isOperator, uigateway.go's ta.role check,
    *  sshgateway.go's admin arm), and ConnectSSHCard renders on both. */
   operator: boolean;
+  /** Whether `operator`/`principal` are /me's answer (absent = true). False defers entry to the server. */
+  operatorResolved?: boolean;
   /** M-7 (admin-member-modes-design.md §4.6): the ssh widget's gate adds
    *  "AND the user view" to owner-or-admin — the admin monitor carries no
    *  Connect-via-SSH door, even on the admin's own run. */
@@ -123,9 +126,8 @@ export type WidgetDef = {
   /** False = render no tile at all right now. Only ssh needs this: its card
    *  returns null unless you may attach to a RUNNING run, and a null inside a
    *  grid tile is an empty box with a dot grid behind it, not nothing. Mirrors
-   *  ConnectSSHCard's own gate — which is owner OR admin, so this predicate
-   *  must read ctx.operator too or an admin's canvas silently drops the tile
-   *  on every run they did not start, even one their saved layout names. */
+   *  ConnectSSHCard's own gate (mayEnterRun, lib/run-entry.ts): the run's
+   *  person, or an admin on a run no person owns. */
   available?: (ctx: WidgetContext) => boolean;
   /** Cannot be removed — see removeWidget below. */
   required?: boolean;
@@ -240,14 +242,14 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
     presets: { live: { x: 8, y: 20, w: 4, h: 5 } },
-    // run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin.
+    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check.
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
     available: (ctx) =>
       ctx.view === "user" &&
       ctx.run.state === "RUNNING" &&
-      ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator),
+      mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
 };
 

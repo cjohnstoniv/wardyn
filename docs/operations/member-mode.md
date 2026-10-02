@@ -128,7 +128,7 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 | Action | Behaviour |
 | --- | --- |
 | Minting an API token (`POST /me/tokens`) | REFUSES instead of clamping, with `409`. A token carries a role stamp re-derived from your REAL role at your next sign-in, so one minted "as a member" would quietly become an admin credential that outlives the mode. Exit first |
-| Registering an SSH key (`POST /me/ssh-keys`) | Allowed in the mode; the key is stored **capped** (migration `0070_ssh_key_view_capped`) — a member key for good. Your sign-in re-stamp leaves its role at `user`, and the SSH gateway never grants it the admin override, even while you are an admin. It reaches your own runs and nothing else. A break-glass key that reaches other people's runs is registered outside the mode |
+| Registering an SSH key (`POST /me/ssh-keys`) | Allowed in the mode; the key is stored **capped** (migration `0070_ssh_key_view_capped`) — a member key for good. Your sign-in re-stamp leaves its role at `user`, and the SSH gateway never grants it the admin override, even while you are an admin. It reaches your own runs and nothing else. An uncapped admin key is registered outside the mode, and since 0.8.5 it reaches only runs with no personal owner |
 
 > **It shows you what a member SEES. It is not proof that a member is
 > REFUSED.** Four ceilings, all deliberate:

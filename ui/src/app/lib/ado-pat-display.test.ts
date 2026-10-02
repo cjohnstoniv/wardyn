@@ -62,6 +62,11 @@ describe("organisation names and the token page", () => {
     expect(adoTokensURL("https://tfs.example.com/collection")).toBe("https://tfs.example.com/collection/_usersSettings/tokens");
     expect(adoTokensURL("")).toBe("");
   });
+  // #1488: the link is built from a stored address, so only https is ever linked.
+  it("links https only: any other scheme gives no link", () => {
+    expect(adoTokensURL("http://tfs.example.com/collection")).toBe("");
+    expect(adoTokensURL("javascript:alert(1)")).toBe("");
+  });
 });
 
 describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", () => {
@@ -171,6 +176,33 @@ describe("patCardView: a row where each person adds their own token (state 10)",
     expect(v.chip).toEqual({ label: "Connected", tone: "success" });
     expect(v.body).toContain("Git only. Azure DevOps Server has no Entra sign-in.");
     expect(v.action).toBe("replace_token");
+  });
+});
+
+// #1488: Remove is offered on every own-token state that holds a token, and
+// nowhere else — derived from the state, not from the action (expired uses
+// add_token yet still holds a stored token).
+describe("patCardView: the Remove flag", () => {
+  const own = { token_mode: "own_pat" } as const;
+  const now = new Date(2000, 9, 24, 12, 0).getTime();
+  const flag = (a: Partial<SCMAccessPAT>) => patCardView(access(a), "Azure DevOps", now)!.remove;
+  it("is true for own live, expiring, refused and expired", () => {
+    expect(flag({ ...own, state: "live", expires_on: "2000-10-27" })).toBe(true);
+    expect(flag({ ...own, state: "expiring", expires_on: "2000-10-27" })).toBe(true);
+    expect(flag({ ...own, state: "live", expires_on: "2000-10-27", refused_at: new Date(2000, 9, 2).toISOString() })).toBe(true);
+    expect(flag({ ...own, state: "expired_signin", cause: "token_expired" })).toBe(true);
+  });
+  it("is false with no token stored, and on every minted state", () => {
+    expect(flag({ ...own, state: "not_configured" })).toBe(false);
+    for (const m of [
+      { state: "not_configured" },
+      { state: "live" },
+      { state: "expired_signin", cause: "ended" },
+      { state: "expired_signin", cause: "blocked" },
+      { state: "expired_signin", cause: "ado_pat_needs_console_app" },
+    ]) {
+      expect(flag({ token_mode: "minted_pat", ...m } as Partial<SCMAccessPAT>)).toBe(false);
+    }
   });
 });
 

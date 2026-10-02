@@ -14,9 +14,11 @@
 //
 // NOT wired here, on purpose:
 //  - C9b ("removed by an address change") — SetupProviderAccess carries only
-//    `not_configured`, the same state a credential that was never stored
-//    grades to; there is no field distinguishing the two. Its canon sentence
-//    is left unwired rather than invented.
+//    `not_configured`, the one state a credential grades to whether it was
+//    never stored, was deleted by an address change, or could not be read;
+//    there is no field distinguishing them. So the console says only that none
+//    is available (#1489), and C9b's canon sentence is left unwired rather
+//    than invented.
 //  - C11 (the admin-token caller) — that principal never mounts the Member
 //    view at all (model-access-context.tsx's own comment), so this page never
 //    sees it.

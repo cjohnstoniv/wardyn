@@ -532,10 +532,12 @@ func TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket(t *testing.T) {
 	}
 }
 
-// TestUIGateway_EnterRejectsNonOwnerTicket: minting is owner-or-admin, but a
-// member CAN hold a ticket for a run they own — the gateway re-checks the
-// ticket's stamped principal/role against the freshly loaded run, exactly as
-// the attach WebSocket does, because this lane runs no auth middleware at all.
+// TestUIGateway_EnterRejectsNonOwnerTicket: a member CAN hold a ticket for a run
+// they own — the gateway re-checks the ticket's stamped principal/role against
+// the freshly loaded run, exactly as the attach WebSocket does, because this
+// lane runs no auth middleware at all. A super admin's ticket for someone
+// else's run is refused too (#1476), with a 403 naming why; on a run with no
+// personal owner it is admitted.
 func TestUIGateway_EnterRejectsNonOwnerTicket(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
@@ -545,14 +547,29 @@ func TestUIGateway_EnterRejectsNonOwnerTicket(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-owner ticket: %d %s", rec.Code, rec.Body.String())
 	}
-	// An ADMIN's ticket for someone else's run is accepted (owner-OR-admin,
-	// the same authorization the ticket endpoint itself applies).
+	rec = h.enter(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, "root", oidc.RoleAdmin)},
+	})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"reason":"run_owner_only"`) ||
+		!strings.Contains(rec.Body.String(), "only the person who started this run can open it interactively") {
+		t.Fatalf("admin ticket for a person's run: %d %s, want 403 run_owner_only", rec.Code, rec.Body.String())
+	}
+	if cs := setUICookies(rec); len(cs) != 0 {
+		t.Fatalf("a refused admin ticket set a relay cookie: %+v", cs)
+	}
+	if rows := h.audit.auditRows("authz.denied", "denied"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), "run_owner_only") {
+		t.Fatalf("authz.denied rows = %+v, want one run_owner_only", rows)
+	}
+	owned := h.run
+	owned.OperatorOwned = true
+	h.store.putRun(owned)
 	rec = h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
 		"ticket": {h.ticket(h.run.ID, "root", oidc.RoleAdmin)},
 	})
 	if rec.Code != http.StatusFound {
-		t.Fatalf("admin ticket: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("admin ticket for an operator-owned run: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1268,7 +1285,7 @@ func TestUIGateway_SessionCookieIsSignedAndBounded(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	now := time.Now()
 	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "alice",
-		Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix()}
+		Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix(), AuthorizedAt: now.Unix()}
 	value := h.srv.encodeUISession(sess)
 
 	req := func(v string) *http.Request {

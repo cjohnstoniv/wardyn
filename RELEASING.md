@@ -163,8 +163,15 @@ flowchart LR
    ```sh
    git log --oneline vX.Y.(Z-1)..release/X.Y   # only cherry-picks + the release commit
    git diff --name-only vX.Y.(Z-1) release/X.Y # only the files the issues name
-   git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/store/migrations ui/src go.mod go.sum
+   git cat-file -e release/X.Y:internal/db/migrations && git cat-file -e release/X.Y:ui/src && git cat-file -e release/X.Y:go.mod && git cat-file -e release/X.Y:go.sum &&
+     git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/db/migrations ui/src go.mod go.sum
    ```
+
+   A non-zero exit stops the tag. `git diff --quiet` on a path that does not
+   exist exits 0, so the `git cat-file -e` chain first proves each pathspec is
+   real on `release/X.Y`; no release helper runs this check, so you run it. A
+   `.sql` change under `internal/db/migrations` is a hard stop, as in the 0.7
+   guard below.
 
 **Evidence is certified against a SHA.** A walk, a conformance run or a gate
 proves the commit it ran on. Any commit after it — a fix, a rebase, the release
@@ -246,6 +253,7 @@ did, and starts its clock at its own first green.
 | The preflight needed a nightly on the exact sha | Evidence is keyed by tree (`green-by-tree.sh`). |
 | ROADMAP Highlights were filled in by hand | `HIGHLIGHTS=`; the command refuses when the row is missing and none was given. |
 | A sha with both PR and push runs was ambiguous | `green-by-tree.sh` judges each run. |
+| A promote that would sign a release under another tag's identity | There is no override flag. A promote is dispatched on the tag ref (`release.yml`'s promote job runs on `github.ref_name`), so its signature carries that tag's identity, which is the exact one `scripts/verify-release.sh` and `docs/VERIFY.md` check. Dispatching it from another ref makes verification fail, correctly. |
 | A repeated cut | `release-commit.sh` exits 4 when `## [V]` is already in the CHANGELOG, so a second `--apply` cannot duplicate the section. The command never calls it again: it sees `## [V]` and skips. |
 
 **Rehearsal.** `DRY_RUN=1` makes no release commit, no PR, no push to `release/*`,
@@ -539,8 +547,8 @@ the other:
   `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
   `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
   (keyless, by digest) but not SBOM- or provenance-attested**, and under the
-  `publish-image.yml@refs/heads/main` certificate identity — not the
-  `release.yml@refs/tags/v.*` one every command in `docs/VERIFY.md` pins, so
+  `publish-image.yml@refs/heads/main` certificate identity — not the exact
+  `release.yml@refs/tags/vX.Y.Z` one every command in `docs/VERIFY.md` pins, so
   that page's recipes structurally cannot verify these tags. See
   [docs/VERIFY.md](docs/VERIFY.md) "The continuous lane" for the regexp that
   can. The compose stack still always builds from source (see
@@ -591,7 +599,7 @@ the other:
     # 2. that index digest — not a child manifest — is what carries the signature
     digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
     cosign verify "ghcr.io/cjohnstoniv/$img@$digest" \
-      --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v' \
+      --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v$TAG" \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
   done
   ```

@@ -68,16 +68,70 @@ const (
 )
 
 // pauseClocks is the process-local state the pause keeps: the two stamp
-// debounces and the idle round-robin cursor. Presence and agent activity are
-// debounced apart, so an agent stamp never swallows the stamp that tells a
-// person's keystroke the run is paused.
+// debounces, the failed-thaw backoffs and the idle round-robin cursor. Presence
+// and agent activity are debounced apart, so an agent stamp never swallows the
+// stamp that tells a person's keystroke the run is paused.
 type pauseClocks struct {
-	mu       sync.Mutex
-	presence map[uuid.UUID]time.Time
-	activity map[uuid.UUID]time.Time
-	cursor   uuid.UUID
-	probes   map[uuid.UUID]*probeState
-	diskRoot map[uuid.UUID]diskRootSample
+	mu        sync.Mutex
+	presence  map[uuid.UUID]time.Time
+	activity  map[uuid.UUID]time.Time
+	thawRetry map[uuid.UUID]thawBackoff
+	cursor    uuid.UUID
+	probes    map[uuid.UUID]*probeState
+	diskRoot  map[uuid.UUID]diskRootSample
+}
+
+// thawRetryFloor is the first wait before an input retries a thaw that failed;
+// each failure after it doubles the wait, up to presenceStampEvery.
+const thawRetryFloor = time.Second
+
+// thawBackoff is one run whose thaw failed: next is the earliest an input
+// retries it, wait the interval that failure set.
+type thawBackoff struct {
+	next time.Time
+	wait time.Duration
+}
+
+// thawGate reports whether a failed thaw of id is outstanding, and whether its
+// backoff still holds at now. A backoff that has come due is reserved for the
+// caller before it is reported, so concurrent inputs at that moment make one
+// attempt between them, not one each.
+func (c *pauseClocks) thawGate(id uuid.UUID, now time.Time) (pending, hold bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b, ok := c.thawRetry[id]
+	if !ok {
+		return false, false
+	}
+	if now.Before(b.next) {
+		return true, true
+	}
+	b.next = now.Add(b.wait)
+	c.thawRetry[id] = b
+	return true, false
+}
+
+// thawFailed notes a failed thaw (or a failed read of the paused run) of id and
+// sets when the next input retries it. now is read after the attempt, so a thaw
+// slower than its wait still holds the next input for a full wait.
+func (c *pauseClocks) thawFailed(id uuid.UUID, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.thawRetry == nil || len(c.thawRetry) >= 4096 {
+		c.thawRetry = map[uuid.UUID]thawBackoff{}
+	}
+	wait := thawRetryFloor
+	if b, ok := c.thawRetry[id]; ok {
+		wait = min(b.wait*2, presenceStampEvery)
+	}
+	c.thawRetry[id] = thawBackoff{next: now.Add(wait), wait: wait}
+}
+
+// thawDone forgets id's failed thaw: it was thawed, or found not paused.
+func (c *pauseClocks) thawDone(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.thawRetry, id)
 }
 
 // probeState is one run's tally of Wardyn's own disk walks in flight and idle
@@ -243,13 +297,21 @@ func (s *Server) markPresent(ctx context.Context, runID uuid.UUID, actorType typ
 }
 
 // stampPresence is markPresent, reporting whether it resumed the run.
+//
+// The stamp debounce keeps a healthy run to one write a window. It never
+// swallows a thaw that is owed: a thaw that failed (or a read of the paused run
+// that failed) is retried by the next input once its short backoff has passed,
+// and reports its failure each time, so a person typing into a frozen agent is
+// not left waiting out the whole window. An input inside the backoff does
+// nothing and reports nothing; thawForExec still thaws directly then.
 func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal, reason string) (bool, error) {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok {
 		return false, nil
 	}
 	now := s.cfg.Now()
-	if !s.pause.stampDue(true, runID, now) {
+	pending, hold := s.pause.thawGate(runID, now)
+	if hold || (!pending && !s.pause.stampDue(true, runID, now)) {
 		return false, nil
 	}
 	paused, err := pauser.StampRunActive(ctx, runID)
@@ -260,13 +322,19 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 	}
 	s.pause.stamped(true, runID, now)
 	if !paused {
+		s.pause.thawDone(runID)
 		return false, nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err == nil {
+		err = s.resumeRun(ctx, pauser, run, actorType, principal, reason)
+	}
 	if err != nil {
+		s.pause.thawFailed(runID, s.cfg.Now())
 		return false, err
 	}
-	return true, s.resumeRun(ctx, pauser, run, actorType, principal, reason)
+	s.pause.thawDone(runID)
+	return true, nil
 }
 
 // thawForExec is markPresent for a path about to exec into the sandbox, given
@@ -359,8 +427,9 @@ var errResumedSandboxGone = errors.New("the run's sandbox is not running")
 
 // resumeRun thaws a paused run, re-reads its sandbox's status, then clears its
 // pause. Thawing first means a failure leaves the run marked paused, so the
-// next keystroke, Resume or sweep tries again; clearing first could leave a
-// frozen agent nobody knows about. The re-read keeps a vanished sandbox from
+// next input (after its short backoff), Resume or exec tries again, and the
+// sweep too for a waiting pause with no request open; clearing first could
+// leave a frozen agent nobody knows about. The re-read keeps a vanished sandbox from
 // reading as a resumed run: its pause stays until the watcher or the
 // reconciler settles the run.
 func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun,

@@ -317,7 +317,7 @@ describe("one door at a time", () => {
 describe("B9 — a relaunch refused after its screen was gone", () => {
   it("shows the server's sentence with Dismiss, and Dismiss clears it", async () => {
     const sentence =
-      "This run's model provider is Corp gateway, and you have not added your token for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.";
+      "This run's model provider is Corp gateway, and no token is available for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.";
     renderDoor(providerStatus([{ provider: bedrock }]), {
       for: { provider: bedrock.id },
       onSignedIn: () => Promise.resolve(sentence),
