@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-10-02
+
 ### Before you upgrade
 
 Migration `0106_attach_ticket_authority` runs on the first start; it adds two nullable columns to
