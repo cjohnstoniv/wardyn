@@ -160,6 +160,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `@types/prop-types` | 15.7.15 | MIT |
 | `@types/react` | 18.3.12 | MIT |
 | `@types/react-dom` | 18.3.1 | MIT |
+| `@xterm/addon-clipboard` | 0.2.0 | MIT |
 | `@xterm/addon-fit` | 0.11.0 | MIT |
 | `@xterm/xterm` | 6.0.0 | MIT |
 | `aria-hidden` | 1.2.6 | MIT |
@@ -172,6 +173,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `detect-node-es` | 1.1.0 | MIT |
 | `fast-equals` | 4.0.3 | MIT |
 | `get-nonce` | 1.0.1 | MIT |
+| `js-base64` | 3.9.4 | BSD-3-Clause |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
 | `lucide-react` | 1.47.0 | ISC |

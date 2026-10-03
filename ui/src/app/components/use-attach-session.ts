@@ -14,6 +14,7 @@ import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { decideKey } from "./attach-terminal-keys";
+import { createCopyGate, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
 import { entryErrorMessage } from "../lib/run-entry";
@@ -97,6 +98,10 @@ export interface UseAttachSessionArgs {
   setTakenOverBy: React.Dispatch<React.SetStateAction<string | null>>;
   setReconnectAttempt: React.Dispatch<React.SetStateAction<number>>;
   setReconnectExhausted: React.Dispatch<React.SetStateAction<boolean>>;
+  /** The clipboard gate (attach-terminal-clipboard.ts): its offer and notice state, and its handle. */
+  setCopyOffer: React.Dispatch<React.SetStateAction<CopyOffer | null>>;
+  setCopyNotice: React.Dispatch<React.SetStateAction<string | null>>;
+  copyGateRef: React.MutableRefObject<CopyGate | null>;
 }
 
 export function useAttachSession(args: UseAttachSessionArgs) {
@@ -125,6 +130,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     setTakenOverBy,
     setReconnectAttempt,
     setReconnectExhausted,
+    setCopyOffer,
+    setCopyNotice,
+    copyGateRef,
   } = args;
 
   React.useEffect(() => {
@@ -146,6 +154,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     const term = new Terminal({
       cursorBlink: true,
       scrollback: 50000,
+      // Option+drag keeps xterm's native selection on macOS while tmux owns the mouse.
+      macOptionClickForcesSelection: true,
       fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
       fontSize: 13,
       theme: {
@@ -208,6 +218,16 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // client's real size. null on the first frame so an initial writer
     // connect (never "was read-only") does not spuriously force-refit.
     let lastReadOnly: boolean | null = null;
+    // The socket the server last announced as the WRITER, and only that one: an
+    // observer, or the gap between sockets, is never entitled to a copy offer.
+    let writerWs: WebSocket | null = null;
+    const copyGate = createCopyGate({
+      term: term as unknown as GateTerm,
+      isWriter: () => writerWs !== null && writerWs === wsRef.current && writerWs.readyState === WebSocket.OPEN,
+      onOffer: setCopyOffer,
+      onNotice: setCopyNotice,
+    });
+    copyGateRef.current = copyGate;
 
     const send = (payload: ArrayBufferView | string) => {
       const cur = wsRef.current;
@@ -274,6 +294,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
+      // A new connection starts with no writer standing and no offer.
+      writerWs = null;
+      copyGate.reset();
 
       // Arm the deadline for THIS attempt. Closing a socket still in CONNECTING
       // fires onclose with an abnormal code — the one path that already knows
@@ -352,6 +375,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
               term.focus();
             }
             lastReadOnly = nowReadOnly;
+            // A role change voids whatever was offered under the old one.
+            if ((writerWs === ws) !== !nowReadOnly) copyGate.reset();
+            writerWs = nowReadOnly ? null : ws;
             setMode({ readOnly: nowReadOnly, holder: msg.holder });
           }
         } catch {
@@ -361,6 +387,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
       ws.onclose = (ev) => {
         clearConnectTimer();
+        writerWs = null;
+        copyGate.reset();
         if (disposed) return;
         // Displaced — checked before the reconnect path, because it is the one
         // close that looks unexpected and must never be retried. See
@@ -543,6 +571,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       mount.removeEventListener("paste", onPaste, true);
       inputDispose.dispose();
       binaryDispose.dispose();
+      copyGate.dispose();
+      copyGateRef.current = null;
       resizeObserver.disconnect();
       const ws = wsRef.current;
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
