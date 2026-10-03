@@ -369,11 +369,10 @@ func TestTakeover_SSHPumpDropsResizeAfterEviction(t *testing.T) {
 	sess := gr.session(0)
 	close(sess.release) // keystrokes are not the subject here
 
-	// bridgeSSHShell already applied the pty-req geometry once as the writer
-	// (bridgeSSHShell in sshgateway_channels.go), so a live window-change makes
-	// it two.
+	// The pty-req geometry seeds the exec at attach (it is not a Resize), so a
+	// live window-change is the first one.
 	resizeCh <- sshWindowChangeMsg{Columns: 120, Rows: 40}
-	waitFor(t, "the pre-eviction window-change", func() bool { return sess.resizeCount() == 2 })
+	waitFor(t, "the pre-eviction window-change", func() bool { return sess.resizeCount() == 1 })
 	before := sess.resizeCount()
 
 	if srv.evictAttachHolder(run.ID) == nil {

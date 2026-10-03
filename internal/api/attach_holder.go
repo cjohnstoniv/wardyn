@@ -115,14 +115,30 @@ type attachHolder struct {
 	// resize write.
 	writable atomic.Bool
 
-	// notify tells THIS client its mode changed — today only read-only ->
-	// writable, on promotion. Transport-specific (a second attach-mode frame on
-	// the WebSocket, the client's own geometry plus a stderr line on the SSH
-	// channel) and NEVER called with the registry lock held: a client write can
-	// block for the full attachWriteTimeout, which would stall every other
-	// attach on the daemon behind one unresponsive peer. The registry hands the
-	// caller a closure to run on its own goroutine instead (releaseAttach).
+	// notify tells THIS client something about its mode, in two cases.
+	// readOnly=false: it was promoted (read-only -> writable). The transport
+	// re-attaches it as a writer first (establishExec), and only then tells the
+	// client: a second attach-mode frame on the WebSocket, a stderr line on the
+	// SSH channel. readOnly=true: the writer's geometry changed, and `holder` is
+	// that writer, so the observer's browser can re-pin its grid (the SSH lane
+	// has nothing to say). NEVER called with the registry lock held: a client
+	// write can block for the full attachWriteTimeout, which would stall every
+	// other attach on the daemon behind one unresponsive peer. The registry
+	// hands the caller a closure to run on its own goroutine instead
+	// (releaseAttach).
 	notify func(readOnly bool, holder *attachHolder)
+
+	// ready is this holder's attach state: attaching until its exec matches its
+	// role, ready after (attach_exec.go). A promotion sends it back to attaching
+	// while the observer's exec is replaced by a writer's.
+	ready attachReady
+	// mux is the session the pumps read and write: the holder's current exec.
+	mux muxSession
+	// openMu serialises establishExec; the three fields below are its state.
+	openMu     sync.Mutex
+	execOpened bool
+	execWriter bool // the current exec was opened without ignore-size
+	execCancel context.CancelFunc
 
 	// evicted flips the instant a take-over removes this holder from the
 	// registry, and it is what actually REVOKES write authority.
@@ -206,16 +222,23 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 	return nil
 }
 
+// promote hands this observer the write slot. The caller holds the registry
+// lock. The holder goes back to attaching, because its exec is still the
+// observer's: input stays held until the transport has replaced it.
+func (h *attachHolder) promote() {
+	h.writable.Store(true)
+	h.ready.setAttaching()
+}
+
 func (h *attachHolder) setSize(cols, rows uint16) {
 	h.mu.Lock()
 	h.cols, h.rows = cols, rows
 	h.mu.Unlock()
 }
 
-// size is the client's own last-known geometry, which a promoted observer has
-// to re-apply: it never resized the shared tmux window while it was watching
-// (that would clamp the writer's terminal), so the window it inherits is the
-// departed writer's.
+// size is the client's own last-known geometry, recorded for observers too: a
+// promoted observer opens its writer exec at it, because its own resizes never
+// reached the shared tmux window while it was watching.
 func (h *attachHolder) size() (cols, rows uint16) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -387,7 +410,7 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 			if len(ra.observers) > 0 {
 				promoted, ra.observers = ra.observers[0], ra.observers[1:]
 				ra.writer = promoted
-				promoted.writable.Store(true)
+				promoted.promote()
 			}
 		} else {
 			ra.observers = slices.DeleteFunc(ra.observers, func(o *attachHolder) bool { return o == h })
@@ -498,7 +521,7 @@ func (s *Server) evictAttachHolderFor(runID uuid.UUID, taker string) (prev *atta
 			promoted = o
 			ra.observers = slices.Delete(ra.observers, i, i+1)
 			ra.writer = promoted
-			promoted.writable.Store(true)
+			promoted.promote()
 			break
 		}
 	}
