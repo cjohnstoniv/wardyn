@@ -69,6 +69,9 @@ func TestPG_CreateRunUnderCap_CountsRowsAndFreesOnTerminal(t *testing.T) {
 	if ok, err := pg.UpdateRunStateIf(ctx, first.ID, types.RunPending, types.RunFailed); err != nil || !ok {
 		t.Fatalf("fail the first run: ok=%v err=%v", ok, err)
 	}
+	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+		t.Fatalf("CountNonTerminalRuns = %d, %v; want 1 (the failed run is terminal)", n, err)
+	}
 	// One PENDING row is still held (the cap-0 insert), so cap 1 refuses and cap 2 admits.
 	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); !errors.Is(err, store.ErrRunCapReached) {
 		t.Fatalf("create at cap 1 with one live row = %v, want ErrRunCapReached", err)

@@ -48,7 +48,8 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonOrgRevoked, orgRevokedMsg)
 		return
 	}
-	// The deployment run cap is a quota like the per-principal one: 422, no audit.
+	// The deployment run cap is a quota like the per-principal one: 422, no audit
+	// (POST /runs refuses before its identity mint, refuseRunCapFull).
 	if errors.Is(err, store.ErrRunCapReached) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
 		return

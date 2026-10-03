@@ -122,12 +122,8 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
 		return types.AgentRun{}, err
 	}
-	states := make([]string, 0, len(types.NonTerminalRunStates))
-	for _, st := range types.NonTerminalRunStates {
-		states = append(states, string(st))
-	}
 	var active int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, states).Scan(&active); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, nonTerminalStateNames()).Scan(&active); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: count active runs: %w", err)
 	}
 	if active >= limit {
@@ -141,6 +137,17 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 		return types.AgentRun{}, err
 	}
 	return created, nil
+}
+
+// CountNonTerminalRuns is the number of non-terminal run rows, the quantity
+// CreateRunUnderCap holds under the cap. It takes no lock: a pre-flight read for
+// a refusal that must come before an identity is minted, never the authority.
+func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
+	var n int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, nonTerminalStateNames()).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return n, nil
 }
 
 func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {

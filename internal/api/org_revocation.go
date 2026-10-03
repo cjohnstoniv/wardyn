@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -24,6 +26,33 @@ const orgRevokedMsg = "this device's enrolment with its organisation was revoked
 // create, so the cap fails closed.
 type runCapCreator interface {
 	CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error)
+}
+
+// runCounter is the store's lock-free count of non-terminal runs, for the
+// deployment-cap refusal that precedes the identity mint (refuseRunCapFull).
+type runCounter interface {
+	CountNonTerminalRuns(ctx context.Context) (int, error)
+}
+
+// refuseRunCapFull writes the 422 run_quota (or the count's 5xx) and reports
+// true when the deployment already holds its cap of non-terminal runs. It is the
+// early refusal only: CreateRunUnderCap, under its lock, stays the authority,
+// and a store that cannot count admits here so createRun's own fail-closed
+// check decides.
+func (s *Server) refuseRunCapFull(w http.ResponseWriter, r *http.Request) bool {
+	c, ok := s.cfg.Store.(runCounter)
+	if s.cfg.MaxConcurrentRuns <= 0 || !ok {
+		return false
+	}
+	n, err := c.CountNonTerminalRuns(r.Context())
+	if err == nil && n < s.cfg.MaxConcurrentRuns {
+		return false
+	}
+	if err == nil {
+		err = store.ErrRunCapReached
+	}
+	writeServerError(w, r, "count active runs", err)
+	return true
 }
 
 // createRun is the ONE door to Store.CreateRun: a revoked hybrid laptop creates
