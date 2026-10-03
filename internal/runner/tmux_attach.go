@@ -35,7 +35,25 @@ var TmuxAttachCommands = []string{
 // pattern, and the settings chain is added only for tmux >= 3.2. On any
 // mismatch (unexpected output, older tmux) the attach proceeds exactly as
 // before. The version text comes from inside the sandbox and is untrusted.
-var TmuxAttachSh = `v=$(tmux -V 2>/dev/null | head -c 64 | sed -n '1s/^tmux \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p'); set -- $v; ` +
-	`if [ $# -eq 2 ] && { [ "$1" -gt 3 ] 2>/dev/null || { [ "$1" -eq 3 ] && [ "$2" -ge 2 ]; } 2>/dev/null; }; ` +
-	`then exec tmux new-session -A -s wardyn bash \; ` + strings.Join(TmuxAttachCommands, ` \; `) + `; ` +
-	`else exec tmux new-session -A -s wardyn bash; fi`
+var TmuxAttachSh = tmuxAttachSh("")
+
+// TmuxObserverAttachSh is TmuxAttachSh for an observer: inside the same
+// tmux >= 3.2 branch the client is attached with `-f ignore-size`, so tmux
+// never counts it when sizing the shared window. Older tmux attaches exactly
+// as TmuxAttachSh does (the caller seeds the observer's PTY from the writer).
+var TmuxObserverAttachSh = tmuxAttachSh(" -f ignore-size")
+
+// TmuxAttachShFor returns the fragment for one role.
+func TmuxAttachShFor(observer bool) string {
+	if observer {
+		return TmuxObserverAttachSh
+	}
+	return TmuxAttachSh
+}
+
+func tmuxAttachSh(flags string) string {
+	return `v=$(tmux -V 2>/dev/null | head -c 64 | sed -n '1s/^tmux \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p'); set -- $v; ` +
+		`if [ $# -eq 2 ] && { [ "$1" -gt 3 ] 2>/dev/null || { [ "$1" -eq 3 ] && [ "$2" -ge 2 ]; } 2>/dev/null; }; ` +
+		`then exec tmux new-session -A` + flags + ` -s wardyn bash \; ` + strings.Join(TmuxAttachCommands, ` \; `) + `; ` +
+		`else exec tmux new-session -A -s wardyn bash; fi`
+}

@@ -71,24 +71,35 @@ func TestTmuxAttachShVersionGate(t *testing.T) {
 		{"tmux 99999999999999999999.1\n", false},
 		{strings.Repeat("x", 100000), false},
 	}
-	for _, c := range cases {
-		name := c.v[:min(len(c.v), 20)]
-		_ = os.Remove(out)
-		cmd := exec.Command("/bin/sh", "-c", TmuxAttachSh)
-		cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FAKE_V=" + c.v}
-		if b, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%q: %v\n%s", name, err, b)
-		}
-		b, err := os.ReadFile(out)
-		if err != nil {
-			t.Fatalf("%q: fake tmux was not exec'd: %v", name, err)
-		}
-		args := string(b)
-		if !strings.HasPrefix(args, "new-session\n-A\n-s\nwardyn\nbash\n") {
-			t.Errorf("%q: attach args = %q", name, args)
-		}
-		if got := strings.Contains(args, "WheelUpPane"); got != c.chain {
-			t.Errorf("%q: chained = %v, want %v", name, got, c.chain)
+	for _, observer := range []bool{false, true} {
+		for _, c := range cases {
+			name := c.v[:min(len(c.v), 20)]
+			_ = os.Remove(out)
+			cmd := exec.Command("/bin/sh", "-c", TmuxAttachShFor(observer))
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FAKE_V=" + c.v}
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%q: %v\n%s", name, err, b)
+			}
+			b, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatalf("%q: fake tmux was not exec'd: %v", name, err)
+			}
+			args := string(b)
+			// ignore-size is a tmux >= 3.2 client flag: an observer carries it
+			// inside the gated branch only, so an older tmux never sees it.
+			want := "new-session\n-A\n-s\nwardyn\nbash\n"
+			if observer && c.chain {
+				want = "new-session\n-A\n-f\nignore-size\n-s\nwardyn\nbash\n"
+			}
+			if !strings.HasPrefix(args, want) {
+				t.Errorf("%q (observer=%v): attach args = %q, want prefix %q", name, observer, args, want)
+			}
+			if got := strings.Contains(args, "WheelUpPane"); got != c.chain {
+				t.Errorf("%q (observer=%v): chained = %v, want %v", name, observer, got, c.chain)
+			}
+			if got := strings.Contains(args, "ignore-size"); got != (observer && c.chain) {
+				t.Errorf("%q (observer=%v): ignore-size = %v", name, observer, got)
+			}
 		}
 	}
 }
