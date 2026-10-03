@@ -149,10 +149,11 @@ func (s *Server) pushActsAs(ctx context.Context, run types.AgentRun, subject str
 	case types.GrantGitHubToken:
 		return types.PushActsAsGitHubApp, run.CreatedBy, nil
 	case types.GrantGitPAT:
-		_, secret, _, serr := gitPATScopeFields(grants[i].Spec.Scope)
+		pat, serr := types.DecodeGitPATScope(grants[i].Spec.Scope)
 		if serr != nil {
 			return "", "", fmt.Errorf("acts_as %q: %w", actsAs, serr)
 		}
+		secret := pat.SecretName
 		if subject != "" && s.cfg.Secrets != nil {
 			if names, lerr := s.cfg.Secrets.For(subject).List(ctx); lerr == nil && slices.Contains(names, secret) {
 				return types.PushActsAsGitPAT, run.CreatedBy, nil

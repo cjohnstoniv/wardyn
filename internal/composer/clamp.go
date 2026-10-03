@@ -490,6 +490,9 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 	if g.Kind == types.GrantGitHubToken && GitHubScopeWithin(g.Scope, cg.Scope) != nil {
 		return false
 	}
+	if g.Kind == types.GrantGitPAT && PATScopeWithin(g.Scope, cg.Scope) != nil {
+		return false
+	}
 	return true
 }
 
@@ -533,6 +536,17 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 			}
 			*warns = append(*warns, dedupeStrings(scopeWarns)...)
 		}
+		// git_pat: the same meet over repos/access/api/forge. An empty repos intersection drops the grant;
+		// it is never kept as an unnarrowed one.
+		if g.Kind == types.GrantGitPAT {
+			var scopeWarns []string
+			scope, keep := PATScopeMeet(g.Scope, grantScopes(bounds), &scopeWarns)
+			*warns = append(*warns, dedupeStrings(scopeWarns)...)
+			if !keep {
+				continue
+			}
+			g.Scope = scope
+		}
 		// TTL cap: the strictest bound; a ceiling TTL <=0 bounds nothing, leaving the broker maximum.
 		max := maxGrantTTLSeconds
 		for _, cg := range bounds {
@@ -557,6 +571,15 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 			g.OwnerOnly = true
 		}
 		out = append(out, g)
+	}
+	return out
+}
+
+// grantScopes lists each grant's scope, in order.
+func grantScopes(grants []types.GrantSpec) []json.RawMessage {
+	out := make([]json.RawMessage, len(grants))
+	for i, g := range grants {
+		out[i] = g.Scope
 	}
 	return out
 }
