@@ -253,6 +253,9 @@ export function NewRunLaunchPanel({
                 modelBlocked
                 ? RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName)
                 : null;
+  // The Connect link belongs to the unattended-block sentence only; an
+  // earlier arm that wins while modelBlocked is true keeps its own sentence.
+  const modelBlockShown = modelBlocked && problem === RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName);
 
   return (
     <RunRail
@@ -268,7 +271,7 @@ export function NewRunLaunchPanel({
       launch={{
         onLaunch,
         disabled: launchDisabled,
-        problemLink: modelBlocked ? { to: "/account", label: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA } : undefined,
+        problemLink: modelBlockShown ? { to: "/account", label: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA } : undefined,
         spinning: launchSpinning,
         inFlight: launching,
         problem,

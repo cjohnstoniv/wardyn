@@ -104,6 +104,13 @@ describe("NewRunLaunchPanel — no model for an unattended agent run", () => {
     expect(screen.queryByText(RAIL_MODEL_ACCESS.NO_PROVIDER, { exact: false })).toBeNull();
   });
 
+  it("an earlier problem arm keeps its own sentence and no Connect link", () => {
+    renderPanel({ task: "" });
+    expect(screen.getByText("An autonomous run needs a task to perform.", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA })).toBeNull();
+    expect(launch()).toBeDisabled();
+  });
+
   it("an interactive body keeps the advice and is not blocked", () => {
     renderPanel({ isInteractive: true, mode: "interactive", unattended: false, showModelWarning: true });
     expect(launch()).toBeEnabled();
