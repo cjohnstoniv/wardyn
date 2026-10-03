@@ -414,6 +414,8 @@ export function NewRunScreen() {
     preflightErrorSeq,
     preflightIsCurrent,
     preflight,
+    currentBody,
+    preflightRefusal,
   } = useLaunch({
     state,
     workspaces,
@@ -796,6 +798,9 @@ export function NewRunScreen() {
           errorSeq={errorSeq}
           credentialRefused={credentialRefused}
           refusedProvider={refusedProvider}
+          launchBody={currentBody}
+          onPreflight={preflight}
+          preflightRefusal={preflightRefusal}
           preflightIsCurrent={preflightIsCurrent}
           preflightError={preflightError}
           preflightErrorSeq={preflightErrorSeq}

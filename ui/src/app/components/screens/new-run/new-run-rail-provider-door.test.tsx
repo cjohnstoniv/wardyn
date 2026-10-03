@@ -40,10 +40,17 @@ const STATUS = providerStatus([
 
 type RailOpts = { refusedProvider?: string; credentialRefused?: boolean; error?: string; onLaunch?: () => void };
 
-function renderRail(opts: RailOpts) {
+// A launch refusal answers a Launch click, and only a click arms a relaunch
+// after sign-in: the rail mounts un-refused, is clicked, then is refused.
+async function renderRail(opts: RailOpts) {
   window.history.pushState({}, "", "/runs/new");
-  const result = render(railTree(opts));
-  return { rerenderWith: (next: Partial<RailOpts>) => result.rerender(railTree({ ...opts, ...next })) };
+  const refused = opts.credentialRefused ?? true;
+  const result = render(railTree({ ...opts, credentialRefused: false }));
+  const rerenderWith = (next: Partial<RailOpts>) => result.rerender(railTree({ ...opts, ...next }));
+  await userEvent.click(screen.getByRole("button", { name: "Launch run" }));
+  (opts.onLaunch as { mockClear?: () => void } | undefined)?.mockClear?.();
+  rerenderWith({ credentialRefused: refused });
+  return { rerenderWith };
 }
 
 function railTree(opts: RailOpts) {
@@ -87,7 +94,7 @@ afterEach(() => window.history.pushState({}, "", "/"));
 describe("state 4 — a New Run refusal opens its own provider's door", () => {
   it("a Codex CLI run on the gateway refused over its token opens the token door, not AWS (#146 defect 2)", async () => {
     const sentence = `This run's model provider is ${gateway.name}, and no token is available for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.`;
-    renderRail({ refusedProvider: gateway.id, error: sentence });
+    await renderRail({ refusedProvider: gateway.id, error: sentence });
     expect(await screen.findByRole("dialog", { name: KEY_DOOR.TITLE(true, gateway.name) })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeNull();
     // The rail's launch-error line still carries the server's sentence.
@@ -96,7 +103,7 @@ describe("state 4 — a New Run refusal opens its own provider's door", () => {
 
   it("an AWS refusal opens THAT provider's door, not the default's, and launches again after sign-in", async () => {
     const onLaunch = vi.fn();
-    renderRail({ refusedProvider: bedrock.id, onLaunch });
+    await renderRail({ refusedProvider: bedrock.id, onLaunch });
     const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
     expect(dialog).toHaveTextContent(`For ${bedrock.name}`);
     const pane = await screen.findByRole("button", { name: "fake pane" });
@@ -106,14 +113,14 @@ describe("state 4 — a New Run refusal opens its own provider's door", () => {
   });
 
   it("a credential refusal naming no provider opens nothing under a provider block", async () => {
-    renderRail({ refusedProvider: "" });
+    await renderRail({ refusedProvider: "" });
     await act(async () => {});
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("off, not available, not granted: no door — the sentence stands on the launch-error line", async () => {
     const sentence = `This run's model provider is ${gateway.name}, and it is turned off — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.`;
-    renderRail({ credentialRefused: false, refusedProvider: "", error: sentence });
+    await renderRail({ credentialRefused: false, refusedProvider: "", error: sentence });
     await act(async () => {});
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText(sentence)).toBeInTheDocument();
@@ -129,7 +136,7 @@ describe("the launch door — focus and once-per-click", () => {
 
   it("a completed sign-in launches again exactly once and returns focus to Launch", async () => {
     const onLaunch = vi.fn();
-    renderRail({ refusedProvider: bedrock.id, onLaunch });
+    await renderRail({ refusedProvider: bedrock.id, onLaunch });
     await userEvent.click(await screen.findByRole("button", { name: "fake pane" }));
     expect(onLaunch).toHaveBeenCalledTimes(1);
     await afterFocusSettles();
@@ -139,7 +146,7 @@ describe("the launch door — focus and once-per-click", () => {
 
   it("Escape launches nothing, the sentence stays, and focus lands on Launch, not #main-content", async () => {
     const onLaunch = vi.fn();
-    renderRail({ refusedProvider: bedrock.id, error: "the server's sentence", onLaunch });
+    await renderRail({ refusedProvider: bedrock.id, error: "the server's sentence", onLaunch });
     await screen.findByRole("button", { name: "fake pane" });
     await userEvent.keyboard("{Escape}");
     await afterFocusSettles();
@@ -152,7 +159,7 @@ describe("the launch door — focus and once-per-click", () => {
 
   it("a relaunch refused again does not reopen the door; a fresh Launch click re-arms it", async () => {
     const onLaunch = vi.fn();
-    const r = renderRail({ refusedProvider: bedrock.id, credentialRefused: false, onLaunch });
+    const r = await renderRail({ refusedProvider: bedrock.id, credentialRefused: false, onLaunch });
     r.rerenderWith({ credentialRefused: true });
     await userEvent.click(await screen.findByRole("button", { name: "fake pane" }));
     expect(onLaunch).toHaveBeenCalledTimes(1);

@@ -61,6 +61,11 @@ export interface NewRunLaunchPanelProps {
   errorSeq: number;
   credentialRefused: boolean;
   refusedProvider: string | undefined;
+  /** The request Launch would send right now — see RunRailProps.launch.body. */
+  launchBody: string | null;
+  /** Re-runs preflight on the current body: what a preflight-origin sign-in does. */
+  onPreflight: () => Promise<void>;
+  preflightRefusal: { body: string; provider: string } | null;
   noBarrier: boolean;
 
   /** The screen's ONE validation rule (RunRail's `launch.problem`) and the
@@ -121,6 +126,9 @@ export function NewRunLaunchPanel({
   errorSeq,
   credentialRefused,
   refusedProvider,
+  launchBody,
+  onPreflight,
+  preflightRefusal,
   noBarrier,
   mode,
   task,
@@ -261,11 +269,12 @@ export function NewRunLaunchPanel({
         errorSeq,
         credentialRefused,
         refusedProvider,
+        body: launchBody,
       }}
       preflight={
         preflightIsCurrent
-          ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult }
-          : { error: null, errorSeq: preflightErrorSeq, result: null }
+          ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult, onPreflight, refusal: preflightRefusal }
+          : { error: null, errorSeq: preflightErrorSeq, result: null, onPreflight, refusal: preflightRefusal }
       }
       agentRow={agentRow}
       modelProvider={
