@@ -162,6 +162,17 @@ fi
 # Build the backend + UI once; subsequent per-spec `up` calls (in every lane)
 # reuse them (each `up` also creates its own ${DB} if it does not exist — see
 # e2e-backend.sh cmd_up).
+# Specs named cockpit-terminal-tmux-* drive a REAL tmux through the production
+# attach endpoint: their backend is the e2etmux build, served with
+# WARDYN_E2E_TMUX=1 (see e2e-backend.sh). Every other spec keeps the none runner.
+needs_tmux_build=0
+if [[ $# -gt 0 ]]; then
+  for a in "$@"; do [[ "${a}" == cockpit-terminal-tmux-* ]] && needs_tmux_build=1; done
+elif compgen -G "ui/e2e/cockpit-terminal-tmux-*.spec.ts" >/dev/null; then
+  needs_tmux_build=1
+fi
+[[ ${needs_tmux_build} -eq 1 ]] && export WARDYN_E2E_TMUX_BUILD=1
+
 if [[ -z "${LIVE_BASE_URL}" ]]; then
   log "Building backend + UI bundle once"
   ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
@@ -264,6 +275,7 @@ run_lane() {
     base="$(basename "${spec}")"
     mkdir "${work}/${base}" 2>/dev/null || continue
     spec_name="${base%.spec.ts}"
+    if [[ "${spec_name}" == cockpit-terminal-tmux-* ]]; then export WARDYN_E2E_TMUX=1; else unset WARDYN_E2E_TMUX; fi
     # Playwright is run from ui/, so its argument is the spec path with the "ui/"
     # prefix dropped — "e2e/foo.spec.ts", or "e2e/walk/foo.spec.ts" in LIVE mode.
     spec_rel="${spec#ui/}"
