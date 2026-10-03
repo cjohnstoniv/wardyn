@@ -415,6 +415,11 @@ func (c *Config) validateTerminatedGates() error {
 	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
 	}
+	for host, g := range c.PATGrants {
+		if g.API && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+			return fmt.Errorf("config: pat_grants[%q] sets api and requires mitm_ca_cert_pem and mitm_ca_key_pem — the forge API door runs only on a terminated connection", host)
+		}
+	}
 	return c.validateAzureGates()
 }
 

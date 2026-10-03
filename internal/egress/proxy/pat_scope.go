@@ -46,6 +46,9 @@ func (g PATGrant) validScope() error {
 	default:
 		return fmt.Errorf("forge %q is not one of generic, gitlab, bitbucket_server, gitea", g.Forge)
 	}
+	if g.API && patAPIForges[g.scope().Forge] == nil {
+		return fmt.Errorf("api is set for forge %q, which has no API table (gitlab, gitea, bitbucket_server)", g.scope().Forge)
+	}
 	if g.Repos != nil {
 		for _, e := range *g.Repos {
 			if _, ok := types.PATRepoKey(g.Forge, e); !ok {

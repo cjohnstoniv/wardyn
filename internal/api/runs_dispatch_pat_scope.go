@@ -31,6 +31,8 @@ type patNarrowingEnv struct {
 	// grant seeds the broker map): its git_pat grant for that forge is withheld.
 	brokered bool
 	site     types.SiteConfig
+	// bbsAPI is whether the Bitbucket Server API door is on (WARDYN_GIT_PAT_API_BITBUCKET_SERVER).
+	bbsAPI bool
 	// adoHosts are the hosts the run's Azure DevOps gate covers, which
 	// serveADOGit handles before the broker's scope checks.
 	adoHosts []string
@@ -53,6 +55,9 @@ func patNarrowingRefusal(grants []types.GrantSpec, env patNarrowingEnv) (reason,
 		case sc.Narrowed() && !env.brokerOn:
 			return reasonGitPATNarrowingNeedsBroker, fmt.Sprintf(
 				"The git_pat grant for %s sets repos, access or api, and that narrowing is enforced only by the PAT broker, which is off (WARDYN_GIT_PAT_BROKER). Without it the PAT is resident in the sandbox and nothing narrows it.", sc.Host)
+		case sc.API && sc.Forge == types.PATForgeBitbucketServer && !env.bbsAPI:
+			return reasonGitPATAPIForgeDisabled, fmt.Sprintf(
+				"The git_pat grant for %s sets api for bitbucket_server, and that forge's API door is off on this deployment (WARDYN_GIT_PAT_API_BITBUCKET_SERVER).", sc.Host)
 		case sc.Narrowed() && patSSHKeyFor(grants, sc.Host):
 			return reasonGitPATNarrowingSSHConflict, fmt.Sprintf(
 				"The git_pat grant for %s sets repos, access or api, and the run also holds an ssh_key for the same forge. SSH is a second push path the broker cannot see, so the narrowing would not bind.", sc.Host)
@@ -93,6 +98,18 @@ func patNarrowingHostUnsupported(env patNarrowingEnv, host string) bool {
 	return adoGrantHost(env.site, host) ||
 		slices.ContainsFunc(env.adoHosts, func(h string) bool { return hostEqual(h, host) }) ||
 		(env.brokered && brokeredForgeHost(host))
+}
+
+// patAPIDoor reports whether any git_pat grant among rows sets api: true. Its
+// forge host is then terminated by the proxy, which needs the per-run MITM CA.
+func patAPIDoor(rows []types.CredentialGrant) bool {
+	return slices.ContainsFunc(rows, func(r types.CredentialGrant) bool {
+		if r.Spec.Kind != types.GrantGitPAT {
+			return false
+		}
+		sc, err := types.DecodeGitPATScope(r.Spec.Scope)
+		return err == nil && sc.API
+	})
 }
 
 // patGrantSpecs is the specs of a run's stored grants.
@@ -156,7 +173,7 @@ func scopePATGrants(grants map[string]proxy.PATGrant, rows []types.CredentialGra
 func (s *Server) enforceablePATNarrowing(ctx context.Context, run types.AgentRun, p dispatchParams,
 	rows []types.CredentialGrant, site types.SiteConfig, adoRun adoEntraRun, adoInject bool,
 ) bool {
-	env := patNarrowingEnv{brokerOn: p.PATBroker, brokered: len(p.GitGrants) > 0, site: site}
+	env := patNarrowingEnv{brokerOn: p.PATBroker, brokered: len(p.GitGrants) > 0, site: site, bbsAPI: patAPIBitbucketOn()}
 	if adoInject {
 		env.adoHosts = adoRun.laneHosts()
 	}
@@ -203,7 +220,7 @@ func (s *Server) refusePATDispatch(ctx context.Context, run types.AgentRun, reas
 // Whether the run is brokered is read off its github_token grant, which is
 // how a brokered run comes to have a broker map at all.
 func (s *Server) patNarrowingAtDoor(r *http.Request, spec types.RunPolicySpec, site types.SiteConfig) (reason, detail string) {
-	env := patNarrowingEnv{brokerOn: !s.cfg.DisableGitPATBroker, site: site}
+	env := patNarrowingEnv{brokerOn: !s.cfg.DisableGitPATBroker, site: site, bbsAPI: patAPIBitbucketOn()}
 	env.brokered = slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantGitHubToken })
 	if lane, on := resolveADOEntraRun(site, repoLocatorsOf(spec.WorkspaceRepos),
 		runIdentitySubject(r.Context(), principalFromRequest(r))); on {

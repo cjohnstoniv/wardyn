@@ -130,7 +130,6 @@ func TestCreatePolicyRefusesGitPATScopes(t *testing.T) {
 		want string
 	}{
 		{"unknown scope key", policy(pat(patTestHost, `"repo":["a/b"]`)), `unknown field \"repo\"`},
-		{"api true", policy(pat(patTestHost, `"api":true,"forge":"gitlab"`)), "not yet available"},
 		{"api true on generic", policy(pat(patTestHost, `"api":true`)), "generic"},
 		{"access out of enum", policy(pat(patTestHost, `"access":"admin"`)), "access"},
 		{"forge out of enum", policy(pat(patTestHost, `"forge":"svn"`)), "forge"},
