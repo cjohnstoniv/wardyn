@@ -74,7 +74,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   it, and the `token.create` audit row records `ttl_clamped_from_seconds`. The cap never shortens a token
   already minted.
 - **A governance profile can carry a contact, and the site config a `policy_help` block.** Migration
-  `0108_governance_profile_contact` adds one nullable `governance_profiles.contact` column and changes no
+  `0116_governance_profile_contact` adds one nullable `governance_profiles.contact` column and changes no
   existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
