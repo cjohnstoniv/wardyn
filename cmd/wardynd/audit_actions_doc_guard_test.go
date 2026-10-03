@@ -579,6 +579,11 @@ var auditActionGrammarAllow = map[string]bool{
 	// compatibility surface docs/OPERATIONS.md already commits to by name; its
 	// rename is its own reviewed change, not a rider on #205's.
 	"authz.denied": true,
+	// The approval-notification rows carry the names the notification design
+	// and its issue fixed: each records something that already happened (a
+	// notification went dead; a raise was held out of the outbox).
+	"approval.notify.failed":     true,
+	"approval.notify.suppressed": true,
 	// The lease's two end-of-run rows (#568) landed on main after this grammar
 	// did. "ended"/"expired" are past tense, and adding them to the closed verb
 	// list would fail the list's OWN no-past-tense check below — so, like

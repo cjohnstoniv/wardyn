@@ -218,6 +218,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := startApprovalNotify(rootCtx, *f.approvalNotify, pool, maskedRec, maskReg); err != nil {
+		return err
+	}
 
 	// Secret store (pluggable seam; default "pg" = envelope-encrypted Postgres
 	// rows), wrapped so every read is audited once (secretstore.Audited).
