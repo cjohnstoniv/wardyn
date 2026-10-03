@@ -252,8 +252,8 @@ export function SummaryHeader({
           the "Failed"/exit chips rather than pushing them over). Putting the
           same floor on the wrapping div is what makes the row actually
           RESERVE the space instead of just letting repo bleed into it. */}
-      <div className="flex min-w-[90px] shrink items-baseline gap-2 overflow-hidden">
-        <span className="min-w-0 max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
+      <div className="flex min-w-[90px] shrink items-baseline gap-2 overflow-hidden 2xl:min-w-[200px]">
+        <span className="min-w-[90px] max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
           {run.repo}
         </span>
         {/* Hidden below 2xl, joining the short-id span right after it in the

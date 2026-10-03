@@ -153,12 +153,6 @@ describe("SummaryHeader — command bar", () => {
   });
 });
 
-// `truncate` on an `inline-flex` Chip clips mid-word with NO
-// ellipsis — the anonymous flex child (the text node) gets min-content
-// sizing regardless of the parent's own overflow-hidden. The chip's text
-// must sit in an inner block span carrying `truncate`, not on the chip's
-// own `inline-flex` className, or this test's selector finds nothing with
-// that class inside the chip's text.
 describe("SummaryHeader — the short run id", () => {
   it("shows 8 characters and keeps the full id on the title", () => {
     const id = "7f3c9a21-5b6d-4e8f-9a0b-1c2d3e4f5a6b";
@@ -171,6 +165,12 @@ describe("SummaryHeader — the short run id", () => {
   });
 });
 
+// `truncate` on an `inline-flex` Chip clips mid-word with NO
+// ellipsis — the anonymous flex child (the text node) gets min-content
+// sizing regardless of the parent's own overflow-hidden. The chip's text
+// must sit in an inner block span carrying `truncate`, not on the chip's
+// own `inline-flex` className, or this test's selector finds nothing with
+// that class inside the chip's text.
 describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)", () => {
   it("wraps the hint in a block span that carries truncate, not the inline-flex chip itself", () => {
     renderHeader(
