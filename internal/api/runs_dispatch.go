@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -588,7 +589,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// blocks, not stamped once. It is released the moment CreateSandbox returns;
 	// the hold below takes over from there. holdRunWatcherLease only touches
 	// run.ID (no dependency on sb.Ref), so taking it earlier is safe.
-	stopCreateLease := s.holdRunWatcherLease(ctx, run.ID)
+	// sync.OnceFunc + defer: the explicit calls below stop it at the earliest point, and the
+	// defer stops the heartbeat if CreateSandbox panics (ctx is WithoutCancel, so nothing else would).
+	stopCreateLease := sync.OnceFunc(s.holdRunWatcherLease(ctx, run.ID))
+	defer stopCreateLease()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so

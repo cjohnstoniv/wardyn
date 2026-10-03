@@ -645,16 +645,17 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   // THE HOLD IS MANUFACTURED BY A NODE TAINT, and the pod it parks is the
   // PROXY's, not the agent's. CreateSandbox creates `wardyn-proxy-<run id>`
   // FIRST and waits for its pod IP before the agent pod exists at all
-  // (internal/runner/k8s's sandbox creation, `podIPWaitTimeout`), so under a
+  // (internal/runner/k8s's sandbox creation, startwait.go), so under a
   // taint nothing schedules, the proxy pod sits Pending and `wardyn-agent-<id>`
   // is never created. An earlier draft of this case watched for the AGENT pod
   // and would have polled a name that cannot exist.
   //
-  // AND THE BOUND IS THAT 90 s POD-IP WAIT, not the 3-minute canary: at 90 s
-  // the RUN FAILS. So the hold is 65 s measured from RUN CREATION — five
-  // seconds past the 60 s at which the slow-start sentence appears, and ~25 s
-  // of margin before the run dies — and the untaint happens the instant the
-  // assertions are made, not at the end of the case.
+  // AN UNSCHEDULABLE TAINT NOW WAITS under WARDYN_SANDBOX_CAPACITY_WAIT
+  // (internal/runner/start_deadlines.go) instead of failing at 90 s, so the run
+  // survives the hold. The hold is still 65 s measured from RUN CREATION — five
+  // seconds past the 60 s at which the slow-start sentence appears — and the
+  // untaint happens the instant the assertions are made, not at the end of the
+  // case.
   kubectl("taint", "nodes", KUBE_NODE, COLDPULL_TAINT);
 
   await dexSignIn(page, MEMBER_EMAIL);
@@ -724,7 +725,7 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   await expect(page.getByText(LOGIN_SANDBOX_UNREADABLE)).toHaveCount(0);
   await expect(page.getByText(LOGIN_SANDBOX_READ_RETRYING)).toHaveCount(0);
 
-  // IMMEDIATELY — every second after this is spent against the 90 s bound.
+  // IMMEDIATELY — every second after this is spent waiting on the capacity wait.
   kubectl("taint", "nodes", KUBE_NODE, "wardyn-coldpull-");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: LOGIN_DONE }).toBe("live");
 });

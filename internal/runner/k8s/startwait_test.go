@@ -118,6 +118,23 @@ func TestWaitPodIP_CapacityWaitOffFailsAtStartTimeout(t *testing.T) {
 	}
 }
 
+// A pod that has an IP but whose proxy container never gets Ready times out at the start bound, and the
+// error names the container's own Waiting reason rather than the scheduler's.
+func TestWaitPodIP_NotReadyFailsAtStartTimeoutNamingTheContainerReason(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
+	const podName = "wardyn-proxy-creating"
+	podByAge(cs, podName, func(time.Duration) corev1.PodStatus {
+		return corev1.PodStatus{Phase: corev1.PodPending, PodIP: "10.244.0.7", ContainerStatuses: []corev1.ContainerStatus{{
+			Name: proxyContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+		}}}
+	})
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not start within") ||
+		!strings.Contains(err.Error(), proxyContainerName+": ContainerCreating") {
+		t.Fatalf("err = %v; want a start-timeout error naming %s: ContainerCreating", err, proxyContainerName)
+	}
+}
+
 // The capacity wait itself has an end, and the error says it was room that never came.
 func TestWaitPodIP_CapacityWaitExpires(t *testing.T) {
 	fastPoll(t)
@@ -176,7 +193,8 @@ func TestWaitPodIP_CancellationDuringCapacityWait(t *testing.T) {
 // startClock arithmetic on a fake clock: the budgets are absolute, a changed stuck message does not
 // reset them, and time spent waiting for room does not eat the start budget.
 func TestStartClock(t *testing.T) {
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	t0 := time.Now()
+	now := t0
 	newClock := func(start, capacity time.Duration) *startClock {
 		return &startClock{now: func() time.Time { return now }, begin: now, startTimeout: start, capacityWait: capacity}
 	}
@@ -184,7 +202,7 @@ func TestStartClock(t *testing.T) {
 	scheduled := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}}
 
 	t.Run("a changed stuck reason does not reset the capacity deadline", func(t *testing.T) {
-		now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		now = t0
 		c := newClock(3*time.Minute, 15*time.Minute)
 		c.observe(pod("1 Insufficient cpu"))
 		now = now.Add(10 * time.Minute)
@@ -200,7 +218,7 @@ func TestStartClock(t *testing.T) {
 		}
 	})
 	t.Run("time waiting for room does not spend the start budget", func(t *testing.T) {
-		now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		now = t0
 		c := newClock(3*time.Minute, 15*time.Minute)
 		c.observe(pod("1 Insufficient cpu"))
 		now = now.Add(10 * time.Minute)
@@ -215,7 +233,7 @@ func TestStartClock(t *testing.T) {
 		}
 	})
 	t.Run("capacity wait off counts the wait as ordinary start time", func(t *testing.T) {
-		now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		now = t0
 		c := newClock(3*time.Minute, 0)
 		c.observe(pod("1 Insufficient cpu"))
 		now = now.Add(4 * time.Minute)
