@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -164,12 +164,12 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, warns []string) []string {
 	// Resources: cap each set field at the ceiling's; an unset ceiling is not "no opinion" (Clamp is the
 	// operator-ceiling authority for every caller), so fall back to
-	// (runner.EffectiveLimits(): the deployment's configured default, else
-	// runner.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no
+	// (sizing.EffectiveLimits(): the deployment's configured default, else
+	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no
 	// such default and stays skip-when-both-unset.
 	effCeilingResources := ceiling.Resources
 	if effCeilingResources == nil {
-		eff := runner.EffectiveLimits()
+		eff := sizing.EffectiveLimits()
 		effCeilingResources = &types.ResourceLimits{
 			CPUMillis: int(eff.CPUMillis),
 			MemoryMiB: int(eff.MemoryMiB),
@@ -179,7 +179,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 	// The profile's own CPU/memory maximum is one more ceiling on the same fields, so a fill
 	// from the ceiling and a cut of a request both stop at it.
 	if limits.MaxCPUMillis > 0 || limits.MaxMemoryMiB > 0 {
-		eff := runner.EffectiveLimits()
+		eff := sizing.EffectiveLimits()
 		capped := *effCeilingResources
 		capped.CPUMillis = capToLimit(capped.CPUMillis, limits.MaxCPUMillis, int(eff.CPUMillis))
 		capped.MemoryMiB = capToLimit(capped.MemoryMiB, limits.MaxMemoryMiB, int(eff.MemoryMiB))
@@ -406,7 +406,7 @@ func capToLimit(ceil, max, def int) int {
 // CapResources bounds a run's CPU and memory by the profile's maximums and reports whether it
 // changed anything. It is the resource-only half of Clamp, for the member launch that carries no
 // policy: its spec is the profile's own ceiling, which Clamp must not process because it drops
-// workspace mounts. A zero field means "the deployment's default size" (runner.EffectiveLimits),
+// workspace mounts. A zero field means "the deployment's default size" (sizing.EffectiveLimits),
 // so it is cut only when that default is itself above the maximum. Returns a FRESH block, never an
 // in-place write, so one shared spec cannot re-size every later run that reads it.
 func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits) (*types.ResourceLimits, bool) {
@@ -417,7 +417,7 @@ func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits) (*type
 	if r != nil {
 		out = *r
 	}
-	eff := runner.EffectiveLimits()
+	eff := sizing.EffectiveLimits()
 	cpu, mem := out.CPUMillis, out.MemoryMiB
 	if limits.MaxCPUMillis > 0 {
 		if cur := cmp.Or(cpu, int(eff.CPUMillis)); cur > limits.MaxCPUMillis {
