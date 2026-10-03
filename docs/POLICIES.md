@@ -576,8 +576,8 @@ allows: read the scope column as *how long*, never as *how narrow*.
 `denied_domains` is not that remedy: a bare deny entry is port-blind too, so
 denying `files.example.org` takes `:443` away with `:22`. What CAN be
 port-scoped is the ALLOWLIST, which does accept a `host:port` qualifier
-(`allowed_domains: ["files.example.org:443"]`, `classifyDomain` in
-`internal/egress/proxy/policy.go`) — but only for a host the policy already
+(`allowed_domains: ["files.example.org:443"]`, `Classify` in
+`internal/egress/domainmatch/domainmatch.go`) — but only for a host the policy already
 names, since an approval-raised host is exactly the case where no allowlist
 entry exists yet. So the honest options for a host whose other ports must stay
 closed are: allow-list it port-qualified instead of leaving it to first-use

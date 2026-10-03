@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -34,12 +35,12 @@ func TestDomainEntryDotsAndCharset(t *testing.T) {
 			}
 		}
 		for _, d := range []string{"example.com.", "example.com..."} {
-			if exact, _, _ := classifyDomain(d); exact != "example.com" {
-				t.Errorf("classifyDomain(%q) exact = %q, want example.com", d, exact)
+			if exact, _, _ := domainmatch.Classify(d); exact != "example.com" {
+				t.Errorf("Classify(%q) exact = %q, want example.com", d, exact)
 			}
 		}
-		if _, wild, _ := classifyDomain("*.example.com.."); wild != ".example.com" {
-			t.Errorf(`classifyDomain("*.example.com..") wild = %q, want ".example.com"`, wild)
+		if _, wild, _ := domainmatch.Classify("*.example.com.."); wild != ".example.com" {
+			t.Errorf(`Classify("*.example.com..") wild = %q, want ".example.com"`, wild)
 		}
 	})
 

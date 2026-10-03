@@ -159,7 +159,7 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		for _, h := range pub {
 			dropHost[strings.ToLower(h)] = true
 		}
-		// Port-qualified, never bare: a bare entry matches EVERY port (classifyDomain
+		// Port-qualified, never bare: a bare entry matches EVERY port (domainmatch.Classify
 		// gives it port 0, and Policy.AllowsLiteralIP answers true from allowedExact
 		// first), so a bare To of https://10.40.2.11:8443/ would trust :22 and :5432
 		// too. planArtifactRedirect's MITM/token half derives the port from the same
