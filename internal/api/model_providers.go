@@ -156,6 +156,9 @@ func normalizeModelProviders(p *types.ModelProviders) *types.ModelProviders {
 			b.BaseURL = strings.TrimSuffix(strings.TrimSpace(b.BaseURL), "/")
 			b.SSOAccountID, b.SSORoleName = strings.TrimSpace(b.SSOAccountID), strings.TrimSpace(b.SSORoleName)
 		}
+		if mp.Azure != nil {
+			mp.Azure.Endpoint, mp.Azure.Route = normalizeAzureEndpoint(mp.Azure.Endpoint), strings.TrimSpace(mp.Azure.Route)
+		}
 		if mp.Kind == types.ModelProviderCustomEndpoint {
 			if mp.Auth == nil {
 				mp.Auth = &types.ProviderAuth{}
@@ -166,6 +169,7 @@ func normalizeModelProviders(p *types.ModelProviders) *types.ModelProviders {
 		for j := range mp.Harnesses {
 			h := &mp.Harnesses[j]
 			h.Harness, h.Model, h.Path = strings.TrimSpace(h.Harness), strings.TrimSpace(h.Model), strings.TrimSpace(h.Path)
+			h.FastModel = strings.TrimSpace(h.FastModel)
 			h.AuthHeader, h.AuthFormat = strings.TrimSpace(h.AuthHeader), strings.TrimSpace(h.AuthFormat)
 		}
 	}
@@ -207,39 +211,44 @@ func assignModelProviderUIDs(block, stored *types.ModelProviders) {
 
 // validateModelProviders is the ONE write-boundary gate every door runs. A nil
 // block is valid (today's behaviour), so the unconfigured case costs nothing.
-// allowTestEndpoints is Config.AllowTestEndpoints, the only server state it
-// reads (validateProviderBedrock's base URL).
-func validateModelProviders(p *types.ModelProviders, allowTestEndpoints bool) error {
+// env is the server state it reads: validateProviderBedrock's test-endpoint
+// switch, and the azure_foundry rules' Entra login, InternalHosts and resolver.
+// The warnings are advisories the door reports beside its success response
+// (model_provider_warnings); they come back only for a valid block.
+func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]string, error) {
 	if p == nil {
-		return nil
+		return nil, nil
 	}
 	seen := map[string]bool{}
 	for i, mp := range p.Providers {
 		if !modelProviderIDPattern.MatchString(mp.ID) {
-			return fmt.Errorf(mp400ID, i, mp.ID)
+			return nil, fmt.Errorf(mp400ID, i, mp.ID)
 		}
 		if seen[mp.ID] {
-			return fmt.Errorf(mp400DupID, mp.ID)
+			return nil, fmt.Errorf(mp400DupID, mp.ID)
 		}
 		seen[mp.ID] = true
 		if !mp.Kind.Valid() {
-			return fmt.Errorf(mp400Kind, i, string(mp.Kind), strings.Join(types.ClosedModelProviderKindList(), ", "))
+			return nil, fmt.Errorf(mp400Kind, i, string(mp.Kind), strings.Join(types.ClosedModelProviderKindList(), ", "))
 		}
 		if utf8.RuneCountInString(mp.Name) > maxModelProviderName || strings.ContainsFunc(mp.Name, unicode.IsControl) {
-			return fmt.Errorf(mp400Name, mp.ID, maxModelProviderName)
+			return nil, fmt.Errorf(mp400Name, mp.ID, maxModelProviderName)
+		}
+		if err := validateProviderAzure(mp, env); err != nil {
+			return nil, err
 		}
 		for _, check := range []func(types.ModelProvider) error{
 			validateProviderAddress, validateProviderAuth, validateProviderHarnesses,
 		} {
 			if err := check(mp); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		if err := validateProviderBedrock(mp, allowTestEndpoints); err != nil {
-			return err
+		if err := validateProviderBedrock(mp, env.AllowTestEndpoints); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return azureEndpointWarnings(p, env), nil
 }
 
 // validateModelProviderImagePrereqs is the E4 refusal (multi-provider design
