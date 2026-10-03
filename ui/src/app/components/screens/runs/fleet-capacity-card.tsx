@@ -20,7 +20,7 @@ import { Mono } from "../../wardyn/code-block";
 import { runPath, useConsoleMode } from "../../wardyn/console-view";
 import { FLEET_CAPACITY as FC, FLEET_CAPACITY_AGE_LABELS } from "../../wardyn/copy/fleet-capacity";
 import { useSecurityOperator } from "../../wardyn/operator-context";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { Chip, SectionLabel, runStateLabel } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
 import { STARTING_UNSCHEDULABLE } from "../run-status-detail";
 
@@ -132,12 +132,12 @@ export function FleetCapacityCard() {
   const owners = data ? (showAll ? data.by_owner : data.by_owner.slice(0, OWNERS_COLLAPSED)) : [];
   const stateLine = data
     ? [
-        ["Running", data.states.RUNNING ?? 0],
-        ["Starting", data.states.STARTING ?? 0],
-        ["Awaiting confirmation", data.states.WAITING_FOR_CONFIRMATION ?? 0],
-        ["Paused", data.paused],
-        ["Pending", data.states.PENDING ?? 0],
-        ["Kept", data.kept],
+        [runStateLabel("RUNNING"), data.states.RUNNING ?? 0],
+        [runStateLabel("STARTING"), data.states.STARTING ?? 0],
+        [runStateLabel("WAITING_FOR_CONFIRMATION"), data.states.WAITING_FOR_CONFIRMATION ?? 0],
+        [FC.STATES_PAUSED, data.paused],
+        [runStateLabel("PENDING"), data.states.PENDING ?? 0],
+        [FC.STATES_KEPT, data.kept],
       ]
         .map(([label, n]) => `${label} ${n}`)
         .join(" · ")

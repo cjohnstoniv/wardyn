@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { FleetCapacityCard } from "./fleet-capacity-card";
 import type { RunCapacityResponse, RunCapacitySums } from "../../../lib/types";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const getMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
@@ -49,7 +50,7 @@ const k8s = sums({
 
 function response(o: Partial<RunCapacityResponse> = {}): RunCapacityResponse {
   return {
-    generated_at: "2026-10-03T12:00:00Z",
+    generated_at: aheadByHours(0),
     basis: "configured_reservations",
     states: { RUNNING: 9, STARTING: 2, WAITING_FOR_CONFIRMATION: 1, PENDING: 3 },
     paused: 2,

@@ -36,11 +36,13 @@ export const FLEET_CAPACITY = {
   OWNERS_COLS: { OWNER: "Owner", RUNS: "Runs", CPU: "CPU", MEMORY: "Memory" },
   OWNERS_SHOW_ALL: (n: number) => `Show all ${n}`,
   OWNERS_TRUNCATED: "Only the top 50 owners by CPU are listed.",
+  // Paused and Kept are not run states, so their state-line labels live here;
+  // the other four are RunStateBadge's labels (runStateLabel).
+  STATES_PAUSED: "Paused",
+  STATES_KEPT: "Kept",
   RESIDUAL_NOTE: "A sandbox that outlived its ended run is not counted here.",
 } as const;
 
-// Paused and Kept are not run states, so the state line's labels for them live
-// here; the other four come from RunStateBadge's own table.
 export const FLEET_CAPACITY_AGE_LABELS: Record<string, string> = {
   under_1h: "Under 1h",
   "1h_to_8h": "1–8h",
