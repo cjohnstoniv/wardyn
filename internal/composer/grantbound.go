@@ -86,10 +86,11 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 			requireTLS: sc.RequireTLS,
 		}, true, true
 	case types.GrantGitPAT:
-		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.SecretName == "" {
+		pat, err := types.DecodeGitPATScope(g.Scope)
+		if err != nil {
 			return grantPairing{}, true, false
 		}
-		return grantPairing{host: sc.Host, secretRef: sc.SecretName}, true, true
+		return grantPairing{host: pat.Host, secretRef: pat.SecretName}, true, true
 	case types.GrantSSHKey:
 		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.KeySecretRef == "" {
 			return grantPairing{}, true, false

@@ -420,6 +420,13 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		sendChannelError(channel, msg)
 		return
 	}
+	// Door 4 of five (mask_manifest.go): the shell's recorded tail is masked
+	// against the run's corpus, which this server must be able to prove whole.
+	if !s.maskCovered(ctx, runID) {
+		s.auditUncovered(ctx, runID, types.ActorHuman, principal, "ssh.shell")
+		sendChannelError(channel, "wardyn: this server cannot prove this run's secrets are masked right now; the shell is refused")
+		return
+	}
 	// Do NOT seed the exec's console size while somebody else holds the PTY.
 	// tmux clamps a shared window to the SMALLEST attached client, and the
 	// driver passes AttachOptions straight into ExecCreateOptions.ConsoleSize —
@@ -540,9 +547,13 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 
 	_ = s.cfg.Store.TouchRun(pumpCtx, runID)
 	go s.attachKeepalive(pumpCtx, runID)
+	maskFenced := s.endSSHOnMaskFence(pumpCtx, runID, channel, cancel)
 
 	closeReason := s.sshShellPump(pumpCtx, channel, sess, castTee, resizeCh, holder)
 	cancel()
+	if maskFenced() {
+		closeReason = maskFencedReason
+	}
 
 	// Use BaseCtx (daemon-lifetime), not ctx (the connection's, cancelled the
 	// instant it closes — exactly when this runs) — see attach.go's identical

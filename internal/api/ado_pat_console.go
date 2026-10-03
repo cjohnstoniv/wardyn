@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -111,6 +112,10 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 		data["error"], outcome = err.Error(), "failure"
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, subject, adoPATAuditDisconnect, rowID, outcome, mustJSON(data)))
+	if db.LockRefused(err) {
+		writeLockRefused(w, r, err)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "forget the Azure DevOps sign-in", err)
 		return
@@ -144,7 +149,7 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 // forgetADOSignIn deletes owner's stored sign-in for rowID and drops any
 // access token held for them. removed reports whether one was stored.
 func (s *Server) forgetADOSignIn(ctx context.Context, owner, rowID string) (removed bool, err error) {
-	err = s.eraseADOSignIn(owner, rowID, func() error {
+	err = s.eraseADOSignIn(ctx, owner, rowID, func(ctx context.Context) error {
 		if s.cfg.Secrets == nil {
 			return nil
 		}
@@ -170,11 +175,14 @@ func (s *Server) forgetADOSignIn(ctx context.Context, owner, rowID string) (remo
 // taken even when rowID is "" (no sign-in row configured): the key is then
 // merely unshared, and every caller takes it in the same place in the order
 // (see eraseLocked).
-func (s *Server) eraseADOSignIn(owner, rowID string, del func() error) error {
-	unlock := s.adoEntra.lock(owner, rowID)
+func (s *Server) eraseADOSignIn(ctx context.Context, owner, rowID string, del func(ctx context.Context) error) error {
+	ctx, unlock, err := s.lockADOSignIn(ctx, owner, rowID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	defer s.adoEntraTokens.forget(owner) // runs before the unlock
-	return del()
+	return del(ctx)
 }
 
 // adoSignInRowID is the row this deployment's Azure DevOps sign-in redeems

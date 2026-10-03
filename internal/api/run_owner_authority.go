@@ -57,7 +57,7 @@ type ownerRefusal struct {
 // admin's revive, restart or extension of their run needs an allow row for
 // the owner's sub, type or everyone. The owner's own session passes.
 func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool, repos []string) (*ownerRefusal, error) {
-	if callerIsOwner && s.isOperator(ctx) {
+	if callerIsOwner && s.runUngoverned(ctx) {
 		return nil, nil
 	}
 	// An operator-owned run (the admin token, local mode) has no person whose

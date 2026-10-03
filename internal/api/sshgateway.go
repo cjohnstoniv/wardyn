@@ -305,7 +305,7 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// attach does (governance_run_doors.go). A super admin reaches this point
 	// only on their own run or an operator-owned one, so the exemption cannot
 	// reach a person's run.
-	if s.sshOverrideRefusal(rec) != "" {
+	if s.sshOverrideRefusal(rec) != "" || !s.adminDoorExempt(run) {
 		name, err := s.interactiveDeniedProfile(ctx, run)
 		if err != nil {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "governance profile unreadable")

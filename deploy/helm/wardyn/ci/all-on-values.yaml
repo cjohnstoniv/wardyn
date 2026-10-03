@@ -263,3 +263,4 @@ runner:
     proxyResources:
       cpuMillis: 400
       memoryMiB: 192
+maxConcurrentRuns: 25

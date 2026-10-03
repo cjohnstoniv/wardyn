@@ -36,6 +36,10 @@
 #   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist instead of rebuilding it
 #   WARDYN_E2E_BASE_PATH     serve under this WARDYN_BASE_PATH (e.g. /wardyn) behind test/basepathproxy
 #   WARDYN_E2E_PROXY_ADDR    that proxy's listen address (default: :8090); only with WARDYN_E2E_BASE_PATH
+#   WARDYN_E2E_TMUX_BUILD    1 also builds .e2e-bin/wardynd-tmux (-tags e2etmux: the test-only local-tmux runner)
+#   WARDYN_E2E_TMUX          1 serves that binary with -runner docker, so the production attach endpoint
+#                            drives a REAL tmux (throwaway socket, deploy/images/common/tmux.conf) and the
+#                            seeded RUNNING fixture is attachable. A missing tmux or binary fails `up`; it never skips
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -93,6 +97,7 @@ PID_FILE="${BIN_DIR}/wardynd-${_PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${_PORT}.log"
 PROXY_PID_FILE="${BIN_DIR}/basepathproxy-${_PORT}.pid"
 PROXY_LOG_FILE="${BIN_DIR}/basepathproxy-${_PORT}.log"
+TMUX_SOCK_FILE="${BIN_DIR}/tmux-${_PORT}.sock"
 
 # log() uses WARDYN_LOG_TAG="[e2e]" set before sourcing common.sh above.
 die()  { printf '\033[1;31m[e2e:err]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -121,6 +126,10 @@ cmd_build() {
   log "Building wardynd (none runner; no -tags docker needed) + wardyn CLI"
   go build -o "${BIN_DIR}/wardynd" ./cmd/wardynd
   go build -o "${BIN_DIR}/wardyn"  ./cmd/wardyn
+  if [[ "${WARDYN_E2E_TMUX_BUILD:-0}" == "1" ]]; then
+    log "Building wardynd-tmux (-tags e2etmux: test-only local-tmux runner)"
+    go build -tags e2etmux -o "${BIN_DIR}/wardynd-tmux" ./cmd/wardynd
+  fi
   if [[ -n "${BASE_PATH}" ]]; then
     go build -o "${BIN_DIR}/basepathproxy" ./test/basepathproxy
   fi
@@ -224,10 +233,20 @@ cmd_up() {
   if [[ -n "${BASE_PATH}" ]]; then
     export WARDYN_BASE_PATH="${BASE_PATH}"
   fi
+  local daemon_bin="${BIN_DIR}/wardynd" runner_sel=none
+  if [[ "${WARDYN_E2E_TMUX:-0}" == "1" ]]; then
+    command -v tmux >/dev/null 2>&1 || die "WARDYN_E2E_TMUX=1 needs a real tmux (>= 3.2) on PATH; the real-tmux specs fail without it, they never skip"
+    [[ -x "${BIN_DIR}/wardynd-tmux" ]] || die "WARDYN_E2E_TMUX=1 needs ${BIN_DIR}/wardynd-tmux (build with WARDYN_E2E_TMUX_BUILD=1)"
+    daemon_bin="${BIN_DIR}/wardynd-tmux" runner_sel=docker
+    # A throwaway tmux server per backend, killed by cmd_down_quiet.
+    export WARDYN_E2E_TMUX_SOCKET="wardyn-e2e-${_PORT}-${RANDOM}${RANDOM}"
+    export WARDYN_E2E_TMUX_CONF="${WARDYN_E2E_TMUX_CONF:-${REPO_ROOT}/deploy/images/common/tmux.conf}"
+    echo "${WARDYN_E2E_TMUX_SOCKET}" > "${TMUX_SOCK_FILE}"
+  fi
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     WARDYN_RUNNER_TARGET=docker \
-    "${BIN_DIR}/wardynd" \
-      -runner none \
+    "${daemon_bin}" \
+      -runner "${runner_sel}" \
       -listen "${ADDR}" \
       -ui-sandbox-listen "${UI_ADDR}" \
       -ui-sandbox-advertise "http://localhost:${UI_ADDR##*:}" \
@@ -254,6 +273,10 @@ cmd_up() {
 }
 
 cmd_down_quiet() {
+  if [[ -f "${TMUX_SOCK_FILE}" ]]; then
+    tmux -L "$(cat "${TMUX_SOCK_FILE}")" kill-server >/dev/null 2>&1 || true
+    rm -f "${TMUX_SOCK_FILE}"
+  fi
   if [[ -f "${PROXY_PID_FILE}" ]]; then
     kill "$(cat "${PROXY_PID_FILE}")" >/dev/null 2>&1 || true
     rm -f "${PROXY_PID_FILE}"
@@ -393,10 +416,13 @@ SQL
   # dispatch would write it. Attached to the RUNNING fixture rather than a new
   # run on purpose: the lane is owner-and-RUNNING-only, and the seeded run
   # count is load-bearing for other specs (runs, recording).
+  # The real-tmux harness attaches to the RUNNING fixture, which needs a sandbox ref.
+  if [[ "${WARDYN_E2E_TMUX:-0}" == "1" ]]; then
+    psql_e2e -c "UPDATE agent_runs SET sandbox_ref = 'e2e-tmux' WHERE task = 'e2e fixture 2'" >/dev/null || die "could not give the RUNNING fixture a sandbox ref"
+  fi
   psql_e2e >/dev/null 2>&1 <<'SQL' || true
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success',
-       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
+SELECT audit_append(gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success', '',
+       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb)
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL
   # review R-03: fixture 6 (FAILED, rn=7 above) is runs-detail.spec.ts's "worst
@@ -411,9 +437,8 @@ UPDATE agent_runs
    SET repo = 'github.com/acme-widgets/payments-platform-monorepo',
        workspace_path = '/home/agent/work/payments-platform-monorepo/services/billing'
  WHERE task = 'e2e fixture 6';
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure',
-       '{"exit_code":137}'::jsonb
+SELECT audit_append(gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure', '',
+       '{"exit_code":137}'::jsonb)
 FROM agent_runs WHERE task = 'e2e fixture 6';
 -- review R-13/R-14: a PENDING approval was seeded here in the previous
 -- round for width headroom, then dropped again — measuring the header's

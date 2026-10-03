@@ -19,10 +19,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const governanceProfileCols = `id, name, ceiling, limits, created_at, updated_at, created_by`
+const governanceProfileCols = `id, name, ceiling, limits, created_at, updated_at, created_by, contact`
 
 const governanceAssignmentCols = `id, subject_type, subject, profile_id, priority, created_at, created_by`
 
@@ -32,6 +33,9 @@ const governanceAssignmentCols = `id, subject_type, subject, profile_id, priorit
 // RESTRICT makes delete-and-recreate impossible for an assigned profile).
 // One statement serves both write routes: POST always inserts (fresh id),
 // PUT always updates (id from the path).
+//
+// contact follows GovernanceProfile.ContactSet: written (or cleared, when empty)
+// only when it is true, otherwise the stored value stays.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write. created_by and
 // created_at are NOT touched on update: creation provenance stays with
@@ -48,18 +52,30 @@ func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfi
 	if err != nil {
 		return types.GovernanceProfile{}, fmt.Errorf("store: marshal governance limits: %w", err)
 	}
+	// An empty contact is stored as NULL, never as an empty object.
+	var contactJSON any
+	if p.Contact != nil && !p.Contact.IsZero() {
+		b, err := json.Marshal(p.Contact)
+		if err != nil {
+			return types.GovernanceProfile{}, fmt.Errorf("store: marshal governance contact: %w", err)
+		}
+		contactJSON = b
+	}
 	const q = `
-		INSERT INTO governance_profiles (id, name, ceiling, limits, created_by)
-		VALUES ($1,$2,$3,$4,$5)
+		INSERT INTO governance_profiles (id, name, ceiling, limits, created_by, contact)
+		VALUES ($1,$2,$3,$4,$5,$8)
 		ON CONFLICT (id) DO UPDATE
 			SET name = EXCLUDED.name,
 			    ceiling = (governance_profiles.ceiling - $6::text[]) || EXCLUDED.ceiling,
-			    limits = (governance_profiles.limits - $7::text[]) || EXCLUDED.limits, updated_at = now()
+			    limits = (governance_profiles.limits - $7::text[]) || EXCLUDED.limits,
+			    contact = CASE WHEN $9::boolean THEN EXCLUDED.contact ELSE governance_profiles.contact END,
+			    updated_at = now()
 		RETURNING ` + governanceProfileCols
 	// ceiling and limits each keep the keys this binary's types don't
 	// declare, so a field a newer wardynd set survives this binary's edit.
 	out, err := scanGovernanceProfile(s.Pool.QueryRow(ctx, q,
-		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy, declaredJSONKeys(p.Ceiling), declaredJSONKeys(p.Limits)))
+		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy, declaredJSONKeys(p.Ceiling), declaredJSONKeys(p.Limits),
+		contactJSON, p.ContactSet))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -186,7 +202,7 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 	if groups == nil {
 		groups = []string{}
 	}
-	q := `SELECT p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, a.subject_type
+	q := `SELECT p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, a.subject_type
 		FROM governance_assignments a
 		JOIN governance_profiles p ON p.id = a.profile_id
 		WHERE ` + subjectMatch("a") + `
@@ -215,9 +231,9 @@ func scanGovernanceProfile(row pgx.Row) (types.GovernanceProfile, error) {
 // than a second scan function so the ceiling/limits unmarshal never forks.
 func scanGovernanceProfileInto(row pgx.Row, tier *string) (types.GovernanceProfile, error) {
 	var p types.GovernanceProfile
-	var ceilingRaw, limitsRaw []byte
+	var ceilingRaw, limitsRaw, contactRaw []byte
 	dest := []any{&p.ID, &p.Name, &ceilingRaw, &limitsRaw,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy}
+		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &contactRaw}
 	if tier != nil {
 		dest = append(dest, tier)
 	}
@@ -233,6 +249,14 @@ func scanGovernanceProfileInto(row pgx.Row, tier *string) (types.GovernanceProfi
 	}
 	if err := json.Unmarshal(limitsRaw, &p.Limits); err != nil {
 		return types.GovernanceProfile{}, fmt.Errorf("store: unmarshal governance limits: %w", err)
+	}
+	// A contact that will not decode (a direct write) reads as none: it is advice,
+	// and must not take the profile's ceiling down with it.
+	if len(contactRaw) > 0 {
+		var c policyref.Contact
+		if json.Unmarshal(contactRaw, &c) == nil && !c.IsZero() {
+			p.Contact = &c
+		}
 	}
 	return p, nil
 }

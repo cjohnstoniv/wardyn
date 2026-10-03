@@ -81,6 +81,7 @@ const (
 	boundFailOwnerOnly
 	boundFailTTL
 	boundFailGitHubScope
+	boundFailPATScope
 )
 
 // governanceGrantsWithinCeiling reports whether every grant in profile is
@@ -206,6 +207,12 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 		if g.Kind == types.GrantGitHubToken {
 			if err := composer.GitHubScopeWithin(g.Scope, cg.Scope); err != nil {
 				note(boundFailGitHubScope, fmt.Errorf("eligible grant %q: %w", g.Kind, err))
+				continue
+			}
+		}
+		if g.Kind == types.GrantGitPAT {
+			if err := composer.PATScopeWithin(g.Scope, cg.Scope); err != nil {
+				note(boundFailPATScope, fmt.Errorf("eligible grant %q: %w", g.Kind, err))
 				continue
 			}
 		}

@@ -22,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -336,7 +337,7 @@ func validateBranding(req brandingRequest) (types.Branding, *brandingRefusal) {
 		SupportURL: strings.TrimSpace(req.SupportURL),
 	}
 	if b.OrgName == "" || utf8.RuneCountInString(b.OrgName) > brandOrgNameMax ||
-		strings.ContainsFunc(b.OrgName, unsafeHelpRune) {
+		strings.ContainsFunc(b.OrgName, policyref.UnsafeRune) {
 		return b, refuse(brandReasonOrgName, "org_name: enter the organisation's name — up to %d characters, on one line.", brandOrgNameMax)
 	}
 	if b.NameFormat != types.BrandNamePrefix && b.NameFormat != types.BrandNameSuffix {
@@ -393,7 +394,7 @@ func validateSupportURL(link string) *brandingRefusal {
 		return refuse(brandReasonLink, "support_url: This link must use https. http:// links, and links with no scheme, aren't allowed.")
 	}
 	if len(link) > brandSupportMax || u.User != nil ||
-		strings.ContainsFunc(link, func(r rune) bool { return unsafeHelpRune(r) || unicode.IsSpace(r) }) ||
+		strings.ContainsFunc(link, func(r rune) bool { return policyref.UnsafeRune(r) || unicode.IsSpace(r) }) ||
 		!hostrules.ValidApprovedHost(strings.ToLower(u.Hostname())) {
 		return refuse(brandReasonLinkShape, "support_url: must be a plain web address with a real host name — no spaces or sign-in details.")
 	}

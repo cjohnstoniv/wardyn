@@ -28,6 +28,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
 
 var _ secretstore.Store = (*Store)(nil)
@@ -36,6 +37,11 @@ var _ secretstore.Store = (*Store)(nil)
 // age payload, which only the boot conversion (ConvertV0) reads; extVersion is
 // the store-mode pointer row (external.go).
 const encVersion = 1
+
+// pkVersion is the credential row sealed under its owner's principal key, whose
+// data key is not under any root KEK: the `secrets` rewrap passes skip it, and
+// subjectkey.Rewrap moves the principal keys instead.
+const pkVersion = 3
 
 // ageHeader opens every age payload, and so every row a pre-envelope wardynd
 // writes.
@@ -85,6 +91,9 @@ type Store struct {
 	// owner is the secretstore.Store.For namespace this view is scoped to;
 	// "" is the operator namespace.
 	owner string
+	// subjects is the principal-key manager every view shares, nil on a Store
+	// built only to rewrap (no pool).
+	subjects *subjectkey.Manager
 }
 
 // New constructs a Store whose KEKs are the local ones derived from identity
@@ -96,6 +105,7 @@ func New(pool *pgxpool.Pool, identity age.Identity) (*Store, error) {
 	if err := s.setLocalKeys(identity, nil); err != nil {
 		return nil, err
 	}
+	s.initSubjects()
 	return s, nil
 }
 
@@ -299,6 +309,9 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
+	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
+		return s.putIfRevision(ctx, name, rev, wrapped, ct, k.ID())
+	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -437,6 +450,17 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 		return fmt.Errorf("pg secretstore: delete %s: begin: %w", ref, err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// A guarded delete (WithIfRevision) is the Put's compare-and-set: a holder
+	// that lost its lock must not delete a newer row. The check runs under the
+	// row's lock, before deleteLocked touches an external store.
+	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
+		if err := lockRow(ctx, tx, s.owner, name); err != nil {
+			return fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+		}
+		if err := s.checkRevision(ctx, tx, name, rev); err != nil {
+			return err
+		}
+	}
 	if _, err := s.deleteLocked(ctx, tx, s.owner, name); err != nil {
 		return err
 	}
@@ -574,13 +598,27 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 		}
 		return to.writer(e.ownedBy, e.name)
 	}
-	return rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil, nil)
+	// A principal key under a key service holds nothing under the age key either.
+	pkTarget := func(domain, kekID string) (kek.KEK, error) {
+		if kek.IsServiceID(kekID) {
+			return nil, nil
+		}
+		return to.pkWriter(domain)
+	}
+	n, _, err := rewrapAll(ctx, pool, "rekey", from.reader, target, nil, nil, nil, func(tx pgx.Tx) (int, error) {
+		return subjectkey.Rewrap(ctx, tx, from.pkReader, pkTarget, nil, nil)
+	})
+	return n, err
 }
 
 // RewrapResult is what RewrapKeys did.
 type RewrapResult struct {
 	// Rewrapped is how many rows' data keys moved.
 	Rewrapped int
+	// PrincipalKeys is how many principal keys' wraps moved. They move in the
+	// transaction that moves the rows, so KeyVersion names a version only when
+	// the `secrets` rows and the principal keys are both at it.
+	PrincipalKeys int
 	// KeyService is the kek_id of the key service every write now uses
 	// (WARDYN_KEK=transit or azurekv), or "" when the local keys do.
 	KeyService string
@@ -725,8 +763,13 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		return nil
 	}
 	rotated := map[string]bool{}
-	n, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard, rotated)
-	res.Rewrapped = n
+	// Every principal key moves onto the credential KEK's latest version of its
+	// own domain; boot keys are never among them.
+	pkTarget := func(domain, _ string) (kek.KEK, error) { return s.pkWriter(domain) }
+	n, pk, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard, rotated, func(tx pgx.Tx) (int, error) {
+		return subjectkey.Rewrap(ctx, tx, s.pkReader, pkTarget, latest, rotated)
+	})
+	res.Rewrapped, res.PrincipalKeys = n, pk
 	// A key service rotated while the run was moving rows: some rows are under
 	// a newer version than the one read first, so no version is yet safe to
 	// retire. Report none; another pass moves them and reports the truth.
@@ -794,10 +837,14 @@ func latestVersion(ctx context.Context, k kek.KEK) (string, error) {
 // when not nil, sees every selected (locked) row before any moves and may
 // refuse the whole run. rotated, when not nil, collects the kek_id of each
 // versioned target that wrapped a row under a version other than latest's.
-func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error, rotated map[string]bool) (int, error) {
+// principal moves the principal keys inside the same transaction, after the
+// rows, and returns how many it moved; rewrapAll returns that second count.
+// Rows of version extVersion hold no data key and pkVersion rows hold theirs
+// under a principal key, so neither is selected.
+func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(envelope) (kek.KEK, error), target func(envelope) kek.KEK, latest map[string]string, guard func([]envelope) error, rotated map[string]bool, principal func(pgx.Tx) (int, error)) (int, int, error) {
 	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s begin: %w", op, err)
 	}
 	// A Rollback after a successful Commit is a documented no-op; on every error
 	// path below it is the thing that makes this all-or-nothing.
@@ -806,9 +853,9 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 	// ORDER BY owned_by, name keeps the lock/abort order stable and readable;
 	// the UPDATE below keys on BOTH columns, since two owners can share a name
 	// (migration 0050).
-	rows, err := tx.Query(ctx, `SELECT owned_by, name, enc_version, kek_id, wrapped_dek FROM secrets WHERE enc_version <> $1 ORDER BY owned_by, name FOR UPDATE`, extVersion)
+	rows, err := tx.Query(ctx, `SELECT owned_by, name, enc_version, kek_id, wrapped_dek FROM secrets WHERE enc_version NOT IN ($1, $2) ORDER BY owned_by, name FOR UPDATE`, extVersion, pkVersion)
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: %s select: %w", op, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s select: %w", op, err)
 	}
 	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (envelope, error) {
 		var e envelope
@@ -816,12 +863,12 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		return e, err
 	})
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: %s scan: %w", op, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s scan: %w", op, err)
 	}
 
 	if guard != nil {
 		if err := guard(all); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 	n := 0
@@ -831,9 +878,9 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 			continue
 		}
 		if e.version == encVersion && e.kekID == to.ID() {
-			old, verr := behind(to, e.wrapped, latest[to.ID()])
+			old, verr := kek.Behind(to, e.wrapped, latest[to.ID()])
 			if verr != nil {
-				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
+				return 0, 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
 			}
 			if !old {
 				continue
@@ -841,11 +888,11 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		}
 		wrapped, rerr := rewrap(ctx, source, to, e)
 		if rerr != nil {
-			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), rerr)
+			return 0, 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), rerr)
 		}
 		if rotated != nil {
-			if was, verr := behind(to, wrapped, latest[to.ID()]); verr != nil {
-				return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
+			if was, verr := kek.Behind(to, wrapped, latest[to.ID()]); verr != nil {
+				return 0, 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), verr)
 			} else if was {
 				rotated[to.ID()] = true
 			}
@@ -853,28 +900,21 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 		if _, uerr := tx.Exec(ctx,
 			`UPDATE secrets SET kek_id=$3, wrapped_dek=$4, updated_at=now() WHERE owned_by=$1 AND name=$2`, e.ownedBy, e.name, to.ID(), wrapped,
 		); uerr != nil {
-			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), fmt.Errorf("update: %w", uerr))
+			return 0, 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), fmt.Errorf("update: %w", uerr))
 		}
 		n++
 	}
+	pk := 0
+	if principal != nil {
+		var perr error
+		if pk, perr = principal(tx); perr != nil {
+			return 0, 0, fmt.Errorf("pg secretstore: %s ABORTED in principal_keys (nothing committed — every secret is still readable with the OLD key): %w", op, perr)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("pg secretstore: %s commit (%d rows, NOTHING committed — the old key still reads every secret): %w", op, n, err)
+		return 0, 0, fmt.Errorf("pg secretstore: %s commit (%d rows, %d principal keys, NOTHING committed — the old key still reads every secret): %w", op, n, pk, err)
 	}
-	return n, nil
-}
-
-// behind reports whether wrapped, made under the versioned KEK to, names a
-// version other than latest. Unversioned, or with latest "", it never does.
-func behind(to kek.KEK, wrapped []byte, latest string) (bool, error) {
-	v, ok := to.(kek.Versioned)
-	if !ok || latest == "" {
-		return false, nil
-	}
-	n, err := v.WrapVersion(wrapped)
-	if err != nil {
-		return false, err
-	}
-	return n != latest, nil
+	return n, pk, nil
 }
 
 // rewrap moves one row's data key from the KEK source names for it to to.

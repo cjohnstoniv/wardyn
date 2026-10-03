@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -104,7 +103,7 @@ func TestRunOutput_OwnerReadsCompletedExecRunWithRecordingsOff(t *testing.T) {
 		t.Fatal("fixture has a recording store; this test is about recordings off")
 	}
 	id := seed(types.AgentRun{})
-	writeExecOutput(t, srv.openExecOutput(id, "exec", false), "go test ./...\n", "ok  pkg 0.1s\n")
+	writeExecOutput(t, srv.openExecOutput(types.AgentRun{ID: id}, false), "go test ./...\n", "ok  pkg 0.1s\n")
 
 	code, got, _ := getRunOutput(t, srv, id, "", outputOwnerCookie(t))
 	if code != http.StatusOK {
@@ -120,7 +119,7 @@ func TestRunOutput_OwnerReadsCompletedExecRunWithRecordingsOff(t *testing.T) {
 func TestRunOutput_LiveRunIsNotComplete(t *testing.T) {
 	srv, _, seed := runOutputServer(t)
 	id := seed(types.AgentRun{State: types.RunRunning})
-	writeExecOutput(t, srv.openExecOutput(id, "exec", false), "step 1\n")
+	writeExecOutput(t, srv.openExecOutput(types.AgentRun{ID: id}, false), "step 1\n")
 	code, got, _ := getRunOutput(t, srv, id, "", outputOwnerCookie(t))
 	if code != http.StatusOK || got.Output != "step 1\n" || got.Complete {
 		t.Fatalf("live run: status %d body %+v, want 200 with step 1 and complete=false", code, got)
@@ -133,7 +132,7 @@ func TestRunOutput_LiveRunIsNotComplete(t *testing.T) {
 func TestRunOutput_ForeignMemberGets404AdminReads(t *testing.T) {
 	srv, _, seed := runOutputServer(t)
 	id := seed(types.AgentRun{CreatedBy: "sub-other-member"})
-	writeExecOutput(t, srv.openExecOutput(id, "exec", false), "secret-free output\n")
+	writeExecOutput(t, srv.openExecOutput(types.AgentRun{ID: id}, false), "secret-free output\n")
 	member := outputOwnerCookie(t)
 
 	for name, rid := range map[string]uuid.UUID{"foreign": id, "unknown": uuid.New()} {
@@ -160,7 +159,7 @@ func TestRunOutput_ForeignMemberGets404AdminReads(t *testing.T) {
 func TestRunOutput_InteractiveRunRefused(t *testing.T) {
 	srv, _, seed := runOutputServer(t)
 	id := seed(types.AgentRun{Interactive: true, State: types.RunRunning})
-	if w := srv.openExecOutput(id, "exec", true); w != nil {
+	if w := srv.openExecOutput(types.AgentRun{ID: id}, true); w != nil {
 		t.Fatal("openExecOutput kept a tail for an interactive run")
 	}
 	code, _, refusal := getRunOutput(t, srv, id, "", outputOwnerCookie(t))
@@ -169,20 +168,20 @@ func TestRunOutput_InteractiveRunRefused(t *testing.T) {
 	}
 }
 
-// TestRunOutput_CapAndTail pins the 8 KiB bound: the ring keeps the LAST bytes,
+// TestRunOutput_CapAndTail pins the default bound: the ring keeps the LAST bytes,
 // says it dropped some, and ?tail= is capped at the bound.
 func TestRunOutput_CapAndTail(t *testing.T) {
 	srv, _, seed := runOutputServer(t)
 	id := seed(types.AgentRun{})
-	w := srv.openExecOutput(id, "exec", false)
+	w := srv.openExecOutput(types.AgentRun{ID: id}, false)
 	// One oversized write and many small ones both have to land on the bound.
-	writeExecOutput(t, w, strings.Repeat("a", 3*execOutputTailBytes))
-	for i := 0; i < execOutputTailBytes/4; i++ {
+	writeExecOutput(t, w, strings.Repeat("a", 3*defaultRunOutputTailBytes))
+	for i := 0; i < defaultRunOutputTailBytes/4; i++ {
 		writeExecOutput(t, w, "bcd\n")
 	}
 	writeExecOutput(t, w, "END")
-	all := strings.Repeat("a", 3*execOutputTailBytes) + strings.Repeat("bcd\n", execOutputTailBytes/4) + "END"
-	wantAll := all[len(all)-execOutputTailBytes:]
+	all := strings.Repeat("a", 3*defaultRunOutputTailBytes) + strings.Repeat("bcd\n", defaultRunOutputTailBytes/4) + "END"
+	wantAll := all[len(all)-defaultRunOutputTailBytes:]
 
 	cases := []struct {
 		query string
@@ -201,7 +200,7 @@ func TestRunOutput_CapAndTail(t *testing.T) {
 	}
 
 	small := seed(types.AgentRun{})
-	writeExecOutput(t, srv.openExecOutput(small, "exec", false), "hello")
+	writeExecOutput(t, srv.openExecOutput(types.AgentRun{ID: small}, false), "hello")
 	if _, got, _ := getRunOutput(t, srv, small, "?tail=5", outputOwnerCookie(t)); got.Output != "hello" || got.Truncated {
 		t.Fatalf("tail equal to the whole output: %+v, want hello, not truncated", got)
 	}
@@ -223,7 +222,7 @@ func TestRunOutput_TTLExpiryDropsTheBuffer(t *testing.T) {
 	const ttl = time.Hour
 	srv, clock, seed := runOutputServer(t, func(c *Config) { c.ExecOutputTailTTL = ttl })
 	id := seed(types.AgentRun{})
-	w := srv.openExecOutput(id, "exec", false)
+	w := srv.openExecOutput(types.AgentRun{ID: id}, false)
 	writeExecOutput(t, w, "first\n")
 
 	clock.advance(ttl - time.Minute)
@@ -261,12 +260,12 @@ func TestRunOutput_TTLExpiryDropsTheBuffer(t *testing.T) {
 }
 
 // TestRunOutput_OffAndNotKept: the off switch keeps nothing and says so; a run
-// with no tail (a harness run, or one from before a restart) says that.
+// with no tail (a sign-in run, or one from before a restart) says that.
 func TestRunOutput_OffAndNotKept(t *testing.T) {
 	srv, _, seed := runOutputServer(t)
 	harness := seed(types.AgentRun{})
-	if w := srv.openExecOutput(harness, "", false); w != nil {
-		t.Fatal("openExecOutput kept a tail for a harness run")
+	if w := srv.openExecOutput(types.AgentRun{ID: harness, Task: harnessLoginTask}, false); w != nil {
+		t.Fatal("openExecOutput kept a tail for a sign-in run that is not interactive")
 	}
 	if code, _, refusal := getRunOutput(t, srv, harness, "", outputOwnerCookie(t)); code != http.StatusConflict || refusal.Reason != reasonRunOutputNotKept {
 		t.Fatalf("harness run: status %d reason %q, want 409 %s", code, refusal.Reason, reasonRunOutputNotKept)
@@ -274,7 +273,7 @@ func TestRunOutput_OffAndNotKept(t *testing.T) {
 
 	off, _, seedOff := runOutputServer(t, func(c *Config) { c.ExecOutputTailOff = true })
 	id := seedOff(types.AgentRun{})
-	if w := off.openExecOutput(id, "exec", false); w != nil {
+	if w := off.openExecOutput(types.AgentRun{ID: id}, false); w != nil {
 		t.Fatal("WARDYN_EXEC_OUTPUT_TAIL=off still kept a tail")
 	}
 	if code, _, refusal := getRunOutput(t, off, id, "", outputOwnerCookie(t)); code != http.StatusConflict || refusal.Reason != reasonRunOutputOff {
@@ -300,7 +299,7 @@ func TestRunOutput_MasksRegisteredSecrets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := seed(types.AgentRun{State: tc.state})
-			w := srv.openExecOutput(id, "exec", false)
+			w := srv.openExecOutput(types.AgentRun{ID: id}, false)
 			reg.Add(id, []byte("s3cr3t-token-value"))
 			writeExecOutput(t, w, "token=s3cr3t-to", "ken-value done\n", tc.last)
 
@@ -315,26 +314,30 @@ func TestRunOutput_MasksRegisteredSecrets(t *testing.T) {
 	}
 }
 
-// TestDispatch_HandsExecRunsAnOutputWriter is the wiring: dispatch gives the
-// runner a writer for a task_mode=exec run only, and what the runner writes
-// there is what the route serves.
-func TestDispatch_HandsExecRunsAnOutputWriter(t *testing.T) {
+// TestDispatch_HandsNonInteractiveRunsAnOutputWriter is the wiring: dispatch
+// gives the runner a writer for every non-interactive run except the sign-in
+// run, and what the runner writes there is what the route serves.
+func TestDispatch_HandsNonInteractiveRunsAnOutputWriter(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		taskMode    string
+		task        string
 		interactive bool
 		off         bool
 		want        bool
 	}{
-		{"exec", "exec", false, false, true},
-		{"harness", "", false, false, false},
-		{"interactive", "", true, false, false},
-		{"exec, tail off", "exec", false, true, false},
+		{"exec", "exec", "", false, false, true},
+		{"agent mode", "", "", false, false, true},
+		{"interactive", "", "", true, false, false},
+		// Not interactive on purpose: only runIsUnrecordable keeps it out.
+		{"sign-in run", "", harnessLoginTask, false, false, false},
+		{"tail off", "", "", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rn := &fakeRunner{}
 			srv, _, run := statusDetailDispatchFixture(t, rn)
 			srv.cfg.ExecOutputTailOff = tc.off
+			run.Task = tc.task
 			srv.dispatchRun(t.Context(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 				RunToken: "run-token", Image: "wardyn/claude-code:latest", TaskMode: tc.taskMode, Interactive: tc.interactive,
 				Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
@@ -353,10 +356,35 @@ func TestDispatch_HandsExecRunsAnOutputWriter(t *testing.T) {
 				return
 			}
 			writeExecOutput(t, out, "from the runner\n")
-			got, truncated, kept, _ := srv.readExecOutput(run.ID, execOutputTailBytes, true)
-			if !kept || !bytes.Equal(got, []byte("from the runner\n")) || truncated {
-				t.Fatalf("tail after a runner write: kept %v %q truncated %v", kept, got, truncated)
+			w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/output", adminToken, "")
+			var got runOutputResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+				t.Fatalf("GET /runs/{id}/output = %d %q (%v), want 200 with the runner's bytes", w.Code, w.Body, err)
+			}
+			if got.Output != "from the runner\n" || got.Truncated {
+				t.Fatalf("route served %q truncated %v, want the runner's bytes", got.Output, got.Truncated)
 			}
 		})
+	}
+}
+
+// TestRunOutput_ConfiguredSizeAndDefault: a 100 KiB write keeps the last 65536
+// bytes by default, and a configured size bounds both the ring and ?tail=.
+func TestRunOutput_ConfiguredSizeAndDefault(t *testing.T) {
+	srv, _, seed := runOutputServer(t)
+	id := seed(types.AgentRun{})
+	all := strings.Repeat("0123456789abcdef", 100<<10/16)
+	writeExecOutput(t, srv.openExecOutput(types.AgentRun{ID: id}, false), all)
+	_, got, _ := getRunOutput(t, srv, id, "", outputOwnerCookie(t))
+	if got.Output != all[len(all)-65536:] || !got.Truncated {
+		t.Fatalf("default: len %d truncated %v, want the last 65536 bytes, truncated", len(got.Output), got.Truncated)
+	}
+
+	small, _, seedSmall := runOutputServer(t, func(c *Config) { c.RunOutputTailBytes = 2048 })
+	id = seedSmall(types.AgentRun{})
+	writeExecOutput(t, small.openExecOutput(types.AgentRun{ID: id}, false), all)
+	_, got, _ = getRunOutput(t, small, id, "?tail=65536", outputOwnerCookie(t))
+	if got.Output != all[len(all)-2048:] || !got.Truncated {
+		t.Fatalf("configured 2048: len %d truncated %v, want the last 2048 bytes, truncated", len(got.Output), got.Truncated)
 	}
 }

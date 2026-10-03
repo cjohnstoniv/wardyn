@@ -183,11 +183,15 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	defer s.reviving.Delete(run.ID)
-	// The run's lock (run_oplock.go) is held from here to the settle, so a lease
+	// The run's lock (locks.go) is held from here to the settle, so a lease
 	// pass that read the run's lost mark before the claim cannot stop the proxy
 	// this revive starts. It is released after the settle, and after the
 	// compensation of a failed one.
-	defer s.lockRunOp(run.ID)()
+	ctx, unlockRun, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	}
+	defer unlockRun()
 
 	c, rerr := s.reviveCeiling(ctx, run)
 	if rerr != nil {

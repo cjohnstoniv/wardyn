@@ -45,7 +45,7 @@ const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 // HONEST CEILING, as for GroundTruthRotatorLockKey: an advisory lock dies with
 // its SESSION, so a Postgres failover can release it under a still-running
 // leader. Unlike the rotator, this lock IS used for work that needs fencing, so
-// each acquisition bumps the durable epoch in sweeper_leader (0108) and a
+// each acquisition bumps the durable epoch in sweeper_leader (0110) and a
 // multi-step operation re-checks its epoch (SweeperLeader.Current) before it
 // writes.
 const SweeperLeaderLockKey int64 = 0x5741524459_53574C // ASCII "WARDYSWL"
@@ -111,6 +111,13 @@ const TerminalSandboxSweepLockKey int64 = 0x5741524459_545353 // ASCII "WARDYTSS
 // write volume is nowhere near contention. Upgrade only if that changes:
 // per-partition chains with a key per partition.
 const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
+
+// AuditPartitionLockKey serializes the creators of audit_events partitions: two replicas booting at
+// once, or a boot beside the daily sweeper, would otherwise both create the same month.
+// audit_ensure_partitions takes it inside the database as a transaction lock; the literal in
+// 0111_audit_partitioned.sql must equal this. It is deliberately NOT AuditChainLockKey: creating a
+// month must not queue behind (or hold up) an append.
+const AuditPartitionLockKey int64 = 0x5741524459_415054 // ASCII "WARDYAPT"
 
 // AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey.
 // Since 0056 the trigger takes it on every audit_events insert, including

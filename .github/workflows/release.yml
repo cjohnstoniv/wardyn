@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the seven images a Wardyn release actually ships, cosign-signed
+# Publishes the eight images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the seven images, and why each ref is what it is (verified against the
+# ── the eight images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -21,6 +21,10 @@ name: Release images
 #     runner substrates compiled in — deploy/compose/Dockerfile.wardynd's own
 #     new default, passed explicitly here for the record) so the SAME
 #     published image serves the compose demo AND the Helm chart.
+#   ghcr.io/cjohnstoniv/wardynd-fips
+#     the same recipe with GOFIPS140 pinned to a frozen Go Cryptographic Module
+#     snapshot (an extra image, so the default one is unchanged). The `images`
+#     job reads the snapshot back out of the pushed digest before signing it.
 #   ghcr.io/cjohnstoniv/wardyn-proxy
 #     matches deploy/helm/wardyn/README.md's "Kubernetes runner substrate"
 #     worked example (`--set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG"`)
@@ -340,6 +344,16 @@ jobs:
             build-args: |
               GO_BUILD_TAGS=docker,k8s
               RELEASE_BUILD=true
+          # wardynd with the Go Cryptographic Module pinned to the frozen
+          # snapshot CMVP certificate #5247 covers (docs/operations/secrets-and-keys.md).
+          # Same recipe, so same build-args as nightly.yml's staged row
+          # (test-repo-guards.sh guard 16); the pin lives only in these two rows.
+          - name: wardynd-fips
+            dockerfile: deploy/compose/Dockerfile.wardynd
+            build-args: |
+              GO_BUILD_TAGS=docker,k8s
+              RELEASE_BUILD=true
+              GOFIPS140=v1.0.0-c2097c7c
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
@@ -453,6 +467,20 @@ jobs:
           provenance: false
           build-args: ${{ matrix.build-args }}
           tags: ${{ steps.tags.outputs.tags }}
+      # What a -fips tag claims is checked on the pushed digest, before it is
+      # signed: its binary must be built against the pinned module snapshot, on
+      # both platforms. The Dockerfile checks the same line at build time, which
+      # is all a dry run (nothing pushed) can reach. Gated on the exit code.
+      - name: Assert the pushed digest carries the pinned GOFIPS140 snapshot
+        if: inputs.dry_run != true && contains(matrix.build-args, 'GOFIPS140=')
+        env:
+          BUILD_ARGS: ${{ matrix.build-args }}
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          pin="$(sed -n 's/^GOFIPS140=//p' <<<"$BUILD_ARGS")"
+          test -n "$pin"
+          ./scripts/check-fips-image.sh "$IMAGE_REF" "$pin"
       - name: Sign the pushed image (keyless, by digest)
         if: inputs.dry_run != true
         env:
@@ -478,7 +506,7 @@ jobs:
             # Nothing was pushed, so there is no digest to scan. The UI-lockfile
             # half needs no image and is the half that shipped broken, so a dry
             # run still exercises it and its assertion.
-            if [ "${{ matrix.name }}" = wardynd ]; then
+            if [[ "${{ matrix.name }}" == wardynd* ]]; then
               syft dir:ui -o cyclonedx-json > ui-sbom.json
               n=$(jq '[.components[]|select(.purl//""|startswith("pkg:npm"))]|length' ui-sbom.json)
               test "$n" -gt 0 || { echo "dry run: syft dir:ui found zero npm packages"; exit 1; }
@@ -494,7 +522,7 @@ jobs:
           # Scanning the image instead of the source tree fixed the OS-package
           # blindness; it did nothing for this. The lockfile is the only place
           # those versions still exist, so merge a lockfile-derived scan in.
-          if [ "${{ matrix.name }}" = wardynd ]; then
+          if [[ "${{ matrix.name }}" == wardynd* ]]; then
             syft dir:ui -o cyclonedx-json > ui-sbom.json
             jq -s '.[0].components += [.[1].components[] | select(.purl // "" | startswith("pkg:npm"))] | .[0]' \
               "sbom-${{ matrix.name }}.cdx.json" ui-sbom.json > merged.json
@@ -687,11 +715,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The same seven rows as `images` and `images-ui-sandbox`. `dockerfile` is
+        # The same eight rows as `images` and `images-ui-sandbox`. `dockerfile` is
         # the recipe nightly built, read by check-image-pins.sh,
-        # gpl-source-offer.sh and guard 16; this job never builds it.
+        # gpl-source-offer.sh and guard 16; this job never builds it. The
+        # wardynd-fips digest was checked for its GOFIPS140 snapshot in nightly's
+        # staging job, and preflight-green proves that run built it.
         include:
           - name: wardynd
+            dockerfile: deploy/compose/Dockerfile.wardynd
+          - name: wardynd-fips
             dockerfile: deploy/compose/Dockerfile.wardynd
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
@@ -792,7 +824,7 @@ jobs:
           syft "${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
           # wardynd embeds the console as a Vite bundle, which strips every
           # package.json, so the lockfile scan is merged in (see the `images` job).
-          if [ "${{ matrix.name }}" = wardynd ]; then
+          if [[ "${{ matrix.name }}" == wardynd* ]]; then
             syft dir:ui -o cyclonedx-json > ui-sbom.json
             jq -s '.[0].components += [.[1].components[] | select(.purl // "" | startswith("pkg:npm"))] | .[0]' \
               "sbom-${{ matrix.name }}.cdx.json" ui-sbom.json > merged.json

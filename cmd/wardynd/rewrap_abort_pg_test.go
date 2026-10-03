@@ -134,7 +134,7 @@ func assertRewrapFailureAudit(t *testing.T, pool *pgxpool.Pool) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"secrets": float64(0), "platform_key_separate": false, "key_service": "transit:transit/test", "reason": "aborted"}
+	want := map[string]any{"secrets": float64(0), "principal_keys": float64(0), "platform_key_separate": false, "key_service": "transit:transit/test", "reason": "aborted"}
 	if !reflect.DeepEqual(data, want) {
 		t.Fatalf("audit fields = %s; want committed count zero and no names, values, error text or uncommitted key_version", raw)
 	}
@@ -314,6 +314,11 @@ func TestRewrapRetirePlatformKey_Refusals(t *testing.T) {
 	*f.rewrapRetirePlatformKey = true
 	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM") {
 		t.Fatalf("-rewrap-retire-platform-key with no key named = %v; want a refusal", err)
+	}
+	// A Key Vault platform key is a key to retire: the run goes on to its checks.
+	*f.azure.kekKeyPlatform = "https://kv.vault.azure.net/keys/wardyn-boot"
+	if err := rewrapMode(f); err == nil || strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM or") || !strings.Contains(err.Error(), "WARDYN_AZURE_KEK_KEY_PLATFORM") {
+		t.Fatalf("-rewrap-retire-platform-key with a Key Vault platform key = %v; want it on to the platform key's own checks", err)
 	}
 }
 

@@ -13,6 +13,7 @@ Nothing here needs an account, a token, or a GitHub login.
 | image | contains |
 |---|---|
 | `ghcr.io/cjohnstoniv/wardynd` | the control plane (distroless) |
+| `ghcr.io/cjohnstoniv/wardynd-fips` | the control plane built against a pinned Go cryptographic module snapshot (distroless); see [Secrets and keys](operations/secrets-and-keys.md) |
 | `ghcr.io/cjohnstoniv/wardyn-proxy` | the egress proxy (distroless) |
 | `ghcr.io/cjohnstoniv/agent-base` | the agent runner contract, **no coding agent** |
 | `ghcr.io/cjohnstoniv/agent-codex-cli` | agent-base + OpenAI Codex CLI (Apache-2.0) |
