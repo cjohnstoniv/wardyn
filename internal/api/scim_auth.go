@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/scim"
 )
@@ -24,6 +25,12 @@ type SCIMConfig struct {
 	// Issuer and Tenant key the identity rows a SCIM user is matched against: the OIDC issuer URL
 	// sign-ins record, and the tenant id derived from it.
 	Issuer, Tenant string
+	// PurgeAfter is how long after a suspension the purge sweeper purges the person
+	// (WARDYN_SCIM_PURGE_AFTER); zero disables the automatic purge, and DELETE still purges.
+	PurgeAfter time.Duration
+	// KeepWorkspaces leaves a purged person's workspaces with them (WARDYN_SCIM_LEAVER_WORKSPACES
+	// set to keep); false hands them to the operator.
+	KeepWorkspaces bool
 }
 
 const (

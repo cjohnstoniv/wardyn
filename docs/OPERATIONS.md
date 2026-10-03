@@ -878,6 +878,92 @@ the wrapping key version is retired. A row waiting in an audit spool under the p
 erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
 which fields are sealed and why the rest stay clear.
 
+### Leavers and SCIM
+
+An identity provider can tell Wardyn that a person has left. Wardyn runs a SCIM 2.0 endpoint whose only job is to
+**remove access**: it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed,
+sign-in refused on every replica) and, later or at once, purges them (stored credentials erased, workspaces
+handed to the operator, user grants deleted). SCIM never grants anything: a user or group created over SCIM is
+stored and gives no access, and roles still come from the sign-in token and the role map. It is off until
+`WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
+
+| Provisioning event | What Wardyn does |
+|---|---|
+| `PATCH` with `active` false (or `POST` with `active` false) | **Suspend.** The answer is 5xx until every step is confirmed, so the identity provider retries; a restart or a failed teardown resumes the pending steps, including a run already `KILLED` whose teardown failed |
+| `PATCH` with `active` true | **Reactivate.** Clears the deactivation and the purge schedule and nothing else: no token, key, run or old session comes back, and the person signs in again |
+| `DELETE /Users/{id}` | **Purge now**, 204 once every step is done. Suspends first if the person is not already suspended |
+| A suspended person past `WARDYN_SCIM_PURGE_AFTER` | **Purge**, by the sweeper on the elected sweeper leader; it also finishes any suspension or purge whose identity provider stopped retrying |
+
+#### Turn it on
+
+1. Put a bearer of at least 32 bytes (`openssl rand -hex 32`) in a Secret under `scim-token`.
+2. On the chart, set `scim.enabled=true` and `scim.tokenSecretRef=<that Secret's name>`; elsewhere set
+   `WARDYN_SCIM_TOKEN` (or `WARDYN_SCIM_TOKEN_FILE`). Wardynd refuses to boot without OIDC on a
+   single-tenant issuer of the form `https://login.microsoftonline.com/<tenant id>/v2.0`, without TLS (its own,
+   or `WARDYN_TLS_TERMINATED` behind your proxy), or with a token that is short, equal to its rotation twin or
+   equal to the admin token.
+3. In the identity provider's provisioning job, set the tenant URL to `https://<your host><base path>/scim/v2`
+   and the secret token to the bearer.
+4. Map Entra's `objectId` to SCIM `externalId`. Wardyn matches a leaver by that object id first, then by the
+   `entra:<tenant id>:<object id>` person, and uses an email only to widen a removal; without `externalId`
+   a suspension can miss the person. `userName` and `emails` may change (renames are accepted as a projection
+   update and the old values are kept as removal aliases); `externalId` may not change on a bound identity.
+5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
+   `person.deprovision` row in the audit log ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+
+#### What a purge removes
+
+| Step | What it does |
+|---|---|
+| Suspend | Completed first, if it is not already |
+| Erase | The person's stored credentials and the masking copies of them, through the same erasure entry point as `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes. Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure` |
+| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
+| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe only because the identity is a permanent tombstone whose subject can never authenticate again |
+| Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
+
+The identity row stays as a tombstone with `purged_at` set. `PATCH active=true` on it is a 400 `invalidValue`
+(a denied `scim.user.write` row with reason `purged`), and the sign-in gate refuses it. A re-hired person needs a
+new identity, which means a new object id.
+
+#### Rotating the token
+
+1. Set `WARDYN_SCIM_TOKEN_NEXT` (the chart's `scim-token-next` key) to a new value and restart.
+2. Point the identity provider at the new value.
+3. Move the new value to `WARDYN_SCIM_TOKEN`, unset `WARDYN_SCIM_TOKEN_NEXT`, restart.
+
+Either value is accepted in between, and each audit row names which slot matched, never the bearer.
+
+#### An urgent leaver
+
+Removal is as fast as the identity provider's provisioning cycle, which can be many minutes. For someone who must
+lose access now, do not wait for it:
+
+| Need | Use |
+|---|---|
+| End their console sessions and revoke their API tokens | `POST /api/v1/sessions/revoke` or `wardyn session revoke` with their subject or email. Both are wired by default whenever OIDC is |
+| A person with no sign-in since the upgrade and no API token | The session cutoff is all that reaches them; their runs need `POST /api/v1/runs/{id}/kill` until they sign in once, which gives them an identity row the suspension can find |
+| Their stored credentials | `POST /api/v1/people/{principal}/erasure` with the `credentials` scope |
+
+#### What this does not cover
+
+- **A stolen SCIM token is a deprovisioning weapon.** It can suspend everyone, and a `DELETE` erases credentials
+  at once; the purge delay does not apply to `DELETE`. HTTPS only, per-replica rate limiting, an audit row per
+  write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
+  effective limit is the per-replica limit times the replica count.
+- **Email recycling.** Email aliases widen removals, so an address reused by a new holder can have that holder's
+  sessions cut by the old holder's suspension. A cutoff only forces a new sign-in; deactivation never follows an
+  email.
+- **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
+  again.
+- **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
+  console streams end at their next authentication check or reconnect.
+- **A database writer** can clear `deactivated_at`, as it could any other row. The authority epoch only rises, so
+  clearing it does not revive a credential minted before the suspension.
+- **Other identity providers.** Non-Entra, multi-tenant and sovereign-cloud Entra issuers get no SCIM routes
+  (boot refuses a SCIM token on them), but every sign-in on any issuer still passes the deactivation gate.
+- **Audit rows written before 0.8.6** stay plaintext and are not reached by a purge; only retention or the
+  legacy split removes them ([Erasing a person](#erasing-a-person)).
+
 ## Monitoring
 
 Moved to [monitoring.md](operations/monitoring.md).

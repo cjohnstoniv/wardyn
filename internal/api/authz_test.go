@@ -694,11 +694,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// portal (a registered portal's own credential, HTTP Basic)
 	"POST /api/v1/token": {class: classPortal},
 	// scim (the identity provider's connector, its own bearer)
-	"GET /scim/v2/Users":        {class: classSCIM},
-	"GET /scim/v2/Users/{id}":   {class: classSCIM},
-	"POST /scim/v2/Users":       {class: classSCIM},
-	"PATCH /scim/v2/Users/{id}": {class: classSCIM},
-	"PUT /scim/v2/Users/{id}":   {class: classSCIM},
+	"GET /scim/v2/Users":         {class: classSCIM},
+	"GET /scim/v2/Users/{id}":    {class: classSCIM},
+	"POST /scim/v2/Users":        {class: classSCIM},
+	"PATCH /scim/v2/Users/{id}":  {class: classSCIM},
+	"PUT /scim/v2/Users/{id}":    {class: classSCIM},
+	"DELETE /scim/v2/Users/{id}": {class: classSCIM},
 	// The portal registry (#1142): registering is the super admin's alone;
 	// listing and revoking only ever subtract reach, like the device inventory.
 	"POST /api/v1/admin/delegates":        {class: classAdmin},

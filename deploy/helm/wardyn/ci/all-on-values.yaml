@@ -41,6 +41,10 @@ auth:
   adminToken:
     value: not-a-real-token
 
+scim:
+  enabled: true
+  tokenSecretRef: wardyn-scim
+
 secrets:
   # Deliberately NOT bech32-shaped: the chart never parses it, and a realistic
   # AGE-SECRET-KEY-1... would need its own gitleaks fingerprint forever.

@@ -125,7 +125,11 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 		return err
 	}
 	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
-		if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.targets}); err != nil {
+		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.targets}
+		if s.cfg.SCIM != nil {
+			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
+		}
+		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
 			return err
 		}
 	}

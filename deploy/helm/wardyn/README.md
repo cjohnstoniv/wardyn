@@ -419,6 +419,38 @@ with no admin token left to sign in with. Create and populate the target
 Secret yourself (as in [Installation](#installation) above) **before** the
 upgrade that sets `secretRef.name`, never after.
 
+## Leaver deprovisioning (SCIM)
+
+`scim.enabled=true` lets an identity provider suspend and purge a person over SCIM 2.0
+(`<base path>/scim/v2/Users`). SCIM only removes access: it never grants a role or rebinds an identity. The
+leaver runbook, the purge steps and the residual risks are in
+[docs/OPERATIONS.md "Leavers and SCIM"](../../../docs/OPERATIONS.md#leavers-and-scim).
+
+1. Create a Secret you own, with a bearer of at least 32 bytes under `scim-token` (and, only while rotating,
+   the next one under `scim-token-next`):
+
+   ```sh
+   kubectl -n wardyn create secret generic wardyn-scim --from-literal=scim-token="$(openssl rand -hex 32)"
+   ```
+
+2. Install with `--set scim.enabled=true --set scim.tokenSecretRef=wardyn-scim`. The chart renders
+   `WARDYN_SCIM_TOKEN` and `WARDYN_SCIM_TOKEN_NEXT` from that Secret (the second is optional), plus
+   `WARDYN_SCIM_PURGE_AFTER` from `scim.purgeAfter` and `WARDYN_SCIM_LEAVER_WORKSPACES` from
+   `scim.leaverWorkspaces`.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `scim.enabled` | `false` | Mount the SCIM routes. Off renders no `WARDYN_SCIM_*` variable |
+| `scim.tokenSecretRef` | `""` | Name of your Secret holding `scim-token` and, optionally, `scim-token-next`. Required when enabled |
+| `scim.purgeAfter` | `720h` | Delay from suspension to the automatic purge. `0` disables it; a SCIM `DELETE` still purges |
+| `scim.leaverWorkspaces` | `reassign` | `reassign` hands a purged person's workspaces to the operator; `keep` leaves them |
+
+The render refuses `scim.enabled` without `scim.tokenSecretRef`, and refuses a `WARDYN_SCIM_*` variable (or a
+`_FILE` twin) in `env` or `extraEnv` beside it, because wardynd refuses to boot with a secret set both ways. To
+deliver the bearer as a file instead, leave `scim.enabled` false and set `WARDYN_SCIM_TOKEN_FILE` in
+`extraEnv`. Wardynd also refuses to boot, whatever delivers the token, without OIDC on a single-tenant Entra
+issuer and without TLS (set `env.WARDYN_TLS_TERMINATED=true` when the ingress terminates it).
+
 ## Kubernetes runner substrate (`k8s.enabled`)
 
 Off by default. Turning it on makes wardynd itself create/manage sandboxes as
@@ -1166,6 +1198,8 @@ See `values.yaml` for all options. Key settings:
   render naming two sources.
 - `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
   acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+- `scim.*`: leaver deprovisioning over SCIM, off by default — see
+  [Leaver deprovisioning (SCIM)](#leaver-deprovisioning-scim) above.
 - `defaultPolicy`: JSON text baking a default policy into a ConfigMap,
   mounted read-only — see [Default policy](#default-policy) above. Empty
   (default) => no ConfigMap, image's own baked default applies.

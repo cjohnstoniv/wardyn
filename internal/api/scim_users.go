@@ -28,7 +28,7 @@ import (
 // scimListLimit caps a filtered list; startIndex and count are ignored.
 const scimListLimit = 100
 
-// mountSCIMRoutes registers the Users routes when Config.SCIM is set. DELETE (purge) is not one of them.
+// mountSCIMRoutes registers the Users routes when Config.SCIM is set. DELETE purges (scim_purge.go).
 func (s *Server) mountSCIMRoutes(r chi.Router) {
 	if s.cfg.SCIM == nil {
 		return
@@ -40,6 +40,7 @@ func (s *Server) mountSCIMRoutes(r chi.Router) {
 		r.Post("/Users", s.handleSCIMCreateUser)
 		r.Patch("/Users/{id}", s.handleSCIMPatchUser)
 		r.Put("/Users/{id}", s.handleSCIMPutUser)
+		r.Delete("/Users/{id}", s.handleSCIMDeleteUser)
 	})
 }
 

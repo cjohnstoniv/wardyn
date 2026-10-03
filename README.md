@@ -270,7 +270,8 @@ the other:
   (see the chart README's "Known gaps").
 
 Still unbuilt: SPIRE, OpenBao, an MCP gateway, arbitrary-domain TLS
-interception, OTLP/OCSF sinks, SAML/SCIM-provisioned team SSO, Compose's own
+interception, OTLP/OCSF sinks, SAML team SSO, SCIM provisioning of joiners (SCIM only removes
+leavers today; see [OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)), Compose's own
 L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License and governance

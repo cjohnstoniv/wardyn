@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 )
@@ -14,6 +15,12 @@ import (
 // minSCIMTokenBytes is the shortest SCIM bearer boot accepts: 32 bytes is 256 bits of an
 // `openssl rand -hex 16`-style value, and the token can suspend every person on the deployment.
 const minSCIMTokenBytes = 32
+
+// WARDYN_SCIM_LEAVER_WORKSPACES values: what a purge does with the workspaces the person owns.
+const (
+	scimWorkspacesReassign = "reassign"
+	scimWorkspacesKeep     = "keep"
+)
 
 // scimConfigValidated is scimConfig after validateBootPosture has already refused every bad
 // setting, so it has no error left to report.
@@ -33,7 +40,9 @@ func scimConfigValidated(f *bootFlags, posture tlsPosture) *api.SCIMConfig {
 //     rows while people rows are keyed by the token's real tid, and a suspension would miss;
 //   - without TLS (built in, or WARDYN_TLS_TERMINATED), the bearer would travel in clear;
 //   - with a token shorter than 32 bytes, or equal to its twin, the admin token or the published
-//     demo admin token.
+//     demo admin token;
+//   - with a negative WARDYN_SCIM_PURGE_AFTER or a WARDYN_SCIM_LEAVER_WORKSPACES other than
+//     reassign or keep.
 //
 // No refusal carries a token's value.
 func scimConfig(f *bootFlags, posture tlsPosture) (*api.SCIMConfig, error) {
@@ -76,5 +85,21 @@ func scimConfig(f *bootFlags, posture tlsPosture) (*api.SCIMConfig, error) {
 	if next != "" && next == token {
 		return nil, errors.New("refusing to start: WARDYN_SCIM_TOKEN_NEXT equals WARDYN_SCIM_TOKEN — the rotation token must be a different value")
 	}
-	return &api.SCIMConfig{Token: token, TokenNext: next, Issuer: issuer, Tenant: tenant}, nil
+	cfg := &api.SCIMConfig{Token: token, TokenNext: next, Issuer: issuer, Tenant: tenant, PurgeAfter: 720 * time.Hour}
+	if f.scimPurgeAfter != nil {
+		if *f.scimPurgeAfter < 0 {
+			return nil, errors.New("refusing to start: WARDYN_SCIM_PURGE_AFTER is negative; use 0 to disable the automatic purge")
+		}
+		cfg.PurgeAfter = *f.scimPurgeAfter
+	}
+	if f.scimLeaverWorkspaces != nil {
+		switch w := strings.TrimSpace(*f.scimLeaverWorkspaces); w {
+		case scimWorkspacesReassign:
+		case scimWorkspacesKeep:
+			cfg.KeepWorkspaces = true
+		default:
+			return nil, fmt.Errorf("refusing to start: WARDYN_SCIM_LEAVER_WORKSPACES %q is not %q or %q", w, scimWorkspacesReassign, scimWorkspacesKeep)
+		}
+	}
+	return cfg, nil
 }

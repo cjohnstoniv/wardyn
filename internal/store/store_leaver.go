@@ -51,6 +51,9 @@ type SuspendPlan struct {
 	Principals []string
 	// CutoffSubs are every sub and email form a session cutoff is written for.
 	CutoffSubs []string
+	// PurgeAfter schedules the automatic purge that long after the deactivation. Zero schedules
+	// none; an earlier schedule is kept.
+	PurgeAfter time.Duration
 }
 
 // SuspendResult is step 1's outcome. WasActive says the identity was active before it, so this
@@ -91,6 +94,10 @@ type LeaverStore interface {
 	FinishDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, detail map[string]int) error
 	FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, cause error) error
 	ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error
+	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
+	PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error)
+	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
+	DeleteUserSubjectRows(ctx context.Context, subjects []string) (grants, assignments int64, err error)
 }
 
 var _ LeaverStore = PG{}
@@ -310,8 +317,9 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	// before this reads the clock, so its cookie's issued-at is at or before the cutoff.
 	if _, err = tx.Exec(ctx, `
 		UPDATE principal_identities
-		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1
-		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals); err != nil {
+		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
+		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
+		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, p.PurgeAfter.Microseconds()); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
 	}
 	for _, sub := range nonEmptyStrings(p.CutoffSubs) {
