@@ -201,16 +201,18 @@ func recvTypeName(e ast.Expr) string {
 // "file|function|primitive", with why it may. Exactly what is there today;
 // nothing added for headroom.
 var decryptSites = map[string]string{
-	"internal/secretstore/kek/kek.go|Open|AEAD.Open":                      "the envelope's AES-256-GCM open, the one definition every local-mode read goes through",
-	"internal/secretstore/kek/kek.go|Local.Unwrap|kek.Open":               "the local KEK unwraps a row's data key",
-	"internal/secretstore/pg/pg.go|Store.open|KEK.Unwrap":                 "a local-mode Get unwraps the row's data key, bound to the row's owner and name",
-	"internal/secretstore/pg/pg.go|Store.open|kek.Open":                   "a local-mode Get opens the value, bound to the row's owner and name",
-	"internal/secretstore/pg/pg.go|rewrap|KEK.Unwrap":                     "-rotate-age-key rewraps a data key; the value itself is never opened",
-	"internal/secretstore/pg/convert.go|ageDecrypt|age.Decrypt":           "the one-time conversion of a pre-envelope (age) row to envelope v1",
-	"internal/secretstore/pg/external.go|Store.openExternal|External.Get": "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
-	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap": "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
-	"internal/secretstore/azurekv/kek.go|KEK.selfTest|KEK.Unwrap":         "the Key Vault KEK boot self-test unwraps a random probe data key it just wrapped, never a stored one",
-	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open": "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",
+	"internal/secretstore/kek/kek.go|Open|AEAD.Open":                        "the envelope's AES-256-GCM open, the one definition every local-mode read goes through",
+	"internal/secretstore/kek/kek.go|Local.Unwrap|kek.Open":                 "the local KEK unwraps a row's data key",
+	"internal/secretstore/pg/pg.go|Store.open|KEK.Unwrap":                   "a local-mode Get unwraps the row's data key, bound to the row's owner and name",
+	"internal/secretstore/pg/pg.go|Store.open|kek.Open":                     "a local-mode Get opens the value, bound to the row's owner and name",
+	"internal/secretstore/pg/pg.go|rewrap|KEK.Unwrap":                       "-rotate-age-key rewraps a data key; the value itself is never opened",
+	"internal/secretstore/pg/convert.go|ageDecrypt|age.Decrypt":             "the one-time conversion of a pre-envelope (age) row to envelope v1",
+	"internal/secretstore/pg/external.go|Store.openExternal|External.Get":   "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
+	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap":   "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
+	"internal/secretstore/azurekv/kek.go|KEK.selfTest|KEK.Unwrap":           "the Key Vault KEK boot self-test unwraps a random probe data key it just wrapped, never a stored one",
+	"internal/secretstore/subjectkey/subjectkey.go|Manager.fill|KEK.Unwrap": "a use opens a per-subject key, bound to its owner, purpose, version and domain; it is the key that seals a person's rows, never a stored credential value",
+	"internal/secretstore/subjectkey/rewrap.go|Rewrap|KEK.Unwrap":           "-rewrap and -rotate-age-key move a per-subject key's wrap onto the current KEK; no sealed value is opened",
+	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open":   "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",
 }
 
 // testSupportFiles are the files the scan skips: test support that calls a
