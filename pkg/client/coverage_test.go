@@ -46,6 +46,8 @@ var (
 	_ client.ApprovalScope
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
+	_ client.PersonList
+	_ client.PersonSummary
 	_ client.RunFiles
 	_ client.RunOutput
 	_ client.RunPolicyView
@@ -93,6 +95,7 @@ func routeFamilies() map[string][]string {
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
 		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
+		"people":      {"ListPeople"},
 		"devices":     {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}
 }

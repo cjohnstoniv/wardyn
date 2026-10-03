@@ -46,6 +46,7 @@ func (s *Server) mountPeopleRoutes(securityOps chi.Router) {
 	if ps, ok := s.cfg.Store.(store.PersonStore); ok && s.cfg.OIDC != nil {
 		s.cfg.OIDC.AttachPersonKeying(peopleKeying{s: s, ps: ps})
 	}
+	securityOps.Get("/people", s.handleListPeople)
 	securityOps.Post("/people", s.handleCreatePerson)
 	securityOps.Post("/people/{principal}/tokens", s.handleMintPersonAPIToken)
 	securityOps.Get("/people/{principal}/tokens", s.handleListPersonAPITokens)

@@ -96,6 +96,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/tokens", "`GET`/`DELETE /tokens`"},
 	{"POST /api/v1/sessions/revoke", "`POST /sessions/revoke`"},
 	{"DELETE /api/v1/people/{principal}/ssh-keys", "`DELETE /people/{principal}/ssh-keys`"},
+	{"GET /api/v1/people", "`GET /people` — the people this deployment knows"},
 	{"POST /api/v1/people", "`POST /people` and `GET /people/{principal}/tokens`"},
 	{"POST /api/v1/people/{principal}/tokens", "`POST /people/{principal}/tokens`"},
 	{"GET /api/v1/people/{principal}/tokens", "`GET /people/{principal}/tokens`"},
