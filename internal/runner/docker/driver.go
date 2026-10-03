@@ -189,6 +189,7 @@ var _ substrate.Substrate = (*Driver)(nil)
 var _ runner.SandboxEnder = (*Driver)(nil)
 var _ runner.ProxyStopper = (*Driver)(nil)
 var _ runner.Freezer = (*Driver)(nil)
+var _ runner.ActivitySampler = (*Driver)(nil)
 
 // New constructs a Driver against the host Docker daemon. API-version
 // negotiation with the server is on by default in the moby v29 client.
