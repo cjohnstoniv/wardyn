@@ -358,6 +358,11 @@ kek:
 #     WARDYN_HOST_MAX_LOAD1: "100"
 env: {}
 
+# Cap on non-terminal runs across the whole deployment (WARDYN_MAX_CONCURRENT_RUNS,
+# docs/ENV.md): exact across replicas and at every door that creates a run, 422 past
+# it. 0 (the default) is unlimited. The per-member cap stays a governance profile limit.
+maxConcurrentRuns: 0
+
 # Raw EnvVar entries appended to the container, for the WARDYN_* variables that
 # must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):
 # WARDYN_OIDC_CLIENT_SECRET and WARDYN_AUDIT_SINKS

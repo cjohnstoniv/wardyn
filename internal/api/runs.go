@@ -268,6 +268,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The deployment run cap, refused before the mint for the same reason: no
+	// identity.mint row and no live token for a run that gets no row.
+	// CreateRunUnderCap (createRun) still decides a race at the cap.
+	if s.refuseRunCapFull(w, r) {
+		return
+	}
+
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
@@ -320,6 +327,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
 	if err != nil {
+		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		writeServerError(w, r, "create run", err)
 		return
 	}

@@ -316,6 +316,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", false)) {
 		return
 	}
+	// The deployment run cap, launch's pre-mint refusal: the same 422 run_quota,
+	// so a full deployment shows before the click. Review writes no audit row.
+	if s.refuseRunCapFull(w, r) {
+		return
+	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
