@@ -35,6 +35,8 @@ func secretFileSettings(f *bootFlags) []secretFileSetting {
 		{"WARDYN_DIRECTORY_CLIENT_SECRET", "WARDYN_DIRECTORY_CLIENT_SECRET_FILE", f.dirSecret},
 		{"WARDYN_AUDIT_SINKS", "WARDYN_AUDIT_SINKS_FILE", f.auditSinks},
 		{"WARDYN_ORG_ENROLMENT_TOKEN", "WARDYN_ORG_ENROLMENT_TOKEN_FILE", f.orgEnrolToken},
+		{"WARDYN_SCIM_TOKEN", "WARDYN_SCIM_TOKEN_FILE", f.scimToken},
+		{"WARDYN_SCIM_TOKEN_NEXT", "WARDYN_SCIM_TOKEN_NEXT_FILE", f.scimTokenNext},
 	}
 }
 

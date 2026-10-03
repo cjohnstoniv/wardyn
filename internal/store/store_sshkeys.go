@@ -25,7 +25,11 @@ func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPubli
 		INSERT INTO ssh_public_keys (` + sshKeyCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING ` + sshKeyCols
-	out, err := scanSSHKey(s.Pool.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.Capped, k.CreatedAt))
+	var out types.SSHPublicKey
+	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = scanSSHKey(qr.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.Capped, k.CreatedAt))
+		return e
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

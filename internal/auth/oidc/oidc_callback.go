@@ -272,7 +272,14 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		return
 	}
 	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
+	var epoch int64
+	if denied == "" {
+		epoch, denied = a.issueIdentity(r, a.loginFacts(sess, cc), onDenied)
+	}
 	if denied != "" {
+		if denied == DenialIdentityDeactivated {
+			denied = authErrorSignInRefused // the page never says the identity is deactivated
+		}
 		// A denied login must not leave a pre-existing session cookie still valid.
 		a.clearCookie(w, sessionCookieName)
 		a.redirectAuthError(w, r, denied)
@@ -289,10 +296,13 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	// The login-grant sink runs here for the same reason as OnLogin: a
 	// refused login never yields a downstream credential, and a credential
 	// that fails to store must not cost this person the session they just
-	// earned (login_grant.go). The session itself carries no token.
-	a.captureLoginGrant(r.Context(), sess.Sub, token)
+	// earned (login_grant.go). The session itself carries no token. The sink
+	// learns the epoch the login was issued under, so a capture that a
+	// suspension overtook stores nothing.
+	a.captureLoginGrant(WithAuthorityEpoch(r.Context(), epoch), sess.Sub, token)
 
 	// (6) Create a Wardyn session.
+	sess.AuthorityEpoch = epoch
 	sess.Expiry = idToken.Expiry
 	sess.IssuedAt = time.Now().UTC() // The cutoff SessionRevocations compares against.
 	if sess.Expiry.IsZero() {
@@ -363,6 +373,10 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	subj := Subject{Issuer: cc.issuer, Sub: sub, TenantID: cc.tid, ObjectID: cc.oid}
 	sub, denied := a.resolvePerson(r, subj, reserved, onDenied)
 	if denied != "" {
+		return Session{}, denied
+	}
+	// A deactivated identity is refused on every issuer, before any derivation reads the token.
+	if denied = a.admitIdentity(r, a.identityRef(sub, cc), onDenied); denied != "" {
 		return Session{}, denied
 	}
 	// (4) email_verified and domain checks — fail closed. The verified gate

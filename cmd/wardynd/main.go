@@ -410,6 +410,7 @@ func run() error {
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
+		SCIM:                scimConfigValidated(f, posture),
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.

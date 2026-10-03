@@ -17,7 +17,7 @@
 //      see, and a COUNT-FREE 409 for the race it cannot,
 //   4. no component in this directory renders a product string of its own.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
@@ -283,6 +283,30 @@ describe("GovernanceScreen — profile writes", () => {
     // Non-blocking: the write went through and the editor closed.
     expect(updateProfileMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("governance-profile-editor")).not.toBeInTheDocument();
+  });
+
+  it("renders the resources omission sentence under the deployment-ceiling heading", async () => {
+    const sentence =
+      "this profile sets no sandbox size — runs under it get the deployment's 1000m CPU and 2048 MiB memory";
+    updateProfileMock.mockResolvedValueOnce({ profile: GREENFIELD, warnings: [sentence] });
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(await screen.findByText("Compared with the deployment ceiling")).toBeInTheDocument();
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+
+  });
+
+  it("shows no omission note when the server sends no warnings", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId("governance-profile-editor")).not.toBeInTheDocument());
+    expect(screen.queryByText(GOV.OMISSION_TITLE)).not.toBeInTheDocument();
   });
 
   it("a grant-bound 400 renders the server's message under the frozen heading, editor still open", async () => {

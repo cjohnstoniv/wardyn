@@ -263,7 +263,7 @@ func (s *Server) handlePutADOOwnPAT(w http.ResponseWriter, r *http.Request) {
 	blob := adoOwnPATBlob{Token: token, Org: org, ExpiresOn: expiresOn, StoredAt: now}
 	raw, _ := json.Marshal(blob)
 	adoOwnPATWriteMu.Lock()
-	err = s.cfg.Secrets.For(subject).Put(ctx, adoOwnPATSecretName(row.ID), raw)
+	err = s.putOwned(ctx, subject, func() error { return s.cfg.Secrets.For(subject).Put(ctx, adoOwnPATSecretName(row.ID), raw) })
 	adoOwnPATWriteMu.Unlock()
 	if err != nil {
 		s.auditRowNotWritten(ctx, err, types.ActorHuman, subject, subject, adoOwnPATSecretName(row.ID))

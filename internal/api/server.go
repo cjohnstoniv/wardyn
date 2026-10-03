@@ -549,6 +549,9 @@ type Config struct {
 	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix Handler
 	// mounts every console route under (base_path.go).
 	BasePath string
+	// SCIM, when non-nil, mounts the SCIM 2.0 Users routes under /scim/v2 (scim_users.go): the way
+	// an identity provider suspends and reactivates a person. nil (default) mounts nothing.
+	SCIM *SCIMConfig
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
 	// the profile is low-confidence or left unrecognized samples (ShouldAdvise),
@@ -762,6 +765,7 @@ type Server struct {
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter *principalLimiter
 	deviceRouteState // the device routes' process state (server_devices.go)
+	scimState        // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
@@ -845,6 +849,7 @@ func New(cfg Config) *Server {
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 		},
 	}
+	s.scimState = newSCIMState()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
