@@ -267,6 +267,27 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 	}
 }
 
+// idleCPUSignalCheck is the "Idle detection" row (M10, SETUP_CHECK.IDLE_CPU_SIGNAL),
+// pinned byte for byte by TestIdleCPUSignalCheck. Off is a warn, not an info:
+// a run busy inside its sandbox with no attach and no egress can be stopped as
+// idle, and its work lost.
+func idleCPUSignalCheck(off bool) SetupCheck {
+	const id, label = "idle_cpu_signal", "Idle detection"
+	if off {
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: "Wardyn can't read this cluster's metrics API, so idle auto-stop sees only attaches and network traffic. " +
+				"A run busy inside its sandbox with neither can be stopped as idle.",
+			Fix: "Install metrics-server. If it is installed, check that the runner Role allows `list` on `pods` in " +
+				"`metrics.k8s.io` (the chart adds it).",
+		}
+	}
+	return SetupCheck{
+		ID: id, Label: label, Status: "ok",
+		Detail: "Idle auto-stop counts CPU work inside a sandbox, so a run that is busy but quiet isn't stopped.",
+	}
+}
+
 // DRAFT (M2 canon pending) — the fix a mechanism principal's provider row
 // carries.
 const (

@@ -299,6 +299,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
 		checks = append(checks, chk)
 	}
+	// idle_cpu_signal: whether idle auto-stop can see CPU work in a sandbox.
+	if chk, ok := s.idleCPUSignalRow(ctx); ok {
+		checks = append(checks, chk)
+	}
 
 	if chk, ok := sandboxStartCheck(rnr.SandboxStart); ok {
 		checks = append(checks, chk)

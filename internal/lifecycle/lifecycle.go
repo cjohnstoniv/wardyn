@@ -8,10 +8,13 @@
 // Idleness is wall-clock age of agent_runs.updated_at, reset only by a write
 // through the store (state transitions, sandbox_ref updates, TouchRun). The
 // proxy's decision-ingest touch is coalesced to one UPDATE per TouchDebounce
-// window, so thresholdFor adds TouchDebounce as slack. Activity that never
-// leaves the sandbox (CPU, file writes) does NOT reset the clock, so a busy
-// run can still be reaped; operators needing an unbounded session use the
-// never-reap escape hatch (AutoStopAfterSec <= 0).
+// window, so thresholdFor adds TouchDebounce as slack. CPU work inside the
+// sandbox reaches the clock through TouchRun too: internal/api's pause sweep
+// reads each candidate's CPU from the substrate and touches a busy one. Where
+// that signal is off (no metrics-server) and for file writes, activity that
+// never leaves the sandbox does NOT reset the clock, so a busy run can still
+// be reaped; operators needing an unbounded session use the never-reap
+// escape hatch (AutoStopAfterSec <= 0).
 //
 // AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
 // 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
