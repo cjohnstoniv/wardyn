@@ -19,6 +19,7 @@ import { ThemeProvider } from "../wardyn/theme-provider";
 import { BANNER } from "../wardyn/copy/door";
 import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { GOVERNED_ADMIN_BANNER } from "../../lib/access-posture-copy";
 import { POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
 import { NO_BARRIER } from "../wardyn/copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
@@ -28,6 +29,7 @@ import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 // too — an absence below is the view rule, not a chunk still in flight.
 import "../wardyn/model-access-banner";
 import "../wardyn/confinement-posture";
+import "../wardyn/governed-admin-banner";
 
 // A person not yet signed in to their claude-code default's AWS sign-in: the
 // strip's B1 line, User view only.
@@ -51,6 +53,7 @@ function renderShellAt(
   me: Record<string, unknown>,
   healthExtra: Record<string, unknown> = {},
   noBarrier?: boolean,
+  status: typeof STATUS = STATUS,
 ) {
   vi.stubGlobal(
     "fetch",
@@ -69,7 +72,7 @@ function renderShellAt(
     <MemoryRouter initialEntries={[path]}>
       <ThemeProvider>
         <ModelAccessProvider
-          status={STATUS}
+          status={status}
           onRefresh={() => {}}
         >
           <Routes>
@@ -104,6 +107,33 @@ describe("the model-access strip is absent in the Admin view (§4.2, M-3)", () =
     // resolved view at "user".
     renderShellAt("/runs", { ...ADMIN_ME, user_view: true });
     expect(await screen.findByText(STRIP)).toBeInTheDocument();
+  });
+});
+
+// Constrained-admin mode (mock M10): the governed-admin band is Admin view
+// only, and reads the session's resolved view like the posture band.
+describe("the governed-admin band follows the resolved view (mock M10)", () => {
+  const GOVERNED = {
+    ...STATUS,
+    auth: { mode: "sso", local_loopback: false, govern_admin_runs: true },
+  } as typeof STATUS;
+
+  it("an admin in /admin/runs sees it", async () => {
+    renderShellAt("/admin/runs", ADMIN_ME, {}, undefined, GOVERNED);
+    expect(await screen.findByText(GOVERNED_ADMIN_BANNER.TITLE)).toBeInTheDocument();
+  });
+
+  it("the same admin in the User view does not", async () => {
+    renderShellAt("/runs", { ...ADMIN_ME, user_view: true }, {}, undefined, GOVERNED);
+    // Positive control: the User view's own per-user strip proves the shell resolved.
+    expect(await screen.findByText(STRIP)).toBeInTheDocument();
+    expect(screen.queryByText(GOVERNED_ADMIN_BANNER.TITLE)).toBeNull();
+  });
+
+  it("is silent with the switch off", async () => {
+    renderShellAt("/admin/runs", ADMIN_ME, { runner: "k8s", network_policy: "unenforced" });
+    expect(await screen.findByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(GOVERNED_ADMIN_BANNER.TITLE)).toBeNull();
   });
 });
 

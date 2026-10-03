@@ -462,6 +462,11 @@ const ConfinementPostureBanner = React.lazy(() =>
 const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
+// Constrained-admin mode (mock M10) — same lazy rationale; mounted after the
+// everyone-is-an-admin band, ahead of the confinement note.
+const GovernedAdminBanner = React.lazy(() =>
+  import("../wardyn/governed-admin-banner").then((m) => ({ default: m.GovernedAdminBanner })),
+);
 // #659 Q2 — same lazy rationale; mounted FIRST in the stack, ahead of every
 // deployment-wide band: it answers what the person just did (a redirect they
 // are actively watching for), one time, then clears itself from the URL —
@@ -875,6 +880,11 @@ export function AppShell({
               before the cluster-wide confinement note. */}
               <React.Suspense fallback={null}>
                 <EveryoneAdminBanner />
+              </React.Suspense>
+              {/* Constrained-admin mode (mock M10): Admin view only, an info
+              band beside the everyone-is-an-admin one. */}
+              <React.Suspense fallback={null}>
+                <GovernedAdminBanner view={view} />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are

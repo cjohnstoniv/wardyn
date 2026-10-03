@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -557,4 +558,25 @@ func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
 	if governAdminRuns && !oidcConfigured {
 		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS is set but OIDC is not configured, so the switch binds nobody — every launch is the admin token or local mode, which stays ungoverned and carries governance_exempt on run.create. Configure SSO to govern admin runs, or unset it.")
 	}
+}
+
+// parseGovernAdminRunsExempt validates WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: a CSV
+// whose only value is "recording". Any other value is refused with exit 2 (the
+// code the flag package uses for a bad flag), so a typo cannot silently leave a
+// lane governed or exempt. Set without the switch it does nothing, and boot
+// says so.
+func parseGovernAdminRunsExempt(csv string, governAdminRuns bool) ([]string, error) {
+	var out []string
+	for _, v := range splitCSV(csv) {
+		if v != "recording" {
+			return nil, &exitCodeError{code: 2, err: fmt.Errorf("WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: %q is not a lane; the only value is \"recording\"", v)}
+		}
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) > 0 && !governAdminRuns {
+		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS_EXEMPT is set but WARDYN_GOVERN_ADMIN_RUNS is not, so it does nothing.")
+	}
+	return out, nil
 }
