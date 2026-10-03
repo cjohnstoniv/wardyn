@@ -327,9 +327,10 @@ export const runs = {
   // checklist and the enforced confinement class (post floor + blast-radius
   // raise). The wizard fires this when the operator enters Review, sending the
   // SAME body createRun would, so the checklist and any 4xx (unknown-secret 422,
-  // XOR, invalid spec) are the real launch verdicts. Callers render an
-  // error as a quiet "preflight unavailable". A `missing` backend row in the
-  // result blocks Launch (new-run-launch-panel.tsx); every other row is advisory.
+  // XOR, invalid spec) are the real launch verdicts. Callers show an error as
+  // a danger alert beside Launch (the server's own sentence). A `missing`
+  // backend row in the result blocks Launch (new-run-launch-panel.tsx); every
+  // other row is advisory.
   async preflightRun(input: RunWireInput): Promise<PreflightResult> {
     // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
     // (mounts, grants, the blast-radius raise) against the same store that
