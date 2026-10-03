@@ -58,9 +58,16 @@ const TAKEN_OVER_CLOSE_CODE = 1008;
 const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 
 // Helpers
-function buildWsUrl(runId: string, ticket?: string): string {
+function buildWsUrl(runId: string, ticket?: string, cols?: number, rows?: number): string {
+  const q = new URLSearchParams();
+  if (ticket) q.set("ticket", ticket);
+  if (cols && rows && cols > 0 && rows > 0) {
+    q.set("cols", String(cols));
+    q.set("rows", String(rows));
+  }
   const base = wsURL(`/runs/${encodeURIComponent(runId)}/attach`);
-  return ticket ? `${base}?ticket=${encodeURIComponent(ticket)}` : base;
+  const qs = q.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 export interface UseAttachSessionArgs {
@@ -170,6 +177,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     term.open(mount);
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+    // Measure now so the attach URL carries the real geometry.
+    refit();
 
     // Initial fit after the browser has laid the container out.
     const rafId = requestAnimationFrame(() => refit());
@@ -245,7 +254,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           .attachTicket(runId)
           .then((ticket) => {
             if (disposed) return;
-            openSocket(buildWsUrl(runId, ticket));
+            openSocket(buildWsUrl(runId, ticket, term.cols, term.rows));
           })
           .catch((e: unknown) => {
             if (disposed) return;
@@ -257,7 +266,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           });
         return;
       }
-      openSocket(buildWsUrl(runId));
+      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows));
     };
 
     const openSocket = (url: string) => {
@@ -296,10 +305,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         setReconnectAttempt(0);
         setReconnectExhausted(false);
         setConnState("open");
-        // Fit + send the real size once the PTY is attached. Forced, so an
-        // attach that lands while another client has the window clamped starts
-        // from this client's own size rather than inheriting the filler.
-        requestAnimationFrame(() => refit(true));
+        // Fit + send the real size once the PTY is attached (deduped per socket).
+        requestAnimationFrame(() => refit());
         // Auto-type the convenience command ONCE, after the shell prompt has had
         // a moment to render. Guarded so a reconnect never re-types it.
         if (!autoRunSent && autoRunRef.current) {
@@ -508,13 +515,23 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // Resize wiring
     // Observe the terminal's own (flex-grown) box so any layout change — panel
     // resize, fullscreen toggle, window resize — refits and re-sizes the PTY.
-    const resizeObserver = new ResizeObserver(() => refit());
+    // ResizeObserver and window resize coalesce into one frame, one refit.
+    let resizeRaf = 0;
+    const scheduleRefit = () => {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        refit();
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleRefit);
     resizeObserver.observe(mount);
-    const onWinResize = () => refit();
+    const onWinResize = scheduleRefit;
     window.addEventListener("resize", onWinResize);
 
     // Cleanup
     return () => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
       // Stop any pending backoff from spawning a new socket after unmount, and
       // mark the close as intentional (so the in-flight ws.onclose won't retry).
       disposed = true;
