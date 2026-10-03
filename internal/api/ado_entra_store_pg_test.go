@@ -156,7 +156,7 @@ func TestPG_ADOSignInWithoutKnownExpiryIsRetainedUntilErased(t *testing.T) {
 		t.Fatalf("store dana's sign-in: %v", err)
 	}
 
-	if n := s.SweepExpiredCredentials(ctx); n != 0 {
+	if n, _ := s.SweepExpiredCredentials(ctx); n != 0 {
 		t.Fatalf("the sweep deleted %d credentials, want none", n)
 	}
 	if _, found, err := s.readADOEntraBlob(ctx, owner, rowID); err != nil || !found {

@@ -169,6 +169,46 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	return removed, errors.Join(errs...)
 }
 
+// RunDeleter is the optional capability to delete every cast of one run: its
+// bare cast and every "<runID>~<suffix>" composite (attach sessions, upload
+// parts). It is how a person's erasure reaches recordings; a Store without it
+// cannot be erased from, and the caller says so rather than report it erased.
+type RunDeleter interface {
+	DeleteRun(ctx context.Context, runID string) (int, error)
+}
+
+var _ RunDeleter = (*FSStore)(nil)
+
+// DeleteRun removes <runID>.cast and every <runID>~*.cast under root, returning
+// how many it removed. Absent casts are not an error: the call is idempotent.
+func (s *FSStore) DeleteRun(_ context.Context, runID string) (int, error) {
+	if _, err := safeRunPath(s.root, runID); err != nil {
+		return 0, err
+	}
+	ents, err := os.ReadDir(s.root)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	var errs []error
+	for _, e := range ents {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".cast") {
+			continue
+		}
+		key := strings.TrimSuffix(name, ".cast")
+		if key != runID && !strings.HasPrefix(key, runID+castSep) {
+			continue
+		}
+		if rerr := os.Remove(filepath.Join(s.root, name)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			errs = append(errs, rerr)
+			continue
+		}
+		removed++
+	}
+	return removed, errors.Join(errs...)
+}
+
 // OpenCast opens <root>/<runID>.cast for reading. Returns ErrNotFound when the
 // file does not exist.
 func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, error) {

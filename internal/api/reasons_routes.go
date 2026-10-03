@@ -210,8 +210,9 @@ const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
 	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; an interactive run keeps no output here
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (interactive, sign-in, or started before a restart)
-	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (a sign-in run, one never captured, or one still being captured)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
+	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
 )
 
 // POST /runs/{id}/resume (run_pause.go).
@@ -519,6 +520,9 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
+	reasonAuditPartitionNotFound           = "audit_partition_not_found"
+	reasonAuditPartitionOpen               = "audit_partition_open"
 )
 
 // POST /api/v1/sources/{id}/scan and the admin bulk scan (source_scan.go).
@@ -698,6 +702,18 @@ const (
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
+// POST /people/{principal}/erasure (person_erasure.go).
+const (
+	// scopes is not a non-empty list of known scope names.
+	reasonErasureScopeUnknown = "erasure_scope_unknown"
+	// The person named is the caller, and a scope other than credentials was asked for.
+	reasonErasureSelfRefused = "erasure_self_refused"
+	// The principal names the operator namespace, which is no person's.
+	reasonErasureOperatorNamespace = "erasure_operator_namespace"
+	// A scope failed part way: the body names what is done and what is left.
+	reasonErasureIncomplete = "erasure_incomplete"
+)
+
 // GET /permissions/explain (capabilities_explain.go).
 const reasonExplainPrincipalInvalid = "explain_principal_invalid"
 
@@ -807,3 +823,8 @@ const (
 // taken (held elsewhere past its wait, the lock pool full, the database not
 // answering). Nothing was done; the request is safe to retry (locks.go).
 const reasonLockUnavailable = "lock_unavailable"
+
+// reasonIdentityDeactivated: a run, API token, SSH key or stored credential was refused because its
+// owner's identity is deactivated or was suspended since the caller was admitted (leaver
+// deprovisioning). One sentence, so a suspension reads like a cut session.
+const reasonIdentityDeactivated = "identity_deactivated"

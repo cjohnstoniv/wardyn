@@ -56,6 +56,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
+	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
+	s.mountSCIMRoutes(r)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
@@ -698,6 +701,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
 	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
+	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys

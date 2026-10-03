@@ -72,6 +72,8 @@ func (s *Server) createRun(ctx context.Context, run types.AgentRun) (types.Agent
 	if s.cfg.OrgFederation != nil && s.cfg.OrgFederation().Revoked {
 		return types.AgentRun{}, errOrgRevoked
 	}
+	// A deactivated or stale-epoch owner gets no run row, so none can outlive a suspension's kill sweep.
+	ctx = guardOwner(ctx, run.CreatedBy)
 	if s.cfg.MaxConcurrentRuns <= 0 {
 		return s.cfg.Store.CreateRun(ctx, run)
 	}

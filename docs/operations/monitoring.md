@@ -25,6 +25,8 @@ flowchart LR
 | --- | --- |
 | Runs by terminal state, approval decisions by outcome, egress denies, credential mints, sandbox launch-latency sum/count | The base counters — every one only moves on success, so two gauges sit beside them: a dead store and an idle cluster otherwise scrape identically |
 | `wardyn_store_up` | Gauge, 1 when Postgres answers the same bounded ping `/readyz` makes. A *ping*, not proof of work: a reachable pool can still fail individual queries |
+| `wardyn_runner_up` | Gauge, per replica: 1 when this replica's last probe of the sandbox runner's substrate succeeded, 0 when it did not. The probe is one read-only call (Kubernetes: a namespaced pod list of limit 1, which the chart's Role already grants; Docker: a daemon ping), cached for 5 seconds and bounded by a 3-second deadline. The `substrate_health` row of `/setup/status` says which way it failed. Absent with no runner configured. **Not part of `/readyz`** |
+| `wardyn_sweep_last_tick_seconds{sweep,result}` | Gauge, Unix seconds. `result="attempt"` is when the sweep last started a tick, `result="success"` when it last finished one without error. The record is shared by every replica, so a follower reports the leader's ticks. A sweep that has not ticked yet has no sample, and a sweep that is not running on this install (see below) has no series. See [Substrate and sweep health](#substrate-and-sweep-health) |
 | `wardyn_audit_spool_lines` | Gauge. Audit events waiting in the local JSONL fallback spool. A value that never returns to 0 means the drain loop isn't working; mid-drain it can read lower than the file's line count |
 | `wardyn_audit_spool_quarantined_total` | Events the store permanently refused, moved aside by the drain. Non-zero means the trail is missing those events even though the spool drained |
 | `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable — a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never reach the quarantine count, since they never parsed far enough to be replayed |
@@ -44,6 +46,57 @@ UNCOUNTED short-circuit — the in-memory dead-mark check, before
 distinct sessions AWS retired," not "how many times people hit a dead
 one." A climbing `transport_error`/`unavailable` series is the SSO-OIDC
 endpoint itself in trouble.
+
+## Substrate and sweep health
+
+`/readyz` answers for the store only, and stays that way. The chart's
+readinessProbe reads it. A substrate fault that pulled every replica out of
+the Service would take the console down with them, and the console is the one
+place the fault is visible. A broken substrate and a stalled sweep show
+instead on two gauges and on one `/setup/status` row, `substrate_health`,
+which an operator sees and a member does not.
+
+| Row state | Cause | Meaning |
+| --- | --- | --- |
+| `fail` | `runner_unreachable` | The substrate does not answer from this replica: no reply, a transport error, or the probe's deadline |
+| `fail` | `runner_auth` | The substrate refused the control plane: an expired or revoked token (unauthorized), or a missing grant such as a deleted RoleBinding (forbidden) |
+| `warn` | `sweep_stale` | A sweep this install runs has gone three of its own intervals without a success |
+
+The row never blocks the console, and its detail names only the classified
+state and the stale sweeps, never the text of a substrate error.
+
+Each background sweep records when it last tried and last finished cleanly.
+A tick that returns an error moves `attempt` but not `success`, and a tick
+that panics leaves `success` where it was. These are the sweeps, with the
+interval each ticks at:
+
+| `sweep` | Interval | Runs when |
+| --- | --- | --- |
+| `idle_reaper` | `WARDYN_AUTOSTOP_INTERVAL`, default 1m | A runner exists and the interval is above 0 |
+| `terminal_sandbox` | 5m | A runner exists |
+| `approval_expiry` | `WARDYN_APPROVAL_EXPIRY_INTERVAL`, default 10m | The interval is above 0 |
+| `run_secret` | 15m | Always, on every replica |
+| `credential_expiry` | 24h | Always |
+| `recording_retention` | 1h | The recording store can sweep and `WARDYN_RECORDING_RETENTION_DAYS` is above 0 (default 0, off) |
+| `run_watcher` | 1m | A runner exists, on every replica |
+| `orphaned_build` | 30m | The image builder can sweep orphaned builds |
+| `run_output` | 1h | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
+
+Every replica registers every sweep whose condition holds on the install,
+whichever replica holds the sweeper lock, so a follower notices a leader that
+stopped ticking. A sweep whose condition does not hold has no series and can
+never be stale. A sweep with no success on record warns only once three of
+its intervals have passed since this process started.
+
+Alert on:
+
+- `wardyn_runner_up == 0` on any replica. Each replica probes for itself, so
+  one replica with a bad token or a network fault shows alone.
+- `time() - wardyn_sweep_last_tick_seconds{result="success"}` exceeding the
+  sweep's interval from the table, with margin for one missed tick. The
+  console row warns at three intervals. A sweep with no `success` sample has
+  not finished a tick yet, so alert on `absent` only after its first three
+  intervals.
 
 ## Why two counters exist beside `wardyn_store_up`
 

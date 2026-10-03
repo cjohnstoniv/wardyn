@@ -110,6 +110,10 @@ const (
 	// portal's own credential alone. Every human credential — an admin's
 	// session and the admin token included — is refused with 401.
 	classPortal routeClass = "portal"
+	// classSCIM: the identity provider's SCIM connector (scim_users.go), authenticated by its own
+	// bearer alone. Every human credential, the admin token's included, is refused with 401, and a
+	// SCIM-authenticated request is never an operator (neverOperator).
+	classSCIM routeClass = "scim"
 )
 
 // routeEntity names which seeded fixture a classOwner route's path id(s) are
@@ -367,6 +371,12 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/people":                    {class: classSecurity},
 	"POST /api/v1/people/{principal}/tokens": {class: classSecurity},
 	"GET /api/v1/people/{principal}/tokens":  {class: classSecurity},
+	// 0.8.6: the person erasure (ar-l1.4). Security tier, like the credential erase
+	// it generalises: it removes reach and returns no record's content.
+	"POST /api/v1/people/{principal}/erasure": {class: classSecurity},
+	// 0.8.6: the SCIM card's read (scim-a7): who is deactivated, which leaver steps are stuck on what
+	// error, and which purged people's drives are still to reclaim. Names, steps and errors, read-only.
+	"GET /api/v1/scim/status": {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},
@@ -687,6 +697,13 @@ var routeMatrix = map[string]classifiedRoute{
 
 	// portal (a registered portal's own credential, HTTP Basic)
 	"POST /api/v1/token": {class: classPortal},
+	// scim (the identity provider's connector, its own bearer)
+	"GET /scim/v2/Users":         {class: classSCIM},
+	"GET /scim/v2/Users/{id}":    {class: classSCIM},
+	"POST /scim/v2/Users":        {class: classSCIM},
+	"PATCH /scim/v2/Users/{id}":  {class: classSCIM},
+	"PUT /scim/v2/Users/{id}":    {class: classSCIM},
+	"DELETE /scim/v2/Users/{id}": {class: classSCIM},
 	// The portal registry (#1142): registering is the super admin's alone;
 	// listing and revoking only ever subtract reach, like the device inventory.
 	"POST /api/v1/admin/delegates":        {class: classAdmin},
@@ -777,6 +794,13 @@ func authzMatrixSiteConfig() types.SiteConfig {
 // shape, when given, adjusts the config before New — the deployment-shape knobs
 // (AdminToken, SSOOnly, MemberMode) TestSSOShapeRoleMatrix walks this same
 // router under.
+// matrixSCIMToken is the SCIM bearer the matrix servers accept; classSCIM's positive control.
+const matrixSCIMToken = "matrix-scim-token-0123456789abcdef0123456789"
+
+func matrixSCIMConfig() *SCIMConfig {
+	return &SCIMConfig{Token: matrixSCIMToken, Issuer: "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0", Tenant: "11111111-2222-3333-4444-555555555555"}
+}
+
 func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
 	t.Helper()
 	ast := newAuthzStore()
@@ -791,6 +815,7 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	}
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
 	for _, f := range shape {
 		f(&cfg)
@@ -804,6 +829,9 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 func matrixServer(cfg Config) *Server {
 	srv := New(cfg)
 	srv.runEvents.hold = time.Nanosecond
+	// The matrix refuses far more bearers per run than a real caller would send; the limiter's own
+	// bound is pinned in scim_auth_test.go.
+	srv.scimState.refused = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
 	return srv
 }
 
@@ -832,6 +860,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	}
 	cfg.RecordingStore = fs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
 	cfg.UIDir = dir
 	return matrixServer(cfg)
@@ -1018,6 +1047,24 @@ func TestAuthzMatrix(t *testing.T) {
 					"member session": doSSO(t, srv, method, pattern, memberSess, body),
 					"admin token":    do(t, srv, method, pattern, adminToken, body),
 					"no credential":  doSSO(t, srv, method, pattern, nil, body),
+				} {
+					if w.Code != http.StatusUnauthorized {
+						t.Errorf("%s: status = %d, want 401; body=%s", who, w.Code, w.Body.String())
+					}
+				}
+
+			case classSCIM:
+				// The control first: the SCIM bearer is admitted past authentication (the matrix store
+				// holds no identity rows, so the handler answers 501, never 401 or 403).
+				p := buildPath(pattern, "x1")
+				if w := do(t, srv, method, p, matrixSCIMToken, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+					t.Errorf("the SCIM bearer: status = %d, want admitted; body=%s", w.Code, w.Body.String())
+				}
+				for who, w := range map[string]*httptest.ResponseRecorder{
+					"admin session":  doSSO(t, srv, method, p, adminSess, body),
+					"member session": doSSO(t, srv, method, p, memberSess, body),
+					"admin token":    do(t, srv, method, p, adminToken, body),
+					"no credential":  doSSO(t, srv, method, p, nil, body),
 				} {
 					if w.Code != http.StatusUnauthorized {
 						t.Errorf("%s: status = %d, want 401; body=%s", who, w.Code, w.Body.String())
@@ -1422,9 +1469,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see. #1428 added
 	// the Azure DevOps organisation check beside the provider rows (= 48 SUPER).
-	// #1449 added the refusal read beside it (= 49 SUPER).
-	if sec != 44 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 44 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
+	// #1449 added the refusal read beside it (= 49 SUPER). 0.8.6's person
+	// erasure joined the security tier beside the credential erase (= 44 SEC),
+	// and scim-a7's read-only SCIM status beside it (= 45 SEC), and ppl-p1's people listing (= 46 SEC).
+	if sec != 46 || super != 49 {
+		t.Errorf("tier split = %d security / %d admin, want 46 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 

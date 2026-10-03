@@ -28,6 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
@@ -135,10 +136,19 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
+	// Every replica registers every sweep this install runs, whether or not it
+	// ever holds the sweeper lock, so a follower can see a stopped leader.
+	_, recSweepable := recStore.(recordingSweepable)
+	registerSweepHealth(ticks, sweepInstall{
+		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
+		recordingSweepable: recSweepable, recordingRetentionDays: *f.recordingRetention,
+		runOutputPersist: *f.runOutputPersist,
+		api:              srv.HealthSweeps(),
+	})
 
 	if run != nil && *f.autoStopInterval > 0 {
 		reaper := lifecycle.New(
@@ -150,9 +160,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				// the one method is smaller than giving the reaper its own approval
 				// store and its own copy of the reason derivation.
 				cancelApprovals: srv.CancelTerminalRunApprovals,
+				finishOutput:    srv.FinishRunOutput,
 			},
 			maskedRec,
-			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool)},
+			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool), Sweeps: ticks},
 		)
 		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
@@ -179,7 +190,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if *f.approvalExpiryInterval > 0 {
 		leaderGo(rootCtx, leader, "approval.sweeper", func(ctx context.Context) {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv)
+			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv, ticks)
 		})
 		slog.Info("wardynd: approval expiry sweeper started",
 			slog.Duration("interval", *f.approvalExpiryInterval),
@@ -190,7 +201,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if rs, ok := recStore.(recordingSweepable); ok && *f.recordingRetention > 0 {
 		after := time.Duration(*f.recordingRetention) * 24 * time.Hour
 		leaderGo(rootCtx, leader, "recording.sweeper", func(ctx context.Context) {
-			runRecordingSweeper(ctx, rs, maskedRec, time.Hour, after)
+			runRecordingSweeper(ctx, rs, maskedRec, recordingSweepInterval, after, ticks)
 		})
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}
@@ -199,8 +210,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// runs terminal past api.RunSecretGrace, so a long-lived daemon stops
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
-	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
-	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval) })
+	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
+	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
+	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
+	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
@@ -218,7 +231,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// moved back above). Gated the same as the lifecycle reaper above (nothing
 	// to probe with no Runner), independent of autoStopInterval.
 	if run != nil {
-		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval)
+		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval, ticks)
 	}
 
 	// D28: re-apply decided `always`-scoped egress decisions onto their

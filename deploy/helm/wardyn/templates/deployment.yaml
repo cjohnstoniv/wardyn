@@ -256,6 +256,25 @@ spec:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
             {{- end }}
+            {{- if .Values.scim.enabled }}
+            # SCIM leaver deprovisioning (secret.yaml refuses a second source in env/extraEnv). The
+            # bearer rides a secretKeyRef, never a literal; the rotation token is optional.
+            - name: WARDYN_SCIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.scim.tokenSecretRef | quote }}
+                  key: scim-token
+            - name: WARDYN_SCIM_TOKEN_NEXT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.scim.tokenSecretRef | quote }}
+                  key: scim-token-next
+                  optional: true
+            - name: WARDYN_SCIM_PURGE_AFTER
+              value: {{ .Values.scim.purgeAfter | toString | quote }}
+            - name: WARDYN_SCIM_LEAVER_WORKSPACES
+              value: {{ .Values.scim.leaverWorkspaces | quote }}
+            {{- end }}
             {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
             - name: WARDYN_BASE_PATH
               value: {{ .Values.basePath | quote }}
@@ -345,6 +364,13 @@ spec:
             {{- if ($.Values.kek | default dict).required }}
             - name: WARDYN_KEK_REQUIRED
               value: "true"
+            {{- end }}
+            {{- /* An unquoted on in a values file is YAML's boolean true: render it as on. */}}
+            {{- $pkeys := ($.Values.kek | default dict).principalKeys | default "off" }}
+            {{- if kindIs "bool" $pkeys }}{{ $pkeys = ternary "on" "off" $pkeys }}{{ end }}
+            {{- if ne (toString $pkeys) "off" }}
+            - name: WARDYN_PRINCIPAL_KEYS
+              value: {{ $pkeys | toString | quote }}
             {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}

@@ -98,7 +98,9 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					return
 				}
 				if !applied {
-					// Already terminal (e.g. killed concurrently) — nothing further to do.
+					// Already terminal (e.g. killed concurrently) — nothing further to
+					// do, but this process may hold the tail the winner does not.
+					s.finishRunOutput(base, runID)
 					return
 				}
 				s.finalizeRunTail(base, runID, ref, "run.complete", "failure", data)
@@ -153,8 +155,10 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			return
 		}
 		if !applied {
-			// Run already terminal (e.g. KILLED by a user mid-run). Do nothing —
-			// the kill path already tore the sandbox down.
+			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
+			// already tore the sandbox down; only this process's tail is left, and
+			// finishing it is a no-op when the winner already did.
+			s.finishRunOutput(base, runID)
 			return
 		}
 
@@ -455,22 +459,25 @@ const RunSecretGrace = time.Hour
 // It also drops the process-wide mask copies of credentials that were refreshed
 // or deleted more than RunSecretGrace ago (secretmask.Registry.SweepGlobals),
 // on the same grace and for the same reason.
-func (s *Server) SweepRunSecrets(ctx context.Context) int {
+//
+// The error is the run listing's: a sweep that could not look at the runs
+// evicted nothing, and says so, so that it is not counted as a clean tick.
+func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 	if s.cfg.MaskRegistry == nil {
-		return 0
+		return 0, nil
 	}
 	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
 	if s.cfg.Store == nil {
-		return 0
+		return 0, nil
 	}
 	held := s.cfg.MaskRegistry.RunIDs()
 	if len(held) == 0 {
-		return 0
+		return 0, nil
 	}
 	runs, err := s.cfg.Store.ListRuns(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
-		return 0
+		return 0, fmt.Errorf("list runs for the run-secret sweep: %w", err)
 	}
 	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
 	for _, run := range runs {
@@ -487,7 +494,7 @@ func (s *Server) SweepRunSecrets(ctx context.Context) int {
 		s.forgetMaskManifest(id)
 		evicted++
 	}
-	return evicted
+	return evicted, nil
 }
 
 // finalizeRunTail runs the terminal-transition side effects shared by the live
@@ -513,10 +520,22 @@ func (s *Server) SweepRunSecrets(ctx context.Context) int {
 // CASes from RUNNING and audits its own uerr; the reconciler reads current state
 // first and slogs) — only the post-CAS tail is shared.
 func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any) {
+	s.finalizeRunTailOrdered(ctx, runID, ref, action, outcome, data, false)
+}
+
+// finalizeRunTailOrdered is finalizeRunTail. The run's output is finalised
+// (run_output_final.go) after the revoke cascade and before StopSandbox, so the
+// seconds of drain never extend a live credential; finishAfterStop moves it
+// after StopSandbox, for a caller that CASed a possibly still-running run to
+// KILLED (reclaimProbeRun), whose process has not exited yet.
+func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop bool) {
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 		runID.String(), outcome, mustJSON(data)))
 	s.revokeRunCascade(ctx, runID)
 	s.cancelRunApprovals(ctx, runID)
+	if !finishAfterStop {
+		s.FinishRunOutput(ctx, runID)
+	}
 	teardownOK := false
 	if ref != "" && s.cfg.Runner != nil {
 		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {
@@ -530,6 +549,9 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 		} else {
 			teardownOK = true
 		}
+	}
+	if finishAfterStop {
+		s.FinishRunOutput(ctx, runID)
 	}
 	s.reconcileWorkspaceRun(ctx, runID)
 	s.reconcileRecordRun(ctx, runID)
@@ -619,6 +641,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		if from == types.RunRunning {
 			s.cancelRunApprovals(ctx, runID)
 		}
+		s.FinishRunOutput(ctx, runID)
 	}
 }
 
@@ -861,6 +884,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	}
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries).
 	s.revokeRunPATs(ctx, id, adoPATRevokeKill)
+	// (7) Its output, on a tracked goroutine: the drain barrier and the write
+	// never delay the kill's answer, and the sandbox is already gone.
+	s.finishRunOutputDetached(ctx, id)
 
 	// Honest outcome: the kill-switch is the central governance control and
 	// the audit log is the system of record. If ANY teardown/revocation step

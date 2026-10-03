@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,36 +68,20 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
-	data := map[string]any{}
-	// The sign-in's row id is read BEFORE anything is erased, because the erase
-	// must hold the redemption lock for it: a configuration that cannot be read
-	// refuses the erase rather than proceeding without the lock.
-	rowID, cfgErr := s.adoSignInRowID(r.Context())
-	if cfgErr != nil {
+	// One code path erases credentials: the orchestrator's credentials scope
+	// (person_erasure.go), which POST /people/{principal}/erasure shares. This
+	// route keeps credentials only; it never reaches audit, run history or
+	// outputs.
+	var rep secretstore.EraseReport
+	_, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	if errors.Is(err, errSignInConfigUnreadable) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialEraseSignInConfigUnreadable,
 			"The Azure DevOps sign-in configuration could not be read, so nothing was erased. Try again.")
 		return
 	}
-	// Revoke the person's live Azure DevOps tokens first: the erase takes the
-	// sign-in that revoking them needs. That runs BEFORE and OUTSIDE the three
-	// locks below, because its paths take the Entra redemption lock themselves
-	// (ado_pat_client.go) and a nested take would deadlock.
-	// end runs even on a panic, or the person's mints would self-revoke until restart.
-	var rep secretstore.EraseReport
-	err := func() error {
-		defer s.adoSignInEnds.begin(owner, adoPATRevokeOffboarding)()
-		s.revokeOwnerRunPATs(r.Context(), owner, adoPATRevokeOffboarding)
-		return s.eraseLocked(r.Context(), owner, rowID, &rep)
-	}()
-	data["count"] = rep.Count
-	if rep.Store != "" {
-		data["store"], data["purged"] = rep.Store, rep.Purged
-		if !rep.Purged && rep.RecoverableDays > 0 {
-			data["recoverable_days"] = rep.RecoverableDays
-		}
-	}
+	data := credentialEraseData(rep)
 	resp := maps.Clone(data)
 	if err != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -172,16 +157,21 @@ var noSweepOnce sync.Once
 // deleted. cmd/wardynd calls it daily. A row it could not delete is kept, and
 // the next sweep tries it again. A store that cannot sweep — no DeleteExpired,
 // or a wrapper answering secretstore.ErrNoExpirySweep — is logged at Error once.
-func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
+//
+// The error is the store's: a delete that failed for any row, or a scan that
+// failed, so the tick does not count as a success. A store that cannot sweep
+// at all is not an error here, because that is a fact about the deployment,
+// announced above, not a tick that failed.
+func (s *Server) SweepExpiredCredentials(ctx context.Context) (int, error) {
 	if s.cfg.Secrets == nil {
-		return 0 // no store, so nothing stored to expire
+		return 0, nil // no store, so nothing stored to expire
 	}
-	noSweep := func() int {
+	noSweep := func() (int, error) {
 		noSweepOnce.Do(func() {
 			slog.ErrorContext(ctx, "wardynd: the secret store has no expiry sweep; expired stored credentials are NOT being deleted",
 				slog.String("store", fmt.Sprintf("%T", s.cfg.Secrets)), slog.String("store_name", s.cfg.Secrets.Name()))
 		})
-		return 0
+		return 0, nil
 	}
 	sw, ok := s.cfg.Secrets.(expiredSweeper)
 	if !ok {
@@ -200,7 +190,7 @@ func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", e.Name, "success",
 			withSecretOwner(map[string]any{"reason": "expired", "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339)}, e.Owner, true)))
 	}
-	return len(gone)
+	return len(gone), err
 }
 
 // auditSweepFailure records what a sweep could not do: a failure row for each
