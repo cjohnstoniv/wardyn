@@ -37,6 +37,9 @@ let _signedOutHold = false;
 export function setSignedOutHold(on: boolean): void {
   _signedOutHold = on;
 }
+export function isSignedOutHold(): boolean {
+  return _signedOutHold;
+}
 
 /** RequestInit plus `save`: the owning screen's id when this request is that
  *  screen's Save, so a refused one is named beside that Save and nowhere else;
