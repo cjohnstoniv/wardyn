@@ -14,6 +14,25 @@ import (
 	"sort"
 )
 
+// auditTreeCTE names every relation a write to audit_events can land on: the table itself, and since
+// 0111 every partition under it. Before the conversion (and on a database mid-bootstrap) the tree is
+// the one table, so every reader here works on both shapes. Callers have already proved
+// audit_events exists.
+//
+// SECURITY: the guards are per RELATION. A row-level trigger on the parent is cloned onto each
+// partition, and it is the clone on the leaf that fires for a row routed there, so "the parent has the
+// trigger" proves nothing about a leaf whose clone was disabled or dropped.
+const auditTreeCTE = `WITH RECURSIVE audit_tree(oid) AS (
+		SELECT 'audit_events'::regclass::oid
+		UNION ALL
+		SELECT i.inhrelid FROM pg_inherits i JOIN audit_tree t ON i.inhparent = t.oid)`
+
+// auditUserTrigger selects the triggers Wardyn or an operator created, as opposed to the ones the
+// server generates for constraints. A clone of a partitioned table's trigger is one of them: it is
+// tgisinternal on Postgres 13 and not on 14 and later, and what identifies it on every version is a
+// non-zero tgparentid. Aliased t.
+const auditUserTrigger = `(NOT t.tgisinternal OR t.tgparentid <> 0)`
+
 // auditImpostorTriggers returns the SHIPPED-NAMED triggers on audit_events bound to something other than
 // the function the migrations bind them to, keyed by trigger name with the offending function as
 // `<schema>.<name>`. Empty when every shipped trigger is the one Wardyn created, and when the table
@@ -41,18 +60,18 @@ func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[strin
 	sort.Strings(names)
 
 	var tgnames, funcs, funcSchemas, tableSchemas []string // one read, decided in Go, against the expectation map above
-	if err := db.QueryRow(ctx, `
+	if err := db.QueryRow(ctx, auditTreeCTE+`
 		SELECT COALESCE(array_agg(t.tgname::text   ORDER BY t.tgname), ARRAY[]::text[]),
 		       COALESCE(array_agg(p.proname::text  ORDER BY t.tgname), ARRAY[]::text[]),
 		       COALESCE(array_agg(fn.nspname::text ORDER BY t.tgname), ARRAY[]::text[]),
 		       COALESCE(array_agg(tn.nspname::text ORDER BY t.tgname), ARRAY[]::text[])
 		FROM pg_trigger t
+		JOIN audit_tree      ON audit_tree.oid = t.tgrelid
 		JOIN pg_proc p       ON p.oid  = t.tgfoid
 		JOIN pg_namespace fn ON fn.oid = p.pronamespace
 		JOIN pg_class c      ON c.oid  = t.tgrelid
 		JOIN pg_namespace tn ON tn.oid = c.relnamespace
-		WHERE t.tgrelid = 'audit_events'::regclass
-		  AND NOT t.tgisinternal
+		WHERE `+auditUserTrigger+`
 		  AND t.tgname = ANY($1)`, names,
 	).Scan(&tgnames, &funcs, &funcSchemas, &tableSchemas); err != nil {
 		return nil, fmt.Errorf("db: read audit_events trigger functions: %w", err)
@@ -101,12 +120,12 @@ func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapa
 	// pg_trigger.tgtype bitmask (Postgres trigger.h): 1=FOR EACH ROW, 2=BEFORE, 4=INSERT. So (tgtype&3)=3
 	// is a row-level BEFORE trigger and (tgtype&4)<>0 means it fires on INSERT.
 	const rowBeforeInsert = `(tgtype & 3) = 3 AND (tgtype & 4) <> 0`
-	if err := db.QueryRow(ctx, `
-		SELECT COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE `+rowBeforeInsert+`), ARRAY[]::text[]),
-		       COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE NOT (`+rowBeforeInsert+`)), ARRAY[]::text[])
-		FROM pg_trigger
-		WHERE tgrelid = 'audit_events'::regclass
-		  AND NOT tgisinternal
+	if err := db.QueryRow(ctx, auditTreeCTE+`
+		SELECT COALESCE(array_agg(DISTINCT tgname::text ORDER BY tgname::text) FILTER (WHERE `+rowBeforeInsert+`), ARRAY[]::text[]),
+		       COALESCE(array_agg(DISTINCT tgname::text ORDER BY tgname::text) FILTER (WHERE NOT (`+rowBeforeInsert+`)), ARRAY[]::text[])
+		FROM pg_trigger t
+		JOIN audit_tree ON audit_tree.oid = t.tgrelid
+		WHERE `+auditUserTrigger+`
 		  AND tgenabled <> 'D'
 		  AND tgname <> ALL($1)`, shipped,
 	).Scan(&tamperCapable, &other); err != nil {
@@ -115,7 +134,8 @@ func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapa
 	return tamperCapable, other, nil
 }
 
-// auditTriggerNames returns the FIRING row/statement triggers on audit_events, or nil when the table
+// auditTriggerNames returns the FIRING row/statement triggers on audit_events (and on every partition
+// under it, see auditTreeCTE), or nil when the table
 // doesn't exist. Disabled is treated as absent on purpose: DISABLE TRIGGER leaves the catalog row in
 // place, so a mere existence check would pass on a table where it never fires.
 //
@@ -134,11 +154,16 @@ func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bo
 	if !exists {
 		return nil, nil
 	}
+	// A name counts as present only when EVERY relation in the tree fires it: one partition whose
+	// clone was disabled is an unguarded write path, whatever the parent says.
 	var names []string
-	if err := db.QueryRow(ctx, `
-		SELECT COALESCE(array_agg(tgname::text), ARRAY[]::text[])
-		FROM pg_trigger
-		WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal AND tgenabled IN ('O', 'A')`,
+	if err := db.QueryRow(ctx, auditTreeCTE+`
+		SELECT COALESCE(array_agg(x.tgname ORDER BY x.tgname), ARRAY[]::text[])
+		FROM (SELECT t.tgname::text AS tgname, count(DISTINCT t.tgrelid) AS n
+		        FROM pg_trigger t JOIN audit_tree ON audit_tree.oid = t.tgrelid
+		       WHERE `+auditUserTrigger+` AND t.tgenabled IN ('O', 'A')
+		       GROUP BY t.tgname) x
+		WHERE x.n = (SELECT count(*) FROM audit_tree)`,
 	).Scan(&names); err != nil {
 		return nil, fmt.Errorf("db: read audit_events triggers: %w", err)
 	}

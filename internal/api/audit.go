@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -294,12 +295,20 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 	// which is the one thing it must not do. The paged sweep checks the request
 	// context between pages instead, so a client that goes away stops the work —
 	// which the single materializing statement it replaced could not.
-	if !s.auditChainSweep.TryLock() {
+	// The lock is taken last in db.LockOrder and only ever tried: a sweep never
+	// waits for another, on this replica or any other.
+	sweepCtx, unlockSweep, got, lerr := s.locker().TryLock(r.Context(), db.NewLockKey(db.AuditSweepLockClass))
+	if lerr != nil {
+		writeLockRefused(w, r, lerr)
+		return
+	}
+	if !got {
 		w.Header().Set("Retry-After", "30")
 		writeErrorReason(w, http.StatusTooManyRequests, reasonAuditChainVerifyBusy, "an audit chain verification is already running; retry when it finishes")
 		return
 	}
-	defer s.auditChainSweep.Unlock()
+	defer unlockSweep()
+	r = r.WithContext(sweepCtx)
 
 	st, err := v.VerifyAuditChain(r.Context())
 	if err != nil {

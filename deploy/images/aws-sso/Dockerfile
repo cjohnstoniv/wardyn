@@ -294,7 +294,7 @@ COPY deploy/images/aws-sso/signin-pane.sh /usr/local/bin/signin-pane.sh
 COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/claude
 COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/codex
 # tmux config for the persistent attach session: no status bar (clean terminal,
-# no xterm.js line-drawing artifacts), truecolor, large scrollback.
+# no xterm.js line-drawing artifacts), truecolor, tmux-owned mouse wheel, large scrollback.
 COPY deploy/images/common/tmux.conf /etc/tmux.conf
 # Interactive attach shell sources this: waits for workspace prep to finish
 # (mirrors claude-code/codex-cli) so `wardyn run attach` never lands mid-setup.

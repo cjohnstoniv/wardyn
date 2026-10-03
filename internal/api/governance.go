@@ -17,6 +17,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -109,6 +111,11 @@ type governanceProfileRequest struct {
 	Name    string                 `json:"name"`
 	Ceiling types.RunPolicySpec    `json:"ceiling"`
 	Limits  types.GovernanceLimits `json:"limits"`
+	// Contact stays raw so absent, null and {} stay distinguishable; decode parses
+	// it into contact and contactSet (governance_contact.go).
+	Contact    json.RawMessage `json:"contact"`
+	contact    *policyref.Contact
+	contactSet bool
 }
 
 // governanceProfileResponse carries the saved profile plus any OMISSION
@@ -155,6 +162,10 @@ func decodeGovernanceProfileRequest(w http.ResponseWriter, r *http.Request) (gov
 	// unlimited/unset on all three.
 	if msg := governanceLimitsRefusal(req.Limits); msg != "" {
 		return governanceProfileRequest{}, msg
+	}
+	var contactMsg string
+	if req.contact, req.contactSet, contactMsg = parseProfileContact(req.Contact); contactMsg != "" {
+		return governanceProfileRequest{}, contactMsg
 	}
 	return req, ""
 }
@@ -218,11 +229,13 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	p := types.GovernanceProfile{
-		ID:        id,
-		Name:      req.Name,
-		Ceiling:   req.Ceiling,
-		Limits:    req.Limits,
-		CreatedBy: principalFromRequest(r),
+		ID:         id,
+		Name:       req.Name,
+		Ceiling:    req.Ceiling,
+		Limits:     req.Limits,
+		CreatedBy:  principalFromRequest(r),
+		Contact:    req.contact,
+		ContactSet: req.contactSet,
 	}
 	saved, err := s.cfg.Store.UpsertGovernanceProfile(r.Context(), p)
 	if errors.Is(err, store.ErrConflict) {
@@ -234,12 +247,15 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	contactFields, contactURL := contactAudit(saved.Contact)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"governance.profile.write", saved.ID.String(), "success", mustJSON(map[string]any{
 			"name":                  saved.Name,
 			"min_confinement_class": saved.Ceiling.MinConfinementClass,
 			"allow_all_egress":      saved.Ceiling.AllowAllEgress,
 			"limits":                saved.Limits,
+			"contact_fields":        contactFields,
+			"contact_request_url":   contactURL,
 		})))
 	writeJSON(w, status, governanceProfileResponse{
 		Profile:  saved,
@@ -801,7 +817,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 // once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
-	if s.isOperator(ctx) {
+	if s.runUngoverned(ctx) {
 		deployment.Operator = true
 		return deployment, nil
 	}

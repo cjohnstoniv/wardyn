@@ -111,6 +111,12 @@ wiring) is rendered by this chart. In detail:
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
   own** (see below) for a fork, a private registry, or an unreleased change.
+  Each release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, the same
+  daemon built against a pinned Go cryptographic module snapshot: set
+  `image.repository` to it, give it non-age key custody (`kek.provider`
+  `transit` or `azurekv`, or store mode), and see
+  [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it
+  does and does not claim.
 - Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via
   `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement
   tiers — CC1 works out of the box. An **OIDC issuer** for SSO and
@@ -523,10 +529,19 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate
   creates (agent, proxy, canary) — separate from `image.pullSecrets`, which is
   only for wardynd's own image.
+- `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`: where every
+  sandbox pod goes (`WARDYN_K8S_SANDBOX_PLACEMENT`). The agent pod, the proxy pod and the boot-time canary all
+  take it; the top-level `nodeSelector`, `affinity` and `tolerations` place wardynd only. wardynd refuses to
+  boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any
+  `kubernetes.io/` or `k8s.io/` annotation or label except
+  `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
   resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
   a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each
   run's `wardyn-proxy` sidecar (500m/256Mi).
+- `runner.sandbox.requestRatio` (`WARDYN_SANDBOX_REQUEST_RATIO`): agent pod requests as a fraction of limits, in
+  (0, 1]; empty (default) keeps requests equal to limits. Below 1 the pod is Burstable and a pod over its memory
+  request is an eviction and OOM-kill candidate under node pressure. The proxy pod stays Guaranteed.
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass
   NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g.
   `--set k8s.runtimeClasses.CC2=gvisor`. Unlike Docker's well-known runtime
@@ -1116,7 +1131,8 @@ See `values.yaml` for all options. Key settings:
 - `image.repository` / `image.tag`: wardynd container image. The defaults
   resolve to a real image once `Chart.yaml`'s `appVersion` has been released
   (see the callout at the top) — override both for a locally built image or
-  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`.
+  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`. The
+  published `ghcr.io/cjohnstoniv/wardynd-fips` takes the same tags.
 - `image.pullSecrets`: list of `{name: ...}` pull secrets for a private registry
 - `ingress.*`: optional Ingress for the console, off by default — see
   [Console Ingress](#console-ingress) above.

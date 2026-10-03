@@ -358,7 +358,14 @@ forms, which no verbatim matcher catches.
   audit event. **The single-process case is not inert**: a `wardynd` restart
   (upgrade, crash) mid-run empties the same map, so a run whose secrets
   registered pre-restart and whose cast uploads post-restart hits the identical
-  empty-snapshot fail-open at `replicas: 1`.
+  empty-snapshot fail-open at `replicas: 1`. **0.8.6 closes the dispatch-time part:**
+  each run's secrets and Azure DevOps run token are committed to a sealed
+  per-run masking manifest before the sandbox starts, and the recording upload,
+  live attach, exec relay, SSH shell and live output read refuse (`503`
+  `mask_state_unavailable`) a run whose manifest they cannot prove complete. Still
+  open: values registered at injection time are memory-only, runs that predate
+  0.8.6 are refused rather than masked after a restart, and SSH exec, SFTP and
+  direct-tcpip are never masked.
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
@@ -1769,14 +1776,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     genuinely incomplete snapshot still reads as truncated downstream, never
     silently flipped to complete by the refresh itself.
 
-    What did NOT move: the table still carries `created_at`, `last_used_at`
-    and `revoked_at` and **no expiry column**, there is no TTL the way
-    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from a stale group snapshot — a
+    What did NOT move: unless the operator sets `WARDYN_ROLE_STAMP_TTL` (off by
+    default; it refuses a token whose stamp is older until its owner signs in
+    again) nothing bounds the stamp's age the way `WARDYN_SSH_ROLE_TTL` bounds a
+    key, and a human who never signs in again is re-stamped never. Since 0.8.6 a
+    token can end on a clock instead (`api_tokens.expires_at`, capped for new
+    tokens by `WARDYN_API_TOKEN_MAX_TTL`), but only one minted with a TTL or under
+    a cap: every earlier token, and every token on a deployment that sets no cap,
+    never expires. So a power that derives from a stale group snapshot — a
     capability grant or governance profile bound to a group they have left, or
     an admin/`security_admin` role they were demoted out of — survives exactly
-    until that human's next login, and for someone who has left the
-    organization and will never sign in again, that is indefinitely. Since 0.7
+    until that human's next login or the token's expiry, and for someone who has
+    left the organization and will never sign in again, that is indefinitely
+    for a token with no expiry. Since 0.7
     stamps `security_admin` verbatim, a human demoted out of that tier keeps —
     through any token minted while they held it, until their next sign-in or an
     explicit revoke — profile authoring and assignment, capability-grant
@@ -1829,11 +1841,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
-    change that must take effect before that human's next login — must revoke
-    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
-    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
-    narrows for the SSH lane; none is built for tokens.
+    wrong. Unless `WARDYN_ROLE_STAMP_TTL` is set, nothing ages a token out short of
+    a sign-in, so offboarding — or any change that must take effect before that
+    human's next login — must revoke explicitly (`docs/OPERATIONS.md`, "Per-user
+    API tokens"). The TTL bounds the stamp's age, not its freshness: a demotion made
+    only at the IdP still waits for the TTL or the next sign-in, and Wardyn holds no
+    IdP credential to re-derive a role sooner.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
@@ -2098,9 +2111,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     Crypto Officer alike — and the vault dedicated to Wardyn is load-bearing,
     not hygiene. Crypto Officer is a full-trust role: it can also import a
     signing-key version whose private key it holds, rotate and disable keys.
-    **Boot keys and credentials share one Entra identity and one key pair**: a
-    leaked identity token, or the vault's crypto operators, can unwrap both and
-    sign (so forge) both; there is no platform split like Transit's.
+    **By default boot keys and credentials share one Entra identity and one key
+    pair**: a leaked identity token, or the vault's crypto operators, can unwrap
+    both and sign (so forge) both. The platform split
+    (`WARDYN_AZURE_KEK_KEY_PLATFORM`, residual 49(d)) gives the boot keys a pair
+    and an identity of their own.
     **One key pair per deployment:** the bind names the vault host and both key
     names but not the install, so two Wardyn databases on the same vault and
     key names accept each other's rows for the same `(owned_by, name)` — (a)'s
@@ -2195,6 +2210,33 @@ hiding them would repeat the failure mode we are designed to avoid.
     database alone is pass one wrap off as another's: each wrap's
     `associated_data` binds `kek_id`, owner and name, so a wrap moved to another
     row, or to the other key, does not unwrap.
+    (d) **Key Vault mode** (`WARDYN_KEK=azurekv`): with ONE key pair and ONE
+    Entra identity, that identity's token (or the vault's crypto operators)
+    wraps, signs and unwraps the boot keys and the credentials alike, and `sign`
+    plants a boot key (residual 48(d)). The split mirrors Transit's:
+    `WARDYN_AZURE_KEK_KEY_PLATFORM` and `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM`
+    (chart `kek.azurekv.keyPlatform` and `kek.azurekv.signingKeyPlatform`) wrap
+    and sign the boot keys under a second pair that only a second Entra identity
+    (`WARDYN_AZURE_CLIENT_ID_PLATFORM`, chart `secretStore.azure.clientIdPlatform`)
+    reaches, and the first pair wraps the credentials. A leaked Entra access token
+    for the credential identity, with or without the database, then wraps, signs
+    and unwraps no boot key, and a serving wardynd opens no boot key that token
+    planted: it opens a boot key under the platform pair alone and refuses one
+    under the credential pair. Boot refuses a platform wrapping key, signing key
+    or client id that equals its credential counterpart, compared on the
+    normalised identity (lowercase vault host and key name; client ids
+    case-insensitively), so a spelling that differs only by case does not defeat
+    it. Adoption and retirement are (c)'s operator steps
+    (`-rewrap-adopt-boot-keys`, `-rewrap-retire-platform-key`), with the same
+    trust root: the operator's word. What the split does not do: under workload
+    identity both client ids exchange the same projected service-account token, so
+    it defends against a leaked Entra access token for the credential identity,
+    not against a leaked service-account token or a compromised wardynd process,
+    which reaches both; it holds only while the platform identity's role
+    assignment is scoped to the platform keys and the credential identity has none
+    on them, which Wardyn cannot check; and `sign` on the platform signing key
+    plants boot keys, so the platform identity, and any Key Vault role that grants
+    `sign` on those keys, is credential-equivalent.
 
 50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`

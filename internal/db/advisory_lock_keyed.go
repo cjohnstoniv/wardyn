@@ -38,6 +38,11 @@ const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
 // inserts serialize, so the per-run cap it counts is the cap it enforces.
 const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 
+// RunCapLockClass is the classid of the TRANSACTION-scoped two-argument lock
+// store.PG.CreateRunUnderCap takes (second key 0): one capped run insert at a
+// time across replicas, so the count it checks is the cap it enforces.
+const RunCapLockClass int32 = 0x57525243 // ASCII "WRRC"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

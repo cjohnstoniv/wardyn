@@ -72,7 +72,20 @@ func TestPG_ModelProviderConversion_OutputPassesTheWriteDoors(t *testing.T) {
 			if _, err := pool.Exec(ctx, `INSERT INTO site_config (config) VALUES ($1)`, doc); err != nil {
 				t.Fatalf("seed site_config: %v", err)
 			}
-			if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			// 0100 predates audit_append and writes its audit rows with a direct INSERT, which the
+			// partitioned table refuses. It runs here on one connection with a temporary table standing in
+			// for audit_events: what is under test is the document it writes, not those rows.
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Release()
+			if _, err := conn.Exec(ctx, `CREATE TEMP TABLE audit_events (id uuid, run_id uuid, actor_type text, actor text,
+				action text, target text, outcome text, data jsonb)`); err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Exec(context.Background(), `DROP TABLE IF EXISTS pg_temp.audit_events`) //nolint:errcheck
+			if _, err := conn.Exec(ctx, string(migration)); err != nil {
 				t.Fatalf("run the conversion: %v", err)
 			}
 			var raw []byte

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -353,13 +354,16 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonIntegrationInvalid, "invalid integration: "+err.Error())
 		return
 	}
-	ctx := r.Context()
 	// SEAM-1: serializes this read-modify-write against the site config's
 	// other two writers (handleDeleteIntegration, handlePutSiteConfig) — see
 	// handlePutIntegration's own SEAM-1 comment for why an
 	// unguarded RMW here can silently erase a concurrent one.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
+	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
@@ -419,10 +423,13 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 //	DELETE /api/v1/integrations/{id}
 func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request) {
 	id := integrationIDParam(r)
-	ctx := r.Context()
 	// SEAM-1: see handlePutIntegration's comment.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
+	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)

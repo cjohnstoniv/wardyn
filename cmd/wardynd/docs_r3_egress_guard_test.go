@@ -79,8 +79,8 @@ func TestApprovalScopeIsDocumentedAsPortWide(t *testing.T) {
 		"If a host\nmust not be reachable on its other ports, deny it (`denied_domains`)",
 	)
 	// The escape hatch the corrected remedy names must actually exist.
-	if !strings.Contains(readSrc(t, "internal", "egress", "proxy", "policy.go"), "func classifyDomain(d string) (exact, wild string, port int)") {
-		t.Error("classifyDomain's port qualifier is gone — POLICIES.md's corrected remedy (port-qualify " +
+	if !strings.Contains(readSrc(t, "internal", "egress", "domainmatch", "domainmatch.go"), "func Classify(d string) (exact, wild string, port int)") {
+		t.Error("domainmatch.Classify's port qualifier is gone — POLICIES.md's corrected remedy (port-qualify " +
 			"the allowlist entry) would then name something that does not exist")
 	}
 }

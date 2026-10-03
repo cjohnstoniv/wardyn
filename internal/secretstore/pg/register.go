@@ -23,6 +23,7 @@ func init() {
 		}
 		// A key service alone (no age key) leaves local rows unreadable; wardynd refuses to boot while any exist.
 		s.withKEK(d)
+		s.initSubjects()
 		return s, nil
 	})
 }
@@ -45,6 +46,7 @@ func RegisterExternal(name string) {
 			}
 		}
 		s.withKEK(d)
+		s.initSubjects()
 		return s, nil
 	})
 }

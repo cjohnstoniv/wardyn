@@ -451,7 +451,7 @@ func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string, po
 			t.Fatal(err)
 		}
 		w := httptest.NewRecorder()
-		if _, ok := srv.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, path, nil), req, types.RunPolicySpec{}, nil); ok {
+		if _, ok := srv.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, path, nil), req, types.RunPolicySpec{}, nil, false); ok {
 			t.Fatal("an unreadable provider block admitted the run")
 		}
 		return w

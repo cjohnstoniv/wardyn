@@ -368,7 +368,7 @@ func TestOwnSecretNeverFallsBackToOperator(t *testing.T) {
 // a key still resolvable at the injection sink.
 func TestProviderSecretNamesReserved(t *testing.T) {
 	const uid = "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70"
-	for _, part := range []string{providerKeyPart, providerOAuthPart, providerSSOPart} {
+	for _, part := range []string{providerKeyPart, providerOAuthPart, providerSSOPart, providerEntraPart} {
 		name := providerSecretName(uid, part)
 		if !secretsAPIReserved(name) {
 			t.Errorf("%s is writable through the generic secrets API", name)

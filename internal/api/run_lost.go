@@ -89,7 +89,7 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	}
 	// The same ownership, for the instant between a revive's mark and its
 	// lock, and for a lease pass mid-stop: skip, and the next sweep decides.
-	unlock, locked := s.tryLockRunOp(run.ID)
+	ctx, unlock, locked := s.tryLockRunOp(ctx, run.ID)
 	if !locked {
 		return true
 	}

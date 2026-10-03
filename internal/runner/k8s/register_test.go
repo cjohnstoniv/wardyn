@@ -32,6 +32,19 @@ func TestBuildConfig_RecordFollowsDeps(t *testing.T) {
 	}
 }
 
+// TestBuildConfig_SandboxPlacementFromEnv: buildConfig carries WARDYN_K8S_SANDBOX_PLACEMENT through
+// to Config.SandboxPlacement verbatim.
+//
+// COUNTERFACTUAL: never read the env var in buildConfig and the "set" case goes red.
+func TestBuildConfig_SandboxPlacementFromEnv(t *testing.T) {
+	for _, want := range []string{"", `{"nodeSelector":{"pool":"sandbox"}}`} {
+		t.Setenv("WARDYN_K8S_SANDBOX_PLACEMENT", want)
+		if got := buildConfig(substrate.Deps{}).SandboxPlacement; got != want {
+			t.Errorf("SandboxPlacement = %q, want %q", got, want)
+		}
+	}
+}
+
 // TestBuildConfig_ImagePullSecretFromEnv is T-47 (#707): buildConfig — the
 // ONLY place init()'s registered "k8s" constructor builds a Config from —
 // must carry WARDYN_K8S_IMAGE_PULL_SECRET through to Config.ImagePullSecret

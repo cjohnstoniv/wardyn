@@ -484,6 +484,7 @@ func (s *Server) SweepRunSecrets(ctx context.Context) int {
 			continue
 		}
 		s.cfg.MaskRegistry.Evict(id)
+		s.forgetMaskManifest(id)
 		evicted++
 	}
 	return evicted
