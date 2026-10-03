@@ -251,13 +251,19 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// directly rather than through dispatchRun.
 	patKept, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	p.GitPATGrants = patKept
-	// Every git_pat grant id, not just the ones kept above: see brokeredPATGrantIDs.
-	brokeredPATIDs, err := s.brokeredPATGrantIDs(ctx, run.ID, p.PATBroker)
+	// The run's stored grants, read ONCE: the set of every git_pat grant id (see
+	// brokeredPATGrantIDs) and each winning grant's scope (dispatchPATGrants) both
+	// come from these rows.
+	grantRows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "list the run's grants: " + err.Error()})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its git_pat grants could not be read to keep their PATs out of the sandbox")
 		return
+	}
+	var brokeredPATIDs []uuid.UUID
+	if p.PATBroker {
+		brokeredPATIDs = patGrantIDsOf(grantRows)
 	}
 	droppedSSH, _ := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.drop", droppedSSH,
@@ -373,6 +379,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	injections = ado.injections
+	// A narrowed git_pat grant this run could not enforce refuses the run here
+	// (runs_dispatch_pat_scope.go).
+	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
+		return
+	}
 
 	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy
@@ -450,6 +461,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBFilled = diskFilled
+	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
+	// with each narrowed grant's scope read from its stored row.
+	patGrants, ok := s.scopedPATGrants(ctx, run, p, grantRows)
+	if !ok {
+		return
+	}
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
@@ -509,7 +526,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// p.GitPATGrants is the map dropBrokeredGrants already filtered above,
 			// not the caller's: a brokered forge's PAT is withheld from BOTH halves
 			// of dispatch or from neither.
-			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
+			PATGrants: patGrants,
 			// Every git_pat grant id of the run, which the proxy refuses at the
 			// raw mint relay (empty with the broker off).
 			BrokeredPATGrantIDs: brokeredPATIDs,
