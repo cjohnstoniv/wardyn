@@ -107,6 +107,34 @@ describe("R1 — one candidate: a static line, no picker (QC-1)", () => {
   });
 });
 
+describe("R1 — one candidate, not connected: the R3 line and its door render under the static line", () => {
+  it("bedrock_sso: names AWS and its button opens that provider's sign-in door", async () => {
+    const status = providerStatus([{ provider: bedrock, state: "not_configured" }]);
+    renderRail({
+      status,
+      modelProvider: { candidates: [bedrock], access: status.provider_access, selectedId: bedrock.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.NOT_SIGNED_IN("Bedrock (prod)"))).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+    const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
+    expect(dialog).toHaveTextContent(DOOR.FOR("Bedrock (prod)"));
+  });
+
+  it("anthropic_subscription: names Claude and its button opens the Claude door", async () => {
+    const status = providerStatus([{ provider: claude, state: "not_configured" }]);
+    renderRail({
+      status,
+      modelProvider: { candidates: [claude], access: status.provider_access, selectedId: claude.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE("Claude subscription"))).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE }));
+    const dialog = await screen.findByRole("dialog", { name: CLAUDE_DOOR.TITLE });
+    expect(dialog).toHaveTextContent(DOOR.FOR("Claude subscription"));
+  });
+});
+
 describe("R2/R6 — several candidates: a Select, each option stating what you provide (QC-2)", () => {
   it("R2: shows the preselected default's option text as the trigger's value", async () => {
     const status = providerStatus([

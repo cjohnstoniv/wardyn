@@ -122,6 +122,12 @@ func (s *govEscapeStore) CreateGrant(_ context.Context, g types.CredentialGrant)
 	return g, nil
 }
 
+// ListGrantsByRun reports no grants: CreateGrant above keeps none, and dispatch
+// reads the list for the run's git_pat ids (brokeredPATGrantIDs).
+func (s *govEscapeStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return nil, nil
+}
+
 func (s *govEscapeStore) CreateRun(_ context.Context, run types.AgentRun) (types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

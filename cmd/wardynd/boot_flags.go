@@ -239,6 +239,12 @@ type bootFlags struct {
 	harnessLoginCPUMillis *int
 	harnessLoginMemoryMiB *int
 
+	// sandboxDefault*/proxy* size the default sandbox and the wardyn-proxy sidecar: see runner.SetDefaultLimits/SetProxyLimits.
+	sandboxDefaultCPUMillis *int
+	sandboxDefaultMemoryMiB *int
+	proxyCPUMillis          *int
+	proxyMemoryMiB          *int
+
 	proxyURL *string
 
 	printGroundtruthToken *bool
@@ -255,6 +261,9 @@ type bootFlags struct {
 	migrateSecrets *bool
 	migrateTo      *string
 	reconcile      *bool
+	// migrateOnly is `wardynd -migrate-only` (migrate_only.go): no env pair, like
+	// the other modes, so a stray variable cannot turn every boot into a migration run.
+	migrateOnly *bool
 	// rewrap is `wardynd -rewrap` (rewrap.go): no env pair, like the above.
 	rewrap *bool
 	// rewrapRetirePlatformKey is `wardynd -rewrap -rewrap-retire-platform-key`:
@@ -467,8 +476,12 @@ func parseBootFlags() *bootFlags {
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on" or "off": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox, or write it into the sandbox directly. Applies to new dispatches only; an unrecognised value takes the default`),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
-		harnessLoginCPUMillis: flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
-		harnessLoginMemoryMiB: flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		harnessLoginCPUMillis:   flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		harnessLoginMemoryMiB:   flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		sandboxDefaultCPUMillis: flagIntEnv("sandbox-default-cpu-millis", "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS", 0, "milli-CPU limit for a sandbox whose policy sets none (default 0 = compiled-in 2000)"),
+		sandboxDefaultMemoryMiB: flagIntEnv("sandbox-default-memory-mib", "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB", 0, "memory limit (MiB) for a sandbox whose policy sets none (default 0 = compiled-in 4096)"),
+		proxyCPUMillis:          flagIntEnv("proxy-cpu-millis", "WARDYN_PROXY_CPU_MILLIS", 0, "milli-CPU limit for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 500)"),
+		proxyMemoryMiB:          flagIntEnv("proxy-memory-mib", "WARDYN_PROXY_MEMORY_MIB", 0, "memory limit (MiB) for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 256)"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
@@ -507,7 +520,10 @@ func parseBootFlags() *bootFlags {
 		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/operations/secrets-and-keys.md (default false)"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
-		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
+		migrateOnly: flag.Bool("migrate-only", false, "maintenance mode, every other wardynd must be stopped: run the schema migration alone on the connection that holds the single-instance lock, then exit without serving. "+
+			"Refuses (exit 3) while that lock is held or any other client is connected to the database; exit 1 when the migration fails. "+
+			"Connects with WARDYN_PG_MIGRATE_DSN when set, bounded by WARDYN_MIGRATE_TIMEOUT. See docs/OPERATIONS.md, \"Stopped-writer upgrade\" (default false)"),
+		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
 		rewrapRetirePlatformKey: flag.Bool("rewrap-retire-platform-key", false, "with -rewrap only: move the signing, session and SSH host keys off the "+
 			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
 			"WARDYN_KEK=transit key or the local key, then exit. Afterwards unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM. "+

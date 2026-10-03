@@ -253,3 +253,13 @@ extraVolumeMounts:
 # actually exists in a cluster.
 daemonProxySecret:
   existingSecret: wardyn-daemon-proxy
+
+# Sandbox sizing knobs (WARDYN_SANDBOX_DEFAULT_* / WARDYN_PROXY_*), set off the chart default so the render proves they reach the env.
+runner:
+  sandbox:
+    defaultResources:
+      cpuMillis: 1500
+      memoryMiB: 3072
+    proxyResources:
+      cpuMillis: 400
+      memoryMiB: 192

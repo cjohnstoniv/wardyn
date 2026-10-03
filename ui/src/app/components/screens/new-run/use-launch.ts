@@ -58,6 +58,18 @@ export interface UseLaunchResult {
   /** Whether preflightResult/preflightError are graded from the request buildRunInput would send RIGHT NOW. */
   preflightIsCurrent: boolean;
   preflight: () => Promise<void>;
+  /** The request Launch would send right now (null while the policy document
+   *  is unparseable) — the identity a click-armed relaunch is held to. */
+  currentBody: string | null;
+  /** Preflight's own model-credential refusal, apart from launch's: the body
+   *  it graded and the provider it names ("" when none). Its sign-in re-checks;
+   *  it never launches. */
+  preflightRefusal: PreflightRefusal | null;
+}
+
+export interface PreflightRefusal {
+  body: string;
+  provider: string;
 }
 
 // New Run's launch + preflight state and actions — split out of
@@ -90,6 +102,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
   const [preflightError, setPreflightError] = React.useState<string | null>(null);
   const [preflightErrorSeq, setPreflightErrorSeq] = React.useState(0);
+  const [preflightRefusal, setPreflightRefusal] = React.useState<PreflightRefusal | null>(null);
   // The request body the verdict on screen was graded FROM. A preflight result
   // is a statement about one body, and the rail renders it directly above
   // Launch as "the last thing read before committing" — so the moment the body
@@ -182,6 +195,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     if (useSaved && !state.selectedPolicyId) return;
     setPreflightError(null);
     setPreflightResult(null);
+    setPreflightRefusal(null);
     setPreflightedBody(null);
     setPreflighting(true);
     // Grade the body we actually send, and remember exactly that one.
@@ -194,6 +208,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
       // that repeats it read "Preflight failed Preflight failed." (#497).
       setPreflightError(getErrorMessage(e) || "No reason was given.");
       setPreflightErrorSeq((n) => n + 1);
+      if (isCredentialRefusal(e)) setPreflightRefusal({ body: key, provider: e instanceof HttpError ? e.provider : "" });
     } finally {
       setPreflightedBody(key);
       setPreflighting(false);
@@ -215,5 +230,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     preflightErrorSeq,
     preflightIsCurrent,
     preflight,
+    currentBody,
+    preflightRefusal,
   };
 }

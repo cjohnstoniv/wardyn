@@ -101,6 +101,14 @@ type Config struct {
 	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
 	// confinement the credential does not have. Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
+	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT
+	// broker is on. handleBrokerMint refuses a sandbox-supplied mint naming one:
+	// PATGrants is keyed per host and narrowed (a shadowed, vetoed or withheld
+	// grant is absent from it), but each of those is still a stored PAT this
+	// run's token could mint raw through the relay. Empty with the broker off.
+	// An older proxy image refuses this key at start (strict decode), so the
+	// proxy image is upgraded with wardynd.
+	BrokeredPATGrantIDs []uuid.UUID `json:"brokered_pat_grant_ids,omitempty"`
 	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
 	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
 	// per sidecar: the gate is keyed by host, and every organisation shares

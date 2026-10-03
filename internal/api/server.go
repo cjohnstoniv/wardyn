@@ -439,6 +439,8 @@ type Config struct {
 	SecretStoreExternal string
 	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
 	SecretKeyService string
+	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
+	KEKRequired bool
 	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.

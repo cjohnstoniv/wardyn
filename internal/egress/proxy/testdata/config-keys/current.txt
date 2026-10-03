@@ -6,6 +6,7 @@ ado_grants
 ado_grants.capabilities
 ado_grants.hosts
 ado_grants.organization
+brokered_pat_grant_ids
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size

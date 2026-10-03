@@ -25,7 +25,7 @@ import (
 )
 
 // maintenanceMode runs the one-shot maintenance mode the flags select, if any
-// (-rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
+// (-migrate-only, -rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
 // one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
 	if *f.rewrapRetirePlatformKey && !*f.rewrap {
@@ -33,6 +33,12 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 	}
 	if *f.rewrapAdoptBootKeys && !*f.rewrap {
 		return true, fmt.Errorf("refusing to run: -rewrap-adopt-boot-keys is a mode of -rewrap; run `wardynd -rewrap -rewrap-adopt-boot-keys`")
+	}
+	if *f.migrateOnly {
+		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile {
+			return true, fmt.Errorf("refusing to run: -migrate-only is a mode of its own; run it without -rotate-age-key, -rewrap, -migrate-secrets or -reconcile")
+		}
+		return true, migrateOnlyMode(f)
 	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)

@@ -18,7 +18,7 @@ import (
 func TestClamp_PushRulesPassesThroughUnderSilentCeiling(t *testing.T) {
 	ceiling := operatorCeiling(t) // sets no push_rules opinion
 
-	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if got.PushRules != nil {
 		t.Errorf("push_rules = %+v, want nil (ceiling sets none)", got.PushRules)
 	}
@@ -27,7 +27,7 @@ func TestClamp_PushRulesPassesThroughUnderSilentCeiling(t *testing.T) {
 	}
 
 	proposed := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 4}}
-	got, warns = Clamp(proposed, ceiling, 0)
+	got, warns = Clamp(proposed, ceiling, types.GovernanceLimits{})
 	if got.PushRules == nil || got.PushRules.MaxInspectPackMiB != 4 || len(got.PushRules.DenyPaths) != 1 || got.PushRules.DenyPaths[0] != ".github/workflows/**" {
 		t.Errorf("push_rules = %+v, want the proposal's own rules untouched", got.PushRules)
 	}
@@ -43,7 +43,7 @@ func TestClamp_PushRulesInheritedWholesaleWhenProposalUnset(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 8}
 
-	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if got.PushRules == nil || got.PushRules.MaxInspectPackMiB != 8 || len(got.PushRules.DenyPaths) != 1 || got.PushRules.DenyPaths[0] != ".github/workflows/**" {
 		t.Errorf("push_rules = %+v, want the ceiling's rules inherited wholesale", got.PushRules)
 	}
@@ -67,7 +67,7 @@ func TestClamp_PushRulesMergedWhenBothSet(t *testing.T) {
 	ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 8}
 
 	proposed := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{"infra/**"}, MaxInspectPackMiB: 32}}
-	got, warns := Clamp(proposed, ceiling, 0)
+	got, warns := Clamp(proposed, ceiling, types.GovernanceLimits{})
 	if got.PushRules == nil {
 		t.Fatal("push_rules = nil, want the merged spec")
 	}
@@ -89,7 +89,7 @@ func TestClamp_PushRulesMergedWhenBothSet(t *testing.T) {
 
 	// A proposal already under the ceiling's max keeps its own (smaller) value.
 	proposed.PushRules.MaxInspectPackMiB = 2
-	got, _ = Clamp(proposed, ceiling, 0)
+	got, _ = Clamp(proposed, ceiling, types.GovernanceLimits{})
 	if got.PushRules.MaxInspectPackMiB != 2 {
 		t.Errorf("max_inspect_pack_mib = %d, want the proposal's own stricter 2 left alone", got.PushRules.MaxInspectPackMiB)
 	}
@@ -109,7 +109,7 @@ func TestClamp_PushRulesDenyPathsUnionIsCaseSensitive(t *testing.T) {
 	ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
 
 	proposed := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{".GitHub/workflows/**"}}}
-	got, _ := Clamp(proposed, ceiling, 0)
+	got, _ := Clamp(proposed, ceiling, types.GovernanceLimits{})
 	if got.PushRules == nil {
 		t.Fatal("push_rules = nil, want the merged spec")
 	}
@@ -141,7 +141,7 @@ func TestClamp_PushRulesEmptyCeilingSpecReadsAsAbsent(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.PushRules = &types.PushRulesSpec{} // present, but nothing in it
 
-	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if got.PushRules != nil {
 		t.Errorf("push_rules = %+v, want nil (an all-zero ceiling spec is absent)", got.PushRules)
 	}
@@ -188,7 +188,7 @@ func TestClamp_PushRulesReviewPathsAndHold(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ceiling := operatorCeiling(t)
 			ceiling.PushRules = c.ceiling
-			got, _ := Clamp(types.RunPolicySpec{PushRules: c.proposal}, ceiling, 0)
+			got, _ := Clamp(types.RunPolicySpec{PushRules: c.proposal}, ceiling, types.GovernanceLimits{})
 			if got.PushRules == nil {
 				t.Fatal("push_rules = nil, want the clamped spec")
 			}
@@ -204,7 +204,7 @@ func TestClamp_PushRulesReviewPathsAndHold(t *testing.T) {
 	// The inherited copy must not alias the ceiling's review list.
 	ceiling := operatorCeiling(t)
 	ceiling.PushRules = &types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}}
-	got, _ := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, _ := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	got.PushRules.RequireReviewPaths[0] = "mutated"
 	if ceiling.PushRules.RequireReviewPaths[0] != "a/**" {
 		t.Error("clamp aliased the ceiling's own PushRules.RequireReviewPaths backing array")
@@ -228,7 +228,7 @@ func TestClamp_PushRulesFileSizeCapsLikeACeiling(t *testing.T) {
 		{"no proposal rules inherits the ceiling's", nil, 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := Clamp(types.RunPolicySpec{PushRules: tc.proposed}, ceiling, 0)
+			got, _ := Clamp(types.RunPolicySpec{PushRules: tc.proposed}, ceiling, types.GovernanceLimits{})
 			if got.PushRules == nil || got.PushRules.MaxFileSizeMiB != tc.want {
 				t.Errorf("push_rules = %+v, want max_file_size_mib %d", got.PushRules, tc.want)
 			}
@@ -236,7 +236,7 @@ func TestClamp_PushRulesFileSizeCapsLikeACeiling(t *testing.T) {
 	}
 
 	// A silent ceiling leaves the proposal's own limit alone.
-	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 50}}, operatorCeiling(t), 0)
+	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 50}}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.PushRules == nil || got.PushRules.MaxFileSizeMiB != 50 {
 		t.Errorf("push_rules = %+v, want the proposal's own 50 untouched", got.PushRules)
 	}
@@ -254,7 +254,7 @@ func TestClamp_PushRulesDenyNewExecutablesCannotBeTurnedOff(t *testing.T) {
 		"proposal sets it itself": {DenyNewExecutables: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, _ := Clamp(types.RunPolicySpec{PushRules: proposed}, ceiling, 0)
+			got, _ := Clamp(types.RunPolicySpec{PushRules: proposed}, ceiling, types.GovernanceLimits{})
 			if got.PushRules == nil || !got.PushRules.DenyNewExecutables {
 				t.Errorf("push_rules = %+v, want deny_new_executables kept on", got.PushRules)
 			}
@@ -262,7 +262,7 @@ func TestClamp_PushRulesDenyNewExecutablesCannotBeTurnedOff(t *testing.T) {
 	}
 
 	// A silent ceiling leaves a proposal's own value alone.
-	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyNewExecutables: true}}, operatorCeiling(t), 0)
+	got, _ := Clamp(types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyNewExecutables: true}}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.PushRules == nil || !got.PushRules.DenyNewExecutables {
 		t.Errorf("push_rules = %+v, want the proposal's own true untouched", got.PushRules)
 	}

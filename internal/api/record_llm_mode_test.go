@@ -23,6 +23,13 @@ import (
 // state — so dispatchRun runs its FULL body (through resolveLLMInjections) and
 // this test can observe what launchRecordRun ultimately persists as the
 // session's llm_mode/model, not just its pre-dispatch guess.
+// ListGrantsByRun is the grants dispatch wrote, which brokeredPATGrantIDs reads.
+func (s *recordLLMModeStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]types.CredentialGrant(nil), s.grants...), nil
+}
+
 type recordLLMModeStore struct {
 	store.Store
 	mu      sync.Mutex

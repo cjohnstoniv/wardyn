@@ -135,20 +135,28 @@ func AuditChainLockTimeoutSQL() string {
 // release, so the caller's own queries need a second conn — requires
 // pool_max_conns >= 2 (a 1-conn pool self-deadlocks).
 func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (release func(), ok bool, err error) {
-	conn, err := pool.Acquire(ctx)
+	_, release, ok, err = TryAdvisoryLockConn(ctx, pool, key)
+	return release, ok, err
+}
+
+// TryAdvisoryLockConn is TryAdvisoryLock that also hands back the connection holding the lock, for
+// the caller that must run its own statements on that same session (wardynd -migrate-only). The
+// conn is only valid until release is called; the caller must not Release it itself.
+func TryAdvisoryLockConn(ctx context.Context, pool *pgxpool.Pool, key int64) (conn *pgxpool.Conn, release func(), ok bool, err error) {
+	conn, err = pool.Acquire(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("db: acquire advisory lock conn: %w", err)
+		return nil, nil, false, fmt.Errorf("db: acquire advisory lock conn: %w", err)
 	}
 	var got bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
 		conn.Release()
-		return nil, false, fmt.Errorf("db: try advisory lock: %w", err)
+		return nil, nil, false, fmt.Errorf("db: try advisory lock: %w", err)
 	}
 	if !got {
 		conn.Release()
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
-	return func() {
+	return conn, func() {
 		// Background context: ctx is typically cancelled at shutdown, exactly
 		// when releasing matters most. Best-effort — lock also dies with the
 		// session when the conn closes.

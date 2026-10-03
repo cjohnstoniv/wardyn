@@ -187,6 +187,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
+		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ADOGrant:             pc.ADOGrant,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,

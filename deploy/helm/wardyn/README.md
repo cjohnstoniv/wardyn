@@ -91,7 +91,7 @@ install.
 ## Prerequisites
 
 Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a
-NetworkPolicy-enforcing CNI, and Postgres 12+.** Everything else the control
+NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control
 plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets
 wiring) is rendered by this chart. In detail:
 
@@ -107,7 +107,7 @@ wiring) is rendered by this chart. In detail:
   SEPARATE trap below (an ambient default-deny already present in
   `k8s.runsNamespace`), and only when the canary pod actually ran and could
   not connect.
-- **Postgres 12+** (external or managed).
+- **Postgres 13+** (external or managed).
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
   own** (see below) for a fork, a private registry, or an unreleased change.
@@ -523,6 +523,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate
   creates (agent, proxy, canary) — separate from `image.pullSecrets`, which is
   only for wardynd's own image.
+- `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
+  resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
+  a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each
+  run's `wardyn-proxy` sidecar (500m/256Mi).
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass
   NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g.
   `--set k8s.runtimeClasses.CC2=gvisor`. Unlike Docker's well-known runtime

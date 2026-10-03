@@ -53,6 +53,26 @@ env doesn't already set it), basePath otherwise. Same precedence both places,
 so the probes and the daemon can never disagree. */ -}}
 {{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
 {{- /*
+startupProbe budget: wardynd's /healthz binds only after its fixed 30s connect and its migration
+(WARDYN_MIGRATE_TIMEOUT, default 5m) finish, so the probe window must outlast both or the kubelet
+kills the pod mid-migration. The timeout is read the way the container gets it: an extraEnv entry
+(rendered later, so it wins) over env, else wardynd's own 5m. Only h, m and s units are accepted, so
+the sum is exact; a spelling this cannot read fails the render rather than guessing a window.
+failureThreshold = (30s connect + migrate + 120s slack) / the 5s probe period, rounded up; the default 5m gives 90.
+*/ -}}
+{{- $migrateTimeout := (get .Values.env "WARDYN_MIGRATE_TIMEOUT") | default "5m" | toString -}}
+{{- range .Values.extraEnv }}{{ if and (eq (.name | toString) "WARDYN_MIGRATE_TIMEOUT") .value }}{{ $migrateTimeout = .value | toString }}{{ end }}{{ end -}}
+{{- if not (regexMatch `^([0-9]+(\.[0-9]+)?[hms])+$` $migrateTimeout) -}}
+{{- fail (printf "wardyn: WARDYN_MIGRATE_TIMEOUT %q is not readable by the chart; spell it with h, m and s only, e.g. 5m, 90s or 1h30m, so the startupProbe window can follow it" $migrateTimeout) -}}
+{{- end -}}
+{{- $migrateSeconds := 0.0 -}}
+{{- range regexFindAll `[0-9]+(\.[0-9]+)?[hms]` $migrateTimeout -1 -}}
+{{- $n := float64 (regexFind `^[0-9.]+` .) -}}
+{{- $unit := regexFind `[hms]$` . -}}
+{{- if eq $unit "h" }}{{ $migrateSeconds = addf $migrateSeconds (mulf $n 3600.0) }}{{ else if eq $unit "m" }}{{ $migrateSeconds = addf $migrateSeconds (mulf $n 60.0) }}{{ else }}{{ $migrateSeconds = addf $migrateSeconds $n }}{{ end -}}
+{{- end -}}
+{{- $startupFailureThreshold := int (ceil (divf (addf $migrateSeconds 150.0) 5.0)) -}}
+{{- /*
 secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
 age key) are projected into ONE read-only volume and wardynd gets
 WARDYN_*_FILE paths instead of secretKeyRef env (cmd/wardynd resolveSecretFiles).
@@ -322,6 +342,10 @@ spec:
             {{- end }}
             {{- end }}
             {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- if ($.Values.kek | default dict).required }}
+            - name: WARDYN_KEK_REQUIRED
+              value: "true"
+            {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key
@@ -458,6 +482,22 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- if not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS") }}
+            - name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS
+              value: {{ .Values.runner.sandbox.defaultResources.cpuMillis | quote }}
+            {{- end }}
+            {{- if not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB") }}
+            - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
+              value: {{ .Values.runner.sandbox.defaultResources.memoryMiB | quote }}
+            {{- end }}
+            {{- if not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS") }}
+            - name: WARDYN_PROXY_CPU_MILLIS
+              value: {{ .Values.runner.sandbox.proxyResources.cpuMillis | quote }}
+            {{- end }}
+            {{- if not (hasKey .Values.env "WARDYN_PROXY_MEMORY_MIB") }}
+            - name: WARDYN_PROXY_MEMORY_MIB
+              value: {{ .Values.runner.sandbox.proxyResources.memoryMiB | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of
@@ -570,7 +610,8 @@ spec:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
             periodSeconds: 5
-            failureThreshold: 90
+            # 5s periods over 30s connect + WARDYN_MIGRATE_TIMEOUT + 120s slack (see $startupFailureThreshold).
+            failureThreshold: {{ $startupFailureThreshold }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

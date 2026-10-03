@@ -8,6 +8,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
+  refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
+  the database server first. Take a dump before this upgrade: the audit conversion that follows in this
+  release is one-way.
+- **`wardynd -migrate-only`** runs the schema migration alone and exits, for an upgrade that must run under
+  stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
+  client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
+  in `docs/OPERATIONS.md`.
+- The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
+  slack). A value spelled with anything but `h`, `m` and `s` fails the render.
+- **Chart installs get a smaller default sandbox (1000m CPU, 2048 MiB).** A run whose policy sets no
+  resources used to get 2000m/4096Mi; the Helm chart now ships `runner.sandbox.defaultResources` at
+  1000m/2048Mi so a run fits a shared node. Set `runner.sandbox.defaultResources.cpuMillis=2000` and
+  `memoryMiB=4096` to keep the old size. A daemon with no knob (Docker Compose) keeps 2000m/4096Mi.
+  The default is read from `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`, and the
+  proxy sidecar's envelope from `WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`. The Docker proxy sidecar
+  now also carries the 500m CPU limit the Kubernetes one already had.
+  With no resources in the operator's governance ceiling, the default is also the cap on member-authored
+  policy and profile resources, so requests above 1000m/2048Mi are cut on chart installs; to allow larger
+  requests, set the knob back to 2000/4096 or set ceiling resources.
+- **A profile that omits `resources` now gets the deployment's size.** Members under such a profile used
+  to get the platform's 2000m/4096Mi; a profile that omits `resources`, or leaves a field zero, now
+  inherits the default policy's value, else the deployment default above. A profile that sets a size
+  keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
+  unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+
+### Security
+
+- **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
+  now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
+  same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
+  image together with wardynd: an older proxy refuses the new `brokered_pat_grant_ids` config key at start.
+
 ## [0.8.5] — 2026-10-02
 
 ### Before you upgrade

@@ -195,6 +195,9 @@ Go's cryptographic module) with HKDF-SHA256 key derivation. Go's FIPS
 140-3 mode (`GODEBUG=fips140=on`) applies to it, and with the Go version
 in `go.mod` the envelope also runs under `GODEBUG=fips140=only`.
 
+Wardyn holds no FIPS 140-3 certification, and no Wardyn build pins a
+validated module snapshot yet.
+
 That's a statement about this path only: the build does not pin a frozen
 module snapshot (`GOFIPS140`), and age (used once, to convert
 pre-envelope rows) is outside it. The `local` key's id is taken over the
@@ -377,9 +380,11 @@ every unwrap is one Transit `decrypt` in your Vault audit device.
 - The database alone decrypts nothing; neither does the database plus
   anything on the Wardyn host, once no row is sealed under the age key
   and `WARDYN_AGE_KEY` is unset.
-- Wardyn's boot keys are wrapped the same way, under the same Transit
-  key, so **do not restart wardynd during a Vault outage** — it will
-  wait for Vault rather than boot.
+- Wardyn's boot keys are wrapped by Vault too: under the same Transit
+  key by default, or under their own key and role when
+  `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is set (see the platform split
+  below). Either way, **do not restart wardynd during a Vault outage** —
+  it will wait for Vault rather than boot.
 - (If your organisation wants Vault to hold the values themselves, not a
   key, that is store mode, below.)
 
@@ -400,9 +405,14 @@ transit/keys/wardyn` shows them).
 - The first two cannot be turned back off once set, and either lets the
   key leave Vault.
 - The third keeps one command from destroying every stored credential.
-- One Transit key and one Vault role wrap Wardyn's boot keys and the
-  credentials alike; a separate key and role for the boot keys is a
-  0.8.x follow-up (`threatmodel/THREAT-MODEL.md` residual #49).
+- By default one Transit key and one Vault role wrap Wardyn's boot keys and
+  the credentials alike. Set `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` (a second
+  key on the same mount) and `WARDYN_VAULT_ROLE_PLATFORM` (a second Vault
+  role, Kubernetes auth) to wrap the boot keys separately, so a token that
+  reaches the credential key never reaches them. `WARDYN_VAULT_TRANSIT_KEY`
+  then wraps only the credentials, and
+  `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto the
+  new key, once (`threatmodel/THREAT-MODEL.md` residual 49(c)).
 
 **Policy.** Two paths, `update` only. Wardyn never calls `rewrap/` (Vault does
 not document `associated_data` on it, so `wardynd -rewrap` rewraps client-side)
@@ -437,6 +447,11 @@ that works, or the probe does not round-trip, **wardynd refuses to start**.
 4. Unset `WARDYN_AGE_KEY` and restart. wardynd refuses to start until you
    do (and, the other way, refuses without it, naming `-rewrap`, while
    any row is still sealed under it).
+
+**Requiring it.** A deployment that mandates key custody sets
+`WARDYN_KEK_REQUIRED` (chart `kek.required`). wardynd then refuses to start while
+the local key wraps credentials, with or without `WARDYN_AGE_KEY`, and
+`wardynd -rewrap` still runs.
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep
 `WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and

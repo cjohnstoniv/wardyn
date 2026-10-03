@@ -79,13 +79,25 @@ func MigrateAllowingUnknown(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, allowUnknown bool) error {
-	// Serialize concurrent boots: a session-level advisory lock on a SINGLE dedicated pooled
-	// connection (lock + unlock must hit the same session) so a second wardynd blocks here.
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("db: acquire migration lock conn: %w", err)
 	}
 	defer conn.Release()
+	return migrateConn(ctx, conn, allowUnknown)
+}
+
+// MigrateConn is Migrate on a connection the caller already holds, for the one caller that must
+// keep every statement of the migration on the session that owns a lock it took first
+// (wardynd -migrate-only). Same refusals and the same migration lock as Migrate; the caller still
+// owns conn and releases it.
+func MigrateConn(ctx context.Context, conn *pgxpool.Conn) error {
+	return migrateConn(ctx, conn, false)
+}
+
+func migrateConn(ctx context.Context, conn *pgxpool.Conn, allowUnknown bool) error {
+	// Serialize concurrent boots: a session-level advisory lock on a SINGLE dedicated pooled
+	// connection (lock + unlock must hit the same session) so a second wardynd blocks here.
 	// Registered BEFORE acquiring, on a background context, so the lock releases even if ctx is
 	// cancelled at the instant the server grants it; unlocking a non-held lock is a harmless no-op.
 	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrateAdvisoryLockKey) //nolint:errcheck // best-effort release
