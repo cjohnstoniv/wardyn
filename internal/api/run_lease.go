@@ -278,7 +278,7 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 	if terminal.IsTerminal() {
 		s.metrics.runTerminal(terminal)
 	}
-	s.finalizeRunTail(ctx, run.ID, run.SandboxRef, action, "success", data)
+	s.finalizeRunTailOrdered(ctx, run.ID, run.SandboxRef, action, "success", data, false, terminal == types.RunStopped)
 }
 
 // revokeRunBroker is revokeRunCascade's broker half alone, for the end: a kept

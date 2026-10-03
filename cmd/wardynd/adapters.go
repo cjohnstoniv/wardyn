@@ -597,7 +597,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, updated_at, auto_stop_after_sec, now()
+		SELECT id, created_at, updated_at, auto_stop_after_sec, now()
 		FROM agent_runs
 		WHERE state = $1 AND lost_at IS NULL`
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
@@ -610,7 +610,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	var dbNow time.Time
 	for rows.Next() {
 		var s lifecycle.RunSummary
-		if err := rows.Scan(&s.ID, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &dbNow); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		out = append(out, s)
@@ -723,6 +723,9 @@ type lifecycleStopper struct {
 	// FinishRunOutput), reached through the server rather than copied here.
 	// Nil-safe, like cancelApprovals.
 	finishOutput func(context.Context, uuid.UUID)
+	// snapshotPane is api.Server's SnapshotRunPane: an interactive run's pane
+	// snapshot, taken after the revocations and before StopSandbox. Nil-safe.
+	snapshotPane func(context.Context, uuid.UUID)
 }
 
 // runRevoker is the minimal revocation surface the idle reaper needs so a run
@@ -736,6 +739,21 @@ type runRevoker interface {
 var _ lifecycle.Stopper = lifecycleStopper{}
 
 func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (lifecycle.StopOutcome, error) {
+	return l.stop(ctx, runID, func() (bool, error) {
+		return store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
+	})
+}
+
+// StopRunMaxAge is StopRun for a run past WARDYN_RUN_MAX_AGE: the same teardown
+// and revocation, behind a transition guarded on the run's age alone.
+func (l lifecycleStopper) StopRunMaxAge(ctx context.Context, runID uuid.UUID, createdNotAfter time.Time) (lifecycle.StopOutcome, error) {
+	return l.stop(ctx, runID, func() (bool, error) {
+		return store.NewPG(l.pool).UpdateRunStateIfCreatedBefore(ctx, runID, types.RunRunning, types.RunStopped, createdNotAfter)
+	})
+}
+
+// stop wins transition (a guarded RUNNING->STOPPED), then tears down and revokes.
+func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition func() (bool, error)) (lifecycle.StopOutcome, error) {
 	run, err := store.NewPG(l.pool).GetRun(ctx, runID)
 	if err != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle get run: %w", err)
@@ -749,7 +767,7 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or
 	// an open request is still inside its wait (store.openHoldSQL), the CAS also
 	// no-ops and we leave the run and any teardown/revocation untouched.
-	applied, uerr := store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
+	applied, uerr := transition()
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
 	}
@@ -778,15 +796,9 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 		l.cancelApprovals(ctx, runID)
 	}
 	errs := map[string]string{}
-	if l.runner != nil && run.SandboxRef != "" {
-		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
-			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
-				slog.String("run_id", runID.String()),
-				slog.Any("err", serr),
-			)
-			errs["teardown_error"] = serr.Error()
-		}
-	}
+	// Revocations BEFORE the teardown, so the pane snapshot's seconds never
+	// extend a live credential: finalizeRunTail's order (revoke, snapshot,
+	// StopSandbox, finish). The CAS above still decides first whether any of it runs.
 	if l.identity != nil {
 		if rerr := l.identity.RevokeRun(ctx, runID); rerr != nil {
 			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop identity revoke FAILED -- run token may still be usable",
@@ -803,6 +815,18 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 				slog.Any("err", rerr),
 			)
 			errs["broker_error"] = rerr.Error()
+		}
+	}
+	if l.snapshotPane != nil {
+		l.snapshotPane(ctx, runID)
+	}
+	if l.runner != nil && run.SandboxRef != "" {
+		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
+			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
+				slog.String("run_id", runID.String()),
+				slog.Any("err", serr),
+			)
+			errs["teardown_error"] = serr.Error()
 		}
 	}
 	if l.finishOutput != nil {

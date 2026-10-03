@@ -320,12 +320,46 @@ func TestRunOutputPG_GapNeverOverwritesAFinalRow(t *testing.T) {
 	a.srv.FinishRunOutput(t.Context(), run.ID)
 
 	b := l.replica() // no tail: finalising writes a gap, which must not touch the final row
-	b.srv.prepareRunOutput(t.Context(), run.ID)
+	b.srv.prepareRunOutput(t.Context(), run.ID, false)
 	raw, final := l.storedOutput(run.ID)
 	if !final || string(raw) != "real bytes\n" {
 		t.Fatalf("row %q final=%v after a gap attempt, want the real bytes", raw, final)
 	}
 	if n := l.count(`SELECT count(*) FROM run_outputs WHERE run_id=$1 AND capture_gap`, run.ID); n != 0 {
 		t.Fatal("a gap flag landed on a final row")
+	}
+}
+
+// An idle-stopped interactive run has a pane_snapshot row in Postgres in which a
+// secret shown in the pane is absent, read with SQL; the covered manifest gives
+// the row its scope, and the audit row carries no pane content.
+func TestRunOutputPG_PaneSnapshotIsMaskedInTheColumn(t *testing.T) {
+	l := newMaskLab(t)
+	a := l.replica()
+	run := l.run()
+	a.dispatch(t, run, "pane-secret-value-123")
+	if _, err := l.pool.Exec(t.Context(), `UPDATE agent_runs SET interactive = true WHERE id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.srv.cfg.Runner = &paneRunner{
+		outputRunner: &outputRunner{fakeRunner: &fakeRunner{}}, o: &orderLog{},
+		pane: textPane("$ echo pane-secret-value-123\npane-secret-value-123\n$ ", 0),
+	}
+
+	a.srv.SnapshotRunPane(t.Context(), run.ID)
+	a.srv.FinishRunOutput(t.Context(), run.ID)
+
+	var out []byte
+	var source, scope string
+	if err := l.pool.QueryRow(t.Context(),
+		`SELECT output, source, mask_scope FROM run_outputs WHERE run_id=$1 AND captured_at IS NOT NULL`, run.ID).Scan(&out, &source, &scope); err != nil {
+		t.Fatalf("read the snapshot row: %v", err)
+	}
+	if want := "$ echo <secret-hidden>\n<secret-hidden>\n$ "; source != "pane_snapshot" || string(out) != want || scope != "run" {
+		t.Fatalf("row = %q source %q scope %q, want %q pane_snapshot run", out, source, scope, want)
+	}
+	evs := l.recEvents("run.output.snapshot")
+	if len(evs) != 1 || evs[0].Outcome != "success" || strings.Contains(string(evs[0].Data), "echo") {
+		t.Fatalf("audit rows %+v, want one success row without pane content", evs)
 	}
 }

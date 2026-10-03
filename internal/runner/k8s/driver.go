@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -88,6 +89,10 @@ type Config struct {
 	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
 	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
 	SandboxPlacement string
+	// RunMaxAge is WARDYN_RUN_MAX_AGE. When positive, both run pods get
+	// activeDeadlineSeconds = RunMaxAge + podDeadlineGrace, so a run whose control plane has
+	// gone away still fails its pods on a bounded schedule. Zero (the default) sets no deadline.
+	RunMaxAge time.Duration
 }
 
 func (c *Config) withDefaults() {
@@ -127,6 +132,10 @@ type Driver struct {
 	// caller-supplied remotecommand.Executor. Nil in production.
 	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 
+	// metricsRead is the test seam readPodMetrics defers to when set: the real
+	// read is a raw GET that a fake clientset cannot serve. Nil in production.
+	metricsRead func(ctx context.Context, namespace, labelSelector string) ([]byte, error)
+
 	// execOutputs maps a sandbox ref to its SandboxSpec.ExecOutput (an
 	// io.Writer), which Exec streams the agent container's log into. The one
 	// in-memory state here: the buffer it feeds is in memory too, so a
@@ -135,6 +144,7 @@ type Driver struct {
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
+var _ runner.ActivitySampler = (*Driver)(nil)
 
 // New constructs a Driver against the cluster client-go's standard config
 // loading resolves (in-cluster, else kubeconfig), running the boot-time

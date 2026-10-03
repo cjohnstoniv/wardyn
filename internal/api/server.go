@@ -707,6 +707,9 @@ type Server struct {
 	// output finaliser's drain barrier and retry backoff for a test; zero uses
 	// runOutputDrainWait and runOutputRetryBase (run_output_final.go).
 	runOutputDrainWaitOverride, runOutputRetryBaseOverride time.Duration
+	// paneSnapshotTimeoutOverride shrinks the pane snapshot's bound for a test;
+	// zero uses paneSnapshotTimeout (run_output_snapshot.go).
+	paneSnapshotTimeoutOverride time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
@@ -786,6 +789,8 @@ type Server struct {
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
+	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
+	activity activitySignal
 	// ssoRefreshMu guards ssoRefreshSpent, which the control-plane AWS SSO
 	// refresher owns (awssso_refresh.go). The refresh is single-flight per owner
 	// through a cross-replica lock (locks.go) that encloses re-read -> expiry
