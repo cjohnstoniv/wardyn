@@ -205,6 +205,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "mask_state_unavailable",
+    "target": "door",
+    "sentence": "maskStateSentence"
+  },
+  {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
     "sentence": "msg"

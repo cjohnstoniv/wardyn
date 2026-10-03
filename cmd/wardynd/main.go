@@ -214,7 +214,8 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
+	maskScopes := &maskScope{}
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, maskScopes)
 	if err != nil {
 		return err
 	}
@@ -225,6 +226,14 @@ func run() error {
 	// below never see one. rootCtx, not bootCtx: the conversion is one
 	// all-or-nothing transaction over the whole table.
 	secrets, err := openSecretStore(rootCtx, pool, f, maskedRec)
+	if err != nil {
+		return err
+	}
+
+	// Run masking manifests: what each run was given, sealed in Postgres, so a
+	// restarted or second wardynd masks it and the doors refuse a run they
+	// cannot prove masked. Over the secret store's per-subject keys.
+	maskManifests, err := buildMaskManifests(pool, secrets, maskReg, maskScopes)
 	if err != nil {
 		return err
 	}
@@ -416,6 +425,7 @@ func run() error {
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
 		MaskRegistry:             maskReg,
+		MaskManifests:            maskManifests,
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		RunOutputTailBytes:       *f.runOutputTailBytes,

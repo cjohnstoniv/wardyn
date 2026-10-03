@@ -183,6 +183,10 @@ type audited struct {
 
 func (a *audited) Name() string { return a.inner.Name() }
 
+// Unwrap is the store this one records reads for, so a caller can reach a
+// capability the audit wrapper does not forward (the pg store's SubjectKeys).
+func (a *audited) Unwrap() Store { return a.inner }
+
 func (a *audited) Put(ctx context.Context, name string, value []byte) error {
 	return a.inner.Put(ctx, name, value)
 }

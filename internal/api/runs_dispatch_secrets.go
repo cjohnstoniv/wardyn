@@ -57,7 +57,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 			})))
 		return
 	}
-	var resolved, missing int
+	var resolved, missing, unrecorded int
 	var reserved []string
 	// runIdentitySubject(run.CreatedBy): the run's own owner's row wins, falling
 	// back to the operator's (secretOwnerFromRequest.stamped rows never collide
@@ -101,18 +101,24 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 			missing++
 			continue
 		}
+		// On the run's masking manifest before it is used anywhere: a value that
+		// cannot be recorded is skipped like one that cannot be read.
+		if err := s.maskDispatchValue(ctx, run.ID, val); err != nil {
+			unrecorded++
+			continue
+		}
 		resolved++
 		li.WorkspaceSecretValues = append(li.WorkspaceSecretValues, string(val))
-		if s.cfg.MaskRegistry != nil {
-			s.cfg.MaskRegistry.Add(run.ID, val)
-		}
 	}
 	outcome := "success"
-	if missing > 0 || len(reserved) > 0 {
+	if missing > 0 || unrecorded > 0 || len(reserved) > 0 {
 		outcome = "failure"
 	}
 	data := map[string]any{
 		"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
+	}
+	if unrecorded > 0 {
+		data["manifest_unrecorded"] = unrecorded
 	}
 	if len(reserved) > 0 {
 		data["reserved_skipped"] = reserved
@@ -203,12 +209,12 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
 			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
+			case s.maskDispatchValue(ctx, run.ID, val) != nil:
+				// On the run's masking manifest before the sandbox can see it.
+				skip = "the run's masking manifest could not record the value"
 			default:
 				sandboxEnv[name] = string(val)
 				resolvedNames = append(resolvedNames, name)
-				if s.cfg.MaskRegistry != nil {
-					s.cfg.MaskRegistry.Add(run.ID, val)
-				}
 			}
 		}
 		data := map[string]any{"name": name, "secret_name": secretName}

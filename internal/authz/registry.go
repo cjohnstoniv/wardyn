@@ -60,6 +60,11 @@ const (
 	// needs the run's owner; a super admin is refused unless the run has no
 	// personal owner (#1476). Not hidden: the admin can already see the run.
 	ReasonRunOwnerOnly Reason = "run_owner_only"
+	// ReasonMaskStateUnavailable: a door that relays or persists a run's output
+	// (recording upload, live attach, SSH shell, exec relay, live output read)
+	// cannot prove this run's masking corpus complete here, so it refuses with
+	// 503 instead of passing bytes through unmasked (ha-l2.0).
+	ReasonMaskStateUnavailable Reason = "mask_state_unavailable"
 )
 
 // Refusal is one reason's registry row.
@@ -107,6 +112,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                   {Effect: EffectConflict},
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
+	ReasonMaskStateUnavailable:        {Effect: EffectUnavailable, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

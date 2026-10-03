@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strconv"
@@ -110,9 +111,15 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 		return nil
 	}
 	runID := run.ID
+	// Door 3 of five (mask_manifest.go): the relay keeps nothing for a run whose
+	// masking corpus this server cannot prove whole, and its writer drops a
+	// chunk the moment that stops being true.
+	if !s.maskCovered(context.Background(), runID) {
+		return nil
+	}
 	now := s.cfg.Now()
 	e := &execOutputTail{ring: outputRing{max: s.cfg.RunOutputTailBytes, last: now, now: s.cfg.Now}}
-	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: &e.ring}
+	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: &e.ring, guard: s.maskGuard(runID)}
 	t := &s.execOutputs
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -194,6 +201,12 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.ExecOutputTailOff {
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputOff,
 			"this deployment keeps no run output (WARDYN_EXEC_OUTPUT_TAIL=off)")
+		return
+	}
+	// Door 5 of five (mask_manifest.go): the tail in this process was masked
+	// against a registry this server must be able to prove whole. A terminal
+	// run's persisted output is out-o2's, not rebuilt from a live registry here.
+	if s.refuseUncovered(w, r, id, "runs.output") {
 		return
 	}
 	complete := run.State.IsTerminal()
