@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -541,6 +542,56 @@ func (o *Orchestrator) ThawSandbox(ctx context.Context, ref string) error {
 		return runner.ErrFreezeUnsupported
 	}
 	return f.ThawSandbox(ctx, ref)
+}
+
+// SampleCPU implements runner.ActivitySampler by handing each substrate its own
+// refs, one SampleCPU call per substrate. A substrate with no sampler gives no
+// readings; a ref that cannot be routed has none. ErrActivityUnavailable in the
+// answer means a substrate that was asked has no CPU signal, and the readings
+// of the others are still returned. With no sampler wired at all it is
+// unavailable. A nil refs probes every sampling substrate once.
+func (o *Orchestrator) SampleCPU(ctx context.Context, refs []string) (map[string]float64, error) {
+	byName := map[string][]string{}
+	for _, ref := range refs {
+		if s, err := o.subForRef(ctx, ref); err == nil {
+			byName[s.Name()] = append(byName[s.Name()], ref)
+		}
+	}
+	out := map[string]float64{}
+	var errs []error
+	asked := false
+	for _, s := range o.substrates {
+		subRefs, routed := byName[s.Name()]
+		smp, ok := s.(runner.ActivitySampler)
+		if !ok || (refs != nil && !routed) {
+			continue
+		}
+		asked = true
+		got, err := smp.SampleCPU(ctx, subRefs)
+		maps.Copy(out, got)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if !asked && refs == nil {
+		errs = append(errs, runner.ErrActivityUnavailable)
+	}
+	return out, errors.Join(errs...)
+}
+
+// BatchSample is true only when every substrate that can sample reads all its
+// sandboxes in one call; one that charges per ref sets the budget for all.
+func (o *Orchestrator) BatchSample() bool {
+	sampling := false
+	for _, s := range o.substrates {
+		if smp, ok := s.(runner.ActivitySampler); ok {
+			if !smp.BatchSample() {
+				return false
+			}
+			sampling = true
+		}
+	}
+	return sampling
 }
 
 func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
