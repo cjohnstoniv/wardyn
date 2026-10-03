@@ -125,6 +125,7 @@ k8s:
   runsNamespace: wardyn-runs
   proxyImage: ghcr.io/example/wardyn-proxy:ci-test
   imagePullSecret: k8s-regcred
+  readNodes: true
   runtimeClasses:
     CC2: gvisor
     CC3: kata-qemu

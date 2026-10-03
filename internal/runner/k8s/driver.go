@@ -88,6 +88,10 @@ type Config struct {
 	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
 	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
 	SandboxPlacement string
+	// ReadNodes is WARDYN_K8S_READ_NODES: list the cluster's nodes (a ClusterRole the chart grants only
+	// under k8s.readNodes) so preflight and create can warn when no node a run may be placed on is large
+	// enough. Off by default: nodes are cluster-scoped and a shared-cluster tenant may not be granted them.
+	ReadNodes bool
 }
 
 func (c *Config) withDefaults() {
@@ -103,6 +107,8 @@ type Driver struct {
 	cfg        Config
 	// placement is cfg.SandboxPlacement, parsed and validated once at construction.
 	placement Placement
+	// nodeCache is the last node list, shared by every fit check (fit_nodes.go).
+	nodeCache nodeCache
 
 	// apiserverHostPort is resolved once at construction from restConfig.Host
 	// — the egress canary's dial target.

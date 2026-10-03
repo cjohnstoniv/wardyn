@@ -87,6 +87,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
+- **A run that cannot fit the runs namespace's ResourceQuota is refused before it is created.** On
+  Kubernetes, `POST /runs` and `POST /runs/preflight` list the namespace's `ResourceQuota` objects and count
+  both run pods, the request and limit axes, and the `Terminating` and `PriorityClass` scopes. A breach is a
+  `422 namespace_quota_exceeded` naming the quota and the numbers, with no run row and no sandbox; a run that
+  would fill a quota to 90% or more is admitted with a warning. A quota list the Role may not read, or the
+  cluster cannot answer, is reported as that, not as an empty list. The chart's runner Role gains `list` on
+  `resourcequotas`. With `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, off by default; adds `list` on `nodes` to the
+  ClusterRole), a run bigger than every node its placement allows also gets a warning. That compares requests
+  to node size, not free capacity, and the scheduler stays the authority.
 
 ### Security
 

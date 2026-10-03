@@ -150,6 +150,8 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
+//
+//nolint:funlen // Deliberate: one linear gate sequence whose ORDER is the contract (TestPreflightMirrorsLaunchGates reads it), and that test only sees gates called from this body, so a gate cannot be folded into a helper to save lines. Each gate already lives in its own function; low branching, passes gocyclo/gocognit, just long.
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
@@ -275,6 +277,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The runs namespace's ResourceQuota, refused before the mint for the same reason: a run
+	// the quota cannot hold leaves no identity, no run row and no sandbox. The advisories
+	// join the 201's warnings. The quota's own admission stays the authority on a race.
+	fitWarnings, refused := s.refuseRunFit(w, r, spec)
+	if refused {
+		return
+	}
+
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
@@ -367,6 +377,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
+	warnings = append(warnings, fitWarnings...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.

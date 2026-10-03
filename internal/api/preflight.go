@@ -338,6 +338,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if s.refuseRunCapFull(w, r) {
 		return
 	}
+	// The runs namespace's ResourceQuota, launch's refusal after the cap and in the same place:
+	// the same 422, so a run that cannot fit shows before the click. Its advisories join the
+	// warnings below.
+	fitWarnings, refused := s.refuseRunFit(w, r, spec)
+	if refused {
+		return
+	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
@@ -391,6 +398,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// show a rosier picture than the launch it previews. WARN, never refuse:
 	// nothing above this line changed.
 	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
+	warnings = append(warnings, fitWarnings...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
 	// non-model run) — omitted rather than published as a guess.

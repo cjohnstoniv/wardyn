@@ -535,6 +535,13 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any
   `kubernetes.io/` or `k8s.io/` annotation or label except
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
+- `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, default `false`): adds `list` on `nodes` to the ClusterRole so preflight and
+  create can warn that no node a run may be placed on is large enough. It compares a run's requests to node size,
+  honouring `k8s.sandbox.*`, never to free capacity: pods of other namespaces are invisible to wardynd, and the
+  scheduler stays the authority. Without it the warning is absent. Separately and always on, the runner Role has
+  `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created
+  (`namespace_quota_exceeded`), and one that would fill a quota to 90% or more is warned; a quota wardynd may not
+  read is reported as unreadable, never as empty.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
   resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
   a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each

@@ -180,6 +180,18 @@ func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount)
 	return "", errors.New("orchestrator: no wired substrate can reclaim drive storage")
 }
 
+// CheckFit implements runner.FitChecker by delegating to the first wired substrate that
+// implements it, the same single fan-out ProbeDrive takes. A substrate with no fit to check
+// (docker) is skipped; none at all answers runner.ErrFitUnsupported.
+func (o *Orchestrator) CheckFit(ctx context.Context, res runner.Resources) (runner.Fit, error) {
+	for _, s := range o.substrates {
+		if fc, ok := s.(runner.FitChecker); ok {
+			return fc.CheckFit(ctx, res)
+		}
+	}
+	return runner.Fit{}, runner.ErrFitUnsupported
+}
+
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.

@@ -73,6 +73,18 @@ canary,driver}.go. In particular:
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
+  - resourcequotas: list ONLY, namespaced (0.8.6 P7) — fit.go's CheckFit reads
+    the runs namespace's quotas before a run is created, so a run no quota can
+    hold is refused instead of failing at the pod. list, not get: the quotas
+    that apply to a pod are whichever objects exist, and a get needs a name. A
+    quota is an object count and a limit, never a credential. A Role without it
+    (an operator-written one under k8s.rbac.create=false) makes the read report
+    "permission denied" as an advisory on the New Run rail; nothing is refused
+    for it, and the quota still bites when the pod is created.
+  - nodes: list ONLY, cluster-scoped, and ONLY when k8s.readNodes — the
+    ClusterRole rule below, for the node-size advisory (fit_nodes.go). Nodes are
+    cluster-scoped, so a shared-cluster tenant may not be granted them; off by
+    default, and the advisory then says nothing.
   - persistentvolumeclaims: get + create, and ONLY when drives.enabled —
     drives.go's ensureDrivePVC. Absent from a stock install: a deployment that
     allocates no drive never touches a claim. `delete` is a THIRD switch
@@ -199,6 +211,12 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["list"]
+  # P7: the runs namespace's ResourceQuota objects, read before create and by preflight
+  # (internal/runner/k8s/fit.go). list, not get: finding every quota that applies to a pod
+  # needs the collection.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["list"]
 {{- if $drives.enabled }}
   # Drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a
@@ -282,6 +300,14 @@ rules:
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
     verbs: ["get"]
+{{- if .Values.k8s.readNodes }}
+  # P7, opt-in: node allocatable for the "no node this run may go to is large enough" advisory
+  # (internal/runner/k8s/fit_nodes.go), read and cached. list only; a node object names its
+  # images and addresses, so this is granted by an operator who wants the advisory.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
