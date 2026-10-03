@@ -193,3 +193,27 @@ func TestGovernanceChanges_ListApproveReject(t *testing.T) {
 		t.Error("approve accepted a malformed id")
 	}
 }
+
+// TestGovernanceSet_PendingBaseListsDeferredChildProfile: a child profile whose base is held for
+// approval is reported as deferred, and only the base is written.
+func TestGovernanceSet_PendingBaseListsDeferredChildProfile(t *testing.T) {
+	f := &fakePendingGovernance{}
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+
+	baseID := uuid.New()
+	path := writeGovernanceFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{
+		{Name: "child", BaseProfileID: &baseID},
+		{ID: baseID, Name: "base"},
+	}})
+	_, stderr, err := runGovernance(t, srv.URL, "set", path)
+	if err != nil {
+		t.Fatalf("set exited non-zero on a pending change: %v", err)
+	}
+	if !strings.Contains(stderr, `profile "child" -> base "base"`) {
+		t.Errorf("stderr missing the deferred child:\n%s", stderr)
+	}
+	if got := strings.Join(f.writes, ","); got != "POST /api/v1/governance/profiles" {
+		t.Errorf("writes = %q, want only the base create", got)
+	}
+}
