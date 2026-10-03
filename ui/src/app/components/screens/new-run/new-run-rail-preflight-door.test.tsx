@@ -26,10 +26,15 @@ vi.mock("../settings/harness-login-pane", () => ({
 
 import { RunRail } from "./new-run-rail";
 import { MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { WithDoor } from "../../../../test/door-harness";
 
 const { bedrock } = MODEL_PROVIDERS;
-const STATUS = providerStatus([{ provider: bedrock }]);
+// A default provider that is not signed in: the shell strip says so and carries
+// the sign-in button, the "elsewhere" entrance the cancel cases use.
+const STATUS = providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state: "not_configured" }], {
+  harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: false, has_login: true }],
+});
 
 interface Handles {
   setBody: (b: string) => void;
@@ -155,8 +160,8 @@ describe("a preflight-origin sign-in re-checks and never launches", () => {
     await settle();
     expect(screen.queryByRole("dialog")).toBeNull();
     // Sign-in completes elsewhere (the strip): the cancelled door has no callback left.
-    act(() => h().refusePreflight());
-    await settle();
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+    await userEvent.click(await pane());
     expect(onLaunch).not.toHaveBeenCalled();
     expect(onPreflight).not.toHaveBeenCalled();
   });
@@ -182,5 +187,19 @@ describe("an explicit Launch click is the only way to launch after sign-in", () 
     await userEvent.click(p);
     expect(onLaunch).toHaveBeenCalledTimes(1);
     expect(onPreflight).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancelled sign-in after a Launch click: a later sign-in from elsewhere does not launch again", async () => {
+    const { onLaunch, onPreflight, h } = renderRail();
+    await userEvent.click(launchButton());
+    act(() => h().refuseLaunch());
+    await pane();
+    await userEvent.keyboard("{Escape}");
+    await settle();
+    // Sign-in completes elsewhere (the strip): the armed closure died with the door.
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+    await userEvent.click(await pane());
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    expect(onPreflight).not.toHaveBeenCalled();
   });
 });
