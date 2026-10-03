@@ -143,6 +143,23 @@ export interface Me {
   // change and is not wired yet — the card falls back to offering nothing,
   // which is what it already did for all four states.
   user_drive_unavailable?: string;
+  // Who to ask for a change to the policy that bounds this caller
+  // (internal/api/me.go's governance_contact, internal/policyref.Ref): the leaf
+  // profile's published contact, or {source: "deployment"} when the deployment
+  // binds them. null for an operator and whenever the ceiling could not be
+  // resolved; absent on a pre-0.8.6 daemon.
+  governance_contact?: PolicyRef | null;
+}
+
+// internal/policyref.Ref — the member-safe reference a refusal, /me and a run
+// carry: which policy bound the person and how to ask for a change.
+export interface PolicyRef {
+  source: string;
+  name?: string;
+  owner?: string;
+  email?: string;
+  request_url?: string;
+  request_text?: string;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —

@@ -40,6 +40,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
+- **A refusal by the governance ceiling now names the policy and how to ask for a change.** The `403` and
+  `422` bodies of `governance_profile`, `run_quota` and `record_ceiling_limit` gain a `policy` object: the
+  leaf profile's name and contact, or the deployment's `policy_help` for a member no profile binds. The
+  `error` text, `reason` and status are unchanged, and a hidden door stays byte-identical to a missing
+  resource. `GET /me` gains `governance_contact` (`null` for an operator or when the ceiling cannot be
+  resolved), `GET /runs/{id}` gains `policy`, the Go SDK's `APIError` gains `Policy`, and `wardyn` prints one
+  `governed by …, to request a change: …` line after the error. Exit codes are unchanged.
 
 ### Security
 

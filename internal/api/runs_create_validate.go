@@ -514,12 +514,13 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 		return false
 	}
 	name := ceiling.Profile.Name
+	policy := s.ceilingPolicy(r.Context(), ceiling)
 	// exec runs a bare command: no agent, no toolgate, nothing for tool_rules to
 	// bind. A profile that wants supervised tool use has to be able to close the
 	// door that routes around the gate entirely.
 	if ceiling.Limits.DenyTaskModeExec && req.TaskMode == "exec" {
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.task_mode", fmt.Sprintf(
-			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name)))
+			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name)).WithPolicy(policy))
 	}
 	// The same door through an interactive run: a task with interactive_start
 	// unset or "shell" is run by the image as `bash -lc` at boot, before anyone
@@ -527,7 +528,7 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
 	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive_start", fmt.Sprintf(
-			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)))
+			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
@@ -535,7 +536,7 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// is the one request shape a deny_interactive profile most needs to refuse.
 	if ceiling.Limits.DenyInteractive && requestIsInteractive(req) {
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
-			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)))
+			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)).WithPolicy(policy))
 	}
 	if s.denyUserRunQuota(w, r, ceiling) {
 		return true
@@ -549,7 +550,7 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// scoped to the derivation's non-interactive lane the way the codex one is.
 	if req.SeedAutoTools {
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
-			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)))
+			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)).WithPolicy(policy))
 	}
 	// Scoped to exactly the case where effectiveToolApprovals WOULD derive
 	// hold: codex-cli has no external tool-approval contract, so a derived hold
@@ -558,7 +559,7 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// field the caller never set.
 	if req.Agent == "codex-cli" && !requestIsInteractive(req) {
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
-			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)))
+			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)).WithPolicy(policy))
 	}
 	return false
 }
@@ -600,7 +601,7 @@ func (s *Server) denyUserRunQuota(w http.ResponseWriter, r *http.Request, ceilin
 	}
 	return s.refuse(w, r, authz.Deny(authz.ReasonRunQuota, "runs.quota", fmt.Sprintf(
 		"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.",
-		limit, ceiling.Profile.Name, active)))
+		limit, ceiling.Profile.Name, active)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
 }
 
 // denyUserSeededImage closes a gap: a MEMBER-OWNED

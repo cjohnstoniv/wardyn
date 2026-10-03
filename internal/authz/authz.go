@@ -12,6 +12,8 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // Schema names the wire shape of Decision. Changes inside v1 are additive and
@@ -97,7 +99,13 @@ type Decision struct {
 	// row"): the caller must see the SAME reason a truly-missing resource's
 	// 404 carries, never the internal "not_owner"/"attach_ticket_foreign_run"
 	// that would tell a prober the resource exists. See Decision.AsIf.
-	WireReason  Reason            `json:"wire_reason,omitempty"`
+	WireReason Reason `json:"wire_reason,omitempty"`
+	// Policy names the policy whose ceiling caused the refusal and how to ask for
+	// a change. Set only by a ceiling door, and written to the wire by the HTTP
+	// refusal emitter, never into the audit datum (Datum reads none of it). The
+	// emitter leaves it off a decision with a WireReason and off an EffectHidden
+	// one: a hidden door must stay byte-identical to a missing resource.
+	Policy      *policyref.Ref    `json:"policy,omitempty"`
 	Detail      map[string]string `json:"detail,omitempty"`
 	Obligations []Obligation      `json:"obligations,omitempty"`
 	Trace       []Step            `json:"trace,omitempty"`
@@ -136,6 +144,13 @@ func (d Decision) OnRun(id uuid.UUID) Decision {
 // audit row) is untouched; only WireReason changes.
 func (d Decision) AsIf(reason Reason) Decision {
 	d.WireReason = reason
+	return d
+}
+
+// WithPolicy is d naming ref as the policy that bound the person. A nil ref
+// leaves d unchanged.
+func (d Decision) WithPolicy(ref *policyref.Ref) Decision {
+	d.Policy = ref
 	return d
 }
 

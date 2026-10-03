@@ -173,6 +173,11 @@ type (
 	// server on write.
 	PolicyContact = policyref.Contact
 
+	// PolicyRef is the policy a ceiling refusal names: the leaf profile (or the
+	// deployment) that bound the caller, plus the contact it published.
+	// APIError.Policy carries one.
+	PolicyRef = policyref.Ref
+
 	// GovernanceAssignment binds one profile to one subject
 	// (GovernanceDocument.Assignments). Returned by GetGovernance and
 	// ApplyGovernance.
