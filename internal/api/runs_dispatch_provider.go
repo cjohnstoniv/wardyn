@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -446,10 +447,30 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 			sandboxEnv[envAnthropicModel] = model
 		}
 	case "codex-cli":
+		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
+		// from config.toml and its key from CODEX_API_KEY (task mode) or
+		// auth.json (interactive), both of which the image's prep writes
+		// from these two. The OPENAI_* pair stays for an older codex.
+		sandboxEnv[envCodexBaseURL] = codexBaseURL(proxyURL, lane.key.upstream)
+		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
 	}
 	return llmTransport{provider: lane.chosen}
+}
+
+// codexBaseURL is the base URL codex is configured with: the brokered openai
+// route plus the path its final upstream needs. codex appends `responses`, the
+// proxy strips /wardyn/llm/openai and prepends a configured gateway's own path
+// prefix, so the vendor host (no gateway) and a gateway whose base URL has an
+// empty path both need the `/v1` here, and a gateway that carries a prefix
+// must not get a second one.
+func codexBaseURL(proxyURL, gateway string) string {
+	base := proxyURL + "/wardyn/llm/openai"
+	if u, err := url.Parse(gateway); gateway != "" && err == nil && strings.TrimSuffix(u.Path, "/") != "" {
+		return base
+	}
+	return base + "/v1"
 }
 
 // authorProviderKeyInjection writes the key arm's one model-credential grant:

@@ -30,6 +30,8 @@ var (
 	envClaudeConfigDir    = modelEnvVar("CLAUDE_CONFIG_DIR")
 	envClaudeManagedCreds = modelEnvVar("WARDYN_CLAUDE_MANAGED_B64")
 	envOpenAIBaseURL      = modelEnvVar("OPENAI_BASE_URL")
+	envCodexAPIKey        = modelEnvVar("CODEX_API_KEY")
+	envCodexBaseURL       = modelEnvVar("WARDYN_CODEX_BASE_URL")
 	envClaudeUseBedrock   = modelEnvVar("CLAUDE_CODE_USE_BEDROCK")
 	envAWSRegion          = modelEnvVar("AWS_REGION")
 	envAWSDefaultRegion   = modelEnvVar("AWS_DEFAULT_REGION")
