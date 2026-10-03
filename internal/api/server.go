@@ -134,6 +134,10 @@ type ImageBuilder interface {
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
 type Config struct {
+	// SweeperLease, when set, gates the sweeps that must run on one replica (the
+	// run pause) to the elected leader and fences them by lease epoch. Nil means
+	// this process is the only one sweeping: every pass runs and no fence applies.
+	SweeperLease SweeperLease
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit
 	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
