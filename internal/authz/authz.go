@@ -183,7 +183,7 @@ type Origin struct {
 	Placement string     `json:"placement,omitempty"`
 }
 
-var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
+var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type", "dry_run"}
 
 // Datum is the data of d's audit row, refused to p over method (empty when no request
 // carried it). A detail never stands in for a reserved key, so it can never forge the

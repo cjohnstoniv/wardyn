@@ -318,7 +318,7 @@ const forwarderJoinWait = 5 * time.Second
 // it is joined (not merely cancelled) before this returns, so the process
 // never exits while its goroutine might still be logging or touching the
 // store.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, hop *hopTLS, orgFederation *federation.Forwarder) error {
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, denials *audit.DenialCoalescer, hop *hopTLS, orgFederation *federation.Forwarder) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -378,6 +378,11 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
 		}
 	}()
+
+	// Declared after the fanout drain, so it runs BEFORE it: the open dry-run
+	// denial windows write their summaries while the sinks and the pool are
+	// still open.
+	defer denials.Flush(context.Background())
 
 	select {
 	case <-rootCtx.Done():
