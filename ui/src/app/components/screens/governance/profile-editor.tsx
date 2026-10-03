@@ -20,7 +20,8 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError } from "../../../lib/api/core";
-import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile } from "../../../lib/api/governance";
+import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
+import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
@@ -40,6 +41,18 @@ import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
 import { Segmented } from "../permissions";
 import { Note, withMono } from "./display";
+import {
+  asOverlay,
+  BASE_DEPLOYMENT,
+  BASE_NONE,
+  baseOptions,
+  BasePicker,
+  CEILING_FIELDS,
+  composeRefusalTitle,
+  EffectiveView,
+  LIMIT_FIELDS,
+  OverlayRows,
+} from "./profile-overlay";
 import { ProfileRubric } from "./profile-rubric";
 
 // A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
@@ -63,12 +76,15 @@ const specText = (spec: RunPolicySpec): string => JSON.stringify(spec, null, 2);
 
 export function ProfileEditor({
   profile,
+  profiles = [],
   disabled,
   onCancel,
   onSaved,
 }: {
   /** The profile being edited, or null for a new one. */
   profile: GovernanceProfile | null;
+  /** Every profile, for the base picker and an overlay's inherited values. */
+  profiles?: GovernanceProfile[];
   disabled: boolean;
   onCancel: () => void;
   /** Hands the write's OMISSION warnings up: the screen renders them after the
@@ -76,7 +92,33 @@ export function ProfileEditor({
   onSaved: (warnings: string[]) => void;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
-  const [spec, setSpec] = React.useState(() => specText(profile?.ceiling ?? STARTER_SPEC));
+  // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
+  const [spec, setSpec] = React.useState(() => specText(profile && !profile.overlay ? profile.ceiling : STARTER_SPEC));
+  // Composition: the base picker's value, and the two overlays as key-present-or-absent bags.
+  const [base, setBase] = React.useState<string>(
+    profile?.overlay ? (profile.base_profile_id ?? BASE_DEPLOYMENT) : BASE_NONE,
+  );
+  const [overlay, setOverlay] = React.useState<Record<string, unknown>>(() => ({ ...(profile?.overlay ?? {}) }));
+  const [overlayLimits, setOverlayLimits] = React.useState<Record<string, unknown>>(() => ({
+    ...(profile?.overlay_limits ?? {}),
+  }));
+  const composed = base !== BASE_NONE;
+  const baseProfile = profiles.find((p) => p.id === base);
+  // The deployment ceiling, read once and only when a deployment-based overlay needs its values.
+  const [deployment, setDeployment] = React.useState<RunPolicySpec | null>(null);
+  React.useEffect(() => {
+    if (base !== BASE_DEPLOYMENT || deployment) return;
+    let alive = true;
+    void policiesApi
+      .getDefaultPolicy()
+      .then((d) => alive && setDeployment(d))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [base, deployment]);
+  const inheritedCeiling = (baseProfile?.effective?.ceiling ?? deployment ?? {}) as unknown as Record<string, unknown>;
+  const inheritedLimits = (baseProfile?.effective?.limits ?? {}) as Record<string, unknown>;
   const [limits, setLimits] = React.useState<GovernanceLimits>(profile?.limits ?? {});
   const [saving, setSaving] = React.useState(false);
   // `title` is set only for the grant-bound refusal: the console contributes a
@@ -101,15 +143,33 @@ export function ProfileEditor({
   const dockerUncapped = isUncappedEnforcement(enforcement);
 
   const save = async () => {
-    const parsed = parseSpec(spec);
-    if (!parsed.ok) {
+    const parsed = composed ? null : parseSpec(spec);
+    if (parsed && !parsed.ok) {
       setError({ message: parsed.message });
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      const input = { name: name.trim(), ceiling: parsed.spec, limits };
+      // A composed profile states its policy ONLY in the overlays and stores an empty ceiling and
+      // limits. An empty limits overlay is sent as null: absent would keep a stored one. Leaving a
+      // base sends null for the overlay, which clears the base and limits with it. A standalone
+      // profile that was never composed sends none of the three, as before.
+      const input: GovernanceProfileInput = composed
+        ? {
+            name: name.trim(),
+            ceiling: {} as RunPolicySpec,
+            limits: {},
+            base_profile_id: baseProfile?.id ?? null,
+            overlay: asOverlay(overlay),
+            overlay_limits: Object.keys(overlayLimits).length > 0 ? overlayLimits : null,
+          }
+        : {
+            name: name.trim(),
+            ceiling: parsed?.ok ? parsed.spec : STARTER_SPEC,
+            limits,
+            ...(profile?.overlay ? { base_profile_id: null, overlay: null, overlay_limits: null } : {}),
+          };
       const res = profile ? await api.updateProfile(profile.id, input) : await api.createProfile(input);
       onSaved(res.warnings);
     } catch (e) {
@@ -120,6 +180,8 @@ export function ProfileEditor({
       setError(
         isGrantBoundError(e)
           ? { title: GOV.GRANT_BOUND_TITLE, message: getErrorMessage(e) }
+          : e instanceof HttpError && composeRefusalTitle(e.reason)
+            ? { title: composeRefusalTitle(e.reason), message: e.message }
           : e instanceof HttpError
             ? { message: e.message }
             : { message: GOV.SAVE_ERROR },
@@ -148,9 +210,34 @@ export function ProfileEditor({
         </Field>
       </div>
 
+      <div className="mt-4">
+        <Field label={GOV.FIELD_BASE} htmlFor="governance-profile-base" hint={GOV.BASE_HINT}>
+          <BasePicker
+            value={base}
+            options={baseOptions(profile, profiles)}
+            disabled={disabled}
+            onChange={setBase}
+          />
+        </Field>
+      </div>
+
       <section className="mt-6">
         <h4 className="text-body font-medium text-foreground">{GOV.CEILING_TITLE}</h4>
         <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.CEILING_LEAD}</p>
+        {composed ? (
+          <>
+            <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.OVERLAY_LEAD}</p>
+            <OverlayRows
+              idPrefix="governance-overlay"
+              fields={CEILING_FIELDS}
+              value={overlay}
+              inherited={inheritedCeiling}
+              disabled={disabled}
+              onChange={setOverlay}
+            />
+          </>
+        ) : (
+          <>
         {/* #1200 §3a — the "Allowed barriers" control: the same
             min_confinement_class floor the JSON spec below already carries,
             authored as one radio instead of a hand-typed field (T-7 ships
@@ -160,11 +247,24 @@ export function ProfileEditor({
           <PolicyPanel instance="policies" value={spec} onChange={setSpec} />
         </div>
         <p className="mt-2 text-xs text-muted-foreground">{GOV.GRADE_NOTE}</p>
+          </>
+        )}
       </section>
 
       <section className="mt-6">
         <h4 className="text-body font-medium text-foreground">{GOV.LIMITS_TITLE}</h4>
         <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.LIMITS_LEAD}</p>
+        {composed ? (
+          <OverlayRows
+            idPrefix="governance-overlay-limit"
+            fields={LIMIT_FIELDS}
+            value={overlayLimits}
+            inherited={inheritedLimits}
+            disabled={disabled}
+            onChange={setOverlayLimits}
+          />
+        ) : (
+          <>
         <LimitRow
           label={GOV.LIMIT_EXEC_LABEL}
           hint={withMono(GOV.LIMIT_EXEC_HINT)}
@@ -220,12 +320,15 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, max_drive_size_mib: v }))}
         />
+          </>
+        )}
       </section>
 
       {/* RL-14 (0.8, #579): the lease and wait bounds (long-holds-design.md
           rev 4 §2.2). A separate section from Limits above — those are doors
           and quotas a run either may or may not open; these are TIME bounds,
           and share one gate (user_changes_limits) none of the doors do. */}
+      {!composed && (
       <section className="mt-6">
         <h4 className="text-body font-medium text-foreground">{RL.SECTION_TITLE}</h4>
         <LimitDurationRow
@@ -286,12 +389,18 @@ export function ProfileEditor({
           onChange={(v) => setLimits((l) => ({ ...l, pause_idle_after_sec: v }))}
         />
       </section>
+      )}
 
-      <ProfileRubric
-        value={limits.autonomy_rubric ?? {}}
-        disabled={disabled}
-        onChange={(rubric) => setLimits((l) => ({ ...l, autonomy_rubric: rubric }))}
-      />
+      {!composed && (
+        <ProfileRubric
+          value={limits.autonomy_rubric ?? {}}
+          disabled={disabled}
+          onChange={(rubric) => setLimits((l) => ({ ...l, autonomy_rubric: rubric }))}
+        />
+      )}
+
+      {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
+      {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
       {error && (
         <Note tone="red" role="alert">

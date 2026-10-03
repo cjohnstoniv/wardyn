@@ -58,6 +58,7 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
 import { Note, noteClass, question, withMono } from "./display";
 import { limitChips } from "./limit-chips";
+import { BaseChip, childrenOf } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
 
 const EMPTY: GovernanceSnapshot = { profiles: [], assignments: [] };
@@ -120,7 +121,10 @@ export function GovernanceScreen() {
       // the race: another admin assigned this profile since the list was read.
       setDeleteError(
         e instanceof HttpError && e.status === 409
-          ? { title: GOV.DELETE_RESTRICT_TITLE, message: e.message }
+          ? {
+              title: childrenOf(p.id, snap.profiles).length > 0 ? GOV.REFUSED_HAS_CHILDREN : GOV.DELETE_RESTRICT_TITLE,
+              message: e.message,
+            }
           : { message: getErrorMessage(e) },
       );
     } finally {
@@ -135,6 +139,9 @@ export function GovernanceScreen() {
   const teal: "save" | "new" | "assign" = editorOpen ? "save" : noProfiles ? "new" : "assign";
 
   const deleteCount = toDelete ? assignedCount(toDelete) : 0;
+  // Profiles composed on the one being deleted: the server refuses the delete (it would widen them
+  // back to the deployment ceiling), so the dialog opens pre-filled and the confirm is disabled.
+  const deleteChildren = toDelete ? childrenOf(toDelete.id, snap.profiles) : [];
   const [deleteHead, deleteBody] = question(toDelete ? GOV.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
@@ -240,7 +247,10 @@ export function GovernanceScreen() {
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
-                          <TableCell className="font-medium">{p.name}</TableCell>
+                          <TableCell className="font-medium">
+                            {p.name}
+                            <BaseChip profile={p} profiles={snap.profiles} />
+                          </TableCell>
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
@@ -264,7 +274,7 @@ export function GovernanceScreen() {
                                 ponytail: one debounced POST /policies/grade per
                                 row. Profile lists are short; batch it if a
                                 deployment ever makes that false. */}
-                            <SafetyMeter spec={p.ceiling} />
+                            <SafetyMeter spec={p.effective?.ceiling ?? p.ceiling} />
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-muted-foreground" title={p.updated_at}>
                             {relativeTime(p.updated_at)}
@@ -305,6 +315,7 @@ export function GovernanceScreen() {
               <ProfileEditor
                 key={editing.profile?.id ?? ""}
                 profile={editing.profile}
+                profiles={snap.profiles}
                 disabled={!securityOperator}
                 onCancel={() => setEditing(null)}
                 onSaved={(warnings) => {
@@ -351,6 +362,12 @@ export function GovernanceScreen() {
               <AlertDialogDescription>{deleteBody}</AlertDialogDescription>
             )}
           </AlertDialogHeader>
+          {deleteChildren.length > 0 && (
+            <Note tone="red">
+              <b className="font-semibold">{GOV.REFUSED_HAS_CHILDREN}</b>
+              <span>{deleteChildren.map((c) => c.name).join(", ")}</span>
+            </Note>
+          )}
           {/* The race, post-attempt: count-free, the server's own message. */}
           {deleteError && (
             <Note tone="red" role="alert">
@@ -362,7 +379,7 @@ export function GovernanceScreen() {
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-danger text-danger-foreground hover:bg-danger/90"
-              disabled={deleteCount > 0 || busy}
+              disabled={deleteCount > 0 || deleteChildren.length > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();
                 if (toDelete) void del(toDelete);

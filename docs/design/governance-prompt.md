@@ -479,7 +479,7 @@ time) and one must be able to change without the other.
 | Key | String |
 |---|---|
 | `TITLE` | Governance |
-| `LEAD` | Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling. |
+| `LEAD` | Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling. |
 | `PROFILES_TITLE` | Profiles |
 | `PROFILES_LEAD` | A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all. |
 | `COL_NAME` | Name |

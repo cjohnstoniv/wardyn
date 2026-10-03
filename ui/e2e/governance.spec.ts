@@ -679,3 +679,75 @@ test.describe("governance — the walls, asserted where this harness can reach t
     expect(body).not.toMatch(/\d+ assignment/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 4. Composition (0.8.6) — a base, and a child that narrows it.
+// ---------------------------------------------------------------------------
+
+test.describe("governance — a profile that narrows a base", () => {
+  const BASE_NAME = "compose-base";
+  const CHILD_NAME = "compose-child";
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+
+  test("creates a base and a child, narrows a domain and a limit, and sees the effective view", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+
+    // The base is an ordinary standalone profile: two domains and a quota of five.
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+    let editor = page.getByTestId("governance-profile-editor");
+    await page.locator("#governance-profile-name").fill(BASE_NAME);
+    await editor.getByLabel("Spec (JSON)").fill(
+      JSON.stringify({
+        allowed_domains: ["a.example.com", "b.example.com"],
+        first_use_approval: "deny_with_review",
+        min_confinement_class: "CC2",
+      }),
+    );
+    await page.locator("#governance-limit-concurrent").fill("5");
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(profilesTable(page).getByRole("cell", { name: BASE_NAME, exact: true })).toBeVisible();
+
+    // The child picks it as its base. The JSON editor gives way to overlay rows
+    // that show what is inherited.
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+    editor = page.getByTestId("governance-profile-editor");
+    await page.locator("#governance-profile-name").fill(CHILD_NAME);
+    await page.locator("#governance-profile-base").click();
+    await page.getByRole("option", { name: BASE_NAME }).click();
+    await expect(editor.getByText(GOV.OVERLAY_LEAD)).toBeVisible();
+    await expect(editor.getByText(GOV.OVERLAY_INHERITED("a.example.com, b.example.com"))).toBeVisible();
+
+    // Narrow one domain and the quota; leave everything else inherited.
+    await editor.getByRole("switch", { name: `allowed_domains ${GOV.OVERLAY_NARROW}` }).click();
+    await editor.getByLabel("allowed_domains", { exact: true }).fill("a.example.com");
+    await editor.getByRole("switch", { name: `${GOV.LIMIT_CONCURRENT_LABEL} ${GOV.OVERLAY_NARROW}` }).click();
+    await editor.getByLabel(GOV.LIMIT_CONCURRENT_LABEL, { exact: true }).fill("2");
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+
+    // The list marks it composed and names its base.
+    const row = profilesTable(page).getByRole("row", { name: new RegExp(CHILD_NAME) });
+    await expect(row.getByText(GOV.BASE_CHIP(BASE_NAME))).toBeVisible();
+
+    // A real write: only the narrowed fields are stored.
+    const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+    const child = snap.profiles.find((p: { name: string }) => p.name === CHILD_NAME);
+    expect(child.overlay).toEqual({ allowed_domains: ["a.example.com"] });
+    expect(child.overlay_limits).toEqual({ max_concurrent_runs: 2 });
+    expect(child.base_profile_id).toBeTruthy();
+
+    // Reopened, the effective view is the base narrowed: one domain, a quota of two.
+    await row.getByRole("button", { name: `${GOV.EDIT} ${CHILD_NAME}` }).click();
+    const view = page.getByTestId("governance-profile-effective");
+    await expect(view.getByText(GOV.EFFECTIVE_TITLE)).toBeVisible();
+    await expect(view.getByTestId("governance-effective-allowed_domains")).toHaveText("a.example.com");
+    await expect(view.getByText(GOV.LIMIT_QUOTA_LABEL(2))).toBeVisible();
+    await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
+
+    // The base cannot be deleted from under its child.
+    await profilesTable(page).getByRole("button", { name: `${GOV.DELETE} ${BASE_NAME}` }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(GOV.REFUSED_HAS_CHILDREN)).toBeVisible();
+    await expect(dialog.getByRole("button", { name: GOV.DELETE, exact: true })).toBeDisabled();
+  });
+});
