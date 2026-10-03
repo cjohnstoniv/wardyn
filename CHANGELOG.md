@@ -33,6 +33,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   role that held `INSERT` on `audit_events` is granted `EXECUTE` on `audit_append` and `audit_ensure_partitions`
   by the migration and loses `INSERT`; a role you add later needs that grant, and wardynd refuses to start
   without it. Conversion time by row count is in "What the audit conversion does", `docs/OPERATIONS.md`.
+- **Dry-run audit rows are marked and summarised.** Every audit row written while serving `POST /runs/preflight`
+  now carries `dry_run: true`, and a repeated identical refusal inside ten minutes is counted into one appended
+  `preflight.denial.coalesce` row instead of one `authz.denied` row per keystroke. Rows written before this
+  release carry no marker, so a SIEM rule over `authz.denied` sees fewer dry-run rows and a new summary action
+  (`count` includes the first row). The windows are per replica. Launch refusals are unchanged.
 - The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
   slack). A value spelled with anything but `h`, `m` and `s` fails the render.
 - **Chart installs get a smaller default sandbox (1000m CPU, 2048 MiB).** A run whose policy sets no

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -256,7 +257,7 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 		tlsTerminated: &no, trustDomain: &trust,
 	}
 	srv := api.New(api.Config{})
-	if serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan, nil, nil); serr == nil {
+	if serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan, &audit.DenialCoalescer{}, nil, nil); serr == nil {
 		t.Fatal("serveAndShutdown returned nil against an address already in use")
 	}
 

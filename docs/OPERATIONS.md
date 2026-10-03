@@ -2850,15 +2850,27 @@ reason with the affected values beside it, not one per dropped host. A preflight
 dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at
 launch. A dry run that is **refused** does audit, though: every gate preflight
 reproduces is the real gate, so a refused door writes its own `authz.denied` row
-from inside the shared path (`refuse`, `internal/api/refusal.go`) — one row per refused door per
-call, with **`run_id` NULL**, because there is no run. A dry run that passes
-writes nothing at all. That is deliberate rather than suppressed: the row records
-that this principal was refused this capability, which is true whether or not
-they went on to launch, and a gate that audits at one door and not at the
-identical door one handler over is the drift the shared path exists to prevent.
-What it costs is that Review re-resolves on every edit, so a member editing
-against a closed door can write a row per keystroke — the NULL `run_id` is what
-tells those apart from the denials that actually bounded a run
+from inside the shared path (`refuse`, `internal/api/refusal.go`), with **`run_id` NULL**,
+because there is no run. A dry run that passes writes nothing at all. That is
+deliberate rather than suppressed: the row records that this principal was
+refused this capability, which is true whether or not they went on to launch, and
+a gate that audits at one door and not at the identical door one handler over is
+the drift the shared path exists to prevent.
+
+`run_id` NULL does not mark a dry run, because a launch refused before its run
+row exists carries it too. Every row written while serving the preflight request
+carries **`dry_run: true`** instead, stamped from the request context by
+`audit.DryRunRecorder` (`internal/audit/dryrun.go`) so no door's detail can set or
+clear it; a launch row never carries it. Review re-resolves on every edit, so a
+member editing against a closed door would otherwise write a row per keystroke.
+`audit.DenialCoalescer` (`internal/audit/coalesce.go`) writes the first refusal
+for an actor, target and `reason` in full and counts identical repeats for ten
+minutes, then appends one **`preflight.denial.coalesce`** row (`count` including
+the first row, `suppressed`, `first_at`, `last_at`). Nothing already written is
+changed, a window with no repeat writes no summary, and a launch refusal is never
+coalesced. The windows live in the replica that served the request, so a
+multi-replica deployment writes one summary per replica, and open windows are
+flushed on graceful shutdown. Rows written before 0.8.6 carry no marker
 (`handlePreflightRun`, `internal/api/preflight.go`).
 
 A 404 on a resource that genuinely doesn't exist stays silent by design. One
