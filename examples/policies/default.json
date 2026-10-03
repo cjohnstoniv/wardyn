@@ -29,5 +29,5 @@
       "requires_approval": true
     }
   ],
-  "auto_stop_after_sec": 0
+  "auto_stop_after_sec": 3600
 }

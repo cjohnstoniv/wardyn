@@ -232,6 +232,9 @@ different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 into the chart instead — an alternative to picking among the image's bundled
 ones — see [Default policy](#default-policy).
 
+The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops
+runs idle for an hour. To keep the old behaviour, use a policy with `auto_stop_after_sec` set to `0`.
+
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
 `image.tag` resolves to `.Chart.AppVersion`, so a stock install

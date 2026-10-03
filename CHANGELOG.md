@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **The shipped `examples/policies/default.json` now sets `auto_stop_after_sec` to `3600`**, so a run idle for an hour is stopped.
+  Policies you already copied from it are unchanged. But the image's default `WARDYN_DEFAULT_POLICY` points at that file, so a
+  deployment that uses the shipped file as its default policy now stops idle runs on upgrade. To keep the old behaviour, point
+  `WARDYN_DEFAULT_POLICY` at a policy with `auto_stop_after_sec` set to `0`.
 - **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
   refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
   the database server first. Take a dump before this upgrade: the audit conversion that follows in this
