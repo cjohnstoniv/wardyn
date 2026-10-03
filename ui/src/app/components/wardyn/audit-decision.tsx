@@ -83,6 +83,8 @@ export const ATTRIBUTED_RULE_SOURCES: ReadonlySet<string> = new Set([
   "brokered:git:branch-ns",
   "brokered:git:push-rules",
   "brokered:git:push-too-large",
+  "brokered:ado:denied",
+  "brokered:ado-git:denied",
 ]);
 
 // True for a refusal row (an egress.deny) whose rule_source is in the set. The

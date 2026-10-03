@@ -86,6 +86,7 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { ATTRIBUTED_RULE_SOURCES } from "../wardyn/audit-decision";
 import { toast } from "sonner";
 
 beforeEach(() => {
@@ -559,7 +560,7 @@ describe("RunDetailScreen — Audit tab Request access remedy", () => {
     await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
   };
 
-  it.each(["policy:denied", "policy:default-deny", "policy:method", "approval:denied", "brokered:git:push-rules"])(
+  it.each([...ATTRIBUTED_RULE_SOURCES])(
     "renders the remedy beside a refused %s row",
     async (source) => {
       await open({ ...RUN, policy: POLICY }, [row("a", "egress.deny", source)]);
