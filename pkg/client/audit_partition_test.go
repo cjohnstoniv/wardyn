@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -47,8 +49,9 @@ func TestAuditRetentionAndDrop(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/audit/retention":
-			_, _ = w.Write([]byte(`{"policy":{"days":0,"effective_days":0,"pending_days":90,"pending_effective_at":"2026-11-01T00:00:00Z"},` +
-				`"cutover":"2026-10-01T00:00:00Z","partitions":[{"name":"audit_events_legacy","rows":5,"state":"closed","eligible":false,"refusal":"audit_retention_inside_window"}],"months_ahead":12}`))
+			at := time.Now().UTC().Format(time.RFC3339)
+			_, _ = fmt.Fprintf(w, `{"policy":{"days":0,"effective_days":0,"pending_days":90,"pending_effective_at":%q},`+
+				`"cutover":%q,"partitions":[{"name":"audit_events_legacy","rows":5,"state":"closed","eligible":false,"refusal":"audit_retention_inside_window"}],"months_ahead":12}`, at, at)
 		case "POST /api/v1/audit/retention/drop":
 			var body map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&body)

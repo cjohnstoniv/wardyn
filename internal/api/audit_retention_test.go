@@ -85,10 +85,10 @@ func TestAuditRetention_OnlyTheSecurityTierReachesIt(t *testing.T) {
 
 func TestAuditRetention_StatusIsServedToSecurityAdmins(t *testing.T) {
 	pending := 90
-	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Now().UTC().Add(30 * 24 * time.Hour)
 	fake := &retentionFake{status: types.AuditRetentionStatus{
 		Policy:      types.AuditRetentionPolicy{Days: 0, EffectiveDays: 0, PendingDays: &pending, PendingEffectiveAt: &at},
-		Cutover:     time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		Cutover:     time.Now().UTC().Add(-24 * time.Hour),
 		MonthsAhead: 12,
 		Partitions:  []types.AuditRetentionPartition{{Name: "audit_events_legacy", Rows: 5, State: "closed", Refusal: store.RetentionInsideWindow}},
 	}}

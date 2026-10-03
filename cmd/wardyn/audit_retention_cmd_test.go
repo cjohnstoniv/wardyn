@@ -5,10 +5,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // execCmdCapture is execCmd that also returns what the command wrote to its stdout.
@@ -27,12 +29,15 @@ func execCmdCapture(t *testing.T, args ...string) (string, error) {
 // partition and the digest it was given, and says why a refusal was refused.
 func TestAuditRetentionCommands(t *testing.T) {
 	var dropBody map[string]string
+	pendingAt := time.Now().UTC().Add(30 * 24 * time.Hour).Truncate(time.Second)
+	cutover := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/audit/retention":
-			_, _ = w.Write([]byte(`{"policy":{"days":0,"effective_days":0,"pending_days":90,"pending_effective_at":"2026-11-01T00:00:00Z"},` +
-				`"cutover":"2026-10-01T00:00:00Z","months_ahead":12,"partitions":[` +
-				`{"name":"audit_events_legacy","rows":5,"state":"closed","eligible":false,"refusal":"audit_retention_inside_window"}]}`))
+			_, _ = fmt.Fprintf(w, `{"policy":{"days":0,"effective_days":0,"pending_days":90,"pending_effective_at":%q},`+
+				`"cutover":%q,"months_ahead":12,"partitions":[`+
+				`{"name":"audit_events_legacy","rows":5,"state":"closed","eligible":false,"refusal":"audit_retention_inside_window"}]}`,
+				pendingAt.Format(time.RFC3339), cutover.Format(time.RFC3339))
 		case "POST /api/v1/audit/retention/drop":
 			_ = json.NewDecoder(r.Body).Decode(&dropBody)
 			if dropBody["digest"] != "abc" {
@@ -52,7 +57,7 @@ func TestAuditRetentionCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audit retention: %v", err)
 	}
-	for _, want := range []string{"retention: forever (a decrease to 90 days takes effect 2026-11-01", "audit_events_legacy", "audit_retention_inside_window"} {
+	for _, want := range []string{"retention: forever (a decrease to 90 days takes effect " + pendingAt.Format(time.RFC3339), "audit_events_legacy", "audit_retention_inside_window"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("audit retention output lacks %q:\n%s", want, out)
 		}

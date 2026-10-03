@@ -817,7 +817,7 @@ run that is still live (a `PENDING`, `STARTING`, `RUNNING` or `WAITING_FOR_CONFI
 refuses unless it equals the one you supplied. In one transaction it then writes the chained
 `audit.retention.partition_dropped` event, the `audit_chain_anchors` row (partition, `seq` range, row count, digest, the
 dropped tail's last `row_hash`, who dropped it, and the event's `seq`), takes the partition out of the expected manifest, and detaches and
-drops it. A crash leaves all of it or none. `GET /audit/chain/verify` then starts from that anchor and still
+drops it. A crash leaves all of it or none. The scan of the partition runs before the chain lock is taken, so audit writers wait only for the drop itself; the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it, so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and nothing changed: retry. `GET /audit/chain/verify` then starts from that anchor and still
 re-hashes every retained row; a partition removed any other way fails verify.
 
 **Runbook: export, check, drop.**

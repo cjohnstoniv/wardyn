@@ -427,7 +427,7 @@ func parseBootFlags() *bootFlags {
 
 		// OFF by default (0 = keep forever), like recordingRetention above and for the same reason; unlike
 		// it, the audit log is only ever trimmed a whole closed partition at a time, through an attested drop.
-		auditRetentionDays:     flagIntEnv("audit-retention-days", "WARDYN_AUDIT_RETENTION_DAYS", 0, "audit retention window in days (default 0, keep forever); the oldest closed monthly partition older than the window can then be dropped through an attested, digest-checked drop. A decrease takes effect 30 days after the boot that first saw it; an increase at once"),
+		auditRetentionDays:     flagIntEnv("audit-retention-days", "WARDYN_AUDIT_RETENTION_DAYS", 0, "audit retention window in days (default 0, keep forever); the oldest closed monthly partition older than it can then be dropped, attested and digest-checked. A decrease takes effect 30 days after the boot that first saw it; an increase at once"),
 		auditRetentionAutodrop: flagBool("audit-retention-autodrop", "WARDYN_AUDIT_RETENTION_AUTODROP", false, "let the leader sweeper drop eligible oldest audit partitions itself, as the system actor (default false). UNATTESTED: no operator checked an export first"),
 
 		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
