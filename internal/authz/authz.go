@@ -36,6 +36,9 @@ const (
 	// the caller could otherwise make it, but their own session state (a
 	// deleted user-view type) conflicts with it.
 	EffectConflict Effect = "conflict"
+	// EffectBadRequest is a refusal answered 400: the request combines parameters the door does not
+	// accept together. Input shape, not a caller's rights.
+	EffectBadRequest Effect = "bad_request"
 )
 
 // Status is the HTTP status a refusal with this effect answers with.
@@ -49,6 +52,8 @@ func (e Effect) Status() int {
 		return 422
 	case EffectConflict:
 		return 409
+	case EffectBadRequest:
+		return 400
 	default:
 		return 403 // an unknown effect refuses
 	}
