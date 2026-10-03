@@ -4,6 +4,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -95,4 +96,32 @@ func refusePATNarrowedDuplicates(w http.ResponseWriter, prefix string, spec type
 		return true
 	}
 	return false
+}
+
+// errPATNarrowingSSHConflict marks the policy-write refusal of a narrowed
+// git_pat beside a same-forge ssh_key; specRefusalReason maps it to its wire
+// reason.
+var errPATNarrowingSSHConflict = errors.New(reasonGitPATNarrowingSSHConflict)
+
+// validatePATNarrowingSSHConflict refuses a policy that narrows a git_pat grant
+// (repos, access read or api) and also declares an ssh_key for the same forge,
+// following validateGrantLaneExclusivity: SSH is a second push path the PAT
+// broker cannot see, so the narrowing would not bind. Dispatch refuses the same
+// pairing (patNarrowingRefusal), which stays authoritative for a stored policy
+// this write never saw. An ssh_key is accepted only for github.com and
+// dev.azure.com (sshOver443Endpoint), folded here as it is there.
+func validatePATNarrowingSSHConflict(grants []types.GrantSpec) error {
+	for i, g := range grants {
+		if g.Kind != types.GrantGitPAT {
+			continue
+		}
+		sc, err := types.DecodeGitPATScope(g.Scope)
+		if err != nil || !sc.Narrowed() || !patSSHKeyFor(grants, sc.Host) {
+			continue
+		}
+		return fmt.Errorf("%w: eligible_grants[%d] narrows a git_pat grant for %q (repos, access read or api), and this policy also "+
+			"declares an ssh_key for the same forge. SSH is a second push path the PAT broker cannot see, so the narrowing would not bind. "+
+			"Drop the ssh_key grant, or the narrowing", errPATNarrowingSSHConflict, i, sc.Host)
+	}
+	return nil
 }

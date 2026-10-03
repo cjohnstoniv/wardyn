@@ -174,6 +174,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
   without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
   downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
+- **A narrowed `git_pat` grant now binds the run at the broker.** The PAT broker refuses, before any mint, a git
+  request for a repository outside the grant's `repos` (`brokered:git-pat:repo`) and, for `access: read`, both
+  doors of a push (`brokered:git-pat:read-only`). A request form a forge's path table does not list is refused.
+  A run whose narrowing cannot be enforced is refused at launch and by Review: `git_pat_narrowing_needs_broker`
+  (the PAT broker is off), `git_pat_narrowing_ssh_conflict` (a same-forge `ssh_key`, also refused at policy
+  write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
+  itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
+  `pat_grants` keys at start.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy

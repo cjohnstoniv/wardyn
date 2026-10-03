@@ -335,6 +335,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if narrowed != "" {
 		clampWarnings = append(clampWarnings, narrowed)
 	}
+	// Dispatch's git_pat narrowing refusals (runs_dispatch_pat_scope.go), the
+	// same reasons and sentences, so a narrowing the run could not enforce shows
+	// before the click.
+	if reason, detail := s.patNarrowingAtDoor(r, spec, scmSite); reason != "" {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reason, detail)
+		return
+	}
 	// Host capacity, launch's last refusal and in the same place: the same 503,
 	// reason and Retry-After, so a busy host shows before the click. false:
 	// Review writes no audit row.

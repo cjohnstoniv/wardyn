@@ -38,7 +38,11 @@ mitm_ca_key_pem
 mitm_hosts
 mitm_llm
 pat_grants
+pat_grants.*.access
+pat_grants.*.api
+pat_grants.*.forge
 pat_grants.*.grant_id
+pat_grants.*.repos
 pat_grants.*.username
 policy
 policy.allow_all_egress

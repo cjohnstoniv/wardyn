@@ -97,10 +97,10 @@ type Config struct {
 	// server-side and injects the credential itself. The PAT never reaches the
 	// sandbox.
 	//
-	// Per-HOST rather than per-repo, deliberately: unlike a GitHub App
-	// installation token, a PAT carries whatever scope the operator issued it
-	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
-	// confinement the credential does not have. Empty => the route always 403s.
+	// Keyed per HOST, with the grant's own scope beside it: a PAT carries whatever
+	// scope the operator issued it with and Wardyn cannot narrow the credential,
+	// but it can narrow the RUN. A narrowed grant's repos and read-only axes are
+	// enforced here, before any mint (pat_scope.go). Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT
 	// broker is on. handleBrokerMint refuses a sandbox-supplied mint naming one:
@@ -275,6 +275,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	case len(raw.LegacyADOGrants) == 1:
 		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
+	if err := validPATGrants(c.PATGrants); err != nil {
+		return nil, err
+	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
 	}
@@ -418,7 +421,22 @@ func (c *Config) applyDefaultsAndValidate() error {
 // PATGrant is one host's git_pat brokering: which grant to mint from, and the
 // git username that host expects alongside the PAT (Azure DevOps wants "pat",
 // GitLab wants "oauth2", and an operator may override either).
+//
+// The narrowing fields carry the grant's scope for the run, not for the PAT:
+// the credential keeps whatever reach its issuer gave it, and the broker refuses
+// a request outside this scope before it mints. Dispatch sets them only for a
+// narrowed grant, so an unnarrowed grant renders exactly as it did before and
+// meets an older proxy image unchanged.
+//
+//	Repos   nil = every repository the PAT reaches; an empty list = none
+//	Access  "read" refuses a push; "" is write
+//	Forge   the path table Repos is read with; "" is generic
+//	API     the forge API door (read by the API gate, not by git)
 type PATGrant struct {
 	GrantID  uuid.UUID `json:"grant_id"`
 	Username string    `json:"username,omitempty"`
+	Repos    *[]string `json:"repos,omitempty"`
+	Access   string    `json:"access,omitempty"`
+	Forge    string    `json:"forge,omitempty"`
+	API      bool      `json:"api,omitempty"`
 }

@@ -76,6 +76,7 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: d.site}
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{govCeilingSecret: []byte("v")}}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
+	st.grants = patRowsFor(run.ID, d.patGrants)
 
 	var firstGitHub *uuid.UUID
 	for _, id := range d.gitGrants {

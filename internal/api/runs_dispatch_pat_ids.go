@@ -7,8 +7,6 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // brokeredPATGrantIDs is every git_pat grant id of the run, for
@@ -30,11 +28,5 @@ func (s *Server) brokeredPATGrantIDs(ctx context.Context, runID uuid.UUID, broke
 	if err != nil {
 		return nil, err
 	}
-	var ids []uuid.UUID
-	for _, g := range grants {
-		if g.Spec.Kind == types.GrantGitPAT {
-			ids = append(ids, g.ID)
-		}
-	}
-	return ids, nil
+	return patGrantIDsOf(grants), nil
 }

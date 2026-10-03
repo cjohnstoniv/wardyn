@@ -63,6 +63,8 @@ type govEscapeStore struct {
 	// the one store write between the autonomy gate and launch's egress union,
 	// so a test can change what site config answers across that span.
 	onCreateRun func()
+	// grants is every grant CreateGrant was handed, in order.
+	grants []types.CredentialGrant
 }
 
 func newGovEscapeStore(cs *capStore) *govEscapeStore {
@@ -125,13 +127,18 @@ func (s *govEscapeStore) SetRunAgentExecID(context.Context, uuid.UUID, string) e
 }
 func (s *govEscapeStore) SetRunFailureHint(context.Context, uuid.UUID, string) error { return nil }
 func (s *govEscapeStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.grants = append(s.grants, g)
 	return g, nil
 }
 
-// ListGrantsByRun reports no grants: CreateGrant above keeps none, and dispatch
-// reads the list for the run's git_pat ids (brokeredPATGrantIDs).
+// ListGrantsByRun reports the grants CreateGrant kept: dispatch reads the list
+// for the run's git_pat ids (brokeredPATGrantIDs) and each winning grant's scope.
 func (s *govEscapeStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
-	return nil, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.grants), nil
 }
 
 func (s *govEscapeStore) CreateRun(_ context.Context, run types.AgentRun) (types.AgentRun, error) {
