@@ -26,6 +26,7 @@ vi.mock("@xterm/xterm", () => {
       this.cols = cols;
       this.rows = rows;
     }
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}
