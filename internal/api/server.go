@@ -412,7 +412,8 @@ type Config struct {
 	HostCapacityConfig
 	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
 	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
-	// is unlimited. Past it a create is a 422 with no audit row (createRun).
+	// is unlimited. Past it every door answers 422 run_quota (createRun); POST /runs
+	// audits nothing for it.
 	MaxConcurrentRuns int
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
