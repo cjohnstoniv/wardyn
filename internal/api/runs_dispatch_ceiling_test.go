@@ -313,6 +313,12 @@ func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, 
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 
+// ListGovernanceProfiles answers none: dispatch reads the run's profile for its
+// refusal attribution, and the embedded store has no such table.
+func (s ceilingRecordStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+	return nil, nil
+}
+
 func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return false, nil
 }

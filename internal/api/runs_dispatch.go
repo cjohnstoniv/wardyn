@@ -549,6 +549,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended: !p.Interactive && policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0,
+			// The policy a refusal names (runs_dispatch_attribution.go); nil when
+			// the run has no profile and the site sets no policy_help, because an
+			// older proxy refuses the key.
+			Attribution: s.runAttribution(ctx, run, siteCfg),
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

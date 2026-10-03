@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -202,6 +203,14 @@ type Config struct {
 	// make (push_hold.go). Control-plane-authored at dispatch; false (the
 	// default) holds.
 	Unattended bool `json:"unattended,omitempty"`
+	// Attribution names the policy that governs this run, for the refusals the
+	// policy decided (refusal_attribution.go). Control-plane-authored at dispatch
+	// for a run under a governance profile, or any run when the site sets
+	// policy_help; nil otherwise. LoadConfigBytes re-projects it, so what the
+	// proxy writes into a header is never a value policyref.Project refused. An
+	// older proxy image refuses this key at start (strict decode), so the proxy
+	// image is upgraded before wardynd.
+	Attribution *policyref.Ref `json:"attribution,omitempty"`
 }
 
 const (
@@ -269,6 +278,7 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
 	}
+	c.Attribution = reprojectAttribution(c.Attribution)
 	return &c, nil
 }
 

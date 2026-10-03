@@ -108,6 +108,8 @@ A relayed editor is the place developers most often meet the egress policy, and
 | `X-Wardyn-Egress` | `denied` (permanently blocked) or `approval-pending` (raised for a human — retry after it is decided) |
 | `X-Wardyn-Host` | the host the decision applies to |
 | `X-Wardyn-Egress-Reason` | which rule decided it |
+| `X-Wardyn-Policy` | on a refusal the run's policy decided: `profile; name="<percent-encoded name>"` for a run launched under a governance profile, or `deployment` for the deployment's default |
+| `X-Wardyn-Policy-Request` | where to ask for a change: the profile's (or the site's) request link, else `mailto:<email>`; absent when none is set |
 
 The **reason** matters because `denied` alone is ambiguous, and the right next
 action differs completely:
@@ -124,6 +126,24 @@ action differs completely:
 
 Those are the same static strings the decision log records, so nothing is
 disclosed here that the audit trail does not already hold.
+
+The two policy headers, and one added line in the body ("This run is governed by
+the profile "Team A". To request a change: …"), come only with `policy:denied`,
+`policy:default-deny`, `policy:method` and `approval:denied`, and with the git,
+PAT and Azure DevOps broker refusals the policy decides (a repository or host not
+granted, the branch namespace, the push content rules). A fault (`builtin:*`,
+`policy:evaluator-error`, an uninspectable push) names no policy. The line says
+"governed by", not "forbidden by": the proxy knows the run's governing profile,
+not which layer refused. It does not name the profile's owner.
+
+**Upgrade note.** Move the proxy image pin in the same step as wardynd, image
+first. From 0.8.6, wardynd writes `attribution` into the proxy's config for every
+run launched under a governance profile (with or without a contact) and for every
+run when the site sets `policy_help`. A 0.8.5 proxy refuses that key at startup
+(its config decode is strict), so the run fails to launch. On any deployment that
+assigns a governance profile, the proxy image must be the 0.8.6 image before
+wardynd is upgraded; if you pin `WARDYN_PROXY_IMAGE` or `k8s.proxyImage` by
+digest, move the pin with wardynd.
 
 ## Extensions are not installable by default
 

@@ -134,7 +134,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	grantID, granted := p.gitGrants[orgRepo]
 	if !granted {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
-		http.Error(w, "repository not granted to this run", http.StatusForbidden)
+		p.denyAttributed(w, "repository not granted to this run", http.StatusForbidden)
 		return
 	}
 	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
@@ -609,7 +609,7 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 		// on the paths that show server messages, and always shows the 403).
 		// A sideband report-status would read better but means claiming
 		// "unpack ok" for a pack we never forwarded.
-		http.Error(w, "wardyn: "+err.Error()+
+		p.denyAttributed(w, "wardyn: "+err.Error()+
 			"\nthis run may push only to "+prefix+"*", http.StatusForbidden)
 		return nil, false
 	}

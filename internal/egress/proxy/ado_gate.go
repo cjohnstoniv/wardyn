@@ -333,6 +333,9 @@ func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, p
 	if p.sink != nil {
 		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceADODenied))
 	}
+	if line := p.attributeRefusal(w); line != "" {
+		msg += " " + line
+	}
 	writeADORefusal(w, http.StatusForbidden, "CapabilityNotGrantedException", msg)
 	return false
 }
