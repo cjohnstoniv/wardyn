@@ -19,6 +19,7 @@ import {
   CC_ORDER as ORDERED_CLASSES,
   type ConfinementClass,
   type RunPolicySpec,
+  type SetupModelProvider,
   type Workspace,
 } from "../../../lib/types";
 import { ccRank as rank } from "./new-run-primitives";
@@ -42,6 +43,7 @@ export interface UseNewRunPolicyParams {
   govFloor: ConfinementClass | undefined;
   operator: boolean;
   workspaces: Workspace[];
+  modelProviders?: SetupModelProvider[];
   /** The Barrier's dirty-check baseline (new-run-screen.tsx's pristineCc, next
    *  to pristineSpec) — the up-clamp effect below moves it with its own write,
    *  as the /setup/status effect does when it re-seeds the class, so a
@@ -63,6 +65,7 @@ export function useNewRunPolicy({
   govFloor,
   operator,
   workspaces,
+  modelProviders,
   pristineCc,
 }: UseNewRunPolicyParams) {
   const cc = state.confinementClass;
@@ -150,9 +153,9 @@ export function useNewRunPolicy({
   // this run's selections" line and goes on the wire, so the screen cannot show
   // one policy and launch another.
   const merged = React.useMemo(
-    () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces) : null),
+    () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces, modelProviders) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- parsed is rebuilt every render; specText is what actually changes
-    [specText, state, workspaces],
+    [specText, state, workspaces, modelProviders],
   );
   const added = merged?.added;
 

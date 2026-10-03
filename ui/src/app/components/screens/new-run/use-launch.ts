@@ -18,11 +18,12 @@ import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
-import type { Workspace } from "../../../lib/types";
+import type { SetupModelProvider, Workspace } from "../../../lib/types";
 
 export interface UseLaunchParams {
   state: WizardState;
   workspaces: Workspace[];
+  modelProviders?: SetupModelProvider[];
   /** The mode row: launch by reference (a saved policy) vs. an authored document. */
   useSaved: boolean;
   /** Whether the Barrier control carries an EXPLICIT pick — see new-run-screen.tsx's ccTouched. */
@@ -77,7 +78,7 @@ export interface PreflightRefusal {
 // `ccTouched`/`merged` are the screen's own form state, read here rather than
 // duplicated: buildRunInput composes the wire body from exactly what the form
 // shows, so the screen and this hook can never author two different requests.
-export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
+export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
   const navigate = useNavigate();
   const mounted = React.useRef(true);
   React.useEffect(() => {
@@ -116,7 +117,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   // the same body, since preflight's verdict is only true if it is a dry-run
   // of what Launch actually does. A second builder here is how the two drift.
   const buildRunInput = () => {
-    const { run: built } = buildSpec(state, workspaces);
+    const { run: built } = buildSpec(state, workspaces, modelProviders);
     // Untouched Barrier control (ccTouched): OMIT confinement_class so the
     // server's own default decides and its audit trail reads `defaulted`.
     const run = ccTouched ? built : { ...built, confinement_class: undefined };
