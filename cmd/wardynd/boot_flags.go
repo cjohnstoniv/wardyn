@@ -151,6 +151,7 @@ type bootFlags struct {
 	recordingDir       *string
 	recordingRetention *int
 	auditSinks         *string
+	approvalNotify     *string
 	auditSpool         *string
 	auditSource        *string
 
@@ -431,6 +432,7 @@ func parseBootFlags() *bootFlags {
 		// the operator asks for a retention window.
 		recordingRetention: flagIntEnv("recording-retention-days", "WARDYN_RECORDING_RETENTION_DAYS", 0, "delete stored session recordings older than N days (default 0, keep forever)"),
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
+		approvalNotify:     flagEnv("approval-notify", "WARDYN_APPROVAL_NOTIFY", "", "approval notification config JSON (webhook channels); empty disables notifications"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 

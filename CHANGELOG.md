@@ -99,6 +99,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
 
+### Added
+
+- **Approval notifications over a signed webhook (`WARDYN_APPROVAL_NOTIFY`).** Off by default. When set,
+  every approval raised gets a durable outbox row in the same transaction, and a worker on each replica
+  delivers it at least once to the named webhook channels, with an `X-Wardyn-Signature` HMAC when a secret
+  is set. A dead notification writes an `approval.notify.failed` audit row and counts in
+  `wardyn_approval_notify_failed_total{channel}`; a run is held to 25 notifications an hour. Migration
+  `0118_approval_notifications` only adds the `approval_notifications` table, and a 0.8.5 binary refuses a
+  database that has applied it, so a downgrade is a restore from the pre-upgrade dump. See "Approval
+  notifications" in `docs/OPERATIONS.md`.
+
 ### Security
 
 - **A run's secrets are masked from a sealed manifest, and a registry miss fails closed (migration

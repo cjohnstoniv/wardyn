@@ -27,6 +27,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 
 - [State stores](#state-stores)
 - [Monitoring](operations/monitoring.md)
+- [Approval notifications](#approval-notifications)
 - [Multi-user: who can change what](#multi-user-who-can-change-what)
 - [Run lifetime: lease, extend, revive, ends](operations/run-lifetime.md)
 - [Exercising member mode as an admin](operations/member-mode.md)
@@ -757,6 +758,87 @@ nothing in that direction is built.
 ## Monitoring
 
 Moved to [monitoring.md](operations/monitoring.md).
+
+## Approval notifications
+
+A pending approval waits in the console until someone opens the Approvals page. With
+`WARDYN_APPROVAL_NOTIFY` set, wardynd also tells a channel you name that one is waiting. Unset or empty
+(the default) means no notification row is written and no worker runs.
+
+**What it guarantees.** Every approval raised while the setting is on gets a durable outbox row in the
+same database transaction that creates the approval, at both places an approval can be created (the API
+raise paths and the broker's credential path). A crash cannot leave an approval with no notification,
+and a raise that loses a dedup race writes nothing. A worker on every replica then delivers each row at
+least once, or records a failure. Approvals already pending when you turn it on get no notification.
+
+**Configuration.** One JSON value, read once at boot; a change needs a restart. The value holds URLs
+and secrets, so deliver it through `WARDYN_APPROVAL_NOTIFY_FILE` from a secret store where you can (see
+[ENV.md](ENV.md)). Wardynd never logs it, and a boot refusal names a channel `id` and the rule it broke,
+never a URL, secret or token.
+
+```json
+{
+  "console_url": "https://wardyn.example.com",
+  "channels": [
+    {"id": "sec-hook", "type": "webhook", "url": "https://hooks.example.com/wardyn",
+     "hmac_secret": "<shared secret>", "bearer_token": "<optional>"}
+  ]
+}
+```
+
+- `id` is `[a-z0-9_-]{1,32}`, unique. It is the metric label and what the outbox stores; rotating a URL
+  under the same `id` keeps pending rows deliverable.
+- `type` must be one this build implements: `webhook`. Any other value refuses boot.
+- HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
+  Plain HTTP with none of those is allowed.
+- `console_url` is optional and must be `https://` with no userinfo, query or fragment.
+
+**The webhook body, `wardyn.approval.v1`.** A `POST` of JSON with `X-Wardyn-Delivery: <delivery_id>`
+and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever sent:
+
+| Field | Meaning |
+|---|---|
+| `schema` | the literal `wardyn.approval.v1` |
+| `delivery_id` | the outbox row's id, stable across retries |
+| `event`, `tier` | `raised` at tier 0 |
+| `approval.id`, `approval.kind`, `approval.requested_at` | the approval |
+| `run.id` | the run that raised it |
+| `profile.id`, `profile.name` | the run's governance profile, when it has one |
+| `requester.principal`, `requester.email` | the run's owner |
+| `console_url` | `<console_url>/approvals`, when configured |
+
+The request scope (host, tool arguments, push paths), the reason text, the run title and any credential
+are never sent: the sandbox agent writes or influences them, and an approval is decided in the console,
+signed in, not from the message. Every string field is control-stripped, capped at 256 bytes and passed
+through the run's secret masker before encoding.
+
+**Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
+HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
+Reject a `t` more than five minutes old. Test vector: key `whsec_test_vector`, `t` 1700000000, body
+`{"schema":"wardyn.approval.v1","delivery_id":"d"}` gives
+`v1=b851b43234ba1d1386179e9f8785cf6c37337c6dee0791f8479579e0eb1e097a`.
+
+**At least once.** A crash between a successful send and recording it resends, so a receiver that cares
+drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
+
+**Retries and failure.** Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m and
+4 m. A row goes dead on its fifth failure, on any other 4xx or a 3xx (redirects are never followed:
+a redirect would hand the body and signature to a host you did not name), or when still unsent an hour
+after it came due. A dead row writes one `approval.notify.failed` audit row and increments
+`wardyn_approval_notify_failed_total{channel}`; both carry an error class (`http_status:503`, `timeout`,
+`tls_verify`, `dial`, `redirect_refused`, `expired`), never a URL or a response body. Terminal rows older
+than 30 days are deleted, 500 per tick.
+
+**A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
+the one real approval under a flood of chat messages. A raise over the budget still creates its
+approval and shows in the console, but enqueues nothing; it increments
+`wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
+per run per hour (per replica).
+
+**Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
+notification endpoint, and for a corporate proxy if one fronts them, through
+`networkPolicy.egress.extra`, exactly as for SIEM sinks. The delivery client uses the same transport as
+the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` and the daemon proxy setting apply to it.
 
 ## Managed laptops: hybrid enrolment and audit federation
 

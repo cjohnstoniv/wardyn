@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -84,13 +85,9 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 		return ap, nil
 	case errors.Is(err, errNoRow):
 		// PENDING insert; a concurrent double-insert loses via DO NOTHING.
-		newID := uuid.New()
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO approvals (id, run_id, grant_id, kind, requested_scope, state)
-			 VALUES ($1, $2, $3, 'credential', $4, 'PENDING')
-			 ON CONFLICT (grant_id) WHERE kind = 'credential' AND state = 'PENDING' DO NOTHING`,
-			newID, runID, grantID, []byte(spec.Scope)); err != nil {
-			return types.ApprovalRequest{}, fmt.Errorf("broker: insert approval: %w", err)
+		afterCommit, err := insertPendingApproval(ctx, tx, uuid.New(), runID, grantID, []byte(spec.Scope))
+		if err != nil {
+			return types.ApprovalRequest{}, err
 		}
 		err = tx.QueryRow(ctx, selectLiveCredentialApproval, grantID).
 			Scan(&ap.ID, &ap.State, &ap.RequestedScope, &ap.MintedJTI, &ap.Reason)
@@ -101,6 +98,7 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 			return types.ApprovalRequest{}, fmt.Errorf("broker: commit approval insert: %w", err)
 		}
 		committed = true
+		afterCommit(ctx)
 		ap.RunID = runID
 		ap.GrantID = &grantID
 		ap.Kind = types.ApprovalCredential
@@ -108,6 +106,41 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 	default:
 		return types.ApprovalRequest{}, fmt.Errorf("broker: select approval: %w", err)
 	}
+}
+
+// insertCredentialApproval is the broker's one approvals INSERT. A concurrent double-insert loses via
+// DO NOTHING, which is also what makes the loser enqueue no notification.
+const insertCredentialApproval = `INSERT INTO approvals (id, run_id, grant_id, kind, requested_scope, state)
+	 VALUES ($1, $2, $3, 'credential', $4, 'PENDING')
+	 ON CONFLICT (grant_id) WHERE kind = 'credential' AND state = 'PENDING' DO NOTHING`
+
+// insertPendingApproval inserts the PENDING approval and, when approval notifications are configured,
+// its outbox rows in the SAME statement (a CTE over the inserted row), so a lost race inserts neither.
+// The returned func records a budget suppression and must run after the transaction commits.
+func insertPendingApproval(ctx context.Context, tx Tx, id, runID, grantID uuid.UUID, scope []byte) (func(context.Context), error) {
+	var profileID *uuid.UUID
+	if notify.Enabled() {
+		// Same transaction as the insert: a concurrent profile change cannot route this approval by stale data.
+		if err := tx.QueryRow(ctx, notify.ProfileSQL, runID).Scan(&profileID); err != nil && !errors.Is(err, errNoRow) {
+			return nil, fmt.Errorf("broker: read run profile: %w", err)
+		}
+	}
+	enq := notify.NewEnqueue(types.ApprovalCredential, profileID)
+	if !enq.On() {
+		if _, err := tx.Exec(ctx, insertCredentialApproval, id, runID, grantID, scope); err != nil {
+			return nil, fmt.Errorf("broker: insert approval: %w", err)
+		}
+		return func(context.Context) {}, nil
+	}
+	var raised, queued int64
+	args := append([]any{id, runID, grantID, scope}, enq.Args()...)
+	err := tx.QueryRow(ctx,
+		`WITH ins AS (`+insertCredentialApproval+` RETURNING id, run_id, requested_at)`+enq.Tail(5), args...).
+		Scan(&raised, &queued)
+	if err != nil {
+		return nil, fmt.Errorf("broker: insert approval: %w", err)
+	}
+	return func(ctx context.Context) { enq.Done(ctx, id, runID, raised, queued) }, nil
 }
 
 // selectGrantApprovalForUpdate is the authoritative read inside the mint tx:

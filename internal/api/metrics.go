@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -528,6 +529,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
 	}
 	s.writeSinkDrops(w)
+	writeApprovalNotify(w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.
 	s.writeEbpfGroundtruthCounters(ctx, w)
@@ -552,6 +554,30 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {
 		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
+}
+
+// writeApprovalNotify emits the two per-channel approval-notification counters: rows that went dead
+// (delivery gave up) and raises the per-run budget kept out of the outbox. Omitted entirely when
+// notifications are not configured; channel ids are the config's bounded [a-z0-9_-] ids. Every
+// configured channel gets a series, zero included, so an alert on rate() has something to read.
+func writeApprovalNotify(w io.Writer) {
+	channels := notify.Channels()
+	if len(channels) == 0 {
+		return
+	}
+	c := notify.Snapshot()
+	for _, m := range []struct {
+		name, help string
+		vals       map[string]int64
+	}{
+		{"wardyn_approval_notify_failed_total", "Approval notifications that went dead (retries exhausted, non-retryable failure, or unsent an hour after due), by channel.", c.Failed},
+		{"wardyn_approval_notify_suppressed_total", "Approval raises that enqueued no notification because the run exceeded its hourly budget, by channel.", c.Suppressed},
+	} {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", m.name, m.help, m.name)
+		for _, ch := range slices.Sorted(slices.Values(channels)) {
+			fmt.Fprintf(w, "%s{channel=%q} %d\n", m.name, ch, m.vals[ch])
+		}
 	}
 }
 
