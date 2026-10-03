@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +42,8 @@ type countingShellSession struct {
 	mu      sync.Mutex
 	writes  [][]byte
 	resizes int
+	sizes   [][2]uint16 // every Resize, in order
+	closed  atomic.Bool
 }
 
 func newCountingShellSession() *countingShellSession {
@@ -57,14 +60,32 @@ func (s *countingShellSession) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (s *countingShellSession) Resize(context.Context, uint16, uint16) error {
+func (s *countingShellSession) Resize(_ context.Context, cols, rows uint16) error {
 	s.mu.Lock()
 	s.resizes++
+	s.sizes = append(s.sizes, [2]uint16{cols, rows})
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *countingShellSession) Close() error { _ = s.w.Close(); return s.r.Close() }
+// lastSize is the size of the most recent Resize (0,0 when none).
+func (s *countingShellSession) lastSize() (cols, rows uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.sizes) == 0 {
+		return 0, 0
+	}
+	l := s.sizes[len(s.sizes)-1]
+	return l[0], l[1]
+}
+
+func (s *countingShellSession) Close() error {
+	s.closed.Store(true)
+	_ = s.w.Close()
+	return s.r.Close()
+}
+
+func (s *countingShellSession) isClosed() bool { return s.closed.Load() }
 
 // feed pushes PTY output toward the client (blocks until the pump reads it).
 func (s *countingShellSession) feed(b string) { _, _ = io.WriteString(s.w, b) }
@@ -102,14 +123,33 @@ type holderTestRunner struct {
 	fakeRunner
 	mu       sync.Mutex
 	sessions []*countingShellSession
+	opts     []runner.AttachOptions // the options each Attach was called with
 }
 
-func (r *holderTestRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+func (r *holderTestRunner) Attach(_ context.Context, _ string, opts runner.AttachOptions) (runner.Session, error) {
 	sess := newCountingShellSession()
 	r.mu.Lock()
 	r.sessions = append(r.sessions, sess)
+	r.opts = append(r.opts, opts)
 	r.mu.Unlock()
 	return sess, nil
+}
+
+// attachOpts is the options the i-th Attach was called with.
+func (r *holderTestRunner) attachOpts(i int) runner.AttachOptions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i >= len(r.opts) {
+		return runner.AttachOptions{}
+	}
+	return r.opts[i]
+}
+
+// waitForSession waits for the i-th Attach and returns its session.
+func waitForSession(t *testing.T, r *holderTestRunner, i int) *countingShellSession {
+	t.Helper()
+	waitFor(t, "the attach exec to open", func() bool { return r.session(i) != nil })
+	return r.session(i)
 }
 
 func (r *holderTestRunner) session(i int) *countingShellSession {
@@ -680,8 +720,13 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	if n := observed.written(); n != 0 {
 		t.Errorf("observer's keystrokes reached the sandbox (%d writes) — read-only is not enforced server-side", n)
 	}
-	if n := observed.resizeCount(); n != 0 {
-		t.Errorf("observer resized the SHARED tmux session (%d resizes) — that clamps the holder's terminal", n)
+	// The observer's exec follows the WRITER's size; its own 20x5 never reaches
+	// the shared window.
+	if o := fr.attachOpts(1); !o.Observer || o.Cols != 132 || o.Rows != 50 {
+		t.Errorf("observer attach options = %+v, want an observer seeded at the writer's 132x50", o)
+	}
+	if cols, rows := observed.lastSize(); cols == 20 || rows == 5 {
+		t.Errorf("observer resized the SHARED tmux session to its own %dx%d — that clamps the holder's terminal", cols, rows)
 	}
 	if v := srv.attachHolderFor(run.ID).view(); v.Cols != 132 || v.Rows != 50 {
 		t.Errorf("observer's resize overwrote the holder's geometry: %+v", v)
@@ -865,8 +910,8 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 	if n := observed.written(); n != 0 {
 		t.Errorf("read-only ssh client's keystrokes reached the sandbox (%d writes)", n)
 	}
-	if n := observed.resizeCount(); n != 0 {
-		t.Errorf("read-only ssh client resized the shared tmux session (%d resizes)", n)
+	if cols, rows := observed.lastSize(); cols == 20 || rows == 5 {
+		t.Errorf("read-only ssh client resized the shared tmux session to its own %dx%d", cols, rows)
 	}
 	if v := srv.attachHolderFor(run.ID).view(); v.Principal != holderOwner || v.Cols != 100 {
 		t.Errorf("the observer disturbed the holder record: %+v", v)
