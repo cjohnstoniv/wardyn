@@ -221,6 +221,9 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			}
 			clampWarnings = append(clampWarnings, warns...)
 		}
+		if refusePATNarrowedDuplicates(w, "invalid inline_policy: ", spec) {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
+		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
@@ -331,6 +334,9 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
 	storedWarns = append(storedWarns, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
+	if refusePATNarrowedDuplicates(w, "invalid policy: ", spec) {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
+	}
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
@@ -785,8 +791,8 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 		r, e := injectionRuleFromScope(g.Scope)
 		return r.Host, r.SecretName, "", true, e
 	case types.GrantGitPAT:
-		h, sn, _, e := gitPATScopeFields(g.Scope)
-		return h, sn, "", true, e
+		sc, e := types.DecodeGitPATScope(g.Scope)
+		return sc.Host, sc.SecretName, "", true, e
 	case types.GrantSSHKey:
 		h, kr, _, khr, e := sshKeyScopeFields(g.Scope)
 		return h, kr, khr, true, e
@@ -893,10 +899,11 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			}
 			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly, ""})
 		case types.GrantGitPAT:
-			patHost, secretName, _, derr := gitPATScopeFields(g.Scope)
+			pat, derr := types.DecodeGitPATScope(g.Scope)
 			if derr != nil {
 				return nil, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
+			patHost, secretName := pat.Host, pat.SecretName
 			// nameSinkReservedSecret, not sinkReservedSecret (#1048): this kind
 			// returns the raw value into the sandbox, so it needs the wider guard
 			// that also refuses a wardyn-provider-*-key name. api_key above stays

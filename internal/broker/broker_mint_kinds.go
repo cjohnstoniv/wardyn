@@ -103,12 +103,9 @@ func (b *Broker) mintAPIKey(spec types.GrantSpec) (Minted, error) {
 // (ADO/GitLab), out of scope. The returned Token is masked from PTY/asciicast
 // by mint()'s maskReg.Add.
 func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
-	var sc gitPATScope
-	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
+	sc, err := types.DecodeGitPATScope(spec.Scope)
+	if err != nil {
 		return Minted{}, fmt.Errorf("broker: decode git_pat scope: %w", err)
-	}
-	if sc.Host == "" || sc.SecretName == "" {
-		return Minted{}, errors.New("broker: git_pat scope requires host and secret_name")
 	}
 	if reservedBrokerSecret(sc.SecretName) {
 		return Minted{}, fmt.Errorf("broker: git_pat secret name %q is reserved for platform internals", sc.SecretName)

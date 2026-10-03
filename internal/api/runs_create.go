@@ -461,7 +461,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 		// owner's OWN row only (#1429): the shared, operator-namespace token is
 		// retired, and the fallback to it is what would serve it.
 		if g.Kind == types.GrantGitPAT {
-			if host, _, _, derr := gitPATScopeFields(g.Scope); derr == nil && adoGrantHost(sc, host) {
+			if pat, derr := types.DecodeGitPATScope(g.Scope); derr == nil && adoGrantHost(sc, pat.Host) {
 				g.OwnerOnly = true
 			}
 		}
@@ -504,7 +504,8 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 			}
 		}
 		if g.Kind == types.GrantGitPAT {
-			if host, _, _, derr := gitPATScopeFields(g.Scope); derr == nil {
+			if pat, derr := types.DecodeGitPATScope(g.Scope); derr == nil {
+				host := pat.Host
 				// The `pat` lane, vetoed: no WARDYN_GIT_PAT_GRANTS entry — AND no ADO
 				// egress bundle, which is the half a veto written anywhere else would
 				// have left behind. Nothing but this arm adds those domains, so
@@ -569,8 +570,8 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 func grantLaneEgress(g types.GrantSpec) []string {
 	switch g.Kind {
 	case types.GrantGitPAT:
-		if host, _, _, err := gitPATScopeFields(g.Scope); err == nil {
-			return adoEgressDomains(host)
+		if sc, err := types.DecodeGitPATScope(g.Scope); err == nil {
+			return adoEgressDomains(sc.Host)
 		}
 	case types.GrantSSHKey:
 		if host, _, _, _, err := sshKeyScopeFields(g.Scope); err == nil {

@@ -56,6 +56,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   live output read answer `503` `mask_state_unavailable` (the SSH shell closes with an error line). Let
   such runs end, or end them, before you restart; runs dispatched by 0.8.6 survive restarts. Before 0.8.6
   the same restart passed that output through unmasked.
+- **A `git_pat` scope now carries `repos`, `access`, `api` and `forge`, and a stray key is refused at write.**
+  A stored scope that already used one of those four key names is enforced as that axis from this upgrade
+  on, and a downgrade runs a narrowed policy unnarrowed. Policy writes,
+  governance profiles, presets, inline run policies and the boot `--policy` file now answer `400` for an
+  unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true`;
+  stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
+  narrowed is refused (`400` at write, `422` at launch).
 
 ### Added
 
