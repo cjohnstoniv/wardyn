@@ -512,7 +512,11 @@ re-running the PATCH, or that image merges unscanned.
 apart.
 
 `trivy (wardynd-fips)` is the same case: the PATCH has to be re-run by the owner
-before that context is required.
+before that context is required, and after the FIRST real tag that builds it the
+owner confirms `ghcr.io/cjohnstoniv/wardynd-fips` is a PUBLIC package (a
+newly-created GHCR package can default to private, which silently breaks every
+documented pull). `ghcr.io/cjohnstoniv/staging/wardynd-fips` may stay private:
+only the workflow reads it.
 
 **#141 (`agent-vscode`/`agent-novnc` join the publish matrix) is exactly this
 case, and it is not yet done.** This document names `trivy (agent-vscode)` and
