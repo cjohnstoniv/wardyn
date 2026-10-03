@@ -165,7 +165,8 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
     renderRun({ ...RUN, interactive: false, state: "RUNNING" });
     // RUN_MODE.autonomous.blurb — there is no PTY to type into.
     expect(await screen.findByText(/Runs unattended/i)).toBeInTheDocument();
-    expect(screen.getByText("Output")).toBeInTheDocument();
+    // The hero pane's title; the Output TAB's trigger carries the same word.
+    expect(screen.getAllByText("Output").some((el) => el.closest('[role="tab"]') === null)).toBe(true);
   });
 
   // Persona-review product finding #9: a run whose form said "No agent, no
