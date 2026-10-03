@@ -101,6 +101,21 @@ var guardExternalStores = []string{
 	guardStorePkg + "/azurekv",
 }
 
+// guardCtxFromFirstArg are the api server's cross-replica lock helpers
+// (internal/api/locks.go): each returns, as its first result, the context it was
+// given with the lock's hold on it (cancelled if the lock is lost), and nothing
+// else. Like a context.With* call, its result is marked exactly when its first
+// argument is, so a Get that receives it is classified by the argument. A new
+// helper of that shape is listed here; one that returns any other context is not.
+var guardCtxFromFirstArg = func() map[string]bool {
+	m := map[string]bool{}
+	for _, name := range []string{"lock", "tryLock", "lockRunOp", "tryLockRunOp", "lockAWSSSOOwner",
+		"tryLockAWSSSOOwner", "lockAWSSSORenewal", "lockADOSignIn", "lockADOSignInRedeem"} {
+		m["(*"+guardModPath+"/internal/api.Server)."+name] = true
+	}
+	return m
+}()
+
 type listedPkg struct {
 	ImportPath, Dir, Export string
 	GoFiles                 []string
@@ -286,6 +301,8 @@ func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
 		case k == guardWithPurpose || k == guardSiteAudited:
 			return ctxMarked
 		case strings.HasPrefix(k, "context.") && len(a.Args) > 0:
+			return c.class(a.Args[0], seen)
+		case guardCtxFromFirstArg[k] && len(a.Args) > 0:
 			return c.class(a.Args[0], seen)
 		}
 	case *ast.Ident:

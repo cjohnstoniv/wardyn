@@ -91,6 +91,67 @@ var createRunSQL = `
 
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
+	args, err := s.createRunArgs(r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	return scanRun(s.Pool.QueryRow(ctx, createRunSQL, args...))
+}
+
+// ErrRunCapReached is CreateRunUnderCap's refusal: the deployment already holds
+// its cap of non-terminal runs.
+var ErrRunCapReached = errors.New("store: deployment run cap reached")
+
+// CreateRunUnderCap is CreateRun with a deployment-wide ceiling on non-terminal
+// runs (WARDYN_MAX_CONCURRENT_RUNS). The count and the insert share one
+// transaction-scoped advisory lock, so two replicas racing at the cap admit
+// exactly the cap. limit <= 0 is unlimited and takes no lock. Rows are counted,
+// not kept in a counter, so a crashed path cannot drift it.
+func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error) {
+	if limit <= 0 {
+		return s.CreateRun(ctx, r)
+	}
+	args, err := s.createRunArgs(r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+		return types.AgentRun{}, err
+	}
+	var active int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, nonTerminalStateNames()).Scan(&active); err != nil {
+		return types.AgentRun{}, fmt.Errorf("store: count active runs: %w", err)
+	}
+	if active >= limit {
+		return types.AgentRun{}, ErrRunCapReached
+	}
+	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.AgentRun{}, err
+	}
+	return created, nil
+}
+
+// CountNonTerminalRuns is the number of non-terminal run rows, the quantity
+// CreateRunUnderCap holds under the cap. It takes no lock: a pre-flight read for
+// a refusal that must come before an identity is minted, never the authority.
+func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
+	var n int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, nonTerminalStateNames()).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return n, nil
+}
+
+func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 	// updated_at is stamped on the DATABASE's clock like every other writer,
 	// back-dated by the row's own age so an app-clock write here can't skew the
 	// idle reaper's DB-clock idleness measurement (30s TouchDebounce margin).
@@ -100,17 +161,16 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	}
 	limitsJSON, err := json.Marshal(r.RunLimits)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("store: marshal run limits: %w", err)
+		return nil, fmt.Errorf("store: marshal run limits: %w", err)
 	}
-	row := s.Pool.QueryRow(ctx, createRunSQL,
+	return []any{
 		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
-	)
-	return scanRun(row)
+	}, nil
 }
 
 // GetRun returns the run for id, or ErrNotFound.
@@ -243,6 +303,29 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 func (s PG) SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error {
 	return s.execRun(ctx, "set run disk mib",
 		`UPDATE agent_runs SET disk_mib=$1, updated_at=now() WHERE id=$2`, mib, id)
+}
+
+// RunSizing is the configured reservation recorded at dispatch (migration 0117). A nil
+// ProxyCPUMillis means the proxy had no CPU cap.
+type RunSizing struct {
+	RunnerKind            string
+	AgentCPURequestMillis int64
+	AgentCPULimitMillis   int64
+	AgentMemoryRequestMiB int64
+	AgentMemoryLimitMiB   int64
+	ProxyCPUMillis        *int64
+	ProxyMemoryMiB        int64
+}
+
+// SetRunSizing scoped-writes ONLY the dispatch-time sizing columns. It does not bump
+// updated_at: the record is not activity, and the idle clock reads updated_at.
+func (s PG) SetRunSizing(ctx context.Context, id uuid.UUID, z RunSizing) error {
+	return s.execRun(ctx, "set run sizing",
+		`UPDATE agent_runs SET runner_kind=$1, agent_cpu_request_millis=$2, agent_cpu_limit_millis=$3,
+		   agent_memory_request_mib=$4, agent_memory_limit_mib=$5, proxy_cpu_millis=$6, proxy_memory_mib=$7
+		 WHERE id=$8`,
+		z.RunnerKind, z.AgentCPURequestMillis, z.AgentCPULimitMillis, z.AgentMemoryRequestMiB,
+		z.AgentMemoryLimitMiB, z.ProxyCPUMillis, z.ProxyMemoryMiB, id)
 }
 
 // SetRunAgentExecID scoped-writes ONLY agent_exec_id, once the driver execs the
@@ -634,10 +717,11 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // so an external SIEM ends up holding a head hash Wardyn cannot later disown.
 //
 // Runs in a transaction because pg_advisory_xact_lock must be held across the
-// INSERT: this caller's seq allocation and head read must not interleave with
-// another writer's, keeping seq order and chain order identical. The DB trigger
-// takes the same lock, binding writers this package knows nothing about; the
-// lock here is re-entrant and free.
+// append: this caller's seq allocation and head read must not interleave with
+// another writer's, keeping seq order and chain order identical. audit_append
+// takes the same lock itself (the only way a row enters the table since 0111);
+// the lock here is re-entrant and free, and keeps the bounded wait below in
+// front of it.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	// The cap lives at the one INSERT every audit writer reaches (api server,
 	// broker, identity, approval sweeper, spool drain), not in Server.auditEvent,
@@ -668,13 +752,13 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	// COALESCE: the genesis row's prev_hash is SQL NULL, which won't scan into a
-	// string; empty string and NULL both mean "nothing before this row".
+	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
+	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis
+	// row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
+	// "nothing before this row".
 	const q = `
-		INSERT INTO audit_events
-			(` + auditCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,

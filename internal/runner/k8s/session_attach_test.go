@@ -152,18 +152,22 @@ func TestAttach_ResolveExecContainerPicksAgentWhenEphemeralExists(t *testing.T) 
 	}
 }
 
-// TestAttach_ShellScriptKeepsFallbackChainAndTermExport pins
-// attachShellScript's literal content. The expected text is spelled out
-// here, NOT built from attachShellScript itself (or from any shared
-// constant/builder the production code also uses) — a test that compared the
-// constant to a value derived from the constant would keep passing even if
-// the tmux/bash/sh chain or the TERM export were deleted, per issue #130's
-// warning.
+// TestAttach_ShellScriptKeepsFallbackChainAndTermExport pins the parts of
+// attachShellScript that are spelled out here, NOT built from the script itself
+// (or from any shared constant the production code also uses) — a test that
+// compared the constant to a value derived from the constant would keep passing
+// even if the tmux/bash/sh chain or the TERM export were deleted, per issue
+// #130's warning. The tmux branch's own content (version gate and settings
+// chain) is pinned in internal/runner and must be embedded verbatim.
 func TestAttach_ShellScriptKeepsFallbackChainAndTermExport(t *testing.T) {
-	const want = `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
-if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
-	if attachShellScript != want {
-		t.Errorf("attachShellScript =\n%s\nwant\n%s", attachShellScript, want)
+	const head = `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
+if command -v tmux >/dev/null 2>&1; then `
+	const tail = `; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
+	if !strings.HasPrefix(attachShellScript, head) || !strings.HasSuffix(attachShellScript, tail) {
+		t.Errorf("attachShellScript =\n%s\nwant prefix\n%s\nand suffix\n%s", attachShellScript, head, tail)
+	}
+	if !strings.Contains(attachShellScript, runner.TmuxAttachSh) {
+		t.Error("attachShellScript does not embed runner.TmuxAttachSh")
 	}
 }
 

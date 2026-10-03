@@ -41,6 +41,8 @@ func providerCredentialName(p types.ModelProvider) string {
 		return providerSecretName(p.UID, providerSSOPart)
 	case types.ModelProviderAnthropicSubscription:
 		return providerSecretName(p.UID, providerOAuthPart)
+	case types.ModelProviderAzureFoundry:
+		return providerSecretName(p.UID, providerEntraPart)
 	default:
 		return providerSecretName(p.UID, providerKeyPart)
 	}

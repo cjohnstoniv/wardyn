@@ -19,7 +19,7 @@ package api
 // At the sidecar's BOOT there is no request to hold: the proxy marks that
 // resolve (phase=boot) and the run fails with a failure hint that names the
 // remedy. The redemption has already deleted a dead sign-in, or recorded a
-// Conditional Access end on it (noteADOEntraSignInEnded), so /me/scm-access and
+// Conditional Access end on it (noteEntraSignInEnded), so /me/scm-access and
 // the launch gate say so before the next launch.
 
 import (
@@ -85,7 +85,7 @@ func (s *Server) answerADOSignInEnded(w http.ResponseWriter, r *http.Request, cl
 	sn adoEntraScopeSnapshot, class ADOEntraFailure, fail adoFail,
 ) bool {
 	if class == ADOEntraFailureNotCaptured {
-		// A dead sign-in is deleted as the hold is raised (noteADOEntraSignInEnded),
+		// A dead sign-in is deleted as the hold is raised (noteEntraSignInEnded),
 		// so the resolves that follow find none: while that request is open they
 		// are still the lapse it holds for. Without one, not connected is refused.
 		return r.URL.Query().Get(adoResolvePhase) != adoResolvePhaseBoot && s.cfg.Approvals != nil &&

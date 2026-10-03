@@ -74,10 +74,10 @@ func rewrapMode(f *bootFlags) error {
 	if retire && *f.rewrapAdoptBootKeys {
 		return fmt.Errorf("refusing to rewrap: -rewrap-adopt-boot-keys adopts boot keys onto the platform key and -rewrap-retire-platform-key moves them off it; run one at a time")
 	}
-	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" {
-		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM, the key to retire")
+	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" && !azurePlatformNamed(f.azure) {
+		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM, the key to retire")
 	}
-	platformSvc, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, retire)
+	platformSvc, err := buildPlatformKEK(ctx, f.vault, f.azure, *f.trustedCAFile, retire)
 	if err != nil {
 		return err
 	}
@@ -144,19 +144,19 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 			"run `wardynd -rewrap` again until it moves 0 rows, and disable or retire no key version before then\n")
 	}
 	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
-		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
+		slog.Int("secrets", res.Rewrapped), slog.Int("principal_keys", res.PrincipalKeys), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
 	if res.KeyVersion != "" {
-		what := "secret"
+		what := "secret and principal key"
 		if d.PlatformKEKWrites {
-			what = "credential" // the boot keys are under the platform key, reported below
+			what = "credential and principal key" // the boot keys are under the platform key, reported below
 		}
 		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s\n", what, retireStep(res.KeyService, res.KeyVersion))
 	}
 	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
-		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM and restart every replica\n", d.PlatformKEK.ID())
+		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM (or WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM) and restart every replica\n", d.PlatformKEK.ID())
 	}
 	if res.PlatformKeyVersion != "" {
-		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %s; raising that Transit key's min_decryption_version to %s now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
+		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s\n", retireStep(res.PlatformKeyService, res.PlatformKeyVersion))
 	}
 	return nil
 }
@@ -184,15 +184,16 @@ func optionalIdentity(id *age.X25519Identity) age.Identity {
 const rewrapAbortAuditTimeout = 5 * time.Second
 
 // emitRewrapAudit writes the secret.rewrap event: the row count, whether the
-// boot keys now sit under a separate platform key, and, when a key service
-// wraps every write, its kek_id and the key version every row is now under.
+// boot keys now sit under a separate platform key, how many principal keys
+// moved with them, and, when a key service wraps every write, its kek_id and the
+// key version every row and principal key is now under.
 // An aborted run's event is outcome failure, reason aborted: its count is
 // what was committed (0 — the rewrap is one transaction), and it carries no
 // key_version, since no row moved to it. A run refused over its boot keys is
 // reason refused with refusal mixed_boot_keys or adopt_not_requested, so a
 // rule can fire on the tamper signal. Like secret.rekey it names no secret.
 func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool, failure error) {
-	fields := map[string]any{"secrets": res.Rewrapped, "platform_key_separate": separate}
+	fields := map[string]any{"secrets": res.Rewrapped, "principal_keys": res.PrincipalKeys, "platform_key_separate": separate}
 	if res.Rotated {
 		fields["rotated"] = true
 	}

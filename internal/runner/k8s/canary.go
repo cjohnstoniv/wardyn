@@ -108,11 +108,12 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 // for a terminal verdict, and cleans up the pod + netpol in every path (defer). denyAll selects phase B.
 func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll bool) canaryPhaseResult {
 	ns := d.cfg.Namespace
-	suffix := uuid.New().String()
+	runID := uuid.New()
+	suffix := runID.String()
 	podName := "wardyn-egress-canary-" + suffix
 	// labelRun carries this invocation's own unique suffix so two wardynd instances booting concurrently
 	// don't share a selector — instance A's phase-B deny-all netpol must never match instance B's phase-A pod.
-	labels := map[string]string{labelManaged: "true", labelComponent: componentCanary, labelRun: suffix}
+	labels := wardynLabels(runID, componentCanary, nil)
 
 	if denyAll {
 		netpolName := "wardyn-egress-canary-netpol-" + suffix
@@ -133,7 +134,7 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	}
 
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
@@ -151,6 +152,8 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	if d.cfg.ImagePullSecret != "" {
 		pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
+	// Same placement as the run pods: the canary must prove enforcement on the nodes runs use.
+	d.placement.apply(pod, runID, componentCanary, nil)
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return canaryPhaseResult{err: fmt.Errorf("%s: create canary pod: %w", phaseName, err)}
 	}

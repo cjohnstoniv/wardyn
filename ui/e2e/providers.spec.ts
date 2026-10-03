@@ -736,8 +736,7 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     // the rows stay and the people are the same on every run.
     const denied = (owner: string, age: string) =>
       sql(
-        `INSERT INTO audit_events (id, time, actor_type, actor, action, target, outcome, data) VALUES ` +
-          `(gen_random_uuid(), now() - interval '${age}', 'system', 'wardynd', 'ado_pat.mint.denied', 'e2e-run', 'failure', ` +
+        `SELECT audit_append(gen_random_uuid(), now() - interval '${age}', NULL, 'system', 'wardynd', 'ado_pat.mint.denied', 'e2e-run', 'failure', '', ` +
           `'{"reason":"launch","owner":"${owner}","provider_row":"${rowId}","organisation":"wardyn-e2e","scope":"vso.code","refusal":"ado_pat_policy_blocked","status":400,"pat_token_error":"accessDenied"}'::jsonb)`,
       );
     sql(
