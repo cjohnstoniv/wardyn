@@ -146,7 +146,7 @@ export function SummaryHeader({
   const owned = !!run.created_by && run.created_by === principal;
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
-  const shortId = run.id.replace(/^run_/, "");
+  const shortId = run.id.replace(/^run_/, "").slice(0, 8);
   // "" whenever there is nothing to say. The SERVER has already blanked
   // status_detail for every run that is not STARTING (PENDING included —
   // projectStatusDetail's `default` branch in runs_status_detail.go blanks it
@@ -252,7 +252,7 @@ export function SummaryHeader({
           the "Failed"/exit chips rather than pushing them over). Putting the
           same floor on the wrapping div is what makes the row actually
           RESERVE the space instead of just letting repo bleed into it. */}
-      <div className="flex min-w-[90px] shrink items-baseline gap-2">
+      <div className="flex min-w-[90px] shrink items-baseline gap-2 overflow-hidden 2xl:min-w-[200px]">
         <span className="min-w-[90px] max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
           {run.repo}
         </span>
