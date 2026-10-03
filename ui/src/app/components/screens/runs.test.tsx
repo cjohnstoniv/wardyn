@@ -17,6 +17,7 @@ vi.mock("../../lib/api/runs", () => ({
     // is the "nothing to restart" case, so it renders nothing and stays a
     // no-op for every test in this file, none of which are about it.
     getAdminProxyWindow: vi.fn().mockResolvedValue({ release: "", window: [], outside: [] }),
+    getAdminRunCapacity: vi.fn().mockReturnValue(new Promise(() => {})),
   },
 }));
 const getSetupStatusMock = vi.fn();
