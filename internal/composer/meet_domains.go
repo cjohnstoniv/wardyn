@@ -167,12 +167,6 @@ func (e domEntry) String() string {
 	return host + ":" + strconv.Itoa(e.port)
 }
 
-// literalIP reports an exact entry that names an address. Only an EXACT entry
-// reaches a private literal IP (Policy.AllowsLiteralIP), so such an entry is
-// covered by an equal exact entry and by nothing else: a wildcard suffix can
-// match the dotted text of an address without ever granting that trust.
-func (e domEntry) literalIP() bool { return !e.wild && net.ParseIP(e.host) != nil }
-
 // covers reports whether every request f matches is also matched by e: the
 // proxy's own matcher decides the host half, so "covered" is never wider than
 // what the proxy enforces.
@@ -181,12 +175,16 @@ func (e domEntry) covers(f domEntry) bool {
 		return false
 	}
 	switch {
-	case f.literalIP():
+	case !f.wild:
+		// Only an exact entry binds credential injection (proxy.AllowedExactHost)
+		// and reaches a private literal IP, and Clamp keeps a run's exact entry
+		// only when the ceiling spells it, so an exact entry is covered by an
+		// equal exact entry and nothing else.
 		return !e.wild && e.host == f.host
 	case e.wild:
 		return domainmatch.MatchWild(f.host, []string{e.host})
 	}
-	return !f.wild && e.host == f.host
+	return false
 }
 
 // intersect is the entry that matches exactly what both a and b match, if one
@@ -212,11 +210,10 @@ func (e domEntry) intersect(b domEntry) (domEntry, bool) {
 	case a.wild:
 		a, b = b, a
 	}
-	// a is exact; b is exact or a wildcard.
-	if a.literalIP() && (b.wild || b.host != a.host) {
-		return domEntry{}, false
-	}
-	if (b.wild && !domainmatch.MatchWild(a.host, []string{b.host})) || (!b.wild && a.host != b.host) {
+	// a is exact; b is exact or a wildcard. No spellable entry carries a
+	// wildcard's reach together with an exact entry's injection binding, so
+	// only two equal exact entries meet.
+	if b.wild || a.host != b.host {
 		return domEntry{}, false
 	}
 	return domEntry{host: a.host, port: port}, true

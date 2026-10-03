@@ -64,7 +64,7 @@ var meetRules = map[string]meetRule{
 	"push_rules.hold_seconds":         {"120 s, cut to 600 s", "smaller after normalising"},
 	"push_rules.deny_new_executables": {"false", "OR"},
 	"push_rules.max_file_size_mib":    {"off", "smaller positive"},
-	"azure_devops_capabilities":       {"the provider row's default profile", "intersection; empty on one side yields the other; disjoint is unsatisfiable; empty overlay refused"},
+	"azure_devops_capabilities":       {"the provider row's default profile", "intersection; a list under an empty base is a widening and stays empty; disjoint is unsatisfiable; empty overlay refused"},
 
 	// GovernanceLimits
 	"deny_task_mode_exec":              {"false", "OR"},
@@ -147,11 +147,14 @@ func paths(ls []leafField) []string {
 // meetSelectors is every identifier the meet source reads off a value or names in
 // a composite literal, from the AST, so a field mentioned only in a comment
 // does not count as handled.
-func meetSelectors(t *testing.T) map[string]bool {
+func meetSelectors(t *testing.T) map[string]bool { return sourceSelectors(t, "meet*.go") }
+
+// sourceSelectors is meetSelectors over any set of source files.
+func sourceSelectors(t *testing.T, glob string) map[string]bool {
 	t.Helper()
-	files, err := filepath.Glob("meet*.go")
+	files, err := filepath.Glob(glob)
 	if err != nil || len(files) == 0 {
-		t.Fatalf("no meet*.go source found: %v", err)
+		t.Fatalf("no %s source found: %v", glob, err)
 	}
 	seen := map[string]bool{}
 	fset := token.NewFileSet()
