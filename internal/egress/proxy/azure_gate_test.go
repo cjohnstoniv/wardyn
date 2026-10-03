@@ -28,9 +28,9 @@ import (
 const (
 	azHost      = "foundry.test"
 	azToken     = "Bearer entra-token-for-foundry"
-	azMain      = "claude-main"
-	azFast      = "claude-fast"
-	azOpenAI    = "gpt-main"
+	azMain      = "deploy-main"
+	azFast      = "deploy-fast"
+	azOpenAI    = "deploy-responses"
 	azMessages  = "/anthropic/v1/messages"
 	azResponses = "/openai/v1/responses"
 )
@@ -214,13 +214,13 @@ func TestAzureGate_RefusalsNeverRedeemTheToken(t *testing.T) {
 	}{
 		{"another deployment in the path", http.MethodPost, "/openai/deployments/other/responses", azBody(azMain), nil},
 		{"the pinned deployment's chat completions", http.MethodPost, "/openai/deployments/" + azMain + "/chat/completions", azBody(azMain), nil},
-		{"another model in the body", http.MethodPost, azMessages, azBody("claude-other"), nil},
+		{"another model in the body", http.MethodPost, azMessages, azBody("deploy-other"), nil},
 		{"the other route's model on this route", http.MethodPost, azMessages, azBody(azOpenAI), nil},
 		{"missing model", http.MethodPost, azMessages, `{"messages":[]}`, nil},
 		{"model of the wrong case key", http.MethodPost, azMessages, `{"Model":"` + azMain + `"}`, nil},
 		{"model not a string", http.MethodPost, azMessages, `{"model":["` + azMain + `"]}`, nil},
-		{"two top-level model keys", http.MethodPost, azMessages, `{"model":"` + azMain + `","model":"claude-other"}`, nil},
-		{"two model keys differing in case", http.MethodPost, azMessages, `{"model":"` + azMain + `","MODEL":"claude-other"}`, nil},
+		{"two top-level model keys", http.MethodPost, azMessages, `{"model":"` + azMain + `","model":"deploy-other"}`, nil},
+		{"two model keys differing in case", http.MethodPost, azMessages, `{"model":"` + azMain + `","MODEL":"deploy-other"}`, nil},
 		{"body is not JSON", http.MethodPost, azMessages, `not json`, nil},
 		{"body is an array", http.MethodPost, azMessages, `[` + huge + `]`, nil},
 		{"gzip body", http.MethodPost, azMessages, azBody(azMain), map[string]string{"Content-Encoding": "gzip"}},
