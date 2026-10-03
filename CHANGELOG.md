@@ -109,6 +109,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   change: ..."). The line names the profile and the route, never the owner. Faults (`builtin:*`,
   `policy:evaluator-error`, an uninspectable push) and every decision-log row are unchanged. See the proxy
   image note under "Before you upgrade".
+- **A broken substrate or a stalled background sweep shows on a gauge and a `/setup/status` row, and `/readyz`
+  is unchanged.** Migration `0118_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
+  replica. `wardyn_runner_up` (per replica) reads 0 when the runner's substrate is unreachable or refuses the
+  control plane, and `wardyn_sweep_last_tick_seconds{sweep,result}` carries each sweep's last attempt and last
+  success. The new `substrate_health` row fails with cause `runner_unreachable` or `runner_auth`, and warns with
+  cause `sweep_stale` once a sweep goes three of its intervals without a success; it is never blocking and
+  members never see it. A runner that is configured but cannot report its capabilities no longer sends every
+  admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
+  The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
+  and a daemon ping on Docker. See `docs/operations/monitoring.md`.
 
 ### Added
 

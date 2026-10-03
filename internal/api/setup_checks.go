@@ -31,8 +31,9 @@ import (
 // Blocking decides ONE thing: whether the console must not open on
 // this install at all — setupGateActive (the console's setup gate) redirects
 // every route into the funnel while any row carries it, until onboarding
-// completes. It is set on exactly three arms: runnerCheck's fail (no runner, so
-// no run can happen), confinementFloorCheck's warn (a floor the runner cannot
+// completes. It is set on exactly three arms: runnerCheck's fail (no runner configured, so
+// no run can happen; a configured runner whose Capabilities() errored is a
+// substrate fault and never blocks), confinementFloorCheck's warn (a floor the runner cannot
 // meet refuses every run before it launches), and ssoRBACCheck's warn (OIDC
 // with no role mapping makes every signed-in human an admin, and the funnel's
 // People step is where that is fixed).
@@ -59,8 +60,9 @@ type SetupCheck struct {
 	// Cause narrows a row that can warn for more than one reason, the same
 	// shape as SCMAccess.cause on the wire (ui/src/app/lib/types/setup.ts) — a
 	// machine key, never prose, so a console reader can pick per-cause copy
-	// without string-matching Detail. Only sso_rbac sets it today ("default_role",
-	// #491): #484's original no-role-map-and-no-admin-list warn leaves it empty.
+	// without string-matching Detail. sso_rbac sets it ("default_role", #491:
+	// #484's original no-role-map-and-no-admin-list warn leaves it empty), and so
+	// does substrate_health ("runner_unreachable", "runner_auth", "sweep_stale").
 	Cause string `json:"cause,omitempty"`
 }
 
@@ -68,6 +70,16 @@ type SetupCheck struct {
 // FAIL on the checklist — runs cannot launch at all. CC2+ is ok; a CC1-only host
 // is "info", not a warning: runs work, just at the weakest isolation.
 func runnerCheck(rnr SetupRunner) SetupCheck {
+	// A runner that is configured but could not report its capabilities is a
+	// substrate fault, not a missing runner: sending every admin into the setup
+	// funnel (Blocking) during an outage would hide the console that shows it.
+	if rnr.Driver != "none" && rnr.capsUnreadable {
+		return SetupCheck{
+			ID: "runner", Label: "Sandbox runner", Status: "fail",
+			Detail: "The sandbox runner is configured but did not report its capabilities, so runs cannot launch until it does.",
+			Fix:    "The substrate_health row says what is wrong with the runner's substrate.",
+		}
+	}
 	if rnr.Driver == "none" || len(rnr.ConfinementClasses) == 0 {
 		return SetupCheck{
 			ID: "runner", Label: "Sandbox runner", Status: "fail",

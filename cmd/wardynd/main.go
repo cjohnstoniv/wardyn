@@ -40,6 +40,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -372,9 +373,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	leader := db.NewSweeperLeader(pool, sweeperHolder())
+	holder := sweeperHolder()
+	leader := db.NewSweeperLeader(pool, holder)
+	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	srv := api.New(api.Config{
 		SweeperLease: leader,
+		SweepHealth:  ticks,
 		Store:        st,
 		Identity:     idp,
 		Approvals:    approvals,
@@ -507,7 +511,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

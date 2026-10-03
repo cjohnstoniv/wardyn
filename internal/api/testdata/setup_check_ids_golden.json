@@ -32,7 +32,8 @@
     "platform_shared",
     "runner",
     "sandbox_start",
-    "scm_provider"
+    "scm_provider",
+    "substrate_health"
   ],
   "with_oidc": [
     "age_key",

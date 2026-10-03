@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -140,6 +141,10 @@ type Config struct {
 	// run pause) to the elected leader and fences them by lease epoch. Nil means
 	// this process is the only one sweeping: every pass runs and no fence applies.
 	SweeperLease SweeperLease
+	// SweepHealth records each background sweep's ticks in the shared sweep_ticks
+	// record and reads them back for the sweep gauges and the substrate_health
+	// setup row. Nil records nothing and reports no sweep.
+	SweepHealth *sweephealth.Tracker
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit
 	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
@@ -700,6 +705,10 @@ type Server struct {
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
+	// substrateProbe is this replica's cached probe of the runner's substrate,
+	// read by /metrics and /setup/status (substrate_health.go).
+	substrateProbe substrateProbeCache
+
 	refRulesetMu   sync.Mutex
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck

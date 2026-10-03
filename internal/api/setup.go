@@ -183,6 +183,10 @@ type SetupRunner struct {
 	// WARDYN_SANDBOX_CAPACITY_WAIT), kept in a member's redacted body because the run page's
 	// "taking longer than expected" bound follows them. Absent off Kubernetes.
 	SandboxStart *SetupSandboxStart `json:"sandbox_start,omitempty"`
+	// capsUnreadable marks a runner that IS configured but whose Capabilities()
+	// call failed, so runnerCheck can tell it from "no runner configured". Never
+	// on the wire.
+	capsUnreadable bool
 }
 
 // SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
@@ -299,6 +303,14 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
 		checks = append(checks, chk)
+	}
+	// substrate_health: operator callers only, because a member's Checks are
+	// discarded below and a member's poll must not trigger or wait on a
+	// substrate call. Never Blocking; see substrateHealthCheck.
+	if s.isOperator(ctx) {
+		if chk, ok := s.substrateHealthRow(ctx); ok {
+			checks = append(checks, chk)
+		}
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
@@ -587,8 +599,13 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		start, capacity := runner.SandboxStartDeadlines()
 		out.SandboxStart = &SetupSandboxStart{StartTimeoutSeconds: int(start.Seconds()), CapacityWaitSeconds: int(capacity.Seconds())}
 	}
-	c, err := rn.Capabilities(ctx)
+	// Bounded like every other substrate read on this page: a black-holed
+	// substrate must not hang the one surface that reports it.
+	cctx, cancel := context.WithTimeout(ctx, storePingTimeout)
+	defer cancel()
+	c, err := rn.Capabilities(cctx)
 	if err != nil {
+		out.capsUnreadable = true
 		return out, ""
 	}
 	for _, cc := range c.ConfinementClasses {

@@ -175,16 +175,21 @@ var noSweepOnce sync.Once
 // deleted. cmd/wardynd calls it daily. A row it could not delete is kept, and
 // the next sweep tries it again. A store that cannot sweep — no DeleteExpired,
 // or a wrapper answering secretstore.ErrNoExpirySweep — is logged at Error once.
-func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
+//
+// The error is the store's: a delete that failed for any row, or a scan that
+// failed, so the tick does not count as a success. A store that cannot sweep
+// at all is not an error here, because that is a fact about the deployment,
+// announced above, not a tick that failed.
+func (s *Server) SweepExpiredCredentials(ctx context.Context) (int, error) {
 	if s.cfg.Secrets == nil {
-		return 0 // no store, so nothing stored to expire
+		return 0, nil // no store, so nothing stored to expire
 	}
-	noSweep := func() int {
+	noSweep := func() (int, error) {
 		noSweepOnce.Do(func() {
 			slog.ErrorContext(ctx, "wardynd: the secret store has no expiry sweep; expired stored credentials are NOT being deleted",
 				slog.String("store", fmt.Sprintf("%T", s.cfg.Secrets)), slog.String("store_name", s.cfg.Secrets.Name()))
 		})
-		return 0
+		return 0, nil
 	}
 	sw, ok := s.cfg.Secrets.(expiredSweeper)
 	if !ok {
@@ -203,7 +208,7 @@ func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", e.Name, "success",
 			withSecretOwner(map[string]any{"reason": "expired", "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339)}, e.Owner, true)))
 	}
-	return len(gone)
+	return len(gone), err
 }
 
 // auditSweepFailure records what a sweep could not do: a failure row for each
