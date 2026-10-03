@@ -4,8 +4,8 @@
 package api
 
 // awssso_refresh.go renews a captured AWS IAM Identity Center (SSO) credential
-// CONTROL-PLANE SIDE — at the real launch, at dispatch and on a credential_reauth
-// hold; never on Review's preflight or the create advisory — instead of shipping the refresh token into
+// CONTROL-PLANE SIDE — at create, at dispatch and on a credential_reauth
+// hold; never on Review's preflight — instead of shipping the refresh token into
 // the sandbox and hoping the in-sandbox AWS SDK renews it.
 //
 // Why the control plane owns this. `CreateToken(grant_type=refresh_token)`
@@ -152,7 +152,82 @@ const (
 	awsSSORefreshUnavailableSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
 		"and renewing that session did not complete — AWS did not answer the token request. " +
 		"Your sign-in is still good; launch again in a moment. Wardyn does not substitute a different model provider."
+
+	// The two failures only a create-time renewal (withCreateRenewal) returns.
+	// providerBedrockRefusal turns each into its provider's own 503 sentence.
+	//
+	// awsSSORefreshStoreUnwritableSentence: the secret store refused the write
+	// probe, so nothing was redeemed and the sign-in is still good.
+	awsSSORefreshStoreUnwritableSentence = "Wardyn's secret store did not accept a write, so the AWS SSO session was not renewed. " +
+		"Your sign-in is still good; launch again in a moment."
+	// awsSSORefreshPersistFailedSentence: the refresh token was redeemed but the
+	// renewed pair could not be stored, and the old pair is spent.
+	awsSSORefreshPersistFailedSentence = "The AWS SSO session was renewed but could not be saved, so it must be signed in again."
 )
+
+// awsSSOPersistAttempts is how many times a redeemed pair's Put is tried, and
+// awsSSOPersistRetryDelay the pause between tries.
+const awsSSOPersistAttempts = 3
+
+var awsSSOPersistRetryDelay = 100 * time.Millisecond
+
+// createRenewalKey marks a refreshAWSSSOBlob that runs for run create.
+type createRenewalKey struct{}
+
+// withCreateRenewal marks ctx as run create's renewal. A renewal there has no
+// run to carry a credential it could not persist (the proxy's bootstrap
+// re-reads the STORED pair, injection_awssso.go), so it first proves the store
+// takes a write and then refuses a redeem it cannot store; dispatch's renewal
+// is unchanged and serves its run from the redeemed blob.
+func withCreateRenewal(ctx context.Context) context.Context {
+	return context.WithValue(ctx, createRenewalKey{}, true)
+}
+
+func createRenewal(ctx context.Context) bool {
+	v, _ := ctx.Value(createRenewalKey{}).(bool)
+	return v
+}
+
+// probeSecretWrite proves the secret store accepts a write in scope's namespace
+// by writing and deleting writeProbeSecretName, a reserved name no door lists or
+// resolves. It never writes the credential row: a copy read earlier could
+// restore a credential an admin erased since (#1478). A failed Delete is only
+// logged; the row is inert and the write path was proven.
+func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error {
+	st := s.cfg.Secrets
+	if st == nil {
+		return errors.New("no secret store configured")
+	}
+	if scope.perUser {
+		if !scope.namespaced() {
+			return errors.New("a per-user aws sso credential has no owner to store it under")
+		}
+		st = st.For(scope.owner)
+	}
+	if err := st.Put(ctx, writeProbeSecretName, []byte("probe")); err != nil {
+		return err
+	}
+	if err := st.Delete(ctx, writeProbeSecretName); err != nil {
+		slog.WarnContext(ctx, "wardynd: deleting the secret store write probe failed", slog.Any("err", err))
+	}
+	return nil
+}
+
+// persistRenewedAWSSSOBlob stores a redeemed pair, retrying a failed Put. The
+// caller holds the owner lock throughout, so an erase queues behind every
+// attempt rather than landing between two of them.
+func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob) (attempts int, err error) {
+	for attempts = 1; ; attempts++ {
+		if err = s.storeAWSSSOBlob(ctx, scope, next); err == nil || attempts == awsSSOPersistAttempts {
+			return attempts, err
+		}
+		select {
+		case <-ctx.Done():
+			return attempts, err
+		case <-time.After(awsSSOPersistRetryDelay):
+		}
+	}
+}
 
 // awsSSOTokenResponse is the subset of the SSO-OIDC CreateToken response this
 // lane consumes, plus the error shape a refusal answers with. `refreshToken` is
@@ -405,13 +480,23 @@ func (s *Server) markAWSSSOTokenSpent(ctx context.Context, fingerprint, owner st
 // first flight even started. Without the re-read it would redeem the stale token,
 // get invalid_grant, and clobber the pair the first flight just persisted.
 //
-// A Put that fails AFTER a successful redeem does NOT fail this run: the rotated
-// pair is already spent at AWS, so re-redeeming is impossible and refusing would
-// throw away a credential we hold. The DISPATCH caller serves this run from the
-// in-memory blob (the create caller discards it; its dispatch then reads the old
-// pair from the store), the persist failure is audited, and the old pair is
-// marked spent — so whoever reads it next is refused as spent rather than
-// redeeming it twice.
+// The renewed pair is stored here, under that lock, and only here: the Put is
+// tried up to awsSSOPersistAttempts times before the old pair is marked spent,
+// and no caller may store a blob it received from this function (an erase takes
+// the same lock, so it can never land between a redeem and its write).
+//
+// A create-time renewal (withCreateRenewal) first proves the store accepts a
+// write (probeSecretWrite), before any refresh token is spent. A Put that still
+// fails AFTER a redeem fails that create with awsSSORefreshPersistFailedSentence:
+// the proxy's bootstrap re-reads the STORED pair, so a run created on a blob
+// held only in memory would die at bootstrap. The old pair is marked spent, so
+// the next launch is refused as spent at once.
+//
+// Any other caller (dispatch) does NOT fail the run on that Put: the rotated pair
+// is already spent at AWS, so re-redeeming is impossible and refusing would
+// throw away a credential we hold. It serves this run from the in-memory blob,
+// the persist failure is audited, and the old pair is marked spent — so whoever
+// reads it next is refused as spent rather than redeeming it twice.
 func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	now := s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
@@ -476,6 +561,19 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	fingerprint := awsSSOTokenFingerprint(blob.RefreshToken)
 	if s.awsSSOTokenSpent(fingerprint) {
 		return blob, awsSSORefreshSpentSentence
+	}
+
+	// Before any refresh token is spent: a create-time renewal whose store
+	// refuses a write would redeem a pair it then cannot keep.
+	if createRenewal(ctx) {
+		if perr := s.probeSecretWrite(ctx, scope); perr != nil {
+			slog.ErrorContext(ctx, "wardynd: the secret store refused a write; not renewing the AWS SSO credential", slog.Any("err", perr))
+			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
+			s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
+				"provider": awsSSOProvider, "spent": false, "probe_error": perr.Error(),
+			})
+			return blob, awsSSORefreshStoreUnwritableSentence
+		}
 	}
 
 	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
@@ -549,20 +647,28 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		data["registration_expires_at"] = next.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	}
 	outcome := "success"
-	if perr := s.storeAWSSSOBlob(ctx, scope, next); perr != nil {
+	persistAttempts, perr := s.persistRenewedAWSSSOBlob(ctx, scope, next)
+	if perr != nil {
 		// Redeemed but not stored — see the doc comment. Audited as a failure so
-		// the row is not read as "the rotated pair is safe", and the run still
-		// gets its credential. The OLD pair is spent at AWS whatever the store
-		// says: mark it, so the next read of it (dispatch after a create-time
-		// redeem, or the next launch) is refused as spent at once rather than
-		// paying a token round trip to learn the same thing.
+		// the row is not read as "the rotated pair is safe". The OLD pair is
+		// spent at AWS whatever the store says: mark it, so the next read of it
+		// (dispatch after a create-time redeem, or the next launch) is refused
+		// as spent at once rather than paying a token round trip to learn the
+		// same thing.
 		s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
 		outcome = "failure"
 		data["persist_error"] = perr.Error()
-		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed; serving this run from memory",
+		data["persist_attempts"] = persistAttempts
+		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed",
 			slog.Any("err", perr))
 	}
 	s.auditAWSSSORefresh(ctx, scope, outcome, data)
+	if perr != nil && createRenewal(ctx) {
+		// Create has no run to serve from memory: the proxy's bootstrap reads
+		// the stored pair, which is now marked spent. Refuse before a run row
+		// exists; the next launch gets the sign-in door at once.
+		return blob, awsSSORefreshPersistFailedSentence
+	}
 	return next, ""
 }
 
