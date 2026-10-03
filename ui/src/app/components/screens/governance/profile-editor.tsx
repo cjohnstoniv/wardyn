@@ -24,7 +24,7 @@ import { governance as api, isGrantBoundError, type GovernanceLimits, type Gover
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { ConfinementClass, RunPolicySpec } from "../../../lib/types";
+import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
@@ -37,7 +37,7 @@ import { Mono } from "../../wardyn/code-block";
 import { CC_META } from "../../wardyn/cc-meta";
 import { FIELD_HELP } from "../../wardyn/policy-field-help";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
-import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
+import { PolicyPanel, minimalSpec, parseSpec } from "../../wardyn/policy-panel";
 import { Segmented } from "../permissions";
 import { Note, withMono } from "./display";
 import { ProfileRubric } from "./profile-rubric";
@@ -57,7 +57,7 @@ const SEC_PER_DAY = 86400;
 // The prefill for a NEW profile is the panel's own Minimal template — the same
 // const policies.tsx's create editor starts from, so there is no second
 // hand-maintained starter to drift.
-const STARTER_SPEC: RunPolicySpec = POLICY_TEMPLATES.find((t) => t.id === "minimal")!.spec;
+const STARTER_SPEC: RunPolicySpec = minimalSpec();
 
 const specText = (spec: RunPolicySpec): string => JSON.stringify(spec, null, 2);
 
@@ -88,15 +88,26 @@ export function ProfileEditor({
   // the /providers Storage tab makes, never a laptop's. Absent (older daemon,
   // no runner detected) reads as "can enforce": no warning, and so does every
   // word but `none` — see isUncappedEnforcement, which both surfaces share.
+  const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
   const [enforcement, setEnforcement] = React.useState<StorageEnforcement | undefined>(undefined);
   React.useEffect(() => {
     let alive = true;
     void setupApi.getSetupStatus().then((s) => {
-      if (alive) setEnforcement(s.runner.ephemeral_disk_enforcement);
+      if (!alive) return;
+      setEnforcement(s.runner.ephemeral_disk_enforcement);
+      const providers = s.unreachable ? undefined : s.model_providers;
+      setModelProviders(providers);
+      // A new, untouched profile re-opens on the starter that follows the providers.
+      if (!profile) {
+        const seeded = specText(minimalSpec(providers));
+        setSpec((prev) => (prev === specText(STARTER_SPEC) ? seeded : prev));
+      }
     });
     return () => {
       alive = false;
     };
+    // read once on mount; `profile` only picks whether the starter is re-seeded
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const dockerUncapped = isUncappedEnforcement(enforcement);
 
@@ -157,7 +168,7 @@ export function ProfileEditor({
             against the existing floor; no allow-set, no ceiling field). */}
         <AllowedBarriersField spec={spec} onChange={setSpec} disabled={disabled} />
         <div className="mt-3">
-          <PolicyPanel instance="policies" value={spec} onChange={setSpec} />
+          <PolicyPanel instance="policies" value={spec} onChange={setSpec} modelProviders={modelProviders} />
         </div>
         <p className="mt-2 text-xs text-muted-foreground">{GOV.GRADE_NOTE}</p>
       </section>

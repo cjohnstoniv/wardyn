@@ -19,7 +19,7 @@ import {
   TriangleAlert,
   ChevronRight,
 } from "lucide-react";
-import type { RunPolicy, RunPolicySpec } from "../../lib/types";
+import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -56,7 +56,7 @@ import {
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { Field } from "../wardyn/form-primitives";
-import { POLICY_TEMPLATES, PolicyPanel, egressSummary, lifecycleSummary } from "../wardyn/policy-panel";
+import { PolicyPanel, egressSummary, lifecycleSummary, minimalSpec } from "../wardyn/policy-panel";
 import { Mono, YamlBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
@@ -76,7 +76,7 @@ import { setup as setupApi } from "../../lib/api/setup";
 
 // The starter spec that prefills the "create" editor IS the panel's Minimal
 // template — one const, no hand-maintained twin to drift.
-const STARTER_SPEC: RunPolicySpec = POLICY_TEMPLATES.find((t) => t.id === "minimal")!.spec;
+const STARTER_SPEC: RunPolicySpec = minimalSpec();
 
 // egressSummary/lifecycleSummary (used by the table rows below) now live in
 // policy-panel.tsx — one copy, shared with the panel's own derivations.
@@ -507,9 +507,23 @@ function PolicyEditor({
   // The Azure DevOps row's ceiling, so the editor locks what a run could never
   // be granted. Unknown (no row, unreachable) locks nothing.
   const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>();
+  const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>();
   React.useEffect(() => {
     if (!editor) return;
-    void setupApi.getSetupStatus().then((st) => setAdoCeiling(st.scm_access?.capability_ceiling)).catch(() => {});
+    void setupApi
+      .getSetupStatus()
+      .then((st) => {
+        setAdoCeiling(st.scm_access?.capability_ceiling);
+        const providers = st.unreachable ? undefined : st.model_providers;
+        setModelProviders(providers);
+        // A new, untouched policy re-opens on the starter that follows the providers.
+        if (editor.mode !== "edit") {
+          const seeded = JSON.stringify(minimalSpec(providers), null, 2);
+          setSpecText((prev) => (prev === initial.current.specText ? seeded : prev));
+          initial.current = { ...initial.current, specText: seeded };
+        }
+      })
+      .catch(() => {});
   }, [editor]);
 
   const dirty = name !== initial.current.name || specText !== initial.current.specText;
@@ -596,7 +610,7 @@ function PolicyEditor({
               required
             />
           </Field>
-          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} adoCeiling={adoCeiling} />
+          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} adoCeiling={adoCeiling} modelProviders={modelProviders} />
           {/* The creation form asks; an existing policy's list lives on its
               sheet, except right after a refused list write. */}
           {(!editing || partial) && (

@@ -36,6 +36,7 @@ import type {
 } from "../../../lib/types";
 import { effectiveWorkspaceRequirements } from "../../../lib/types";
 import { capabilityAllowed } from "../../../lib/capabilities";
+import { templateProviders } from "../../wardyn/policy-template-providers";
 // review U-01: the ONE place both clone doors (run header, Runs-list kebab)
 // turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
 // below. lib/api must not import from components/ (audit.ts's own comment),
@@ -563,11 +564,18 @@ export function titleFromTask(task: string): string {
 export function initialWizardState(
   defaultCc: ConfinementClass = "CC1",
   overlay?: Partial<WizardState>,
+  providers?: readonly SetupModelProvider[],
 ): WizardState {
-  return { ...freshWizardState(defaultCc), ...(overlay ?? {}) };
+  return { ...freshWizardState(defaultCc, providers), ...(overlay ?? {}) };
 }
 
-function freshWizardState(defaultCc: ConfinementClass): WizardState {
+// The Network card's seed: the configured model providers' hosts, else the
+// no-provider default. Same derivation as the policy templates.
+export function seedAllowedDomains(providers?: readonly SetupModelProvider[]): string[] {
+  return [...templateProviders(providers).hosts];
+}
+
+function freshWizardState(defaultCc: ConfinementClass, providers?: readonly SetupModelProvider[]): WizardState {
   return {
     title: "",
     description: "",
@@ -612,7 +620,7 @@ function freshWizardState(defaultCc: ConfinementClass): WizardState {
     // operator can still opt back in.
     gitPatRequiresApproval: false,
 
-    allowedDomains: ["api.anthropic.com"],
+    allowedDomains: seedAllowedDomains(providers),
     deniedDomains: [],
     firstUseApproval: "deny_with_review",
     allowAllEgress: false,
