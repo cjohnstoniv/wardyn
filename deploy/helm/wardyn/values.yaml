@@ -288,6 +288,11 @@ secretStore:
     tenantId: ""
     # The app registration's or user-assigned identity's client id.
     clientId: ""
+    # Optional, with kek.azurekv.keyPlatform: the client id of a second Entra
+    # identity that reaches the platform key pair, and no credential key. It must
+    # differ from clientId. Under workload identity it needs its own federated
+    # credential trusting the same service account. Empty = one identity.
+    clientIdPlatform: ""
     # Entra authority host; empty = the public cloud's.
     authorityHost: ""
     # Start of every secret name (empty = the release namespace).
@@ -329,6 +334,17 @@ kek:
     # Versionless id of the EC P-256 key, sign and verify only, in the same
     # vault, that signs every wrap. Set together with key.
     signingKey: ""
+    # Optional, needs provider azurekv, secretStore.azure.clientIdPlatform and
+    # signingKeyPlatform: a second RSA 3072/4096 wrapping key that wraps wardynd's
+    # own signing, session and SSH host keys, reached as clientIdPlatform; key
+    # then wraps only the credentials. Versionless id, a key other than key.
+    # `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it.
+    # Empty = one key pair for both.
+    keyPlatform: ""
+    # Versionless id of the EC P-256 key, sign and verify only, in the same vault
+    # as keyPlatform, that signs every wrap keyPlatform makes. Set together with
+    # keyPlatform; a key other than signingKey.
+    signingKeyPlatform: ""
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default

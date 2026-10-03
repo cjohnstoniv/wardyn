@@ -22,6 +22,7 @@ func testExternalFlags(vaultAddr, kvURL string) (vaultFlags, azureFlags) {
 		vaultURL: strp(kvURL), auth: strp("workload-identity"), tenantID: strp("tenant-1"), clientID: strp("client-1"),
 		federatedTokenFile: strp("/nonexistent"), authorityHost: strp("https://login.microsoftonline.com"), prefix: strp("wardyn"),
 		purge: strp("auto"), maxVersions: &maxV, kekKey: strp(""), kekSigningKey: strp(""),
+		kekKeyPlatform: strp(""), kekSigningKeyPlatform: strp(""), clientIDPlatform: strp(""),
 	}
 	return v, az
 }

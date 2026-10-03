@@ -2105,9 +2105,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     Crypto Officer alike — and the vault dedicated to Wardyn is load-bearing,
     not hygiene. Crypto Officer is a full-trust role: it can also import a
     signing-key version whose private key it holds, rotate and disable keys.
-    **Boot keys and credentials share one Entra identity and one key pair**: a
-    leaked identity token, or the vault's crypto operators, can unwrap both and
-    sign (so forge) both; there is no platform split like Transit's.
+    **By default boot keys and credentials share one Entra identity and one key
+    pair**: a leaked identity token, or the vault's crypto operators, can unwrap
+    both and sign (so forge) both. The platform split
+    (`WARDYN_AZURE_KEK_KEY_PLATFORM`, residual 49(d)) gives the boot keys a pair
+    and an identity of their own.
     **One key pair per deployment:** the bind names the vault host and both key
     names but not the install, so two Wardyn databases on the same vault and
     key names accept each other's rows for the same `(owned_by, name)` — (a)'s
@@ -2202,6 +2204,33 @@ hiding them would repeat the failure mode we are designed to avoid.
     database alone is pass one wrap off as another's: each wrap's
     `associated_data` binds `kek_id`, owner and name, so a wrap moved to another
     row, or to the other key, does not unwrap.
+    (d) **Key Vault mode** (`WARDYN_KEK=azurekv`): with ONE key pair and ONE
+    Entra identity, that identity's token (or the vault's crypto operators)
+    wraps, signs and unwraps the boot keys and the credentials alike, and `sign`
+    plants a boot key (residual 48(d)). The split mirrors Transit's:
+    `WARDYN_AZURE_KEK_KEY_PLATFORM` and `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM`
+    (chart `kek.azurekv.keyPlatform` and `kek.azurekv.signingKeyPlatform`) wrap
+    and sign the boot keys under a second pair that only a second Entra identity
+    (`WARDYN_AZURE_CLIENT_ID_PLATFORM`, chart `secretStore.azure.clientIdPlatform`)
+    reaches, and the first pair wraps the credentials. A leaked Entra access token
+    for the credential identity, with or without the database, then wraps, signs
+    and unwraps no boot key, and a serving wardynd opens no boot key that token
+    planted: it opens a boot key under the platform pair alone and refuses one
+    under the credential pair. Boot refuses a platform wrapping key, signing key
+    or client id that equals its credential counterpart, compared on the
+    normalised identity (lowercase vault host and key name; client ids
+    case-insensitively), so a spelling that differs only by case does not defeat
+    it. Adoption and retirement are (c)'s operator steps
+    (`-rewrap-adopt-boot-keys`, `-rewrap-retire-platform-key`), with the same
+    trust root: the operator's word. What the split does not do: under workload
+    identity both client ids exchange the same projected service-account token, so
+    it defends against a leaked Entra access token for the credential identity,
+    not against a leaked service-account token or a compromised wardynd process,
+    which reaches both; it holds only while the platform identity's role
+    assignment is scoped to the platform keys and the credential identity has none
+    on them, which Wardyn cannot check; and `sign` on the platform signing key
+    plants boot keys, so the platform identity, and any Key Vault role that grants
+    `sign` on those keys, is credential-equivalent.
 
 50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`
