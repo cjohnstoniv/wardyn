@@ -423,6 +423,29 @@ type DriveProber interface {
 	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
 }
 
+// SubstrateState is the closed set of answers a SubstrateProber gives about
+// whether the control plane can use its substrate right now. Three failure
+// classes, not one bool, because the remedies differ: a substrate that cannot
+// be reached is a network or daemon fault, a refused credential is a token to
+// renew, and a refused verb is a missing grant.
+type SubstrateState string
+
+const (
+	SubstrateOK           SubstrateState = "ok"
+	SubstrateUnreachable  SubstrateState = "unreachable"  // no answer, a transport error, or the probe's deadline
+	SubstrateUnauthorized SubstrateState = "unauthorized" // the substrate refused the credential (401)
+	SubstrateForbidden    SubstrateState = "forbidden"    // the credential is valid but may not do this (403, a permission error)
+)
+
+// SubstrateProber is an OPTIONAL Runner capability, in the shape of
+// DriveProber: a cheap read-only call that proves the control plane can reach
+// and use its substrate (Kubernetes: one namespaced pod list; Docker: a daemon
+// ping). It never creates anything. The implementation classifies its own
+// errors, and MUST honour ctx's deadline; a ctx that ended is SubstrateUnreachable.
+type SubstrateProber interface {
+	ProbeSubstrate(ctx context.Context) SubstrateState
+}
+
 // DriveReclaimOutcome is the closed set of answers a DriveReclaimer gives for
 // one object it was asked to destroy. The second is not an error: the object
 // being gone already is the same END STATE the caller asked for. Telling the

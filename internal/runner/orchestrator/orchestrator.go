@@ -159,6 +159,22 @@ func (o *Orchestrator) ProbeDrive(ctx context.Context, mount types.DriveMount) (
 	return runner.DriveProbe{}, errors.New("orchestrator: no wired substrate supports drive probing")
 }
 
+// ProbeSubstrate implements runner.SubstrateProber by delegating to the first
+// wired substrate that implements it, the same single fan-out ProbeDrive takes.
+// With no probing substrate the answer is whether Capabilities can be read,
+// which is the only live call such a substrate has.
+func (o *Orchestrator) ProbeSubstrate(ctx context.Context) runner.SubstrateState {
+	for _, s := range o.substrates {
+		if sp, ok := s.(runner.SubstrateProber); ok {
+			return sp.ProbeSubstrate(ctx)
+		}
+	}
+	if _, err := o.Capabilities(ctx); err != nil {
+		return runner.SubstrateUnreachable
+	}
+	return runner.SubstrateOK
+}
+
 // ReclaimDrive implements runner.DriveReclaimer by delegating to the first
 // wired substrate that implements it — the same single fan-out ProbeDrive and
 // ImagePresent take.

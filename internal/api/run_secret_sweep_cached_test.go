@@ -33,11 +33,11 @@ func TestSweepRunSecrets_EvictsCacheOnlyRuns(t *testing.T) {
 	cfg.MaskRegistry = reg
 	srv := New(cfg)
 
-	if n := srv.SweepRunSecrets(context.Background()); n != 1 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 1 {
 		t.Fatalf("evicted = %d, want 1 (the cold terminal run's cached Masker)", n)
 	}
 	// Idempotent, and the live run's entry is untouched.
-	if n := srv.SweepRunSecrets(context.Background()); n != 0 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 0 {
 		t.Errorf("second sweep evicted = %d, want 0", n)
 	}
 }

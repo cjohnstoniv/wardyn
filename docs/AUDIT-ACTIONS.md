@@ -534,7 +534,7 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 
 | Action | When | Data fields | Where | Status | Consumers |
 |---|---|---|---|---|---|
-| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md#wardynd-control-plane` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go#runRecordingSweeper` | internal | — |
+| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md#wardynd-control-plane` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/sweepers.go#recordingSweepTick` | internal | — |
 | `k8s.netpol.fail` | Boot-time NetworkPolicy canary verdict (`k8sNetpolVerdict`, also published on the anonymous `/healthz`'s `network_policy` field) grades this k8s substrate `unenforced` or `acknowledged` — every sandbox on it runs without a proven default-deny NetworkPolicy. Nil run id (deployment-wide, not tied to a run); silent on `enforced` and on every non-k8s driver | `verdict`, `driver` | `internal/api/reconcile.go#Server.auditK8sNetpolIfUnenforced` (`auditK8sNetpolIfUnenforced`) | internal | — |
 
 ## Notes on completeness
