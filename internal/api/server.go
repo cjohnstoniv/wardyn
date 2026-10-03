@@ -36,7 +36,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -139,6 +141,10 @@ type Config struct {
 	// run pause) to the elected leader and fences them by lease epoch. Nil means
 	// this process is the only one sweeping: every pass runs and no fence applies.
 	SweeperLease SweeperLease
+	// SweepHealth records each background sweep's ticks in the shared sweep_ticks
+	// record and reads them back for the sweep gauges and the substrate_health
+	// setup row. Nil records nothing and reports no sweep.
+	SweepHealth *sweephealth.Tracker
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit
 	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
@@ -176,6 +182,14 @@ type Config struct {
 	// spooling chain) the spool drain replays into. It must bypass the spool to
 	// avoid a re-spool loop / lock re-entry; a nil recorder disables the drain.
 	AuditDrainRecorder audit.Recorder
+	// AuditUnsealer opens the sealed personal fields of the audit rows the
+	// audit reads serve (WARDYN_AUDIT_SEAL, internal/audit/seal.go). Nil serves
+	// rows as stored.
+	AuditUnsealer audit.Unsealer
+	// SubjectKeys is the per-subject key service; person erasure destroys a
+	// person's audit-seal key through it. Nil makes the audit_personal_fields
+	// scope unavailable.
+	SubjectKeys *subjectkey.Manager
 	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
 	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
@@ -404,6 +418,14 @@ type Config struct {
 	// tail is kept after its last output. Zero defaults to
 	// defaultExecOutputTailTTL in New.
 	ExecOutputTailTTL time.Duration
+	// RunOutputPersistOff is WARDYN_RUN_OUTPUT_PERSIST=off: the final tail stays
+	// in memory only and nothing reaches run_outputs (run_output_final.go). A
+	// store that keeps no run outputs behaves the same.
+	RunOutputPersistOff bool
+	// RunOutputRetention is WARDYN_RUN_OUTPUT_RETENTION_DAYS as a duration: final
+	// rows older than it are deleted by the retention sweeper. Zero keeps them
+	// forever.
+	RunOutputRetention time.Duration
 	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
 	// sign-in runs against (see ado_entra.go). Nil — the default — means this
 	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
@@ -693,9 +715,17 @@ type Server struct {
 	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
 	// an in-flight consumer re-reads its run's fence.
 	maskBeat time.Duration
+	// runOutputDrainWaitOverride and runOutputRetryBaseOverride shrink the
+	// output finaliser's drain barrier and retry backoff for a test; zero uses
+	// runOutputDrainWait and runOutputRetryBase (run_output_final.go).
+	runOutputDrainWaitOverride, runOutputRetryBaseOverride time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
+	// substrateProbe is this replica's cached probe of the runner's substrate,
+	// read by /metrics and /setup/status (substrate_health.go).
+	substrateProbe substrateProbeCache
+
 	refRulesetMu   sync.Mutex
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck

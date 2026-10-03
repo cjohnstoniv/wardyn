@@ -16,7 +16,7 @@ import (
 // records under a portal's delegated request names the portal too (#1142),
 // not only the rows the API writes itself.
 func TestAuditChainStampsDelegation(t *testing.T) {
-	rec, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry())
+	rec, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

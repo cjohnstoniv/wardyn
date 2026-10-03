@@ -38,14 +38,14 @@ func (s *Store) Revision(ctx context.Context, name string) (string, error) {
 
 // putIfRevision is the local-mode guarded upsert: one statement, so the check
 // and the write are atomic. rev "" requires an absent row.
-func (s *Store) putIfRevision(ctx context.Context, name, rev string, wrapped, ct []byte, kekID string) error {
+func (s *Store) putIfRevision(ctx context.Context, name, rev string, r sealedRow) error {
 	var n int64
 	if rev == "" {
 		tag, err := s.pool.Exec(ctx, `
 			INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (owned_by, name) DO NOTHING`,
-			s.owner, name, encVersion, kekID, wrapped, ct, expiresAt(ctx))
+			s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx))
 		if err != nil {
 			return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), err)
 		}
@@ -54,7 +54,7 @@ func (s *Store) putIfRevision(ctx context.Context, name, rev string, wrapped, ct
 		tag, err := s.pool.Exec(ctx, `
 			UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()
 			WHERE owned_by=$1 AND name=$2 AND `+revisionExpr+` = $8`,
-			s.owner, name, encVersion, kekID, wrapped, ct, expiresAt(ctx), rev)
+			s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx), rev)
 		if err != nil {
 			return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), err)
 		}

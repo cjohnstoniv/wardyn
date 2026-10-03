@@ -76,6 +76,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
   narrowed is refused (`400` at write, `422` at launch).
 
+- **Run output now reaches Postgres and its backups.** Migration `0119_run_outputs` adds `run_outputs` and
+  `run_output_erasures`. With `WARDYN_RUN_OUTPUT_PERSIST` on (the default), the final masked tail of every
+  non-interactive run is written to Postgres when the run ends and kept `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  days (default `30`; `0` keeps it forever), so "nothing reaches Postgres or a backup" no longer holds. Set
+  `WARDYN_RUN_OUTPUT_PERSIST` to `off` to keep the 0.8.5 behaviour of an in-memory tail only. A secret a
+  command prints that Wardyn never registered is kept like any log line, and is now persisted. See
+  `docs/OPERATIONS.md` "Run output".
+
 ### Added
 
 - **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
@@ -90,6 +98,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
+- **A broken substrate or a stalled background sweep shows on a gauge and a `/setup/status` row, and `/readyz`
+  is unchanged.** Migration `0118_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
+  replica. `wardyn_runner_up` (per replica) reads 0 when the runner's substrate is unreachable or refuses the
+  control plane, and `wardyn_sweep_last_tick_seconds{sweep,result}` carries each sweep's last attempt and last
+  success. The new `substrate_health` row fails with cause `runner_unreachable` or `runner_auth`, and warns with
+  cause `sweep_stale` once a sweep goes three of its intervals without a success; it is never blocking and
+  members never see it. A runner that is configured but cannot report its capabilities no longer sends every
+  admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
+  The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
+  and a daemon ping on Docker. See `docs/operations/monitoring.md`.
 
 ### Added
 
@@ -114,6 +132,45 @@ and does not yet follow semantic versioning (interfaces are not stable).
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
 
+- **A run's output is persisted once, after its last bytes, and read from any replica.** Every way a run
+  ends (completion, failure, kill, idle stop, lease end, reconciliation, a failed dispatch) goes through one
+  finalisation: wait up to 5 seconds for the runner's copy of the output to end, flush the masker's
+  holdback, seal the tail, and write one masked row. A byte that arrives later is dropped and marks the row
+  `incomplete`; a process that holds no tail for the run (a restart) writes a `capture_gap` row and reads
+  nothing from the substrate. A failed write is retried with backoff and audited as `run.output.finalize`
+  (only for a capture that is not clean); an hourly leader-gated sweep deletes rows past retention
+  (`run.output.retention.sweep`) and is the `run_output` row of `wardyn_sweep_last_tick_seconds`.
+  `GET /runs/{id}/output` gains `source`, `incomplete`, `capture_gap`, `mask_scope` and `captured_at`.
+- **A run's output can be erased for good.** `EraseRunOutputs` writes a tombstone and deletes the rows in one
+  transaction, and every write and read checks the tombstone in its own transaction, so no replica recreates
+  or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
+  tail drops and zeroes it on its next touch. It is wired into the person erasure by a later change;
+  `DELETE /people/{principal}/credentials` does not call it.
+
+### Added
+
+- **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
+  `0110_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
+  memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
+  with its manifest and the same digest in a footer, in a readable form or a raw archive form you can re-hash
+  with no Wardyn code ("Verifying an exported audit partition by hand", `docs/OPERATIONS.md`); only a security
+  operator is served, and `?partition=` with any other filter is refused (`audit_export_partition_filter`).
+  `GET /audit/chain/verify` now starts from the newest attested retention drop, reports a removed newest tail
+  (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
+  removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
+  `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
+- **Personal audit fields can be sealed, and a person's records erased by scope.** `WARDYN_AUDIT_SEAL=fields`
+  (default `off`) stores the personal fields of an audit row (the table in "Sealed fields",
+  `docs/AUDIT-ACTIONS.md`) as ciphertext under the person's own key, in the store, the spool and every audit
+  sink, so a SIEM receives ciphertext for them; audit reads and the readable export open them. A key that cannot
+  be had never drops the row or writes it in the clear: it waits in the spool under the new platform key
+  `wardyn-audit-pending-key` and the drain re-seals it. Rows written before it is turned on stay plaintext.
+  `POST /people/{principal}/erasure` (`wardyn person erase`) erases one person's `credentials`,
+  `audit_personal_fields`, `run_tasks`, `run_outputs`, `recordings` (opt-in) and `mask_copies` by explicit
+  scope in one audited `person.erasure` act, reports complete only when every scope asked for is, names the
+  scopes left after a partial failure, and refuses a security admin erasing themself for any scope but
+  `credentials`. `DELETE /people/{principal}/credentials` still erases credentials only.
+
 ### Security
 
 - **A run's secrets are masked from a sealed manifest, and a registry miss fails closed (migration
@@ -137,6 +194,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a key version is reported safe to retire only once both are at it. The audit action
   `principal_key.destroyed` names the owner, purpose and generation numbers and never key material. A split
   migrator and app role install grants the app role `SELECT, INSERT, UPDATE` on `principal_keys`.
+- **Per-person credential keys, off by default (`WARDYN_PRINCIPAL_KEYS`, chart `kek.principalKeys`).** With
+  it `on`, a person's stored credential is sealed under a key of that person's own (`enc_version=3`, `kek_id`
+  `pk:v<n>`) and erasing the person destroys the key, so those rows cannot be read again even from a backup
+  of the table. Boot keys, the operator namespace and store mode are unaffected, and every row format is
+  read with it off. `wardynd -rewrap-principal-keys` moves existing credentials into the new form.
+  `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
+  without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
+  downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
@@ -144,6 +209,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`complete` on `GET /runs/{id}/output` now means a final capture.** It used to mean the run had finished,
+  so a read could still gain bytes after it said `complete`. It is true only for a stored final row, or an
+  in-memory tail whose drain barrier closed and whose holdback was flushed. A run that has just finished
+  reads `complete: false` until then.
 - **The sweepers that must run once now run on one elected replica.** The approval expiry, recording
   retention, credential expiry, always-egress reconcile and run pause sweeps run only on the replica that
   holds a Postgres advisory lock (`db.SweeperLeaderLockKey`); the others retry and take over within about 15

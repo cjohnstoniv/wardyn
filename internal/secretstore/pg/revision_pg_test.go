@@ -50,7 +50,7 @@ func TestPut_IfRevisionWritesOnlyWhileTheRowIsUnchanged(t *testing.T) {
 	if err := view.Put(secretstore.WithIfRevision(ctx, rev1), name, []byte("stale")); !errors.Is(err, secretstore.ErrRevisionChanged) {
 		t.Fatalf("guarded replace of a row that changed = %v, want ErrRevisionChanged", err)
 	}
-	if got := mustGet(t, view, name); got != "second" {
+	if got := mustGetValue(t, view, name); got != "second" {
 		t.Fatalf("stored = %q after a refused stale write, want %q", got, "second")
 	}
 	// A row deleted since the read is not recreated by the holder.
@@ -110,7 +110,7 @@ func TestAudited_ForwardsRevisionAndGuard(t *testing.T) {
 	}
 }
 
-func mustGet(t *testing.T, st secretstore.Store, name string) string {
+func mustGetValue(t *testing.T, st secretstore.Store, name string) string {
 	t.Helper()
 	b, err := st.Get(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), name)
 	if err != nil {

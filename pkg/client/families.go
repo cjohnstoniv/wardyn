@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -367,6 +368,31 @@ func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
+// ErasePersonResult is what POST /api/v1/people/{principal}/erasure answers once
+// every scope asked for is erased.
+type ErasePersonResult struct {
+	// Person is the principal the name resolved to.
+	Person string `json:"person"`
+	// Scopes are the scopes erased, in the order they ran.
+	Scopes []string `json:"scopes"`
+	// Outcome is each scope's result: "done".
+	Outcome map[string]string `json:"outcome"`
+	// Detail is each scope's counts.
+	Detail map[string]any `json:"detail"`
+}
+
+// ErasePerson erases one person's retained records by scope (credentials,
+// audit_personal_fields, run_tasks, run_outputs, recordings, mask_copies) in one
+// audited act. principal is the person's subject (or an email the deployment
+// knows them by) and is percent-encoded here. A scope that fails part way is a
+// 500 whose reason is erasure_incomplete: retry with the same scopes. Security
+// tier. POST /api/v1/people/{principal}/erasure.
+func (c *Client) ErasePerson(ctx context.Context, principal string, scopes []string) (ErasePersonResult, error) {
+	var out ErasePersonResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/people/"+url.PathEscape(principal)+"/erasure", map[string]any{"scopes": scopes}, &out)
+	return out, err
+}
+
 // RunFileStat is one changed file in a RunFiles listing.
 type RunFileStat struct {
 	Path string `json:"path"`
@@ -406,9 +432,24 @@ type RunOutput struct {
 	Output string `json:"output"`
 	// Truncated: Output does not start at the run's first byte.
 	Truncated bool `json:"truncated"`
-	// Complete: the run has finished; bytes it printed in its last moments can
-	// land a moment later, so read once more after Complete if the end matters.
+	// Complete: the capture is final (a stored row, or a memory tail sealed after
+	// the run's last bytes), so a read never gains bytes after it. A run that
+	// has just finished is not Complete until then: read again.
 	Complete bool `json:"complete"`
+	// Source is where the bytes came from; "stdout" for a run's own output.
+	Source string `json:"source"`
+	// Incomplete: bytes may be missing (a copy did not end in time or failed, or
+	// a byte arrived after the capture was sealed).
+	Incomplete bool `json:"incomplete"`
+	// CaptureGap: the output could not be captured (no process held it), so
+	// Output is empty.
+	CaptureGap bool `json:"capture_gap"`
+	// MaskScope is "run" when the capture was masked against the run's complete
+	// manifest throughout, "globals_only" when it was not; empty when this
+	// deployment keeps no manifests.
+	MaskScope string `json:"mask_scope,omitempty"`
+	// CapturedAt is when the final row was written; nil while the run is live.
+	CapturedAt *time.Time `json:"captured_at,omitempty"`
 }
 
 // RunOutput reads the last tail bytes of a non-interactive run's output

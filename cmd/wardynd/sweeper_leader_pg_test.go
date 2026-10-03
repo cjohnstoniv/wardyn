@@ -64,7 +64,7 @@ func TestLeaderGo_RecordingSweepRunsOnOneReplica(t *testing.T) {
 		leader := db.NewSweeperLeader(r.pool, r.name)
 		go leader.Run(ctx)
 		leaderGo(ctx, leader, "recording.sweeper", func(c context.Context) {
-			runRecordingSweeper(c, r.sw, r.rec, 20*time.Millisecond, time.Hour)
+			runRecordingSweeper(c, r.sw, r.rec, 20*time.Millisecond, time.Hour, nil)
 		})
 	}
 

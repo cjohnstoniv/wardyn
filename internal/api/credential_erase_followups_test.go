@@ -46,7 +46,7 @@ func TestSweepExpiredCredentials_AuditsFailures(t *testing.T) {
 			&secretstore.ExpiredKept{Owner: "carol", Name: "wardyn-harness-aws-oauth", Err: errors.New("vault: 403 permission denied")},
 			errors.New("pg secretstore: expired select: connection reset"),
 		)}
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d, want 1", n)
 	}
 	rows, data := actionRows(t, h.audit.events, "credential.expired.delete")

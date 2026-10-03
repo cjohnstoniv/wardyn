@@ -88,26 +88,71 @@ transient — regenerated on start.
 ### Run output
 
 wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
-1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr in
-memory, so a caller can read the end of a headless run with
+1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr, in
+memory while the run lives and in Postgres once it ends, so a caller can read
+the end of a headless run, during it and after a restart, with
 `GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
 else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none, and
 neither does the managed-harness sign-in run, whose output is a live credential.
 
-- **It is not a recording, and not stored.** It lives outside the recording
-  store and works with `WARDYN_RECORDING_STORE=off`; nothing reaches Postgres or
-  a backup, and a wardynd restart drops every tail. It is dropped
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output.
-- **Memory bound.** A tail is held from a run's first output until
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last, finished runs included, so
-  memory is at most (runs that printed within the TTL) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`:
-  2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against that.
+- **It is not a recording, and it is stored.** It lives outside the recording
+  store and works with `WARDYN_RECORDING_STORE=off`. With
+  `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
+  written once, masked, to the `run_outputs` table when the run ends, so it
+  **is in Postgres and in its backups** for `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  (default `30`; `0` keeps it forever) and any replica serves it, with or
+  without a restart. An hourly sweeper on the elected leader deletes rows past
+  the window, and a run whose output was erased (below) answers
+  `404 run_output_erased`. A deployment that turned recordings off so terminals
+  are not kept should decide on these two settings too.
+- **One finalisation for every way a run ends.** Completion, failure, a kill,
+  an idle stop, a lease end, a probe reclaim, boot reconciliation and a failed
+  dispatch all end in the same step: wait up to 5 seconds for the runner's copy
+  of the output to reach its end (the process exiting is not the end of its
+  output), release the bytes the masker was holding back as a possible secret
+  prefix, seal the tail, and write the row. A byte that arrives after that is
+  dropped. The row says what it is: `complete` is true only for a final capture,
+  `incomplete` when the wait ran out, a copy failed or a byte was dropped, and
+  `capture_gap` when this process held no tail (for example a run adopted after
+  a restart) so there are no bytes to keep. A write that fails is retried with
+  capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
+  a clean capture writes no audit row.
+- **A restart.** A run that was live across a wardynd restart keeps only what
+  its new process captured, and ends with a `capture_gap` row: wardynd never
+  re-runs the agent, and on Docker the exec's terminal cannot be re-attached
+  after the process that held it died. Runs that finished before the upgrade
+  have no row and read `409 run_output_not_kept`.
+- **Settings.** `WARDYN_EXEC_OUTPUT_TAIL=off` collects nothing and refuses
+  stored rows too (`409 run_output_off`); the sweeper still deletes them.
+  `WARDYN_RUN_OUTPUT_PERSIST=off` keeps the tail in memory only, expired
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output,
+  writes nothing to Postgres, and still serves rows stored earlier until the
+  sweeper deletes them. The sweep is the `run_output` row of
+  [monitoring](operations/monitoring.md).
+- **Storage.** About `WARDYN_RUN_OUTPUT_TAIL_BYTES` × (runs per day) × retention
+  days at most: 2,000 runs a day at the default size and 30 days is about
+  3.7 GiB of table, before indexes.
+- **Memory bound.** With persistence on, a tail is held from a run's first
+  output until its row commits, never expired by the TTL, so memory is at most
+  (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`: 500
+  runs at 1 MiB is about 500 MiB. With persistence off a tail is held until
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs included, so
+  memory is at most (runs that printed within the TTL) × the tail size: 2,000
+  runs a day at 1 MiB is about 2 GiB. Size the variable against the mode you run.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,
   the same way a recording is. Anything else a command prints — a token it read
   from a file, a secret a person pasted into the task — is kept verbatim and
-  served to whoever may read the run. A harness that prints a token it read from
-  a file therefore keeps that token in memory for the run's readers.
+  served to whoever may read the run, and now persisted for the retention
+  window. A harness that prints a token it read from a file therefore keeps that
+  token for the run's readers.
+- **Erasure.** `EraseRunOutputs` deletes a run's rows and writes a tombstone in
+  one transaction (nothing at all if it fails). Every write and read of a run's
+  output checks the tombstone in its own transaction, so no replica recreates or
+  serves an erased run's output, and a replica still holding the run's tail in
+  memory drops and zeroes it the next time it touches the run. Bytes already in
+  a database backup stay there until it ages out. `DELETE /people/{principal}/credentials`
+  erases credentials only and does not call it.
 - **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
   does not turn this off; a deployment that disables recordings so terminals are
   not kept should decide on this one too.
@@ -575,7 +620,7 @@ as an exact `seq` and a reason.
 **What it does not give you.** Tamper-**evidence**, not tamper-proofness. Someone
 who can rewrite one row can usually rewrite every row after it and re-chain the
 lot; a re-chained tail verifies perfectly clean, and truncating the newest rows
-leaves a shorter, valid chain. The defence against both is **off-box**: every
+leaves a shorter, valid chain (the high-water mark below catches it, unless it is rewritten too). The defence against both is **off-box**: every
 event **whose Postgres write succeeded** carries its `prev_hash`/`row_hash` onto
 the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
 cannot later disown — that comparison, not the sweep, is the control. The
@@ -619,6 +664,48 @@ append-only, so every later sweep reports that same `broken_seq` forever — no
 repair, no "acknowledge" cursor. `ok: false` is a one-way latch: treat the first
 occurrence as the incident and preserve the row range, because the alert will not
 clear.
+
+**After the audit log was partitioned (0.8.6): what verify checks beyond the chain.** The sweep runs in one
+repeatable-read snapshot and still re-hashes every retained row. It starts from the newest attested retention drop
+(a `kind = 'drop'` row in `audit_chain_anchors`): the first retained row's `prev_hash` must equal the tail hash
+that drop recorded, and the result reports that drop's last `seq` as `anchor_seq`. A removal with no anchor still
+breaks the chain, and its `reason` now says `rows removed without an attested retention drop`. Two checks cover
+what a chain cannot say about itself. The newest row must be the one `audit_partition_meta` recorded as the
+high-water mark, so rows removed from the **newest** end (which leave a shorter, valid chain) read as `the log was
+truncated at its tail`. And every partition in the expected manifest must still exist unless a drop anchor names
+it; a range a `split` anchor names must exist or be accounted for by a later drop. Someone who can rewrite the
+table can rewrite the high-water mark and the anchors too: the head hash on your SIEM remains the control that
+catches that.
+
+**Verifying an exported audit partition by hand.** A partition that is fully behind the high-water mark is
+*closed*: nothing can be appended to it, so its digest is fixed. Export it in the raw archive form, fold it
+yourself, and compare with the database and the footer:
+
+```bash
+wardyn audit export-partition audit_events_p202610 --raw -o p.ndjson   # security_admin; or GET /audit/export?partition=audit_events_p202610&form=raw
+# manifest header: a JSON array of strings, jsonb's own text form (", " between elements);
+# the ranges are empty strings for an empty partition
+header=$(jq -r 'select(.type=="manifest")
+  | (if .row_count == 0 then "" else null end) as $e
+  | [.partition] + ([.seq_lo, .seq_hi, .recorded_lo_us, .recorded_hi_us] | map($e // tostring)) + [(.row_count | tostring)]
+  | "[" + (map(@json) | join(", ")) + "]"' p.ndjson)
+d=$(printf %s "$header" | sha256sum | cut -d' ' -f1)                       # d_0
+while read -r h; do d=$(printf %s "$d$h" | sha256sum | cut -d' ' -f1); done \
+  < <(jq -r 'select(.type=="row") | (.row_hash // .fold_hash)' p.ndjson)   # d_i = sha256(d_(i-1) || row_hash_i)
+echo "fold:   $d"
+jq -r 'select(.type=="footer") | "footer: " + .digest' p.ndjson
+psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
+```
+
+All three must match, and the export must end with its `footer` line (a transfer that stops short is aborted, not
+ended cleanly). The fold is over lowercase hex text, in `seq` order: `d_0 = sha256(header)` and
+`d_i = sha256(d_(i-1) || row_hash_i)`, which holds in constant memory however large the partition is. A row from
+before the chain began has no `row_hash`; the archive carries the hash it folds as `fold_hash`. To check each row,
+recompute `row_hash` from the archive's own columns as the formula above gives it: `time_us` is the `time` in
+microseconds since the epoch, and `data` is the jsonb text exactly as stored (not re-encoded), embedded in the
+array as a JSON value. Only a security operator may export a partition; anyone else gets an empty export, and
+`?partition=` with any other filter is refused (`audit_export_partition_filter`). The readable form
+(`form=readable`, the default) gives the same rows in the audit feed's own event shape.
 
 **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`,
 and are never a failure. There is no backfill, on purpose: hashes computed after
@@ -752,7 +839,44 @@ a "right to erasure" obligation on data an audit row could contain, the honest
 answer is: **you cannot selectively erase it, and the fix that exists for
 recordings does not exist here.** A time-partitioned audit table with an attested,
 operator-invoked partition-drop (or crypto-shredding) is the shape of a real fix;
-nothing in that direction is built.
+the crypto-shredding half of it is [below](#erasing-a-person), for the rows
+written after `WARDYN_AUDIT_SEAL=fields` is on.
+
+### Erasing a person
+
+`POST /api/v1/people/{principal}/erasure` (security tier; `wardyn person erase`)
+erases one person's retained records by explicit scope, in one audited act
+(`person.erasure`). The body names the scopes, a non-empty list of:
+
+| Scope | What it erases |
+|---|---|
+| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
+| `run_tasks` | the task text of the runs the person created |
+| `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
+| `recordings` | their session recordings. Opt-in: nothing deletes a recording unless this scope is asked for |
+| `mask_copies` | the masking manifests of those runs, after their live attaches, SSH shells and relays are fenced |
+
+The scopes run in the order above whatever order the body lists them: the person's live
+consumers are fenced first, the data they could still reach next, the keys last. Every scope is
+idempotent. A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and
+`remaining`, the `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the
+same scopes finishes the rest. Erasure is reported complete (`200`, `outcome` success) only when every scope
+asked for finished.
+
+Refusals, all before anything is erased: the operator namespace (`erasure_operator_namespace`), an unknown or
+empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`owner_unresolved`,
+`owner_ambiguous`), and the person being the caller for any scope but `credentials`
+(`erasure_self_refused`; the admin token, which is no person, may erase anyone, and is audited as every
+other bypass is).
+
+**What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
+are plaintext: no key covers them. A SIEM sink holds ciphertext for a sealed field, so after
+`audit_personal_fields` it holds nothing readable either; its copies of the clear `actor` and `source_ip`
+columns are outside this scope. A backup restores the wrapped key and so the field until the backup expires or
+the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
+erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
+which fields are sealed and why the rest stay clear.
 
 ## Monitoring
 
@@ -921,6 +1045,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
 | `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
+| `POST /people/{principal}/erasure` — erasing one person's retained records by scope (0.8.6, [Erasing a person](#erasing-a-person)): it only removes records and returns counts, never a record's content; nobody erases themself except their credentials | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `POST /people` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and listing the API tokens an admin once created for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). `POST /people/{principal}/tokens` stays mounted on this tier so a non-admin is refused as ever, and answers every admin `403` `person_token_mint_removed`: no role creates a token that acts as another person (0.8.5) | ⛔ admin or `security_admin` |
 | `GET /model-providers/credentials` — the credential inventory (0.8): for each model provider, every person who holds a credential of their own for it, with its state (`stored`, or `expired` past its sign-in's expiry), where it is stored (`pg`, `vaultkv`, `azurekv`), when it was added and when a run last used it (to the minute: a sink stamps a row at most once a minute), plus counts. Each row also carries `email` and `provider_name` (CS-8, both additive and non-secret) so a `security_admin` — who has no route to the model-provider roster or an identity directory — can still read the table well enough to offboard from it. The console's own page is `/admin/credentials`. The erase's companion; read from the rows' metadata, never a value | ⛔ admin or `security_admin` |
@@ -2838,6 +2963,7 @@ admin walking the member path, not an incident.
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -5335,7 +5461,8 @@ BEGIN
 END $$;
 GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
-  audit_ensure_partitions(integer) TO wardyn_app;
+  audit_ensure_partitions(integer),
+  audit_partition_digest(text) TO wardyn_app;
 
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an

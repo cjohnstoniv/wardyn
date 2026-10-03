@@ -16,6 +16,9 @@ type Meta struct {
 	// Store is where the value lives: "pg" when it is sealed in the row, or
 	// the external store a pointer row names ("vaultkv", "azurekv").
 	Store string
+	// PrincipalKey is true when the value is sealed under its owner's
+	// principal key (enc_version 3), which destroying that key erases.
+	PrincipalKey bool
 	// AddedAt is when the row was first written; replacing the value keeps it.
 	AddedAt time.Time
 	// LastUsedAt is when a run's credential sink last used the value (MarkUsed),

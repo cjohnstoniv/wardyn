@@ -174,6 +174,22 @@ func (s *PGStore) Sweep(olderThan time.Duration) (int, error) {
 	return int(tag.RowsAffected()), nil
 }
 
+var _ RunDeleter = (*PGStore)(nil)
+
+// DeleteRun removes the run's bare cast and every "<runID>~<suffix>" composite,
+// returning how many rows went. Absent casts are not an error.
+func (s *PGStore) DeleteRun(ctx context.Context, runID string) (int, error) {
+	if err := validKey(runID); err != nil {
+		return 0, err
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM recordings WHERE cast_key = $1 OR starts_with(cast_key, $1 || $2)`, runID, castSep)
+	if err != nil {
+		return 0, fmt.Errorf("recording: delete run %q: %w", runID, err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func init() {
 	Register("pg", func(d Deps) (Store, error) {
 		if d.Pool == nil {
