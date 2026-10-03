@@ -36,6 +36,20 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // reuse this key.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
+// SweeperLeaderLockKey elects the one replica that runs the sweepers which must
+// run once (approvals, recordings, credentials, the always-egress reconcile and
+// the run pause). Acquired ONCE and held for the process lifetime by
+// SweeperLeader; followers retry on a backoff and take over when the leader's
+// session ends.
+//
+// HONEST CEILING, as for GroundTruthRotatorLockKey: an advisory lock dies with
+// its SESSION, so a Postgres failover can release it under a still-running
+// leader. Unlike the rotator, this lock IS used for work that needs fencing, so
+// each acquisition bumps the durable epoch in sweeper_leader (0108) and a
+// multi-step operation re-checks its epoch (SweeperLeader.Current) before it
+// writes.
+const SweeperLeaderLockKey int64 = 0x5741524459_53574C // ASCII "WARDYSWL"
+
 // SingleInstanceLockKey is the RUNTIME half of the one-replica safety control
 // (the Helm chart's `replicas > 1` render refusal is the other half). Taken
 // once at boot, held for the process lifetime: a second instance refuses to start.

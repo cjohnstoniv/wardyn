@@ -43,6 +43,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
   image together with wardynd: an older proxy refuses the new `brokered_pat_grant_ids` config key at start.
 
+### Changed
+
+- **The sweepers that must run once now run on one elected replica.** The approval expiry, recording
+  retention, credential expiry, always-egress reconcile and run pause sweeps run only on the replica that
+  holds a Postgres advisory lock (`db.SweeperLeaderLockKey`); the others retry and take over within about 15
+  seconds of the leader's session ending. The run-secret sweeper still runs on every replica. Each
+  acquisition bumps a durable epoch (migration `0108_sweeper_leader`), and a leader that loses its lock
+  stops its sweeps before releasing it. A pause whose mark loses the compare to another leader's no longer
+  thaws the run the other leader just paused. The lock holds one more connection for the process lifetime:
+  size `pool_max_conns` at least 3 (5 with the ground-truth rotator); `docs/ENV.md` has the detail.
+
 ## [0.8.5] — 2026-10-02
 
 ### Before you upgrade
