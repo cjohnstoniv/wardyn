@@ -14,7 +14,7 @@ import (
 )
 
 // SweepTicks is the Postgres-backed sweephealth.Store: one sweep_ticks row per
-// sweep, shared by every replica (migration 0118).
+// sweep, shared by every replica (migration 0120).
 type SweepTicks struct{ pool *pgxpool.Pool }
 
 // NewSweepTicks returns the shared tick record on pool.

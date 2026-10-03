@@ -3,7 +3,7 @@
 
 package db
 
-// Live tests for audit_partition_digest (0110): the fold it computes, what it refuses, and who may call
+// Live tests for audit_partition_digest (0119): the fold it computes, what it refuses, and who may call
 // it. The Go side of the same definition (store.PartitionDigest) is pinned to it from the store package.
 
 import (

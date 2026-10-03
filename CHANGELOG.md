@@ -110,7 +110,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `policy:evaluator-error`, an uninspectable push) and every decision-log row are unchanged. See the proxy
   image note under "Before you upgrade".
 - **A broken substrate or a stalled background sweep shows on a gauge and a `/setup/status` row, and `/readyz`
-  is unchanged.** Migration `0118_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
+  is unchanged.** Migration `0120_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
   replica. `wardyn_runner_up` (per replica) reads 0 when the runner's substrate is unreachable or refuses the
   control plane, and `wardyn_sweep_last_tick_seconds{sweep,result}` carries each sweep's last attempt and last
   success. The new `substrate_health` row fails with cause `runner_unreachable` or `runner_auth`, and warns with
@@ -143,7 +143,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Added
 
 - **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
-  `0110_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
+  `0119_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
   memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
   with its manifest and the same digest in a footer, in a readable form or a raw archive form you can re-hash
   with no Wardyn code ("Verifying an exported audit partition by hand", `docs/OPERATIONS.md`); only a security
