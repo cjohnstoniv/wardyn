@@ -31,8 +31,8 @@ func decideRow(reason string) types.AuditEvent {
 		Action: "approval.decide", Target: "a1", Outcome: "success", Data: data}
 }
 
-func TestAuditSealModeFullRefusesToBoot(t *testing.T) {
-	for in, wantErr := range map[string]string{"": "", "off": "", "fields": "", "full": "not available in this release", "fileds": "want off, fields or full"} {
+func TestAuditSealModeServesAllThreeAndRefusesAMisspelling(t *testing.T) {
+	for in, wantErr := range map[string]string{"": "", "off": "", "fields": "", "full": "", "fileds": "want off, fields or full"} {
 		f := &bootFlags{auditSeal: &in}
 		_, err := auditSealMode(f)
 		if (err == nil) != (wantErr == "") || (err != nil && !strings.Contains(err.Error(), wantErr)) {
@@ -67,6 +67,28 @@ func TestSealingRecorderNeverWritesAPersonalFieldInTheClear(t *testing.T) {
 	inner = &captureRecorder{}
 	if err := (sealingRecorder{inner: inner}).Record(t.Context(), decideRow("words")); err != nil || len(inner.evs) != 1 {
 		t.Fatalf("nil source: %v", err)
+	}
+}
+
+// Under full a person's row needs the Sealer whatever its action, and so is
+// refused, never written under the person's name, before the keys are armed; an
+// agent's row and every row under fields still pass through.
+func TestSealingRecorderUnderFullNeedsTheSealerForAnyHumanRow(t *testing.T) {
+	human := types.AuditEvent{ActorType: types.ActorHuman, Actor: "alice", Action: "run.kill"}
+	agent := types.AuditEvent{ActorType: types.ActorAgent, Actor: "spiffe://x/run/1", Action: "run.start"}
+
+	inner := &captureRecorder{}
+	full := sealingRecorder{inner: inner, src: newAuditSealSource(audit.SealFull)}
+	if err := full.Record(t.Context(), human); err == nil || len(inner.evs) != 0 {
+		t.Fatalf("a human row under full before the keys were armed: err %v, rows %d; want a refusal", err, len(inner.evs))
+	}
+	if err := full.Record(t.Context(), agent); err != nil || len(inner.evs) != 1 {
+		t.Fatalf("an agent row under full: %v, rows %d; want it passed through", err, len(inner.evs))
+	}
+	inner = &captureRecorder{}
+	fields := sealingRecorder{inner: inner, src: newAuditSealSource(audit.SealFields)}
+	if err := fields.Record(t.Context(), human); err != nil || len(inner.evs) != 1 || inner.evs[0].Actor != "alice" {
+		t.Fatalf("a human row under fields: %v, rows %v; want it unchanged", err, inner.evs)
 	}
 }
 

@@ -73,12 +73,14 @@ func TestPG_AuditFilterSQLAgreesWithGo(t *testing.T) {
 		for _, u := range []time.Time{{}, until} {
 			for _, action := range []string{"", "run.kill"} {
 				for _, prefix := range []string{"", "credential.", "run_"} {
-					for _, actor := range []string{"", "alice@corp.example"} {
+					// ActorAlt is the subject a sealed row stores for the person: any
+					// other stored actor stands in for it here.
+					for _, who := range [][2]string{{"", ""}, {"alice@corp.example", ""}, {"alice@corp.example", "bob@corp.example"}} {
 						for _, at := range []types.ActorType{"", types.ActorHuman} {
 							for _, outcome := range []string{"", "failure"} {
 								filters = append(filters, store.AuditFilter{
 									Since: s, Until: u, Action: action, ActionPrefix: prefix,
-									Actor: actor, ActorType: at, Outcome: outcome,
+									Actor: who[0], ActorAlt: who[1], ActorType: at, Outcome: outcome,
 								})
 							}
 						}

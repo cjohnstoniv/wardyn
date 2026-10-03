@@ -144,6 +144,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   scope in one audited `person.erasure` act, reports complete only when every scope asked for is, names the
   scopes left after a partial failure, and refuses a security admin erasing themself for any scope but
   `credentials`. `DELETE /people/{principal}/credentials` still erases credentials only.
+- **`WARDYN_AUDIT_SEAL=full` stores a human actor as `subject:<uuid>`.** After the person is erased their rows
+  no longer name them and the chain still verifies; reads and the readable export show the person while their
+  key exists and `[erased]` after, and `?actor=<person>` finds both forms. Off by default. **SIEM rules keyed on
+  `actor` see subject ids once it is on**, and it applies to rows written after that. `subject:` is now a
+  reserved principal prefix (`reserved_principal`) whatever the setting is.
 
 ### Security
 

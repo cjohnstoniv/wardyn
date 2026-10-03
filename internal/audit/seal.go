@@ -68,6 +68,39 @@ type Unsealer interface {
 
 var _ Unsealer = (*Sealer)(nil)
 
+// SubjectDirectory maps a person to the subject id a SealFull row carries in its
+// actor, and back. The id is the person's oldest principal_identities row.
+type SubjectDirectory interface {
+	// AuditSubjectFor is principal's subject id; ok is false when the person has
+	// no identity row, and their actor then stays as it is.
+	AuditSubjectFor(ctx context.Context, principal string) (id string, ok bool, err error)
+	// AuditPrincipalOf is the principal an id names; ok is false for an id no
+	// identity row carries.
+	AuditPrincipalOf(ctx context.Context, id string) (principal string, ok bool, err error)
+	// AuditKeyDestroyedAt is when the latest generation of principal's seal key
+	// was destroyed; ok is false while none has been.
+	AuditKeyDestroyedAt(ctx context.Context, principal string) (at time.Time, ok bool, err error)
+}
+
+// ActorTranslator turns the person an audit actor filter names into the actor
+// the store holds for them under SealFull.
+type ActorTranslator interface {
+	// StoredActor is the stored actor for name; ok is false when there is none
+	// (the person has no subject), and the filter then matches name alone.
+	StoredActor(ctx context.Context, name string) (actor string, ok bool, err error)
+}
+
+var _ ActorTranslator = (*Sealer)(nil)
+
+const (
+	// PendingActorKey is the data key that holds a human actor waiting under the
+	// pending key, and PendingActor the placeholder the actor column carries
+	// meanwhile, so the spool never holds the name.
+	PendingActorKey = "pending_actor"
+	PendingActor    = SubjectActorPrefix + "pending"
+	actorPath       = "actor"
+)
+
 // Sealer seals the personal fields of audit rows under their subjects' keys.
 type Sealer struct {
 	// Keys serves the subjects' keys.
@@ -84,6 +117,13 @@ type Sealer struct {
 	// pending field that waited past its subject's erasure is then erased on
 	// re-seal instead of sealed under a fresh key. Nil means never.
 	GoneSince func(ctx context.Context, subject string, since time.Time) (bool, error)
+	// Subjects renders and translates the subject actors of rows written under
+	// SealFull. Nil reads every actor as it is stored.
+	Subjects SubjectDirectory
+	// SealActor stores a human actor as its subject (WARDYN_AUDIT_SEAL=full).
+	// Reads open subject actors whatever its value, so rows written while it was
+	// on stay readable after it is turned off.
+	SealActor bool
 }
 
 func sealAAD(eventID, action, path, subject string, version int) []byte {
@@ -144,7 +184,16 @@ func rewrite(obj json.RawMessage, path []string, fn func(json.RawMessage) (json.
 // the row carries PendingMarker: pending is then true, and the row must go to
 // the spool, never to the store. No path writes a personal field in the clear;
 // when even the pending key is missing, Seal fails.
-func (s *Sealer) Seal(ctx context.Context, ev types.AuditEvent) (out types.AuditEvent, pending bool, err error) {
+func (s *Sealer) Seal(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, bool, error) {
+	out, pending, err := s.sealFields(ctx, ev)
+	if err != nil || !s.sealsActor(out) {
+		return out, pending, err
+	}
+	out, actorPending, err := s.sealActor(ctx, out)
+	return out, pending || actorPending, err
+}
+
+func (s *Sealer) sealFields(ctx context.Context, ev types.AuditEvent) (out types.AuditEvent, pending bool, err error) {
 	fields := sealFields[ev.Action]
 	if len(fields) == 0 || len(ev.Data) == 0 {
 		return ev, false, nil
@@ -301,6 +350,17 @@ func stringValue(v json.RawMessage) (string, bool) {
 type keyMemo struct {
 	keys   map[string][]byte
 	erased map[string]bool
+	actors map[string]actorMemo // subject id -> who it is
+}
+
+type actorMemo struct {
+	principal string // "" for an id no identity row carries
+	destroyed time.Time
+	hasKey    bool // destroyed is meaningful
+}
+
+func newKeyMemo() *keyMemo {
+	return &keyMemo{keys: map[string][]byte{}, erased: map[string]bool{}, actors: map[string]actorMemo{}}
 }
 
 func (m *keyMemo) clear() {
@@ -344,52 +404,72 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 	var out []types.AuditEvent // copy-on-write: the caller's slice is not touched
 	for i := range evs {
 		ev := evs[i]
-		fields := sealFields[ev.Action]
-		if len(fields) == 0 || !bytes.Contains(ev.Data, []byte(`"`+sealedPrefix)) {
-			continue
-		}
-		if memo == nil {
-			memo = &keyMemo{keys: map[string][]byte{}, erased: map[string]bool{}}
-		}
-		data := ev.Data
-		for _, f := range fields {
-			var err error
-			data, _, err = rewrite(data, strings.Split(f.Path, "."), func(v json.RawMessage) (json.RawMessage, bool, error) {
-				str, ok := stringValue(v)
-				if !ok {
-					return v, false, nil
-				}
-				version, subject, ct, ok := parseSealed(str)
-				if !ok {
-					return v, false, nil
-				}
-				key, err := s.memoKey(ctx, memo, subject, version)
-				if errors.Is(err, ErrKeyErased) {
-					return jsonString(ErasedValue), true, nil
-				}
-				if err != nil {
-					return nil, false, err
-				}
-				plain, err := kek.Open(key, ct, sealAAD(ev.ID.String(), ev.Action, f.Path, subject, version))
-				if err != nil {
-					return v, false, nil
-				}
-				return plain, true, nil
-			})
+		changed := false
+		if s.Subjects != nil && strings.HasPrefix(ev.Actor, SubjectActorPrefix) {
+			if memo == nil {
+				memo = newKeyMemo()
+			}
+			actor, err := s.renderActor(ctx, memo, ev)
 			if err != nil {
 				return nil, fmt.Errorf("audit unseal: %w", err)
 			}
+			ev.Actor, changed = actor, true
+		}
+		if fields := sealFields[ev.Action]; len(fields) > 0 && bytes.Contains(ev.Data, []byte(`"`+sealedPrefix)) {
+			if memo == nil {
+				memo = newKeyMemo()
+			}
+			data, err := s.unsealData(ctx, memo, ev, fields)
+			if err != nil {
+				return nil, err
+			}
+			ev.Data, changed = data, true
+		}
+		if !changed {
+			continue
 		}
 		if out == nil {
 			out = append([]types.AuditEvent(nil), evs...)
 		}
-		ev.Data = data
 		out[i] = ev
 	}
 	if out == nil {
 		return evs, nil
 	}
 	return out, nil
+}
+
+func (s *Sealer) unsealData(ctx context.Context, memo *keyMemo, ev types.AuditEvent, fields []SealField) (json.RawMessage, error) {
+	data := ev.Data
+	for _, f := range fields {
+		var err error
+		data, _, err = rewrite(data, strings.Split(f.Path, "."), func(v json.RawMessage) (json.RawMessage, bool, error) {
+			str, ok := stringValue(v)
+			if !ok {
+				return v, false, nil
+			}
+			version, subject, ct, ok := parseSealed(str)
+			if !ok {
+				return v, false, nil
+			}
+			key, err := s.memoKey(ctx, memo, subject, version)
+			if errors.Is(err, ErrKeyErased) {
+				return jsonString(ErasedValue), true, nil
+			}
+			if err != nil {
+				return nil, false, err
+			}
+			plain, err := kek.Open(key, ct, sealAAD(ev.ID.String(), ev.Action, f.Path, subject, version))
+			if err != nil {
+				return v, false, nil
+			}
+			return plain, true, nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("audit unseal: %w", err)
+		}
+	}
+	return data, nil
 }
 
 // Reseal is the spool drain's step for a row that waited under the pending key:
@@ -399,7 +479,7 @@ func (s *Sealer) Unseal(ctx context.Context, evs []types.AuditEvent) ([]types.Au
 // new key. Any failure is returned and the caller keeps the spool line.
 func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 	fields := sealFields[ev.Action]
-	if len(fields) == 0 || !IsPending(ev) {
+	if !IsPending(ev) {
 		return ev, nil
 	}
 	pk := s.pendingKey()
@@ -446,7 +526,7 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 		return ev, err
 	}
 	ev.Data = data
-	return ev, nil
+	return s.resealActor(ctx, ev, pk)
 }
 
 // subjectKeyUnlessGone is subjectKey, except ErrKeyErased when the subject's

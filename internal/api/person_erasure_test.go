@@ -108,6 +108,30 @@ func TestErasePerson_RefusesABadScopeListBeforeErasingAnything(t *testing.T) {
 	}
 }
 
+// subject:<id> is the actor WARDYN_AUDIT_SEAL=full stores for a person, never a
+// person: every /people/{principal} route refuses it before its handler runs,
+// whatever the seal mode is.
+func TestPeopleRoutesRefuseAnAuditSubjectPrincipal(t *testing.T) {
+	_, srv, st, sec := erasureRig(t)
+	sa := ssoSession(t, "sec-2", "sec2@corp.example", oidc.RoleSecurityAdmin)
+	for _, rt := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/people/subject:0f0e/erasure", erasureBody("credentials", "run_tasks")},
+		{http.MethodPost, "/api/v1/people/SUBJECT:0f0e/erasure", erasureBody("run_tasks")},
+		{http.MethodDelete, "/api/v1/people/subject:0f0e/credentials", ""},
+		{http.MethodDelete, "/api/v1/people/subject:0f0e/ssh-keys", ""},
+		{http.MethodPost, "/api/v1/people/subject:0f0e/tokens", "{}"},
+		{http.MethodGet, "/api/v1/people/subject:0f0e/tokens", ""},
+	} {
+		w := doSSO(t, srv, rt.method, rt.path, sa, rt.body)
+		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonReservedPrincipal {
+			t.Errorf("%s %s = %d %s, want 422 %s", rt.method, rt.path, w.Code, w.Body, reasonReservedPrincipal)
+		}
+	}
+	if len(st.blanked) != 0 || len(namesOf(t, sec, "bob")) != 2 {
+		t.Fatalf("a refused request erased something: blanked %v, bob holds %v", st.blanked, namesOf(t, sec, "bob"))
+	}
+}
+
 func TestErasePerson_RefusesTheOperatorNamespaceBeforeAnything(t *testing.T) {
 	_, srv, st, sec := erasureRig(t)
 	sa := ssoSession(t, "sec-2", "sec2@corp.example", oidc.RoleSecurityAdmin)

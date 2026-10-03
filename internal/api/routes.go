@@ -696,7 +696,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
-	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
@@ -748,7 +748,7 @@ func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	r.Put("/secrets/{name}", s.handlePutSecret)
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
-	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 

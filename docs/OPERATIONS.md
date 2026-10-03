@@ -873,7 +873,10 @@ other bypass is).
 **What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
 are plaintext: no key covers them. A SIEM sink holds ciphertext for a sealed field, so after
 `audit_personal_fields` it holds nothing readable either; its copies of the clear `actor` and `source_ip`
-columns are outside this scope. A backup restores the wrapped key and so the field until the backup expires or
+columns are outside this scope, except the `actor` of rows written under `WARDYN_AUDIT_SEAL=full`, which is a
+subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
+`actor`: from that moment it sees `subject:<uuid>` for a person, and the setting applies only to rows written
+after it is on. A backup restores the wrapped key and so the field until the backup expires or
 the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
 erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
 which fields are sealed and why the rest stay clear.
@@ -951,7 +954,7 @@ A few things that don't fit the grid:
   person to sign in — nothing it does is saved.
 - **Some subjects never sign in.** The callback refuses an identity-provider
   `sub` that names an identity that is not a person — `admin-token`, the
-  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:` name, trimmed
+  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:`/`subject:` name, trimmed
   and case-folded — with the generic sign-in error and an `auth.fail` row
   (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
   one is refused on use. Switching a local-mode install to SSO: the default
@@ -2589,7 +2592,7 @@ happens when the email already names another known subject, when the subject is
 already known under a different email, when the subject differs from a known
 one only by case, or when the subject is another person's email. It answers
 `422` for the reserved subjects `admin-token`, the local-mode operator,
-`local:…`, `device:…` and `delegate:…`, in any case — the same set a sign-in is refused for
+`local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for
 (see "Some subjects never sign in").
 
 Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`,

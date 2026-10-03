@@ -36,16 +36,12 @@ import (
 // written in the clear (32 bytes).
 const secretAuditPendingKey = "wardyn-audit-pending-key"
 
-// auditSealMode is WARDYN_AUDIT_SEAL as this release serves it: full (the actor
-// as well) is ar-l1.5's, so it refuses to boot rather than quietly seal less
-// than was asked.
+// auditSealMode is WARDYN_AUDIT_SEAL: off, fields, or full (fields, and the
+// human actor stored as the person's subject id).
 func auditSealMode(f *bootFlags) (audit.SealMode, error) {
 	mode, err := audit.ParseSealMode(*f.auditSeal)
 	if err != nil {
 		return "", fmt.Errorf("refusing to start: %w", err)
-	}
-	if mode == audit.SealFull {
-		return "", errors.New("refusing to start: WARDYN_AUDIT_SEAL is full, which also seals the actor and is not available in this release; use fields")
 	}
 	return mode, nil
 }
@@ -83,6 +79,18 @@ func (a *auditSealSource) arm(s *audit.Sealer) {
 	}
 }
 
+// seals reports whether ev needs the Sealer: it has a personal field to seal,
+// or, under full, a human actor to store as a subject.
+func (a *auditSealSource) seals(ev types.AuditEvent) bool {
+	switch a.mode {
+	case audit.SealFields:
+		return audit.SealsAction(ev.Action)
+	case audit.SealFull:
+		return audit.SealsAction(ev.Action) || (ev.ActorType == types.ActorHuman && ev.Actor != "")
+	}
+	return false
+}
+
 // unsealer is what reads use: the armed Sealer, or nil.
 func (a *auditSealSource) unsealer() audit.Unsealer {
 	if a == nil {
@@ -111,7 +119,7 @@ func (r sealingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	if r.replay {
 		return r.record(ctx, ev)
 	}
-	if r.src == nil || r.src.mode != audit.SealFields || !audit.SealsAction(ev.Action) {
+	if r.src == nil || !r.src.seals(ev) {
 		return r.inner.Record(ctx, ev)
 	}
 	sealer := r.src.sealer.Load()
@@ -184,18 +192,22 @@ func armAuditSeal(ctx context.Context, src *auditSealSource, pool *pgxpool.Pool,
 	if err != nil {
 		return err
 	}
-	src.arm(newAuditSealer(subjectSealKeys{keys}, pool, pending))
+	src.arm(newAuditSealer(subjectSealKeys{keys}, pool, pending, src.mode == audit.SealFull))
 	return nil
 }
 
 // newAuditSealer is the Sealer over keys, with aliases resolved through the
-// person directory and the pending key (nil: none) held in memory.
-func newAuditSealer(keys audit.SealKeys, pool *pgxpool.Pool, pending []byte) *audit.Sealer {
+// person directory and the pending key (nil: none) held in memory. sealActor
+// (WARDYN_AUDIT_SEAL=full) stores a human actor as its subject; reads open a
+// subject actor whatever it is, so rows written under full stay readable.
+func newAuditSealer(keys audit.SealKeys, pool *pgxpool.Pool, pending []byte, sealActor bool) *audit.Sealer {
 	st := store.NewPG(pool)
 	return &audit.Sealer{
-		Keys:    keys,
-		Pending: func() []byte { return pending },
-		Resolve: st.PrincipalForName,
+		Keys:      keys,
+		Pending:   func() []byte { return pending },
+		Subjects:  st,
+		SealActor: sealActor,
+		Resolve:   st.PrincipalForName,
 		GoneSince: func(ctx context.Context, subject string, since time.Time) (bool, error) {
 			return st.SubjectKeyDestroyedSince(ctx, subject, audit.SealPurpose, since)
 		},
