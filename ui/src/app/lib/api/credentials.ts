@@ -57,6 +57,34 @@ export interface EraseResult {
   recoverable_days?: number;
 }
 
+/** The scopes POST /people/{principal}/erasure takes (internal/erasure). */
+export type ErasureScope =
+  | "credentials"
+  | "audit_personal_fields"
+  | "run_tasks"
+  | "run_outputs"
+  | "mask_copies"
+  | "recordings";
+
+/** The 200: every scope asked for finished. `outcome` maps each to "done". */
+export interface PersonErasureResult {
+  person: string;
+  scopes: ErasureScope[];
+  outcome: Record<string, string>;
+}
+
+/** The 500 `erasure_incomplete`: what finished and what is left, so a retry names the same scopes. */
+export class ErasureIncomplete extends HttpError {
+  done: string[];
+  remaining: string[];
+  constructor(message: string, done: string[], remaining: string[]) {
+    super(500, message, "erasure_incomplete");
+    this.done = done;
+    this.remaining = remaining;
+    this.name = "ErasureIncomplete";
+  }
+}
+
 export const credentials = {
   // GET /api/v1/model-providers/credentials -> the inventory. 503
   // (credInventoryNoMeta) when the configured secret store keeps no
@@ -100,5 +128,28 @@ export const credentials = {
       throw new HttpError(res.status, await errText(res));
     }
     return asJson<EraseResult>(res);
+  },
+  // POST /api/v1/people/{principal}/erasure (security tier): erase a person's
+  // records by explicit scope, in one audited act. A partial run is a 500
+  // `erasure_incomplete` naming what finished (ErasureIncomplete); any other
+  // refusal is an HttpError carrying the server's sentence.
+  async erasePerson(principal: string, scopes: ErasureScope[]): Promise<PersonErasureResult> {
+    const res = await wfetch(`/people/${encodeURIComponent(principal)}/erasure`, {
+      method: "POST",
+      body: JSON.stringify({ scopes }),
+    });
+    if (res.status === 500) {
+      const body = (await res.clone().json().catch(() => null)) as {
+        error?: string;
+        reason?: string;
+        done?: unknown;
+        remaining?: unknown;
+      } | null;
+      if (body?.reason === "erasure_incomplete" && Array.isArray(body.remaining)) {
+        const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+        throw new ErasureIncomplete(body.error ?? "", names(body.done), names(body.remaining));
+      }
+    }
+    return asJson<PersonErasureResult>(res);
   },
 };
