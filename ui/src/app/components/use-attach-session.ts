@@ -13,6 +13,7 @@
 import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { decideKey } from "./attach-terminal-keys";
 import { createCopyGate, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
@@ -154,6 +155,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     const term = new Terminal({
       cursorBlink: true,
       scrollback: 50000,
+      // The unicode addon uses xterm's proposed API.
+      allowProposedApi: true,
       // Option+drag keeps xterm's native selection on macOS while tmux owns the mouse.
       macOptionClickForcesSelection: true,
       fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
@@ -185,6 +188,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     let disposedFont = false;
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    // Unicode 11 widths match tmux and glibc (emoji take two cells); the default table is Unicode 6.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
     term.open(mount);
     termRef.current = term;
     fitAddonRef.current = fitAddon;

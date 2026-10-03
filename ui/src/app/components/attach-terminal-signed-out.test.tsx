@@ -17,6 +17,7 @@ vi.mock("@xterm/xterm", () => {
     cols = 80;
     rows = 24;
     resize() {}
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}

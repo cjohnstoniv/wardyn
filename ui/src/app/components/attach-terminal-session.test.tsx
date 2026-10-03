@@ -28,6 +28,7 @@ vi.mock("@xterm/xterm", () => {
   class Terminal {
     cols = 80;
     rows = 24;
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}
