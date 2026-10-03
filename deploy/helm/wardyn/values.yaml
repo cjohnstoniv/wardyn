@@ -524,6 +524,23 @@ k8s:
   # Optional imagePullSecrets name (WARDYN_K8S_IMAGE_PULL_SECRET) threaded
   # onto every pod the k8s substrate creates (agent, proxy, boot-time canary).
   imagePullSecret: ""
+  # Where every sandbox pod goes (WARDYN_K8S_SANDBOX_PLACEMENT, rendered here as JSON): the agent pod,
+  # the proxy pod and the boot-time canary all take it, so the canary proves NetworkPolicy
+  # enforcement on the nodes runs use. The top-level nodeSelector/affinity/tolerations place wardynd
+  # only. All empty by default.
+  #
+  # podAnnotations and podLabels may not carry a reserved wardyn label (wardyn.managed, wardyn.run-id,
+  # wardyn.component) or any key under kubernetes.io/ or k8s.io/ other than
+  # cluster-autoscaler.kubernetes.io/safe-to-evict: wardynd refuses to boot naming the key. Such keys
+  # reach confinement the pod spec sets on purpose (an AppArmor "unconfined" annotation, for one).
+  # No safe-to-evict annotation is set by default.
+  sandbox:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    priorityClassName: ""
+    podAnnotations: {}
+    podLabels: {}
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime

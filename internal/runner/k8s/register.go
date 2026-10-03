@@ -26,6 +26,7 @@ func buildConfig(d substrate.Deps) Config {
 		Namespace:           resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
 		ProxyImage:          d.ProxyImage,
 		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
+		SandboxPlacement:    os.Getenv("WARDYN_K8S_SANDBOX_PLACEMENT"),
 		Record:              d.Record,
 		ConfinementRuntimes: d.ConfinementRuntimes,
 		// cliutil.EnvBool, not a literal "1" compare (#202): the shared
