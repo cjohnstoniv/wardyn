@@ -130,13 +130,22 @@ ARG GO_BUILD_TAGS=docker,k8s
 # under the legacy non-BuildKit builder, and `GOARCH=` empty is exactly how Go
 # spells "use the default", so a legacy build still produces a native binary.
 ARG TARGETARCH
-# RELEASE_BUILD=true (release.yml's `images` job, wardynd row only) stamps
+# RELEASE_BUILD=true (release.yml's `images` job, wardynd rows only) stamps
 # internal/version's unexported releaseBuild var via -ldflags -X, so version.String()
 # reports the bare release instead of `<version>+<commit>` (#1105). Empty by
 # default, so `make ci`/`docker compose build`/publish-image.yml's per-commit
 # build all get the commit-suffixed string.
 ARG RELEASE_BUILD=false
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardynd ./cmd/wardynd \
+# GOFIPS140 pins the Go Cryptographic Module snapshot wardynd is compiled
+# against. Empty (the default) is Go's ordinary build. The published
+# `wardynd-fips` image sets it in release.yml's and nightly.yml's matrix rows,
+# the one place the pin lives; it applies to the wardynd binary only. With it
+# set, the build stops unless `go version -m` reports exactly that snapshot, so
+# an image built from this recipe cannot be a mislabelled ordinary binary.
+# docs/operations/secrets-and-keys.md names the certificate the snapshot is.
+ARG GOFIPS140=
+RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardynd ./cmd/wardynd \
+ && { [ -z "${GOFIPS140}" ] || go version -m /out/wardynd | awk -v want="GOFIPS140=${GOFIPS140}" '$1 == "build" && $2 == want { found = 1 } END { exit !found }'; } \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardyn ./cmd/wardyn \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-git-helper ./cmd/wardyn-git-helper

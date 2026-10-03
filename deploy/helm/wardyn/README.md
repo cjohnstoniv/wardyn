@@ -111,6 +111,12 @@ wiring) is rendered by this chart. In detail:
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
   own** (see below) for a fork, a private registry, or an unreleased change.
+  Each release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, the same
+  daemon built against a pinned Go cryptographic module snapshot: set
+  `image.repository` to it, give it non-age key custody (`kek.provider`
+  `transit` or `azurekv`, or store mode), and see
+  [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it
+  does and does not claim.
 - Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via
   `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement
   tiers — CC1 works out of the box. An **OIDC issuer** for SSO and
@@ -1116,7 +1122,8 @@ See `values.yaml` for all options. Key settings:
 - `image.repository` / `image.tag`: wardynd container image. The defaults
   resolve to a real image once `Chart.yaml`'s `appVersion` has been released
   (see the callout at the top) — override both for a locally built image or
-  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`.
+  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`. The
+  published `ghcr.io/cjohnstoniv/wardynd-fips` takes the same tags.
 - `image.pullSecrets`: list of `{name: ...}` pull secrets for a private registry
 - `ingress.*`: optional Ingress for the console, off by default — see
   [Console Ingress](#console-ingress) above.
