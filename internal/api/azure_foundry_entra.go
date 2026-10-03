@@ -344,7 +344,12 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 	}
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.MergeGlobalUntil(subject, ec.secretName, accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	if err := s.cfg.MaskRegistry.MergeGlobalUntil(subject, ec.secretName, accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.ErrorContext(ctx, "wardynd: the Azure sign-in tokens could not be recorded for masking",
+			slog.String("row", ec.rowUID), slog.Any("err", err))
+		fail(reasonStoreError)
+		return
+	}
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		slog.WarnContext(ctx, "wardynd: azure sign-in identity binding failed",
@@ -384,7 +389,11 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		fail(reason)
 		return
 	}
-	s.cfg.MaskRegistry.AddGlobalUntil(subject, ec.secretName, s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	// The Merge above already put both tokens on record; this retires what the
+	// sign-in replaced, and a failure leaves the old values masked longer.
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(subject, ec.secretName, s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.WarnContext(ctx, "wardynd: the replaced Azure sign-in tokens could not be retired", slog.String("row", ec.rowUID), slog.Any("err", err))
+	}
 	s.auditAzureCapture(ctx, subject, ec, "success", map[string]any{
 		"audience": stamp.Audience, "scopes": granted,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),

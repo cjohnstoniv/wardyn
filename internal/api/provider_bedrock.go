@@ -35,6 +35,7 @@ const (
 	mpBRStoreUnwritable = "Wardyn's secret store did not accept a write, so your AWS sign-in was not renewed"
 	mpBRPersistFailed   = "your AWS sign-in was renewed but could not be saved, so it must be signed in again"
 	mpBRReadFailed      = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
+	mpBRMaskFailed      = "Wardyn couldn't record your AWS credential for model provider %s for masking just now — nothing was started. Try again in a moment."
 )
 
 // providerUnavailable is a liveness error that is a 503 with its own sentence,

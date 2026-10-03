@@ -362,10 +362,14 @@ forms, which no verbatim matcher catches.
   each run's secrets and Azure DevOps run token are committed to a sealed
   per-run masking manifest before the sandbox starts, and the recording upload,
   live attach, exec relay, SSH shell and live output read refuse (`503`
-  `mask_state_unavailable`) a run whose manifest they cannot prove complete. Still
-  open: values registered at injection time are memory-only, runs that predate
-  0.8.6 are refused rather than masked after a restart, and SSH exec, SFTP and
-  direct-tcpip are never masked.
+  `mask_state_unavailable`) a run whose manifest they cannot prove complete. **The
+  registry itself is shared too:** values registered after dispatch, and the
+  per-owner sign-in tokens, are committed to Postgres (`mask_values`, sealed under
+  the owner's key) before the call that hands them out returns, every replica masks
+  with that corpus, and a consumer that cannot prove its copy current replaces a
+  live chunk with the placeholder, answers an upload `503` and refuses an attach.
+  Still open: runs that predate 0.8.6 are refused rather than masked after a
+  restart, and SSH exec, SFTP and direct-tcpip are never masked.
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 

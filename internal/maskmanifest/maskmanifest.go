@@ -158,7 +158,7 @@ func (m *Manifests) Append(ctx context.Context, runID uuid.UUID, values ...[]byt
 	}
 	// The values are registered before any caller can hand the credential out.
 	for _, v := range todo {
-		m.reg.Add(runID, v)
+		m.reg.AddLocal(runID, v)
 	}
 	m.note(runID, rev, false, todo)
 	return nil
@@ -348,7 +348,7 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 	}
 	e := &entry{rev: rev, complete: true, have: make(map[[sha256.Size]byte]struct{}, len(plain))}
 	for _, v := range plain {
-		m.reg.Add(runID, v)
+		m.reg.AddLocal(runID, v)
 		e.have[sha256.Sum256(v)] = struct{}{}
 		clear(v)
 	}
@@ -389,6 +389,35 @@ func (m *Manifests) Forget(runID uuid.UUID) {
 	delete(m.cache, runID)
 	m.mu.Unlock()
 	m.reg.Evict(runID)
+}
+
+// DropFenced forgets every manifest this process holds whose row is fenced or
+// gone in Postgres, with the values the registry holds for it: how a replica
+// that never served the run learns of an erasure issued elsewhere, without
+// waiting for a door to ask. Postgres not answering forgets nothing.
+func (m *Manifests) DropFenced(ctx context.Context) {
+	m.mu.Lock()
+	held := make([]uuid.UUID, 0, len(m.cache))
+	for id := range m.cache {
+		held = append(held, id)
+	}
+	m.mu.Unlock()
+	if len(held) == 0 {
+		return
+	}
+	rows, err := m.pool.Query(ctx, `SELECT run_id FROM run_mask_manifest WHERE run_id = ANY($1) AND fenced_at IS NULL`, held)
+	if err != nil {
+		return
+	}
+	live, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return
+	}
+	for _, id := range held {
+		if !slices.Contains(live, id) {
+			m.Forget(id)
+		}
+	}
 }
 
 // ForgetCache drops this process's copy of runID's manifest only, leaving the

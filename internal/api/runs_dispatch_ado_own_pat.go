@@ -189,10 +189,9 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 	}
 
 	value := adoOwnPATHeaderValue(blob.Token)
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.Token))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(base64.StdEncoding.EncodeToString([]byte(":"+blob.Token))))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(blob.Token),
+		[]byte(base64.StdEncoding.EncodeToString([]byte(":"+blob.Token))), []byte(value)) {
+		return true
 	}
 	data := map[string]any{
 		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,

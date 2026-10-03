@@ -24,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
+	"github.com/cjohnstoniv/wardyn/internal/maskstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -59,12 +60,12 @@ func sealModeOf(f *bootFlags) audit.SealMode {
 // armSubjectKeyed wires what sits under the secret store's per-subject keys,
 // built after the store: the run masking manifests, and the keys of the sealed
 // audit fields.
-func armSubjectKeyed(ctx context.Context, pool *pgxpool.Pool, secrets secretstore.Store, reg *secretmask.Registry, scope *maskScope, src *auditSealSource, bootKeys bootKeyStore) (*maskmanifest.Manifests, error) {
-	m, err := buildMaskManifests(pool, secrets, reg, scope)
+func armSubjectKeyed(ctx context.Context, pool *pgxpool.Pool, secrets secretstore.Store, reg *secretmask.Registry, scope *maskScope, src *auditSealSource, bootKeys bootKeyStore) (*maskmanifest.Manifests, *maskstore.Store, error) {
+	m, store, err := buildMaskManifests(ctx, pool, secrets, reg, scope)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return m, armAuditSeal(ctx, src, pool, secrets, bootKeys)
+	return m, store, armAuditSeal(ctx, src, pool, secrets, bootKeys)
 }
 
 // auditSealSource is the sealing state the recorder chain and the spool drain

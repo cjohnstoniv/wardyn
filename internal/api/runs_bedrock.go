@@ -211,6 +211,9 @@ type bedrockAuth struct {
 	// running sandbox never changes lane under the operator's flip. False =
 	// unchanged, byte for byte.
 	ssoProxyInject bool
+	// maskErr is why the captured credential could not be registered for
+	// masking (SSO lane only); a run is never started with it.
+	maskErr error
 }
 
 // bedrockRuntimeHost is the regional Bedrock DATA-PLANE host claude-code's
@@ -492,6 +495,19 @@ func bedrockBaseEnv(region, model, baseURL string) map[string]string {
 	return env
 }
 
+// maskSSOBlob registers a captured AWS SSO credential for masking GLOBALLY (not
+// per-run, like the static-key branch does via the caller): this credential is
+// reused across every run that picks this mode, not minted fresh per run, so a
+// per-run Add would miss every run after the first. Empty fields are ignored
+// (Registry.MinLen). Merge, not AddGlobal: the blob may predate a refresh that
+// ran concurrently outside our read, and replacing the credential's set with it
+// would retire the refresh's live tokens. An error means it is not on record, and
+// the run must not be dispatched with it.
+func (s *Server) maskSSOBlob(blob awsSSOBlob, sso awsSSOScope) error {
+	return s.cfg.MaskRegistry.MergeGlobalUntil(sso.rowOwner(), sso.ssoSecret(), blob.ExpiresAt,
+		[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
+}
+
 // bedrockSSOAuth is the captured-AWS-SSO credential mode over a live blob: the
 // synthetic ~/.aws the sandbox SDK resolves (its token cache a placeholder under
 // Phase B), the SSO egress hosts, and the blob's secrets masked. env is the
@@ -523,19 +539,13 @@ func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string
 	// this env map is byte-identical to before the knob existed.
 	maps.Copy(env, ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride))
 	hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
-	// Mask GLOBALLY (not per-run, like the static-key branch below does via
-	// the caller): this captured credential is reused across every run that
-	// picks this mode, not minted fresh per run, so a per-run Add would miss
-	// every run after the first. It ignores the empty strings when a field wasn't
-	// captured (Registry.MinLen). Merge, not AddGlobal: this blob may predate
-	// a refresh that ran concurrently outside our read, and replacing the
-	// credential's set with it would retire the refresh's live tokens.
-	s.cfg.MaskRegistry.MergeGlobalUntil(sso.rowOwner(), sso.ssoSecret(), blob.ExpiresAt,
-		[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
+	// An error is carried on the result: the dispatch that built it refuses the
+	// run rather than start it with a credential that is not on record.
+	maskErr := s.maskSSOBlob(blob, sso)
 	// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 	// to redeem the rotating refresh token, and the identity the gate
 	// compares must be the one this run will actually present.
 	return bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
 		ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
-		ssoRegion: blob.Region, ssoProxyInject: proxyInjected}
+		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, maskErr: maskErr}
 }

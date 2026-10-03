@@ -133,11 +133,8 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		return fail(http.StatusFailedDependency, "own_key_absent", providerKeyAbsent)
 	}
 	formatted := formatInjectionValue(format, secret)
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, secret)
-		if formatted != string(secret) {
-			s.cfg.MaskRegistry.Add(claims.RunID, []byte(formatted))
-		}
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", secret, []byte(formatted)) {
+		return true
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success", mustJSON(withStoreRow(map[string]any{

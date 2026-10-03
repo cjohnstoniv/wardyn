@@ -265,11 +265,8 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// streams, and the per-run set is what the terminal-run sweeper can evict.
 	// Neither replaces the other.
 	value := formatInjectionValue(minted.Injection.Format, []byte(blob.AccessToken))
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.AccessToken))
-		if value != blob.AccessToken {
-			s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
-		}
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(blob.AccessToken), []byte(value)) {
+		return true
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.AWSSSOAccessTokenSecret, "success",

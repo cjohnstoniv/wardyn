@@ -5,14 +5,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
+	"github.com/cjohnstoniv/wardyn/internal/maskstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -85,12 +89,22 @@ func subjectKeysOf(s secretstore.Store) *subjectkey.Manager {
 // subject keys, and arms scope with what they hold. wardynd refuses to serve
 // without them: a run it cannot prove masked is a door that would pass
 // credentials through.
-func buildMaskManifests(pool *pgxpool.Pool, secrets secretstore.Store, reg *secretmask.Registry, scope *maskScope) (*maskmanifest.Manifests, error) {
+//
+// It also makes the Postgres masking registry reg's only Backend, whichever
+// number of replicas is running, and reads the committed corpus once before it
+// returns: a registry that starts empty would mask nothing until its first read.
+// The caller starts the store's background reads (Store.Start) on the process
+// context.
+func buildMaskManifests(ctx context.Context, pool *pgxpool.Pool, secrets secretstore.Store, reg *secretmask.Registry, scope *maskScope) (*maskmanifest.Manifests, *maskstore.Store, error) {
 	keys := subjectKeysOf(secrets)
 	if keys == nil {
-		return nil, errors.New("refusing to start: the secret store has no per-subject keys, which the run masking manifests are sealed under")
+		return nil, nil, errors.New("refusing to start: the secret store has no per-subject keys, which the run masking manifests are sealed under")
 	}
 	m := maskmanifest.New(pool, keys, reg)
 	scope.arm(m.Held)
-	return m, nil
+	store := maskstore.New(pool, keys, reg)
+	if err := store.Fresh(ctx, time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("refusing to start: the shared masking registry could not be read: %w", err)
+	}
+	return m, store, nil
 }

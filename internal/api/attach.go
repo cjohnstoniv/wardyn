@@ -857,6 +857,9 @@ func (w *liveMaskWriter) writeLocked(p []byte) (n int, late func(), err error) {
 		w.capture.dropped, w.capture.uncovered = true, true
 		return len(p), nil, nil
 	}
+	if stale, err := w.replaceIfStale(len(p)); stale {
+		return len(p), nil, err
+	}
 
 	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
 	// chunk: the pair cloned every secret twice and sorted the whole set on every

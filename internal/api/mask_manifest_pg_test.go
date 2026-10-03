@@ -26,6 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
+	"github.com/cjohnstoniv/wardyn/internal/maskstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -60,9 +61,15 @@ type replica struct {
 	rec *fakeRecordingStore
 	fr  *holderTestRunner
 	sec *secretspg.Store
+	st  *maskstore.Store
 }
 
-func (l *maskLab) replica() replica {
+func (l *maskLab) replica() replica { return l.replicaMasking(l.pool) }
+
+// replicaMasking is replica with its masking state (the manifests and the shared
+// registry) on maskPool and everything else on the lab's pool, so a test can take
+// Postgres away from masking alone.
+func (l *maskLab) replicaMasking(maskPool *pgxpool.Pool) replica {
 	l.t.Helper()
 	sec, err := secretspg.New(l.pool, l.id)
 	if err != nil {
@@ -78,10 +85,11 @@ func (l *maskLab) replica() replica {
 	cfg.Secrets = sec
 	cfg.RecordingStore = rs
 	cfg.MaskRegistry = reg
-	cfg.MaskManifests = maskmanifest.New(l.pool, sec.SubjectKeys(), reg)
+	cfg.MaskManifests = maskmanifest.New(maskPool, sec.SubjectKeys(), reg)
+	st := maskstore.New(maskPool, sec.SubjectKeys(), reg)
 	srv := New(cfg)
 	srv.maskBeat = 25 * time.Millisecond
-	return replica{srv: srv, reg: reg, rec: rs, fr: fr, sec: sec}
+	return replica{srv: srv, reg: reg, rec: rs, fr: fr, sec: sec, st: st}
 }
 
 // run persists a RUNNING, operator-owned run with a sandbox (so the attach

@@ -160,6 +160,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   SSH exec, SFTP and direct-tcpip were never masked and still are not. A split migrator and app role install
   grants the app role `SELECT, INSERT, UPDATE` on `run_mask_manifest` and `SELECT, INSERT, DELETE` on
   `run_mask_values`.
+- **Every wardynd masks with one shared registry in Postgres, and one that cannot prove its copy is current
+  fails closed (migration `0120_mask_values`).** A value registered after dispatch (a minted token, an injected
+  key, an AWS SSO or Azure DevOps sign-in token) is committed to `mask_values` before the call returns,
+  sealed under its owner's per-subject key, so a second wardynd, or one that restarted, masks it too; before
+  this a restart lost every per-owner sign-in token from the registry. A registration that cannot be committed
+  fails the injection: the route answers `503` `mask_state_unavailable` and hands out nothing. Replicas read
+  the table by a generation cursor that is a committed prefix, and a consumer waits for a read that began
+  after its chunk arrived; with Postgres down an upload answers `503`, a new attach is refused, and a live
+  chunk is replaced by `<secret-hidden>`. The run leader deletes a terminal run's rows and manifest after
+  `RunSecretGrace`, and `mask_copies` erasure tombstones every row of the person (no ciphertext is left).
+  It applies to a single-replica install too: there is no in-memory-only mode, and wardynd refuses to start
+  when it cannot read the table. A credential in the operator namespace (no owner) still has no subject key
+  and stays in the process that registered it; none exists today. A split migrator and app role install
+  grants the app role `SELECT, INSERT, UPDATE, DELETE` on `mask_values`, `SELECT` and `UPDATE` on `mask_gen`,
+  and `DELETE` on `run_mask_manifest`.
 - **A per-subject key table, `principal_keys` (migration `0108_principal_keys`).** Each (person, purpose,
   generation) has one 32-byte key wrapped under the deployment's credential key (local, Vault Transit or
   Key Vault), and destroying a person's key is a tombstone that a replica with a warm cache notices at its
