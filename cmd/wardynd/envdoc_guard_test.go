@@ -33,7 +33,7 @@ var envDocRoots = []string{"cmd", "internal", "pkg"}
 // section.
 var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
-	"WARDYN_TEST_PG": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
+	"WARDYN_TEST_PG": true, "WARDYN_REQUIRE_TMUX": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
 	"WARDYN_TEST_AZURE_KV":   true,
 	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
@@ -81,6 +81,7 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_PG_CONTAINER": true, "WARDYN_E2E_PG_DBNAME": true,
 	"WARDYN_E2E_TOKEN": true, "WARDYN_E2E_AGE_KEY": true,
 	"WARDYN_E2E_SKIP_BUILD": true, "WARDYN_E2E_NO_UI_BUILD": true,
+	"WARDYN_E2E_TMUX": true, "WARDYN_E2E_TMUX_BUILD": true,
 	"WARDYN_E2E_KEEP": true, "WARDYN_E2E_NO_BUILD": true,
 	"WARDYN_E2E_ANTHROPIC_KEY": true, "WARDYN_E2E_CC_IMAGE": true,
 	// run-ui-e2e.sh's allowlist for a spec allowed to skip its whole

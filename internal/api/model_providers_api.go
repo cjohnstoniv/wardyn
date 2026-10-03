@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -109,11 +110,14 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
 		return
 	}
-	ctx := r.Context()
-	imageOK := s.claudeSignInImageOK(ctx, block)
+	imageOK := s.claudeSignInImageOK(r.Context(), block)
 	// SEAM-1, handlePutAgentProviders's reason: the same singleton document.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
+	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)

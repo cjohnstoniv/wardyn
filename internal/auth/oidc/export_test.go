@@ -78,6 +78,12 @@ func SetRevocationsForTest(a *Authenticator, r SessionRevocations) {
 	a.cfg.Revocations = r
 }
 
+// SetRoleStampTTLForTest sets Config.RoleStampTTL on an already-built Authenticator, like
+// SetRevocationsForTest.
+func SetRoleStampTTLForTest(a *Authenticator, ttl time.Duration) {
+	a.cfg.RoleStampTTL = ttl
+}
+
 // DeriveRoleForTest exposes deriveRole for direct table-testing of role
 // derivation precedence and Match provenance, without driving a signed ID
 // token through the whole callback for every case.

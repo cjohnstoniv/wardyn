@@ -174,10 +174,14 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 		return denied(err)
 	}
 	s.noteADOMintBlocked(ctx, cfg.RowID, sn.OwnerSubject, false)
-	// Mask before anything can render it: the value, and both forms it rides in.
-	s.cfg.MaskRegistry.Add(runID, []byte(pat.Token))
-	s.cfg.MaskRegistry.Add(runID, []byte(base64.StdEncoding.EncodeToString([]byte(":"+pat.Token))))
-	s.cfg.MaskRegistry.Add(runID, []byte(adoRunPATValue(pat.Token)))
+	// Mask before anything can render it: the value, and both forms it rides in,
+	// on the run's masking manifest too so a restart still masks them. A token
+	// whose renderings cannot be recorded is never handed out: it is revoked here.
+	if err := s.maskMintedValue(ctx, runID, []byte(pat.Token),
+		[]byte(base64.StdEncoding.EncodeToString([]byte(":"+pat.Token))), []byte(adoRunPATValue(pat.Token))); err != nil {
+		_ = client.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
+		return adoPAT{}, fmt.Errorf("record the run token's masking renderings: %w", err)
+	}
 	if pat.ValidTo.IsZero() {
 		pat.ValidTo = validTo
 	}

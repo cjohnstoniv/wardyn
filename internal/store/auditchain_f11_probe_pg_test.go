@@ -243,7 +243,7 @@ func TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 	}
 	restore := func() error {
 		return onConn(func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO audit_events OVERRIDING SYSTEM VALUE
+			_, err := tx.Exec(ctx, `INSERT INTO audit_events
 				SELECT * FROM f11_victim v WHERE NOT EXISTS (SELECT 1 FROM audit_events a WHERE a.seq = v.seq)`)
 			return err
 		})
@@ -303,8 +303,10 @@ func TestPG_AuditChain_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	appendChained(t, pool, "f11-null-before")
 	forged := uuid.New()
 	triggersOff(t, pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-			VALUES ($1, 'system', 'f11-forged-unchained', 'test.chain.forged', 'success')`, forged)
+		// seq from the real sequence: the append path allocates from it too, so the next
+		// audit_append lands above this row exactly as it would above any other.
+		_, err := tx.Exec(ctx, `INSERT INTO audit_events (seq, id, actor_type, actor, action, outcome)
+			VALUES (nextval('audit_events_seq'), $1, 'system', 'f11-forged-unchained', 'test.chain.forged', 'success')`, forged)
 		return err
 	})
 	t.Cleanup(func() {
@@ -362,16 +364,16 @@ func TestPG_AuditChain_UnlockedWriterDoesNotForkChain(t *testing.T) {
 
 	appendChained(t, pool, "f11-fork-head")
 
-	// Writer R: direct INSERT, no caller-side pg_advisory_xact_lock, in a
-	// transaction held open while the locked writer starts.
+	// Writer R: audit_append with no caller-side pg_advisory_xact_lock (the function takes the
+	// chain lock itself, which is what serializes it), in a transaction held open while the
+	// locked writer starts.
 	rawTx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin raw tx: %v", err)
 	}
 	defer rawTx.Rollback(ctx) //nolint:errcheck
 	rawID := uuid.New()
-	if _, err := rawTx.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES ($1, 'system', 'f11-unlocked-writer', 'test.chain.fork', 'success')`, rawID); err != nil {
+	if _, err := rawTx.Exec(ctx, `SELECT audit_append($1, now(), NULL, 'system', 'f11-unlocked-writer', 'test.chain.fork', '', 'success', '', NULL)`, rawID); err != nil {
 		t.Fatalf("raw insert: %v", err)
 	}
 

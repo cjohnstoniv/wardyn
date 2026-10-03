@@ -190,8 +190,8 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 			return types.GrantSSHKey, h, true
 		}
 	case types.GrantGitPAT:
-		if h, _, _, derr := gitPATScopeFields(target.Scope); derr == nil && brokeredForgeHost(h) {
-			return types.GrantGitPAT, h, true
+		if sc, derr := types.DecodeGitPATScope(target.Scope); derr == nil && brokeredForgeHost(sc.Host) {
+			return types.GrantGitPAT, sc.Host, true
 		}
 	}
 	return "", "", false
