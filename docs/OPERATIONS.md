@@ -85,22 +85,29 @@ disposable derived data. Preserve that recovery state as described below.
 Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are
 transient — regenerated on start.
 
-### Exec run output
+### Run output
 
-wardynd keeps the last 8 KiB of each `task_mode=exec` run's combined
-stdout/stderr in memory, so a caller can read the end of a headless run with
+wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
+1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr in
+memory, so a caller can read the end of a headless run with
 `GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
-else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none.
+else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none, and
+neither does the managed-harness sign-in run, whose output is a live credential.
 
 - **It is not a recording, and not stored.** It lives outside the recording
   store and works with `WARDYN_RECORDING_STORE=off`; nothing reaches Postgres or
   a backup, and a wardynd restart drops every tail. It is dropped
   `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output.
+- **Memory bound.** A tail is held from a run's first output until
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last, finished runs included, so
+  memory is at most (runs that printed within the TTL) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`:
+  2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against that.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,
   the same way a recording is. Anything else a command prints — a token it read
   from a file, a secret a person pasted into the task — is kept verbatim and
-  served to whoever may read the run.
+  served to whoever may read the run. A harness that prints a token it read from
+  a file therefore keeps that token in memory for the run's readers.
 - **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
   does not turn this off; a deployment that disables recordings so terminals are
   not kept should decide on this one too.
@@ -2262,13 +2269,36 @@ Their next successful sign-in **re-stamps the role, the group snapshot, and the
 snapshot's own completeness bit** on every unrevoked token they hold — the same
 `OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
 carry groups too — so a demotion, or a group membership change, reaches
-outstanding tokens at that human's own next login rather than immediately. And
-nothing ages either half out on its own short of that sign-in: `api_tokens` has
-`created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
-no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role and groups their tokens
-were minted with indefinitely. **Explicit revocation is the only thing that
-ends it on your schedule** rather than waiting for that next login.
+outstanding tokens at that human's own next login rather than immediately. A token's stamp is
+timed: `api_tokens.identity_stamped_at` is set at mint and again at every one of those re-stamps.
+By default nothing ages a stamp out on its own, so a human who is demoted in the identity provider
+and never signs in again keeps the role and groups their tokens were minted with. Set
+`WARDYN_ROLE_STAMP_TTL` (default off) to bound that: a token whose stamp is older than the TTL is
+refused with `401` and the reason `role_stamp_stale` (an `authz.denied` audit row) until its owner
+signs in again, which re-stamps it with their current role. A console session older than the TTL is
+sent back through sign-in, so a stamp you can tune is also the age of the longest role a session
+can carry (a session already ends at the ID token's own expiry, so the TTL only matters when it is
+shorter than that). Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
+re-login is the only refresh. Turning the TTL on asks every token holder to sign in once, because
+the backfill dated existing stamps at mint. A login never revives a revoked token, and a stamp is
+one statement, so a failed re-stamp leaves that person's tokens stale, never half-updated.
+What ends a token is its **expiry** (below) or **explicit revocation**; neither waits for that
+next login, and neither needs the TTL.
+
+**A token can expire.** `api_tokens.expires_at` is nullable: NULL means the
+token never expires, which is every token minted before 0.8.6. `POST /me/tokens`
+takes an optional `ttl_seconds`. Omitted or zero gets `WARDYN_API_TOKEN_MAX_TTL`
+when you have set one (see [ENV.md](ENV.md)) and no expiry when you have not; a
+value above that cap is clamped to it, and the `token.create` audit row records
+the clamp (`ttl_clamped_from_seconds`); a negative value is a `400` and mints
+nothing. The console's mint form sends no TTL, so on a deployment with a cap it
+gets the cap. An expired token is refused as a revoked one is, the same `401`
+with the same body, so expiry is no way to learn that a token once existed. Both
+lists show `expires_at`. The cap applies to tokens minted after it is set; it
+never shortens one already minted, so an operator who wants those gone revokes
+them. There is no default cap: turning one on is what starts failing CI tokens
+on its own schedule. Console sessions are unaffected and keep their own cookie
+expiry.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -2805,7 +2835,9 @@ admin walking the member path, not an incident.
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
+| `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
+| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -5019,6 +5051,12 @@ upgrade across this release**:
   again with the same key, or restore the pre-upgrade dump (step 0) before you
   run the older version. A wrong key reads differently:
   `age decrypt: no identity matched any of the recipients`.
+  Over a database 0.8.6 or later migrated, the older binary stops earlier, at its
+  boot audit check: `migrate: db: the audit chain canary could not append a row`,
+  ending in `audit_events: rows are appended only through audit_append()`. The
+  audit conversion is one-way (see "Stopped-writer upgrade"); the meaning and the
+  remedy are the same: start the newer release again, or restore the pre-upgrade
+  dump before you run the older version.
 
 **Upgrading to 0.8 signs every SSO human out, once, under TLS (#1258).** With
 secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), the session
@@ -5212,6 +5250,15 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0092` adds `agent_runs.ended_at`.
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
+`0111` converts `audit_events` (`0001`'s table) to a partitioned table: it adds `recorded_at`, drops the
+identity and the primary key, renames the table and re-creates its triggers, and `0112` is the
+`CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
+`0114` adds `api_tokens.expires_at` (`0045`'s table).
+`0115` adds `api_tokens.identity_stamped_at` (`0045`'s table), backfilled to `created_at`.
+`0116` adds `governance_profiles.contact` (`0052`'s table).
+`0117` (`0117_agent_runs_sizing`) adds the dispatch-time sizing columns on `agent_runs` (`runner_kind`, the agent CPU/memory
+request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`); at dispatch, before the sandbox
+is created, each run records the values its driver applied, and a run that predates it reads all NULL.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5268,11 +5315,37 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wardyn_ap
 --    after the shipped one (name order) and overwrite the hashes on the way in.
 REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn_app;
 
+-- 3b. 0.8.6 and later: nothing writes audit_events directly. Every row goes in
+--     through the SECURITY DEFINER function audit_append, so the app role gets
+--     EXECUTE on it and loses INSERT. The migration that converts the table
+--     (0111) does this once for every role that held INSERT at the upgrade;
+--     run it yourself for a role you create after that. The same GRANT ALL
+--     TABLES in step 2 also reached the table's partitions and its bookkeeping
+--     tables, so take their write privileges back too.
+REVOKE INSERT ON audit_events FROM wardyn_app;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+  ON audit_partition_meta, audit_chain_anchors, audit_events_legacy FROM wardyn_app;
+DO $$
+DECLARE p regclass;
+BEGIN
+  FOR p IN SELECT inhrelid::regclass FROM pg_inherits WHERE inhparent = 'audit_events'::regclass LOOP
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON %s FROM wardyn_app', p);
+  END LOOP;
+END $$;
+GRANT EXECUTE ON FUNCTION
+  audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
+  audit_ensure_partitions(integer) TO wardyn_app;
+
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an
---    app role that cannot read its own new tables.
+--    app role that cannot read its own new tables. The second line does the same
+--    for the functions a later release adds. A new audit partition is the one
+--    table this does NOT hand write access: audit_ensure_partitions takes
+--    every privilege but SELECT back as it creates each month.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO wardyn_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO wardyn_app;
 ```
 
 Then set **`WARDYN_PG_MIGRATE_DSN` to the DSN you were already using** and point
@@ -5302,14 +5375,22 @@ session_replication_role` — which no amount of role-swapping reaches.
 The second line means the split did not take; the deployment is no worse off than
 single-DSN mode, and no better.
 
-**Why an INSERT+SELECT-only role can write to a hash-chained table at all.** The
-chain trigger function is `SECURITY DEFINER` and runs as its owner — the
-migrator, which also owns `audit_events` — so allocating `seq` and reading the
-chain head are the owner's acts, not the caller's (`0057`). Before that, a split
-deployment upgrading past `0056` hit `permission denied for sequence
-audit_events_seq_seq` on **every** audit insert, which pushed every write to the
-spool and refused every credential mint. Keep the migrator as the owner of both
-the table and that function; that pairing is what makes the posture work.
+**Why a role with SELECT and EXECUTE can write to a hash-chained table at all.** Since
+0.8.6 no role inserts into `audit_events`. Every row goes in through `audit_append`, a
+`SECURITY DEFINER` function that runs as its owner — the migrator, which also owns the
+table — so allocating `seq` and `recorded_at`, reading the chain head and advancing the
+high-water mark are the owner's acts, not the caller's. Before `0057` a split deployment
+hit `permission denied for sequence audit_events_seq_seq` on **every** audit insert,
+which pushed every write to the spool and refused every credential mint. Keep the
+migrator as the owner of the table, the sequence and the functions; that pairing is what
+makes the posture work. wardynd checks it at boot: a serving role that cannot `EXECUTE`
+`audit_append` refuses to start and names the `GRANT`, and a function any role may execute
+is reported on a `WARN` line with the `REVOKE`.
+
+**Single-DSN installs keep one honest gap.** The one role owns the table, so the INSERT
+privilege cannot be taken from it; the chain trigger refuses any row `audit_append` did
+not allocate, which stops a mistaken or out-of-tree writer, not an owner who edits the
+trigger. The boot log says so on a `NOTICE` line ("app role can INSERT directly").
 
 ## Kubernetes: day-2
 
@@ -5466,6 +5547,44 @@ Raise it in `env` or `extraEnv` as `h`, `m` and `s` units only.
 **Under `allowMultiReplica`, no replica holds the lock**, so nothing the lock does stops writers there:
 `kubectl scale --replicas=0` is the only pre-step that does. `-migrate-only` will still refuse while any replica
 is connected, but it is the scale-down that makes the run possible.
+
+#### What the audit conversion does (`0111_audit_partitioned`, `0112_audit_chain_partitioned`)
+
+`audit_events` becomes a table range-partitioned by month on a new, server-assigned `recorded_at`. Every
+existing row keeps its place in the chain, its hash and its `seq`, and lands in one partition,
+`audit_events_legacy`, whose upper bound is the moment of the conversion. The conversion is one transaction and
+it commits with the append-only, chain and TRUNCATE guards already armed, so a crash at any point leaves the
+table guarded. `audit_ensure_partitions(12)` then creates the current month and twelve more, at every boot, before
+the listener; an insert into a month that does not exist fails and waits in the audit spool until it does.
+
+- **0.8.5 writers are refused.** A 0.8.5 binary inserts directly with no `seq` or `recorded_at`; the chain trigger
+  refuses that row, and the converted schema is one a 0.8.5 binary will not start against (it does not ship
+  `0111` or `0112`). The chart's `Recreate` strategy is what keeps one from writing during the upgrade.
+- **The history stays together.** Every row from before the conversion is in `audit_events_legacy`, one
+  partition that ends at the moment of the conversion.
+- **An index you built out of band** on `audit_events` (beyond the ones Wardyn ships) stays on
+  `audit_events_legacy`; the partitioned table starts with Wardyn's own set. Re-create yours on the parent if you
+  need it on the months to come.
+- **Grants.** Every role that could `INSERT` into `audit_events` before the upgrade is granted `EXECUTE` on
+  `audit_append` and `audit_ensure_partitions` in the same transaction, found from the table's ACL rather than by
+  name, and only then loses `INSERT`. Roles that could `SELECT` keep it. A role you add later needs the
+  `GRANT EXECUTE` line in the recipe above.
+- **Time.** The cost is one scan of the existing rows to prove the legacy bound, one index build on them, and
+  the lock waits. Measured on Postgres 13 and 17 in a container on a shared development machine, over rows
+  with the audit log's columns, bulk-loaded without chain hashes (the scan and the index build do not read them);
+  a `psql` timing of the `0111` transaction, with the twelve months of partitions inside it, and `0112` adding
+  under 10 ms:
+
+  | Rows before the conversion | Postgres 13 | Postgres 17 |
+  |---:|---:|---:|
+  | 100 000 | 0.3 s | 0.1 s |
+  | 1 000 000 | 0.7 s | 0.4 s |
+  | 3 000 000 | 1.8 s | 1.0 s |
+  | 12 000 000 | 6.2 s | not measured |
+
+  Scale the figures to your own row count; they are an order of magnitude, not a promise. The chart's startup
+  probe window is derived from `WARDYN_MIGRATE_TIMEOUT` (above): if your table is larger than the figures cover,
+  raise the timeout rather than letting the probe kill a migration that is making progress.
 
 ### Backup: what `pg_dump` carries here, and what it does not
 
@@ -6089,6 +6208,25 @@ rather than a preference:
   this one. The map does not grow without bound: a background sweeper evicts a
   run's entry once that run has been terminal for an hour (`api.RunSecretGrace`),
   late enough for the finalize audit and the cast upload to still see it.
+  **Since 0.8.6 a registry miss fails closed for runs dispatched by 0.8.6.**
+  Dispatch commits each run's *masking manifest* to Postgres before the sandbox
+  can see a value: the exact bytes of every rendering the run received (its
+  workspace and inspection secrets and its Azure DevOps run token in all three
+  renderings, and every run token minted later), sealed under the run owner's
+  per-subject `cred` key (tables `run_mask_manifest` and `run_mask_values`;
+  destroying that key leaves the rows undecryptable). A restarted or second
+  wardynd loads it, so a value rotated after dispatch is still masked. Five doors
+  — the recording upload, the live attach, the exec relay, the SSH shell and the
+  live output read — answer `503` `mask_state_unavailable` for a run whose manifest
+  they cannot prove complete (see the reason table above), and audit rows of such
+  a run carry `"mask_scope":"globals_only"`. **After any restart, a run that
+  predates 0.8.6 has no manifest and is refused at those doors** (attach, SSH
+  shell, exec output and recording upload) until it ends; runs dispatched by 0.8.6
+  survive restarts. Two limits remain until the shared registry lands: a value
+  registered at *injection* time (a minted GitHub token, an injected API key, the
+  AWS SSO and sign-in tokens) is still held in memory only, and **SSH exec, SFTP
+  and direct-tcpip were never masked** (`sshgateway_channels.go`), so none of
+  them is covered by any of this.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: the fallback for a
   failed Postgres write, each pod draining its own back into the database.
@@ -6111,14 +6249,6 @@ rather than a preference:
 - **the decision-ingest `lastTouch` debounce** (`shouldTouch`,
   `internal/api/internal.go`) — per-process, so N pods can do up to N× the
   `TouchRun` writes the 30s debounce was sized for. Load, not correctness.
-- **the per-run operation lock** (`runOps`, `internal/api/run_oplock.go`) — an
-  in-process mutex per run. A revive holds it from its claim to its settle, and
-  the lease sweep's re-assertion of a kept run's stop and the watcher's reboot
-  mark take it too, so a sweep that read a run's lost mark before a revive cannot
-  stop the proxy that revive just started (#1480). It orders work inside one
-  process only: two replicas hold two locks and the race is back. A sweep never
-  waits for it, it skips a locked run until the next pass; the expiry teardown
-  does not take it, so a run that keeps being revived still expires.
 
 Six OTHER pieces are now Postgres-backed, so they survive a crash and no longer
 break under a second replica: single-use **attach tickets**, delete-on-read
@@ -6135,6 +6265,25 @@ restart case `ReconcileOnBoot` handles alone); **session recordings** (migration
 replica; `WARDYN_RECORDING_STORE=fs` still selects the old per-pod directory); and
 the **ground-truth token rotator** (`cmd/wardynd/gt_rotator.go`, leader-elected via
 a Postgres advisory lock — a standby takes over within one ~30s backoff).
+
+Six in-process locks are Postgres advisory locks too (`internal/db/locks.go`),
+so the work they serialise holds across replicas: the **per-run operation lock**
+(a revive holds it from its claim to its settle, and the lease sweep's
+re-assertion of a kept run's stop and the watcher's reboot mark take it, so a
+sweep that read a run's lost mark before a revive cannot stop the proxy that
+revive just started, #1480; a sweep never waits for it, it skips a locked run
+until the next pass), the **site-config** and **capability-enforcement** writers,
+the **audit chain verify sweep**, and the **AWS SSO** and **Azure DevOps sign-in
+refresh** single-flights, which keep one rotating refresh token from being
+redeemed twice. They are taken in one order (run operation, run-token mint,
+AWS SSO, Azure DevOps sign-in, the document locks, the audit sweep last), each
+nested lock shares its caller's connection, and none proceeds unlocked: a lock
+that cannot be taken answers `503` `lock_unavailable` and is retried. A refresh
+that loses its lock (a failover) is cancelled, and its final write is a
+compare-and-set on the stored credential, so it cannot overwrite a newer one;
+a refresh already in flight can still race the new holder at the authority
+across a failover (residual). The connection budget is in
+[ENV.md](ENV.md) beside `pool_max_conns`.
 
 None of that makes `replicas > 1` supported. It closed the six reasons a second
 replica used to drop *requests*; it did not touch the list above, and the masking

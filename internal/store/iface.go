@@ -167,8 +167,8 @@ type Store interface {
 	// third auth branch on every authenticated route.
 	//
 	// CreateAPIToken/GetAPITokenByRaw hash the plaintext token internally — the raw value never
-	// reaches SQL. GetAPITokenByRaw returns ErrNotFound for unknown, mismatched AND revoked tokens
-	// alike, so it's not an existence oracle. RevokeAPIToken is principal-scoped when non-empty
+	// reaches SQL. GetAPITokenByRaw returns ErrNotFound for unknown, mismatched, revoked AND expired
+	// tokens alike, so it's not an existence oracle. RevokeAPIToken is principal-scoped when non-empty
 	// (self-service; someone else's id is ErrNotFound) and revokes ANY token when empty (admin).
 	// TouchAPIToken is best effort — its error must never fail a request.
 	CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error)

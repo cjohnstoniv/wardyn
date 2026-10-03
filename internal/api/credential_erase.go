@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -104,6 +105,10 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 			writeErrorReason(w, http.StatusBadRequest, reasonCredentialEraseOperatorNamespace, "that names the operator namespace, which is not a person's")
 			return
 		}
+		if db.LockRefused(err) {
+			writeLockRefused(w, r, err)
+			return
+		}
 		writeServerError(w, r, "erase credentials", err)
 		return
 	}
@@ -139,8 +144,12 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // (ssotoken.go), which a held AWS lock serialises. A run that already holds a
 // credential in memory keeps it; the erase does not reach into a running run.
 func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secretstore.EraseReport) error {
-	defer s.lockAWSSSOOwner(owner)()
-	return s.eraseADOSignIn(owner, rowID, func() (err error) {
+	ctx, unlock, err := s.lockAWSSSOOwner(ctx, owner)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.eraseADOSignIn(ctx, owner, rowID, func(ctx context.Context) (err error) {
 		adoOwnPATWriteMu.Lock()
 		defer adoOwnPATWriteMu.Unlock()
 		*rep, err = secretstore.EraseOwner(ctx, s.cfg.Secrets, owner)
@@ -223,7 +232,13 @@ func (s *Server) auditSweepFailure(ctx context.Context, err error) {
 func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store, owner, name, provider string) {
 	data := map[string]any{"reason": "invalid_grant", "provider": provider}
 	outcome := "success"
-	if err := st.Delete(ctx, name); err != nil {
+	if err := st.Delete(ctx, name); errors.Is(err, secretstore.ErrRevisionChanged) {
+		// A newer row replaced the one the authority refused (the caller's
+		// compare-and-set): it is kept, and nothing failed.
+		slog.InfoContext(ctx, "wardynd: the sign-in the authority refused was replaced meanwhile; keeping the newer row", slog.String("provider", provider))
+		s.adoEntraTokens.forget(owner)
+		return
+	} else if err != nil {
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
 		outcome, data["error"] = "failure", err.Error()
 	}

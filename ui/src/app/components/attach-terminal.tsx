@@ -51,6 +51,8 @@ import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
+import { CopyNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
+import type { CopyGate, CopyOffer } from "./attach-terminal-clipboard";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
@@ -188,6 +190,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // #216 — mirrors the connect effect's `reconnectAttempts` var for render.
   const [reconnectAttempt, setReconnectAttempt] = React.useState(0);
   const [reconnectExhausted, setReconnectExhausted] = React.useState(false);
+  // The clipboard gate's verified copy offer and its quiet "blocked" notice.
+  const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
+  const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
+  const copyGateRef = React.useRef<CopyGate | null>(null);
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -241,22 +247,30 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // container) so the PTY and xterm always agree — see the ptyCols doc.
   // refit(force) — measure the container, resize the local grid, tell the PTY.
   //
-  // `force` sends a ONE-COLUMN-SMALLER size first, then the real one. That looks
-  // pointless and is not: the session is tmux, tmux clamps a shared window to
-  // the SMALLEST attached client, and it re-evaluates on a client size CHANGE.
+  // A resize frame goes out only when {socket, cols, rows} differs from the last
+  // one sent, so a same-size refit is silent and a fresh socket still gets its
+  // first size. A zero-size box (hidden pane) is skipped, not measured.
+  //
+  // `force` bypasses that dedup and sends a ONE-COLUMN-SMALLER size first, then
+  // the real one. That looks pointless and is not: the session is tmux, and
+  // tmux (3.5a defaults to `window-size latest`) sizes the shared window from a
+  // client's most recent size, re-evaluating on a client size CHANGE.
   // So when a second client (a `wardyn run attach` from another terminal) attaches
   // small, the browser's grid fills with tmux's `·` filler — and when that
-  // client leaves, the filler STAYS, because the browser's own size never
+  // client leaves, the filler can STAY, because the browser's own size never
   // changed and a same-size resize frame is a no-op tmux ignores.
   //
   // Measured: 0 dots before a second client, 1001 while attached, still 1001
   // after it detached, and 0 again the moment the viewport actually changed
   // size. The nudge manufactures that change on demand.
+  const lastSentRef = React.useRef<{ ws: WebSocket; cols: number; rows: number } | null>(null);
   const refit = React.useCallback((force = false) => {
     const fit = fitAddonRef.current;
     const term = termRef.current;
     const ws = wsRef.current;
     if (!fit || !term) return;
+    const box = term.element?.parentElement;
+    if (box && (box.clientWidth === 0 || box.clientHeight === 0)) return;
     try {
       if (ptyColsRef.current) {
         const dims = fit.proposeDimensions();
@@ -273,10 +287,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // the panel for nothing.
     setGeom((g) => (g && g.cols === term.cols && g.rows === term.rows ? g : { cols: term.cols, rows: term.rows }));
     if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+      const last = lastSentRef.current;
+      if (!force && last && last.ws === ws && last.cols === term.cols && last.rows === term.rows) return;
       if (force && term.cols > 1) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols - 1, rows: term.rows }));
       }
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      lastSentRef.current = { ws, cols: term.cols, rows: term.rows };
     }
   }, []);
 
@@ -305,6 +322,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setTakenOverBy,
     setReconnectAttempt,
     setReconnectExhausted,
+    setCopyOffer,
+    setCopyNotice,
+    copyGateRef,
   });
 
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
@@ -472,12 +492,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           a CHILD of the element xterm owns. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
-          ref={containerRef}
+          data-testid="run-terminal-wrapper"
           className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
-          // R4-F144: the same sentence the title bar shows, for the reader who
-          // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
-          // reader landing in the grid, not only for a sighted user.
-          aria-description={TERMINAL.ESCAPE_CHORD_HINT}
           // D3: xterm only focuses itself on a click that lands exactly on its
           // own `.xterm-screen` canvas layer — a click on this container's
           // padding, or in the dead space below the last row, lands nowhere,
@@ -494,7 +510,23 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             e.stopPropagation();
             termRef.current?.focus();
           }}
-        />
+        >
+          {/* FitAddon measures the PARENT of `.xterm`; under border-box sizing a
+              padded parent over-counts rows and clips the last one. The mount
+              is therefore an unpadded child of the padded wrapper above. */}
+          <div
+            ref={containerRef}
+            className="h-full min-h-0"
+            // R4-F144: the same sentence the title bar shows, for the reader who
+            // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
+            // reader landing in the grid, not only for a sighted user.
+            aria-description={TERMINAL.ESCAPE_CHORD_HINT}
+          />
+        </div>
+        {copyOffer ? (
+          <CopyOfferToast key={copyOffer.id} offer={copyOffer} onDone={() => copyGateRef.current?.dismiss()} />
+        ) : null}
+        {copyNotice && <CopyNotice message={copyNotice} />}
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
           // describes is dropped SERVER-side; blocking clicks here would also

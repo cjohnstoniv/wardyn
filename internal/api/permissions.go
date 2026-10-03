@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -427,9 +428,9 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // If-Match (etag.go) is optional optimistic concurrency on top of this
 // whole-map replace: an absent header behaves exactly as before, a present
 // one that no longer matches GET /permissions's current Enforcement ETag is
-// refused with 412 before the write reaches the store. capEnforcementMu
-// (server.go) makes the check-then-write atomic against a second overlapping
-// PUT on this process.
+// refused with 412 before the write reaches the store. the
+// capability-enforcement lock (locks.go) makes the check-then-write atomic
+// against a second overlapping PUT on any replica.
 func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.Request) {
 	var body map[string]bool
 	if !decodeStrict(w, r, &body) {
@@ -441,8 +442,11 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	s.capEnforcementMu.Lock()
-	defer s.capEnforcementMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.CapEnforcementLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	existing, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get existing capability enforcement", err)

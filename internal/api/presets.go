@@ -68,7 +68,7 @@ func setRunFields(req createRunRequest) []string {
 	return out
 }
 
-// presetOpenTo reports whether the caller may list and launch p: every
+// presetOpenTo reports whether the caller may list and read p: every
 // preset for an admin, otherwise one open to every type or to theirs.
 func (s *Server) presetOpenTo(r *http.Request, p types.LaunchPreset) bool {
 	return s.isOperator(r.Context()) || len(p.UserTypes) == 0 || slices.Contains(p.UserTypes, runCreatorUserType(r.Context()))
@@ -280,7 +280,7 @@ func (s *Server) expandRunPreset(w http.ResponseWriter, r *http.Request, req *cr
 		return false
 	}
 	p, err := s.cfg.Store.GetLaunchPreset(r.Context(), req.Preset)
-	if errors.Is(err, store.ErrNotFound) || err == nil && !s.presetOpenTo(r, p) {
+	if errors.Is(err, store.ErrNotFound) || err == nil && !s.presetLaunchOpenTo(r, p) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPresetUnknown, fmt.Sprintf(
 			"preset %q does not exist or is not open to you", req.Preset))
 		return false

@@ -293,8 +293,7 @@ func insertAuditEvent(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES ($1, 'system', 'tester', 'test.seed', 'success')`,
+		SELECT audit_append($1, now(), NULL, 'system', 'tester', 'test.seed', '', 'success', '', NULL)`,
 		id); err != nil {
 		t.Fatalf("seed audit_events row: %v", err)
 	}

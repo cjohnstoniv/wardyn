@@ -52,8 +52,7 @@ func TestPG_BootCanaryRefusesAChainTriggerThatDoesNotChain(t *testing.T) {
 
 			// Seed a real head first, so "prev_hash never links" is a genuine
 			// mismatch rather than the legitimate empty-chain case.
-			if _, err := pool.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-				VALUES (gen_random_uuid(), 'system', 'canary-probe', 'test.canary.seed', 'success')`); err != nil {
+			if _, err := pool.Exec(ctx, `SELECT audit_append(gen_random_uuid(), now(), NULL, 'system', 'canary-probe', 'test.canary.seed', '', 'success', '', NULL)`); err != nil {
 				t.Fatalf("seed the chain in %s: %v", schema, err)
 			}
 
@@ -116,8 +115,7 @@ func TestPG_BootCanaryCommitsNothing(t *testing.T) {
 	if after := countRows(); after != before {
 		t.Errorf("audit_events grew from %d to %d across Migrate; the canary row was COMMITTED", before, after)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'canary-probe', 'test.canary.after', 'success')`); err != nil {
+	if _, err := pool.Exec(ctx, `SELECT audit_append(gen_random_uuid(), now(), NULL, 'system', 'canary-probe', 'test.canary.after', '', 'success', '', NULL)`); err != nil {
 		t.Fatalf("append after the canary: %v", err)
 	}
 	var canaries int

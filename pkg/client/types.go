@@ -20,7 +20,10 @@ package client
 //
 // internal/types remains the single source of truth; these add no new types.
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
+import (
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // Domain nouns returned or accepted by Client methods.
 type (
@@ -164,6 +167,11 @@ type (
 	// governance_profiles row), carried in GovernanceDocument.Profiles.
 	// Returned by GetGovernance and ApplyGovernance.
 	GovernanceProfile = types.GovernanceProfile
+
+	// PolicyContact is the contact a GovernanceProfile (and SiteConfig.PolicyHelp)
+	// publishes: owner, email, request_url and request_text, validated by the
+	// server on write.
+	PolicyContact = policyref.Contact
 
 	// GovernanceAssignment binds one profile to one subject
 	// (GovernanceDocument.Assignments). Returned by GetGovernance and
