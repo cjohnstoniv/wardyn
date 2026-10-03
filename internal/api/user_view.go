@@ -310,6 +310,20 @@ func userViewTypeDeleted(typeID string) string {
 	return fmt.Sprintf("The %s user type was removed, so you're back in the Admin view. Choose another type to use the User view.", typeID)
 }
 
+// userViewPreviewRefusal is the sentence of a write refused in a read-only
+// preview (WARDYN_GOVERN_ADMIN_RUNS on, the view looks through another type).
+func userViewPreviewRefusal(viewed, stamped string) string {
+	return fmt.Sprintf("The User view is looking through the %s user type, a read-only preview. Switch the view to your own type (%s) to make changes or launch.", viewed, stamped)
+}
+
+// userViewPreviewWriteAllowed lists the non-read requests a preview still
+// serves: the way out of the view, sign-out, and the policy grade (a read-only
+// computation the New Run safety meter sends as the document is typed).
+// POST /me/view passes the gate before this is asked.
+func userViewPreviewWriteAllowed(path string) bool {
+	return path == "/api/v1/auth/logout" || path == "/api/v1/policies/grade"
+}
+
 func userViewLaunchRefusal(typeID string) string {
 	return fmt.Sprintf("The %s user type was removed, so you're back in the Admin view. Switch to the User view to launch.", typeID)
 }
@@ -320,6 +334,11 @@ func userViewLaunchRefusal(typeID string) string {
 // launch doors 409 admin_view). The request is never re-evaluated as the
 // admin: its tier was read as user, and an admin-tier answer halfway through
 // would apply the operator exemption to a request admitted as a user.
+//
+// With WARDYN_GOVERN_ADMIN_RUNS on, a view looking through a type other than
+// the stamped one is a read-only preview: every request that is not a GET, HEAD
+// or OPTIONS is refused 409 user_view_preview, so the picker never chooses the
+// profile an admin's runs are governed by.
 //
 // Two exceptions. GET /me is the one request that drops back and answers the
 // admin's real tier, carrying user_view_dropped. The switch routes pass
@@ -345,7 +364,7 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 		return nil
 	}
 	if ok {
-		return r
+		return s.userViewPreviewGate(w, r, ctx, typeID)
 	}
 	dropped, err := s.cfg.OIDC.DropUserView(w, r)
 	if err != nil {
@@ -373,6 +392,32 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 		writeJSON(w, launch.Status, errorBody{Error: launch.Sentence, Reason: string(launch.Reason)})
 		return nil
 	}
+	s.recordAudit(ctx, s.refusalEvent(ctx, types.ActorHuman, oidc.PrincipalFromContext(ctx), r.Method, d))
+	writeJSON(w, d.Status, errorBody{Error: d.Sentence, Reason: string(d.Reason)})
+	return nil
+}
+
+// userViewPreviewGate refuses a write in a preview (see userViewGate). It
+// compares typeID with the STAMPED type, not the view-aware one, which would
+// compare the view with itself. Written like the gate's other refusal rather
+// than through refuse: the api's human is not published yet.
+func (s *Server) userViewPreviewGate(w http.ResponseWriter, r *http.Request, ctx context.Context, viewed string) *http.Request {
+	if !s.cfg.GovernAdminRuns {
+		return r
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return r
+	}
+	stamped := oidc.StampedUserTypeFromContext(ctx)
+	if stamped == "" {
+		stamped = types.UserTypeStandard
+	}
+	if viewed == stamped || userViewPreviewWriteAllowed(r.URL.Path) {
+		return r
+	}
+	d := authz.Deny(authz.ReasonUserViewPreview, r.URL.Path, userViewPreviewRefusal(viewed, stamped)).
+		With("viewed_user_type", viewed).With("stamped_user_type", stamped)
 	s.recordAudit(ctx, s.refusalEvent(ctx, types.ActorHuman, oidc.PrincipalFromContext(ctx), r.Method, d))
 	writeJSON(w, d.Status, errorBody{Error: d.Sentence, Reason: string(d.Reason)})
 	return nil

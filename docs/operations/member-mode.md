@@ -73,6 +73,15 @@ no admin route opens whatever the type.
   launch), and the view turns off.
 - `GET /me` then answers as your real tier with `user_view_dropped`
   naming the type.
+- With `WARDYN_GOVERN_ADMIN_RUNS` on, looking through a type other than
+  your own stamped type is a **read-only preview**. Any request that is not
+  a `GET`, `HEAD` or `OPTIONS` (a run launch, a preflight, a workspace
+  create) answers `409` with reason `user_view_preview`. The picker never
+  chooses the profile your runs are governed by. Switching the view
+  (`POST /me/view`), signing out and grading a policy
+  (`POST /policies/grade`, a read-only computation) still work. Viewing
+  your own type launches as usual. The refusal is audited as `authz.denied`
+  with the viewed and stamped types.
 
 ## The no-credential preview — "Preview as a new user"
 
