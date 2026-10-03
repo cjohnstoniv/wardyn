@@ -24,6 +24,7 @@ import type {
   Workspace,
 } from "../../../lib/types";
 import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
+import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
@@ -201,6 +202,11 @@ export function NewRunLaunchPanel({
   // so the sentence renders exactly once, on the workspace picker's own
   // advisory line (workspace-card.tsx), never a second time in the rail's
   // problem slot.
+  const modelBlocked =
+    isAgent &&
+    !isInteractive &&
+    preflightIsCurrent &&
+    !!preflightResult?.setup_items?.some((i) => i.kind === "llm_access" && i.status === "missing");
   const problem = needsTask && !task.trim()
     ? isAgent
       ? "An autonomous run needs a task to perform."
@@ -240,14 +246,20 @@ export function NewRunLaunchPanel({
               // generic hint stays silent whenever one is set.
               providerCandidates.length > 1 && !selectedModelProviderId && !pin
               ? RAIL_PROVIDER.LAUNCH_HINT
-              : null;
+              : // f-f5: mirrors the server's runNeedsModelWarning — an unattended
+                // agent run with no reachable model waits. Interactive bodies are
+                // exempt (a shell still works). The verdict is the current body's
+                // own preflight `llm_access` row, never the mount-time llm_ready.
+                modelBlocked
+                ? RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName)
+                : null;
 
   return (
     <RunRail
       governanceProfile={governanceProfile}
       savedPolicy={savedPolicy}
       cc={cc}
-      showModelWarning={showModelWarning}
+      showModelWarning={showModelWarning && !modelBlocked}
       startup={startup}
       showHoldNote={showHoldNote}
       toolRules={toolRules}
@@ -256,6 +268,7 @@ export function NewRunLaunchPanel({
       launch={{
         onLaunch,
         disabled: launchDisabled,
+        problemLink: modelBlocked ? { to: "/account", label: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA } : undefined,
         spinning: launchSpinning,
         inFlight: launching,
         problem,

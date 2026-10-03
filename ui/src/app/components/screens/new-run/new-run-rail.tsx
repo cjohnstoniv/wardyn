@@ -85,6 +85,8 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** An action that rides on the `problem` line (f-f5: "Connect →"). */
+    problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
      *  workspace picker's own advisory line (workspace-card.tsx) already
      *  names the reason, so Launch disables without the rail repeating the
@@ -624,7 +626,16 @@ export function RunRail({
           gate is also active, since it's a separate reason nothing has
           launched yet. */}
       {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
+        <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}
+          {launch.problemLink && (
+            <>
+              {" "}
+              <Link to={launch.problemLink.to} className="font-medium text-info hover:underline">
+                {launch.problemLink.label}
+              </Link>
+            </>
+          )}
+        </p>
       )}
       {/* #214 — the one control that genuinely cannot work says so beside
           itself, not in a tooltip, with a route to the step that fixes it.
