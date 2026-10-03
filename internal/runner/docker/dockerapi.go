@@ -49,6 +49,9 @@ type dockerAPI interface {
 	// disk and established TCP connections keep state — without stopping or removing it.
 	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
 	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
+	// ContainerStats backs runner.ActivitySampler: one non-streaming read of the agent container's CPU
+	// counters, with the daemon's own earlier sample so the reading is a rate. Nothing runs in the sandbox.
+	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 	// ContainerWait blocks for a terminal condition and yields the exit code; used by Wait for EXEC-LESS
 	// runtimes (krun microVMs) whose agent workload is the container's MAIN process, not a docker exec.
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult

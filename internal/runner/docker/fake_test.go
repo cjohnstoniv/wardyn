@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -88,6 +89,10 @@ type fakeDocker struct {
 	onNetworkCreate func(name string, opts client.NetworkCreateOptions)
 
 	containers map[string]*createdContainer // id (== name) -> record
+
+	// stats is the canned ContainerStats body per container id; statsCalls records every read's options.
+	stats      map[string]container.StatsResponse
+	statsCalls []client.ContainerStatsOptions
 
 	// stdin is what was written to each container's stdin through
 	// ContainerAttach (the proxy's config, #1176), by container id; attached
@@ -706,6 +711,24 @@ func (f *fakeDocker) ContainerKill(ctx context.Context, id string, _ client.Cont
 	}
 	c.state = &container.State{Status: "exited", ExitCode: 137}
 	return client.ContainerKillResult{}, nil
+}
+
+// ContainerStats serves a canned reading from f.stats (by id); a container the fake does not hold is a
+// 404, one with no entry is a daemon error. statsCalls counts the reads.
+func (f *fakeDocker) ContainerStats(_ context.Context, id string, opts client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statsCalls = append(f.statsCalls, opts)
+	c := f.containers[id]
+	if c == nil || c.removed {
+		return client.ContainerStatsResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	st, ok := f.stats[id]
+	if !ok {
+		return client.ContainerStatsResult{}, errors.New("stats unavailable")
+	}
+	b, _ := json.Marshal(st)
+	return client.ContainerStatsResult{Body: io.NopCloser(bytes.NewReader(b))}, nil
 }
 
 // ContainerPause / ContainerUnpause mirror the real daemon's redundant-state

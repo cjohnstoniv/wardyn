@@ -250,6 +250,23 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 	return tag.RowsAffected() > 0, nil
 }
 
+// UpdateRunStateIfCreatedBefore transitions a run only when still in fromState,
+// created_at is at or before createdNotAfter, and it has no lost/end mark. The
+// max-age stop's own predicate on the run's age: it carries neither the idleness
+// guard nor the open-request guard of UpdateRunStateIfIdle, because an absolute
+// age cap exists to end a run that is not going to finish by itself.
+func (s PG) UpdateRunStateIfCreatedBefore(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, createdNotAfter time.Time) (bool, error) {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
+		 WHERE id=$2 AND state=$3 AND created_at <= $4 AND lost_at IS NULL`,
+		string(toState), id, string(fromState), createdNotAfter, toState.IsTerminal(),
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: conditional age update run state: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // openHoldSQL is TRUE when agent_runs (the outer query's row) has a PENDING
 // approval that has not yet reached its own min(requested_at+wait, ends_at)
 // expiry — an "open request within its wait". A boolean expression, not a full

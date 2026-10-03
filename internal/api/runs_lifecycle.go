@@ -520,21 +520,25 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 // CASes from RUNNING and audits its own uerr; the reconciler reads current state
 // first and slogs) — only the post-CAS tail is shared.
 func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any) {
-	s.finalizeRunTailOrdered(ctx, runID, ref, action, outcome, data, false)
+	s.finalizeRunTailOrdered(ctx, runID, ref, action, outcome, data, false, false)
 }
 
 // finalizeRunTailOrdered is finalizeRunTail. The run's output is finalised
 // (run_output_final.go) after the revoke cascade and before StopSandbox, so the
 // seconds of drain never extend a live credential; finishAfterStop moves it
 // after StopSandbox, for a caller that CASed a possibly still-running run to
-// KILLED (reclaimProbeRun), whose process has not exited yet.
-func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop bool) {
+// KILLED (reclaimProbeRun), whose process has not exited yet. gracefulStop is
+// a caller that is stopping a live sandbox into STOPPED itself (the lease
+// end): an interactive run's pane is then snapshotted, after the revocations
+// and before StopSandbox.
+func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop, gracefulStop bool) {
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 		runID.String(), outcome, mustJSON(data)))
 	s.revokeRunCascade(ctx, runID)
 	s.cancelRunApprovals(ctx, runID)
 	if !finishAfterStop {
-		s.FinishRunOutput(ctx, runID)
+		s.prepareRunOutput(ctx, runID, gracefulStop)
+		s.finishRunOutput(ctx, runID)
 	}
 	teardownOK := false
 	if ref != "" && s.cfg.Runner != nil {
