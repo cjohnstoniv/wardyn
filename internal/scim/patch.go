@@ -270,7 +270,7 @@ func quotedAwareClose(s string, open int) int {
 }
 
 // flexBool decodes a JSON boolean or Entra's strings "True" and "False" (any case); set is false for
-// anything else, including null.
+// null, and any other value is an error.
 type flexBool struct{ set, v bool }
 
 func (b *flexBool) UnmarshalJSON(data []byte) error {
@@ -279,6 +279,7 @@ func (b *flexBool) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch t := v.(type) {
+	case nil:
 	case bool:
 		*b = flexBool{true, t}
 	case string:
@@ -290,6 +291,8 @@ func (b *flexBool) UnmarshalJSON(data []byte) error {
 		default:
 			return fmt.Errorf("not a boolean: %q", t)
 		}
+	default:
+		return fmt.Errorf("not a boolean: %s", data)
 	}
 	return nil
 }

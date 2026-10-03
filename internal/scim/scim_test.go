@@ -148,7 +148,7 @@ func TestParseResourcesRefuseBadInput(t *testing.T) {
 			t.Errorf("group %q: want invalidSyntax, got %v", body, err)
 		}
 	}
-	for _, body := range []string{`{"externalId":"e"}`, `{"userName":"a"}`, `{"userName":"a","externalId":"e","active":"maybe"}`} {
+	for _, body := range []string{`{"externalId":"e"}`, `{"userName":"a"}`, `{"userName":"a","externalId":"e","active":"maybe"}`, `{"userName":"a","externalId":"e","active":0}`} {
 		_, err := ParseUser([]byte(body))
 		if err == nil || (err.ScimType != TypeInvalidValue && err.ScimType != TypeInvalidSyntax) {
 			t.Errorf("user %q: want a 400, got %v", body, err)
