@@ -425,6 +425,8 @@ services:
       # key. Never bake a real key into a committed file.
       WARDYN_AGE_KEY: "${WARDYN_AGE_KEY:-}"
       WARDYN_AUDIT_SINKS: '${WARDYN_AUDIT_SINKS:-{"file":{"path":"/data/audit/audit.log","max_bytes":10485760,"keep":3}}}'
+      # Approval notification config JSON (docs/ENV.md). Empty = off: no outbox rows, no worker.
+      WARDYN_APPROVAL_NOTIFY: "${WARDYN_APPROVAL_NOTIFY:-}"
       # Audit fallback spool (C1): a Postgres write that fails is fsync'd here
       # instead of silently lost (internal/api/auditspool.go). Lands in the
       # same `audit` volume the file sink above uses (mounted at /data/audit

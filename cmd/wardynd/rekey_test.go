@@ -28,6 +28,7 @@ func rekeyFlags(dsn, storeSel, ageKey string) *bootFlags {
 		ageKey:                  &ageKey,
 		platformKeyFile:         new(string),
 		auditSinks:              new(string),
+		approvalNotify:          new(string),
 		auditSpool:              new(string),
 		auditSource:             new(string),
 		trustedCAFile:           new(string),

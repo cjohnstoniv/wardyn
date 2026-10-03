@@ -36,6 +36,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
 
+### Added
+
+- **Approval notifications over a signed webhook (`WARDYN_APPROVAL_NOTIFY`).** Off by default. When set,
+  every approval raised gets a durable outbox row in the same transaction, and a worker on each replica
+  delivers it at least once to the named webhook channels, with an `X-Wardyn-Signature` HMAC when a secret
+  is set. A dead notification writes an `approval.notify.failed` audit row and counts in
+  `wardyn_approval_notify_failed_total{channel}`; a run is held to 25 notifications an hour. Migration
+  `0108_approval_notifications` only adds the `approval_notifications` table, and a 0.8.5 binary refuses a
+  database that has applied it, so a downgrade is a restore from the pre-upgrade dump. See "Approval
+  notifications" in `docs/OPERATIONS.md`.
+
 ### Security
 
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
