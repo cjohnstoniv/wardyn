@@ -495,6 +495,47 @@ console depends on for its own sign-in/connect doors (`ui/src/app/lib/api/runs.t
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). |
 | `git_credential` | The New Run rail's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
 
+## Pending approval (governance writes)
+
+A deployment can require a second human to approve governance writes. A covered write is then
+stored as a pending change and answered `202` with a `{"pending_change": {...}}` body; nothing is
+applied until a different approver approves it. The SDK never reads that body as a saved object:
+
+- Any method that goes through the shared request path returns a `*client.PendingApprovalError`
+  (check with `errors.As`) instead of a zero-value result. Only a `202` whose body has a
+  `pending_change` key is treated this way; `KillRun`, `RecordWorkspaceTask`, `ScanWorkspace` and
+  `ScanSource` also answer `202` and decode as before.
+- `ApplyGovernance` keeps its signature. When any write is pending it returns the current document
+  and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly instead of
+  carrying on.
+- `ApplyGovernanceResult` returns the same outcome as data: the document, the `Pending` changes,
+  the `Deferred` writes and `PruneSkipped`. An assignment that names a profile whose write is
+  pending is deferred, never sent; so is a composed profile whose base profile's write is pending
+  (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
+  assignments. Prune does not run after a pending write.
+- `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
+  `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
+  (`/api/v1/governance/changes`).
+
+```go
+res, err := c.ApplyGovernanceResult(ctx, doc, false)
+if err != nil {
+    return err
+}
+for _, ch := range res.Pending {
+    fmt.Println("awaiting approval:", ch.ID, ch.TargetKind, ch.TargetKey)
+}
+```
+
+The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists (profiles and assignments) on stderr and
+exits 0, and `wardyn governance changes list [--state ...]`, `changes approve <id>` and
+`changes reject <id> [--reason ...]` act on them.
+
+**Old clients.** A client built before 0.8.6 that writes governance against a deployment with this
+switch on decodes the `202` as an empty profile, and its next assignment write is refused with
+`profile_id: required` or is itself queued. Nothing applies without approval, but the error is
+confusing. Upgrade the CLI and any SDK callers before requiring a second approver.
+
 ## Renamed in 0.8
 
 Issue #658: the attach route family had three different sub-resource shapes,
@@ -632,3 +673,24 @@ line on stderr (never stdout, so `--json` stays a plain array) naming the next
 header a caller has to remember to check; `scripts/ci-run.sh` loops it so a CI
 run's `audit.json` artifact is never a silently-truncated prefix. Everything
 else here is one method on the Go client above, or one `wardyn` CLI command.
+
+### Composed profile graphs
+
+`ApplyGovernance` reproduces a graph of composed profiles (`base_profile_id`, `overlay`,
+`overlay_limits`, `contact`) from `wardyn governance get` on one install to `wardyn governance set`
+on another, and a repeat apply is a no-op.
+
+- **Order.** Profiles are written bases first, whatever order the document lists them in; a
+  `base_profile_id` cycle in the document is an error before any write. Prune deletes the profiles
+  composed on a base before the base, so it never meets the server's `409`.
+- **Ids.** Every graph reference, `base_profile_id` and an assignment's `profile_id`, is matched by the
+  id the document's own entry for that profile carries and rewritten to the id the profile holds on the
+  target. A base the document does not contain is sent as given.
+- **Fields.** A profile is rewritten only when its ceiling, limits, contact, base, overlay or
+  overlay limits differ from the stored one. The read-only `effective` view is never written back.
+- **Pending approval.** A child whose base has a pending write is deferred, not sent; apply again
+  once the base is approved.
+- **Older clients.** A client built before 0.8.6 drops `base_profile_id`, `overlay` and
+  `overlay_limits`. A composed profile it creates therefore arrives as a standalone profile with an
+  empty ceiling, and one it updates keeps the composition the server stored. It also writes in name
+  order. Upgrade before applying a composed document.
