@@ -250,6 +250,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "recording_governed",
+    "target": "\"workspaces.record\"",
+    "sentence": "recordingGovernedRefusal"
+  },
+  {
     "reason": "run_owner_only",
     "target": "run.ID.String()",
     "sentence": "\"only the person who started this run can open it interactively\" (registry)"

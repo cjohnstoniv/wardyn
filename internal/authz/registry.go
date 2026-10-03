@@ -60,6 +60,9 @@ const (
 	// needs the run's owner; a super admin is refused unless the run has no
 	// personal owner (#1476). Not hidden: the admin can already see the run.
 	ReasonRunOwnerOnly Reason = "run_owner_only"
+	// ReasonRecordingGoverned: Record Mode is refused for an admin whose runs are
+	// governed (WARDYN_GOVERN_ADMIN_RUNS) unless the deployment exempts recording.
+	ReasonRecordingGoverned Reason = "recording_governed"
 )
 
 // Refusal is one reason's registry row.
@@ -98,6 +101,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunKept:                     {Effect: EffectDeny, Audit: true},
 	ReasonRunNotFound:                 {Effect: EffectDeny, Audit: true},
 	ReasonRunOwnerOnly:                {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
+	ReasonRecordingGoverned:           {Effect: EffectDeny, Audit: true},
 	ReasonRunTerminal:                 {Effect: EffectDeny, Audit: true},
 	ReasonSecondHumanRequired:         {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                    {Effect: EffectUnprocessable},

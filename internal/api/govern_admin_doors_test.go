@@ -384,6 +384,15 @@ func TestAuthzMatrixGovernAdminRuns(t *testing.T) {
 				t.Fatalf("probed %d routes, want the whole admin and member surface", len(on))
 			}
 			for _, key := range keys {
+				// The one route the switch does refuse: Record Mode answers a
+				// governed admin recording_governed (record_govern_admin_test.go
+				// proves the body and the audit row).
+				if key == "POST /api/v1/workspaces/{id}/record" {
+					if on[key] != http.StatusForbidden || off[key] == http.StatusForbidden {
+						t.Errorf("%s: switch on = %d, switch off = %d, want 403 only with the switch on", key, on[key], off[key])
+					}
+					continue
+				}
 				if on[key] != off[key] {
 					t.Errorf("%s: switch on = %d, switch off = %d, want identical route admission", key, on[key], off[key])
 				}

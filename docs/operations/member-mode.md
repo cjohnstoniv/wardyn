@@ -223,3 +223,56 @@ and its own ownership namespace.
 > "passes" without testing anything. This is the single most common way a
 > member walk proves nothing at all. (`deploy/azure-entra-sso/README.md`
 > says the same for its own walk, and for the same reason.)
+
+## Constrained-admin mode
+
+`WARDYN_GOVERN_ADMIN_RUNS` (off by default, [ENV.md](../ENV.md)) governs an admin's
+own runs like a member's. It changes who stands outside governance when a run
+launches, and nothing else.
+
+**Governed.** A super admin's SSO session, in either view, and any admin-role
+personal token. Their own runs are bounded by the governance profile and the
+capability grants that apply to them. That holds at every run seam: quotas, the
+drive and workspace-provider doors, owner revalidation and preset launch.
+`deny_interactive` and `deny_ui_apps` also bind the terminal, SSH and UI gateway
+on their own run.
+**Record Mode is refused** (`403` `recording_governed`), because that lane builds
+its own allow-all, credentialed sandbox and skips the member clamp on purpose.
+Setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording` restores it for that lane
+only, and each such recording carries `governance_exempt: true` on its
+`run.record.start` row.
+
+**Break-glass.** The admin token and local mode carry no person to resolve a
+profile for, so they stay ungoverned. While the switch is on each of their
+launches carries `governance_exempt: true` on `run.create`, so a SIEM rule can
+find them. Hold the admin token out of band. Route tiers, the credential
+namespace, run reach and reading recordings are unchanged.
+
+**Before you enable it:**
+
+1. Configure single sign-on. Without it nobody is a signed-in person, so the
+   switch governs no one; boot warns and the setup checks show a warning on
+   Admin runs.
+2. Give each admin a governance profile, and the capability grants their own runs
+   need. A governed admin with neither falls to the deployment ceiling.
+3. Move CI that launches with a personal admin token to the admin token
+   deliberately, or grant the token's owner what it needs: that token is governed too.
+4. Decide on the recording exemption. Leave it unset unless admins must keep
+   recording.
+5. Set the switch only once every replica runs a version that reads it. An older
+   replica ignores it.
+
+It takes effect on the next request, and runs already running stay as they were
+created. Everyone signed in can read the posture in `/setup/status`
+(`auth.govern_admin_runs` and `auth.govern_admin_runs_exempt`), and an admin sees
+a banner and the Admin runs row in the setup checks.
+
+**Residual risk.** An admin still governs the governance. Profiles, assignments,
+capability grants and role mappings are security-operator writes, and a super
+admin is a security operator, so a constrained admin can widen their own profile
+and then launch inside it. Every such write is audited, but the mode is not
+separation of duties on its own: it needs a four-eyes rule on governance
+changes beside it, which this mode does not provide. Self-approval of an approval on
+their own run is bounded only by `WARDYN_EGRESS_SECOND_HUMAN` and
+`WARDYN_CAPABILITY_SECOND_HUMAN`. See
+[the threat model](../../threatmodel/THREAT-MODEL.md#constrained-admin-mode-is-not-separation-of-duties-and-its-break-glass-is-the-admin-token).

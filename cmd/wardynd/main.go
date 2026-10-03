@@ -329,6 +329,11 @@ func run() error {
 		return err
 	}
 
+	governAdminRunsExempt, err := parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
+	if err != nil {
+		return err
+	}
+
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
@@ -395,6 +400,10 @@ func run() error {
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
+
+		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
+		GovernAdminRunsExempt: governAdminRunsExempt,
+
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.

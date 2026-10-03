@@ -324,6 +324,14 @@ export interface SetupStatus {
   auth: {
     mode: "local" | "sso" | "token" | "disabled";
     local_loopback: boolean;
+    /** WARDYN_GOVERN_ADMIN_RUNS: an admin's own runs are governed like a
+     *  member's. Kept through redaction, so every signed-in person can read
+     *  it. Optional for fixture compatibility with an older daemon; absent
+     *  reads as off. */
+    govern_admin_runs?: boolean;
+    /** The lanes WARDYN_GOVERN_ADMIN_RUNS_EXEMPT leaves ungoverned: the only
+     *  value is "recording". Absent when none. */
+    govern_admin_runs_exempt?: string[];
   };
   runner: {
     driver: "docker" | "k8s" | "none" | (string & {});

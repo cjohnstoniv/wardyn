@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -38,6 +39,49 @@ func TestWarnGovernAdminRunsUnbound(t *testing.T) {
 			}
 			if tc.wantWarned && !strings.Contains(out, "level=WARN") {
 				t.Errorf("want a WARN, got %q", out)
+			}
+		})
+	}
+}
+
+// TestParseGovernAdminRunsExempt: the only value is "recording"; anything else
+// exits 2; set without the switch it warns that it does nothing.
+func TestParseGovernAdminRunsExempt(t *testing.T) {
+	for _, tc := range []struct {
+		name, csv  string
+		on         bool
+		want       []string
+		wantExit2  bool
+		wantWarned bool
+	}{
+		{"unset", "", true, nil, false, false},
+		{"recording", "recording", true, []string{"recording"}, false, false},
+		{"spaces and a repeat", " recording , recording", true, []string{"recording"}, false, false},
+		{"recording without the switch", "recording", false, []string{"recording"}, false, true},
+		{"unset without the switch", "", false, nil, false, false},
+		{"another lane", "runs", true, nil, true, false},
+		{"recording and another lane", "recording,runs", true, nil, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			got, err := parseGovernAdminRunsExempt(tc.csv, tc.on)
+
+			if tc.wantExit2 {
+				var ec *exitCodeError
+				if !errors.As(err, &ec) || ec.code != 2 {
+					t.Fatalf("err = %v, want an exit-2 refusal", err)
+				}
+				return
+			}
+			if err != nil || strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("got %v, %v; want %v", got, err, tc.want)
+			}
+			if warned := strings.Contains(buf.String(), "does nothing"); warned != tc.wantWarned {
+				t.Errorf("warned = %v, want %v; log: %q", warned, tc.wantWarned, buf.String())
 			}
 		})
 	}

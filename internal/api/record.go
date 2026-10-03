@@ -449,6 +449,9 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if weakCC {
 		auditData["weak_confinement"] = "cc1"
 	}
+	// With the switch on, a launch that stood outside governance (the admin
+	// token, local mode, or the recording exemption) says so.
+	s.markGovernanceExempt(r.Context(), auditData)
 	// The cross-user audit marker, on both emits. workspace_owner.go states the
 	// decision as "the cross-user audit marker every workspace-scoped write
 	// stamps", and warns that "a second copy of the actor != owner comparison is
