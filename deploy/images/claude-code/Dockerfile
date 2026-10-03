@@ -143,7 +143,7 @@ RUN printf '%s\n' \
     && test "$(ssh-keygen -l -f /etc/ssh/ssh_known_hosts | wc -l)" = "$(wc -l < /etc/ssh/ssh_known_hosts)"
 
 # tmux config for the persistent attach session: no status bar (clean terminal,
-# no xterm.js line-drawing artifacts), truecolor, mouse, large scrollback.
+# no xterm.js line-drawing artifacts), truecolor, tmux-owned mouse wheel, large scrollback.
 COPY deploy/images/common/tmux.conf /etc/tmux.conf
 
 # Corporate build support (no-ops on OSS): install the optional corp CA into the

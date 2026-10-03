@@ -595,7 +595,7 @@ maybe_exec_task_mode() {
 start_wardyn_session() {
     WARDYN_SESSION_START=""
     export WARDYN_IDLE_PID=$$
-    if tmux new-session -d -s wardyn "$1"; then
+    if LANG=C.UTF-8 tmux new-session -d -s wardyn "$1"; then
         WARDYN_SESSION_START="created"
         return 0
     fi

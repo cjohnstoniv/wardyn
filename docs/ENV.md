@@ -584,7 +584,7 @@ by test/e2e harnesses):
 Read only by test scaffolding, the fake-docker harness, or the ground-truth
 negative-control tooling; deliberately excluded from the registry above and
 allowlisted in the ratchet test: `WARDYN_TEST_BOOL`, `WARDYN_TEST_DUR`,
-`WARDYN_TEST_STR`, `WARDYN_TEST_PG`, `WARDYN_TEST_VAULT` and
+`WARDYN_TEST_STR`, `WARDYN_TEST_PG`, `WARDYN_REQUIRE_TMUX` (set to `1`, a missing `tmux` fails `TestTmuxConf` instead of skipping it), `WARDYN_TEST_VAULT` and
 `WARDYN_TEST_VAULT_TOKEN_FILE` (the live Vault/OpenBao case,
 `internal/secretstore/vaultkv/live_test.go`: the server's address and a file
 holding a token that can mount and write policies),
