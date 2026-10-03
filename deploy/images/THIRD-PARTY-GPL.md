@@ -697,6 +697,21 @@ replaced by a digest scan of the real tag once one exists._
 | `ca-certificates` | 20250419~deb12u1 | GPL-2, GPL-2+, MPL-2.0 | deb |
 | `netbase` | 6.4 | GPL-2 | deb |
 
+## `ghcr.io/cjohnstoniv/wardynd-fips` (not yet published)
+
+_Scanned before publication, from a local build of `deploy/compose/Dockerfile.wardynd`
+with the `GOFIPS140` build argument set. It is the recipe of `wardynd` above on the
+same base layers, so the packages are the same; no published digest exists yet to
+scan, and this section will be replaced by a digest scan of the real tag once one
+exists._
+
+2 package(s) carrying a GPL or LGPL term.
+
+| package | version | licence | type |
+|---|---|---|---|
+| `ca-certificates` | 20250419~deb12u1 | GPL-2, GPL-2+, MPL-2.0 | deb |
+| `netbase` | 6.4 | GPL-2 | deb |
+
 ## Intermediate tags 0.6.6 through 0.7.7, not individually re-scanned (still pullable)
 
 `wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli` and `agent-aws-sso`
