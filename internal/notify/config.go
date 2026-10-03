@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,9 +34,10 @@ const (
 	TypeWebhook = "webhook"
 	TypeTeams   = "teams"
 	TypeSlack   = "slack"
+	TypeSMTP    = "smtp"
 )
 
-var implementedTypes = []string{TypeWebhook, TypeTeams, TypeSlack}
+var implementedTypes = []string{TypeWebhook, TypeTeams, TypeSlack, TypeSMTP}
 
 // Config is the parsed WARDYN_APPROVAL_NOTIFY value.
 type Config struct {
@@ -81,6 +84,15 @@ type Channel struct {
 	BearerToken string `json:"bearer_token"`
 	// RedactRequester drops the run owner's principal and email from this channel's messages.
 	RedactRequester bool `json:"redact_requester"`
+
+	// The smtp type's settings. It has no url: Host and Port name the relay, which must offer
+	// STARTTLS. To is a static recipient list; the tier's notify targets are added to it.
+	Host     string   `json:"host"`
+	Port     int      `json:"port"`
+	From     string   `json:"from"`
+	To       []string `json:"to"`
+	Username string   `json:"username"`
+	Password string   `json:"password"`
 }
 
 // Parse validates raw and returns the config. An empty value means notifications are off and returns
@@ -251,6 +263,9 @@ func (ch *Channel) validate() error {
 		}
 		return fmt.Errorf("approval notify config: channel %q: type %q is not one this build implements (%s)", ch.ID, shown, strings.Join(implementedTypes, ", "))
 	}
+	if ch.Type == TypeSMTP {
+		return ch.validateSMTP()
+	}
 	u, err := url.Parse(ch.URL)
 	if err != nil || ch.URL == "" || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return fmt.Errorf("approval notify config: channel %q: url must be an absolute http or https URL (value withheld)", ch.ID)
@@ -261,6 +276,45 @@ func (ch *Channel) validate() error {
 	}
 	if u.Scheme != "https" && (ch.HMACSecret != "" || ch.BearerToken != "" || u.User != nil || u.RawQuery != "" || strings.Contains(ch.URL, "?")) {
 		return fmt.Errorf("approval notify config: channel %q: https is required when hmac_secret or bearer_token is set or the url carries userinfo or a query", ch.ID)
+	}
+	return nil
+}
+
+// hostRe is a DNS name; an IP literal is accepted separately.
+var hostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+
+// validateSMTP refuses an smtp channel with a missing or malformed setting, a CR or LF in any field
+// (a header-injection vector), or a setting that belongs to another type. Errors name the channel id
+// and the field, never its value.
+func (ch *Channel) validateSMTP() error {
+	fields := [][2]string{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}}
+	for i, to := range ch.To {
+		fields = append(fields, [2]string{"to #" + strconv.Itoa(i+1), to})
+	}
+	for _, f := range fields {
+		if strings.ContainsAny(f[1], "\r\n") {
+			return fmt.Errorf("approval notify config: channel %q: smtp %s contains a CR or LF", ch.ID, f[0])
+		}
+	}
+	if ch.URL != "" || ch.HMACSecret != "" || ch.BearerToken != "" {
+		return fmt.Errorf("approval notify config: channel %q: an smtp channel takes host and port, not url, hmac_secret or bearer_token", ch.ID)
+	}
+	if !hostRe.MatchString(ch.Host) && net.ParseIP(ch.Host) == nil {
+		return fmt.Errorf("approval notify config: channel %q: smtp host must be a DNS name or IP address (value withheld)", ch.ID)
+	}
+	if ch.Port < 1 || ch.Port > 65535 {
+		return fmt.Errorf("approval notify config: channel %q: smtp port must be 1 to 65535", ch.ID)
+	}
+	if !validAddress(ch.From) {
+		return fmt.Errorf("approval notify config: channel %q: smtp from must be a bare email address (value withheld)", ch.ID)
+	}
+	for i, to := range ch.To {
+		if !validAddress(to) {
+			return fmt.Errorf("approval notify config: channel %q: smtp to #%d must be a bare email address (value withheld)", ch.ID, i+1)
+		}
+	}
+	if (ch.Username == "") != (ch.Password == "") {
+		return fmt.Errorf("approval notify config: channel %q: smtp username and password are set together or not at all", ch.ID)
 	}
 	return nil
 }

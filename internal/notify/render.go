@@ -79,6 +79,12 @@ func (ch Channel) render(deliveryID uuid.UUID, tier int16, f approvalFacts, cons
 		return renderTeams(newMessage(tier, f, consoleURL, m))
 	case TypeSlack:
 		return renderSlack(newMessage(tier, f, consoleURL, m))
+	case TypeSMTP:
+		// An email that fails the send-time check appears nowhere in the message, body included.
+		if !validAddress(f.Email) {
+			f.Email = ""
+		}
+		return ch.renderMail(deliveryID, newMessage(tier, f, consoleURL, m), f.Recipients)
 	}
 	return buildPayload(deliveryID, tier, f, consoleURL, m)
 }

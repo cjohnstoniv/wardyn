@@ -39,8 +39,8 @@ func TestParse_RefusalsNameTheRuleAndNeverAValue(t *testing.T) {
 		mustHave []string
 		leaks    []string
 	}{
-		{"unimplemented type", `{"channels":[{"id":"chat","type":"smtp","url":"https://h.example.com/SECRETPATH"}]}`,
-			[]string{`"chat"`, `"smtp"`}, []string{"SECRETPATH", "h.example.com"}},
+		{"unimplemented type", `{"channels":[{"id":"chat","type":"pagerduty","url":"https://h.example.com/SECRETPATH"}]}`,
+			[]string{`"chat"`, `"pagerduty"`}, []string{"SECRETPATH", "h.example.com"}},
 		{"type that could be a secret is not echoed", `{"channels":[{"id":"chat","type":"TYPE-SECRET-VALUE","url":"https://h.example.com/x"}]}`,
 			[]string{`"chat"`, "redacted"}, []string{"TYPE-SECRET-VALUE"}},
 		{"bad url", `{"channels":[{"id":"hook","type":"webhook","url":"::not a url SECRETURL"}]}`,
