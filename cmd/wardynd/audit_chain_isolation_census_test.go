@@ -81,6 +81,11 @@ var auditWriterPins = map[string]string{
 // act; the alternative — an unlisted bare Begin — is what shipped the false
 // claim in the first place.
 var declaredNonAuditTx = map[string]string{
+	"internal/store/auditchain.go:PG.VerifyAuditChain": "the verify sweep: one READ ONLY repeatable-read snapshot, so the " +
+		"chain, the anchors, the high-water mark and the manifest are one instant. Postgres refuses any write in it, " +
+		"audit_events included, so there is no head for it to chain onto stale",
+	"internal/store/auditpartition.go:PG.ExportAuditPartition": "reads one closed partition and its manifest from one READ ONLY " +
+		"repeatable-read snapshot, so the header can never disagree with the rows. Postgres refuses any write in it",
 	"internal/db/db.go:applyMigration": "runs one migration's DDL and records it in schema_migrations; it never inserts " +
 		"into audit_events, and migration DDL is not chain-linked",
 	"internal/db/advisory_lock_keyed.go:AdvisoryLockKeyed": "exists ONLY to scope SET LOCAL lock_timeout around the " +

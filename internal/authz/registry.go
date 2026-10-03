@@ -60,6 +60,10 @@ const (
 	// needs the run's owner; a super admin is refused unless the run has no
 	// personal owner (#1476). Not hidden: the admin can already see the run.
 	ReasonRunOwnerOnly Reason = "run_owner_only"
+	// ReasonAuditExportPartitionFilter: a partition export (GET /audit/export?partition=) was asked
+	// to narrow the partition with another filter, so the digest in its footer would not cover the
+	// whole partition. Input shape, not a denial: not audited.
+	ReasonAuditExportPartitionFilter Reason = "audit_export_partition_filter"
 )
 
 // Refusal is one reason's registry row.
@@ -107,6 +111,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                   {Effect: EffectConflict},
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
+	ReasonAuditExportPartitionFilter:  {Effect: EffectBadRequest},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

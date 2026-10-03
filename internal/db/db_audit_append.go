@@ -43,6 +43,7 @@ func AuditAppendPostureOf(ctx context.Context, pool *pgxpool.Pool) (AuditAppendP
 		                   FROM pg_proc p
 		                  WHERE p.oid = ANY(ARRAY[to_regprocedure($1),
 		                                          to_regprocedure('audit_ensure_partitions(integer)'),
+		                                          to_regprocedure('audit_partition_digest(text)'),
 		                                          to_regprocedure('audit_events_chain()')]::oid[])
 		                    AND (p.proacl IS NULL
 		                         OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a
