@@ -37,6 +37,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -108,6 +109,10 @@ var declaredNonAuditTx = map[string]string{
 // move with it.
 const auditChainTriggerName = "audit_events_chain"
 
+// updateStatementRE matches an UPDATE statement's head (upper-cased input): UPDATE, an optional ONLY, a
+// possibly schema-qualified table, an optional alias, then SET.
+var updateStatementRE = regexp.MustCompile(`\bUPDATE\s+(ONLY\s+)?[\w."@]+(\s+(AS\s+)?\w+)?\s+SET\b`)
+
 // assertReplaySetIsPureDDL re-derives replayTriggerMigrations' set the way
 // db.triggerMigrationFiles does — by CONTENT, not by a list — and fails if any
 // file in it carries DML. That is the whole claim declaredNonAuditTx makes about
@@ -134,13 +139,21 @@ func assertReplaySetIsPureDDL(t *testing.T) {
 		}
 		found++
 		upper := strings.ToUpper(string(body))
-		for _, dml := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM"} {
+		for _, dml := range []string{"INSERT INTO", "DELETE FROM"} {
 			if strings.Contains(upper, dml) {
 				t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains %q. "+
 					"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
 					"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
 					"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, dml)
 			}
+		}
+		// An UPDATE STATEMENT (UPDATE <table> SET ...), not the word: the append-only trigger the replay
+		// re-creates is declared BEFORE UPDATE OR DELETE, an event list that is DDL.
+		if loc := updateStatementRE.FindStringIndex(upper); loc != nil {
+			t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains the UPDATE statement %q. "+
+				"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
+				"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
+				"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, upper[loc[0]:loc[1]])
 		}
 	}
 	if found == 0 {

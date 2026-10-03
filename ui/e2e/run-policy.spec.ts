@@ -159,9 +159,8 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
       });
       const workspaceAdd = JSON.stringify({ kind: "workspace", added_domains: ["registry.npmjs.org"] });
       sql(
-        `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data) VALUES ` +
-          `(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.egress.add', '${runId}', 'success', '${workspaceAdd}'::jsonb), ` +
-          `(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '${resolved}'::jsonb)`,
+        `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.egress.add', '${runId}', 'success', '', '${workspaceAdd}'::jsonb), ` +
+          `audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '', '${resolved}'::jsonb)`,
       );
       const edited = await request.put(`/api/v1/policies/${policyId}`, {
         headers: auth,

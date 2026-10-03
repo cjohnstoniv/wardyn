@@ -5220,6 +5220,9 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0092` adds `agent_runs.ended_at`.
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
+`0108` converts `audit_events` (`0001`'s table) to a partitioned table: it adds `recorded_at`, drops the
+identity and the primary key, renames the table and re-creates its triggers, and `0109` is the
+`CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5276,11 +5279,37 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wardyn_ap
 --    after the shipped one (name order) and overwrite the hashes on the way in.
 REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn_app;
 
+-- 3b. 0.8.6 and later: nothing writes audit_events directly. Every row goes in
+--     through the SECURITY DEFINER function audit_append, so the app role gets
+--     EXECUTE on it and loses INSERT. The migration that converts the table
+--     (0108) does this once for every role that held INSERT at the upgrade;
+--     run it yourself for a role you create after that. The same GRANT ALL
+--     TABLES in step 2 also reached the table's partitions and its bookkeeping
+--     tables, so take their write privileges back too.
+REVOKE INSERT ON audit_events FROM wardyn_app;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+  ON audit_partition_meta, audit_chain_anchors, audit_events_legacy FROM wardyn_app;
+DO $$
+DECLARE p regclass;
+BEGIN
+  FOR p IN SELECT inhrelid::regclass FROM pg_inherits WHERE inhparent = 'audit_events'::regclass LOOP
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON %s FROM wardyn_app', p);
+  END LOOP;
+END $$;
+GRANT EXECUTE ON FUNCTION
+  audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
+  audit_ensure_partitions(integer) TO wardyn_app;
+
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an
---    app role that cannot read its own new tables.
+--    app role that cannot read its own new tables. The second line does the same
+--    for the functions a later release adds. A new audit partition is the one
+--    table this does NOT hand write access: audit_ensure_partitions takes
+--    every privilege but SELECT back as it creates each month.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO wardyn_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO wardyn_app;
 ```
 
 Then set **`WARDYN_PG_MIGRATE_DSN` to the DSN you were already using** and point
@@ -5310,14 +5339,22 @@ session_replication_role` — which no amount of role-swapping reaches.
 The second line means the split did not take; the deployment is no worse off than
 single-DSN mode, and no better.
 
-**Why an INSERT+SELECT-only role can write to a hash-chained table at all.** The
-chain trigger function is `SECURITY DEFINER` and runs as its owner — the
-migrator, which also owns `audit_events` — so allocating `seq` and reading the
-chain head are the owner's acts, not the caller's (`0057`). Before that, a split
-deployment upgrading past `0056` hit `permission denied for sequence
-audit_events_seq_seq` on **every** audit insert, which pushed every write to the
-spool and refused every credential mint. Keep the migrator as the owner of both
-the table and that function; that pairing is what makes the posture work.
+**Why a role with SELECT and EXECUTE can write to a hash-chained table at all.** Since
+0.8.6 no role inserts into `audit_events`. Every row goes in through `audit_append`, a
+`SECURITY DEFINER` function that runs as its owner — the migrator, which also owns the
+table — so allocating `seq` and `recorded_at`, reading the chain head and advancing the
+high-water mark are the owner's acts, not the caller's. Before `0057` a split deployment
+hit `permission denied for sequence audit_events_seq_seq` on **every** audit insert,
+which pushed every write to the spool and refused every credential mint. Keep the
+migrator as the owner of the table, the sequence and the functions; that pairing is what
+makes the posture work. wardynd checks it at boot: a serving role that cannot `EXECUTE`
+`audit_append` refuses to start and names the `GRANT`, and a function any role may execute
+is reported on a `WARN` line with the `REVOKE`.
+
+**Single-DSN installs keep one honest gap.** The one role owns the table, so the INSERT
+privilege cannot be taken from it; the chain trigger refuses any row `audit_append` did
+not allocate, which stops a mistaken or out-of-tree writer, not an owner who edits the
+trigger. The boot log says so on a `NOTICE` line ("app role can INSERT directly").
 
 ## Kubernetes: day-2
 
@@ -5474,6 +5511,44 @@ Raise it in `env` or `extraEnv` as `h`, `m` and `s` units only.
 **Under `allowMultiReplica`, no replica holds the lock**, so nothing the lock does stops writers there:
 `kubectl scale --replicas=0` is the only pre-step that does. `-migrate-only` will still refuse while any replica
 is connected, but it is the scale-down that makes the run possible.
+
+#### What the audit conversion does (`0108_audit_partitioned`, `0109_audit_chain_partitioned`)
+
+`audit_events` becomes a table range-partitioned by month on a new, server-assigned `recorded_at`. Every
+existing row keeps its place in the chain, its hash and its `seq`, and lands in one partition,
+`audit_events_legacy`, whose upper bound is the moment of the conversion. The conversion is one transaction and
+it commits with the append-only, chain and TRUNCATE guards already armed, so a crash at any point leaves the
+table guarded. `audit_ensure_partitions(12)` then creates the current month and twelve more, at every boot, before
+the listener; an insert into a month that does not exist fails and waits in the audit spool until it does.
+
+- **0.8.5 writers are refused.** A 0.8.5 binary inserts directly with no `seq` or `recorded_at`; the chain trigger
+  refuses that row, and the converted schema is one a 0.8.5 binary will not start against (it does not ship
+  `0108` or `0109`). The chart's `Recreate` strategy is what keeps one from writing during the upgrade.
+- **The history stays together.** Every row from before the conversion is in `audit_events_legacy`, one
+  partition that ends at the moment of the conversion.
+- **An index you built out of band** on `audit_events` (beyond the ones Wardyn ships) stays on
+  `audit_events_legacy`; the partitioned table starts with Wardyn's own set. Re-create yours on the parent if you
+  need it on the months to come.
+- **Grants.** Every role that could `INSERT` into `audit_events` before the upgrade is granted `EXECUTE` on
+  `audit_append` and `audit_ensure_partitions` in the same transaction, found from the table's ACL rather than by
+  name, and only then loses `INSERT`. Roles that could `SELECT` keep it. A role you add later needs the
+  `GRANT EXECUTE` line in the recipe above.
+- **Time.** The cost is one scan of the existing rows to prove the legacy bound, one index build on them, and
+  the lock waits. Measured on Postgres 13 and 17 in a container on a shared development machine, over rows
+  with the audit log's columns, bulk-loaded without chain hashes (the scan and the index build do not read them);
+  a `psql` timing of the `0108` transaction, with the twelve months of partitions inside it, and `0109` adding
+  under 10 ms:
+
+  | Rows before the conversion | Postgres 13 | Postgres 17 |
+  |---:|---:|---:|
+  | 100 000 | 0.3 s | 0.1 s |
+  | 1 000 000 | 0.7 s | 0.4 s |
+  | 3 000 000 | 1.8 s | 1.0 s |
+  | 12 000 000 | 6.2 s | not measured |
+
+  Scale the figures to your own row count; they are an order of magnitude, not a promise. The chart's startup
+  probe window is derived from `WARDYN_MIGRATE_TIMEOUT` (above): if your table is larger than the figures cover,
+  raise the timeout rather than letting the probe kill a migration that is making progress.
 
 ### Backup: what `pg_dump` carries here, and what it does not
 
