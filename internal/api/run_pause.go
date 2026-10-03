@@ -58,12 +58,13 @@ const (
 	// It is far below pauseDelayFloor, so a run stamped within it is never a
 	// pause candidate.
 	presenceStampEvery = 60 * time.Second
-	// idleSamplesPerTick bounds the CPU reads one sweep makes; the candidates
-	// are taken round-robin, so every idle run is read in turn.
+	// idleSamplesPerTick bounds the CPU reads one sweep makes on a substrate
+	// that charges a read per run; the candidates, the pause's and the
+	// auto-stop's together, are taken round-robin, so every one is read in turn.
 	idleSamplesPerTick = 4
 	// idleQuietCorePercent is the CPU use, as a percent of one core, below
-	// which an idle run counts as quiet. The reading includes the sampling
-	// script's own few milliseconds.
+	// which a run counts as quiet: the one threshold the idle pause and the
+	// auto-stop's CPU signal (run_activity.go) share.
 	idleQuietCorePercent = 10.0
 )
 
@@ -479,9 +480,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	if !ok || s.cfg.Runner == nil {
 		return nil
 	}
-	if _, ok := s.cfg.Runner.(runner.Freezer); !ok {
-		return nil
-	}
+	_, canFreeze := s.cfg.Runner.(runner.Freezer)
 	cands, now, err := pauser.ListPauseCandidates(ctx)
 	if err != nil {
 		return err
@@ -492,6 +491,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	var (
 		freeze  map[types.ConfinementClass]bool
 		idle    []types.AgentRun
+		stop    []types.AgentRun
 		capsErr error
 	)
 	freezable := func(class types.ConfinementClass) bool {
@@ -506,6 +506,13 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	}
 	for _, c := range cands {
 		run := c.Run
+		if autoStopCandidate(run, now) {
+			s.activity.noteAutoStop()
+			stop = append(stop, run)
+		}
+		if !canFreeze {
+			continue
+		}
 		if run.PausedAt != nil {
 			// Only a waiting pause is the backstop's: an idle pause is marked
 			// with no request open, so no open request is the state it paused
@@ -525,12 +532,36 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 			idle = append(idle, run)
 		}
 	}
-	for _, run := range s.nextIdleSamples(idle) {
-		if s.runCPUQuiet(ctx, run) {
+	s.actOnCPU(ctx, pauser, now, idle, stop)
+	return nil
+}
+
+// actOnCPU reads the CPU of every run the sweep has a use for, once, and acts
+// on the reading twice: a quiet pause candidate is paused, and a busy
+// auto-stop candidate has its idle clock bumped. One reading and one threshold
+// (idleQuietCorePercent) feed both, so a run is never paused as quiet and kept
+// from the reaper as busy. A run with no reading is left alone, which is the
+// pause's rule too: a run is never paused on a reading nobody took.
+func (s *Server) actOnCPU(ctx context.Context, pauser store.RunPauser, now time.Time, idle, stop []types.AgentRun) {
+	runs := slices.CompactFunc(slices.SortedFunc(slices.Values(slices.Concat(idle, stop)), func(a, b types.AgentRun) int {
+		return strings.Compare(a.ID.String(), b.ID.String())
+	}), func(a, b types.AgentRun) bool { return a.ID == b.ID })
+	if smp, ok := s.cfg.Runner.(runner.ActivitySampler); ok && !smp.BatchSample() {
+		runs = s.nextIdleSamples(runs)
+	}
+	readings := s.sampleRunCPU(ctx, runs)
+	for _, run := range idle {
+		if pct, ok := readings[run.ID]; ok && pct < idleQuietCorePercent {
 			s.pauseRun(ctx, pauser, run, types.PauseIdle, now.Sub(activeSince(run)))
 		}
 	}
-	return nil
+	for _, run := range stop {
+		if pct, ok := readings[run.ID]; ok && pct >= idleQuietCorePercent {
+			// TouchRun refuses a terminal run in SQL, so a run that ended since
+			// the listing is not given a longer life by this reading.
+			_ = s.cfg.Store.TouchRun(ctx, run.ID)
+		}
+	}
 }
 
 // activeSince is when anything last happened in run: its presence clock, or
@@ -564,40 +595,6 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 	}
 	s.pause.cursor = out[len(out)-1].ID
 	return out
-}
-
-// runCPUQuiet reads run's CPU use through the cgroup exec idiom
-// (run_resources.go) and reports whether it is below idleQuietCorePercent of
-// one core. Anything it cannot read counts as busy: a run is never paused on a
-// reading nobody took.
-func (s *Server) runCPUQuiet(ctx context.Context, run types.AgentRun) bool {
-	// Wardyn's own disk walk (an open run page's Sandbox widget) is CPU in this
-	// window too, and the cgroup cannot tell it from the agent's. So the window
-	// is claimed first: in-flight walks finish before it opens, and none starts
-	// inside it. Not claimed in time reads as busy, like any reading not taken.
-	claim, stop := context.WithTimeout(ctx, runResourcesExecTimeout)
-	ok := s.pause.beginSample(claim, run.ID)
-	stop()
-	if !ok {
-		return false
-	}
-	defer s.pause.endSample(run.ID)
-	ctx, cancel := context.WithTimeout(ctx, runResourcesExecTimeout)
-	defer cancel()
-	// Only the cpu keys are read here; `filesystem` picks the script's disk
-	// arm that is one statfs, never the 2-second walk the others can take.
-	kv, err := s.execRunResourcesScript(ctx, run, types.StorageEnforcementFilesystem)
-	if err != nil {
-		return false
-	}
-	u1, ok1 := kvInt64(kv, "cpu_usage_usec_1")
-	u2, ok2 := kvInt64(kv, "cpu_usage_usec_2")
-	p1, ok3 := kvFloat64(kv, "uptime_1")
-	p2, ok4 := kvFloat64(kv, "uptime_2")
-	if !ok1 || !ok2 || !ok3 || !ok4 || p2 <= p1 || u2 < u1 {
-		return false
-	}
-	return float64(u2-u1)/((p2-p1)*1e6)*100 < idleQuietCorePercent
 }
 
 // pauseRun freezes run, then marks it paused. Freezing first and marking with a

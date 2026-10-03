@@ -736,6 +736,8 @@ type Server struct {
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
+	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
+	activity activitySignal
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two

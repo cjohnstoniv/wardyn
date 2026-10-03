@@ -121,6 +121,10 @@ type Driver struct {
 	// caller-supplied remotecommand.Executor. Nil in production.
 	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 
+	// metricsRead is the test seam readPodMetrics defers to when set: the real
+	// read is a raw GET that a fake clientset cannot serve. Nil in production.
+	metricsRead func(ctx context.Context, namespace, labelSelector string) ([]byte, error)
+
 	// execOutputs maps a sandbox ref to its SandboxSpec.ExecOutput (an
 	// io.Writer), which Exec streams the agent container's log into. The one
 	// in-memory state here: the buffer it feeds is in memory too, so a
@@ -129,6 +133,7 @@ type Driver struct {
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
+var _ runner.ActivitySampler = (*Driver)(nil)
 
 // New constructs a Driver against the cluster client-go's standard config
 // loading resolves (in-cluster, else kubeconfig), running the boot-time

@@ -368,6 +368,31 @@ type Freezer interface {
 // ErrFreezeUnsupported is Freezer's answer from a router that cannot pause ref.
 var ErrFreezeUnsupported = errors.New("runner: this substrate cannot freeze a sandbox")
 
+// ActivitySampler is an OPTIONAL Runner capability: the CPU the agent of each
+// sandbox is using, read from the substrate, never by running anything inside
+// the sandbox. It is a workload-activity signal and nothing more: a ref with no
+// reading is "no reading", neither idle nor gone, and it is never evidence
+// that a runner is alive.
+//
+// SampleCPU returns each ref's agent CPU use in percent of one core. A ref
+// missing from the result has no reading. ErrActivityUnavailable means the
+// substrate cannot report CPU at all right now (a cluster with no metrics API,
+// or one the runner's Role may not read); any other error is a failed read
+// that says nothing about whether the signal exists. A nil refs asks only
+// whether the signal exists, at the cost of one read.
+//
+// BatchSample reports that one call reads every sandbox at the cost of one
+// read (Kubernetes: one PodMetrics list). When false each ref costs a read of
+// its own, and the caller bounds how many it asks for.
+type ActivitySampler interface {
+	SampleCPU(ctx context.Context, refs []string) (map[string]float64, error)
+	BatchSample() bool
+}
+
+// ErrActivityUnavailable is ActivitySampler's answer when the substrate has no
+// CPU signal to give.
+var ErrActivityUnavailable = errors.New("runner: this substrate cannot report sandbox CPU use")
+
 // ImageChecker is an OPTIONAL Runner capability: a substrate whose local image
 // cache can go stale (the docker driver) implements this so a stale cache can
 // be detected and fallen through to a rebuild. A substrate that pulls fresh

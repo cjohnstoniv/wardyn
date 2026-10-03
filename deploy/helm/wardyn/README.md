@@ -566,7 +566,7 @@ body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
 whose pods are both gone, and it is asked for best-effort — a Role without it
 degrades the sweep rather than killing it; `events` list only, so an image
 pull reads as "Downloading the image" rather than ContainerCreating — a Role
-without it keeps the old wording and nothing else changes); the cluster-scoped ClusterRole covers
+without it keeps the old wording and nothing else changes; `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox — a Role without it, or a cluster without metrics-server, keeps idleness on attaches and egress and the setup checklist's Idle detection row says so); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name). One rule is conditional, and it is the only
 one switched twice: `persistentvolumeclaims` get+create, rendered only with
