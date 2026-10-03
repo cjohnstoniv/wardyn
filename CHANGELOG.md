@@ -42,6 +42,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true`;
   stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
   narrowed is refused (`400` at write, `422` at launch).
+- **A governance profile can carry a contact, and the site config a `policy_help` block.** Migration
+  `0108_governance_profile_contact` adds one nullable `governance_profiles.contact` column and changes no
+  existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
+  address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
+  `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
 
 ### Security
 
