@@ -1033,6 +1033,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| `GET /admin/runs/capacity` — the fleet's configured reservations (below, "Fleet capacity"): across every owner, so not a member read. It never execs into a sandbox or calls the runner | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
@@ -4420,6 +4421,31 @@ at READ for any run that is not `STARTING` (for `image: Building`, any run that 
 failure. The last reason therefore survives on the row for a `SELECT`
 postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
 daemon, or a run that started before this upgrade, simply carries no reason.
+
+### Fleet capacity
+
+`GET /api/v1/admin/runs/capacity` (admin or `security_admin`) returns what the fleet's runs were
+configured to reserve, summed from the values each run recorded at dispatch. The response says
+`basis: "configured_reservations"`: these are not measurements, and the endpoint never execs into a
+sandbox or calls the runner. One query reads the non-terminal rows.
+
+| Row | Counted as holding |
+|---|---|
+| `STARTING`, `RUNNING`, `WAITING_FOR_CONFIRMATION` with no `lost_at` | yes, paused runs included (a paused sandbox keeps its pods) |
+| unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
+| kept (`lost_at` set) | no; counted as `kept` |
+| `PENDING` | no; appears only in `states` |
+| terminal | no |
+
+Kubernetes rows sum requests and report limits beside them; Docker rows report caps, and a proxy
+with no CPU cap adds nothing to the CPU sum (`proxy_cpu_uncapped` counts them). `by_runner` keeps
+the two kinds apart, and `totals` carries the deployment's own kind. A holding row that recorded no
+reservation (a run from before it was recorded, a failed best-effort write, or a `STARTING` run
+between its create and the dispatch write) is counted in `unknown` and adds to no sum. `by_owner`
+lists the top 50 owners by held CPU, with `by_owner_truncated` when more exist.
+
+Residual: a run whose teardown failed after it reached a terminal state is not counted, though its
+pods may still exist; `POST /admin/sandboxes/sweep` reaps those.
 
 ### The start deadlines
 

@@ -406,6 +406,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// the verdict counts every row in the deployment: whole-fleet audit VOLUME
 	// is the same disclosure that keeps /metrics admin-gated.
 	"GET /api/v1/audit/chain/verify": {class: classSecurity},
+	// Fleet capacity: configured reservations across every owner's runs. The security tier
+	// can already list those runs (GET /runs?view=admin); members cannot.
+	"GET /api/v1/admin/runs/capacity": {class: classSecurity},
 
 	// Governance profiles (migration 0052) — classSecurity: profile authoring
 	// IS the security-admin duty (§A/§B reconciliation). Six of these registered
@@ -1422,8 +1425,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// WRONG tier, exactly the drift the per-route loop cannot see. #1428 added
 	// the Azure DevOps organisation check beside the provider rows (= 48 SUPER).
 	// #1449 added the refusal read beside it (= 49 SUPER).
-	if sec != 43 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 43 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
+	// 0.8.6 fleet-fl2 added GET /admin/runs/capacity on the security tier (= 44 SEC).
+	if sec != 44 || super != 49 {
+		t.Errorf("tier split = %d security / %d admin, want 44 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 
