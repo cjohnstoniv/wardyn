@@ -84,6 +84,9 @@ func (p *Proxy) isLLMHost(host string) bool {
 	if _, ok := p.gatewayVendor[h]; ok {
 		return true
 	}
+	if _, ok := p.channelHosts[h]; ok {
+		return true
+	}
 	return isBedrockHost(h)
 }
 

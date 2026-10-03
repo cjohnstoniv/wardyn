@@ -383,6 +383,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		"audience": stamp.Audience, "scopes": granted,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
+	s.resolvePendingAzureReauth(ctx, subject, ec.rowUID)
 	http.Redirect(w, r, s.cfg.BasePath+ec.donePath, http.StatusFound)
 }
 

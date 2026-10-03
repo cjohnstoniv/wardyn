@@ -152,6 +152,7 @@ type ProxyConfig struct {
 	// upstream proxy — still faces the private-IP guard and the run's policy.
 	UpstreamProxyNoProxy []string
 	LLMUpstreams         map[string]string // public vendor host -> operator model gateway base URL
+	LLMChannelHosts      map[string]string // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
 	LLMUnavailableDetail string            // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool              // a run nobody is driving: a held push is refused instead
 }

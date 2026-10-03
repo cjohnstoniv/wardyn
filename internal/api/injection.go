@@ -121,6 +121,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveADOOwnPATInjection(w, r, claims, minted, grantID) || s.resolveADOInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// PER-PERSON AZURE FOUNDRY: the run owner's own captured Entra sign-in for the provider the run
+	// chose, redeemed for the snapshot's audience and pinned to the provider's own endpoint host — see
+	// resolveAzureFoundryInjection. Before the provider-key arm below, which would read a
+	// wardyn-provider-<uid>-* name as a key.
+	if s.resolveAzureFoundryInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header

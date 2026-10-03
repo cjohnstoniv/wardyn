@@ -190,6 +190,12 @@ type Config struct {
 	// (the default) => every brokered LLM route dials the vendor host,
 	// byte-identical to today.
 	LLMUpstreams map[string]string `json:"llm_upstreams,omitempty"`
+	// LLMChannelHosts maps a model host to the vendor whose request schema the
+	// content scanner reads on it (api.anthropic.com or api.openai.com): an
+	// azure_foundry endpoint, which speaks one of the two dialects. It feeds
+	// host classification only, never LLMUpstreams' reverse lookup (llm_channel_hosts.go).
+	// Control-plane-authored; omitempty because an older proxy refuses a key it does not know.
+	LLMChannelHosts map[string]string `json:"llm_channel_hosts,omitempty"`
 	// LLMUnavailableDetail is what the brokered-LLM 404 says about WHY no
 	// credential is behind this run's LLM route, composed by the control plane at
 	// dispatch (internal/api's llmUnavailableDetail) because only it knows the
@@ -401,7 +407,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 			return fmt.Errorf("config: llm_upstreams[%q]: %w", vendor, err)
 		}
 	}
-	return nil
+	return c.validateChannelHosts()
 }
 
 // validateTerminatedGates checks the gates that run only on a connection the proxy terminates. An

@@ -117,6 +117,34 @@ func (s *Server) answerADOSignInEnded(w http.ResponseWriter, r *http.Request, cl
 func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
 	sn adoEntraScopeSnapshot, class ADOEntraFailure, fail adoFail,
 ) bool {
+	// The body says what answers the request; the console reads it. Matching
+	// (adoSignInScope) stays on lane and mechanism, so both causes resolve alike.
+	reason, detail := adoSignInReason, adoSignInRaisedNote
+	if class == ADOEntraFailure(reasonADOOwnPATExpired) {
+		reason, detail = reasonADOOwnPATExpired, adoOwnPATRaisedNote
+	}
+	return s.holdForSignIn(w, r, claims, signInHold{
+		lane: adoApprovalLane, owner: sn.OwnerSubject, providerID: sn.ProviderRowID, reason: reason, detail: detail,
+		closed: adoSignInClosedRefusal, tooMany: adoSignInTooManyRefusal, raiseFailed: adoSignInRaiseFailedBody,
+	}, class, fail)
+}
+
+// signInHold is one lane's sign-in hold: which approval lane its requests are
+// raised and matched under, whose sign-in for which row answers them, and the
+// sentences it speaks in. closed takes the terminal state.
+type signInHold struct {
+	lane, owner, providerID string
+	reason, detail          string
+	closed, tooMany         string
+	raiseFailed             string
+}
+
+// holdForSignIn is the sign-in hold both Entra lanes share (Azure DevOps and
+// azure_foundry); see holdForADOSignIn. The lane keeps the two lanes' rows
+// apart: neither lane's capture resolves, or counts as a match for, the other's.
+func (s *Server) holdForSignIn(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
+	h signInHold, class ADOEntraFailure, fail adoFail,
+) bool {
 	ctx := r.Context()
 	rows, err := s.runApprovals(ctx, claims.RunID, "")
 	if err != nil {
@@ -132,8 +160,8 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 			continue
 		}
 		workflows++
-		sc, ok := adoSignInScope(rows[i])
-		if !ok || sc.Owner != sn.OwnerSubject || sc.ProviderID != sn.ProviderRowID {
+		sc, ok := signInScopeFor(rows[i], h.lane)
+		if !ok || sc.Owner != h.owner || sc.ProviderID != h.providerID {
 			continue
 		}
 		switch rows[i].State {
@@ -145,22 +173,16 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 		}
 	}
 	if terminal != nil {
-		return fail(http.StatusForbidden, reasonSigninClosed, fmt.Sprintf(adoSignInClosedRefusal, terminal.State),
-			map[string]any{"owner": sn.OwnerSubject, "approval_id": terminal.ID})
+		return fail(http.StatusForbidden, reasonSigninClosed, fmt.Sprintf(h.closed, terminal.State),
+			map[string]any{"owner": h.owner, "approval_id": terminal.ID})
 	}
 	if workflows >= maxReauthHolds {
-		return fail(http.StatusForbidden, reasonSigninHoldsExhausted, adoSignInTooManyRefusal,
-			map[string]any{"owner": sn.OwnerSubject})
-	}
-	// The body says what answers the request; the console reads it. Matching
-	// (adoSignInScope) stays on lane and mechanism, so both causes resolve alike.
-	reason, detail := adoSignInReason, adoSignInRaisedNote
-	if class == ADOEntraFailure(reasonADOOwnPATExpired) {
-		reason, detail = reasonADOOwnPATExpired, adoOwnPATRaisedNote
+		return fail(http.StatusForbidden, reasonSigninHoldsExhausted, h.tooMany,
+			map[string]any{"owner": h.owner})
 	}
 	raw, _ := json.Marshal(adoSignInScopeBody{
-		Lane: adoApprovalLane, Mechanism: adoSignInMechanism, Reason: reason,
-		Owner: sn.OwnerSubject, ProviderID: sn.ProviderRowID,
+		Lane: h.lane, Mechanism: adoSignInMechanism, Reason: h.reason,
+		Owner: h.owner, ProviderID: h.providerID,
 	})
 	raisedID := uuid.New()
 	created, err := s.cfg.Approvals.Request(ctx, types.ApprovalRequest{
@@ -170,20 +192,20 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 		// Routed through fail (#204): every other refusal in this lane leaves a
 		// secret.read failure row; this raise and the capability and consent
 		// raises (injection_ado_capability.go) used to be the exceptions.
-		return fail(http.StatusServiceUnavailable, reasonRaiseFailed, adoSignInRaiseFailedBody,
-			map[string]any{"owner": sn.OwnerSubject})
+		return fail(http.StatusServiceUnavailable, reasonRaiseFailed, h.raiseFailed,
+			map[string]any{"owner": h.owner})
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
 			"credential.reauth.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
-				"approval_id": created.ID, "owner": sn.OwnerSubject, "provider": adoApprovalLane,
-				"reason": string(class), "detail": detail,
+				"approval_id": created.ID, "owner": h.owner, "provider": h.lane,
+				"reason": string(class), "detail": h.detail,
 			})))
 		// No metrics.credentialReauthRecorded here (#971):
 		// wardyn_credential_reauth_total's HELP promises the AWS SSO re-auth
-		// population alone, and an Azure DevOps sign-in is credential_reauth
-		// too but not that. The audit row above is the trail for this lane.
+		// population alone, and an Entra sign-in is credential_reauth too but
+		// not that. The audit row above is the trail for these lanes.
 	}
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
@@ -193,13 +215,18 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 // request for sn's owner and provider row, and reports whether it did. A read
 // failure answers nothing, so the caller refuses.
 func (s *Server) stillHeldForADOSignIn(ctx context.Context, w http.ResponseWriter, claims *identity.Claims, sn adoEntraScopeSnapshot) bool {
+	return s.stillHeldForSignIn(ctx, w, claims, adoApprovalLane, sn.OwnerSubject, sn.ProviderRowID)
+}
+
+// stillHeldForSignIn is stillHeldForADOSignIn for either Entra lane.
+func (s *Server) stillHeldForSignIn(ctx context.Context, w http.ResponseWriter, claims *identity.Claims, lane, owner, providerID string) bool {
 	rows, err := s.runApprovals(ctx, claims.RunID, "")
 	if err != nil {
 		return false
 	}
 	for _, ap := range rows {
-		sc, ok := adoSignInScope(ap)
-		if ok && ap.State == types.ApprovalPending && sc.Owner == sn.OwnerSubject && sc.ProviderID == sn.ProviderRowID {
+		sc, ok := signInScopeFor(ap, lane)
+		if ok && ap.State == types.ApprovalPending && sc.Owner == owner && sc.ProviderID == providerID {
 			writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: ap.ID})
 			return true
 		}
@@ -209,11 +236,16 @@ func (s *Server) stillHeldForADOSignIn(ctx context.Context, w http.ResponseWrite
 
 // adoSignInScope reports whether ap is an Azure DevOps sign-in request.
 func adoSignInScope(ap types.ApprovalRequest) (adoSignInScopeBody, bool) {
+	return signInScopeFor(ap, adoApprovalLane)
+}
+
+// signInScopeFor reports whether ap is a sign-in request raised under lane.
+func signInScopeFor(ap types.ApprovalRequest, lane string) (adoSignInScopeBody, bool) {
 	if ap.Kind != types.ApprovalCredentialReauth {
 		return adoSignInScopeBody{}, false
 	}
 	var sc adoSignInScopeBody
-	if json.Unmarshal(ap.RequestedScope, &sc) != nil || sc.Lane != adoApprovalLane || sc.Mechanism != adoSignInMechanism {
+	if json.Unmarshal(ap.RequestedScope, &sc) != nil || sc.Lane != lane || sc.Mechanism != adoSignInMechanism {
 		return adoSignInScopeBody{}, false
 	}
 	return sc, true

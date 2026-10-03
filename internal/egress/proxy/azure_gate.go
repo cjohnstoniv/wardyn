@@ -252,9 +252,13 @@ func (p *Proxy) refuseAzure(w http.ResponseWriter, r *http.Request, host string,
 	if p.sink != nil {
 		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceAzureDenied))
 	}
+	writeAzureJSON(w, status, code, "Wardyn refused this Azure request: "+msg+".")
+}
+
+func writeAzureJSON(w http.ResponseWriter, status int, code, detail string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"wardyn": code, "detail": "Wardyn refused this Azure request: " + msg + "."})
+	_ = json.NewEncoder(w).Encode(map[string]string{"wardyn": code, "detail": detail})
 }
 
 // refuseAzurePlain refuses, on the plain forward lane, every request to a host the run's Azure gate

@@ -213,6 +213,9 @@ type Proxy struct {
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
 	// for the gateway host lives in gatewayTarget, not here).
 	gatewayVendor map[string]string
+	// channelHosts is host -> vendor for the hosts classified as model hosts without being gateways
+	// (llm_channel_hosts.go).
+	channelHosts map[string]string
 
 	now func() time.Time
 }
@@ -305,6 +308,8 @@ type Options struct {
 	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
 	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
 	LLMUpstreams map[string]string
+	// LLMChannelHosts is Config.LLMChannelHosts, forwarded verbatim.
+	LLMChannelHosts map[string]string
 	// LLMUnavailableDetail is the control-plane's reason the brokered-LLM 404
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
@@ -459,6 +464,7 @@ func newProxy(opts Options) *Proxy {
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		gatewayVendor:        gatewayVendor,
+		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
 	}

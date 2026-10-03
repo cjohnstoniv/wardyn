@@ -195,6 +195,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		InternalHosts:        pc.InternalHosts,
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
+		LLMChannelHosts:      pc.LLMChannelHosts,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		Unattended:           pc.Unattended,
 	}
