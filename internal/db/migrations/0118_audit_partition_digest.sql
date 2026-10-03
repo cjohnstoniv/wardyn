@@ -33,7 +33,7 @@
 -- change after it is taken. An open partition is refused. The fold takes no lock: a closed partition
 -- is immutable, and the drop function (ar-l1.3) holds the chain lock only for the drop itself.
 --
--- HARDENING is 0058's, as in 0108: every name qualified with the ACTUAL schema discovered from the
+-- HARDENING is 0058's, as in 0111: every name qualified with the ACTUAL schema discovered from the
 -- catalog, the pinned search_path ends with pg_temp, the partition NAME is validated against the
 -- parent's pg_inherits before it is used as an identifier, EXECUTE is revoked from PUBLIC and granted to
 -- exactly the roles that hold it on audit_append.

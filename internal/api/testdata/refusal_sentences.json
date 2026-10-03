@@ -40,6 +40,31 @@
     "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
   },
   {
+    "reason": "audit_retention_digest_mismatch",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the digest does not match the partition's own; export it again and recompute it\""
+  },
+  {
+    "reason": "audit_retention_inside_window",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition is inside the retention window (or retention is set to forever)\""
+  },
+  {
+    "reason": "audit_retention_live_run",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition holds audit rows of a run that is still live\""
+  },
+  {
+    "reason": "audit_retention_not_closed",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition can still receive rows, so it cannot be dropped\""
+  },
+  {
+    "reason": "audit_retention_not_oldest",
+    "target": "\"audit.retention\"",
+    "sentence": "\"only the oldest audit partition can be dropped\""
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""

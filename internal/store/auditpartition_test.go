@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// The digest is defined in migration 0110; this is the same definition written out with nothing shared.
+// The digest is defined in migration 0118; this is the same definition written out with nothing shared.
 func referenceDigest(header string, hashes ...string) string {
 	sum := sha256.Sum256([]byte(header))
 	d := hex.EncodeToString(sum[:])

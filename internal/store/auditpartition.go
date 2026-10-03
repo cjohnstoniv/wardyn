@@ -24,7 +24,7 @@ var ErrAuditPartitionOpen = errors.New("store: audit partition is still open")
 // recorded_at it actually holds (recorded_at as integer microseconds since the epoch, the unit
 // audit_row_hash uses) and its row count. An empty partition has Rows 0 and every range zero.
 //
-// Header is the canonical text the digest starts from. It is the migration 0110 definition, which
+// Header is the canonical text the digest starts from. It is the migration 0118 definition, which
 // audit_partition_digest(p_partition) implements in the database: the two are pinned together by a test.
 type PartitionManifest struct {
 	Partition    string `json:"partition"`

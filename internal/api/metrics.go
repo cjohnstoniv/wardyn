@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -527,10 +528,27 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		fmt.Fprintf(w, "# HELP wardyn_org_federation_lag Local audit rows the organisation has not yet acknowledged (hybrid laptops only).\n"+
 			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
 	}
+	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.
 	s.writeEbpfGroundtruthCounters(ctx, w)
+}
+
+// writePartitionsAhead emits wardyn_audit_partitions_ahead: how many months past the current one already
+// have an audit partition. Omitted on a store with no partitions, and when the read fails (the store_up
+// gauge beside it already says the store is down).
+func (s *Server) writePartitionsAhead(ctx context.Context, w io.Writer) {
+	rs, ok := s.cfg.Store.(store.AuditRetention)
+	if !ok {
+		return
+	}
+	n, err := rs.AuditPartitionsAhead(ctx)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "# HELP wardyn_audit_partitions_ahead Months past the current one that already have an audit partition. An audit write into a month with no partition fails and waits in the spool; /setup/status warns below 3.\n"+
+		"# TYPE wardyn_audit_partitions_ahead gauge\nwardyn_audit_partitions_ahead %d\n", n)
 }
 
 // writeSinkDrops emits the per-SIEM-sink delivery-drop counter: events a

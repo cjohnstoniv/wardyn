@@ -331,7 +331,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := s.githubRefRulesetCheck(ctx, sec.GitHubApp); ok {
 		checks = append(checks, chk)
 	}
-	checks = append(checks, platformChecks(plat)...)
+	checks = append(checks, append(platformChecks(plat), s.auditPartitionChecks(ctx)...)...)
 
 	hasRuns := s.setupHasRuns(ctx)
 

@@ -41,3 +41,8 @@ reason run_owner_only
 reason mask_state_unavailable
 reason role_stamp_stale
 reason audit_export_partition_filter
+reason audit_retention_not_oldest
+reason audit_retention_not_closed
+reason audit_retention_inside_window
+reason audit_retention_live_run
+reason audit_retention_digest_mismatch
