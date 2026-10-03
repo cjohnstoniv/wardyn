@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -107,31 +108,30 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope, target := "sub", body.Sub
+	actorCtx := withRequestActor(r)
+	var res personRevocation
 	var err error
 	if body.All {
 		scope, target = "all", "*"
-		err = s.cfg.SessionRevocations.RevokeAll(r.Context())
+		if err = s.cfg.SessionRevocations.RevokeAll(r.Context()); err != nil {
+			writeServerError(w, r, "revoke sessions", err)
+			return
+		}
+		res, err = s.revokeCredentials(actorCtx, "")
 	} else {
-		err = s.cfg.SessionRevocations.RevokeSub(r.Context(), body.Sub)
+		res, err = s.revokePersonCredentials(actorCtx, body.Sub)
+		if !res.Stamped {
+			writeServerError(w, r, "revoke sessions", err)
+			return
+		}
+		// The route has always refused on an unresolved key owner, once the
+		// cutoff has committed; only the request-free callers read it as zero keys.
+		if res.KeyUnresolved {
+			err = errors.Join(err, errors.New(res.Refusal))
+		}
 	}
-	if err != nil {
-		writeServerError(w, r, "revoke sessions", err)
-		return
-	}
-
-	// Each credential lane still runs if the other fails. The cutoff has already
-	// committed, so the audit records the completed work before returning failure.
-	tokens, tokenErr := s.revokeAPITokensFor(r, body.Sub)
-	keys, keyPrincipal, refusal, keyReason, keyErr := s.deleteSSHKeysFor(r, body.Sub)
-	// SSH keys have no email column. Preserve the named cutoff for sessions and
-	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
-	if body.Sub != "" && keyPrincipal != "" && keyPrincipal != body.Sub {
-		keyErr = errors.Join(keyErr, s.cfg.SessionRevocations.RevokeSub(r.Context(), keyPrincipal))
-	}
-	if refusal != "" {
-		keyErr = errors.New(refusal)
-	}
-	err = errors.Join(tokenErr, keyErr)
+	refusal, keyReason := res.Refusal, res.KeyReason
+	tokens, keys := res.Tokens, res.Keys
 	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys}
 	if !body.All {
 		data["sub"] = body.Sub
@@ -155,6 +155,68 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// personRevocation is what one revokePersonCredentials (or the revoke-all
+// sweep) did. Stamped says the session cutoff committed; Refusal and KeyReason
+// are the SSH key owner resolver's answer, and KeyUnresolved marks the refusal
+// that names a person with nothing on this deployment.
+type personRevocation struct {
+	Tokens, Keys  int
+	Stamped       bool
+	Refusal       string
+	KeyReason     string
+	KeyUnresolved bool
+}
+
+// revokePersonCredentials is the credential sequence POST /sessions/revoke runs
+// for one person, callable without a request: the session cutoff, then the
+// person's API tokens, then their SSH keys, then the cutoff again under the
+// principal the keys resolved to. Audit rows name the actor withActor attached
+// to ctx.
+//
+// An empty principal is refused and changes nothing: the helpers below read ""
+// as everyone, and that lever stays in handleRevokeSessions. An unresolved key
+// owner is zero keys and success; an ambiguous one is a failure.
+func (s *Server) revokePersonCredentials(ctx context.Context, principal string) (personRevocation, error) {
+	if principal == "" {
+		return personRevocation{}, errors.New("revoke person credentials: principal required")
+	}
+	// Without an attached actor the audit rows would fall back to the admin
+	// token, misattributing a request-free caller in the append-only audit.
+	if _, ok := ctx.Value(auditActorCtxKey{}).(auditActor); !ok {
+		return personRevocation{}, errors.New("revoke person credentials: audit actor required")
+	}
+	if err := s.cfg.SessionRevocations.RevokeSub(ctx, principal); err != nil {
+		return personRevocation{}, err
+	}
+	res, err := s.revokeCredentials(ctx, principal)
+	res.Stamped = true
+	return res, err
+}
+
+// revokeCredentials sweeps tokens and keys for principal ("" is everyone). Each
+// lane still runs if the other fails. The cutoff has already committed, so the
+// audit records the completed work before returning failure.
+func (s *Server) revokeCredentials(ctx context.Context, principal string) (personRevocation, error) {
+	var res personRevocation
+	var tokenErr error
+	res.Tokens, tokenErr = s.revokeAPITokensFor(ctx, principal)
+	var keyPrincipal string
+	var keyErr error
+	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal)
+	// SSH keys have no email column. Preserve the named cutoff for sessions and
+	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
+	if principal != "" && keyPrincipal != "" && keyPrincipal != principal {
+		keyErr = errors.Join(keyErr, s.cfg.SessionRevocations.RevokeSub(ctx, keyPrincipal))
+	}
+	if res.Refusal != "" {
+		res.KeyUnresolved = res.KeyReason == reasonOwnerUnresolved
+		if !res.KeyUnresolved {
+			keyErr = errors.New(res.Refusal)
+		}
+	}
+	return res, errors.Join(tokenErr, keyErr)
 }
 
 // revokeAPITokensFor revokes every unrevoked API token owned by principal, or
@@ -189,8 +251,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 // unreachable by this sweep forever, since nothing ever re-listed — stops
 // authenticating anyway. The sweep is what makes GET /api/v1/tokens SHOW the
 // row revoked; the read-side check is what makes the lever true.
-func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, error) {
-	ctx := r.Context()
+func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int, error) {
 	var (
 		toks []types.APIToken
 		err  error
@@ -242,7 +303,8 @@ func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, err
 		// Same action and same two keys as the single-token door
 		// (handleRevokeAPIToken), plus the scope that says this was a sweep, so
 		// one query answers the question across both doors.
-		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		actorType, actor := auditActorFromContext(ctx)
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor,
 			"token.revoke", revoked.ID.String(), "success", mustJSON(map[string]any{
 				"principal": revoked.Principal, "name": revoked.Name, "scope": "sweep"})))
 		n++
