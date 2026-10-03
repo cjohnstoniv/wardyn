@@ -330,7 +330,15 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
   // use-attach-terminal-fullscreen.ts for the reasoning; split into its own
   // hook purely to keep this file under its line cap.
-  const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit);
+  // Focus the terminal only when the page has nothing better to give focus to:
+  // nothing focused, or focus already inside this panel. Never steals from a
+  // control elsewhere on the page (Q-T6; observers included).
+  const focusTermIfFree = React.useCallback(() => {
+    const a = document.activeElement;
+    if (a && a !== document.body && !panelRef.current?.contains(a)) return;
+    termRef.current?.focus();
+  }, []);
+  const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit, focusTermIfFree);
 
   // Holder / take-over
   // Spectator: the server admitted us read-only because someone else holds the
@@ -458,7 +466,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
               see refit's note. One click forces the size change that clears it. */}
           <button
             type="button"
-            onClick={() => refit(true)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              refit(true);
+              termRef.current?.focus();
+            }}
             title="Redraw (fixes a terminal left clamped by another attached client)"
             aria-label="Redraw terminal"
             className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -467,6 +479,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           </button>
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={toggleFullscreen}
             title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -495,19 +508,17 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           data-testid="run-terminal-wrapper"
           className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
           // D3: xterm only focuses itself on a click that lands exactly on its
-          // own `.xterm-screen` canvas layer — a click on this container's
-          // padding, or in the dead space below the last row, lands nowhere,
-          // which reads as "needs a double click" (the first click was wasted
-          // here) or "only works in one area". Focusing on ANY mousedown in
-          // this container covers the whole clickable surface; xterm's own
-          // click-to-focus still fires too (harmless — focusing twice is a
-          // no-op). Kept on THIS container, deliberately NOT the panel root:
-          // the root also renders the title-bar Redraw/Fullscreen buttons and
-          // the footer's Take-over button, and stealing focus back from a
-          // just-pressed button on every click would be its own bug; the root
-          // also owns the tabIndex={-1} landing pad the escape chord targets.
+          // own `.xterm-screen` canvas layer. A click on this wrapper's padding
+          // or in the dead space below the last row would otherwise take the
+          // browser's own focus step, which moves focus to the tabIndex={-1}
+          // panel. preventDefault cancels that step and we focus the terminal
+          // ourselves, so any click in the terminal area focuses it. Kept on
+          // THIS wrapper, not the panel root: the root also holds the title-bar
+          // buttons and the footer's Take-over button, and the tabIndex={-1}
+          // landing pad the escape chord targets.
           onMouseDown={(e) => {
             e.stopPropagation();
+            e.preventDefault();
             termRef.current?.focus();
           }}
         >
@@ -595,6 +606,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         holderPrincipal={holderPrincipal}
         onOpenChange={(o) => !o && setConfirmTakeover(false)}
         onConfirm={() => void doTakeover()}
+        onCloseFocus={() => termRef.current?.focus()}
       />
     </div>
   );
