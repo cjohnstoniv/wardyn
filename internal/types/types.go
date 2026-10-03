@@ -436,6 +436,7 @@ type APIToken struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"` // nil = never expires; an expired token authenticates nothing
 	MintedBy        string     `json:"minted_by,omitempty"` // admin who minted this for its owner; empty when the owner minted it
 	Token           string     `json:"token,omitempty"`     // plaintext, create response ONLY
 }

@@ -245,7 +245,7 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string) (perso
 // Cost: one extra ListAPITokens call in the sub-form case, buying correctness
 // on the identity-straddling shape this lever exists to cover.
 //
-// The sweep is not the only closure. api_tokens still has no expiry, but
+// The sweep is not the only closure. A token may carry an expiry, but most carry none, and
 // apiTokenAuth now compares each row's created_at against the SAME cutoff this
 // handler stamps, so a mint whose INSERT commits after this snapshot is taken —
 // unreachable by this sweep forever, since nothing ever re-listed — stops

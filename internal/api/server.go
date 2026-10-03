@@ -567,6 +567,11 @@ type Config struct {
 	// same posture production does rather than an accidental zero-tolerance
 	// TTL that fails every override.
 	SSHRoleTTL time.Duration
+	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
+	// minted API token may have. Zero (the default) means no cap. A mint that
+	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
+	// It never touches a token already minted.
+	APITokenMaxTTL time.Duration
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed

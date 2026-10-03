@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -137,7 +138,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// created_at. Without it POST /sessions/revoke was a race the sweep
 		// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
 		// and a mint whose INSERT commits after that snapshot is never reachable
-		// by that revoke again — api_tokens has no expiry, so the escaped row is
+		// by that revoke again — a token minted without an expiry never ages out, so the escaped row is
 		// a permanent credential. Closing it on the READ side rather than by
 		// locking the writer also removes the sweep's dependence on winning the
 		// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
@@ -202,6 +203,36 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 // createAPITokenRequest is the POST /api/v1/me/tokens body.
 type createAPITokenRequest struct {
 	Name string `json:"name"`
+	// TTLSeconds is the token's requested lifetime in seconds. Omitted or zero
+	// means the deployment's WARDYN_API_TOKEN_MAX_TTL when one is set, else no
+	// expiry; above that cap it is clamped to it; negative is a 400.
+	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+}
+
+// apiTokenMaxTTLSeconds bounds a requested lifetime so the arithmetic below
+// cannot overflow a Duration; a hundred years is no expiry in practice.
+const apiTokenMaxTTLSeconds = 100 * 365 * 24 * 60 * 60
+
+// apiTokenLifetime resolves a mint's requested TTL against the deployment cap.
+// It returns the lifetime to stamp (0 = none), the lifetime that was asked for
+// when the cap cut it down (0 = not clamped), and false after a 400.
+func (s *Server) apiTokenLifetime(w http.ResponseWriter, requested int64) (life, clampedFrom time.Duration, ok bool) {
+	if requested < 0 || requested > apiTokenMaxTTLSeconds {
+		writeErrorReason(w, http.StatusBadRequest, reasonAPITokenTTLInvalid,
+			fmt.Sprintf("ttl_seconds: must be between 0 and %d", apiTokenMaxTTLSeconds))
+		return 0, 0, false
+	}
+	life = time.Duration(requested) * time.Second
+	maxTTL := s.cfg.APITokenMaxTTL
+	switch {
+	case maxTTL <= 0:
+		return life, 0, true
+	case life == 0:
+		return maxTTL, 0, true
+	case life > maxTTL:
+		return maxTTL, life, true
+	}
+	return life, 0, true
 }
 
 // handleCreateAPIToken is POST /api/v1/me/tokens: mint a token for the caller's
@@ -293,6 +324,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, ok := apiTokenName(w, req.Name)
+	if !ok {
+		return
+	}
+	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
 	if !ok || s.apiTokenCapReached(w, r, sub) {
 		return
 	}
@@ -372,6 +407,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var expiresAt *time.Time
+	if lifetime > 0 {
+		t := authorizedAt.Add(lifetime)
+		expiresAt = &t
+	}
 	created, ok := s.insertAPIToken(w, r, types.APIToken{
 		Principal:       sub,
 		Email:           oidcEmailFromContext(ctx),
@@ -381,13 +421,20 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		GroupsTruncated: &groupsTruncated,
 		Name:            name,
 		CreatedAt:       authorizedAt,
+		ExpiresAt:       expiresAt,
 	})
 	if !ok {
 		return
 	}
+	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType}
+	if created.ExpiresAt != nil {
+		detail["expires_at"] = created.ExpiresAt
+	}
+	if clampedFrom > 0 {
+		detail["ttl_clamped_from_seconds"] = int64(clampedFrom / time.Second)
+	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"token.create", created.ID.String(), "success",
-		mustJSON(map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType})))
+		"token.create", created.ID.String(), "success", mustJSON(detail)))
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -413,7 +460,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 	}
 	live := 0
 	for _, e := range existing {
-		if e.RevokedAt == nil {
+		if e.RevokedAt == nil && (e.ExpiresAt == nil || e.ExpiresAt.After(s.cfg.Now())) {
 			live++
 		}
 	}
