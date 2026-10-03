@@ -124,7 +124,7 @@ func TestSCIMAuthAdmitsEitherSlot(t *testing.T) {
 // Admitted requests are limited per slot with a 429 and Retry-After, and a refused bearer, which has no
 // slot, shares one bucket however many sources it comes from, so guessing is bounded.
 func TestSCIMAuthRateLimits(t *testing.T) {
-	frozen := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	frozen := time.Now().UTC()
 	srv, _ := scimAuthServer(t, func(c *Config) { c.Now = func() time.Time { return frozen } })
 
 	for i := 0; i < int(scimBurst); i++ {

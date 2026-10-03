@@ -106,7 +106,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   was cut. SCIM only removes access: it never grants, never rebinds an identity (an `externalId` change on a
   bound identity is `400 invalidValue`) and is never an operator. New audit actions `scim.user.write`,
   `scim.user.deactivate` and `person.deprovision`, and `auth.fail` reasons `invalid_scim_token` and
-  `identity_deactivated`. Groups, purge (`DELETE`) and the console card are separate changes.
+  `identity_deactivated`. Purge (`DELETE`) and the console card are separate changes.
+- **Removing a person from a group at the identity provider ends what that group gave them.** The same SCIM
+  token now serves `<base path>/scim/v2/Groups` (`GET` with a `displayName` or `externalId` filter, `GET` by id,
+  `POST`, `PATCH` of members and `displayName`, `DELETE`). A member removed, by either shape Entra sends, by a
+  remove of every member or by deleting the group, cuts that person's browser sessions and revokes their own
+  API tokens whose login-time group snapshot holds the group's `externalId` (the Entra group object id, matched
+  without regard to case, never the display name) or whose snapshot was truncated or never recorded. Their other
+  tokens and SSH keys, and everyone else's credentials, are untouched. The request answers 5xx until the removal
+  is recorded as done in `deprovision_jobs`. A group created or a member added is stored and grants nothing. New
+  audit action `scim.group.member_remove`. Migration `0119_scim_groups` adds the tables `scim_groups`,
+  `scim_group_members` and `oidc_session_cuts` (new tables only); the session cut is kept apart from the
+  revocation cutoff because that one also ends tokens and keys.
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses

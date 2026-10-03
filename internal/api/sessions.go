@@ -252,6 +252,12 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string) (perso
 // authenticating anyway. The sweep is what makes GET /api/v1/tokens SHOW the
 // row revoked; the read-side check is what makes the lever true.
 func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int, error) {
+	return s.revokeAPITokensMatching(ctx, principal, nil)
+}
+
+// revokeAPITokensMatching is revokeAPITokensFor narrowed to the tokens match accepts; a nil match accepts
+// every token. A group removal passes the one that reads the token's group snapshot.
+func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, match func(types.APIToken) bool) (int, error) {
 	var (
 		toks []types.APIToken
 		err  error
@@ -287,7 +293,7 @@ func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int,
 	now := time.Now().UTC()
 	n := 0
 	for _, t := range toks {
-		if t.RevokedAt != nil {
+		if t.RevokedAt != nil || (match != nil && !match(t)) {
 			continue
 		}
 		revoked, err := s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now)
