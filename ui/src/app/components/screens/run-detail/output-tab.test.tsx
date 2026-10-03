@@ -168,6 +168,22 @@ describe("OutputTab — refusals", () => {
     expect(screen.getByText(RUN_OUTPUT.savingTitle)).toBeInTheDocument();
   });
 
+  it("not kept: the saving text switches to nothing-kept once the window closes, and polling stops", async () => {
+    vi.useFakeTimers();
+    refuse("run_output_not_kept");
+    await mount({ endedAt: new Date(Date.now() - 58_000).toISOString() });
+    expect(screen.getByText(RUN_OUTPUT.savingTitle)).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(screen.getByText(RUN_OUTPUT.notKeptTitle)).toBeInTheDocument();
+    const calls = getMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(calls);
+  });
+
   it("expired", async () => {
     refuse("run_output_expired", 410);
     await mount();

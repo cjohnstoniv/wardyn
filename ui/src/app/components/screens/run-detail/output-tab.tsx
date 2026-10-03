@@ -58,8 +58,7 @@ export function OutputTab({
   const [loaded, setLoaded] = React.useState(false);
   const [attempt, setAttempt] = React.useState(0);
 
-  const recentlyEnded = !live && !!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS;
-  const saving = refusal === "not_kept" && (live || recentlyEnded);
+  const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -70,6 +69,7 @@ export function OutputTab({
         if (cancelled) return;
         setOut(o);
         setRefusal(null);
+        setSaving(false);
         setLoaded(true);
         if (!o.complete) timer = setTimeout(tick, POLL_MS);
       } catch (e) {
@@ -79,9 +79,10 @@ export function OutputTab({
         setRefusal(r);
         setLoaded(true);
         // Only a not-kept answer around the end of a run is worth another look.
-        if (r === "not_kept" && (live || (!!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS))) {
-          timer = setTimeout(tick, POLL_MS);
-        }
+        const again =
+          r === "not_kept" && (live || (!!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS));
+        setSaving(again);
+        if (again) timer = setTimeout(tick, POLL_MS);
       }
     };
     void tick();
