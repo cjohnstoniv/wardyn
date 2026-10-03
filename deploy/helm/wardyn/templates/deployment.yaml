@@ -458,6 +458,14 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            - name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS
+              value: {{ .Values.runner.sandbox.defaultResources.cpuMillis | quote }}
+            - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
+              value: {{ .Values.runner.sandbox.defaultResources.memoryMiB | quote }}
+            - name: WARDYN_PROXY_CPU_MILLIS
+              value: {{ .Values.runner.sandbox.proxyResources.cpuMillis | quote }}
+            - name: WARDYN_PROXY_MEMORY_MIB
+              value: {{ .Values.runner.sandbox.proxyResources.memoryMiB | quote }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of

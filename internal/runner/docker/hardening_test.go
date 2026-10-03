@@ -591,8 +591,8 @@ func TestProxyResources(t *testing.T) {
 	if r.PidsLimit == nil || *r.PidsLimit != proxyPidsLimit {
 		t.Errorf("proxy PidsLimit = %v, want %d", r.PidsLimit, proxyPidsLimit)
 	}
-	if r.Memory != proxyMemoryMiB*1024*1024 {
-		t.Errorf("proxy Memory = %d, want %d", r.Memory, proxyMemoryMiB*1024*1024)
+	if r.Memory != runner.DefaultProxyMemoryMiB*1024*1024 {
+		t.Errorf("proxy Memory = %d, want %d", r.Memory, runner.DefaultProxyMemoryMiB*1024*1024)
 	}
 	if r.MemorySwap != r.Memory {
 		t.Errorf("proxy MemorySwap = %d, want == Memory %d", r.MemorySwap, r.Memory)

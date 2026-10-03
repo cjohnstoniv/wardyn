@@ -239,6 +239,12 @@ type bootFlags struct {
 	harnessLoginCPUMillis *int
 	harnessLoginMemoryMiB *int
 
+	// sandboxDefault*/proxy* size the default sandbox and the wardyn-proxy sidecar: see runner.SetDefaultLimits/SetProxyLimits.
+	sandboxDefaultCPUMillis *int
+	sandboxDefaultMemoryMiB *int
+	proxyCPUMillis          *int
+	proxyMemoryMiB          *int
+
 	proxyURL *string
 
 	printGroundtruthToken *bool
@@ -467,8 +473,12 @@ func parseBootFlags() *bootFlags {
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on" or "off": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox, or write it into the sandbox directly. Applies to new dispatches only; an unrecognised value takes the default`),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
-		harnessLoginCPUMillis: flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
-		harnessLoginMemoryMiB: flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		harnessLoginCPUMillis:   flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		harnessLoginMemoryMiB:   flagIntEnv("harness-login-memory-mib", "WARDYN_HARNESS_LOGIN_MEMORY_MIB", 512, "memory request/limit (MiB) for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
+		sandboxDefaultCPUMillis: flagIntEnv("sandbox-default-cpu-millis", "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS", 0, "milli-CPU limit for a sandbox whose policy sets none (default 0 = compiled-in 2000)"),
+		sandboxDefaultMemoryMiB: flagIntEnv("sandbox-default-memory-mib", "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB", 0, "memory limit (MiB) for a sandbox whose policy sets none (default 0 = compiled-in 4096)"),
+		proxyCPUMillis:          flagIntEnv("proxy-cpu-millis", "WARDYN_PROXY_CPU_MILLIS", 0, "milli-CPU limit for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 500)"),
+		proxyMemoryMiB:          flagIntEnv("proxy-memory-mib", "WARDYN_PROXY_MEMORY_MIB", 0, "memory limit (MiB) for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 256)"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).

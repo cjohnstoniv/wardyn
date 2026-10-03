@@ -30,7 +30,6 @@ import (
 // its own PID (fork-bomb guard) and memory cap, independent of the agent's larger spec-driven caps.
 const (
 	proxyPidsLimit int64 = 128
-	proxyMemoryMiB int64 = 256
 )
 
 // Docker runtime names probed from `docker info`. SECURITY (invariant 5): a class is claimed only
@@ -464,12 +463,14 @@ func hostSupportsAppArmor(info system.Info) bool {
 }
 
 // proxyResources is the proxy sidecar's cgroup envelope: a tight PID cap (fork-bomb guard) and
-// memory cap (MemorySwap pinned so swap can't double it). CPU is unconstrained — latency-path and
-// already PID/memory bounded.
+// memory/CPU cap (MemorySwap pinned so swap can't double it), the same runner.ProxyLimits envelope
+// the k8s substrate applies.
 func proxyResources() container.Resources {
-	memBytes := proxyMemoryMiB * 1024 * 1024
+	cpuMillis, memMiB := runner.ProxyLimits()
+	memBytes := memMiB * 1024 * 1024
 	pids := proxyPidsLimit
 	return container.Resources{
+		NanoCPUs:   cpuMillis * 1_000_000,
 		Memory:     memBytes,
 		MemorySwap: memBytes,
 		PidsLimit:  &pids,
@@ -490,11 +491,11 @@ func proxyResources() container.Resources {
 func resourcesFromSpec(res runner.Resources) container.Resources {
 	cpuMillis := res.CPUMillis
 	if cpuMillis <= 0 {
-		cpuMillis = runner.DefaultCPUMillis
+		cpuMillis = runner.EffectiveLimits().CPUMillis
 	}
 	memMiB := res.MemoryMiB
 	if memMiB <= 0 {
-		memMiB = runner.DefaultMemoryMiB
+		memMiB = runner.EffectiveLimits().MemoryMiB
 	}
 	pids := res.PidsLimit
 	if pids <= 0 {

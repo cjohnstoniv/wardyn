@@ -142,10 +142,11 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	// default and stays skip-when-both-unset.
 	effCeilingResources := ceiling.Resources
 	if effCeilingResources == nil {
+		eff := runner.EffectiveLimits()
 		effCeilingResources = &types.ResourceLimits{
-			CPUMillis: int(runner.DefaultCPUMillis),
-			MemoryMiB: int(runner.DefaultMemoryMiB),
-			PidsLimit: int(runner.DefaultPidsLimit),
+			CPUMillis: int(eff.CPUMillis),
+			MemoryMiB: int(eff.MemoryMiB),
+			PidsLimit: int(eff.PidsLimit),
 		}
 	}
 	{

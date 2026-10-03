@@ -164,11 +164,11 @@ const ephemeralStorageRequestFloorMiB int64 = 256
 func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	cpuMillis := res.CPUMillis
 	if cpuMillis <= 0 {
-		cpuMillis = runner.DefaultCPUMillis
+		cpuMillis = runner.EffectiveLimits().CPUMillis
 	}
 	memMiB := res.MemoryMiB
 	if memMiB <= 0 {
-		memMiB = runner.DefaultMemoryMiB
+		memMiB = runner.EffectiveLimits().MemoryMiB
 	}
 	shared := func() corev1.ResourceList { // two lists, not one aliased into both: a shared map would put the limit in the requests too
 		return corev1.ResourceList{
@@ -255,17 +255,13 @@ func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMou
 	return vols, mounts
 }
 
-// proxyResourcesMilliCPU/proxyResourcesMemoryMiB are the wardyn-proxy sidecar's fixed cgroup
-// envelope — mirrors docker's proxyResources: a tight, run-independent footprint bounding a compromised proxy.
-const (
-	proxyResourcesMilliCPU  int64 = 500
-	proxyResourcesMemoryMiB int64 = 256
-)
-
+// proxyResources is the wardyn-proxy sidecar's cgroup envelope — the same runner.ProxyLimits
+// docker applies: a tight, run-independent footprint bounding a compromised proxy.
 func proxyResources() corev1.ResourceRequirements {
+	cpuMillis, memMiB := runner.ProxyLimits()
 	list := corev1.ResourceList{
-		corev1.ResourceCPU:    *resource.NewMilliQuantity(proxyResourcesMilliCPU, resource.DecimalSI),
-		corev1.ResourceMemory: *resource.NewQuantity(proxyResourcesMemoryMiB*1024*1024, resource.BinarySI),
+		corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
+		corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
 	}
 	return corev1.ResourceRequirements{Requests: list, Limits: list}
 }
