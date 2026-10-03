@@ -425,6 +425,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		slog.WarnContext(ctx, "wardynd: persist run disk cap failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
+	// Record the reservation the driver will apply (best-effort, like the disk cap above).
+	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources))
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws

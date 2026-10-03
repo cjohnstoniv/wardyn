@@ -5250,6 +5250,9 @@ identity and the primary key, renames the table and re-creates its triggers, and
 `0114` adds `api_tokens.expires_at` (`0045`'s table).
 `0115` adds `api_tokens.identity_stamped_at` (`0045`'s table), backfilled to `created_at`.
 `0116` adds `governance_profiles.contact` (`0052`'s table).
+`0108` (`0108_agent_runs_sizing`) adds the dispatch-time sizing columns on `agent_runs` (`runner_kind`, the agent CPU/memory
+request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`); at dispatch, before the sandbox
+is created, each run records the values its driver applied, and a run that predates it reads all NULL.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

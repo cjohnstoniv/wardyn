@@ -164,22 +164,15 @@ const ephemeralStorageRequestFloorMiB int64 = 256
 // PidsLimit still has no k8s Pod-API equivalent, so it remains a silently-nothing risk and
 // CreateSandbox warns rather than claiming a cap that was dropped.
 func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
-	cpuMillis := res.CPUMillis
-	if cpuMillis <= 0 {
-		cpuMillis = runner.EffectiveLimits().CPUMillis
-	}
-	memMiB := res.MemoryMiB
-	if memMiB <= 0 {
-		memMiB = runner.EffectiveLimits().MemoryMiB
-	}
-	reqCPU, reqMem := runner.EffectiveRequests(res)
+	sz := runner.EffectiveResources(res)
 	list := func(cpu, mem int64) corev1.ResourceList { // two lists, not one aliased into both: a shared map would put the limit in the requests too
 		return corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewMilliQuantity(cpu, resource.DecimalSI),
 			corev1.ResourceMemory: *resource.NewQuantity(mem*1024*1024, resource.BinarySI),
 		}
 	}
-	requests, limits := list(reqCPU, reqMem), list(cpuMillis, memMiB)
+	requests := list(sz.AgentCPURequestMillis, sz.AgentMemoryRequestMiB)
+	limits := list(sz.AgentCPULimitMillis, sz.AgentMemoryLimitMiB)
 	if res.DiskMiB > 0 {
 		limits[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(res.DiskMiB*1024*1024, resource.BinarySI)
 		floor := min(res.DiskMiB, ephemeralStorageRequestFloorMiB)
@@ -261,10 +254,10 @@ func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMou
 // proxyResources is the wardyn-proxy sidecar's cgroup envelope — the same runner.ProxyLimits
 // docker applies: a tight, run-independent footprint bounding a compromised proxy.
 func proxyResources() corev1.ResourceRequirements {
-	cpuMillis, memMiB := runner.ProxyLimits()
+	sz := runner.EffectiveResources(runner.Resources{})
 	list := corev1.ResourceList{
-		corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
-		corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
+		corev1.ResourceCPU:    *resource.NewMilliQuantity(sz.ProxyCPUMillis, resource.DecimalSI),
+		corev1.ResourceMemory: *resource.NewQuantity(sz.ProxyMemoryMiB*1024*1024, resource.BinarySI),
 	}
 	return corev1.ResourceRequirements{Requests: list, Limits: list}
 }

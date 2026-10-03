@@ -244,6 +244,29 @@ func (s PG) SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error {
 		`UPDATE agent_runs SET disk_mib=$1, updated_at=now() WHERE id=$2`, mib, id)
 }
 
+// RunSizing is the configured reservation recorded at dispatch (migration 0108). A nil
+// ProxyCPUMillis means the proxy had no CPU cap.
+type RunSizing struct {
+	RunnerKind            string
+	AgentCPURequestMillis int64
+	AgentCPULimitMillis   int64
+	AgentMemoryRequestMiB int64
+	AgentMemoryLimitMiB   int64
+	ProxyCPUMillis        *int64
+	ProxyMemoryMiB        int64
+}
+
+// SetRunSizing scoped-writes ONLY the dispatch-time sizing columns. It does not bump
+// updated_at: the record is not activity, and the idle clock reads updated_at.
+func (s PG) SetRunSizing(ctx context.Context, id uuid.UUID, z RunSizing) error {
+	return s.execRun(ctx, "set run sizing",
+		`UPDATE agent_runs SET runner_kind=$1, agent_cpu_request_millis=$2, agent_cpu_limit_millis=$3,
+		   agent_memory_request_mib=$4, agent_memory_limit_mib=$5, proxy_cpu_millis=$6, proxy_memory_mib=$7
+		 WHERE id=$8`,
+		z.RunnerKind, z.AgentCPURequestMillis, z.AgentCPULimitMillis, z.AgentMemoryRequestMiB,
+		z.AgentMemoryLimitMiB, z.ProxyCPUMillis, z.ProxyMemoryMiB, id)
+}
+
 // SetRunAgentExecID scoped-writes ONLY agent_exec_id, once the driver execs the
 // agent. The crash reconciler reads it to observe agent liveness across a restart.
 func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error {
