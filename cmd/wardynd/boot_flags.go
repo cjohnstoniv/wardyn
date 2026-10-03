@@ -286,6 +286,8 @@ type bootFlags struct {
 
 	hostCapacity hostCapacityFlags
 
+	preflightRatePerMin *int
+
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
 	// (claimSingleInstance). Like rotateAgeKey it has NO WARDYN_* env pair — a
@@ -548,9 +550,10 @@ func parseBootFlags() *bootFlags {
 			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM, WARDYN_AZURE_KEK_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
 			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
 			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
-		vault:        registerVaultFlags(),
-		hostCapacity: registerHostCapacityFlags(),
-		azure:        registerAzureFlags(),
+		vault:               registerVaultFlags(),
+		hostCapacity:        registerHostCapacityFlags(),
+		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
+		azure:               registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),

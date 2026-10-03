@@ -441,6 +441,7 @@ func run() error {
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		RunOutputTailBytes:       *f.runOutputTailBytes,
+		PreflightRatePerMin:      *f.preflightRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
