@@ -8,7 +8,11 @@
 
 package types
 
-import "time"
+import (
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
+)
 
 // The site-config family: SiteConfig and the value types its fields carry.
 // Split out of types.go by seam in 0.7.2; nothing here changed meaning.
@@ -94,6 +98,14 @@ type SiteConfig struct {
 	// URL is http(s) only.
 	SignInHelpText string `json:"sign_in_help_text,omitempty"`
 	SignInHelpURL  string `json:"sign_in_help_url,omitempty"`
+	// PolicyHelp is the contact a signed-in person is shown when a deployment-wide
+	// rule (no profile binds them) refuses them. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks.
+	//
+	// NOT public: unlike the sign-in help pair, /healthz never publishes it.
+	// Validated by policyref.Validate at PUT; a stored value is re-validated by
+	// policyref.Project on every read.
+	PolicyHelp *policyref.Contact `json:"policy_help,omitempty"`
 	// Branding is the part of the console branding (#1215) a site config can
 	// carry: today only the logo, as a file wardynd reads when this document is
 	// applied. A POINTER for the same byte-identical-GET reason as the provider

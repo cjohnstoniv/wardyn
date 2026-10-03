@@ -30,6 +30,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -804,13 +805,12 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
 		return
 	}
-	// SEAM-1: serializes this read-modify-write against the site config's other
-	// writers (handlePutSiteConfig and the two integration handlers), which read
-	// and rewrite the SAME singleton document — see handlePutIntegration's
-	// SEAM-1 comment for why an unguarded RMW here silently erases a concurrent
-	// one.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	// SEAM-1: the site-config lock (locks.go) serializes this RMW with the document's other writers.
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
@@ -960,7 +960,7 @@ const capProvider403 = "you are not granted this deployment's %s provider — as
 // derived clone URL is computed HERE, once, so no call site can compare a bare
 // <org>/<name> against a base URL and miss.
 func (s *Server) denyUserWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
-	if len(repos) == 0 || s.cfg.Store == nil || s.isOperator(r.Context()) {
+	if len(repos) == 0 || s.cfg.Store == nil || s.runUngoverned(r.Context()) {
 		return false
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())

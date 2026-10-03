@@ -491,7 +491,7 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "gates (govulncheck)", "gates (staticcheck)", "gates (gitleaks)",
     "gates (licenses)", "gates (license-headers)",
     "notices",
-    "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
+    "trivy (wardynd)", "trivy (wardynd-fips)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
     "trivy (agent-vscode)", "trivy (agent-novnc)"
   ]
@@ -499,17 +499,24 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
 JSON
 ```
 
-`notices` and the seven `trivy` cells are in that list because the Prerequisites
+`notices` and the eight `trivy` cells are in that list because the Prerequisites
 section above already calls them gates and they are **not** conditional — both
 report on every pull request, so both are eligible contexts. Until the PATCH
 above is applied they are advisory only: `notices` is the copyleft /
-unreviewed-dependency gate, and `trivy` is the only CVE scan of the seven images
+unreviewed-dependency gate, and `trivy` is the only CVE scan of the eight images
 a release publishes, so with either red a PR still merges. `trivy` is a matrix
 job, so it reports one context per image cell — adding an image to
 `.github/workflows/ci.yml`'s `trivy` matrix means adding its context here **and**
 re-running the PATCH, or that image merges unscanned.
 `scripts/test-claims-match-code.sh` (C6) fails if this list and that matrix drift
 apart.
+
+`trivy (wardynd-fips)` is the same case: the PATCH has to be re-run by the owner
+before that context is required, and after the FIRST real tag that builds it the
+owner confirms `ghcr.io/cjohnstoniv/wardynd-fips` is a PUBLIC package (a
+newly-created GHCR package can default to private, which silently breaks every
+documented pull). `ghcr.io/cjohnstoniv/staging/wardynd-fips` may stay private:
+only the workflow reads it.
 
 **#141 (`agent-vscode`/`agent-novnc` join the publish matrix) is exactly this
 case, and it is not yet done.** This document names `trivy (agent-vscode)` and
@@ -554,9 +561,12 @@ the other:
   can. The compose stack still always builds from source (see
   [docs/CI.md](docs/CI.md)).
 - **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
-  pushes all SEVEN images a release ships —
+  pushes all EIGHT images a release ships —
   `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
-  `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
+  `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardynd-fips` (the same
+  recipe built with `GOFIPS140` pinned to a frozen Go Cryptographic Module
+  snapshot; the job reads that pin back out of the pushed digest with
+  `scripts/check-fips-image.sh` before it signs it), `ghcr.io/cjohnstoniv/wardyn-proxy`,
   `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
   `ghcr.io/cjohnstoniv/agent-aws-sso`, `ghcr.io/cjohnstoniv/agent-vscode`,
   `ghcr.io/cjohnstoniv/agent-novnc` (the last two built from the `agent-base`
@@ -592,7 +602,7 @@ the other:
   # 0.6.2 and this loop errored on it every release (an interactive paste with
   # no `set -e` just carries on), while agent-base — the image that IS published
   # — went unverified.
-  for img in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
+  for img in wardynd wardynd-fips wardyn-proxy agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

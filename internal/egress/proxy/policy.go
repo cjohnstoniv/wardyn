@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -66,9 +67,9 @@ type Policy struct {
 	// sides stay symmetric: a stripped shadow would let "allow m.corp:443 + deny
 	// m.corp:443" build an injector the port-less code failed closed on.
 	allowedExactAnyPort map[string]map[int]struct{}
-	allowedWildPort     []wildPort
+	allowedWildPort     []domainmatch.WildPort
 	deniedExactPort     map[string]struct{}
-	deniedWildPort      []wildPort
+	deniedWildPort      []domainmatch.WildPort
 	allowedMeth         map[string]struct{} // empty == all methods allowed
 	firstUse            types.FirstUseMode
 	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
@@ -115,10 +116,10 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		}
 	}
 	for _, d := range spec.AllowedDomains {
-		exact, wild, port := classifyDomain(d)
+		exact, wild, port := domainmatch.Classify(d)
 		switch {
 		case wild != "" && port > 0:
-			p.allowedWildPort = append(p.allowedWildPort, wildPort{suffix: wild, port: port})
+			p.allowedWildPort = append(p.allowedWildPort, domainmatch.WildPort{Suffix: wild, Port: port})
 		case wild != "":
 			p.allowedWild = append(p.allowedWild, wild)
 		case exact != "" && port > 0:
@@ -132,10 +133,10 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		}
 	}
 	for _, d := range spec.DeniedDomains {
-		exact, wild, port := classifyDomain(d)
+		exact, wild, port := domainmatch.Classify(d)
 		switch {
 		case wild != "" && port > 0:
-			p.deniedWildPort = append(p.deniedWildPort, wildPort{suffix: wild, port: port})
+			p.deniedWildPort = append(p.deniedWildPort, domainmatch.WildPort{Suffix: wild, Port: port})
 		case wild != "":
 			p.deniedWild = append(p.deniedWild, wild)
 		case exact != "" && port > 0:
@@ -222,87 +223,15 @@ func NewBuiltinEvaluator(spec types.RunPolicySpec) egress.Evaluator {
 	return builtinEvaluator{p: CompilePolicy(spec)}
 }
 
-// wildPort is a port-qualified wildcard entry: suffix WITHOUT the leading "*"
-// (e.g. ".example.com") that matches only when the request port equals port.
-type wildPort struct {
-	suffix string
-	port   int
-}
-
 // hostPortKey is the map key for a port-qualified exact entry. It must be built
 // identically at compile time and at lookup so "host:443" collides correctly.
 func hostPortKey(host string, port int) string {
 	return host + ":" + strconv.Itoa(port)
 }
 
-// canonHost is the ONE spelling every policy map is keyed on, at compile time
-// and at lookup: lower-cased, trailing dot trimmed, and — when the string is an
-// IP LITERAL — the canonical net.IP.String() form of it.
-//
-// The literal half closes a real deny bypass, not a cosmetic inconsistency:
-// evalHost keyed on the raw request string while AllowsLiteralIP keyed on
-// ip.String(), so a run that denies 93.184.216.34 still allowed
-// "::ffff:93.184.216.34" — which vetHostLift's literal fast path parses back
-// to the same address and dials, the whole barrier gone under allow_all_egress.
-// Literal-IP deny entries are first-class here: ValidDomainEntry exempts IPv6
-// literals from the ":port" check, and literalIPDenialDetail composes an
-// operator message about them.
-//
-// The same normalization on the ENTRY side (classifyDomain) closes the other
-// half: a non-canonical spelling in denied_domains was a dead entry protecting
-// nothing. Both sides now land in the same space and can no longer disagree.
-//
-// It does NOT widen an allow to a different destination: deny lookups are
-// canonicalized in the same call and still run first, and a spelling
-// net.ParseIP cannot read ("127.1", a zone-suffixed "fe80::1%eth0") is left
-// verbatim — it matches no allow entry, and the unconditional IP guard still
-// binds the dial.
-func canonHost(h string) string {
-	h = strings.TrimSuffix(strings.ToLower(h), ".")
-	if ip := net.ParseIP(h); ip != nil {
-		return ip.String()
-	}
-	return h
-}
-
-// classifyDomain normalizes a configured domain entry. A "*.example.com"
-// pattern yields a wildcard suffix ".example.com" (label-boundary match);
-// anything else is an exact host. An optional ":port" qualifier ("host:443",
-// "*.example.com:443") is parsed out and returned as port>0; a bare entry
-// returns port==0 and matches ANY port.
-func classifyDomain(d string) (exact, wild string, port int) {
-	d = strings.ToLower(strings.TrimSpace(d))
-	// TrimRight, not TrimSuffix: the REQUEST side normalises every FQDN-root
-	// spelling with TrimRight (splitHostPort), so an entry trimming only one
-	// dot compiled to a key no request host equals. Root cause for allow and
-	// deny at once, since both compile through here.
-	d = strings.TrimRight(d, ".")
-	if d == "" {
-		return "", "", 0
-	}
-	// Optional :port qualifier. Only a VALID port (1..65535) is honored; a
-	// non-numeric or out-of-range suffix is left attached, so the entry stays
-	// an exact host that never matches a real request — it must NOT silently
-	// degrade to a bare any-port match, which would widen egress.
-	if h, ps, err := net.SplitHostPort(d); err == nil {
-		if n, perr := strconv.Atoi(ps); perr == nil && n >= 1 && n <= 65535 {
-			d = h
-			port = n
-		}
-	}
-	if strings.HasPrefix(d, "*.") {
-		// ".example.com" — suffix-match on the label boundary.
-		return "", d[1:], port
-	}
-	// canonHost, not the raw string: an entry spelled as an alternate IPv6
-	// form must compile to the same key the request side derives, or the
-	// entry is dead. No wildcard IP form, so only this branch carries a literal.
-	return canonHost(d), "", port
-}
-
 // ValidDomainEntry reports whether d is an allowlist/denylist entry the matcher
 // above can ever match — the ONE shape check every operator-supplied policy
-// ingest point runs (validatePolicySpec). classifyDomain accepts anything (a
+// ingest point runs (validatePolicySpec). domainmatch.Classify accepts anything (a
 // mid-label pattern like "oidc.*.amazonaws.com" compiles to a hostname no real
 // request can equal), so operator input fails closed instead of shipping a
 // policy the operator believes is guarding them.
@@ -310,7 +239,7 @@ func classifyDomain(d string) (exact, wild string, port int) {
 // Valid: a bare exact host ("api.anthropic.com"), a leading-"*." wildcard
 // ("*.example.com"), and either with a valid ":port" qualifier.
 func ValidDomainEntry(d string) error {
-	exact, wild, _ := classifyDomain(d)
+	exact, wild, _ := domainmatch.Classify(d)
 	bad := func(why string) error {
 		return fmt.Errorf("domain %q never matches any request (%s); supported forms: "+
 			`"example.com", "*.example.com", "example.com:443", "*.example.com:443"`, d, why)
@@ -322,13 +251,13 @@ func ValidDomainEntry(d string) error {
 		return bad(`a "*" is only supported as a leading "*."`)
 	case strings.ContainsAny(exact, "/ \t"), strings.ContainsAny(wild, "/ \t"):
 		return bad("must be a bare host, not a URL")
-	// classifyDomain leaves a malformed ":port" attached (so it can't silently
+	// domainmatch.Classify leaves a malformed ":port" attached (so it can't silently
 	// widen to any-port), which makes it a dead entry. IPv6 legitimately
 	// contains ':', so exempt it.
 	case strings.Contains(exact, ":") && net.ParseIP(exact) == nil:
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
 	// Same check on the wildcard branch: a valid ":port" is stripped by
-	// classifyDomain and there's no IPv6 wildcard form, so any residual ':'
+	// domainmatch.Classify and there's no IPv6 wildcard form, so any residual ':'
 	// here is malformed. Without this, "*.example.com:0" compiles to a suffix
 	// no request host can end with.
 	case strings.Contains(wild, ":"):
@@ -340,34 +269,11 @@ func ValidDomainEntry(d string) error {
 	return nil
 }
 
-// matchWild reports whether host falls under any wildcard suffix. A suffix
-// ".example.com" matches "a.example.com" and "x.y.example.com" but NOT
-// "example.com" itself nor "notexample.com" (label-boundary safe).
-func matchWild(host string, wilds []string) bool {
-	for _, w := range wilds {
-		if strings.HasSuffix(host, w) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchWildPort is matchWild for port-qualified wildcard entries: the suffix
-// must match AND the request port must equal the entry's port.
-func matchWildPort(host string, port int, wilds []wildPort) bool {
-	for _, w := range wilds {
-		if w.port == port && strings.HasSuffix(host, w.suffix) {
-			return true
-		}
-	}
-	return false
-}
-
 // evalHost returns the policy-only verdict for a host+port. Deny always wins.
 // A bare allow/deny entry matches any port; a port-qualified entry ("host:443")
 // matches only that host+port.
 func (p *Policy) evalHost(host string, port int) hostDecision {
-	host = canonHost(host)
+	host = domainmatch.CanonHost(host)
 	key := hostPortKey(host, port)
 	// Deny beats allow, unconditionally.
 	if _, ok := p.deniedExact[host]; ok {
@@ -376,7 +282,7 @@ func (p *Policy) evalHost(host string, port int) hostDecision {
 	if _, ok := p.deniedExactPort[key]; ok {
 		return hostDeny
 	}
-	if matchWild(host, p.deniedWild) || matchWildPort(host, port, p.deniedWildPort) {
+	if domainmatch.MatchWild(host, p.deniedWild) || domainmatch.MatchWildPort(host, port, p.deniedWildPort) {
 		return hostDeny
 	}
 	if _, ok := p.allowedExact[host]; ok {
@@ -385,7 +291,7 @@ func (p *Policy) evalHost(host string, port int) hostDecision {
 	if _, ok := p.allowedExactPort[key]; ok {
 		return hostAllow
 	}
-	if matchWild(host, p.allowedWild) || matchWildPort(host, port, p.allowedWildPort) {
+	if domainmatch.MatchWild(host, p.allowedWild) || domainmatch.MatchWildPort(host, port, p.allowedWildPort) {
 		return hostAllow
 	}
 	// Allow-all (deny-list only) mode: any host surviving the deny checks
@@ -428,8 +334,8 @@ func (p *Policy) methodAllowed(method string) bool {
 // catch (there's no hostname to rebind), so evaluate() trusts it instead of
 // hard-denying. Deny still beats allow.
 func (p *Policy) AllowsLiteralIP(host string, port int) bool {
-	// Callers already pass ip.String(); canonHost is idempotent on that.
-	host = canonHost(host)
+	// Callers already pass ip.String(); domainmatch.CanonHost is idempotent on that.
+	host = domainmatch.CanonHost(host)
 	if _, ok := p.deniedExact[host]; ok {
 		return false
 	}
@@ -458,20 +364,20 @@ func (p *Policy) AuthoredPortFor(host string, port int) bool {
 	if p == nil {
 		return false
 	}
-	host = canonHost(host)
+	host = domainmatch.CanonHost(host)
 	if _, ok := p.deniedExact[host]; ok {
 		return false
 	}
 	if _, ok := p.deniedExactPort[hostPortKey(host, port)]; ok {
 		return false
 	}
-	if matchWildPort(host, port, p.deniedWildPort) {
+	if domainmatch.MatchWildPort(host, port, p.deniedWildPort) {
 		return false
 	}
 	if _, ok := p.allowedExactPort[hostPortKey(host, port)]; ok {
 		return true
 	}
-	return matchWildPort(host, port, p.allowedWildPort)
+	return domainmatch.MatchWildPort(host, port, p.allowedWildPort)
 }
 
 // egressHeaderDetail carries the CAUSE behind an address-range refusal, beside

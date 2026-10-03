@@ -288,6 +288,11 @@ secretStore:
     tenantId: ""
     # The app registration's or user-assigned identity's client id.
     clientId: ""
+    # Optional, with kek.azurekv.keyPlatform: the client id of a second Entra
+    # identity that reaches the platform key pair, and no credential key. It must
+    # differ from clientId. Under workload identity it needs its own federated
+    # credential trusting the same service account. Empty = one identity.
+    clientIdPlatform: ""
     # Entra authority host; empty = the public cloud's.
     authorityHost: ""
     # Start of every secret name (empty = the release namespace).
@@ -329,6 +334,17 @@ kek:
     # Versionless id of the EC P-256 key, sign and verify only, in the same
     # vault, that signs every wrap. Set together with key.
     signingKey: ""
+    # Optional, needs provider azurekv, secretStore.azure.clientIdPlatform and
+    # signingKeyPlatform: a second RSA 3072/4096 wrapping key that wraps wardynd's
+    # own signing, session and SSH host keys, reached as clientIdPlatform; key
+    # then wraps only the credentials. Versionless id, a key other than key.
+    # `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it.
+    # Empty = one key pair for both.
+    keyPlatform: ""
+    # Versionless id of the EC P-256 key, sign and verify only, in the same vault
+    # as keyPlatform, that signs every wrap keyPlatform makes. Set together with
+    # keyPlatform; a key other than signingKey.
+    signingKeyPlatform: ""
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
@@ -341,6 +357,11 @@ kek:
 #     WARDYN_HOST_MIN_MEM_AVAILABLE_MIB: "8192"
 #     WARDYN_HOST_MAX_LOAD1: "100"
 env: {}
+
+# Cap on non-terminal runs across the whole deployment (WARDYN_MAX_CONCURRENT_RUNS,
+# docs/ENV.md): exact across replicas and at every door that creates a run, 422 past
+# it. 0 (the default) is unlimited. The per-member cap stays a governance profile limit.
+maxConcurrentRuns: 0
 
 # Raw EnvVar entries appended to the container, for the WARDYN_* variables that
 # must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):
@@ -461,8 +482,13 @@ awsSSOProxyInject: ""
 # set 2000/4096 here to keep the size chart installs had before 0.8.6. An operator policy
 # value overrides it; with no resources in the governance ceiling it is also the cap on
 # member-authored policies. proxyResources is each run's wardyn-proxy sidecar.
+# requestRatio (WARDYN_SANDBOX_REQUEST_RATIO, Kubernetes only) sets each agent pod's CPU and
+# memory requests to that fraction of its limits, in (0, 1]; "" keeps requests equal to limits
+# (Guaranteed). Below 1 the pod is Burstable: more runs fit a node, but a pod over its memory
+# request is evicted or OOM-killed first under node pressure. The proxy pod stays Guaranteed.
 runner:
   sandbox:
+    requestRatio: ""
     defaultResources:
       cpuMillis: 1000
       memoryMiB: 2048
@@ -524,6 +550,23 @@ k8s:
   # Optional imagePullSecrets name (WARDYN_K8S_IMAGE_PULL_SECRET) threaded
   # onto every pod the k8s substrate creates (agent, proxy, boot-time canary).
   imagePullSecret: ""
+  # Where every sandbox pod goes (WARDYN_K8S_SANDBOX_PLACEMENT, rendered here as JSON): the agent pod,
+  # the proxy pod and the boot-time canary all take it, so the canary proves NetworkPolicy
+  # enforcement on the nodes runs use. The top-level nodeSelector/affinity/tolerations place wardynd
+  # only. All empty by default.
+  #
+  # podAnnotations and podLabels may not carry a reserved wardyn label (wardyn.managed, wardyn.run-id,
+  # wardyn.component) or any key under kubernetes.io/ or k8s.io/ other than
+  # cluster-autoscaler.kubernetes.io/safe-to-evict: wardynd refuses to boot naming the key. Such keys
+  # reach confinement the pod spec sets on purpose (an AppArmor "unconfined" annotation, for one).
+  # No safe-to-evict annotation is set by default.
+  sandbox:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    priorityClassName: ""
+    podAnnotations: {}
+    podLabels: {}
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime

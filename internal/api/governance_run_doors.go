@@ -101,7 +101,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 // arm's spec. It binds whoever the ceiling's limits bind: an assigned member or
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
-	if ceiling.Profile == nil || !ceiling.Limits.DenyUIApps || len(spec.UIApps) == 0 || s.isOperator(r.Context()) {
+	if ceiling.Profile == nil || !ceiling.Limits.DenyUIApps || len(spec.UIApps) == 0 || s.runUngoverned(r.Context()) {
 		return nil
 	}
 	dropped := make([]string, 0, len(spec.UIApps))

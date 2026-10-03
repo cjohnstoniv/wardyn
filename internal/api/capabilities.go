@@ -330,7 +330,7 @@ var capKinds = map[string]capKind{
 // give them). See the three-tier doctrine on internal/auth/oidc's
 // RoleSecurityAdmin. A pinning test asserts it.
 func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, error) {
-	if s.cfg.Store == nil && validCapabilityKind(kind) && !s.isOperator(ctx) {
+	if s.cfg.Store == nil && validCapabilityKind(kind) && !s.runUngoverned(ctx) {
 		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
 	}
 	return s.capSeamAllowed(ctx, kind, value)
@@ -516,7 +516,7 @@ type capBatch struct {
 // newCapBatch snapshots the store-free inputs decide needs before it ever
 // reads: the operator bit and the nil-Store bit.
 func (s *Server) newCapBatch(ctx context.Context) *capBatch {
-	return &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.isOperator(ctx)}
+	return &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.runUngoverned(ctx)}
 }
 
 // capBatchKey carries one resolution's batch: the ownedSecretMemo pattern, a

@@ -807,13 +807,6 @@ type apiKeyScope struct {
 	SecretName string `json:"secret_name"`
 }
 
-// gitPATScope is the JSON shape of a git_pat grant scope.
-type gitPATScope struct {
-	Host       string `json:"host"`
-	SecretName string `json:"secret_name"`
-	Username   string `json:"username"`
-}
-
 // reservedBrokerSecretNames is the reserved-name guard for the git_pat/ssh_key
 // mint paths (mintGitPAT/mintSSHKey below) — the ONLY broker lanes that hand a
 // stored secret's raw VALUE to the sandbox (Minted.Token / Minted.KnownHosts,
@@ -861,6 +854,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"bedrock-api-key":       true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
+	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.
+	"wardyn-write-probe": true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
@@ -877,7 +872,7 @@ func reservedBrokerSecret(name string) bool {
 }
 
 // providerSecretPrefix mirrors internal/api's: every per-person model-provider
-// credential (wardyn-provider-<uid>-{key,oauth,sso}). A model key is injected
+// credential (wardyn-provider-<uid>-{key,oauth,sso,entra}). A model key is injected
 // proxy-side as a header, never minted, so a git_pat/ssh_key grant naming one
 // could only hand the person's own API key to the sandbox as a git password.
 const providerSecretPrefix = "wardyn-provider-"
@@ -951,16 +946,13 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 // that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
 // on), the same reason the grant/approval SQL is inlined here.
 //
-// prev_hash/row_hash are NOT written here: migration 0047's BEFORE INSERT
-// trigger fills them for every insert path, including this one. What this path
-// DOES owe the chain is the serializing lock — it must be taken before the
-// INSERT statement, on this same tx, so this writer's seq allocation and head
-// read cannot interleave with another's. Since migration 0056 the trigger takes
-// the same lock and allocates seq under it, so an out-of-tree writer cannot fork
-// the chain either; advisory locks are re-entrant within a transaction, so
-// taking it here still costs nothing (db.AuditChainLockKey). Taken here, as late in the mint tx as
-// possible, so the chain lock is always acquired AFTER this tx's grant/approval
-// row locks and can never invert a lock order with a concurrent mint.
+// The row goes in through audit_append (migration 0111), the only way a row enters
+// audit_events: the function allocates seq and recorded_at under the chain lock, and
+// the chain trigger fills prev_hash/row_hash. The lock is still taken here, before the
+// call, on this same tx; advisory locks are re-entrant within a transaction, so
+// audit_append's own acquisition costs nothing (db.AuditChainLockKey). Taken here, as
+// late in the mint tx as possible, so the chain lock is always acquired AFTER this tx's
+// grant/approval row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
@@ -977,14 +969,12 @@ func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) er
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
 		return fmt.Errorf("broker: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
 	}
-	const q = `
-		INSERT INTO audit_events
-			(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if _, err := tx.Exec(ctx, q,
+	const q = `SELECT seq FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+	var seq int64
+	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
-	); err != nil {
+	).Scan(&seq); err != nil {
 		return fmt.Errorf("broker: insert mint audit: %w", err)
 	}
 	return nil

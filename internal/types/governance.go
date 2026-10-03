@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // GovernanceLimits carries the autonomy switches that BOUND A REQUEST rather
@@ -294,6 +296,12 @@ type GovernanceProfile struct {
 	CreatedAt time.Time        `json:"created_at"`
 	UpdatedAt time.Time        `json:"updated_at"`
 	CreatedBy string           `json:"created_by,omitempty"`
+	// Contact is who owns the profile and how to ask for a change; nil is none.
+	// Validated on write and re-validated on every read (internal/policyref).
+	Contact *policyref.Contact `json:"contact,omitempty"`
+	// ContactSet is a write instruction, never stored or serialized: true makes an
+	// upsert write Contact (nil clears it), false keeps the stored value.
+	ContactSet bool `json:"-"`
 }
 
 // GovernanceAssignment binds one profile to one subject (migration 0052's governance_assignments row).

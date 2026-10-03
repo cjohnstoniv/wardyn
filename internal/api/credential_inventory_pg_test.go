@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -311,5 +312,52 @@ func TestPG_ProviderAccessMetadataIsTheCallersOwn(t *testing.T) {
 	}
 	if carol := access(invCarol); carol.AddedAt != nil || carol.LastUsedAt != nil || carol.State != modelAccessNotConfigured {
 		t.Errorf("carol stores no key, yet provider_access = %+v", carol)
+	}
+}
+
+// TestPG_CredentialInventoryListsAnAzureEntraBlob: an azure_foundry row's
+// per-person sign-in is the sealed -entra blob, and the inventory enumerates it
+// like every other provider credential: its state, store and added time, counted
+// once, and never its value or its name.
+func TestPG_CredentialInventoryListsAnAzureEntraBlob(t *testing.T) {
+	foundry := types.ModelProvider{ID: "foundry", UID: uuid.NewString(), Kind: types.ModelProviderAzureFoundry,
+		Azure:     &types.AzureSettings{Endpoint: "https://res.services.ai.azure.com", Route: types.AzureRouteAnthropic},
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "m"}}}
+	srv := modelProvidersStatusSrv(t, types.SiteConfig{ModelProviders: providerBlock(foundry),
+		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code"})}, &capStore{})
+	sec, _ := auditedPGSecrets(t)
+	srv.cfg.Secrets = sec
+
+	const refresh = "azure-entra-refresh-token-inventory-0123456789"
+	name := providerSecretName(foundry.UID, providerEntraPart)
+	if err := sec.For(invAlice).Put(context.Background(), name, []byte(`{"refresh_token":"`+refresh+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// A -key under the same provider is not what an azure_foundry row stores.
+	if err := sec.For(invBob).Put(context.Background(), providerSecretName(foundry.UID, providerKeyPart), []byte("sk-not-an-entra-blob")); err != nil {
+		t.Fatal(err)
+	}
+
+	w := do(t, srv, http.MethodGet, "/api/v1/model-providers/credentials", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin GET = %d %s", w.Code, w.Body.String())
+	}
+	for _, leak := range []string{refresh, name, types.ModelProviderSecretPrefix} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Fatalf("response carries %q: %s", leak, w.Body.String())
+		}
+	}
+	var inv credentialInventory
+	if err := json.Unmarshal(w.Body.Bytes(), &inv); err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.Credentials) != 1 {
+		t.Fatalf("inventory = %+v, want exactly alice's -entra blob", inv.Credentials)
+	}
+	if r := inv.Credentials[0]; r.Person != invAlice || r.Provider != "foundry" || r.State != credStateStored || r.Store != "pg" || r.AddedAt.IsZero() {
+		t.Errorf("row = %+v", r)
+	}
+	if inv.Counts.People != 1 || inv.Counts.Credentials != 1 || inv.Counts.ByProvider["foundry"] != 1 {
+		t.Errorf("counts = %+v", inv.Counts)
 	}
 }

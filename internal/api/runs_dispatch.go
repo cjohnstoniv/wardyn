@@ -192,6 +192,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
+	// The run's masking manifest opens before any value is resolved and completes
+	// before the sandbox exists (mask_manifest.go).
+	if !s.beginMaskManifest(ctx, run) {
+		return
+	}
+
 	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
 	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
 	// ground-truth stream. wardynd knows the resolved confinement class here, so
@@ -419,6 +425,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		slog.WarnContext(ctx, "wardynd: persist run disk cap failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
+	// Record the reservation the driver will apply (best-effort, like the disk cap above).
+	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources))
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
@@ -601,7 +609,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
-	spec.ExecOutput = s.openExecOutput(run.ID, p.TaskMode, p.Interactive)
+	if !s.completeMaskManifest(ctx, run) {
+		return
+	}
+	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
 	if err != nil {

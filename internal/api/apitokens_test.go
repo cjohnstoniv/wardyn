@@ -43,6 +43,8 @@ type tokenMemStore struct {
 	byID    map[uuid.UUID]types.APIToken
 	byHash  map[string]uuid.UUID
 	touched map[uuid.UUID]time.Time
+	// clock stands in for the database's now() in GetAPITokenByRaw; nil is the wall clock.
+	clock func() time.Time
 }
 
 func (*tokenMemStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
@@ -68,13 +70,17 @@ func (s *tokenMemStore) CreateAPIToken(_ context.Context, t types.APIToken, raw 
 		return types.APIToken{}, store.ErrConflict
 	}
 	t.Token = "" // the store never persists the plaintext
+	if now := time.Now().UTC(); t.IdentityStampedAt == nil {
+		t.IdentityStampedAt = &now // the PG store stamps the mint
+	}
 	s.byID[t.ID] = t
 	s.byHash[h] = t.ID
 	return t, nil
 }
 
-// GetAPITokenByRaw mirrors the PG query's `revoked_at IS NULL`: unknown,
-// mismatched and revoked all collapse to ErrNotFound.
+// GetAPITokenByRaw mirrors the PG query's `revoked_at IS NULL AND (expires_at
+// IS NULL OR expires_at > now())`: unknown, mismatched, revoked and expired all
+// collapse to ErrNotFound.
 func (s *tokenMemStore) GetAPITokenByRaw(_ context.Context, raw string) (types.APIToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,6 +90,13 @@ func (s *tokenMemStore) GetAPITokenByRaw(_ context.Context, raw string) (types.A
 	}
 	t := s.byID[id]
 	if t.RevokedAt != nil {
+		return types.APIToken{}, store.ErrNotFound
+	}
+	now := time.Now()
+	if s.clock != nil {
+		now = s.clock()
+	}
+	if t.ExpiresAt != nil && !t.ExpiresAt.After(now) {
 		return types.APIToken{}, store.ErrNotFound
 	}
 	return t, nil

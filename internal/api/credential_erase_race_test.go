@@ -254,7 +254,10 @@ func TestAWSRefresh_FailedReReadPersistsNothing(t *testing.T) {
 // and still has a servable token serves it from memory and writes nothing.
 func TestAWSRefresh_TryLockDuringEraseServesInMemory(t *testing.T) {
 	s, blob, calls := refreshFixture(t, awsSSOTestFixedNow.Add(8*time.Minute)) // inside the skew, above the serve floor
-	unlock := s.lockAWSSSOOwner(awsSSOTestOwner)
+	_, unlock, err := s.lockAWSSSOOwner(context.Background(), awsSSOTestOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, msg := s.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob)
 	unlock()
 	if msg != "" || got.AccessToken != blob.AccessToken {
@@ -364,7 +367,10 @@ func TestEraseRace_FourWayNoDeadlock(t *testing.T) {
 		})
 		run(func() { putOwn("pasted-token") })
 		run(func() { // an Entra redemption storing its rotated refresh token
-			unlock := s.adoEntra.lock(owner, "entra-row")
+			_, unlock, err := s.lockADOSignIn(context.Background(), owner, "entra-row")
+			if err != nil {
+				return
+			}
 			defer unlock()
 			_ = s.cfg.Secrets.For(owner).Put(context.Background(), adoEntraSecretName("entra-row"), []byte("rotated"))
 		})

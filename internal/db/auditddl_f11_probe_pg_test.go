@@ -153,14 +153,16 @@ func TestPG_AuditDDL_Protected(t *testing.T) {
 		}
 	})
 	must(`GRANT USAGE ON SCHEMA public TO ` + role)
-	// EXACTLY the documented deploy posture and nothing more: INSERT+SELECT on
-	// audit_events (0007_audit_least_privilege.sql, cmd/wardynd's boot check).
+	// EXACTLY the documented deploy posture and nothing more: SELECT on
+	// audit_events and EXECUTE on audit_append (0111_audit_partitioned.sql, which
+	// hands a role that held INSERT exactly this; cmd/wardynd's boot check).
 	// No sequence grant — this role once held USAGE ON ALL SEQUENCES here, which
 	// hid the whole of review finding A1: 0056 allocated seq with an ordinary
 	// nextval() call as the INVOKER, so the real documented role got "permission
 	// denied for sequence" on every audit insert while this probe stayed green.
-	// The append subtest below is the pin for 0057's SECURITY DEFINER remedy.
-	must(`GRANT SELECT, INSERT ON audit_events TO ` + role)
+	// The append subtest below is the pin for the SECURITY DEFINER remedy.
+	must(`GRANT SELECT ON audit_events TO ` + role)
+	must(`GRANT EXECUTE ON FUNCTION audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb) TO ` + role)
 
 	u.User = url.UserPassword(role, pw)
 	app, err := Connect(ctx, u.String())
@@ -189,12 +191,11 @@ func TestPG_AuditDDL_Protected(t *testing.T) {
 			t.Fatalf("advisory lock as app role: %v", err)
 		}
 		var rowHash string
-		if err := tx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-			VALUES (gen_random_uuid(), 'system', 'f11-app-role', 'test.ddl.probe', 'success')
-			RETURNING COALESCE(row_hash,'')`).Scan(&rowHash); err != nil {
-			t.Fatalf("INSERT as the documented app role: %v — INSERT+SELECT on audit_events is the whole grant set "+
-				"0007 and the boot check describe, so anything the chain trigger needs beyond it (0056 allocates seq "+
-				"inside the trigger) must run as the DEFINER, not the invoker (0057)", err)
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(row_hash,'')
+			FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'f11-app-role', 'test.ddl.probe', '', 'success', '', NULL)`).Scan(&rowHash); err != nil {
+			t.Fatalf("audit_append as the documented app role: %v — SELECT on audit_events plus EXECUTE on audit_append is "+
+				"the whole grant set 0111 hands a role that could INSERT, so anything the append needs beyond it "+
+				"(the sequence, the high-water row) must run as the DEFINER, not the invoker (0057)", err)
 		}
 		if rowHash == "" {
 			t.Fatal("row inserted by the app role has no row_hash; the chain trigger did not run for it")
