@@ -2721,14 +2721,14 @@ this: the registries only, the forge dropped, `GET` and `HEAD` only, the extra h
 2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's
 `always_deny`. Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of
 the division and the team gives 1000, with no write to either. A baseline edit that would leave
-a descendant empty (it removes `GET` while a team overlay allows only `GET`) is refused with
+a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with
 `409 governance_overlay_unsatisfiable` naming that descendant. Widening the baseline later never
 activates anything an overlay did not already ask for, because an overlay is checked against the
 base at write.
 
 *A base that moves under an overlay.* A write is strict, but a base edit, or a redeploy that
 narrows the deployment default, is someone else's act arriving later. At resolve the meet drops
-what the base no longer covers and the write response lists it in `clamp_warnings`. If nothing
+what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`. If nothing
 satisfies the base and the overlay together (the deployment default narrowed until their
 `allowed_methods` are disjoint, say), a chain that cannot be read, or a chain that loops or runs
 deeper than three, the launch and every live door refuse with `403
@@ -2747,7 +2747,7 @@ subtree at once, so one edit has a larger reach and the same delay.
 content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them,
 never the chain. A base's name, overlay and contact are not disclosed, and a profile with no
 `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that
-would name the base. Only a security admin can read the graph (`GET /governance`). When you write
+would name the base. Only an admin or a `security_admin` can read the graph (`GET /governance`). When you write
 an example for a member, show the effective result and the profile's own name; do not describe
 the structure behind it.
 
