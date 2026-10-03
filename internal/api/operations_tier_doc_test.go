@@ -186,6 +186,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/delegates/{id}", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
 	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
+	{"GET /api/v1/scim/status", "`GET /scim/status`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
 }
 

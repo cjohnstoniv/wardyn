@@ -53,6 +53,7 @@ import { ProvidersCard } from "../setup/providers-card";
 import { ModelProvidersList } from "./model-providers-list";
 import { BrandingCard } from "./branding-card";
 import { AdminSshKeysCard } from "./admin-ssh-keys-card";
+import { ScimCard } from "./scim-card";
 import { ViewNotice } from "../../wardyn/console-view";
 import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -352,6 +353,8 @@ export function AdminSettingsScreen() {
               adds an SSH key that reaches other people's runs, now that Your
               account is the only door left for a personal one. */}
           <AdminSshKeysCard />
+          {/* 0.8.6 scim-a7 (mock M5, D1 as amended): where leaver deprovisioning stands. Read-only. */}
+          <ScimCard />
         </div>
       )}
     </div>

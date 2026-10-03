@@ -53,6 +53,7 @@
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
 //   - /api/v1/people         — creating a person, their tokens and erasing only their stored credentials (0.8, offboarding)
+//   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
