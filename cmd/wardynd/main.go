@@ -33,6 +33,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -303,6 +304,8 @@ func run() error {
 	// fail-closed confinement pins. The pg-backed RefStore makes the
 	// orchestrator's ref->substrate routing (and thus the kill switch) durable
 	// across control-plane restarts.
+	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
+	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
 	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err

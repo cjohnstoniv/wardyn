@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- **Chart installs get a smaller default sandbox (1000m CPU, 2048 MiB).** A run whose policy sets no
+  resources used to get 2000m/4096Mi; the Helm chart now ships `runner.sandbox.defaultResources` at
+  1000m/2048Mi so a run fits a shared node. Set `runner.sandbox.defaultResources.cpuMillis=2000` and
+  `memoryMiB=4096` to keep the old size. A daemon with no knob (Docker Compose) keeps 2000m/4096Mi.
+  The default is read from `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`, and the
+  proxy sidecar's envelope from `WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`. The Docker proxy sidecar
+  now also carries the 500m CPU limit the Kubernetes one already had.
+  With no resources in the operator's governance ceiling, the default is also the cap on member-authored
+  policy and profile resources, so requests above 1000m/2048Mi are cut on chart installs; to allow larger
+  requests, set the knob back to 2000/4096 or set ceiling resources.
+
 ### Security
 
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay

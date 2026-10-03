@@ -137,15 +137,17 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
 	// Resources: cap each set field at the ceiling's; an unset ceiling is not "no opinion" (Clamp is the
-	// operator-ceiling authority for every caller), so fall back to CreateSandbox's own platform defaults
-	// (runner.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no such
-	// default and stays skip-when-both-unset.
+	// operator-ceiling authority for every caller), so fall back to
+	// (runner.EffectiveLimits(): the deployment's configured default, else
+	// runner.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no
+	// such default and stays skip-when-both-unset.
 	effCeilingResources := ceiling.Resources
 	if effCeilingResources == nil {
+		eff := runner.EffectiveLimits()
 		effCeilingResources = &types.ResourceLimits{
-			CPUMillis: int(runner.DefaultCPUMillis),
-			MemoryMiB: int(runner.DefaultMemoryMiB),
-			PidsLimit: int(runner.DefaultPidsLimit),
+			CPUMillis: int(eff.CPUMillis),
+			MemoryMiB: int(eff.MemoryMiB),
+			PidsLimit: int(eff.PidsLimit),
 		}
 	}
 	{

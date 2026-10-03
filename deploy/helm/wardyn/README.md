@@ -523,6 +523,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate
   creates (agent, proxy, canary) — separate from `image.pullSecrets`, which is
   only for wardynd's own image.
+- `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
+  resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
+  a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each
+  run's `wardyn-proxy` sidecar (500m/256Mi).
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass
   NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g.
   `--set k8s.runtimeClasses.CC2=gvisor`. Unlike Docker's well-known runtime

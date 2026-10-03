@@ -450,6 +450,22 @@ daemonProxySecret:
 # untouched.
 awsSSOProxyInject: ""
 
+# Sandbox sizing, one value for every substrate (WARDYN_SANDBOX_DEFAULT_CPU_MILLIS /
+# WARDYN_SANDBOX_DEFAULT_MEMORY_MIB, WARDYN_PROXY_CPU_MILLIS / WARDYN_PROXY_MEMORY_MIB).
+# defaultResources is the size of a run whose policy sets none; it ships at 1000m/2048Mi
+# so a run fits a shared node. The daemon's own default with no knob is 2000m/4096Mi:
+# set 2000/4096 here to keep the size chart installs had before 0.8.6. An operator policy
+# value overrides it; with no resources in the governance ceiling it is also the cap on
+# member-authored policies. proxyResources is each run's wardyn-proxy sidecar.
+runner:
+  sandbox:
+    defaultResources:
+      cpuMillis: 1000
+      memoryMiB: 2048
+    proxyResources:
+      cpuMillis: 500
+      memoryMiB: 256
+
 # Kubernetes runner substrate (internal/runner/k8s, `-tags k8s`, v0.5+). Off by
 # default — the Docker Compose stack (deploy/compose/) remains a fully
 # separate, independent path. Enabling this makes wardynd itself create/manage
