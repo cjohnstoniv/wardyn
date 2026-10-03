@@ -272,14 +272,7 @@ func run() error {
 	// middleware ignores the run claims and checks only the audience. Print and
 	// exit so this slots cleanly into a compose token-seeding step.
 	if *f.printGroundtruthToken {
-		mintCtx, mintCancel := context.WithTimeout(rootCtx, 10*time.Second)
-		defer mintCancel()
-		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
-		if merr != nil {
-			return fmt.Errorf("mint groundtruth token: %w", merr)
-		}
-		fmt.Println(ri.Token)
-		return nil
+		return printGroundtruthToken(rootCtx, idp)
 	}
 
 	// Token broker: GitHub minter only when the App credentials are present;
@@ -780,3 +773,16 @@ var (
 	flagIntEnv   = cliutil.FlagIntEnv
 	splitCSV     = cliutil.SplitCSV
 )
+
+// printGroundtruthToken mints the host-sensor token and prints it, so the -print-groundtruth-token
+// path slots into a compose token-seeding step and exits.
+func printGroundtruthToken(ctx context.Context, idp identity.Provider) error {
+	mintCtx, mintCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer mintCancel()
+	ri, err := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
+	if err != nil {
+		return fmt.Errorf("mint groundtruth token: %w", err)
+	}
+	fmt.Println(ri.Token)
+	return nil
+}
