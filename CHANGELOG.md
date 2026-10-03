@@ -17,6 +17,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The default is read from `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`, and the
   proxy sidecar's envelope from `WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`. The Docker proxy sidecar
   now also carries the 500m CPU limit the Kubernetes one already had.
+  With no resources in the operator's governance ceiling, the default is also the cap on member-authored
+  policy and profile resources, so requests above 1000m/2048Mi are cut on chart installs; to allow larger
+  requests, set the knob back to 2000/4096 or set ceiling resources.
 
 ## [0.8.5] — 2026-10-02
 

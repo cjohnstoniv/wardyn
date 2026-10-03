@@ -794,6 +794,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A6 '^        - name: daemon-proxy-secret$$' | grep -A1 "key: url" | grep -q "path: url" || { echo "daemonProxySecret.existingSecretKey did not reach the projected volume's item key/path — the env value above would name a file this volume never writes"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set env.WARDYN_DAEMON_PROXY_SECRET=/mnt/csi/proxy-url); \
 	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/mnt/csi/proxy-url"' || { echo "env.WARDYN_DAEMON_PROXY_SECRET did not override the Secret-backed mount path"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_SANDBOX_DEFAULT_CPU_MILLIS=2000); \
+	[ "$$(echo "$$out" | grep -c 'name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS')" = "1" ] || { echo "env.WARDYN_SANDBOX_DEFAULT_CPU_MILLIS must replace the chart's named entry, not duplicate it"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS" | grep -q 'value: "2000"' || { echo "env.WARDYN_SANDBOX_DEFAULT_CPU_MILLIS did not override runner.sandbox.defaultResources.cpuMillis"; exit 1; }
 	@# T-60/#720's third DSN mode (secret.yaml doc comment "your own file"): a
 	@# Vault-Agent/CSI shape entirely OUTSIDE the chart's own Secrets — postgres.dsn
 	@# left external-empty, WARDYN_PG_DSN_FILE + WARDYN_AGE_KEY_FILE named in env,
