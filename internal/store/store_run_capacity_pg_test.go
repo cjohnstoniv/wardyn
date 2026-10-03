@@ -122,9 +122,9 @@ func TestPG_RunCapacityAggregate(t *testing.T) {
 		d.ProxyCPUMillis != 0 || d.ProxyCPUUncapped != 1 || d.HeldCPUMillis != 4000 {
 		t.Errorf("docker = %+v", d)
 	}
-	// Totals carry the current kind's sums; the docker rows add only to the counts.
-	if got.Totals.AgentCPURequestMillis != 2500 || got.Totals.Holding != 6 || got.Totals.Unknown != 2 {
-		t.Errorf("totals = %+v, want k8s sums, 6 holding, 2 unknown", got.Totals)
+	// Totals carry the current kind's entry only; the docker rows appear only under by_runner.
+	if got.Totals.AgentCPURequestMillis != 2500 || got.Totals.Holding != 4 || got.Totals.Unknown != 1 {
+		t.Errorf("totals = %+v, want k8s figures only: 2500 cpu request, 4 holding, 1 unknown", got.Totals)
 	}
 	ages := 0
 	for _, b := range got.AgeBuckets {

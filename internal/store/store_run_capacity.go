@@ -88,7 +88,7 @@ type RunCapacity struct {
 }
 
 // RunCapacityOpts parameterises RunCapacity. CurrentKind is the deployment's runner kind; Totals
-// carries only that kind's sums. UnschedulableReason maps a status_detail to its capacity-blocker
+// carries only that kind's entry; other kinds appear only under ByRunner. UnschedulableReason maps a status_detail to its capacity-blocker
 // reason, or "" when it is not one.
 type RunCapacityOpts struct {
 	Now                 time.Time
@@ -257,14 +257,8 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 		return RunCapacity{}, fmt.Errorf("store: run capacity: %w", err)
 	}
 
-	// Totals: the current kind's sums; the other kinds contribute only their counts, never a figure.
+	// Totals: the current kind's entry only; other kinds appear only under ByRunner.
 	out.Totals = out.ByRunner[o.CurrentKind]
-	for k, r := range out.ByRunner {
-		if k != o.CurrentKind {
-			out.Totals.Holding += r.Holding
-			out.Totals.Unknown += r.Unknown
-		}
-	}
 
 	list := make([]RunCapacityOwner, 0, len(owners))
 	for _, ow := range owners {
