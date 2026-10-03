@@ -213,4 +213,28 @@ describe("PoliciesScreen: New policy follows the deployment's model providers", 
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
+
+  it("a slow /setup/status that settles after New policy was closed never rewrites a later Edit", async () => {
+    let settle!: (v: unknown) => void;
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    getSetupStatusMock.mockResolvedValue({ model_providers: [] });
+    listPoliciesMock.mockResolvedValue([policy()]);
+    render(<PoliciesScreen />);
+    await screen.findByText("payments-strict");
+    await userEvent.click(screen.getAllByRole("button", { name: /new policy/i })[0]);
+    await screen.findByRole("dialog");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /policy actions/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^edit/i }));
+    const spec = (await screen.findByRole("dialog")).querySelector("textarea") as HTMLTextAreaElement;
+    expect(spec.value).toContain("deny_with_review");
+
+    settle({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: BEDROCK_HOST, harnesses: ["claude-code"] }] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(spec.value).toContain("deny_with_review");
+    expect(spec.value).not.toContain(BEDROCK_HOST);
+  });
 });

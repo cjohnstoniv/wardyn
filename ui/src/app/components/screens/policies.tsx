@@ -510,9 +510,11 @@ function PolicyEditor({
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>();
   React.useEffect(() => {
     if (!editor) return;
+    let alive = true;
     void setupApi
       .getSetupStatus()
       .then((st) => {
+        if (!alive) return;
         setAdoCeiling(st.scm_access?.capability_ceiling);
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
@@ -525,6 +527,9 @@ function PolicyEditor({
         }
       })
       .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [editor]);
 
   const dirty = name !== initial.current.name || specText !== initial.current.specText;
