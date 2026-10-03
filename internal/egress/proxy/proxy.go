@@ -24,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -206,6 +207,9 @@ type Proxy struct {
 	llmUnavailableDetail string
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
+	// attribution is Options.Attribution: the policy named in a policy-decided
+	// refusal, nil when there is none to name.
+	attribution *policyref.Ref
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -307,6 +311,8 @@ type Options struct {
 	LLMUnavailableDetail string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
+	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
+	Attribution *policyref.Ref
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -453,6 +459,7 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
+		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		dial:                 dial,
 		now:                  now,

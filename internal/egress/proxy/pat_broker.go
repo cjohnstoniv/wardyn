@@ -99,7 +99,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	ado, adoLane := p.adoGitGrant(host)
 	if !granted && !adoLane {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
-		http.Error(w, "host not granted to this run", http.StatusForbidden)
+		p.denyAttributed(w, "host not granted to this run", http.StatusForbidden)
 		return
 	}
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the

@@ -666,6 +666,10 @@ func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, lo
 		body = "egress denied: " + resolveFailedDetail
 	}
 	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, reason)
+	if policyDecidedReason(reason) {
+		p.denyAttributed(w, body, http.StatusForbidden)
+		return
+	}
 	http.Error(w, body, http.StatusForbidden)
 }
 

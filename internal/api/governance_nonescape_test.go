@@ -101,6 +101,12 @@ func (s *govEscapeStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Wo
 	}
 	return types.Workspace{}, store.ErrNotFound
 }
+
+// ListGovernanceProfiles answers no profiles: dispatch reads the run's profile
+// for its refusal attribution, and the embedded store is nil.
+func (s *govEscapeStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+	return nil, nil
+}
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
