@@ -318,7 +318,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
-	if err := validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL); err != nil {
+	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -579,7 +579,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // have decided which side of this line it sits on.
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
-	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding",
+	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -637,6 +637,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	if !present["sign_in_help_url"] {
 		cfg.SignInHelpURL = existing.SignInHelpURL
 	}
+	carryForwardPolicyHelp(cfg, existing, present) // same terms as the sign-in help pair
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -882,6 +883,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		"sign_in_help_text": saved.SignInHelpText,
 		"sign_in_help_url":  saved.SignInHelpURL,
 	}
+	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}

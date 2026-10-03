@@ -35,6 +35,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inherits the default policy's value, else the deployment default above. A profile that sets a size
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+- **A governance profile can carry a contact, and the site config a `policy_help` block.** Migration
+  `0108_governance_profile_contact` adds one nullable `governance_profiles.contact` column and changes no
+  existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
+  address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
+  `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
 
 ### Security
 
