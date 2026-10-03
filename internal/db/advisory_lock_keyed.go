@@ -63,6 +63,13 @@ const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
 // proposed cannot be overwritten by an upsert that landed in between.
 const GovernanceAssignmentLockClass int32 = 0x57474153 // ASCII "WGAS"
 
+// GovernanceTargetLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// target of a held governance change (hashtext of the kind and its natural key), for the kinds whose
+// row may be absent: a capability grant, a restriction, the enforcement map, a role mapping. The direct
+// write and the approval of a held change to that target both take it, so a write that landed between
+// the approval's staleness check and its own write cannot be overwritten.
+const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

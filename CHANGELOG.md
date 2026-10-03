@@ -99,6 +99,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Capability grants, the enforcement map, availability, user-type priority and role mappings can require a
+  second human too.** With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a human's write to `/permissions/grants`,
+  `/permissions/enforcement`, `/permissions/availability/{kind}/*` (when the restricted bit changes),
+  `PUT /user-types/{id}` (when the priority changes) or `/access/mappings` is held as a pending change and answered
+  `202`, and applies only on a distinct approval. A role mapping needs a super admin to approve it, and its lockout
+  guard is judged against the approver. No write to these targets has a narrowing exemption.
+
 - **Governance profile and assignment writes can require a second human.** With `WARDYN_GOVERNANCE_SECOND_HUMAN`
   on, a human's write to `/governance/profiles` or `/governance/assignments` is stored as a pending change and
   answered `202` with a `pending_change` body, and applies only when a different human with the authority to make

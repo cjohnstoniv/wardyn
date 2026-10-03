@@ -289,6 +289,11 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		for k, v := range applied.data {
 			tdata[k] = v
 		}
+		if applied.afterCommit != nil {
+			for k, v := range applied.afterCommit() {
+				tdata[k] = v
+			}
+		}
 		tdata["change_id"], tdata["proposed_by"] = out.ID, out.ProposedBy
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, applied.action, applied.target, "success", mustJSON(tdata)))
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.approve", out.ID.String(), "success", mustJSON(data)))

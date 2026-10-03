@@ -1415,8 +1415,11 @@ follows the setting, as it does for egress: it stops naming the creator as the
 person who can act.
 
 **Optional: four-eyes on governance writes.** Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no
-single administrator can change a governance profile or an assignment alone. With it on, a
-human's write to `POST/PUT/DELETE /governance/profiles` or `POST/DELETE /governance/assignments`
+single administrator can change a governance profile, an assignment, a capability grant, the
+enforcement map, a value's availability, a user type's priority or a role mapping alone. With it on, a
+human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`,
+`POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`,
+`PUT /user-types/{id}` (when the priority changes) or `POST/DELETE /access/mappings`
 is decoded and validated exactly as before and then stored as a pending change, answered `202`
 with `Location: /api/v1/governance/changes/{id}` and
 `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
@@ -1432,8 +1435,12 @@ most 512 characters, no control characters, recorded on the change and its audit
 approvers find them through `wardyn governance changes list` or the API.
 
 - **Who may approve.** The approver must pass the predicate of the tier the write was proposed on,
-  never a weaker one. Profile and assignment changes are proposed on the security tier, so a
-  security admin or a super admin approves; a security admin may approve a super admin's change.
+  never a weaker one. Profile, assignment, grant, enforcement, availability and user-type priority
+  changes are proposed on the security tier, so a security admin or a super admin approves; a security
+  admin may approve a super admin's change. A role mapping is written on the super-admin tier, so only a
+  super admin approves one: a security admin who tries is refused `403` `authz.denied` reason
+  `admin_surface` (target `governance.change`), and role-mapping changes are neither listed to a security
+  admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
   The predicate is evaluated again inside the approval transaction: an API token that was revoked
   after it authenticated, one cut off by a session revocation, or one whose role no longer passes
   is refused and the change stays pending.
@@ -1450,9 +1457,32 @@ approvers find them through `wardyn governance changes list` or the API.
   once; the other is `409` `governance_change_not_pending`. A failure after the write rolls it back.
 - **Exemptions.** Only these apply directly, with no second human: a profile update whose new
   effective profile is no more permissive than the current one (the same resolved comparison
-  composition uses, `Leq`), and a rename that changes nothing else. A profile update that changes the
-  contact is held even when it narrows. Everything else is held, deletes and every assignment write
-  included: deleting an assignment widens its subjects back to the deployment ceiling.
+  composition uses, `Leq`), a rename that changes nothing else, an availability `PUT` that leaves the
+  restricted bit as it is, and a user type's name or description edit that leaves its priority alone.
+  A profile update that changes the contact is held even when it narrows. Everything else is held,
+  deletes and every assignment write included: deleting an assignment widens its subjects back to the
+  deployment ceiling. No grant, enforcement, availability, priority or role-mapping write has a
+  narrowing exemption, because each can widen: deleting a deny grant, lifting a restriction (which
+  admits every person with no grant write), turning enforcement on, raising a priority (which moves a
+  person matching two types onto the other at their next sign-in).
+- **Per target.**
+  - *Capability grant* (`POST`/`DELETE /permissions/grants`): the target is the grant's natural key
+    (subject type, subject, capability, value); a delete by id is resolved to it at proposal, so a
+    pending delete and a pending upsert of one grant collide. Staleness covers the row at that key.
+  - *Enforcement* (`PUT /permissions/enforcement`): the whole-map replacement. A stale `If-Match` is
+    refused `412` at proposal as for a direct write; the approval then compares the map's ETag, and
+    the approval transaction, not the in-process lock a direct write takes, is what serializes it.
+  - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit
+    changes, in either direction. Staleness covers the bit and the allow rows naming the value, so a
+    restriction accepted at proposal is applied only while its list is what it was.
+  - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a
+    priority edit together are one held change). A name or description edit alone applies directly.
+  - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at
+    proposal and carried in the payload, and judged again when the change is applied. The lockout guard
+    runs when the change is applied, against the claim snapshot of the **approver**; the proposer's own
+    facts are not consulted (they may have been demoted since, and the second human is the safeguard
+    against them). The `admin-token` is exempt from the guard as it is on a direct write. The tokens
+    a demotion strands are revoked after the approval commits, as after a direct write.
 - **Break-glass and local mode.** The `admin-token` principal applies a covered write directly and
   approves a change, each writing `governance.change.bypass` beside the target's own row. A deployment
   that wants this gate to bind holds the token out of band. Local mode authenticates nobody, so the
@@ -1468,11 +1498,10 @@ approvers find them through `wardyn governance changes list` or the API.
   tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is
   detection, not prevention. Each change is reviewed alone: two separately approved changes can compose
   into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
-  (capability grants, enforcement, availability, user-type priority and role mappings arrive in the
-  next lane; workspace egress lists, `/policies`, `/site-config`, `/integrations` and the approval
-  `always` scope stay single-human).
-- **Availability.** A build that holds only the profile and assignment writes refuses to boot with the
-  switch set (exit 2), until the rest of the covered set and the console are pending-aware.
+  (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope,
+  user-type create and delete, and key-domain assignments stay single-human until their own lanes).
+- **Availability.** A build whose console is not yet pending-aware refuses to boot with the switch set
+  (exit 2).
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
