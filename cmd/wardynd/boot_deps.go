@@ -477,7 +477,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			// It also records the sign-in's identity row (migration 0108) on every issuer.
+			// It also records the sign-in's identity row (migration 0113) on every issuer.
 			OnLogin: func(ctx context.Context, f oidc.LoginFacts) {
 				now := time.Now().UTC()
 				refreshLoginStamps(ctx, store.NewPG(pool), f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated, now)

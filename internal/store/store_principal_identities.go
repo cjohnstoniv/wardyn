@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The identity row every successful sign-in leaves (migration 0108).
+// The identity row every successful sign-in leaves (migration 0113).
 package store
 
 import (
