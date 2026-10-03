@@ -854,6 +854,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"bedrock-api-key":       true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
+	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.
+	"wardyn-write-probe": true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the

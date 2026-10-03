@@ -277,7 +277,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// SAME refusal launch would. Review has no run row to freeze the choice
 	// onto; it keeps it only for the model-access row below and for the model
 	// credential the autonomy gate grades with.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, false)
 	if !ok {
 		return
 	}
