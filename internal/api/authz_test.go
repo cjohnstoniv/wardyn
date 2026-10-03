@@ -510,6 +510,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// route can reach anyone else's credential whatever tier the caller holds.
 	"GET /api/v1/scm/azure-devops/signin":   {class: classMember},
 	"GET /api/v1/scm/azure-devops/callback": {class: classMember},
+	// The Azure Foundry capture's start door (azure_foundry_entra.go): the same
+	// self-service shape. Its callback is the Azure DevOps callback above.
+	"GET /api/v1/model-providers-entra/signin": {class: classMember},
 	// The member's disconnect (ado_pat_console.go): the same self-service
 	// shape. It revokes and forgets the CALLER's own tokens and sign-in only,
 	// and a row the caller may not use answers as no row (D-6).

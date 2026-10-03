@@ -190,6 +190,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		PATGrants:            pc.PATGrants,
 		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ADOGrant:             pc.ADOGrant,
+		AzureGates:           pc.AzureGates,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,

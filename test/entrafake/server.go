@@ -91,6 +91,10 @@ const (
 	// is deliberately among them: Entra's own Conditional Access baseline
 	// recommends blocking it, and it cannot be bound to a browser session.
 	ErrUnsupportedGrantType = "unsupported_grant_type"
+	// AADSTSMultipleResources is Entra's refusal of a scope string that names
+	// more than one resource (AADSTS700022): one token is for one resource, so
+	// one request cannot ask for two.
+	AADSTSMultipleResources = "AADSTS700022"
 	// ErrUnsupportedResponseType is any response_type but `code`. The implicit
 	// and hybrid flows are not modelled because the capture must never use one.
 	ErrUnsupportedResponseType = "unsupported_response_type"
@@ -196,6 +200,9 @@ type Server struct {
 	// omitRefreshToken answers the code grant without a refresh_token
 	// (SetOmitRefreshToken).
 	omitRefreshToken bool
+	// answerScope, when set, replaces the granted scope every token response
+	// reports (SetAnswerScope).
+	answerScope []string
 
 	codes   map[string]codeGrant
 	access  map[string][]string
@@ -389,6 +396,15 @@ func (s *Server) SetOmitIDToken(v bool) { s.set(func() { s.omitIDToken = v }) }
 // which leaves a relying party nothing to store and nothing to renew.
 func (s *Server) SetOmitRefreshToken(v bool) { s.set(func() { s.omitRefreshToken = v }) }
 
+// SetAnswerScope makes every token response report exactly these scopes as
+// granted, whatever was requested: an authority that answers a `.default`
+// request with permissions of another resource, which a capture must read as
+// unusable rather than assume it got what it asked for. No arguments restores
+// the normal answer.
+func (s *Server) SetAnswerScope(scopes ...string) {
+	s.set(func() { s.answerScope = slices.Clone(scopes) })
+}
+
 func (s *Server) set(f func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -529,9 +545,19 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		redirectError(w, r, redirectURI, state, ErrInvalidRequest, "scope is required")
 		return
 	}
+	if multipleResources(requested) {
+		redirectError(w, r, redirectURI, state, ErrInvalidRequest, multipleResourcesDescription)
+		return
+	}
 	if consentRequired {
 		redirectError(w, r, redirectURI, state, ErrConsentRequired,
 			AADSTSConsentRequired+": the user or administrator has not consented to use the application")
+		return
+	}
+	requested, bad, ok := expandDefault(requested, consented)
+	if !ok {
+		redirectError(w, r, redirectURI, state, ErrConsentRequired,
+			AADSTSConsentRequired+": the user or administrator has not consented to use the application with scope "+bad)
 		return
 	}
 	if bad, ok := firstUnconsented(requested, consented); !ok {
@@ -729,14 +755,30 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	consented := slices.Clone(grant.scopes)
+	granted := consented
 	if requested := splitScope(r.Form.Get("scope")); len(requested) > 0 {
-		if bad, ok := firstUnconsented(requested, consented); !ok {
+		if multipleResources(requested) {
+			writeTokenError(w, http.StatusBadRequest, ErrInvalidRequest, multipleResourcesDescription)
+			return
+		}
+		expanded, bad, ok := expandDefault(requested, consented)
+		if !ok {
 			writeTokenError(w, http.StatusBadRequest, ErrConsentRequired,
 				AADSTSConsentRequired+": the user or administrator has not consented to use the application with scope "+bad)
 			return
 		}
-		// And then the requested subset is DISCARDED, which is the whole of
-		// F-LIVE-1: the token that comes back carries everything consented.
+		if bad, ok := firstUnconsented(expanded, consented); !ok {
+			writeTokenError(w, http.StatusBadRequest, ErrConsentRequired,
+				AADSTSConsentRequired+": the user or administrator has not consented to use the application with scope "+bad)
+			return
+		}
+		// A `.default` request is answered with the permissions it expands to
+		// for that one resource. Any other requested subset is DISCARDED, which
+		// is the whole of F-LIVE-1: the token that comes back carries everything
+		// consented.
+		if slices.ContainsFunc(requested, isDefaultScope) {
+			granted = expanded
+		}
 	}
 
 	// Retire the presented token BEFORE the new pair is minted, so there is no
@@ -745,7 +787,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	s.refresh[presented].retired = true
 	s.mu.Unlock()
 
-	s.issueTokens(w, consented, consented, "", false, true, grant.who)
+	s.issueTokens(w, granted, consented, "", false, true, grant.who)
 }
 
 // issueTokens mints the access/refresh/id triple and answers with the GRANTED
@@ -763,6 +805,9 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 	refresh := "fake-entra-refresh-" + randHex(16)
 
 	s.mu.Lock()
+	if s.answerScope != nil {
+		granted = slices.Clone(s.answerScope)
+	}
 	s.access[access] = slices.Clone(granted)
 	if withRefresh {
 		s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}

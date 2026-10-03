@@ -228,7 +228,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		// required fields, and a short capture is refused as blob_shape), so a
 		// STORED session always carries the pair and awsSSOPinQuery always
 		// answers one. pin_path is authored unconditionally besides, and
-		// InjectionRule.Pinned() reads PinPath alone — so the rule is pinned
+		// InjectionRule.Pinned() reads PinPath (or PinRoutes) — so the rule is pinned
 		// whatever the query turns out to be. The nil arm in awsSSOPinQuery is a
 		// fail-safe for a shape the upload door does not admit, not a supported
 		// configuration.

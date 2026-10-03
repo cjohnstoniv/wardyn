@@ -22,7 +22,7 @@ func (p *ModelProviders) Empty() bool {
 	return p == nil || len(p.Providers) == 0
 }
 
-// ModelProviderSecretPrefix starts every per-person credential name: wardyn-provider-<uid>-{key,oauth,sso}.
+// ModelProviderSecretPrefix starts every per-person credential name: wardyn-provider-<uid>-{key,oauth,sso,entra}.
 const ModelProviderSecretPrefix = "wardyn-provider-"
 
 // ModelProviderKind is what kind of credential each person brings to a provider, and so which dispatch
@@ -37,6 +37,16 @@ const (
 	ModelProviderBedrockBearer         ModelProviderKind = "bedrock_bearer"         // own Bedrock API key
 	// ModelProviderCustomEndpoint: admin's own endpoint, reached with each person's own token/PAT.
 	ModelProviderCustomEndpoint ModelProviderKind = "custom_endpoint"
+	// ModelProviderAzureFoundry: each person's own Entra sign-in, captured for one Azure resource audience.
+	// Writable only while validateModelProviders' activation flag (azureFoundryGateReady) is true.
+	ModelProviderAzureFoundry ModelProviderKind = "azure_foundry"
+)
+
+// The two inference routes an azure_foundry row serves. One row serves one route, and a route names the one
+// Entra audience its sign-in is captured for.
+const (
+	AzureRouteAnthropic = "anthropic"
+	AzureRouteOpenAIV1  = "openai_v1"
 )
 
 // ClosedModelProviderKinds is the only kind set a write may name.
@@ -44,6 +54,7 @@ var ClosedModelProviderKinds = map[ModelProviderKind]bool{
 	ModelProviderAnthropicSubscription: true, ModelProviderBedrockSSO: true,
 	ModelProviderAnthropicAPIKey: true, ModelProviderOpenAIAPIKey: true,
 	ModelProviderBedrockBearer: true, ModelProviderCustomEndpoint: true,
+	ModelProviderAzureFoundry: true,
 }
 
 // ClosedModelProviderKindList is ClosedModelProviderKinds in stable order, for a rejected write's error.
@@ -80,6 +91,7 @@ type ModelProvider struct {
 	BaseURL string           `json:"base_url,omitempty"`
 	Auth    *ProviderAuth    `json:"auth,omitempty"`    // how each person's token is sent; custom_endpoint only
 	Bedrock *BedrockSettings `json:"bedrock,omitempty"` // region, address and sign-in setup for a Bedrock kind
+	Azure   *AzureSettings   `json:"azure,omitempty"`   // endpoint and route for azure_foundry
 	// Harnesses are the harnesses this provider serves, with per-pairing settings.
 	Harnesses []ProviderHarness `json:"harnesses,omitempty"`
 }
@@ -105,13 +117,22 @@ type BedrockSettings struct {
 	SSORoleName  string `json:"sso_role_name,omitempty"`
 }
 
+// AzureSettings is an azure_foundry row's data-plane endpoint and the one route it serves (AzureRoute*).
+type AzureSettings struct {
+	Endpoint string `json:"endpoint,omitempty"`
+	Route    string `json:"route,omitempty"`
+}
+
 // ProviderHarness is one harness a provider is enabled for, and the settings for that pairing.
 type ProviderHarness struct {
 	Harness string `json:"harness"` // harness-catalog id ("claude-code", "codex-cli")
 	// Model: model id this harness uses on this provider; admin-set, no member override. Required
 	// (an inference profile) on a Bedrock kind.
 	Model string `json:"model,omitempty"`
-	Path  string `json:"path,omitempty"` // where a custom endpoint serves this harness's API dialect, under BaseURL; may not change the host
+	// FastModel is the deployment the Messages harness uses for its small-model alias; azure_foundry only,
+	// on that harness only. Unset means Model.
+	FastModel string `json:"fast_model,omitempty"`
+	Path      string `json:"path,omitempty"` // where a custom endpoint serves this harness's API dialect, under BaseURL; may not change the host
 	// AuthHeader and AuthFormat override the provider's Auth for this harness alone (custom_endpoint only).
 	AuthHeader string `json:"auth_header,omitempty"`
 	AuthFormat string `json:"auth_format,omitempty"`

@@ -422,6 +422,7 @@ func run() error {
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
+		AzureFoundryEntra:        azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:            feats.scanAdvisor,

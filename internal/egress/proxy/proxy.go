@@ -113,6 +113,8 @@ type Proxy struct {
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
+	// azure is the run's Azure route gates (azure_gate.go). Nil == no host gated.
+	azure *azureGates
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -264,6 +266,8 @@ type Options struct {
 	BrokeredPATGrantIDs []uuid.UUID
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
 	ADOGrants adoGrantsByHost
+	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
+	AzureGates []AzureGateConfig
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -440,6 +444,7 @@ func newProxy(opts Options) *Proxy {
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
+		azure:                newAzureGates(opts.AzureGates),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -840,7 +845,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) {
 		return
 	}
 

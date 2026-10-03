@@ -109,6 +109,8 @@ var harnessCatalog = []harnessDef{
 			"bedrock_sso":     "",
 			"bedrock_bearer":  "",
 			"custom_endpoint": "",
+			// Which route this harness may use is the row's (validateProviderAzure), not the catalog's.
+			"azure_foundry": "",
 		},
 	},
 	{
@@ -124,6 +126,7 @@ var harnessCatalog = []harnessDef{
 			"bedrock_sso":            reasonXBedrockCodex,
 			"bedrock_bearer":         reasonXBedrockCodex,
 			"custom_endpoint":        "",
+			"azure_foundry":          "",
 		},
 	},
 	{
