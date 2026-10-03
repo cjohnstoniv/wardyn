@@ -80,7 +80,7 @@ func driveSeed(t *testing.T, srv *Server, req createRunRequest, ceiling governan
 // deniedCeiling is an ASSIGNED profile whose door is shut.
 func deniedCeiling() governanceCeiling {
 	return governanceCeiling{
-		Profile: &types.GovernanceProfile{Name: "contractors"},
+		Profile: &ResolvedProfile{Name: "contractors"},
 		Limits:  types.GovernanceLimits{DenyUserDrive: true},
 	}
 }
@@ -150,7 +150,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 			// would ever notice the revert.
 			name: "a blank-named profile shuts it too",
 			ceiling: governanceCeiling{
-				Profile: &types.GovernanceProfile{Name: ""},
+				Profile: &ResolvedProfile{Name: ""},
 				Limits:  types.GovernanceLimits{DenyUserDrive: true},
 			},
 			want: "mounting a user drive is not allowed by your governance profile \"\". Launch without drive.",

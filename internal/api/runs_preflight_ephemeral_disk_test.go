@@ -106,7 +106,7 @@ func TestPreflightAndDispatchAgreeOnEphemeralDisk(t *testing.T) {
 			}
 			gc := governanceCeiling{}
 			if tc.profile != nil {
-				gc = governanceCeiling{Profile: tc.profile, Limits: tc.profile.Limits}
+				gc = governanceCeiling{Profile: resolvedOf(tc.profile), Limits: tc.profile.Limits}
 			}
 			res, _, _ := ephemeralDispatch(t, policy, tc.site, gc)
 

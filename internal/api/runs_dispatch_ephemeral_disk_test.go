@@ -55,7 +55,7 @@ func ephemeralSite(defaultMiB, maxMiB int) types.SiteConfig {
 // returns no limits for an unassigned principal).
 func assignedCeiling(maxEphemeralDiskMiB int) governanceCeiling {
 	return governanceCeiling{
-		Profile: &types.GovernanceProfile{Name: "sized"},
+		Profile: &ResolvedProfile{Name: "sized"},
 		Limits:  types.GovernanceLimits{MaxEphemeralDiskMiB: maxEphemeralDiskMiB},
 	}
 }
@@ -260,7 +260,7 @@ func TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp(t *testing.T) {
 
 	// A profile with no size limit: neither key appears.
 	_, events, runID = ephemeralDispatch(t, policy, types.SiteConfig{},
-		governanceCeiling{Profile: &types.GovernanceProfile{Name: "unsized"}})
+		governanceCeiling{Profile: &ResolvedProfile{Name: "unsized"}})
 	ev = findAudit(events, runID, "run.ceiling.reassert", "success")
 	if ev == nil {
 		t.Fatalf("no run.ceiling.reassert row for an assigned profile; events=%s", auditDump(events, runID))
@@ -291,7 +291,7 @@ func TestBoundMemberSpec_PreviewsTheGovernanceEphemeralLimit(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil)
 	ceiling := governanceCeiling{
 		Spec:    types.RunPolicySpec{MinConfinementClass: types.CC2},
-		Profile: &types.GovernanceProfile{Name: "sized"},
+		Profile: &ResolvedProfile{Name: "sized"},
 		Limits:  types.GovernanceLimits{MaxEphemeralDiskMiB: 2048},
 	}
 	spec, warns, ok := h.srv.boundUserSpec(context.Background(), httptest.NewRecorder(), r,

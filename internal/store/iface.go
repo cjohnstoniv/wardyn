@@ -247,8 +247,18 @@ type Store interface {
 	// DeleteGovernanceProfile returns ErrConflict when the profile is still ASSIGNED — the ON DELETE
 	// RESTRICT, so deleting a profile can never silently widen its members.
 	UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error)
+	// WriteGovernanceProfile is the graph-aware write: one transaction under the profile-graph
+	// lock, where build decides the stored row from every profile as that transaction reads them
+	// (migration 0109: a profile may be composed on another). DeleteGovernanceProfile also
+	// returns *ErrProfileHasChildren when another profile composes on the row.
+	WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build GovernanceProfileBuild) (types.GovernanceProfile, error)
 	DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error
+	// ListGovernanceProfiles and GetGovernanceProfileChain return RAW rows: a composed row
+	// carries no authority of its own. Only internal/api/governance_compose.go calls them for
+	// authority (a source guard fails any other caller); GetGovernanceProfileChain is one
+	// statement, leaf first, bounded at depth 3, and ErrNotFound when the leaf is gone.
 	ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error)
+	GetGovernanceProfileChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceProfile, error)
 	// UpsertGovernanceAssignment keys on the natural UNIQUE (subject_type,
 	// subject): re-assigning a subject REPOINTS its one row, returning the
 	// EXISTING row's id on a conflict. ErrNotFound when profile_id names no

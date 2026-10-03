@@ -39,3 +39,4 @@ reason event_stream_cap
 reason run_owner_only
 reason mask_state_unavailable
 reason role_stamp_stale
+reason governance_overlay_unsatisfiable

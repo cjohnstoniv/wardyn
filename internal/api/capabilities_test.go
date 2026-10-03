@@ -175,6 +175,10 @@ type capStore struct {
 	// — the store's own ORDER BY has its own pg test (TestPG_Resolve
 	// GovernanceProfile); what the api-side tests need to drive is the ANSWER.
 	govProfile *types.GovernanceProfile
+	// govGraph is every stored profile, for the chain a composed govProfile reads;
+	// govChainErr fails that read (governance_compose_disclosure_test.go).
+	govGraph    []types.GovernanceProfile
+	govChainErr error
 	// govTier is the tier that answer matched at. Load-bearing for the
 	// stale/truncated scoping: a user-tier winner is served, an all-tier one is
 	// refused when a group row exists.
@@ -272,6 +276,10 @@ func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string, _ 
 		return nil, "", store.ErrNotFound
 	}
 	return s.govProfile, s.govTier, nil
+}
+
+func (s *capStore) GetGovernanceProfileChain(_ context.Context, id uuid.UUID) ([]types.GovernanceProfile, error) {
+	return profileChainOf(s.govGraph, s.govChainErr, id)
 }
 
 func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
