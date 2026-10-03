@@ -77,7 +77,7 @@ beforeEach(() => {
   window.matchMedia ??= ((q: string) => ({
     matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
   })) as unknown as typeof window.matchMedia;
-  if (!("fonts" in document)) Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+  if (!("fonts" in document)) Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   // An 80x24 grid of 10x20 px cells.
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     const grid = this.classList.contains("xterm-screen");

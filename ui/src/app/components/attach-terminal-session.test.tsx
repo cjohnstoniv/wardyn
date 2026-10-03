@@ -149,7 +149,7 @@ function stubTerminalEnv() {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
-    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   }
   vi.stubGlobal(
     "ResizeObserver",
