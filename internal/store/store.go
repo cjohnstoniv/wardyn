@@ -605,10 +605,11 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // so an external SIEM ends up holding a head hash Wardyn cannot later disown.
 //
 // Runs in a transaction because pg_advisory_xact_lock must be held across the
-// INSERT: this caller's seq allocation and head read must not interleave with
-// another writer's, keeping seq order and chain order identical. The DB trigger
-// takes the same lock, binding writers this package knows nothing about; the
-// lock here is re-entrant and free.
+// append: this caller's seq allocation and head read must not interleave with
+// another writer's, keeping seq order and chain order identical. audit_append
+// takes the same lock itself (the only way a row enters the table since 0108);
+// the lock here is re-entrant and free, and keeps the bounded wait below in
+// front of it.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	// The cap lives at the one INSERT every audit writer reaches (api server,
 	// broker, identity, approval sweeper, spool drain), not in Server.auditEvent,
@@ -639,13 +640,13 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	// COALESCE: the genesis row's prev_hash is SQL NULL, which won't scan into a
-	// string; empty string and NULL both mean "nothing before this row".
+	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
+	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis
+	// row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
+	// "nothing before this row".
 	const q = `
-		INSERT INTO audit_events
-			(` + auditCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,

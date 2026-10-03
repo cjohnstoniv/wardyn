@@ -394,9 +394,8 @@ SQL
   # run on purpose: the lane is owner-and-RUNNING-only, and the seeded run
   # count is load-bearing for other specs (runs, recording).
   psql_e2e >/dev/null 2>&1 <<'SQL' || true
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success',
-       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
+SELECT audit_append(gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success', '',
+       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb)
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL
   # review R-03: fixture 6 (FAILED, rn=7 above) is runs-detail.spec.ts's "worst
@@ -411,9 +410,8 @@ UPDATE agent_runs
    SET repo = 'github.com/acme-widgets/payments-platform-monorepo',
        workspace_path = '/home/agent/work/payments-platform-monorepo/services/billing'
  WHERE task = 'e2e fixture 6';
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure',
-       '{"exit_code":137}'::jsonb
+SELECT audit_append(gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure', '',
+       '{"exit_code":137}'::jsonb)
 FROM agent_runs WHERE task = 'e2e fixture 6';
 -- review R-13/R-14: a PENDING approval was seeded here in the previous
 -- round for width headroom, then dropped again — measuring the header's

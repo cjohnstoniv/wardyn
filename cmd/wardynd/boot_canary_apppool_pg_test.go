@@ -89,6 +89,20 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		t.Fatalf("create the shadowing audit_events in %s: %v", appSchema, err)
 	}
 
+	// The append function the app role calls exists and does not chain either: since 0108 every audit
+	// write goes through audit_append, and a role that cannot call it is refused earlier, by name, by the
+	// privilege check (TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend).
+	if _, err := admin.Exec(ctx, `CREATE FUNCTION `+appSchema+`.audit_append(
+			p_id uuid, p_time timestamptz, p_run_id uuid, p_actor_type text, p_actor text,
+			p_action text, p_target text, p_outcome text, p_source_ip text, p_data jsonb)
+		RETURNS TABLE (seq bigint, recorded_at timestamptz, prev_hash text, row_hash text)
+		LANGUAGE sql AS $$
+			INSERT INTO `+appSchema+`.audit_events (id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
+			VALUES (p_id, p_time, p_run_id, p_actor_type, p_actor, p_action, p_target, p_outcome, p_source_ip, p_data)
+			RETURNING audit_events.seq, now(), audit_events.prev_hash, audit_events.row_hash $$`); err != nil {
+		t.Fatalf("create the shadowing audit_append in %s: %v", appSchema, err)
+	}
+
 	pool, err := connectAndMigrate(t.Context(), schemaDSN(appSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if pool != nil {
 		pool.Close()
@@ -110,6 +124,98 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 	ok, err := connectAndMigrate(t.Context(), schemaDSN(migrateSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if err != nil {
 		t.Fatalf("a split-role boot on a healthy schema: %v, want it to come up", err)
+	}
+	ok.Close()
+}
+
+// TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend: since 0108 every audit row is
+// appended by audit_append, so a serving role that cannot EXECUTE it would start clean and then lose every
+// audit write to the spool and refuse every credential mint. The boot refuses, naming the GRANT, and comes
+// up once the grant exists.
+func TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend(t *testing.T) {
+	dsn := os.Getenv("WARDYN_TEST_PG")
+	if dsn == "" {
+		t.Skip("WARDYN_TEST_PG not set; skipping the app-role privilege boot test")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		t.Skip("WARDYN_TEST_PG is not a URL-form DSN; cannot derive a role-scoped DSN from it")
+	}
+	ctx := context.Background()
+	admin, err := db.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(admin.Close)
+	var canCreate bool
+	if err := admin.QueryRow(ctx, `SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user`).Scan(&canCreate); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if !canCreate {
+		t.Skip("WARDYN_TEST_PG role cannot CREATE ROLE")
+	}
+
+	stamp := time.Now().UnixNano() % 1_000_000_000
+	schema := fmt.Sprintf("wardyn_ap_s_%d", stamp)
+	role := fmt.Sprintf("wardyn_ap_r_%d", stamp)
+	const pw = "ap-test-pw"
+	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s'`, role, pw)); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		_, _ = admin.Exec(context.Background(), `DROP OWNED BY `+role)
+		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS `+role)
+	})
+	scoped := func(user *url.Userinfo) string {
+		v := *u
+		if user != nil {
+			v.User = user
+		}
+		q := v.Query()
+		q.Set("search_path", schema)
+		v.RawQuery = q.Encode()
+		return v.String()
+	}
+	migrator := scoped(nil)
+	first, err := connectAndMigrate(t.Context(), migrator, "", 30*time.Second, 2*time.Minute, false)
+	if err != nil {
+		t.Fatalf("migrate the schema: %v", err)
+	}
+	first.Close()
+	for _, q := range []string{
+		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
+		fmt.Sprintf(`GRANT SELECT ON %s.audit_events TO %s`, schema, role),
+	} {
+		if _, err := admin.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	app := scoped(url.UserPassword(role, pw))
+
+	pool, err := connectAndMigrate(t.Context(), app, migrator, 30*time.Second, 2*time.Minute, false)
+	if pool != nil {
+		pool.Close()
+	}
+	if err == nil {
+		t.Fatal("a split-role boot came up with an app role that cannot EXECUTE audit_append")
+	}
+	for _, want := range []string{"app role", role, "GRANT EXECUTE ON FUNCTION audit_append"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q so the operator can act on it", err, want)
+		}
+	}
+
+	if _, err := admin.Exec(ctx, fmt.Sprintf(
+		`GRANT EXECUTE ON FUNCTION %s.audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb) TO %s`, schema, role)); err != nil {
+		t.Fatalf("grant execute: %v", err)
+	}
+	ok, err := connectAndMigrate(t.Context(), app, migrator, 30*time.Second, 2*time.Minute, false)
+	if err != nil {
+		t.Fatalf("a split-role boot with EXECUTE granted: %v, want it to come up", err)
 	}
 	ok.Close()
 }

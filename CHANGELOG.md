@@ -18,6 +18,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
   client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
   in `docs/OPERATIONS.md`.
+- **The audit log becomes a monthly-partitioned table, and every audit write goes through the database
+  function `audit_append`** (`0108_audit_partitioned`, `0109_audit_chain_partitioned`). The conversion is
+  one-way and needs stopped writers: a 0.8.5 binary's direct `INSERT` is refused afterwards, and 0.8.5 will not
+  start against the converted schema. History and hashes are untouched and verify as before. A split-role app
+  role that held `INSERT` on `audit_events` is granted `EXECUTE` on `audit_append` and `audit_ensure_partitions`
+  by the migration and loses `INSERT`; a role you add later needs that grant, and wardynd refuses to start
+  without it. Conversion time by row count is in "What the audit conversion does", `docs/OPERATIONS.md`.
 - The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
   slack). A value spelled with anything but `h`, `m` and `s` fails the render.
 - **Chart installs get a smaller default sandbox (1000m CPU, 2048 MiB).** A run whose policy sets no

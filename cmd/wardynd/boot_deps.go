@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -98,6 +99,10 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// refusal rules: a chain that demonstrably does not chain refuses the
 		// boot; a canary that could not RUN (chain lock busy, statement
 		// cancelled) reports at ERROR and lets it continue.
+		if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+			pool.Close()
+			return nil, aerr
+		}
 		if cerr := db.AuditChainCanary(connectCtx, pool); cerr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify the audit chain on the app role: %w", cerr)
@@ -128,7 +133,42 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	slog.InfoContext(rootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
+	if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+		pool.Close()
+		return nil, aerr
+	}
 	return pool, nil
+}
+
+// verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0108.
+// Every audit row is appended by the database function audit_append, so a serving role that cannot
+// EXECUTE it would start clean and then lose every audit write to the spool and refuse every
+// credential mint: that refuses the boot, naming the GRANT. The other two findings are postures to
+// report, not defects to refuse over: a role that can still INSERT directly (always true of the
+// owner, so of every single-DSN install), and an audit function any role may execute.
+func verifyAuditAppendPosture(connectCtx, rootCtx context.Context, pool *pgxpool.Pool) error {
+	p, err := db.AuditAppendPostureOf(connectCtx, pool)
+	if err != nil {
+		return fmt.Errorf("verify the audit append privileges: %w", err)
+	}
+	if !p.CanAppend {
+		return fmt.Errorf("the app role %q (the role in WARDYN_PG_DSN) cannot EXECUTE audit_append, the only function that appends to audit_events, so no "+
+			"audit row could be written and every credential mint would be refused; as the migrator/owner role run: "+
+			"GRANT EXECUTE ON FUNCTION audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb), "+
+			"audit_ensure_partitions(integer) TO %s (and ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO %s "+
+			"so later releases' functions are callable too)", p.Role, pgx.Identifier{p.Role}.Sanitize(), pgx.Identifier{p.Role}.Sanitize())
+	}
+	if p.DirectInsert {
+		slog.InfoContext(rootCtx, "wardynd: NOTICE app role can INSERT directly into audit_events (it owns the table, or holds INSERT). "+
+			"The chain trigger refuses a row audit_append did not allocate, which binds a well-behaved or mistaken writer, not a hostile owner; "+
+			"to take direct INSERT away use WARDYN_PG_MIGRATE_DSN with a non-owner app role that holds SELECT on audit_events and EXECUTE on audit_append.",
+			slog.String("role", p.Role))
+	}
+	if len(p.PublicExecute) > 0 {
+		slog.WarnContext(rootCtx, "wardynd: every database role may EXECUTE an audit function (the PUBLIC default); fix with REVOKE ALL ON FUNCTION <name> FROM PUBLIC for each function named here, then GRANT EXECUTE to the app role",
+			slog.Any("functions", p.PublicExecute))
+	}
+	return nil
 }
 
 // warnAllowUnknownMigrations is the #1050 follow-up: WARN whenever the
