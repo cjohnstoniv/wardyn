@@ -137,12 +137,17 @@ func TestApplyGovernance_FailuresNameTheStepAndStopThere(t *testing.T) {
 	cases := []struct {
 		name, failOn, want string
 		prune              bool
+		forbid             []string // write prefixes that must never be issued: the apply stops at the failure
 	}{
-		{"read current state", "GET /api/v1/governance", "read current governance state", false},
-		{"profile write", "POST /api/v1/governance/profiles", `apply governance profile "fresh"`, false},
-		{"assignment write", "POST /api/v1/governance/assignments", "apply governance assignment", false},
-		{"assignment prune", "DELETE /api/v1/governance/assignments/", "prune governance assignment", true},
-		{"profile prune", "DELETE /api/v1/governance/profiles/", `prune governance profile "stale"`, true},
+		{"read current state", "GET /api/v1/governance", "read current governance state", false,
+			[]string{"POST", "PUT", "DELETE"}},
+		{"profile write", "POST /api/v1/governance/profiles", `apply governance profile "fresh"`, false,
+			[]string{"POST /api/v1/governance/assignments", "DELETE"}},
+		{"assignment write", "POST /api/v1/governance/assignments", "apply governance assignment", true,
+			[]string{"DELETE"}},
+		{"assignment prune", "DELETE /api/v1/governance/assignments/", "prune governance assignment", true,
+			[]string{"DELETE /api/v1/governance/profiles/"}},
+		{"profile prune", "DELETE /api/v1/governance/profiles/", `prune governance profile "stale"`, true, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,6 +159,13 @@ func TestApplyGovernance_FailuresNameTheStepAndStopThere(t *testing.T) {
 			}
 			if len(got.Profiles) != 0 || len(got.Assignments) != 0 {
 				t.Fatalf("a failed apply returned a document: %+v", got)
+			}
+			for _, w := range g.writes {
+				for _, f := range tc.forbid {
+					if strings.HasPrefix(w, f) {
+						t.Fatalf("writes = %v; %q was issued after the failure", g.writes, w)
+					}
+				}
 			}
 		})
 	}

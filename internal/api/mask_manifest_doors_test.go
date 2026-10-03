@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -277,7 +278,9 @@ func TestEndSSHOnMaskFenceTellsTheShellThenCancelsIt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cancelled := make(chan struct{})
-	fenced := s.endSSHOnMaskFence(ctx, uuid.New(), ch, func() { close(cancelled) })
+	var once sync.Once
+	cancelShell := func() { once.Do(func() { close(cancelled) }) }
+	fenced := s.endSSHOnMaskFence(ctx, uuid.New(), ch, cancelShell)
 
 	select {
 	case <-cancelled:

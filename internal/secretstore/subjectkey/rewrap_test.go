@@ -93,21 +93,30 @@ type verKEK struct {
 
 func (v verKEK) Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]byte, error) {
 	w, err := v.Local.Wrap(ctx, dek, bind)
-	return append([]byte(v.version+"|"), w...), err
+	return append([]byte(verMagic+v.version+"|"), w...), err
 }
 
+// verMagic starts every verKEK wrap; a version never contains '|', so the first
+// '|' after it ends the version whatever bytes the inner wrap holds.
+const verMagic = "ver:"
+
 func (v verKEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
-	_, inner, _ := bytes.Cut(wrapped, []byte("|"))
+	rest, ok := bytes.CutPrefix(wrapped, []byte(verMagic))
+	if !ok {
+		return nil, errors.New("unversioned wrap")
+	}
+	_, inner, _ := bytes.Cut(rest, []byte("|"))
 	return v.Local.Unwrap(ctx, inner, bind)
 }
 
 func (verKEK) LatestVersion(context.Context) (string, error) { return "", nil }
 
 func (verKEK) WrapVersion(wrapped []byte) (string, error) {
-	v, _, ok := bytes.Cut(wrapped, []byte("|"))
+	rest, ok := bytes.CutPrefix(wrapped, []byte(verMagic))
 	if !ok {
 		return "", errors.New("unversioned wrap")
 	}
+	v, _, _ := bytes.Cut(rest, []byte("|"))
 	return string(v), nil
 }
 
@@ -224,18 +233,22 @@ func TestRewrapStopsAtTheFirstFailureAndNamesTheRow(t *testing.T) {
 		source func(string, string) (kek.KEK, error)
 		target func(string, string) (kek.KEK, error)
 		want   string
+		wantIs error
 	}{
-		{"select", &fakeTx{queryErr: boom}, only(from), only(to), "principal_keys select"},
-		{"scan", &fakeTx{rows: row(), scanErr: boom}, only(from), only(to), "principal_keys scan"},
-		{"target resolution", &fakeTx{rows: row()}, only(from), func(string, string) (kek.KEK, error) { return nil, boom }, `owner="alice", purpose="cred", version=4`},
-		{"source resolution", &fakeTx{rows: row()}, func(string, string) (kek.KEK, error) { return nil, boom }, only(to), "principal key"},
-		{"unwrap with the old key", &fakeTx{rows: row()}, only(stranger), only(to), "unwrap with the old key"},
-		{"update", &fakeTx{rows: row(), execErr: boom}, only(from), only(to), "update"},
+		{"select", &fakeTx{queryErr: boom}, only(from), only(to), "principal_keys select", boom},
+		{"scan", &fakeTx{rows: row(), scanErr: boom}, only(from), only(to), "principal_keys scan", boom},
+		{"target resolution", &fakeTx{rows: row()}, only(from), func(string, string) (kek.KEK, error) { return nil, boom }, `owner="alice", purpose="cred", version=4`, boom},
+		{"source resolution", &fakeTx{rows: row()}, func(string, string) (kek.KEK, error) { return nil, boom }, only(to), "principal key", boom},
+		{"unwrap with the old key", &fakeTx{rows: row()}, only(stranger), only(to), "unwrap with the old key", nil},
+		{"update", &fakeTx{rows: row(), execErr: boom}, only(from), only(to), "update", boom},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, err := Rewrap(context.Background(), tc.tx, tc.source, tc.target, nil, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) || n != 0 {
 				t.Fatalf("Rewrap = %d, %v; want a failure containing %q and no count", n, err, tc.want)
+			}
+			if tc.wantIs != nil && !errors.Is(err, tc.wantIs) {
+				t.Fatalf("Rewrap = %v; the cause was lost (errors.Is %v is false)", err, tc.wantIs)
 			}
 			if len(tc.tx.updates) != 0 {
 				t.Fatalf("a failed rewrap issued updates: %+v", tc.tx.updates)
@@ -250,6 +263,7 @@ func TestRewrapRefusesAWrapWhoseVersionCannotBeRead(t *testing.T) {
 	// A row at the target's own id whose wrap carries no version: Behind errors.
 	bare := sealedRow(t, base, "alice", PurposeCred, 1, 0x11)
 	bare.kekID = ver.ID()
+	bare.wrapped = []byte("no version marker")
 	tx := &fakeTx{rows: []pkRow{bare}}
 	_, err := Rewrap(context.Background(), tx, only(ver), only(ver), map[string]string{base.ID(): "v2"}, nil)
 	if err == nil || !strings.Contains(fmt.Sprint(err), "unversioned wrap") {

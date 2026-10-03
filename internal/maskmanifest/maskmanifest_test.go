@@ -205,8 +205,9 @@ func TestWatchAnswersFromTheLastCheckWithinItsInterval(t *testing.T) {
 	if watch() {
 		t.Fatal("Watch answered true with Postgres down")
 	}
-	// Within the interval the answer is the cached one, not a second round trip.
-	m.pool.Close()
+	// Within the interval the answer is the cached one, not a second round trip:
+	// with no pool at all, a re-query would panic.
+	m.pool = nil
 	if watch() {
 		t.Fatal("Watch changed its answer inside the interval")
 	}
