@@ -137,7 +137,7 @@ func (s *Server) admitRepoSources(w http.ResponseWriter, r *http.Request, repos 
 	if !providersConfigured(sc) {
 		return false // legacy open mode — byte-identical to 0.7.1
 	}
-	operator := s.isOperator(r.Context())
+	operator := s.runUngoverned(r.Context())
 	for _, repo := range repos {
 		if msg := admissionRefusal(sc, repo, operator); msg != "" {
 			writeErrorReason(w, admissionRefusalStatus(operator), reasonWorkspaceRepoNotAdmitted, msg)
@@ -166,7 +166,7 @@ func (s *Server) admitLauncherRepo(ctx context.Context, repos ...string) error {
 	if !providersConfigured(sc) {
 		return nil
 	}
-	operator := s.isOperator(ctx)
+	operator := s.runUngoverned(ctx)
 	for _, repo := range repos {
 		if msg := admissionRefusal(sc, repo, operator); msg != "" {
 			return fmt.Errorf("%w: %s", errRepoNotAdmitted, msg)
@@ -184,7 +184,7 @@ func (s *Server) writeAdmissionLaunchRefusal(w http.ResponseWriter, r *http.Requ
 	if !errors.Is(err, errRepoNotAdmitted) {
 		return false
 	}
-	writeErrorReason(w, admissionRefusalStatus(s.isOperator(r.Context())), reasonWorkspaceRepoNotAdmitted,
+	writeErrorReason(w, admissionRefusalStatus(s.runUngoverned(r.Context())), reasonWorkspaceRepoNotAdmitted,
 		strings.TrimPrefix(err.Error(), errRepoNotAdmitted.Error()+": "))
 	return true
 }
@@ -534,7 +534,7 @@ func (s *Server) laneVetoedBy(ctx context.Context, runID uuid.UUID,
 		string(decided.Kind), "failure", mustJSON(map[string]any{
 			"lane": string(lane), "grant": string(grant), "kind": string(decided.Kind),
 		})))
-	if s.isOperator(ctx) {
+	if s.runUngoverned(ctx) {
 		return fmt.Sprintf(admitLaneDroppedOperator, lane, decided.Kind, decided.ID, grant), true
 	}
 	return fmt.Sprintf(admitLaneDropped, lane, decided.Kind, grant), true

@@ -546,3 +546,15 @@ func parseMountCeilings(f *bootFlags) (runner.UserMountPolicy, []string, error) 
 	}
 	return memberMounts, driveHostRoots, nil
 }
+
+// warnGovernAdminRunsUnbound says at boot that WARDYN_GOVERN_ADMIN_RUNS binds
+// nobody when OIDC is not configured. Without OIDC (local mode, or admin-token-only
+// mode) no request carries a person, so every launch is the break-glass admin: it
+// is ungoverned and carries governance_exempt on run.create. The second-human
+// switches warn only in local mode because they fail closed in token mode; this
+// one fails open there, so it warns in both.
+func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
+	if governAdminRuns && !oidcConfigured {
+		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS is set but OIDC is not configured, so the switch binds nobody — every launch is the admin token or local mode, which stays ungoverned and carries governance_exempt on run.create. Configure SSO to govern admin runs, or unset it.")
+	}
+}
