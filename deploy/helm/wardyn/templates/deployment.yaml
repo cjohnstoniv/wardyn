@@ -490,6 +490,10 @@ spec:
             - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
               value: {{ .Values.runner.sandbox.defaultResources.memoryMiB | quote }}
             {{- end }}
+            {{- if and .Values.runner.sandbox.requestRatio (not (hasKey .Values.env "WARDYN_SANDBOX_REQUEST_RATIO")) }}
+            - name: WARDYN_SANDBOX_REQUEST_RATIO
+              value: {{ .Values.runner.sandbox.requestRatio | quote }}
+            {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS") }}
             - name: WARDYN_PROXY_CPU_MILLIS
               value: {{ .Values.runner.sandbox.proxyResources.cpuMillis | quote }}
