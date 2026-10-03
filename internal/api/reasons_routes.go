@@ -807,3 +807,8 @@ const (
 // taken (held elsewhere past its wait, the lock pool full, the database not
 // answering). Nothing was done; the request is safe to retry (locks.go).
 const reasonLockUnavailable = "lock_unavailable"
+
+// reasonIdentityDeactivated: a run, API token, SSH key or stored credential was refused because its
+// owner's identity is deactivated or was suspended since the caller was admitted (leaver
+// deprovisioning). One sentence, so a suspension reads like a cut session.
+const reasonIdentityDeactivated = "identity_deactivated"

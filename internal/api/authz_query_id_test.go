@@ -118,6 +118,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"filter":                    "GET /scim/v2/Users (SCIM bearer only, never a member): the identity provider's own userName, externalId or emails.value eq filter; the route admits no human credential at all (classSCIM)",
 	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",

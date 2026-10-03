@@ -479,12 +479,14 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			// It also records the sign-in's identity row (migration 0113) on every issuer.
 			OnLogin: func(ctx context.Context, f oidc.LoginFacts) {
-				now := time.Now().UTC()
-				refreshLoginStamps(ctx, store.NewPG(pool), f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated, now)
-				recordLoginIdentity(ctx, store.NewPG(pool), f, now)
+				refreshLoginStamps(ctx, store.NewPG(pool), f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated, time.Now().UTC())
 			},
+			// The leaver gate: every issuer's sign-in is refused for a deactivated identity, and
+			// issuance records the identity row (migration 0113) and stamps the session's authority
+			// epoch. Unlike OnLogin it fails the sign-in closed, so a database outage now denies
+			// sign-ins, as an unreadable role-mapping store already does.
+			Identities: api.NewIdentityGate(store.NewPG(pool)),
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)
@@ -889,18 +891,6 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, user
 	// admin keyed by this sub records that its person has now signed in.
 	if err := st.MarkPersonSignedIn(ctx, sub, now); err != nil {
 		slog.Warn("wardynd: marking a pre-created person signed in failed", slog.String("err", err.Error()))
-	}
-}
-
-// recordLoginIdentity writes the identity row an approved sign-in leaves, so a later removal of
-// this person has a row to act on even when no people row exists. Best-effort like the stamps
-// above: a store error logs and the login still succeeds.
-func recordLoginIdentity(ctx context.Context, st store.PrincipalIdentityStore, f oidc.LoginFacts, now time.Time) {
-	_, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{
-		Principal: f.Sub, Issuer: f.Issuer, TenantID: f.TenantID, ObjectID: f.ObjectID, Email: f.Email,
-	}, now)
-	if err != nil {
-		slog.Warn("wardynd: recording the sign-in identity failed", slog.String("err", err.Error()))
 	}
 }
 

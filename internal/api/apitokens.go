@@ -158,7 +158,9 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// be perfectly good, this deployment simply cannot decide, and the SSO
 		// lane now answers the identical condition the identical way.
 		if s.cfg.SessionRevocations != nil {
-			revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), t.Principal, t.Email, t.CreatedAt)
+			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
+			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -166,7 +168,10 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 				return
 			}
-			if revoked {
+			if status != oidc.SessionLive {
+				if status == oidc.SessionDeactivated {
+					r = r.WithContext(oidc.WithSessionRejected(r.Context(), authFailedIdentityDeactivated))
+				}
 				fallback.ServeHTTP(w, r)
 				return
 			}
@@ -482,7 +487,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 func (s *Server) insertAPIToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (types.APIToken, bool) {
 	plaintext := newBearer(apiTokenPrefix)
 	t.ID = uuid.New()
-	created, err := s.cfg.Store.CreateAPIToken(r.Context(), t, plaintext)
+	created, err := s.cfg.Store.CreateAPIToken(guardOwner(r.Context(), t.Principal), t, plaintext)
 	if err != nil {
 		writeServerError(w, r, "create api token", err)
 		return types.APIToken{}, false
