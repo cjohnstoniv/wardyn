@@ -5212,6 +5212,9 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0092` adds `agent_runs.ended_at`.
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
+`0108` (`0108_agent_runs_sizing`) adds the dispatch-time sizing columns on `agent_runs` (`runner_kind`, the agent CPU/memory
+request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`); at dispatch, before the sandbox
+is created, each run records the values its driver applied, and a run that predates it reads all NULL.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

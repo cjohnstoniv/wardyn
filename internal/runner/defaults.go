@@ -106,3 +106,31 @@ func EffectiveRequests(res Resources) (cpuMillis, memoryMiB int64) {
 	}
 	return scale(cpuLimit, res.CPURequestMillis), scale(memLimit, res.MemoryRequestMiB)
 }
+
+// Sizing is what a driver applies to one run's agent and proxy: the agent's effective CPU
+// and memory requests and limits and the proxy envelope. Both drivers and the dispatch
+// record read this one result, so the recorded figure cannot drift from the applied one.
+type Sizing struct {
+	AgentCPURequestMillis int64
+	AgentCPULimitMillis   int64
+	AgentMemoryRequestMiB int64
+	AgentMemoryLimitMiB   int64
+	ProxyCPUMillis        int64
+	ProxyMemoryMiB        int64
+}
+
+// EffectiveResources resolves res into Sizing: the default (EffectiveLimits) fills only zero
+// limit fields, EffectiveRequests applies the ratio, and ProxyLimits gives the proxy envelope.
+func EffectiveResources(res Resources) Sizing {
+	lim := EffectiveLimits()
+	s := Sizing{AgentCPULimitMillis: lim.CPUMillis, AgentMemoryLimitMiB: lim.MemoryMiB}
+	if res.CPUMillis > 0 {
+		s.AgentCPULimitMillis = res.CPUMillis
+	}
+	if res.MemoryMiB > 0 {
+		s.AgentMemoryLimitMiB = res.MemoryMiB
+	}
+	s.AgentCPURequestMillis, s.AgentMemoryRequestMiB = EffectiveRequests(res)
+	s.ProxyCPUMillis, s.ProxyMemoryMiB = ProxyLimits()
+	return s
+}
