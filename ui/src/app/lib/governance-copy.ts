@@ -243,7 +243,7 @@ export const GOVERNANCE = {
   DELETE_RESTRICT_TITLE: "This profile is still assigned",
   DELETE_RESTRICT_BODY: (name: string, n: number) =>
     `"${name}" still has ${n} assignment${n === 1 ? "" : "s"}. Deleting it would widen those subjects back to the deployment ceiling without anyone deciding that — remove the assignments first.`,
-  OMISSION_TITLE: "This profile narrows by omission",
+  OMISSION_TITLE: "Compared with the deployment ceiling",
   // Q6's acknowledge-before-save variant only. The recommended variant renders
   // OMISSION_TITLE over the warning list after a SUCCESSFUL save and never
   // blocks it.
