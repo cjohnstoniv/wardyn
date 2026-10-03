@@ -37,9 +37,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -266,6 +266,20 @@ func (s *Server) readADOEntraBlob(ctx context.Context, owner, rowID string) (ado
 	return s.readEntraBlob(ctx, owner, adoCapture(ADOEntraConfig{RowID: rowID}))
 }
 
+// entraRevision is the revision of owner's own stored sign-in row, for the
+// compare-and-set of the Put that follows a redemption. guarded is false when
+// the store keeps none (a test double) or there is no owner to read for.
+func (s *Server) entraRevision(ctx context.Context, owner string, ec entraCapture) (rev string, guarded bool, err error) {
+	if s.cfg.Secrets == nil || owner == "" {
+		return "", false, nil
+	}
+	rev, guarded, err = secretstore.RevisionOf(ctx, s.cfg.Secrets.For(owner), ec.secretName)
+	if err != nil {
+		return "", false, fmt.Errorf("read %s sign-in revision: %w", ec.label(), err)
+	}
+	return rev, guarded, nil
+}
+
 // readEntraBlob is readADOEntraBlob's body for any kind's capture: the same
 // own-namespace list-then-get, keyed by the capture's sealed name.
 func (s *Server) readEntraBlob(ctx context.Context, owner string, ec entraCapture) (adoEntraBlob, bool, error) {
@@ -353,31 +367,27 @@ type ADOEntraAccess struct {
 	ExpiresAt   time.Time
 }
 
-// adoEntraFlight is the per-owner single-flight registry. Keyed by owner AND
-// row, so two people redeeming at once never serialise behind each other while
-// two redemptions for the SAME person and row always do — which is what keeps
-// one rotating refresh token from being spent twice. Process-local, correct for
-// the same reason every other in-memory bound in this package is: more than one
-// replica is refused by construction.
-type adoEntraFlight struct {
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+// lockADOSignIn is the per-owner single-flight lock, across replicas. Keyed by
+// owner AND row, so two people redeeming at once never serialise behind each
+// other while two redemptions for the SAME person and row always do — which is
+// what keeps one rotating refresh token from being spent twice. It returns the
+// context the guarded work must use (cancelled if the lock is lost) and the
+// release. A lock that cannot be taken is an error, never a pass-through; a
+// redemption turns it into ErrADOEntraUnavailable (lockADOSignInRedeem).
+func (s *Server) lockADOSignIn(ctx context.Context, owner, rowID string) (context.Context, func(), error) {
+	return s.lock(ctx, db.ADOSignInLockClass, owner, rowID)
 }
 
-func (f *adoEntraFlight) lock(owner, rowID string) func() {
-	f.mu.Lock()
-	if f.locks == nil {
-		f.locks = map[string]*sync.Mutex{}
+// lockADOSignInRedeem is lockADOSignIn for a redemption: a lock it cannot take
+// is the transient ErrADOEntraUnavailable, the same answer an authority that
+// did not respond gets, so the credential is not graded dead and the caller
+// retries.
+func (s *Server) lockADOSignInRedeem(ctx context.Context, owner, rowID string) (context.Context, func(), error) {
+	lctx, unlock, err := s.lockADOSignIn(ctx, owner, rowID)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("%w: could not take the sign-in renewal lock: %w", ErrADOEntraUnavailable, err)
 	}
-	key := owner + "\x00" + rowID
-	mu := f.locks[key]
-	if mu == nil {
-		mu = &sync.Mutex{}
-		f.locks[key] = mu
-	}
-	f.mu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	return lctx, unlock, nil
 }
 
 // RedeemADOEntraAccess mints an Azure DevOps access token for owner, REQUESTING
@@ -412,9 +422,12 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
 		return ADOEntraAccess{}, err
 	}
-	unlock := s.adoEntra.lock(owner, cfg.RowID)
+	lctx, unlock, err := s.lockADOSignInRedeem(ctx, owner, cfg.RowID)
+	if err != nil {
+		return ADOEntraAccess{}, err
+	}
 	defer unlock()
-	return s.redeemADOEntraAccessLocked(ctx, cfg, owner, scopes)
+	return s.redeemADOEntraAccessLocked(lctx, cfg, owner, scopes)
 }
 
 // adoEntraRedeemable is what a redemption checks before it takes the lock.
@@ -429,18 +442,26 @@ func adoEntraRedeemable(cfg ADOEntraConfig, owner string, scopes []string) error
 }
 
 // redeemADOEntraAccessLocked is RedeemADOEntraAccess's body. The caller holds
-// s.adoEntra.lock(owner, cfg.RowID) and has checked adoEntraRedeemable.
+// the sign-in lock for (owner, cfg.RowID) and has checked adoEntraRedeemable.
 func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string) (ADOEntraAccess, error) {
 	return s.redeemEntraAccessLocked(ctx, cfg, adoCapture(cfg), owner, scopes)
 }
 
 // redeemEntraAccessLocked is the redemption for any kind's capture: the caller
-// holds s.adoEntra.lock(owner, <row key>) and has checked the requested scopes
+// holds the sign-in lock for (owner, <row key>) and has checked the requested scopes
 // against ec's policy. The kind decides only what counts as consented, what is
 // sent as `scope`, and what is stored back; the rotation, masking and
 // persistence discipline is one implementation.
 func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig, ec entraCapture, owner string, scopes []string) (ADOEntraAccess, error) {
-	blob, found, err := s.readEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, ec)
+	// The row's revision comes BEFORE the read, so a write landing between the
+	// two can only make the rotation's Put refuse, never overwrite.
+	rev, guarded, rerr := s.entraRevision(ctx, owner, ec)
+	var blob adoEntraBlob
+	var found bool
+	err := rerr
+	if err == nil {
+		blob, found, err = s.readEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, ec)
+	}
 	switch {
 	case errors.Is(err, secretstore.ErrUnavailable):
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
@@ -508,7 +529,18 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 		next.ExpiresAt = access.ExpiresAt
 		next.RenewedAt = s.cfg.Now().UTC()
 		next.DeadAt, next.DeadReason = time.Time{}, ""
-		if perr := s.storeEntraBlob(ctx, owner, ec, next); perr != nil {
+		// Detached from the lock's context, which is cancelled when the lock is
+		// lost: the token is already redeemed, so the store is attempted either
+		// way, and the compare-and-set is what keeps a holder that lost its lock
+		// from overwriting a newer pair.
+		pctx := context.WithoutCancel(ctx)
+		if guarded {
+			pctx = secretstore.WithIfRevision(pctx, rev)
+		}
+		if perr := s.storeEntraBlob(pctx, owner, ec, next); errors.Is(perr, secretstore.ErrRevisionChanged) {
+			slog.WarnContext(ctx, "wardynd: the stored azure sign-in changed while it was being renewed; keeping the newer row, serving this caller from memory",
+				slog.String("row", ec.logRow()))
+		} else if perr != nil {
 			slog.ErrorContext(ctx, "wardynd: persisting the rotated azure devops refresh token failed; serving this caller from memory",
 				slog.String("row", ec.logRow()), slog.Any("err", perr))
 		}

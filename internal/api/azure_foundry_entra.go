@@ -20,7 +20,7 @@ package api
 // So the start leg stamps the row uid, the audience its route names and the
 // row's address digest beside the random state, and the callback treats all
 // three as claims to re-check: it re-reads the row by uid from the current site
-// config under siteConfigMu, and stores nothing unless the row still exists, is
+// config under the site-config lock, and stores nothing unless the row still exists, is
 // an azure_foundry row, and still has the digest and audience the sign-in was
 // started for. That is the discipline the provider sign-ins already follow
 // (storeProviderSignIn): a capture for an old address must not land after rule
@@ -47,6 +47,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -274,7 +275,7 @@ func (s *Server) azureFoundryRedirect(w http.ResponseWriter, r *http.Request, re
 // in the callback query is not read at all.
 //
 // Nothing is stored until every check has passed, and the last of them (the row
-// is still what it was) runs under siteConfigMu in the same critical section as
+// is still what it was) runs under the site-config lock in the same critical section as
 // the write, so a purge cannot land between them.
 func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Request, subject string, stamp azureFoundryState) {
 	ctx := r.Context()
@@ -294,7 +295,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		s.azureFoundryRedirect(w, r, reason)
 	}
 	// Before the code is spent: the row must still be what the sign-in started
-	// for. The authoritative check is the one under siteConfigMu at the write.
+	// for. The authoritative check is the one under the site-config lock at the write.
 	if s.cfg.Store == nil || s.cfg.AzureFoundryEntra == nil {
 		fail(azureCaptureRowChanged)
 		return
@@ -366,7 +367,12 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		CapturedAt:   now.UTC(),
 		Source:       adoEntraSourceSignIn,
 	}
-	unlock := s.adoEntra.lock(subject, ec.rowUID)
+	ctx, unlock, err := s.lockADOSignIn(ctx, subject, ec.rowUID)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: could not take the Azure sign-in lock", slog.String("row", ec.rowUID), slog.Any("err", err))
+		fail(reasonStoreError)
+		return
+	}
 	defer unlock()
 	reason, err := s.storeAzureFoundryCapture(ctx, subject, stamp, ec, blob)
 	if err != nil {
@@ -388,12 +394,15 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 
 // storeAzureFoundryCapture stores blob only while the row is still the one the
 // sign-in was started for: it exists, is an azure_foundry row, and has the
-// audience and address digest the start leg stamped. Under siteConfigMu, which
+// audience and address digest the start leg stamped. Under the site-config lock, which
 // rule 8's purge also holds, so a purge can never land between the check and the
 // write. A non-empty reason means refused and nothing stored.
 func (s *Server) storeAzureFoundryCapture(ctx context.Context, subject string, stamp azureFoundryState, ec entraCapture, blob adoEntraBlob) (string, error) {
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	ctx, unlock, err := s.lock(ctx, db.SiteConfigLockClass)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if s.cfg.Store == nil {
 		return "", errors.New("no store configured")
 	}
@@ -444,9 +453,12 @@ func (s *Server) RedeemAzureFoundryAccess(ctx context.Context, cfg ADOEntraConfi
 	if err := ec.checkRequested(ec.scopes); err != nil {
 		return ADOEntraAccess{}, err
 	}
-	unlock := s.adoEntra.lock(owner, uid)
+	lctx, unlock, err := s.lockADOSignInRedeem(ctx, owner, uid)
+	if err != nil {
+		return ADOEntraAccess{}, err
+	}
 	defer unlock()
-	return s.redeemEntraAccessLocked(ctx, cfg, ec, owner, ec.scopes)
+	return s.redeemEntraAccessLocked(lctx, cfg, ec, owner, ec.scopes)
 }
 
 // mountAzureFoundrySignInRoutes mounts the start door on the authenticated

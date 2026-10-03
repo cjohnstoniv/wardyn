@@ -299,8 +299,8 @@ func TestCreateRenewal_EraseDuringPutRetryWinsAndBootstrapFailsClosed(t *testing
 	heldAtEveryPut.Store(true)
 	f.srv.cfg.Secrets = putScript{Store: f.secrets, only: providerSecretName(reauthProviderUID, providerSSOPart), n: new(atomic.Int32),
 		hook: func(n int) error {
-			if mu := f.srv.awsSSOOwnerMutex("alice@example.com"); mu.TryLock() {
-				mu.Unlock()
+			if _, release, ok := f.srv.tryLockAWSSSOOwner(context.Background(), "alice@example.com"); ok {
+				release()
 				heldAtEveryPut.Store(false)
 			}
 			if n == 1 {
@@ -371,7 +371,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 					return true
 				}
 				switch name := sel.Sel.Name; name {
-				case "lockAWSSSOOwner", "tryLockAWSSSOOwner":
+				case "lockAWSSSOOwner", "tryLockAWSSSOOwner", "lockAWSSSORenewal":
 					locks[fn.Name.Name] = append(locks[fn.Name.Name], c.Pos())
 				case "storeAWSSSOBlob", "persistRenewedAWSSSOBlob", "storeProviderSignIn":
 					calls = append(calls, call{fn.Name.Name, name, c.Pos()})

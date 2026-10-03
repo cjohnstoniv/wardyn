@@ -42,9 +42,10 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -213,12 +214,30 @@ func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error 
 	return nil
 }
 
+// awsSSOPersistBudget bounds persistRenewedAWSSSOBlob's attempts as a whole.
+const awsSSOPersistBudget = 30 * time.Second
+
 // persistRenewedAWSSSOBlob stores a redeemed pair, retrying a failed Put. The
 // caller holds the owner lock throughout, so an erase queues behind every
 // attempt rather than landing between two of them.
-func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob) (attempts int, err error) {
+//
+// The pair is already redeemed, and the presented one is spent, so it is stored
+// even when the lock was lost under the holder or the request's client went
+// away: the attempts run on a context detached from both. What keeps a holder
+// that lost the lock from overwriting a NEWER pair is the compare-and-set: when
+// the secret store keeps row revisions, the Put lands only while the row is
+// still the one rev names (read, under the lock, before the refresh token in it
+// was redeemed), and a row that changed since is left as it is
+// (secretstore.ErrRevisionChanged, never retried).
+func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob, rev string, guarded bool) (attempts int, err error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
+	defer cancel()
+	if guarded {
+		ctx = secretstore.WithIfRevision(ctx, rev)
+	}
 	for attempts = 1; ; attempts++ {
-		if err = s.storeAWSSSOBlob(ctx, scope, next); err == nil || attempts == awsSSOPersistAttempts {
+		err = s.storeAWSSSOBlob(ctx, scope, next)
+		if err == nil || errors.Is(err, secretstore.ErrRevisionChanged) || attempts == awsSSOPersistAttempts {
 			return attempts, err
 		}
 		select {
@@ -227,6 +246,23 @@ func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope
 		case <-time.After(awsSSOPersistRetryDelay):
 		}
 	}
+}
+
+// awsSSORevision is the revision of the stored credential row in scope's
+// namespace, for the compare-and-set of the Put that follows a redemption.
+// guarded is false when the store keeps none (a test double).
+func (s *Server) awsSSORevision(ctx context.Context, scope awsSSOScope) (rev string, guarded bool, err error) {
+	st := s.cfg.Secrets
+	if st == nil {
+		return "", false, nil
+	}
+	if scope.perUser {
+		if !scope.namespaced() {
+			return "", false, nil
+		}
+		st = st.For(scope.owner)
+	}
+	return secretstore.RevisionOf(ctx, st, scope.ssoSecret())
 }
 
 // awsSSOTokenResponse is the subset of the SSO-OIDC CreateToken response this
@@ -299,24 +335,26 @@ func awsSSOTokenFingerprint(refreshToken string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// lockAWSSSOOwner takes the per-owner single-flight lock and returns its
-// release. Owner is the secret-store namespace the blob was read from: "" is
-// the operator-wide one (a `shared` credential), and under a per_user row it is
-// the principal's own — so two people renewing at once never serialise behind
-// each other, and two dispatches of the SAME person's runs always do.
+// lockAWSSSOOwner takes the per-owner single-flight lock, across replicas, and
+// returns the context the guarded work must use (cancelled if the lock is lost)
+// and its release. Owner is the secret-store namespace the blob was read from:
+// "" is the operator-wide one (a `shared` credential), and under a per_user row
+// it is the principal's own — so two people renewing at once never serialise
+// behind each other, and two dispatches of the SAME person's runs always do. A
+// lock that cannot be taken is an error, never a pass-through: a renewal
+// without it can spend one rotating refresh token twice.
 //
 // Also taken by the login-capture upload (handleUploadSSOToken), whose once-only
 // guard is a read-then-put over the same namespace: one lock per namespace, so
 // every read-modify-write of a stored AWS SSO credential is serialised, whichever
 // path makes it.
-func (s *Server) lockAWSSSOOwner(owner string) func() {
-	mu := s.awsSSOOwnerMutex(owner)
-	mu.Lock()
-	return mu.Unlock
+func (s *Server) lockAWSSSOOwner(ctx context.Context, owner string) (context.Context, func(), error) {
+	return s.lock(ctx, db.AWSSSOLockClass, owner)
 }
 
-// tryLockAWSSSOOwner is lockAWSSSOOwner's NON-BLOCKING form: it returns
-// ok=false rather than queueing behind a renewal that is already in flight.
+// tryLockAWSSSOOwner is lockAWSSSOOwner's NON-BLOCKING form: ok=false rather
+// than queueing behind a renewal that is already in flight, and ok=false too
+// when the lock cannot be taken at all.
 //
 // Why that is a different question from "who renews". Dispatch is
 // synchronous with POST /runs, and the renewal starts a whole skew window
@@ -334,27 +372,23 @@ func (s *Server) lockAWSSSOOwner(owner string) func() {
 // A caller whose token is EXPIRED still BLOCKS, because for that caller the
 // renewal is the difference between a working run and a dead one, and the
 // in-flight renewal is very likely about to produce exactly what it needs.
-func (s *Server) tryLockAWSSSOOwner(owner string) (func(), bool) {
-	mu := s.awsSSOOwnerMutex(owner)
-	if !mu.TryLock() {
-		return nil, false
-	}
-	return mu.Unlock, true
+func (s *Server) tryLockAWSSSOOwner(ctx context.Context, owner string) (context.Context, func(), bool) {
+	return s.tryLock(ctx, db.AWSSSOLockClass, owner)
 }
 
-// awsSSOOwnerMutex returns the per-owner mutex, creating it on first use.
-func (s *Server) awsSSOOwnerMutex(owner string) *sync.Mutex {
-	s.ssoRefreshMu.Lock()
-	defer s.ssoRefreshMu.Unlock()
-	if s.ssoRefreshLocks == nil {
-		s.ssoRefreshLocks = map[string]*sync.Mutex{}
+// lockAWSSSORenewal takes owner's renewal lock for refreshAWSSSOBlob. mayServe
+// says the token in hand can still carry a run, so the caller only tries
+// (tryLockAWSSSOOwner): got=false then means a renewal is already in flight, or
+// the lock cannot be had, and the caller serves the token it holds. Any other
+// caller waits (lockAWSSSOOwner); err means the lock could not be taken at all.
+// The returned context is the guarded work's.
+func (s *Server) lockAWSSSORenewal(ctx context.Context, owner string, mayServe bool) (lctx context.Context, unlock func(), got bool, err error) {
+	if mayServe {
+		lctx, unlock, got = s.tryLockAWSSSOOwner(ctx, owner)
+		return lctx, unlock, got, nil
 	}
-	mu := s.ssoRefreshLocks[owner]
-	if mu == nil {
-		mu = &sync.Mutex{}
-		s.ssoRefreshLocks[owner] = mu
-	}
-	return mu
+	lctx, unlock, err = s.lockAWSSSOOwner(ctx, owner)
+	return lctx, unlock, err == nil, err
 }
 
 // AWSSSOSpentTokenRetention bounds how long a persisted spent-token row is
@@ -497,7 +531,7 @@ func (s *Server) markAWSSSOTokenSpent(ctx context.Context, fingerprint, owner st
 // throw away a credential we hold. It serves this run from the in-memory blob,
 // the persist failure is audited, and the old pair is marked spent — so whoever
 // reads it next is refused as spent rather than redeeming it twice.
-func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
+func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	now := s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
 		return blob, ""
@@ -518,13 +552,17 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// dispatch that close to the edge has everything to gain by waiting for the
 	// renewal already in flight, and nothing to lose — it has no usable
 	// credential of its own either way.
-	var unlock func()
-	if !blob.servableFor(now, awsSSORefreshServeFloor) {
-		unlock = s.lockAWSSSOOwner(scope.owner)
-	} else if u, ok := s.tryLockAWSSSOOwner(scope.owner); ok {
-		unlock = u
-	} else {
-		slog.InfoContext(ctx, "wardynd: a renewal of this AWS SSO credential is already in flight; serving the still-valid token",
+	ctx, unlock, got, lerr := s.lockAWSSSORenewal(parent, scope.owner, blob.servableFor(now, awsSSORefreshServeFloor))
+	if lerr != nil {
+		// No lock, no redemption: the token in hand cannot carry a run, and
+		// spending the refresh token unlocked could spend it twice. Nothing was
+		// redeemed, so the sign-in is still good: retry.
+		slog.WarnContext(parent, "wardynd: could not take the AWS SSO renewal lock; not renewing the credential", slog.Any("err", lerr))
+		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
+		return blob, awsSSORefreshUnavailableSentence
+	}
+	if !got {
+		slog.InfoContext(parent, "wardynd: a renewal of this AWS SSO credential is already in flight; serving the still-valid token",
 			slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
 		return blob, ""
 	}
@@ -540,7 +578,12 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// from it would write a credential back that an admin erased (#1478). So it
 	// renews nothing, spends nothing at AWS, and writes nothing. A token with at
 	// least the serve floor left is served from memory; otherwise the run is refused.
-	cur, found, rerr := s.readAWSSSOBlob(ctx, scope)
+	rev, guarded, rerr := s.awsSSORevision(ctx, scope)
+	var cur awsSSOBlob
+	var found bool
+	if rerr == nil {
+		cur, found, rerr = s.readAWSSSOBlob(ctx, scope)
+	}
 	if rerr != nil {
 		slog.WarnContext(ctx, "wardynd: could not re-read the captured AWS SSO credential under its lock; not renewing it", slog.Any("err", rerr))
 		if blob.servableFor(s.cfg.Now(), awsSSORefreshServeFloor) {
@@ -647,8 +690,17 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		data["registration_expires_at"] = next.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	}
 	outcome := "success"
-	persistAttempts, perr := s.persistRenewedAWSSSOBlob(ctx, scope, next)
-	if perr != nil {
+	persistAttempts, perr := s.persistRenewedAWSSSOBlob(ctx, scope, next, rev, guarded)
+	superseded := errors.Is(perr, secretstore.ErrRevisionChanged)
+	if superseded {
+		// The row is no longer the one this renewal read: a newer pair (or an
+		// erase) landed while the lock was lost. It is left as it is. The pair
+		// just redeemed serves this caller only, and the presented one is spent
+		// at AWS whatever the store holds.
+		s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
+		data["superseded"] = true
+		slog.WarnContext(ctx, "wardynd: the stored AWS SSO credential changed while it was being renewed; keeping the newer row")
+	} else if perr != nil {
 		// Redeemed but not stored — see the doc comment. Audited as a failure so
 		// the row is not read as "the rotated pair is safe". The OLD pair is
 		// spent at AWS whatever the store says: mark it, so the next read of it
@@ -663,7 +715,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 			slog.Any("err", perr))
 	}
 	s.auditAWSSSORefresh(ctx, scope, outcome, data)
-	if perr != nil && createRenewal(ctx) {
+	if perr != nil && !superseded && createRenewal(ctx) {
 		// Create has no run to serve from memory: the proxy's bootstrap reads
 		// the stored pair, which is now marked spent. Refuse before a run row
 		// exists; the next launch gets the sign-in door at once.
@@ -683,7 +735,9 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outcome string, data map[string]any) {
 	data["owner"] = scope.owner
 	data["credential_source"] = awsSSOCredentialSourceLabel(scope)
-	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd",
+	// Detached: the context is the renewal lock's, cancelled when the lock is
+	// lost, and the row describing that renewal must still be written.
+	s.recordAudit(context.WithoutCancel(ctx), s.auditEvent(nil, types.ActorSystem, "wardynd",
 		"harness.credential.refresh", harnessCredSecretName(awsSSOProvider), outcome, mustJSON(data)))
 }
 

@@ -798,3 +798,8 @@ const (
 	uiDeniedReasonDelegationEnded       = "delegation_ended"
 	uiDeniedReasonDelegationUnavailable = "delegation_unavailable"
 )
+
+// reasonLockUnavailable: a cross-replica lock the request needs could not be
+// taken (held elsewhere past its wait, the lock pool full, the database not
+// answering). Nothing was done; the request is safe to retry (locks.go).
+const reasonLockUnavailable = "lock_unavailable"

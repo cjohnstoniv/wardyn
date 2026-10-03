@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -104,6 +105,10 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 			writeErrorReason(w, http.StatusBadRequest, reasonCredentialEraseOperatorNamespace, "that names the operator namespace, which is not a person's")
 			return
 		}
+		if db.LockRefused(err) {
+			writeLockRefused(w, r, err)
+			return
+		}
 		writeServerError(w, r, "erase credentials", err)
 		return
 	}
@@ -139,8 +144,12 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // (ssotoken.go), which a held AWS lock serialises. A run that already holds a
 // credential in memory keeps it; the erase does not reach into a running run.
 func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secretstore.EraseReport) error {
-	defer s.lockAWSSSOOwner(owner)()
-	return s.eraseADOSignIn(owner, rowID, func() (err error) {
+	ctx, unlock, err := s.lockAWSSSOOwner(ctx, owner)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.eraseADOSignIn(ctx, owner, rowID, func(ctx context.Context) (err error) {
 		adoOwnPATWriteMu.Lock()
 		defer adoOwnPATWriteMu.Unlock()
 		*rep, err = secretstore.EraseOwner(ctx, s.cfg.Secrets, owner)
