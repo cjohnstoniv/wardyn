@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -88,9 +89,18 @@ type Config struct {
 	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
 	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
 	SandboxPlacement string
+	// StartTimeout is WARDYN_SANDBOX_START_TIMEOUT: the absolute budget for a sandbox's proxy and agent
+	// pods to start. Zero means runner.DefaultSandboxStartTimeout.
+	StartTimeout time.Duration
+	// CapacityWait is WARDYN_SANDBOX_CAPACITY_WAIT: how long a pod the scheduler has no room for waits,
+	// on top of StartTimeout. Zero turns the wait off: such a pod fails at StartTimeout.
+	CapacityWait time.Duration
 }
 
 func (c *Config) withDefaults() {
+	if c.StartTimeout <= 0 {
+		c.StartTimeout = runner.DefaultSandboxStartTimeout
+	}
 	if c.Namespace == "" {
 		c.Namespace = "default"
 	}

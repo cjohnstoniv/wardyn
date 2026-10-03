@@ -346,6 +346,10 @@ export interface SetupStatus {
     // because `driver` is blanked for them and the Vault remedy differs by
     // substrate. Absent on an older daemon or off Kubernetes.
     kubernetes?: boolean;
+    // How long a Kubernetes sandbox has to start, and how much longer one that no machine
+    // has room for waits (internal/api/setup.go, SetupSandboxStart). Kept in a member's
+    // redacted body: the run page's overdue bound follows it. Absent off Kubernetes.
+    sandbox_start?: { start_timeout_seconds: number; capacity_wait_seconds: number };
   };
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };

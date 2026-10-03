@@ -4260,27 +4260,39 @@ failure. The last reason therefore survives on the row for a `SELECT`
 postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
 daemon, or a run that started before this upgrade, simply carries no reason.
 
-### The two real bounds on a slow start
+### The start deadlines
 
-The pane will wait; the **runner** will not wait forever, and those are the bounds an operator has to
-size:
+The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
 
-- `podIPWaitTimeout` = **90 seconds** (`internal/runner/k8s/canary.go`) is a SCHEDULING bound, not a
-  pull bound. It bounds the wait for the PROXY pod's CNI-assigned IP, and the CNI assigns that at
-  PodSandbox creation, *before* any application image is pulled. A cold pull can therefore never trip
-  it; an unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an
-  operator most often sees just before this error.
-- The proxy image's pull, its config-staging init container and its container becoming Ready are then
-  bounded by `canaryWaitTimeout` below, counted from the proxy pod's creation. The agent pod is not
-  created before the proxy is Ready. A terminal proxy state (`ImagePullBackOff`, `CrashLoopBackOff`, a
-  failed init, …) fails the run at once instead of waiting it out.
-- `canaryWaitTimeout` = **3 minutes** (same file) is the agent image's PULL bound. It bounds the wait
-  for the agent pod's main container to reach Running, which is where a genuine first pull of an
-  arbitrary agent image is spent. A first pull of the `aws-sso` image was measured at **131 seconds**
-  on a reporting estate — 73% of this budget.
+- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox
+  start, counted from the moment the proxy pod is created and spent across BOTH pods: the proxy's
+  scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running. It
+  is not restarted when the agent pod is created, and a change in the reason a pod is stuck never resets
+  it. A first pull of the `aws-sso` image was measured at **131 seconds** on a reporting estate, which is
+  most of the default; raise it for a slower registry. Before 0.8.6 this was a fixed 3 minutes for the
+  agent plus a separate fixed 90 seconds for the proxy's IP.
+- `WARDYN_SANDBOX_CAPACITY_WAIT` (default **15 minutes**) is how long a pod the scheduler cannot place
+  for lack of room (`Unschedulable`, for example `Insufficient cpu`) may wait. The run stays `STARTING`
+  with "Waiting for a machine with room for this sandbox." and the poll backs off to every few seconds.
+  That time is counted apart: it spends the capacity wait, not the start timeout, so a run that waited ten
+  minutes for room still has its full start budget to pull an image. The longest a run can sit in
+  `STARTING` is therefore the two added together (18 minutes by default). `0` turns the wait off: an
+  unplaceable run fails at the start timeout, which is what 0.8.5 did (at 90 seconds for the proxy).
+- Terminal states never wait: `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the
+  run at once, inside a capacity wait as anywhere else.
+- The **boot egress canary** keeps its own fixed budget (`canaryWaitTimeout`, 3 minutes a phase,
+  `internal/runner/k8s/canary.go`) and neither setting moves it: both phases must fit inside the chart's
+  450 second startup probe.
+- While a run waits, wardynd holds the run's watcher lease with a heartbeat for as long as the sandbox
+  create blocks, so another replica's sweep does not adopt a run that is still being set up.
+- `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the
+  checklist shows them as the `sandbox_start` row. The console's "taking longer than expected" bound for a
+  starting run is the two added together plus 90 seconds, read from there.
 
-Neither is configurable in 0.7.6 and neither was moved: they bound every Kubernetes run on every
-estate. A pull slower than them fails the run honestly — the run carries a `failure_hint` naming the
+**Upgrading:** a run that cannot be placed now waits up to 15 minutes where 0.8.5 failed it at 90 seconds.
+Set `WARDYN_SANDBOX_CAPACITY_WAIT` to `0` to keep failing fast.
+
+A pull slower than the start timeout fails the run honestly: the run carries a `failure_hint` naming the
 deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
 
 **A first pull after an upgrade does not fail a run.** Every image tag changes at a version bump, so

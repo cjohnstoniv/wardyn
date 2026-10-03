@@ -1194,7 +1194,7 @@ func TestWaitContainerRunning_TimeoutNamesTheUnboundClaim(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName, nil)
+	err := d.waitContainerRunning(ctx, d.newStartClock(), pod.Name, mainContainerName, nil)
 	if err == nil {
 		t.Fatal("waitContainerRunning: want a timeout on a pod that never starts")
 	}
@@ -1454,7 +1454,7 @@ func TestWaitContainerRunning_OnWaitingFiresOncePerReasonChange(t *testing.T) {
 	})
 
 	var seen []string
-	err := d.waitContainerRunning(context.Background(), podName, mainContainerName, func(detail string) {
+	err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, func(detail string) {
 		seen = append(seen, detail)
 	})
 	if err == nil {
@@ -1494,7 +1494,7 @@ func TestWaitPodIP_ReportsTheProxyPodsReason(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 	var seen []string
-	if _, err := d.waitPodIP(ctx, podName, func(detail string) { seen = append(seen, detail) }); err == nil {
+	if _, err := d.waitPodIP(ctx, d.newStartClock(), podName, func(detail string) { seen = append(seen, detail) }); err == nil {
 		t.Fatal("waitPodIP: want a timeout on a pod that never gets an IP")
 	}
 	if len(seen) != 1 || !strings.HasPrefix(seen[0], "pod: Unschedulable: ") || !strings.Contains(seen[0], taint) {

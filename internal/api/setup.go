@@ -173,6 +173,17 @@ type SetupRunner struct {
 	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
 	// not the driver name or anything a substrate reports about itself.
 	Kubernetes bool `json:"kubernetes,omitempty"`
+	// SandboxStart is the Kubernetes sandbox start deadlines (WARDYN_SANDBOX_START_TIMEOUT,
+	// WARDYN_SANDBOX_CAPACITY_WAIT), kept in a member's redacted body because the run page's
+	// "taking longer than expected" bound follows them. Absent off Kubernetes.
+	SandboxStart *SetupSandboxStart `json:"sandbox_start,omitempty"`
+}
+
+// SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
+// machine has room for waits. Seconds on the wire; a capacity wait of 0 is the wait switched off.
+type SetupSandboxStart struct {
+	StartTimeoutSeconds int `json:"start_timeout_seconds"`
+	CapacityWaitSeconds int `json:"capacity_wait_seconds"`
 }
 
 // SetupProvider is a coding-agent CLI (claude|codex) detected on the wardynd
@@ -286,6 +297,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
 	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
+		checks = append(checks, chk)
+	}
+
+	if chk, ok := sandboxStartCheck(rnr.SandboxStart); ok {
 		checks = append(checks, chk)
 	}
 
@@ -462,7 +477,7 @@ func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes, SandboxStart: st.Runner.SandboxStart}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
@@ -555,6 +570,10 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 	}
 	out.Driver = rn.Name()
 	out.Kubernetes = out.Driver == "k8s"
+	if out.Kubernetes {
+		start, capacity := runner.SandboxStartDeadlines()
+		out.SandboxStart = &SetupSandboxStart{StartTimeoutSeconds: int(start.Seconds()), CapacityWaitSeconds: int(capacity.Seconds())}
+	}
 	c, err := rn.Capabilities(ctx)
 	if err != nil {
 		return out, ""

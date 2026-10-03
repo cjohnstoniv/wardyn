@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import type { AgentRun } from "../../../lib/types";
 import { SIGNIN_PROGRESS } from "../settings/login-pane-copy";
 import { PENDING_NO_DETAIL, RUN_STARTUP } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
+
+const getSetupStatus = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus } }));
+beforeEach(() => getSetupStatus.mockResolvedValue({ runner: {} }));
 
 const T0 = Date.UTC(2000, 0, 1, 12); // fixed reference instant for the mocked clock
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -120,6 +124,21 @@ describe("StartupProgress", () => {
 
     render(<StartupProgress lastStep="terminal" run={run({})} />);
     expect(screen.getAllByRole("listitem")[0]).toHaveClass("font-medium", "text-foreground");
+  });
+
+  it("a run waiting for room is not overdue until the deployment's real deadlines pass", async () => {
+    vi.useFakeTimers({ now: T0 + 6 * 60_000 });
+    getSetupStatus.mockResolvedValue({ runner: { sandbox_start: { start_timeout_seconds: 180, capacity_wait_seconds: 900 } } });
+    render(
+      <StartupProgress
+        lastStep="terminal"
+        run={run({ status_detail: "pod: Unschedulable: 0/1 nodes are available", status_reason: "Unschedulable" })}
+      />,
+    );
+    // Before the answer lands the default 4.5 minute bound applies: the active row has lost its spinner.
+    expect(states()[0]).toBe("pending");
+    await act(async () => {});
+    expect(states()[0]).toBe("active");
   });
 
   it("renders nothing for a run that is up", () => {

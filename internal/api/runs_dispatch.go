@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -584,17 +585,22 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
 		})))
 
-	// Stamped BEFORE CreateSandbox, not after: the row still carries the
+	// Held BEFORE CreateSandbox, not after: the row still carries the
 	// heartbeat it was born with, which any image build/pull longer than the
-	// stale window has already let expire — so without an early stamp the next
+	// stale window has already let expire — so without an early lease the next
 	// reconcile sweep on any replica can adopt a run this dispatch is still
-	// setting up (reconcile.go). CreateSandbox can block for canaryWaitTimeout
-	// (the k8s substrate's agent-pod readiness wait, on top of whatever image
-	// pull it was already doing), so stamping first covers that latency too
-	// instead of leaving the run entirely un-leased while it waits.
-	// stampRunWatcherLease only touches run.ID (idempotent heartbeat write; no
-	// dependency on sb.Ref), so moving it earlier is safe.
-	s.stampRunWatcherLease(ctx, run.ID)
+	// setting up (reconcile.go). CreateSandbox can block for the whole of the
+	// sandbox start deadline plus the capacity wait (WARDYN_SANDBOX_START_TIMEOUT,
+	// WARDYN_SANDBOX_CAPACITY_WAIT: 18 minutes by default on k8s, far past the
+	// 90s stale window), on top of whatever image pull it was already doing, so
+	// the lease is HELD, heartbeating, for exactly as long as CreateSandbox
+	// blocks, not stamped once. It is released the moment CreateSandbox returns;
+	// the hold below takes over from there. holdRunWatcherLease only touches
+	// run.ID (no dependency on sb.Ref), so taking it earlier is safe.
+	// sync.OnceFunc + defer: the explicit calls below stop it at the earliest point, and the
+	// defer stops the heartbeat if CreateSandbox panics (ctx is WithoutCancel, so nothing else would).
+	stopCreateLease := sync.OnceFunc(s.holdRunWatcherLease(ctx, run.ID))
+	defer stopCreateLease()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
@@ -602,6 +608,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The proxy config is stored before any proxy holds it (#1176): a revive
 	// rebuilds the proxy from this row alone.
 	if err := s.keepRunProxyConfig(ctx, run.ID, spec.ProxyConfig); err != nil {
+		stopCreateLease()
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy config could not be stored")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
@@ -615,6 +622,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
+	stopCreateLease()
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that

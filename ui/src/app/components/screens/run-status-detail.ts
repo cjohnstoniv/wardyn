@@ -129,11 +129,25 @@ export const STATUS_REASON_BUILDING = "Building";
 export const RUN_POLL_SLOW_START_MS = 60_000;
 
 // Past the longest a healthy start can take, the startup view stops claiming
-// the substrate's step. STARTING: canaryWaitTimeout + podIPWaitTimeout
-// (internal/runner/k8s/canary.go) = 4 min 30 s. PENDING: imageBuildTimeout
-// (internal/api/runs.go) = 30 min. Each has a parity test against its Go source.
+// the substrate's step. STARTING: the default sandbox start timeout
+// (DefaultSandboxStartTimeout, internal/runner/start_deadlines.go) plus 90 s of slack,
+// 4 min 30 s, until /setup/status says what this deployment is set to (see
+// startOverdueMs). PENDING: imageBuildTimeout (internal/api/runs.go) = 30 min.
+// Each has a parity test against its Go source.
 export const RUN_START_OVERDUE_MS = 270_000;
+export const RUN_START_OVERDUE_SLACK_MS = 90_000;
 export const RUN_PENDING_OVERDUE_MS = 1_800_000;
+
+// How long a STARTING run may take before the startup view calls it overdue, from the
+// deadlines /setup/status reports (runner.sandbox_start): the start budget plus the
+// capacity wait, which a run waiting for room is allowed to spend in full, plus slack.
+// RUN_START_OVERDUE_MS where the deployment reports none (not Kubernetes, older daemon).
+export function startOverdueMs(
+  sandboxStart: { start_timeout_seconds: number; capacity_wait_seconds: number } | null | undefined,
+): number {
+  if (!sandboxStart) return RUN_START_OVERDUE_MS;
+  return (sandboxStart.start_timeout_seconds + sandboxStart.capacity_wait_seconds) * 1000 + RUN_START_OVERDUE_SLACK_MS;
+}
 
 // Parsing
 
@@ -307,7 +321,7 @@ export function runStartupView(
     status_reason?: string | null;
   },
   now: number,
-  opts: { lastStep: StartupLastStep; sawBuilding: boolean },
+  opts: { lastStep: StartupLastStep; sawBuilding: boolean; startOverdueMs?: number },
 ): StartupView | null {
   const starting = run.state === "STARTING";
   if (!starting && run.state !== "PENDING") return null;
@@ -361,7 +375,7 @@ export function runStartupView(
   }
 
   const pulling = stepReason === "Pulling";
-  const overdue = elapsed >= (starting ? RUN_START_OVERDUE_MS : RUN_PENDING_OVERDUE_MS);
+  const overdue = elapsed >= (starting ? (opts.startOverdueMs ?? RUN_START_OVERDUE_MS) : RUN_PENDING_OVERDUE_MS);
   // Past the overdue bound the active row loses its spinner: the substrate's
   // last word is no longer evidence that anything is happening.
   const active: StartupMark = overdue ? "pending" : "active";

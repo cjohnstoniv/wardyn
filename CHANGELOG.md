@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **An unplaceable Kubernetes run now waits for room.** A run whose pods no machine has room for used to
+  fail at 90 seconds (the proxy's IP bound); it now stays `STARTING`, showing "Waiting for a machine with
+  room for this sandbox.", for up to `WARDYN_SANDBOX_CAPACITY_WAIT` (15 minutes). Set it to `0` to keep
+  failing fast. `WARDYN_SANDBOX_START_TIMEOUT` (default 3 minutes) is now one absolute deadline across the
+  proxy and agent pods, replacing the separate 90 second proxy bound. See "The start deadlines" in
+  `docs/OPERATIONS.md`.
 - **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
   refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
   the database server first. Take a dump before this upgrade: the audit conversion that follows in this
