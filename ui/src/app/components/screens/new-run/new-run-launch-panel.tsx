@@ -262,7 +262,8 @@ export function NewRunLaunchPanel({
       governanceProfile={governanceProfile}
       savedPolicy={savedPolicy}
       cc={cc}
-      showModelWarning={showModelWarning && !modelBlocked}
+      showModelWarning={showModelWarning}
+      modelBlocked={modelBlocked}
       startup={startup}
       showHoldNote={showHoldNote}
       toolRules={toolRules}

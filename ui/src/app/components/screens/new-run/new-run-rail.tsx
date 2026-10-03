@@ -62,6 +62,9 @@ interface RunRailProps {
   cc: ConfinementClass;
   /** An agent run with no model path launches, then fails its first model call. */
   showModelWarning: boolean;
+  /** Launch is already blocked on the missing model: the block sentence speaks, so this
+   *  rail adds neither the no-provider advice nor "Resolved at launch.". */
+  modelBlocked?: boolean;
   /** What happens the moment this launches, in one sentence. */
   startup: string;
   /** Autonomous + held tool approvals: every call parks for a human. */
@@ -253,6 +256,7 @@ export function RunRail({
   savedPolicy,
   cc,
   showModelWarning,
+  modelBlocked,
   startup,
   showHoldNote,
   toolRules,
@@ -385,7 +389,7 @@ export function RunRail({
   // connected. This run launches; its first model call fails." Nothing
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
-  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning && !modelBlocked);
   // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
   // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
   // require_review_paths at all): there is nothing to say about PATHS in
@@ -496,7 +500,7 @@ export function RunRail({
               harnessLabel={modelProvider.harnessLabel}
             />
           )}
-          {!hasProviderCandidates && showModelWarning && (
+          {!hasProviderCandidates && showModelWarning && !modelBlocked && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the

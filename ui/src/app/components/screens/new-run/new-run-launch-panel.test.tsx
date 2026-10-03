@@ -97,8 +97,12 @@ const launch = () => screen.getByRole("button", { name: /Launch run/ });
 
 describe("NewRunLaunchPanel — no model for an unattended agent run", () => {
   it("blocks Launch and says why, with the Connect link", () => {
-    renderPanel({ showModelWarning: true });
+    renderPanel({
+      showModelWarning: true,
+      agentRow: { id: "codex-cli", display: "Codex", has_gateway: true, has_login: true },
+    });
     expect(launch()).toBeDisabled();
+    expect(screen.queryByText("Resolved at launch.")).toBeNull();
     expect(screen.getByText(block, { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA })).toBeInTheDocument();
     expect(screen.queryByText(RAIL_MODEL_ACCESS.NO_PROVIDER, { exact: false })).toBeNull();
