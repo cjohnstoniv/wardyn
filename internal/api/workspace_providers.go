@@ -960,7 +960,7 @@ const capProvider403 = "you are not granted this deployment's %s provider — as
 // derived clone URL is computed HERE, once, so no call site can compare a bare
 // <org>/<name> against a base URL and miss.
 func (s *Server) denyUserWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
-	if len(repos) == 0 || s.cfg.Store == nil || s.isOperator(r.Context()) {
+	if len(repos) == 0 || s.cfg.Store == nil || s.runUngoverned(r.Context()) {
 		return false
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())

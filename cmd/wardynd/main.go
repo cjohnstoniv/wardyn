@@ -340,6 +340,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
 	// beside validateConfig). Checked here, not there, because both of its
@@ -382,6 +383,7 @@ func run() error {
 		LocalMode:           lm.enabled,
 		MemberMode:          *f.memberMode,
 		SSOOnly:             *f.ssoOnly,
+		GovernAdminRuns:     *f.governAdminRuns,
 		LocalOperator:       lm.operator,
 		TrustDomain:         *f.trustDomain,
 		DefaultPolicy:       defaultPolicy,
