@@ -505,6 +505,12 @@ jobs:
       # production attach endpoint; a missing tmux fails them, it never skips.
       - name: Install tmux (real-tmux terminal specs)
         run: sudo apt-get update && sudo apt-get install -y tmux
+      # The e2etmux tag is used by no other job: this pins the harness's copied
+      # attach command to internal/runner/docker/session.go and the real PTY size.
+      - name: Local-tmux harness pins (attach script == docker/session.go; real PTY size)
+        run: |
+          go test -tags e2etmux ./internal/runner/localtmux/
+          go vet -tags e2etmux ./internal/runner/localtmux/ ./cmd/wardynd/
       - name: Install UI deps
         working-directory: ui
         run: pnpm install --frozen-lockfile
