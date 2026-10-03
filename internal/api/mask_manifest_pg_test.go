@@ -141,20 +141,26 @@ func wantMaskRefusal(t *testing.T, w *httptest.ResponseRecorder, what string) {
 	}
 }
 
-// deniedRow is the authz.denied row of an uncovered door, by target.
-func (l *maskLab) deniedRow(runID uuid.UUID, target string) map[string]any {
+// deniedEvent is the authz.denied event of an uncovered door, by target.
+func (l *maskLab) deniedEvent(runID uuid.UUID, target string) types.AuditEvent {
 	l.t.Helper()
 	for _, ev := range l.rec.snapshot() {
 		if ev.Action == authz.AuditAction && ev.Target == target && ev.RunID != nil && *ev.RunID == runID && ev.Outcome == "denied" {
-			var d map[string]any
-			if err := json.Unmarshal(ev.Data, &d); err != nil {
-				l.t.Fatal(err)
-			}
-			return d
+			return ev
 		}
 	}
 	l.t.Fatalf("no denied authz row for %s on run %s; events: %s", target, runID, auditDump(l.rec.snapshot(), runID))
-	return nil
+	return types.AuditEvent{}
+}
+
+// deniedRow is deniedEvent's decoded datum.
+func (l *maskLab) deniedRow(runID uuid.UUID, target string) map[string]any {
+	l.t.Helper()
+	var d map[string]any
+	if err := json.Unmarshal(l.deniedEvent(runID, target).Data, &d); err != nil {
+		l.t.Fatal(err)
+	}
+	return d
 }
 
 // The recording upload masks a value committed at dispatch on a replica that
@@ -223,6 +229,15 @@ func TestMaskManifest_IncompleteManifestIsRefusedAtAllFiveDoors(t *testing.T) {
 			row := l.deniedRow(run.ID, "recordings.upload")
 			if row["reason"] != string(authz.ReasonMaskStateUnavailable) || row["mask_scope"] != "globals_only" {
 				t.Errorf("recording denial row = %v, want reason mask_state_unavailable and mask_scope globals_only", row)
+			}
+
+			// The upload is the run token's own: its row says so, never admin-token.
+			id, err := l.h.idp.MintRunIdentity(ctx, run.ID, maskOwner, "", internalAudience, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev := l.deniedEvent(run.ID, "recordings.upload"); ev.ActorType != types.ActorAgent || ev.Actor != id.SPIFFEID {
+				t.Errorf("recording denial actor = %s %q, want %s %q", ev.ActorType, ev.Actor, types.ActorAgent, id.SPIFFEID)
 			}
 
 			// 2. the live attach (refused before the WebSocket upgrade)

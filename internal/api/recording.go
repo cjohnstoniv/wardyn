@@ -117,7 +117,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	// Door 1 of five (mask_manifest.go): a run whose masking corpus this server
 	// cannot prove complete is refused, not passed through. Before the part
 	// limit so an uncovered run's refusal never depends on what it uploads.
-	if s.refuseUncovered(w, r, claims.RunID, "recordings.upload") {
+	if s.refuseUncoveredAgent(w, r, claims, "recordings.upload") {
 		return
 	}
 	if part > types.RecordingMaxParts {
@@ -182,7 +182,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if errors.Is(saveErr, errMaskUncovered) {
 		// The run was fenced or lost its manifest mid-upload: nothing past
 		// that point was masked against a corpus proven whole.
-		s.refuse(w, r, maskRefusal(claims.RunID, "recordings.upload"))
+		s.refuseAgent(w, r, claims, "recordings.upload")
 		return
 	}
 	if saveErr != nil {

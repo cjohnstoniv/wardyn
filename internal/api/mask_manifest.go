@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -90,6 +91,25 @@ func (s *Server) refuseUncovered(w http.ResponseWriter, r *http.Request, runID u
 		return false
 	}
 	return s.refuse(w, r, maskRefusal(runID, door))
+}
+
+// refuseUncoveredAgent is refuseUncovered for a door the run token reaches: the
+// denied row is the run-token tier's (ActorAgent, the token's SPIFFE id), as
+// auditInternalDenied's is, not the admin-token the public-lane derivation
+// would fall back to on the internal lane.
+func (s *Server) refuseUncoveredAgent(w http.ResponseWriter, r *http.Request, claims *identity.Claims, door string) bool {
+	if s.maskCovered(r.Context(), claims.RunID) {
+		return false
+	}
+	s.refuseAgent(w, r, claims, door)
+	return true
+}
+
+// refuseAgent answers 503 mask_state_unavailable with the run-token tier's
+// denied row, whether or not the run was just found uncovered.
+func (s *Server) refuseAgent(w http.ResponseWriter, r *http.Request, claims *identity.Claims, door string) {
+	s.recordAudit(r.Context(), s.refusalEvent(r.Context(), types.ActorAgent, claims.SPIFFEID, r.Method, maskRefusal(claims.RunID, door)))
+	writeErrorReason(w, authz.EffectUnavailable.Status(), string(authz.ReasonMaskStateUnavailable), maskStateSentence)
 }
 
 // auditUncovered records the denied row of a door that has no HTTP response
