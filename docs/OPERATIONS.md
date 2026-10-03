@@ -2806,6 +2806,7 @@ admin walking the member path, not an incident.
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
+| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -6089,6 +6090,25 @@ rather than a preference:
   this one. The map does not grow without bound: a background sweeper evicts a
   run's entry once that run has been terminal for an hour (`api.RunSecretGrace`),
   late enough for the finalize audit and the cast upload to still see it.
+  **Since 0.8.6 a registry miss fails closed for runs dispatched by 0.8.6.**
+  Dispatch commits each run's *masking manifest* to Postgres before the sandbox
+  can see a value: the exact bytes of every rendering the run received (its
+  workspace and inspection secrets and its Azure DevOps run token in all three
+  renderings, and every run token minted later), sealed under the run owner's
+  per-subject `cred` key (tables `run_mask_manifest` and `run_mask_values`;
+  destroying that key leaves the rows undecryptable). A restarted or second
+  wardynd loads it, so a value rotated after dispatch is still masked. Five doors
+  — the recording upload, the live attach, the exec relay, the SSH shell and the
+  live output read — answer `503` `mask_state_unavailable` for a run whose manifest
+  they cannot prove complete (see the reason table above), and audit rows of such
+  a run carry `"mask_scope":"globals_only"`. **After any restart, a run that
+  predates 0.8.6 has no manifest and is refused at those doors** (attach, SSH
+  shell, exec output and recording upload) until it ends; runs dispatched by 0.8.6
+  survive restarts. Two limits remain until the shared registry lands: a value
+  registered at *injection* time (a minted GitHub token, an injected API key, the
+  AWS SSO and sign-in tokens) is still held in memory only, and **SSH exec, SFTP
+  and direct-tcpip were never masked** (`sshgateway_channels.go`), so none of
+  them is covered by any of this.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: the fallback for a
   failed Postgres write, each pod draining its own back into the database.

@@ -166,7 +166,7 @@ func warnAllowUnknownMigrations(allow bool) {
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, scope ...*maskScope) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
 	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
 	// emitting — see sinks.Source's doc comment. A no-op (empty) is
 	// byte-identical to before this field existed.
@@ -195,6 +195,9 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		}
 	}
 	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
+	if len(scope) > 0 {
+		masked.scope = scope[0] // the serving boot's; maintenance modes label nothing
+	}
 	// Outermost: a row any writer records under a portal's delegated request
 	// names the portal (data.via, #1142) before it is masked, spooled or stored.
 	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil

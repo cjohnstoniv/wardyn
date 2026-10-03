@@ -414,6 +414,16 @@ on all eligible recordings, not one. If a human types an unregistered secret
 into an SSH (or browser-attach) session, treat that recording as holding it in
 the clear until retention deletes it.
 
+**What is masked at all (0.8.6).** Only the **shell**. SSH **exec**
+(`ssh <run-id>@host <command>`), **SFTP** and **direct-tcpip** (`-L`) were never
+masked: their bytes go from the sandbox to your client through no masking
+pipeline, so a registered secret a command prints reaches your terminal verbatim.
+The shell itself now refuses to open, with an error line and an
+`authz.denied` row (`mask_state_unavailable`, target `ssh.shell`), when this
+server cannot prove the run's masking corpus complete: a run dispatched before
+0.8.6 after a restart, or a run whose person is being erased. A shell already
+open ends within about two seconds of that.
+
 ## Bounds
 
 **Auth.** Registered public keys only — no password, no keyboard-interactive.

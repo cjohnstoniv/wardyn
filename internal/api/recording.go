@@ -114,6 +114,12 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		writeErrorReason(w, http.StatusNotImplemented, reasonRecordingStoreUnavailable, "recording store not configured")
 		return
 	}
+	// Door 1 of five (mask_manifest.go): a run whose masking corpus this server
+	// cannot prove complete is refused, not passed through. Before the part
+	// limit so an uncovered run's refusal never depends on what it uploads.
+	if s.refuseUncovered(w, r, claims.RunID, "recordings.upload") {
+		return
+	}
 	if part > types.RecordingMaxParts {
 		runID := claims.RunID
 		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
@@ -137,7 +143,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	//
 	// Read only on the store's demand: an early storage failure must not leave
 	// an independent goroutine blocked reading the request body.
-	body := buildMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID)
+	body := buildGuardedMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID, s.maskGuard(claims.RunID))
 
 	var saveErr error
 	if part == 1 {
@@ -173,6 +179,12 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		data,
 	))
 
+	if errors.Is(saveErr, errMaskUncovered) {
+		// The run was fenced or lost its manifest mid-upload: nothing past
+		// that point was masked against a corpus proven whole.
+		s.refuse(w, r, maskRefusal(claims.RunID, "recordings.upload"))
+		return
+	}
 	if saveErr != nil {
 		// An over-cap upload surfaces as *http.MaxBytesError through the masker.
 		var maxErr *http.MaxBytesError
@@ -188,11 +200,18 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 }
 
 func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) io.Reader {
+	return buildGuardedMaskingBody(src, reg, runID, nil)
+}
+
+// buildGuardedMaskingBody is buildMaskingBody whose reader also ends with
+// errMaskUncovered when guard (non-nil) turns false: the run was fenced while
+// its upload was in flight, and the rest of it is not read.
+func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID, guard func() bool) io.Reader {
 	if reg == nil {
 		return src
 	}
 	snap := reg.Snapshot(runID)
-	if len(snap) == 0 {
+	if len(snap) == 0 && guard == nil {
 		return src
 	}
 	// The upload body is asciicast JSON: asciinema (which wardyn-rec execs)
@@ -209,7 +228,7 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
 	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src}
+	r := &recordingMaskReader{src: src, guard: guard}
 	r.masker = secretmask.NewMaskingWriter(&r.output, secretmask.NewMasker(snap))
 	return r
 }
@@ -220,6 +239,7 @@ type recordingMaskReader struct {
 	masker *secretmask.MaskingWriter
 	chunk  [32 << 10]byte
 	err    error
+	guard  func() bool // nil, or false once the run is no longer covered
 }
 
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
@@ -227,6 +247,10 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	for r.output.Len() == 0 && r.err == nil {
+		if r.guard != nil && !r.guard() {
+			r.err = errMaskUncovered
+			return 0, r.err
+		}
 		n, readErr := r.src.Read(r.chunk[:])
 		_, maskErr := r.masker.Write(r.chunk[:n])
 		r.err = cmp.Or(maskErr, readErr)

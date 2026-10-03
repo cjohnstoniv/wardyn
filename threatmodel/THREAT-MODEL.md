@@ -358,7 +358,14 @@ forms, which no verbatim matcher catches.
   audit event. **The single-process case is not inert**: a `wardynd` restart
   (upgrade, crash) mid-run empties the same map, so a run whose secrets
   registered pre-restart and whose cast uploads post-restart hits the identical
-  empty-snapshot fail-open at `replicas: 1`.
+  empty-snapshot fail-open at `replicas: 1`. **0.8.6 closes the dispatch-time part:**
+  each run's secrets and Azure DevOps run token are committed to a sealed
+  per-run masking manifest before the sandbox starts, and the recording upload,
+  live attach, exec relay, SSH shell and live output read refuse (`503`
+  `mask_state_unavailable`) a run whose manifest they cannot prove complete. Still
+  open: values registered at injection time are memory-only, runs that predate
+  0.8.6 are refused rather than masked after a restart, and SSH exec, SFTP and
+  direct-tcpip are never masked.
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 

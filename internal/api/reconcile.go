@@ -100,7 +100,10 @@ type SandboxOrphanSweeper interface {
 // persisted agent_exec_id rather than the container — an idle-container exec run
 // whose agent already exited is finalized instead of stranded.
 func (s *Server) ReconcileOnBoot(ctx context.Context) error {
-	buildErr := s.sweepOrphanedBuilds(ctx)
+	// Coverage first: every live run's masking manifest is loaded here, so a
+	// restarted replica masks (and its doors admit) before the first request
+	// asks, on any replica, whether or not it ever holds a watcher lease.
+	buildErr := errors.Join(s.loadMaskManifests(ctx), s.sweepOrphanedBuilds(ctx))
 	if _, ok := s.cfg.ImageBuilder.(ImageBuildSweeper); ok && s.watcherBaseCtx() != nil {
 		go s.orphanedBuildSweeper(s.watcherBaseCtx(), buildSweepInterval)
 	}

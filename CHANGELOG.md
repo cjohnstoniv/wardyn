@@ -35,9 +35,28 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inherits the default policy's value, else the deployment default above. A profile that sets a size
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+- **A run that is live when you upgrade is refused at five doors after the restart, until it ends.**
+  0.8.6 commits each run's masking manifest at dispatch (below); a run dispatched by an earlier version has
+  none, so after the upgrade restarts wardynd its recording upload, live attach, SSH shell, exec output and
+  live output read answer `503` `mask_state_unavailable` (the SSH shell closes with an error line). Let
+  such runs end, or end them, before you restart; runs dispatched by 0.8.6 survive restarts. Before 0.8.6
+  the same restart passed that output through unmasked.
 
 ### Security
 
+- **A run's secrets are masked from a sealed manifest, and a registry miss fails closed (migration
+  `0109_run_mask_manifest`).** At dispatch, before the sandbox can see a value, wardynd commits the exact
+  bytes of every rendering the run received to Postgres (`run_mask_manifest`, `run_mask_values`): its
+  workspace and inspection secrets, its Azure DevOps run token in all three renderings, and every run token
+  minted later (a renewal, widening or resume appends before the token is returned; a failed append fails
+  the mint). Each value is sealed under the run owner's per-subject key. A restarted or second wardynd loads
+  the manifest, so a secret rotated after dispatch is still masked, and the recording upload, live attach,
+  exec relay, SSH shell and live output read refuse a run it cannot prove complete (`503`
+  `mask_state_unavailable`, with a denied `authz.denied` row). An attach, shell or upload in flight ends within
+  about two seconds when the run is fenced. Audit rows of an uncovered run carry `"mask_scope":"globals_only"`.
+  SSH exec, SFTP and direct-tcpip were never masked and still are not. A split migrator and app role install
+  grants the app role `SELECT, INSERT, UPDATE` on `run_mask_manifest` and `SELECT, INSERT, DELETE` on
+  `run_mask_values`.
 - **A per-subject key table, `principal_keys` (migration `0108_principal_keys`).** Each (person, purpose,
   generation) has one 32-byte key wrapped under the deployment's credential key (local, Vault Transit or
   Key Vault), and destroying a person's key is a tombstone that a replica with a warm cache notices at its

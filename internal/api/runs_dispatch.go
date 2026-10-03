@@ -192,6 +192,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
+	// The run's masking manifest opens before any value is resolved and completes
+	// before the sandbox exists (mask_manifest.go).
+	if !s.beginMaskManifest(ctx, run) {
+		return
+	}
+
 	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
 	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
 	// ground-truth stream. wardynd knows the resolved confinement class here, so
@@ -601,6 +607,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
+	if !s.completeMaskManifest(ctx, run) {
+		return
+	}
 	spec.ExecOutput = s.openExecOutput(run.ID, p.TaskMode, p.Interactive)
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()

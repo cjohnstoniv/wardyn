@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -378,6 +379,12 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
+	// MaskManifests, when non-nil, keeps each dispatched run's masking
+	// manifest in Postgres and gates the five doors that relay or persist a
+	// run's output on it (mask_manifest.go): a run whose corpus it cannot prove
+	// complete is refused instead of passed through. Nil keeps no manifests
+	// and gates nothing, as a nil MaskRegistry masks nothing.
+	MaskManifests *maskmanifest.Manifests
 	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no task_mode=exec run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
 	ExecOutputTailOff bool
@@ -642,6 +649,9 @@ type Server struct {
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
+	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
+	// an in-flight consumer re-reads its run's fence.
+	maskBeat time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
