@@ -443,7 +443,7 @@ func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string,
 }
 
 // normalizeClampTTL resolves a TTL to actual mint seconds: 0 and negative both mean "broker maximum",
-// matching internal/api's normalizeGrantTTLSeconds so the two sides stay comparable — testing `==0`
+// matching GrantWithin (the write-time comparator) so the two sides stay comparable — testing `==0`
 // alone would let ttl_seconds=-1 pass a 300s ceiling that the write-time comparator refuses.
 func normalizeClampTTL(ttl int) int {
 	if ttl <= 0 || ttl > maxGrantTTLSeconds {
@@ -479,7 +479,7 @@ func CeilingGrantsCovering(g types.GrantSpec, ceiling []types.GrantSpec) []types
 }
 
 // grantDominatedBy reports whether ceiling grant cg bounds g on every axis a clamp can narrow, the
-// same three questions governanceGrantWithinCeiling asks — if one dominates, the clamp returns g unchanged.
+// same questions GrantWithin asks — if one dominates, the clamp returns g unchanged.
 func grantDominatedBy(g, cg types.GrantSpec) bool {
 	if cg.RequiresApproval && !g.RequiresApproval {
 		return false
