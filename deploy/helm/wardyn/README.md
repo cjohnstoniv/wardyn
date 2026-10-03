@@ -91,7 +91,7 @@ install.
 ## Prerequisites
 
 Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a
-NetworkPolicy-enforcing CNI, and Postgres 12+.** Everything else the control
+NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control
 plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets
 wiring) is rendered by this chart. In detail:
 
@@ -107,7 +107,7 @@ wiring) is rendered by this chart. In detail:
   SEPARATE trap below (an ambient default-deny already present in
   `k8s.runsNamespace`), and only when the canary pod actually ran and could
   not connect.
-- **Postgres 12+** (external or managed).
+- **Postgres 13+** (external or managed).
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
   own** (see below) for a fork, a private registry, or an unreleased change.

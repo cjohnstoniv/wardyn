@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
+  refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
+  the database server first. Take a dump before this upgrade: the audit conversion that follows in this
+  release is one-way.
+- **`wardynd -migrate-only`** runs the schema migration alone and exits, for an upgrade that must run under
+  stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
+  client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
+  in `docs/OPERATIONS.md`.
+- The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
+  slack). A value spelled with anything but `h`, `m` and `s` fails the render.
+
 ## [0.8.5] — 2026-10-02
 
 ### Before you upgrade
