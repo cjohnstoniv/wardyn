@@ -37,10 +37,11 @@ import (
 // from the same binary, so the name is never registered twice.
 const Name = "docker"
 
-// attachScript mirrors internal/runner/docker/session.go's attachShell tmux
-// branch. The docker package is behind the docker build tag and cannot be
-// imported here; attach_script_test.go pins the two together.
-const attachScript = `exec tmux new-session -A -s wardyn bash`
+// attachScript is the tmux branch both real drivers run (runner.TmuxAttachSh,
+// with its version-gated tmux settings). The docker package is behind the
+// docker build tag and cannot be imported here; attach_script_test.go pins
+// docker/session.go to the same fragment.
+var attachScript = runner.TmuxAttachSh
 
 func init() {
 	substrate.Register(Name, func(substrate.Deps) (substrate.Substrate, error) {
