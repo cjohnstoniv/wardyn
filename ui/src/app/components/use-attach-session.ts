@@ -182,6 +182,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       },
     });
 
+    let disposedFont = false;
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(mount);
@@ -192,9 +193,18 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
     // Initial fit after the browser has laid the container out.
     const rafId = requestAnimationFrame(() => refit());
-    // Refit once the bundled font has loaded so xterm's cell metrics match the
-    // real glyph width (a fit measured against the fallback font would misalign).
-    document.fonts.ready.then(() => refit()).catch(() => {});
+    // The web font is font-display: swap, so xterm may have measured cells
+    // against the fallback (17px vs 15px). fit() resizes only when the grid
+    // dimensions change, so once the font is in, nudge cols-1 to make the next
+    // refit a real change and re-measure the cells.
+    document.fonts
+      .load("13px 'JetBrains Mono'")
+      .then(() => {
+        if (disposedFont || termRef.current !== term) return;
+        if (term.cols > 1) term.resize(term.cols - 1, term.rows);
+        refit();
+      })
+      .catch(() => {});
 
     // WebSocket (with bounded reconnect)
     // The terminal/xterm instance above persists across reconnects; only the
@@ -563,6 +573,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       // Stop any pending backoff from spawning a new socket after unmount, and
       // mark the close as intentional (so the in-flight ws.onclose won't retry).
       disposed = true;
+      disposedFont = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (autoRunTimer) clearTimeout(autoRunTimer);
       if (connectTimer) clearTimeout(connectTimer);

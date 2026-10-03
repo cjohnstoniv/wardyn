@@ -146,7 +146,7 @@ function stubTerminalEnv() {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
-    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   }
   vi.stubGlobal(
     "ResizeObserver",
@@ -167,7 +167,7 @@ describe("AttachTerminal reconnect", () => {
     if (!("fonts" in document)) {
       Object.defineProperty(document, "fonts", {
         configurable: true,
-        value: { ready: Promise.resolve() },
+        value: { ready: Promise.resolve(), load: () => Promise.resolve([]) },
       });
     }
     // jsdom has no ResizeObserver; the terminal observes its container.
@@ -310,7 +310,7 @@ describe("AttachTerminal — role-aware attach", () => {
     if (!("fonts" in document)) {
       Object.defineProperty(document, "fonts", {
         configurable: true,
-        value: { ready: Promise.resolve() },
+        value: { ready: Promise.resolve(), load: () => Promise.resolve([]) },
       });
     }
     vi.stubGlobal(
@@ -479,7 +479,7 @@ describe("AttachTerminal — forced refit clears a stale tmux clamp", () => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
     if (!("fonts" in document)) {
-      Object.defineProperty(document, "fonts", { value: { ready: Promise.resolve() }, configurable: true });
+      Object.defineProperty(document, "fonts", { value: { ready: Promise.resolve(), load: () => Promise.resolve([]) }, configurable: true });
     }
   });
 
