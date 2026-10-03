@@ -79,6 +79,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
 
+### Added
+
+- **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
+  (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
+  NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses
+  to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
+  any `kubernetes.io/` or `k8s.io/` annotation or label other than
+  `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
+
 ### Security
 
 - **A run's secrets are masked from a sealed manifest, and a registry miss fails closed (migration

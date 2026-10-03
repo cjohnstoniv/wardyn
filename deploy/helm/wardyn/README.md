@@ -529,6 +529,12 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate
   creates (agent, proxy, canary) — separate from `image.pullSecrets`, which is
   only for wardynd's own image.
+- `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`: where every
+  sandbox pod goes (`WARDYN_K8S_SANDBOX_PLACEMENT`). The agent pod, the proxy pod and the boot-time canary all
+  take it; the top-level `nodeSelector`, `affinity` and `tolerations` place wardynd only. wardynd refuses to
+  boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any
+  `kubernetes.io/` or `k8s.io/` annotation or label except
+  `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
   resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
   a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each
