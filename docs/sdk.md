@@ -485,6 +485,45 @@ console depends on for its own sign-in/connect doors (`ui/src/app/lib/api/runs.t
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). |
 | `git_credential` | The New Run rail's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
 
+## Pending approval (governance writes)
+
+A deployment can require a second human to approve governance writes. A covered write is then
+stored as a pending change and answered `202` with a `{"pending_change": {...}}` body; nothing is
+applied until a different approver approves it. The SDK never reads that body as a saved object:
+
+- Any method that goes through the shared request path returns a `*client.PendingApprovalError`
+  (check with `errors.As`) instead of a zero-value result. Only a `202` whose body has a
+  `pending_change` key is treated this way; `KillRun`, `RecordWorkspaceTask`, `ScanWorkspace` and
+  `ScanSource` also answer `202` and decode as before.
+- `ApplyGovernance` keeps its signature. When any write is pending it returns the current document
+  and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly instead of
+  carrying on.
+- `ApplyGovernanceResult` returns the same outcome as data: the document, the `Pending` changes,
+  the `Deferred` assignments and `PruneSkipped`. An assignment that names a profile whose write is
+  pending is deferred, never sent; prune does not run after a pending write.
+- `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
+  `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
+  (`/api/v1/governance/changes`).
+
+```go
+res, err := c.ApplyGovernanceResult(ctx, doc, false)
+if err != nil {
+    return err
+}
+for _, ch := range res.Pending {
+    fmt.Println("awaiting approval:", ch.ID, ch.TargetKind, ch.TargetKey)
+}
+```
+
+The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists on stderr and
+exits 0, and `wardyn governance changes list [--state ...]`, `changes approve <id>` and
+`changes reject <id> [--reason ...]` act on them.
+
+**Old clients.** A client built before 0.8.6 that writes governance against a deployment with this
+switch on decodes the `202` as an empty profile, and its next assignment write is refused with
+`profile_id: required` or is itself queued. Nothing applies without approval, but the error is
+confusing. Upgrade the CLI and any SDK callers before requiring a second approver.
+
 ## Renamed in 0.8
 
 Issue #658: the attach route family had three different sub-resource shapes,
