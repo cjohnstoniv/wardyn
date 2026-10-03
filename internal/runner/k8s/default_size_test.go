@@ -30,7 +30,7 @@ func TestDefaultSizeFollowsEffectiveLimits(t *testing.T) {
 			t.Errorf("%s: resourceRequirements limits = %v, want %+v", tc.name, r, want)
 		}
 		pc, pm := runner.ProxyLimits()
-		p := proxyResources().Limits
+		p := proxyResources(false).Limits
 		if p.Cpu().MilliValue() != pc || p.Memory().Value() != pm*1024*1024 {
 			t.Errorf("%s: proxyResources = %v, want %d/%d", tc.name, p, pc, pm)
 		}

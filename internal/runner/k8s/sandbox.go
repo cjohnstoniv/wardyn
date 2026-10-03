@@ -228,7 +228,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir},
 				},
 				SecurityContext: restrictedSecurityContext(),
-				Resources:       proxyResources(),
+				Resources:       proxyResources(false),
 				// The binary logs its refusal to stderr, not /dev/termination-log;
 				// without this proxyStartFailure's error names no cause.
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
@@ -247,7 +247,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
 				},
 				SecurityContext:          restrictedSecurityContext(),
-				Resources:                proxyResources(),
+				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 			}},
 			Volumes: []corev1.Volume{

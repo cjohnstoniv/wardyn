@@ -143,7 +143,13 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	if blocked {
 		return
 	}
-	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, hdr.name, ruleSourceLLM, false, bodyReader, scanSummary)
+	// A rule that pins its credential to a method-and-path set withholds it from every other request
+	// on this route too (the strip still runs: ownedHeader is hdr.name either way).
+	inject := &hdr
+	if !p.inject.allowsInjection(host, r.Method, "/"+rest, r.URL.RawQuery) {
+		inject = nil
+	}
+	p.forwardInspectedLLM(w, r, host, port, rest, target, inject, hdr.name, ruleSourceLLM, false, bodyReader, scanSummary)
 }
 
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the

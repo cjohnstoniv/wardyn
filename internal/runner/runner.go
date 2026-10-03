@@ -136,6 +136,9 @@ type ProxyConfig struct {
 	GitGrants     map[string]uuid.UUID      // git-broker per-repo allowlist; token stays proxy-side
 	PATGrants     map[string]proxy.PATGrant // git_pat broker's per-HOST allowlist; PAT minted proxy-side, never enters the sandbox
 	ADOGrant      *proxy.ADOGrantConfig     // per-person Azure DevOps grant for the proxy's REST gate
+	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
+	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
+	AzureGates []proxy.AzureGateConfig
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar

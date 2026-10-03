@@ -116,6 +116,9 @@ type Config struct {
 	// organisation pin. LoadConfigBytes still reads the older ado_grants list,
 	// and refuses one with more than one entry.
 	ADOGrant *ADOGrantConfig `json:"ado_grant,omitempty"`
+	// AzureGates are the run's azure_foundry route gates, one per row (azure_gate.go). Empty == off.
+	// Omitempty and set only for a run with such a row: an older proxy refuses a key it does not know.
+	AzureGates []AzureGateConfig `json:"azure_gates,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -385,12 +388,8 @@ func (c *Config) applyDefaultsAndValidate() error {
 			}
 		}
 	}
-	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
-	// connection the proxy terminates. Without the MITM CA nothing terminates,
-	// and the covered hosts would degrade to a credential-less tunnel no gate
-	// sees — so a config carrying ado_grant without the CA is refused at boot.
-	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
-		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	if err := c.validateTerminatedGates(); err != nil {
+		return err
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these
@@ -403,6 +402,17 @@ func (c *Config) applyDefaultsAndValidate() error {
 		}
 	}
 	return nil
+}
+
+// validateTerminatedGates checks the gates that run only on a connection the proxy terminates. An
+// Azure DevOps grant is enforced by the REST gate; without the MITM CA nothing terminates, and the
+// covered hosts would degrade to a credential-less tunnel no gate sees — so a config carrying ado_grant
+// without the CA is refused at boot. The Azure route gate has the same rule and its own checks.
+func (c *Config) validateTerminatedGates() error {
+	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	}
+	return c.validateAzureGates()
 }
 
 // PATGrant is one host's git_pat brokering: which grant to mint from, and the

@@ -587,7 +587,7 @@ func TestStorageDriverSupportsQuota(t *testing.T) {
 
 // proxyResources must always carry a PID cap and a swap-pinned memory cap.
 func TestProxyResources(t *testing.T) {
-	r := proxyResources()
+	r := proxyResources(false)
 	if r.PidsLimit == nil || *r.PidsLimit != proxyPidsLimit {
 		t.Errorf("proxy PidsLimit = %v, want %d", r.PidsLimit, proxyPidsLimit)
 	}

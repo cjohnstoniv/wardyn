@@ -380,6 +380,9 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// to the sidecar. Absent on every scope but the captured-AWS-SSO one.
 		PinPath  string            `json:"pin_path"`
 		PinQuery map[string]string `json:"pin_query"`
+		// PinRoutes is the method-and-path set form of the pin (the Azure
+		// route gate's rule); see egress.InjectionRule.PinRoutes.
+		PinRoutes []egress.PinRoute `json:"pin_routes"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	dec.DisallowUnknownFields()
@@ -389,6 +392,13 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	if sc.Host == "" || sc.SecretName == "" {
 		return egress.InjectionRule{}, errors.New("api_key scope requires host and secret_name")
 	}
+	// A route with no method or a relative path would never match: refuse it here rather than
+	// ship a rule that withholds the credential from every request.
+	for _, rt := range sc.PinRoutes {
+		if rt.Method == "" || rt.Method != strings.ToUpper(rt.Method) || !strings.HasPrefix(rt.Path, "/") {
+			return egress.InjectionRule{}, fmt.Errorf("api_key scope pin_routes entry %q %q needs an upper-case method and an absolute path", rt.Method, rt.Path)
+		}
+	}
 	if sc.Header == "" {
 		sc.Header = "Authorization"
 	}
@@ -397,7 +407,7 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	}
 	return egress.InjectionRule{
 		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
-		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery,
+		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery, PinRoutes: sc.PinRoutes,
 	}, nil
 }
 

@@ -67,7 +67,7 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 			SecurityOpt:    []string{"no-new-privileges"},
 			ReadonlyRootfs: true,
 			AutoRemove:     false, // removed explicitly below
-			Resources:      proxyResources(),
+			Resources:      proxyResources(false),
 			Mounts: []mount.Mount{{
 				Type:     mount.TypeBind,
 				Source:   drive.ObjectName,

@@ -375,6 +375,12 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if mitmSource == "" {
 		return
 	}
+	// The Azure gate runs before the injector resolves, so a refused request never redeems the token.
+	mitmSource, releaseAzure, ok := p.gateAzure(w, r, host, port, mitmSource)
+	if !ok {
+		return
+	}
+	defer releaseAzure()
 	rearmBodyDeadline(w) // the gate may have held the request (awaitADOCapability)
 
 	// Dial target: through the corp proxy (by hostname) when configured — egressDial chains
