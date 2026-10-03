@@ -13,6 +13,8 @@ import {
   RUN_PENDING_OVERDUE_MS,
   RUN_POLL_SLOW_START_MS,
   RUN_START_OVERDUE_MS,
+  RUN_START_OVERDUE_SLACK_MS,
+  startOverdueMs,
   RUN_STARTUP,
   runStartupView,
   STATUS_REASON_BUILDING,
@@ -199,8 +201,8 @@ const mk = (over: Partial<RunIn> & { createdAgo?: number; updatedAgo?: number })
   const { createdAgo = 0, updatedAgo = 0, ...rest } = over;
   return { state: "STARTING", created_at: ago(createdAgo), updated_at: ago(updatedAgo), ...rest };
 };
-const view = (run: RunIn, o: { lastStep?: StartupLastStep; sawBuilding?: boolean } = {}) =>
-  runStartupView(run, T0, { lastStep: "terminal", sawBuilding: false, ...o });
+const view = (run: RunIn, o: { lastStep?: StartupLastStep; sawBuilding?: boolean } = {}, startOverdueMs?: number) =>
+  runStartupView(run, T0, { lastStep: "terminal", sawBuilding: false, startOverdueMs, ...o });
 const marks = (v: ReturnType<typeof view>) => v!.rows.map((r) => `${r.label}=${r.mark}`);
 
 const START = RUN_STARTUP.STEP_START;
@@ -400,14 +402,24 @@ describe("runStartupView: the last row", () => {
 describe("runStartupView: mirrors of the Go sources", () => {
   const go = (rel: string) => readFileSync(resolve(process.cwd(), "..", rel), "utf8");
 
-  it("RUN_START_OVERDUE_MS = canaryWaitTimeout + podIPWaitTimeout (internal/runner/k8s/canary.go)", () => {
-    const src = go("internal/runner/k8s/canary.go");
+  it("RUN_START_OVERDUE_MS = DefaultSandboxStartTimeout + the slack (internal/runner/start_deadlines.go)", () => {
+    const src = go("internal/runner/start_deadlines.go");
     const dur = (name: string) => {
       const m = new RegExp(`${name}\\s*=\\s*(\\d+)\\s*\\*\\s*time\\.(Minute|Second)`).exec(src);
       expect(m, name).not.toBeNull();
       return Number(m![1]) * (m![2] === "Minute" ? MIN : S);
     };
-    expect(RUN_START_OVERDUE_MS).toBe(dur("canaryWaitTimeout") + dur("podIPWaitTimeout"));
+    expect(RUN_START_OVERDUE_MS).toBe(dur("DefaultSandboxStartTimeout") + RUN_START_OVERDUE_SLACK_MS);
+  });
+
+  it("the overdue bound follows /setup/status: start budget + capacity wait + slack", () => {
+    expect(startOverdueMs(undefined)).toBe(RUN_START_OVERDUE_MS);
+    expect(startOverdueMs({ start_timeout_seconds: 180, capacity_wait_seconds: 900 })).toBe(1_080_000 + RUN_START_OVERDUE_SLACK_MS);
+    expect(startOverdueMs({ start_timeout_seconds: 180, capacity_wait_seconds: 0 })).toBe(180_000 + RUN_START_OVERDUE_SLACK_MS);
+    const waiting = mk({ updatedAgo: 600_000, status_detail: "pod: Unschedulable: 0/1 nodes are available", status_reason: "Unschedulable" });
+    const stale = (ms?: number) => view(waiting, undefined, ms)!.rows.some((r) => r.stale);
+    expect(stale()).toBe(true); // default bound: 10 minutes is past 4.5
+    expect(stale(startOverdueMs({ start_timeout_seconds: 180, capacity_wait_seconds: 900 }))).toBe(false);
   });
 
   it("RUN_PENDING_OVERDUE_MS = imageBuildTimeout (internal/api/runs.go)", () => {

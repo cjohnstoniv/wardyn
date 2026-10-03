@@ -14,8 +14,10 @@ import (
 //
 // A sign-in launch used to run the WHOLE launch inside the request:
 // CreateRun, the audit stamp, then dispatchRun — which blocks on CreateSandbox
-// for as long as the substrate needs. On k8s that is canaryWaitTimeout (3 min,
-// canary.go) ON TOP of a cold image pull; the reporting estate measured 131 s.
+// for as long as the substrate needs. On k8s that is WARDYN_SANDBOX_START_TIMEOUT
+// (3 min) plus WARDYN_SANDBOX_CAPACITY_WAIT (15 min) for a full cluster
+// (internal/runner/start_deadlines.go) ON TOP of a cold image pull; the
+// reporting estate measured 131 s.
 // The console's own deadline is 60 s (WFETCH_TIMEOUT_MS, lib/api/core.ts), so
 // the pane showed the unreachable-daemon sentence, `setRunId` never ran, and
 // Cancel had nothing to kill: the sandbox was orphaned to harnessLoginIdleCap.

@@ -174,6 +174,32 @@ func envBuilderCheck(wired bool) SetupCheck {
 	}
 }
 
+// sandboxStartCheck states the Kubernetes sandbox start deadlines (canon SETUP_CHECK.SANDBOX_START,
+// mock packet M10). Always info: it describes a setting, it grades nothing. Absent off Kubernetes.
+func sandboxStartCheck(d *SetupSandboxStart) (SetupCheck, bool) {
+	if d == nil {
+		return SetupCheck{}, false
+	}
+	start := formatStartDeadline(d.StartTimeoutSeconds)
+	detail := "A sandbox has " + start + " to start. If no machine has room for it, it waits up to " +
+		formatStartDeadline(d.CapacityWaitSeconds) + ", then fails."
+	if d.CapacityWaitSeconds == 0 {
+		detail = "A sandbox has " + start + " to start. Capacity wait is off, so a sandbox no machine has room for fails when that deadline passes."
+	}
+	return SetupCheck{ID: "sandbox_start", Label: "Sandbox start deadlines", Status: "info", Detail: detail}, true
+}
+
+// formatStartDeadline renders whole seconds as the shortest exact "1h", "15m", "90s" form.
+func formatStartDeadline(seconds int) string {
+	switch {
+	case seconds > 0 && seconds%3600 == 0:
+		return fmt.Sprintf("%dh", seconds/3600)
+	case seconds > 0 && seconds%60 == 0:
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 // k8sEgressContainmentCheck grades the k8s substrate's boot-time NetworkPolicy
 // canary verdict (netpolProven, computed in setupRunnerInfo from
 // ClassSupport.NetworkPolicy — a local value, not a wire field: nothing else

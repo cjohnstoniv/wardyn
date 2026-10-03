@@ -163,21 +163,38 @@ export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as Confinement
 // timeoutMs.
 export const WFETCH_TIMEOUT_MS = 60_000;
 
-// LAUNCH_DEADLINE_MS — the deadline for a console call that brings a SANDBOX up.
+// LAUNCH_DEADLINE_MS — the floor of the deadline for a console call that brings a SANDBOX up.
 //
 // The default above bounds a hang; it is not a latency budget, and for these
 // calls it was being spent as one. POST /runs is synchronous through
-// CreateSandbox (runs.go), which on k8s waits canaryWaitTimeout (3 min,
-// canary.go) ON TOP of a cold image pull — a server-side worst case that
-// legitimately exceeds 60s, at which point the console reports the daemon
-// unreachable over a launch that is working fine and drops the run id it was
-// about to be handed. Five minutes covers the substrate's own ceiling with room
-// to spare; a longer deadline cannot break a call that already works today.
+// CreateSandbox (runs.go), which on k8s waits the sandbox start timeout on top
+// of a cold image pull — a server-side worst case that legitimately exceeds
+// 60s, at which point the console reports the daemon unreachable over a launch
+// that is working fine and drops the run id it was about to be handed. Five
+// minutes covers the default start timeout (WARDYN_SANDBOX_START_TIMEOUT, 3 min)
+// with room to spare. It does NOT cover a run waiting for room: the capacity
+// wait (WARDYN_SANDBOX_CAPACITY_WAIT, 15 min default) holds CreateSandbox far
+// longer, so a call that waits on it passes launchDeadlineMs(sandbox_start)
+// instead, which follows the deployment's real deadlines.
 //
 // The sign-in launch is NOT on this list: POST /model-providers/{id}/sign-in answers
 // before dispatch now (internal/api/harnesscred_launch.go), so it is a fast
 // call again and the default bound is the right one for it.
 export const LAUNCH_DEADLINE_MS = 300_000;
+
+// How long past the server's own start budget a launch call waits before the console gives up.
+export const LAUNCH_SLACK_MS = 90_000;
+
+// launchDeadlineMs is the deadline for a launch call that blocks on CreateSandbox: never
+// shorter than LAUNCH_DEADLINE_MS, and past the real start budget plus slack where the
+// deployment reports one (a full cluster waits up to start timeout + capacity wait, from
+// /setup/status runner.sandbox_start; the run page's startOverdueMs reads the same two numbers).
+export function launchDeadlineMs(
+  sandboxStart: { start_timeout_seconds: number; capacity_wait_seconds: number } | null | undefined,
+): number {
+  if (!sandboxStart) return LAUNCH_DEADLINE_MS;
+  return Math.max(LAUNCH_DEADLINE_MS, (sandboxStart.start_timeout_seconds + sandboxStart.capacity_wait_seconds) * 1000 + LAUNCH_SLACK_MS);
+}
 
 // TIMEOUT_STATUS: no HTTP response ever happened, so there is no status to
 // report. Callers that branch on `e.status === 401` are unaffected, and the
