@@ -212,6 +212,7 @@ export function ModelProviderSection({
       <>
         <p className="text-body font-medium text-foreground">{RAIL_PROVIDER.STATIC(p.name ?? p.id)}</p>
         <ProviderResidencyLine provider={p} />
+        <ProviderNotConnectedLine provider={p} access={access} onSignIn={() => onSignIn(p)} />
       </>
     );
   }
