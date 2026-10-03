@@ -398,3 +398,52 @@ describe("RunFailureBlock", () => {
     expect(screen.queryByRole("button", { name: /Start a run like this one/i })).toBeNull();
   });
 });
+
+// f-f6 — sandbox-create and agent-start failures, graded by the stamped reason.
+describe("dispatch failures in plain words (M2)", () => {
+  const WRAPPED = "rpc error: code = Unknown desc = pull access denied for registry.example/team/agent:1.4";
+  const STRIPPED = "pull access denied for registry.example/team/agent:1.4";
+
+  it("grades each reason exactly; an unclassified run.create failure stays unknown", () => {
+    expect(
+      runEndingFromAudit("FAILED", [ev("run.create", "failure", { data: { error: "x", reason: "sandbox_create" } })])?.kind,
+    ).toBe("sandbox_create");
+    expect(
+      runEndingFromAudit("FAILED", [ev("run.exec", "failure", { data: { error: "x", reason: "agent_start" } })])?.kind,
+    ).toBe("agent_start");
+    expect(runEndingFromAudit("FAILED", [ev("run.create", "failure", { data: { error: "sandbox_create refused" } })])?.kind).toBe(
+      "unknown",
+    );
+  });
+
+  it("sandbox_create renders its copy, the stripped words, and the unstripped text behind a closed disclosure", () => {
+    renderBlock("FAILED", [ev("run.create", "failure", { data: { error: WRAPPED, reason: "sandbox_create" } })]);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block.getAttribute("data-ending")).toBe("sandbox_create");
+    expect(block.textContent).toContain(
+      "The sandbox could not be created, so the run stopped before the agent started. There is no exit code because nothing ran.",
+    );
+    expect(block.textContent).toContain("Read the runner's message above — it names what it could not create or find.");
+    expect(block.textContent).toContain("Fix that, then start a new run — the policy and workspace are unchanged.");
+    const details = block.querySelector("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("Platform message");
+    expect(details.textContent).toContain(WRAPPED);
+    // The visible line outside the disclosure carries no wrapper.
+    expect(block.textContent?.split(WRAPPED).length).toBe(2);
+    expect(block.textContent).toContain(STRIPPED);
+  });
+
+  it("agent_start renders its copy and omits the disclosure when nothing was stripped", () => {
+    renderBlock("FAILED", [
+      ev("run.exec", "failure", { data: { error: "OCI runtime exec failed: unable to start", reason: "agent_start" } }),
+    ]);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block.getAttribute("data-ending")).toBe("agent_start");
+    expect(block.textContent).toContain(
+      "The sandbox was created, but the agent could not be started in it, so no task ran. There is no exit code because nothing ran.",
+    );
+    expect(block.textContent).toContain("Read the runner's message above — it says why the agent process would not start.");
+    expect(block.querySelector("details")).toBeNull();
+  });
+});

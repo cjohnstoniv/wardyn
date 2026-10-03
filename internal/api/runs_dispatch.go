@@ -629,7 +629,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// terminal state (mirrors the STARTING->RUNNING guard below).
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the sandbox could not be created: "+err.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": "sandbox_create"})))
 		return
 	}
 
@@ -792,7 +792,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error()})))
+				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.

@@ -51,8 +51,9 @@ describe("statusDetailSentence", () => {
     const s = statusDetailSentence(raw, "ImagePullBackOff");
     expect(s).toContain(STUCK_IMAGE_PULL);
     // The message is the fix: without it the sentence names a problem and no
-    // way to act on it.
+    // way to act on it. The CRI wrapper is not: it is dropped, the desc kept.
     expect(s).toContain("pull access denied");
+    expect(s).not.toContain("rpc error: code =");
     expect(isTerminalStatusReason("ImagePullBackOff")).toBe(true);
   });
 
@@ -60,9 +61,9 @@ describe("statusDetailSentence", () => {
     // "rpc error: code = …" is the SHAPE the kubelet actually produces, so a
     // parser that split on every colon would truncate every real message.
     const raw = "agent: ErrImagePull: rpc error: code = NotFound desc = manifest unknown: manifest tagged v9 not found";
-    expect(statusDetailSentence(raw, "ErrImagePull")).toContain(
-      "rpc error: code = NotFound desc = manifest unknown: manifest tagged v9 not found",
-    );
+    const s = statusDetailSentence(raw, "ErrImagePull");
+    expect(s).toContain("manifest unknown: manifest tagged v9 not found");
+    expect(s).not.toContain("rpc error: code =");
     expect(parseStatusDetail(raw, "ErrImagePull").component).toBe("agent");
   });
 
@@ -346,7 +347,8 @@ describe("runStartupView: the plan's table", () => {
       expect(marks(v)).toEqual([`${START}=done`, `${RUN_STARTUP.STEP_DOWNLOAD_FAILED}=failed`]);
       expect(v.hint).toBe("");
       expect(v.alert).toBe(statusDetailSentence(detail, reason));
-      expect(v.alert).toContain("rpc error: code = NotFound desc = not found");
+      expect(v.alert).toContain("not found");
+      expect(v.alert).not.toContain("rpc error: code =");
     }
     expect(view(mk({ status_detail: "agent: ImagePullBackOff: x", status_reason: "ImagePullBackOff" }))!.alert).toContain(
       STUCK_IMAGE_PULL,
