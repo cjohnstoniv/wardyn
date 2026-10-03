@@ -877,7 +877,7 @@ func reservedBrokerSecret(name string) bool {
 }
 
 // providerSecretPrefix mirrors internal/api's: every per-person model-provider
-// credential (wardyn-provider-<uid>-{key,oauth,sso}). A model key is injected
+// credential (wardyn-provider-<uid>-{key,oauth,sso,entra}). A model key is injected
 // proxy-side as a header, never minted, so a git_pat/ssh_key grant naming one
 // could only hand the person's own API key to the sandbox as a git password.
 const providerSecretPrefix = "wardyn-provider-"
