@@ -64,6 +64,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
   narrowed is refused (`400` at write, `422` at launch).
 
+- **Run output now reaches Postgres and its backups.** Migration `0119_run_outputs` adds `run_outputs` and
+  `run_output_erasures`. With `WARDYN_RUN_OUTPUT_PERSIST` on (the default), the final masked tail of every
+  non-interactive run is written to Postgres when the run ends and kept `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  days (default `30`; `0` keeps it forever), so "nothing reaches Postgres or a backup" no longer holds. Set
+  `WARDYN_RUN_OUTPUT_PERSIST` to `off` to keep the 0.8.5 behaviour of an in-memory tail only. A secret a
+  command prints that Wardyn never registered is kept like any log line, and is now persisted. See
+  `docs/OPERATIONS.md` "Run output".
+
 ### Added
 
 - **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
@@ -78,6 +86,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
+- **A broken substrate or a stalled background sweep shows on a gauge and a `/setup/status` row, and `/readyz`
+  is unchanged.** Migration `0118_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
+  replica. `wardyn_runner_up` (per replica) reads 0 when the runner's substrate is unreachable or refuses the
+  control plane, and `wardyn_sweep_last_tick_seconds{sweep,result}` carries each sweep's last attempt and last
+  success. The new `substrate_health` row fails with cause `runner_unreachable` or `runner_auth`, and warns with
+  cause `sweep_stale` once a sweep goes three of its intervals without a success; it is never blocking and
+  members never see it. A runner that is configured but cannot report its capabilities no longer sends every
+  admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
+  The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
+  and a daemon ping on Docker. See `docs/operations/monitoring.md`.
 
 ### Added
 
@@ -87,6 +105,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
+
+- **A run's output is persisted once, after its last bytes, and read from any replica.** Every way a run
+  ends (completion, failure, kill, idle stop, lease end, reconciliation, a failed dispatch) goes through one
+  finalisation: wait up to 5 seconds for the runner's copy of the output to end, flush the masker's
+  holdback, seal the tail, and write one masked row. A byte that arrives later is dropped and marks the row
+  `incomplete`; a process that holds no tail for the run (a restart) writes a `capture_gap` row and reads
+  nothing from the substrate. A failed write is retried with backoff and audited as `run.output.finalize`
+  (only for a capture that is not clean); an hourly leader-gated sweep deletes rows past retention
+  (`run.output.retention.sweep`) and is the `run_output` row of `wardyn_sweep_last_tick_seconds`.
+  `GET /runs/{id}/output` gains `source`, `incomplete`, `capture_gap`, `mask_scope` and `captured_at`.
+- **A run's output can be erased for good.** `EraseRunOutputs` writes a tombstone and deletes the rows in one
+  transaction, and every write and read checks the tombstone in its own transaction, so no replica recreates
+  or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
+  tail drops and zeroes it on its next touch. It is wired into the person erasure by a later change;
+  `DELETE /people/{principal}/credentials` does not call it.
 
 ### Security
 
@@ -118,6 +151,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`complete` on `GET /runs/{id}/output` now means a final capture.** It used to mean the run had finished,
+  so a read could still gain bytes after it said `complete`. It is true only for a stored final row, or an
+  in-memory tail whose drain barrier closed and whose holdback was flushed. A run that has just finished
+  reads `complete: false` until then.
 - **The sweepers that must run once now run on one elected replica.** The approval expiry, recording
   retention, credential expiry, always-egress reconcile and run pause sweeps run only on the replica that
   holds a Postgres advisory lock (`db.SweeperLeaderLockKey`); the others retry and take over within about 15

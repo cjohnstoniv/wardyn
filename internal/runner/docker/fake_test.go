@@ -71,6 +71,9 @@ type fakeDocker struct {
 	mu sync.Mutex
 
 	info system.Info
+	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
+	pingErr   error
+	pingBlock bool
 
 	images map[string]bool // ref -> present
 
@@ -304,6 +307,16 @@ func (f *fakeDocker) stdinOf(id string) []byte {
 
 func (f *fakeDocker) Info(ctx context.Context, _ client.InfoOptions) (client.SystemInfoResult, error) {
 	return client.SystemInfoResult{Info: f.info}, nil
+}
+
+// Ping answers pingErr: a test sets it to make the daemon refuse, or hang until
+// its ctx ends when pingBlock is set.
+func (f *fakeDocker) Ping(ctx context.Context, _ client.PingOptions) (client.PingResult, error) {
+	if f.pingBlock {
+		<-ctx.Done()
+		return client.PingResult{}, ctx.Err()
+	}
+	return client.PingResult{}, f.pingErr
 }
 
 func (f *fakeDocker) ImageList(ctx context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {

@@ -175,9 +175,11 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	// We do not block on the process; drain in the background so the PTY does
 	// not stall, teeing it into the run's output tail when it keeps one.
 	w := d.execOutput(ref)
+	endDrain := runner.BeginOutputDrain(w)
 	go func() {
 		defer resp.Close()
-		_, _ = io.Copy(w, resp.Reader)
+		_, err := io.Copy(w, resp.Reader)
+		endDrain(err)
 	}()
 	return created.ID, nil
 }
@@ -205,14 +207,17 @@ func (d *Driver) followMainProcessOutput(ref string) {
 	if !ok {
 		return
 	}
+	endDrain := runner.BeginOutputDrain(w.(io.Writer))
 	go func() {
 		rc, err := d.cli.ContainerLogs(context.Background(), ref, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
 		if err != nil {
 			slog.Warn("wardynd: exec output tail: could not follow the agent's log", slog.String("ref", ref), slog.Any("err", err))
+			endDrain(err)
 			return
 		}
 		defer rc.Close()
-		_, _ = io.Copy(w.(io.Writer), rc)
+		_, cerr := io.Copy(w.(io.Writer), rc)
+		endDrain(cerr)
 	}()
 }
 

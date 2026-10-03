@@ -46,7 +46,7 @@ var isOperatorCensus = map[string]int{
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,
 	// The deployer funnel, admin read projections and display tiers.
-	"setup.go:handleSetupStatus":                   2,
+	"setup.go:handleSetupStatus":                   3, // the third gates the substrate_health row: operator-only, so a member poll never probes the substrate
 	"setup_integrations.go:handleListIntegrations": 1,
 	"me.go:handleMe":                               3,
 	// Compares stamped tiers: the switch must not change whether a demotion
