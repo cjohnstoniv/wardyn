@@ -596,7 +596,13 @@ function PolicyEditor({
               required
             />
           </Field>
-          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} adoCeiling={adoCeiling} />
+          <PolicyPanel
+            instance="policies"
+            value={specText}
+            onChange={setSpecText}
+            adoCeiling={adoCeiling}
+            serverError={error}
+          />
           {/* The creation form asks; an existing policy's list lives on its
               sheet, except right after a refused list write. */}
           {(!editing || partial) && (
