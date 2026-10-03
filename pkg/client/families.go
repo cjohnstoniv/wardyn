@@ -230,6 +230,9 @@ type SiteConfigPutResult struct {
 	// because the console has no branding record yet. Apply again after saving
 	// the Branding card.
 	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+	// ModelProviderWarnings are advisories on the model_providers block, such as an azure_foundry
+	// endpoint that resolves to a private address no internal_hosts entry covers.
+	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
 }
 
 // PutSiteConfigResult is PutSiteConfig with every advisory signal, including

@@ -106,18 +106,30 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	block := normalizeModelProviders(&body)
-	if err := validateModelProviders(block, s.cfg.AllowTestEndpoints); err != nil {
+	ctx := r.Context()
+	// The private-endpoint advisory reads the stored InternalHosts, which this door's body does not carry.
+	var internalHosts []types.InternalHost
+	if hasAzureFoundry(block) {
+		stored, err := s.cfg.Store.GetSiteConfig(ctx)
+		if err != nil {
+			writeServerError(w, r, "get site config", err)
+			return
+		}
+		internalHosts = stored.InternalHosts
+	}
+	warnings, err := validateModelProviders(block, s.providerWriteEnv(internalHosts))
+	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
 		return
 	}
-	imageOK := s.claudeSignInImageOK(r.Context(), block)
+	imageOK := s.claudeSignInImageOK(ctx, block)
 	// SEAM-1, handlePutAgentProviders's reason: the same singleton document.
 	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
 	if !ok {
 		return
 	}
 	defer unlock()
-	ctx := r.Context()
+	ctx = r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
@@ -156,7 +168,14 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"model_provider.write", "model_providers", "success", mustJSON(datum)))
 	w.Header().Set("ETag", computeETag(savedBlock))
-	writeJSON(w, http.StatusOK, savedBlock)
+	writeJSON(w, http.StatusOK, modelProvidersWritten{ModelProviders: savedBlock, ModelProviderWarnings: warnings})
+}
+
+// modelProvidersWritten is PUT's body: the stored block, and the write's advisories (see
+// siteConfigPutResponse.ModelProviderWarnings). GET returns the bare block.
+type modelProvidersWritten struct {
+	types.ModelProviders
+	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
 }
 
 // stillDefaultRefusal is this door's spelling of validateDefaultProviders: the
@@ -225,7 +244,8 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 // providerAddressChanged is rule 8's predicate: where requests go, or how each
 // person's credential is sent, differs between two versions of one provider.
 func providerAddressChanged(a, b types.ModelProvider) bool {
-	if a.BaseURL != b.BaseURL || bedrockAddress(a) != bedrockAddress(b) || authHeader(a.Auth) != authHeader(b.Auth) {
+	if a.BaseURL != b.BaseURL || bedrockAddress(a) != bedrockAddress(b) || authHeader(a.Auth) != authHeader(b.Auth) ||
+		azureAddress(a) != azureAddress(b) {
 		return true
 	}
 	for _, ha := range a.Harnesses {
@@ -249,7 +269,11 @@ func providerAddressDigest(p types.ModelProvider) string {
 	for _, h := range p.Harnesses {
 		harnesses[h.Harness] = [2]string{h.Path, h.AuthHeader}
 	}
-	sum := sha256.Sum256(mustJSON([]any{p.BaseURL, bedrockAddress(p), authHeader(p.Auth), harnesses}))
+	parts := []any{p.BaseURL, bedrockAddress(p), authHeader(p.Auth), harnesses}
+	if p.Azure != nil { // appended only for the kind that has it, so no other row's digest moves
+		parts = append(parts, azureAddress(p))
+	}
+	sum := sha256.Sum256(mustJSON(parts))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -258,6 +282,15 @@ func bedrockAddress(p types.ModelProvider) string {
 		return ""
 	}
 	return p.Bedrock.Region + " " + p.Bedrock.BaseURL
+}
+
+// azureAddress is an azure_foundry row's endpoint and route: where each person's Entra token goes, and
+// which audience it was captured for. A Model or FastModel change is not an address change.
+func azureAddress(p types.ModelProvider) string {
+	if p.Azure == nil {
+		return ""
+	}
+	return p.Azure.Endpoint + " " + p.Azure.Route
 }
 
 func authHeader(a *types.ProviderAuth) string {
