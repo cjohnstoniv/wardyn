@@ -204,7 +204,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// RoleSecurityAdmin), in lockstep with denyUserRequest: a security
 		// admin's OWN run is clamped like anyone else's. They author the
 		// ceiling; they do not stand outside it.
-		if !s.isOperator(r.Context()) {
+		if !s.runUngoverned(r.Context()) {
 			// A member's inline_policy can never smuggle wider grants/
 			// egress/confinement than THEIR ceiling allows — the governance
 			// profile an admin assigned them, or Config.DefaultPolicy when
@@ -313,7 +313,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// rule whether body or row id" claim would be false at exactly the
 	// grant-bearing rows, which are the ones that matter. Dropping the unlisted
 	// pairing is filterUserGrants' job, stage 2.
-	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
+	if policyID != nil && ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
 		var warns []string
 		var bounded bool
 		spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)

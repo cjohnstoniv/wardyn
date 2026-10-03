@@ -939,7 +939,7 @@ func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run t
 		}
 		// The fall-through lane is operator-only, and a super admin's ticket
 		// is exempt the same way.
-		return !superAdmin && s.refuseInteractiveAttach(w, r, run)
+		return (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r, run)
 	}
 	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
 		// The cookie lane: requireOperator and the origin check keep members
@@ -949,5 +949,5 @@ func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run t
 		s.refuseRunOwnerOnly(w, r, run)
 		return true
 	}
-	return false
+	return s.refuseNoTicketAttach(w, r, run)
 }
