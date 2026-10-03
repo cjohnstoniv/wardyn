@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // parseRequestRatio reads WARDYN_SANDBOX_REQUEST_RATIO. Empty is unset (0, requests equal limits);
@@ -21,4 +23,13 @@ func parseRequestRatio(s string) (float64, error) {
 		return 0, fmt.Errorf("WARDYN_SANDBOX_REQUEST_RATIO %q must be a number in (0, 1]", s)
 	}
 	return v, nil
+}
+
+// applyRequestRatio parses WARDYN_SANDBOX_REQUEST_RATIO and sets it on the runner (boot, from run).
+func applyRequestRatio(s string) error {
+	ratio, err := parseRequestRatio(s)
+	if err != nil {
+		return err
+	}
+	return runner.SetRequestRatio(ratio)
 }
