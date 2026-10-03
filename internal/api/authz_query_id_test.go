@@ -121,6 +121,7 @@ var queryParamNotAnID = map[string]string{
 	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
+	"cursor":                    "GET /people (security tier): the opaque last-principal marker of the previous page of a listing that tier already reads whole; it picks where the page starts and widens nothing",
 	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
 	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
