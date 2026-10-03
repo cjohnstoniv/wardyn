@@ -244,7 +244,7 @@ func (s PG) SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error {
 		`UPDATE agent_runs SET disk_mib=$1, updated_at=now() WHERE id=$2`, mib, id)
 }
 
-// RunSizing is the configured reservation recorded at dispatch (migration 0108). A nil
+// RunSizing is the configured reservation recorded at dispatch (migration 0117). A nil
 // ProxyCPUMillis means the proxy had no CPU cap.
 type RunSizing struct {
 	RunnerKind            string
