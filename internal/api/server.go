@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -134,6 +135,10 @@ type ImageBuilder interface {
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
 type Config struct {
+	// SweeperLease, when set, gates the sweeps that must run on one replica (the
+	// run pause) to the elected leader and fences them by lease epoch. Nil means
+	// this process is the only one sweeping: every pass runs and no fence applies.
+	SweeperLease SweeperLease
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit
 	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
@@ -209,6 +214,11 @@ type Config struct {
 	// reads to drop the admin-token form and the role-derivation caveat — can
 	// never overclaim.
 	SSOOnly bool
+	// GovernAdminRuns mirrors WARDYN_GOVERN_ADMIN_RUNS: an SSO admin's or an
+	// admin-role personal token's runs are governed like a member's (see
+	// runUngoverned in govern_admin.go). The admin token and local mode stay
+	// ungoverned either way.
+	GovernAdminRuns bool
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
@@ -378,9 +388,18 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
-	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no task_mode=exec run
+	// MaskManifests, when non-nil, keeps each dispatched run's masking
+	// manifest in Postgres and gates the five doors that relay or persist a
+	// run's output on it (mask_manifest.go): a run whose corpus it cannot prove
+	// complete is refused instead of passed through. Nil keeps no manifests
+	// and gates nothing, as a nil MaskRegistry masks nothing.
+	MaskManifests *maskmanifest.Manifests
+	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no non-interactive run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
 	ExecOutputTailOff bool
+	// RunOutputTailBytes is WARDYN_RUN_OUTPUT_TAIL_BYTES: each run's tail size
+	// and the cap on ?tail=. Zero defaults to defaultRunOutputTailBytes in New.
+	RunOutputTailBytes int
 	// ExecOutputTailTTL is WARDYN_EXEC_OUTPUT_TAIL_TTL: how long a run's output
 	// tail is kept after its last output. Zero defaults to
 	// defaultExecOutputTailTTL in New.
@@ -395,6 +414,13 @@ type Config struct {
 	// first, so a token created through a row an admin has since disabled can
 	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
 	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
+	// AzureFoundryEntra resolves the Entra application an azure_foundry provider
+	// row signs people in against, by the row's uid (azure_foundry_entra.go). It
+	// answers found=false for a uid that is not an azure_foundry row. The
+	// application is always the console's own sign-in application, so a
+	// deployment without Entra console login answers an unusable configuration
+	// and both legs refuse. Nil: no Azure sign-in is offered.
+	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
@@ -410,6 +436,15 @@ type Config struct {
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
+	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
+	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
+	// is unlimited. Past it every door answers 422 run_quota (createRun); POST /runs
+	// refuses before minting and audits nothing for it, bar a create that loses
+	// the race at the cap, which keeps its identity.mint row.
+	MaxConcurrentRuns int
+	// PreflightRatePerMin is WARDYN_PREFLIGHT_RATE_PER_MIN: the per-person
+	// POST /runs/preflight rate (burst 5). 0 turns the limit off.
+	PreflightRatePerMin int
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
@@ -553,6 +588,16 @@ type Config struct {
 	// same posture production does rather than an accidental zero-tolerance
 	// TTL that fails every override.
 	SSHRoleTTL time.Duration
+	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
+	// minted API token may have. Zero (the default) means no cap. A mint that
+	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
+	// It never touches a token already minted.
+	APITokenMaxTTL time.Duration
+	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
+	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
+	// refuses it until its owner signs in again. Zero, the default, is off: no
+	// token is refused for the age of its stamp.
+	RoleStampTTL time.Duration
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
@@ -622,11 +667,11 @@ type Server struct {
 	// capability_batch_test.go's growth law reads it. One atomic add per row
 	// already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
-	// auditChainSweep admits ONE verify sweep at a time (handleVerifyAuditChain).
-	// The sweep re-hashes an unprunable table, so concurrent GETs would multiply
-	// one operator action into N full passes each holding a pool connection.
-	// Zero value is ready to use.
-	auditChainSweep sync.Mutex
+	// locks is the in-process fallback for the cross-replica locks (locks.go).
+	// The audit chain verify sweep, the site-config and capability-enforcement
+	// writers, the per-run operation lock and the two refresh single-flights
+	// all take theirs there. Zero value is ready to use.
+	locks lockState
 	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
 	// shouldTouch in internal.go). Zero value is ready to use.
 	lastTouchMu sync.Mutex
@@ -642,6 +687,9 @@ type Server struct {
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
+	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
+	// an in-flight consumer re-reads its run's fence.
+	maskBeat time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
@@ -659,28 +707,6 @@ type Server struct {
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
-	// siteConfigMu serializes the single site-config document's four
-	// read-modify-write writers (PUT /site-config, PUT/DELETE/POST-adopt
-	// /integrations/{id}) — an unconditional Postgres upsert (store.go's
-	// PutSiteConfig) with no CAS, so two overlapping RMWs on one process can
-	// otherwise silently erase each other's write (SEAM-1: a hand-authored
-	// integration row, a default_for:[agent_runs] mark, or the just-saved
-	// corp proxy/redirect config). Correct because replicas>1 is refused by
-	// construction (deployment.yaml) — a single in-process mutex covers every
-	// writer that can ever exist. Zero value is ready to use. ponytail:
-	// promote to a PG advisory lock (gt_rotator.go's pattern) if
-	// allowMultiReplica ever becomes real.
-	siteConfigMu sync.Mutex
-	// capEnforcementMu is siteConfigMu's sibling for the OTHER whole-document
-	// replace this package added If-Match/ETag optimistic concurrency to
-	// (etag.go): PUT /permissions/enforcement reads the current enforcement
-	// map to check If-Match against, then writes the new one, and this mutex
-	// is what keeps that check-then-write atomic against a second overlapping
-	// PUT on the same process — same reasoning as siteConfigMu above (single
-	// replica by construction), just a second lock because the two documents
-	// live in different tables and a writer on one must never block a writer
-	// on the other. Zero value is ready to use.
-	capEnforcementMu sync.Mutex
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
 	// the same terminal (see attach_holder.go). Process-local like sshSessions
@@ -690,7 +716,7 @@ type Server struct {
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
 	creates   inflightCreates
 	runEvents runEventHub // each run's lifecycle event ring (run_events.go)
-	// execOutputs holds each task_mode=exec run's output tail (run_output.go).
+	// execOutputs holds each non-interactive run's output tail (run_output.go).
 	execOutputs execOutputTails
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
@@ -731,16 +757,20 @@ type Server struct {
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
-	dirLimiter       principalLimiter
+	dirLimiter principalLimiter
+	// preflightLimiter rate-bounds POST /runs/preflight per person
+	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
+	preflightLimiter *principalLimiter
 	deviceRouteState // the device routes' process state (server_devices.go)
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
-	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
-	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
-	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
-	// dispatches of the same principal cannot both redeem one rotating refresh
-	// token (the second re-reads inside the lock and finds it already renewed);
+	// ssoRefreshMu guards ssoRefreshSpent, which the control-plane AWS SSO
+	// refresher owns (awssso_refresh.go). The refresh is single-flight per owner
+	// through a cross-replica lock (locks.go) that encloses re-read -> expiry
+	// check -> CreateToken -> Put, so two dispatches of the same principal, on
+	// this or another replica, cannot both redeem one rotating refresh token
+	// (the second re-reads inside the lock and finds it already renewed).
 	// ssoRefreshSpent records the fingerprints of refresh tokens the OIDC
 	// endpoint has already told us are gone, keyed to the TOKEN rather than the
 	// credential, so a later capture is never pre-marked dead. Process-local
@@ -753,13 +783,7 @@ type Server struct {
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
-	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
-	// adoEntra is the per-owner single-flight registry the Azure DevOps
-	// sign-in's redemption takes before it redeems a rotating refresh token
-	// (see ado_entra_store.go). Process-local for the same reason as the locks
-	// above, and its zero value is ready to use.
-	adoEntra adoEntraFlight
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
@@ -806,6 +830,9 @@ func New(cfg Config) *Server {
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
 	}
+	if cfg.RunOutputTailBytes <= 0 {
+		cfg.RunOutputTailBytes = defaultRunOutputTailBytes
+	}
 	if cfg.ExecOutputTailTTL <= 0 {
 		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL
 	}
@@ -817,6 +844,9 @@ func New(cfg Config) *Server {
 			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 		},
+	}
+	if cfg.PreflightRatePerMin > 0 {
+		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it

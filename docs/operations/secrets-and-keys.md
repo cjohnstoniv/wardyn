@@ -196,17 +196,49 @@ Go's cryptographic module) with HKDF-SHA256 key derivation. Go's FIPS
 140-3 mode (`GODEBUG=fips140=on`) applies to it, and with the Go version
 in `go.mod` the envelope also runs under `GODEBUG=fips140=only`.
 
-Wardyn holds no FIPS 140-3 certification, and no Wardyn build pins a
-validated module snapshot yet.
+Two statements about FIPS 140-3, kept apart:
 
-That's a statement about this path only: the build does not pin a frozen
-module snapshot (`GOFIPS140`), and age (used once, to convert
-pre-envelope rows) is outside it. The `local` key's id is taken over the
-age key's public recipient, which is X25519, and
-`GODEBUG=fips140=only` forbids X25519. Under it wardynd refuses to start
-with a `WARDYN_AGE_KEY` (or an ephemeral one) and names store mode. Store
-mode (`WARDYN_SECRET_STORE=vaultkv`, below) needs no age key and boots
-under `GODEBUG=fips140=only`.
+- **The `-fips` image uses a FIPS 140-3 validated Go cryptographic module.**
+  Every release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, signed like
+  the other images. Its wardynd is built with `GOFIPS140=v1.0.0-c2097c7c`, the
+  frozen Go Cryptographic Module v1.0.0 snapshot. Go's FIPS 140-3 documentation
+  (<https://go.dev/doc/security/fips140>) gives that module's CMVP certificate
+  as #5247 and its CAVP certificate as A6650. The release job reads the setting
+  back out of the pushed image (`go version -m` must print exactly
+  `build GOFIPS140=v1.0.0-c2097c7c`, on both platforms) and fails if it does
+  not; `scripts/check-fips-image.sh <image-ref> v1.0.0-c2097c7c` runs the same
+  check by hand. That check is what makes the tag mean something:
+  `GODEBUG=fips140=only` at run time is a diagnostic that selects no module
+  snapshot, and passes for an ordinary build.
+- **Wardyn itself is not certified.** No part of Wardyn holds a FIPS 140-3
+  certification, and nothing here claims one, or that a deployment running this
+  image is compliant. Only the Go module is validated; the rest of wardynd is
+  ordinary code around it.
+
+The `-fips` build turns Go's FIPS mode on by default (`GODEBUG=fips140=on`);
+set `GODEBUG=fips140=only` (the chart's `env.GODEBUG`) to make a non-approved
+algorithm fail instead of run. Under `only` the age key cannot be used: the
+`local` key's id is taken over the age key's public recipient, which is X25519,
+and `only` forbids X25519. wardynd then refuses to start with a `WARDYN_AGE_KEY`
+(or an ephemeral one) and names store mode. Run the image with non-age custody
+instead: Vault Transit (`WARDYN_KEK=transit`), Azure Key Vault, or store mode
+(`WARDYN_SECRET_STORE=vaultkv`, below). None of them needs an age key. Age is
+used once, to convert pre-envelope rows, and is outside the module.
+
+Exercised under `GODEBUG=fips140=only` on a kind cluster, with Transit custody
+and no age key:
+
+- boot, with all four boot keys wrapped by Transit, and `/healthz`;
+- the Kubernetes runner substrate, and an interactive run reaching `RUNNING`
+  with its proxy sidecar;
+- the SSH gateway's handshake: it negotiates `ecdh-sha2-nistp256`, an
+  `ssh-ed25519` host key, `aes128-ctr` and `hmac-sha2-256-etm@openssh.com`, and
+  an unauthenticated client then gets the normal `Permission denied (publickey)`.
+
+That is not a coverage claim. These were not run under `only`, so nothing is
+claimed for them: SSO and OIDC sign-in, the built-in TLS listener, Azure Key
+Vault, store mode and session recording. The one path found to need an
+unapproved primitive is age's X25519, above.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation: a
 **maintenance mode, not a server start**. It mints a new identity and
@@ -443,7 +475,7 @@ that works, or the probe does not round-trip, **wardynd refuses to start**.
    ```sh
    wardynd -rewrap
    ```
-   Expected output: `every sealed secret is wrapped under
+   Expected output: `every sealed secret and principal key is wrapped under
    transit:transit/wardyn version 1; …`
 4. Unset `WARDYN_AGE_KEY` and restart. wardynd refuses to start until you
    do (and, the other way, refuses without it, naming `-rewrap`, while
@@ -465,7 +497,7 @@ old versions:
    vault write -f transit/keys/wardyn/rotate
    wardynd -rewrap
    ```
-   Expected output: `every sealed secret is wrapped under
+   Expected output: `every sealed secret and principal key is wrapped under
    transit:transit/wardyn version 2; raising the Transit key's
    min_decryption_version to 2 now retires the older versions`
 2. ```sh
@@ -509,8 +541,9 @@ Vault protect the data key, and neither ever leaves the vault:
 - The database alone decrypts nothing; neither does the database plus
   anything on the Wardyn host, once no row is sealed under the age key
   and `WARDYN_AGE_KEY` is unset.
-- Wardyn's boot keys are wrapped the same way, under the same keys, so
-  **do not restart wardynd during a Key Vault outage**.
+- Wardyn's boot keys are wrapped the same way, under the same keys unless
+  you set a platform pair (see "A second key pair and a second identity"
+  below). Either way, **do not restart wardynd during a Key Vault outage**.
 - Public-cloud Key Vault only: a Managed HSM or sovereign-cloud vault is
   refused at boot, by name.
 
@@ -577,7 +610,7 @@ row, or Key Vault is unreachable, **wardynd refuses to start**.
 2. Set `WARDYN_KEK=azurekv`, both key ids and the identity settings,
    keep `WARDYN_AGE_KEY`, and restart.
 3. Run `wardynd -rewrap` with the same settings. Expected output:
-   `every sealed secret is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
+   `every sealed secret and principal key is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
 4. Unset `WARDYN_AGE_KEY` and restart.
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep both key ids
@@ -602,6 +635,68 @@ refuses to start with both named.
 
 A row still wrapped under a disabled wrapping version is refused, naming
 the row, until that version is enabled again.
+
+**A second key pair and a second identity (the platform split).** By
+default one pair and one Entra identity protect Wardyn's boot keys (signing,
+session and SSH host keys) and the credentials alike. `sign` on the signing
+key plants a boot key, so the identity that serves credentials is
+credential-equivalent twice over. To separate them, create a second pair
+with the same types and `key_ops` as above, and a second Entra identity (an
+app registration or a user-assigned managed identity). Then set:
+
+| Setting | Chart |
+|---|---|
+| `WARDYN_AZURE_KEK_KEY_PLATFORM` | `kek.azurekv.keyPlatform` |
+| `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM` | `kek.azurekv.signingKeyPlatform` |
+| `WARDYN_AZURE_CLIENT_ID_PLATFORM` | `secretStore.azure.clientIdPlatform` |
+
+- wardynd wraps and signs the boot keys under the platform pair, reached as
+  the platform identity, and every credential under `WARDYN_AZURE_KEK_KEY`
+  and `WARDYN_AZURE_KEK_SIGNING_KEY` as `WARDYN_AZURE_CLIENT_ID`. A leaked
+  Entra access token for the credential identity then wraps, signs and
+  unwraps no boot key.
+- **Scope the role assignments, which Wardyn cannot check.** Give the
+  platform identity the role above at the scope of the two platform keys
+  alone, and give the credential identity none on them. A dedicated vault for
+  the platform pair is the stronger choice, though not a boot rule: a role
+  assigned at the vault scope reaches every key in it.
+- **Under workload identity the second identity needs its own federated
+  credential**, trusting the same issuer, the same service account subject
+  (`system:serviceaccount:<namespace>:<name>`) and audience
+  `api://AzureADTokenExchange` as the first. The pod's one projected token is
+  exchanged for each identity's Entra token in turn.
+- Boot refuses in these cases:
+  - the platform keys are set without `WARDYN_AZURE_CLIENT_ID_PLATFORM`;
+  - only one key of the pair is set;
+  - `WARDYN_KEK` is not `azurekv`;
+  - `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is also named;
+  - the wrapping key, the signing key or the client id equals the credential one.
+
+  Keys compare by lowercase vault host and key name, so a spelling that
+  differs only by case is the same key. Client ids compare
+  case-insensitively. The chart's render-time check is a first line, and
+  wardynd's is the authority. With the pair set, a boot key under any other
+  key is refused at boot.
+- **What the split does not do.** Both client ids exchange the same
+  projected service-account token, so it does not defend against a leaked
+  service-account token or a compromised wardynd process
+  (`threatmodel/THREAT-MODEL.md` residual 49).
+- On an install coming from 0.7.x or earlier, boot this version once with the
+  platform settings unset first, so the pre-envelope rows convert. Then run
+  `wardynd -rewrap -rewrap-adopt-boot-keys` with the same settings, once, to
+  move the boot keys onto the platform pair (see "Adopting boot keys"); it
+  touches no credential row. Expected output:
+  `every boot key is wrapped under azurekv-key:<vault-host>/<platform-key>/<platform-signing-key> at versions <wv>/<sv> (wrapping/signing); …`.
+  A later `-rewrap` needs no flag, and refuses a boot key found under any other
+  key. Rotating either platform key follows the steps above, run against the
+  platform key; disable every older version once `-rewrap` reports 0 rows.
+- **Retiring the pair.** Do not just unset it: the boot keys are still under
+  it. Run `wardynd -rewrap -rewrap-retire-platform-key` with the settings you
+  boot with today, the three platform settings included. It reads the boot
+  keys under the platform pair and writes them under the key a write uses
+  today (the credential pair with `WARDYN_KEK=azurekv`, the local key with
+  `WARDYN_KEK=local`). A second run moves nothing. Then unset the three
+  platform settings and restart every replica.
 
 **When Key Vault is unavailable.** Throttling (429), a 5xx or an
 unreachable vault is *transient* (the sink answers 503). A 401, a 403, a

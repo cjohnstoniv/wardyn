@@ -71,11 +71,11 @@ func newEntraPeoplePG(t *testing.T) entraPeoplePG {
 			"root@corp.example": oidc.RoleAdmin, "sec@corp.example": oidc.RoleSecurityAdmin,
 		},
 		DefaultRole: oidc.RoleUser,
-		OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
-			if err := st.RefreshAPITokenIdentity(ctx, sub, role, userType, groups, truncated); err != nil {
+		OnLogin: func(ctx context.Context, f oidc.LoginFacts) {
+			if err := st.RefreshAPITokenIdentity(ctx, f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated); err != nil {
 				t.Error(err)
 			}
-			if err := st.MarkPersonSignedIn(ctx, sub, time.Now().UTC()); err != nil {
+			if err := st.MarkPersonSignedIn(ctx, f.Sub, time.Now().UTC()); err != nil {
 				t.Error(err)
 			}
 		},

@@ -49,7 +49,7 @@ Wardyn is distributed through four channels:
 | channel | what it is |
 |---|---|
 | **Source** | this git repository |
-| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
+| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
 | **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 

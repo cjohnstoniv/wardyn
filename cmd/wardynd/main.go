@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
@@ -214,7 +215,8 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
+	maskScopes := &maskScope{}
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, maskScopes)
 	if err != nil {
 		return err
 	}
@@ -228,6 +230,14 @@ func run() error {
 	// below never see one. rootCtx, not bootCtx: the conversion is one
 	// all-or-nothing transaction over the whole table.
 	secrets, err := openSecretStore(rootCtx, pool, f, maskedRec)
+	if err != nil {
+		return err
+	}
+
+	// Run masking manifests: what each run was given, sealed in Postgres, so a
+	// restarted or second wardynd masks it and the doors refuse a run they
+	// cannot prove masked. Over the secret store's per-subject keys.
+	maskManifests, err := buildMaskManifests(pool, secrets, maskReg, maskScopes)
 	if err != nil {
 		return err
 	}
@@ -309,6 +319,9 @@ func run() error {
 	// across control-plane restarts.
 	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
 	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
+	if err := applyRequestRatio(*f.sandboxRequestRatio); err != nil {
+		return err
+	}
 	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err
@@ -343,6 +356,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
 	// beside validateConfig). Checked here, not there, because both of its
@@ -358,11 +372,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	leader := db.NewSweeperLeader(pool, sweeperHolder())
 	srv := api.New(api.Config{
-		Store:     st,
-		Identity:  idp,
-		Approvals: approvals,
-		Broker:    brk,
+		SweeperLease: leader,
+		Store:        st,
+		Identity:     idp,
+		Approvals:    approvals,
+		Broker:       brk,
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
@@ -385,6 +401,7 @@ func run() error {
 		LocalMode:           lm.enabled,
 		MemberMode:          *f.memberMode,
 		SSOOnly:             *f.ssoOnly,
+		GovernAdminRuns:     *f.governAdminRuns,
 		LocalOperator:       lm.operator,
 		TrustDomain:         *f.trustDomain,
 		DefaultPolicy:       defaultPolicy,
@@ -419,10 +436,14 @@ func run() error {
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
 		MaskRegistry:             maskReg,
+		MaskManifests:            maskManifests,
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
+		RunOutputTailBytes:       *f.runOutputTailBytes,
+		PreflightRatePerMin:      *f.preflightRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
+		AzureFoundryEntra:        azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:            feats.scanAdvisor,
@@ -451,6 +472,8 @@ func run() error {
 		SSHAdvertiseAddr: *f.sshAdvertise,
 		SSHHostKey:       feats.sshHostKey,
 		SSHRoleTTL:       *f.sshRoleTTL,
+		APITokenMaxTTL:   *f.apiTokenMaxTTL,
+		RoleStampTTL:     *f.roleStampTTL,
 		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
 		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
 		// checks both.
@@ -463,6 +486,7 @@ func run() error {
 		RunConfigKey:     feats.runConfigKey,
 		// Admits every run unless a WARDYN_HOST_* limit is set.
 		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
+		MaxConcurrentRuns:  *f.hostCapacity.maxConcurrentRuns,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -479,7 +503,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

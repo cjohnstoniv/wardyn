@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strconv"
@@ -13,9 +14,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// GET /runs/{id}/output (#1232) serves the end of a task_mode=exec run's
+// GET /runs/{id}/output (#1232) serves the end of a non-interactive run's
 // combined stdout/stderr. wardynd keeps it in memory, apart from the recording
 // store, so a deployment with WARDYN_RECORDING_STORE=off can still read what
 // its headless runs printed. An interactive run is refused: its terminal is
@@ -30,15 +32,17 @@ import (
 // only if someone needs one across a restart.
 
 const (
-	// execOutputTailBytes bounds each run's tail and what ?tail= may ask for.
-	execOutputTailBytes = 8 << 10
+	// defaultRunOutputTailBytes is WARDYN_RUN_OUTPUT_TAIL_BYTES's default: it
+	// bounds each run's tail and what ?tail= may ask for.
+	defaultRunOutputTailBytes = 64 << 10
 	// defaultExecOutputTailTTL is WARDYN_EXEC_OUTPUT_TAIL_TTL's default.
 	defaultExecOutputTailTTL = 24 * time.Hour
 )
 
-// outputRing keeps the last execOutputTailBytes written to it. Not locked on
+// outputRing keeps the last max bytes written to it. Not locked on
 // its own: every access holds its execOutputTail's liveMaskWriter mutex.
 type outputRing struct {
+	max       int
 	buf       []byte
 	truncated bool // bytes were dropped off the front
 	expired   bool // the TTL passed: buf is released and later writes are dropped
@@ -53,13 +57,13 @@ func (r *outputRing) Write(p []byte) (int, error) {
 		return n, nil
 	}
 	if r.buf == nil {
-		r.buf = make([]byte, 0, execOutputTailBytes)
+		r.buf = make([]byte, 0, r.max)
 	}
-	if len(p) > execOutputTailBytes {
-		p = p[len(p)-execOutputTailBytes:]
+	if len(p) > r.max {
+		p = p[len(p)-r.max:]
 		r.truncated = true
 	}
-	if drop := len(r.buf) + len(p) - execOutputTailBytes; drop > 0 {
+	if drop := len(r.buf) + len(p) - r.max; drop > 0 {
 		r.buf = append(r.buf[:0], r.buf[drop:]...)
 		r.truncated = true
 	}
@@ -102,13 +106,20 @@ func (t *execOutputTails) pruneLocked(now time.Time, ttl time.Duration) {
 
 // openExecOutput starts runID's tail and returns the writer dispatch hands the
 // runner (runner.SandboxSpec.ExecOutput), or nil when this run keeps none.
-func (s *Server) openExecOutput(runID uuid.UUID, taskMode string, interactive bool) io.Writer {
-	if s.cfg.ExecOutputTailOff || taskMode != "exec" || interactive {
+func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer {
+	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) {
+		return nil
+	}
+	runID := run.ID
+	// Door 3 of five (mask_manifest.go): the relay keeps nothing for a run whose
+	// masking corpus this server cannot prove whole, and its writer drops a
+	// chunk the moment that stops being true.
+	if !s.maskCovered(context.Background(), runID) {
 		return nil
 	}
 	now := s.cfg.Now()
-	e := &execOutputTail{ring: outputRing{last: now, now: s.cfg.Now}}
-	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: &e.ring}
+	e := &execOutputTail{ring: outputRing{max: s.cfg.RunOutputTailBytes, last: now, now: s.cfg.Now}}
+	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: &e.ring, guard: s.maskGuard(runID)}
 	t := &s.execOutputs
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -173,23 +184,29 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := execOutputTailBytes
+	limit := s.cfg.RunOutputTailBytes
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
 			writeErrorReason(w, http.StatusBadRequest, reasonRunOutputTailInvalid, "tail must be a positive number of bytes")
 			return
 		}
-		limit = min(n, execOutputTailBytes)
+		limit = min(n, s.cfg.RunOutputTailBytes)
 	}
 	if run.Interactive {
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive,
-			"only a task_mode=exec run keeps its output, and this run is interactive")
+			"an interactive run keeps no output here: its terminal is the recording's to keep")
 		return
 	}
 	if s.cfg.ExecOutputTailOff {
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputOff,
 			"this deployment keeps no run output (WARDYN_EXEC_OUTPUT_TAIL=off)")
+		return
+	}
+	// Door 5 of five (mask_manifest.go): the tail in this process was masked
+	// against a registry this server must be able to prove whole. A terminal
+	// run's persisted output is out-o2's, not rebuilt from a live registry here.
+	if s.refuseUncovered(w, r, id, "runs.output") {
 		return
 	}
 	complete := run.State.IsTerminal()
@@ -201,7 +218,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	case !kept:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
-			"no output is kept for this run: only a task_mode=exec run started since wardynd last restarted keeps its output")
+			"no output is kept for this run: only a non-interactive run started since wardynd last restarted keeps its output")
 		return
 	}
 	writeJSON(w, http.StatusOK, runOutputResponse{Output: string(out), Truncated: truncated, Complete: complete})

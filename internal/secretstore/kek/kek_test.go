@@ -266,3 +266,53 @@ func TestSeal_NeverRepeatsANonce(t *testing.T) {
 		seen[n] = true
 	}
 }
+
+// A principal-key wrap binds its own labelled AAD; the data-key AAD is
+// unchanged, a mixed or partial bind is refused, and no field moves between
+// the two shapes.
+func TestWrapAAD_PrincipalKeyBind(t *testing.T) {
+	got, err := WrapAAD(PrincipalBind("alice", "cred", 3, "default"), "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := Encode("wardyn/pk-wrap/v1", "alice", "cred", "3", "default", "k1"); !bytes.Equal(got, want) {
+		t.Fatalf("principal AAD = %x, want %x", got, want)
+	}
+	row, err := WrapAAD(Bind("alice", "cred"), "k1")
+	if err != nil || !bytes.Equal(row, Encode("wardyn/kek/v1", "alice", "cred", "k1")) {
+		t.Fatalf("data-key AAD = (%x, %v), want the unchanged encoding", row, err)
+	}
+	for _, other := range [][]byte{
+		mustAAD(t, PrincipalBind("bob", "cred", 3, "default")),
+		mustAAD(t, PrincipalBind("alice", "audit-seal", 3, "default")),
+		mustAAD(t, PrincipalBind("alice", "cred", 4, "default")),
+		mustAAD(t, PrincipalBind("alice", "cred", 3, "other")),
+		row,
+	} {
+		if bytes.Equal(got, other) {
+			t.Fatal("two different bindings share an AAD")
+		}
+	}
+	mixed := PrincipalBind("alice", "cred", 3, "default")
+	mixed[BindName] = "cred"
+	for name, bind := range map[string]map[string]string{
+		"a principal bind with a row name":    mixed,
+		"a bind with a purpose only":          {BindOwner: "alice", BindPurpose: "cred"},
+		"a principal bind with no owner":      {BindPurpose: "cred", BindVersion: "1", BindDomain: "default"},
+		"a principal bind with no domain":     {BindOwner: "alice", BindPurpose: "cred", BindVersion: "1"},
+		"a data-key bind with a version only": {BindOwner: "alice", BindName: "n", BindVersion: "1"},
+	} {
+		if _, err := WrapAAD(bind, "k1"); err == nil {
+			t.Errorf("WrapAAD accepted %s", name)
+		}
+	}
+}
+
+func mustAAD(t *testing.T, bind map[string]string) []byte {
+	t.Helper()
+	aad, err := WrapAAD(bind, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return aad
+}

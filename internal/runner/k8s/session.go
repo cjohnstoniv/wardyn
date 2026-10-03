@@ -33,8 +33,8 @@ import (
 // Env list. Duplicated rather than hoisted, since docker's attachShell lives
 // in a `//go:build docker` file this package cannot import — keep the two in
 // lockstep if the shell chain ever changes.
-const attachShellScript = `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
-if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
+var attachShellScript = `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
+if command -v tmux >/dev/null 2>&1; then ` + runner.TmuxAttachSh + `; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
 
 // resolveExecContainer picks the Attach/ExecStream target: the ephemeral
 // "wardyn-agent" exec container if Exec already added one (so the session

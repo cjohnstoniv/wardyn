@@ -104,6 +104,11 @@ export interface SiteConfig {
   // characters; the URL is http(s) only. Edited on the People step.
   sign_in_help_text?: string;
   sign_in_help_url?: string;
+  // types.SiteConfig.PolicyHelp — the contact a signed-in person is shown when a
+  // deployment-wide rule refuses them. NOT public: /healthz never publishes it.
+  // Set through the site-config document (API, CLI or MDM); no console surface
+  // writes it.
+  policy_help?: PolicyContact;
   // #1215 — the part of the console branding a site config carries: the logo,
   // as a file wardynd reads when this document is applied
   // (types.SiteConfig.Branding). Delivered by `wardyn site-config set` or the
@@ -147,6 +152,15 @@ export interface WithheldScmHost {
 export interface SiteBranding {
   // Absolute path, as wardynd sees it, to an SVG or PNG (at most 512 KB).
   logo_path?: string;
+}
+
+// policyref.Contact — who owns a policy and how a person it refuses asks for a
+// change. Mirrors the Go json tags; every field is optional.
+export interface PolicyContact {
+  owner?: string;
+  email?: string;
+  request_url?: string;
+  request_text?: string;
 }
 
 // The keys GET /site-config returns that PUT /site-config REFUSES: each one is

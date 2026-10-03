@@ -257,6 +257,22 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 		// runRevoked: args[0]=runID; EXISTS(...) always returns one bool row.
 		runID := args[0].(uuid.UUID)
 		return boolRow{v: tx.db.revokedRuns[runID]}
+
+	case strings.Contains(sql, "FROM audit_append"):
+		// D29 in-tx mint audit, written through the audit_append function (0111). args: id, time,
+		// run_id, actor_type, actor, action, target, outcome, source_ip, data. Record preCommit so
+		// the atomicity test can prove it rode the tx rather than a separate post-commit connection.
+		runID, _ := args[2].(*uuid.UUID)
+		tx.db.auditRows = append(tx.db.auditRows, auditRow{
+			runID:     runID,
+			actorType: types.ActorType(args[3].(string)),
+			actor:     args[4].(string),
+			action:    args[5].(string),
+			outcome:   args[7].(string),
+			preCommit: !tx.committed,
+			data:      string(args[9].([]byte)),
+		})
+		return seqRow{seq: int64(len(tx.db.auditRows))}
 	}
 	return errRow{errors.New("fakeTx: unhandled query: " + sql)}
 }
@@ -301,21 +317,6 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 			scope: json.RawMessage(scope), state: types.ApprovalPending,
 		}
 		return 1, nil
-	case strings.Contains(sql, "INSERT INTO audit_events"):
-		// D29 in-tx mint audit. args: id, time, run_id, actor_type, actor, action,
-		// target, outcome, source_ip, data. Record preCommit so the atomicity test
-		// can prove it rode the tx rather than a separate post-commit connection.
-		runID, _ := args[2].(*uuid.UUID)
-		tx.db.auditRows = append(tx.db.auditRows, auditRow{
-			runID:     runID,
-			actorType: types.ActorType(args[3].(string)),
-			actor:     args[4].(string),
-			action:    args[5].(string),
-			outcome:   args[7].(string),
-			preCommit: !tx.committed,
-			data:      string(args[9].([]byte)),
-		})
-		return 1, nil
 	}
 	return 0, errors.New("fakeTx: unhandled exec: " + sql)
 }
@@ -323,6 +324,13 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 type errRow struct{ err error }
 
 func (r errRow) Scan(...any) error { return r.err }
+
+type seqRow struct{ seq int64 }
+
+func (r seqRow) Scan(dest ...any) error {
+	*dest[0].(*int64) = r.seq
+	return nil
+}
 
 type boolRow struct{ v bool }
 

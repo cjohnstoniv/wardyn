@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -234,7 +235,11 @@ func (s *Server) revokeADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, or
 // under the redemption lock and on a fresh read, so it cannot overwrite a
 // rotation. Best-effort: the caller's answer does not depend on it.
 func (s *Server) noteADOMintBlocked(ctx context.Context, rowID, owner string, blocked bool) {
-	unlock := s.adoEntra.lock(owner, rowID)
+	ctx, unlock, err := s.lockADOSignIn(ctx, owner, rowID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not take the sign-in lock to record a blocked mint; leaving the mark as it was", slog.Any("err", err))
+		return
+	}
 	defer unlock()
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, rowID)
 	if err != nil || !found || (!blocked && blob.MintBlockedAt.IsZero()) {

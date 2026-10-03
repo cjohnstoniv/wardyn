@@ -33,9 +33,9 @@ const userTypeRowRefsExist = `(
 	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
 
-// userTypeTokenStamps counts the unrevoked API tokens stamped with user type
+// userTypeTokenStamps counts the live (unrevoked, unexpired) API tokens stamped with user type
 // $1. A snapshot column with no foreign key, so this count is what holds the type.
-const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = $1 AND revoked_at IS NULL)`
+const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = $1 AND ` + apiTokenLive + `)`
 
 // ListUserTypes returns every type: the built-in first, then by priority
 // (highest first) and name.

@@ -206,7 +206,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
 	proxyPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
+		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
@@ -279,6 +279,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
+	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
 	}
@@ -300,7 +301,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			slog.Int64("pids_limit", spec.Resources.PidsLimit), slog.String("run_id", spec.RunID.String()))
 	}
 	agentPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentAgent, spec.Labels)},
+		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
@@ -344,6 +345,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ImagePullSecret != "" {
 		agentPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
+	d.placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, agentPod, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
