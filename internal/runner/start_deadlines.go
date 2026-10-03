@@ -9,11 +9,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 )
 
-// CapacityBlockerReasons are the scheduler reasons that mean "no machine has room yet": a pod stuck
-// on one is worth waiting for, because room frees as other runs finish. Tagless, like
-// TerminalWaitingReasons, because the control plane reads it too.
-var CapacityBlockerReasons = map[string]bool{"Unschedulable": true}
-
 const (
 	// DefaultSandboxStartTimeout is how long a sandbox has to start (WARDYN_SANDBOX_START_TIMEOUT).
 	DefaultSandboxStartTimeout = 3 * time.Minute
