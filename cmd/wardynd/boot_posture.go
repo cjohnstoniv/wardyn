@@ -418,6 +418,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateRunOutputTailBytes(*f.runOutputTailBytes); err != nil {
 		return err
 	}
+	if _, err := scimConfig(f, posture); err != nil {
+		return err
+	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
 	}

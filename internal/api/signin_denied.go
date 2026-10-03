@@ -45,5 +45,7 @@ func (s *Server) auditSignInDenied(r *http.Request, reason string) {
 		s.auditAuthFailedAs(r, oidcCallbackActor, authFailedEmailUnverified)
 	case oidc.DenialEmailDomain:
 		s.auditAuthFailedAs(r, oidcCallbackActor, authFailedEmailDomain)
+	case oidc.DenialIdentityDeactivated:
+		s.auditAuthFailedAs(r, oidcCallbackActor, authFailedIdentityDeactivated)
 	}
 }

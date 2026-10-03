@@ -321,7 +321,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	}
 	name := providerSecretName(p.UID, providerOAuthPart)
 	raw, _ := json.Marshal(managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC(), SourceRunID: runID.String()})
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, raw); err != nil {
+	if err := s.putOwned(r.Context(), owner, func() error { return s.cfg.Secrets.For(owner).Put(r.Context(), name, raw) }); err != nil {
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}

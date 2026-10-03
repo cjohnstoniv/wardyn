@@ -198,7 +198,7 @@ func TestSecretFileSettings_EveryDefaultIsEmpty(t *testing.T) {
 	f := &bootFlags{
 		dsn: new(string), migrateDSN: new(string), adminToken: new(string), ageKey: new(string),
 		oidcClientSecret: new(string), dirSecret: new(string), auditSinks: new(string),
-		orgEnrolToken: new(string),
+		orgEnrolToken: new(string), scimToken: new(string), scimTokenNext: new(string),
 	}
 	settings := secretFileSettings(f)
 	for _, s := range settings {

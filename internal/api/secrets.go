@@ -282,7 +282,9 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	if !s.admitSecretCount(w, r, owner, name) {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
+	if err := s.putOwned(r.Context(), owner, func() error {
+		return s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value))
+	}); err != nil {
 		if errors.Is(err, secretstore.ErrRowNotWritten) {
 			// Rule 18: the value reached the external store but its row did not,
 			// so the store may already serve it behind this failure.

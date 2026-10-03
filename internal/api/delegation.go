@@ -150,5 +150,6 @@ func createdVia(ctx context.Context) *uuid.UUID {
 func neverOperator(ctx context.Context) bool {
 	_, isDevice := deviceFromContext(ctx)
 	_, delegated := audit.DelegationFrom(ctx)
-	return isDevice || delegated
+	_, isSCIM := scimCallerSlot(ctx) // the identity provider's connector removes access, and never acts as the admin token
+	return isDevice || delegated || isSCIM
 }
