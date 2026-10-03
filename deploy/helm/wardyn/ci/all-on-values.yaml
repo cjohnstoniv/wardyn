@@ -192,6 +192,18 @@ resources:
 podAnnotations:
   prometheus.io/scrape: "true"
 
+# The Prometheus Operator route to the same /metrics: one ServiceMonitor that
+# names the operator-created scrape-credential Secret (the chart never makes it).
+metrics:
+  serviceMonitor:
+    enabled: true
+    bearerTokenSecret:
+      name: wardyn-scrape
+      key: token
+    labels:
+      release: prometheus
+    interval: 30s
+
 # Raised above the 70s default; the render must carry the operator's value.
 terminationGracePeriodSeconds: 90
 

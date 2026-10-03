@@ -1016,9 +1016,78 @@ podAnnotations:
   prometheus.io/scrape: "true"
 ```
 
-`ci/all-on-values.yaml` renders exactly that pair. The chart ships no
-ServiceMonitor: it would bind this chart to a specific operator's CRD, and the
-annotation plus the peer above is what a stock Prometheus needs.
+`ci/all-on-values.yaml` renders exactly that pair. A stock Prometheus needs the
+annotation plus the peer above and a bearer token of its own. A cluster running
+the Prometheus Operator can use the opt-in ServiceMonitor below instead.
+
+## Scraping `/metrics` with a ServiceMonitor
+
+`metrics.serviceMonitor.enabled=true` renders one `monitoring.coreos.com/v1`
+`ServiceMonitor`. It selects this chart's Service, scrapes the named `http` port
+at `/metrics` under `basePath`, and sends the Secret you name as the bearer
+credential. It is off by default, it renders on the flag alone (no
+`.Capabilities` gate, so offline and GitOps renders carry it), and the chart
+never creates the Secret: a Secret built from values would put an admin
+credential in the Helm release history.
+
+```yaml
+metrics:
+  serviceMonitor:
+    enabled: true
+    bearerTokenSecret:
+      name: wardyn-scrape   # a Secret in THIS release's namespace
+      key: token
+    labels:
+      release: prometheus   # must match the Prometheus serviceMonitorSelector
+    interval: 30s           # optional
+```
+
+The credential is emitted as `endpoints[].authorization.credentials` with type
+`Bearer`, the field the `monitoring.coreos.com/v1` API documents for it. The
+older `bearerTokenSecret` endpoint field is deprecated there and is not used.
+A ServiceMonitor resolves secret references in its own namespace, so a Secret
+created anywhere but the release namespace fails at scrape time as "target
+down".
+
+**The scrape credential carries full admin authority.** `GET /metrics` is gated
+by `requireOperator` (`internal/api/routes.go`), the same gate as the rest of
+the operator API, and there is no narrower metrics-reader token class yet (a
+follow-up). The Prometheus Operator copies the credential into the Prometheus
+configuration Secret and into the Prometheus pod, in the Prometheus namespace.
+Everyone with Secret read or `exec` there, and the Operator's ServiceAccount,
+therefore holds admin authority over the Wardyn API. Treat the Prometheus
+namespace as part of the admin trust boundary.
+
+**Mint a dedicated credential, never the shared admin token.** Use a dedicated
+admin identity that exists only for scraping, and mint a personal API token for
+it ([docs/OPERATIONS.md](../../../docs/OPERATIONS.md), "Per-user API tokens:
+stop sharing the admin token"): sign in as that identity in admin mode and mint
+the token from its own session (`POST /api/v1/me/tokens`; a token cannot mint a
+token, and member mode refuses the mint), with a `ttl_seconds` no longer than
+`WARDYN_API_TOKEN_MAX_TTL` allows. Then create the Secret in the release
+namespace:
+
+```bash
+kubectl -n <release-namespace> create secret generic wardyn-scrape \
+  --from-literal=token="$WARDYN_SCRAPE_TOKEN"
+```
+
+Never put `auth.adminToken` in it. A leaked scrape credential is then revoked by
+deleting that one token (`DELETE /api/v1/tokens/{id}`), without rotating the
+deployment-wide admin token.
+
+**The scrape stops on its own, and you rotate the Secret.** A personal token
+stops authenticating at its expiry (`WARDYN_API_TOKEN_MAX_TTL`, see
+[docs/ENV.md](../../../docs/ENV.md)). With `WARDYN_ROLE_STAMP_TTL` set, a token
+whose role stamp is older is refused `401` `role_stamp_stale` until its owner
+signs in again. Each of these makes the target go down until the Secret holds a
+fresh token, so put the rotation on a calendar shorter than both.
+
+**Two selectors must match, or the target never appears.**
+`networkPolicy.ingress.from` must admit the Prometheus namespace (see the
+previous section: it replaces the same-namespace default), and
+`metrics.serviceMonitor.labels` must match the Prometheus
+`serviceMonitorSelector`.
 
 ## UI sandbox gateway
 

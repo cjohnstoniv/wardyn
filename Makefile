@@ -774,6 +774,17 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
+	@# metrics.serviceMonitor (o-o1): off by default (a default render holds no ServiceMonitor), and on
+	@# it renders exactly one, scraping the named http port at the base-pathed /metrics with the
+	@# operator's Secret as the bearer credential (the chart never creates that Secret).
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	[ "$$(echo "$$out" | grep -c 'kind: ServiceMonitor')" = "0" ] || { echo "default render (metrics.serviceMonitor.enabled=false) rendered a ServiceMonitor"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-scrape --set metrics.serviceMonitor.bearerTokenSecret.key=token); \
+	[ "$$(echo "$$out" | grep -c '^kind: ServiceMonitor$$')" = "1" ] || { echo "metrics.serviceMonitor.enabled did not render exactly one ServiceMonitor"; exit 1; }; \
+	echo "$$out" | grep -q '^    - port: http$$' || { echo "ServiceMonitor does not target the named http port"; exit 1; }; \
+	echo "$$out" | grep -q 'path: "/wardyn/metrics"' || { echo "ServiceMonitor path is not /metrics under basePath"; exit 1; }; \
+	echo "$$out" | grep -A6 '^      authorization:$$' | grep -q 'name: "wardyn-scrape"' || { echo "ServiceMonitor does not carry the bearer Secret reference"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.serviceMonitor.enabled=true >/dev/null 2>&1 && { echo "ServiceMonitor rendered with no bearer Secret named — Prometheus would scrape unauthenticated"; exit 1; } || true
 	@# WARDYN_DAEMON_PROXY_SECRET from an operator Secret (#719): daemonProxySecret.existingSecret
 	@# mounts it read-only and wires WARDYN_DAEMON_PROXY_SECRET at the mounted path; a default
 	@# render (no daemonProxySecret set) touches none of it, and an env.WARDYN_DAEMON_PROXY_SECRET
