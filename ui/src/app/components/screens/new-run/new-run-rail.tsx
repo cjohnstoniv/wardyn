@@ -108,8 +108,17 @@ interface RunRailProps {
      *  one that opens (#543). Optional so a caller with no provider block
      *  passes nothing. */
     refusedProvider?: string;
+    /** The request Launch would send right now. A click-armed relaunch after
+     *  sign-in only fires while this still equals the body the click was for. */
+    body?: string | null;
   };
   preflight: {
+    /** Re-runs preflight on the current body — a preflight-origin sign-in's
+     *  only action (it never launches). */
+    onPreflight?: () => void | Promise<void>;
+    /** Preflight's own model-credential refusal: the body it graded and the
+     *  provider it names, "" when none. */
+    refusal?: { body: string; provider: string } | null;
     error: string | null;
     /** Same remount purpose as launch.errorSeq, for the preflight alert. */
     errorSeq: number;
@@ -303,6 +312,15 @@ export function RunRail({
   // that click asked for and lands on it.
   const onLaunchRef = React.useRef(launch.onLaunch);
   onLaunchRef.current = launch.onLaunch;
+  const onPreflightRef = React.useRef(preflight.onPreflight);
+  onPreflightRef.current = preflight.onPreflight;
+  // This screen's current body, read at fire time — the door is the shell's and
+  // outlives the route, so it cannot be trusted to forget a stale closure.
+  const bodyRef = React.useRef(launch.body);
+  bodyRef.current = launch.body;
+  // Only the Launch button's click arms a launch-after-sign-in; it records the
+  // body the click was for, and the effect below hands it to the door once.
+  const clickArm = React.useRef<{ body: string | null | undefined } | null>(null);
   const autoOpened = React.useRef(false);
   const refusedProvider = launch.refusedProvider ?? "";
   React.useEffect(() => {
@@ -314,12 +332,42 @@ export function RunRail({
     // click (#146's ruling). A provider this person has no door for, or a
     // refusal naming no provider (a sign-in renewal that did not complete),
     // opens nothing (resolveDoor's null) and the sentence stands.
+    const armed = clickArm.current;
+    clickArm.current = null;
     if (refusedProvider) {
-      door.openDoor({ for: { provider: refusedProvider }, returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+      let fired = false;
+      door.openDoor({
+        for: { provider: refusedProvider },
+        returnTo: launchRef.current,
+        // Launches only the body the click was for, once; anything else is a
+        // re-check of what is on screen now. Not disarmed by onClosed, which
+        // also runs on a successful sign-in.
+        onSignedIn: () => {
+          if (armed && !fired && armed.body === bodyRef.current) {
+            fired = true;
+            return onLaunchRef.current();
+          }
+          return onPreflightRef.current?.();
+        },
+      });
     }
     // The strip catches up with what the server just said.
     void door.refresh();
   }, [launch.credentialRefused, refusedProvider, door]);
+
+  // A preflight-origin refusal opens the same door, but its sign-in only
+  // re-checks. At most once per body and provider, never over another door.
+  const preflightOpened = React.useRef("");
+  const refusal = preflight.refusal ?? null;
+  React.useEffect(() => {
+    if (!refusal?.provider) return;
+    const key = `${refusal.provider}\n${refusal.body}`;
+    if (preflightOpened.current === key) return;
+    preflightOpened.current = key;
+    if (door.open) return;
+    door.openDoor({ for: { provider: refusal.provider }, returnTo: launchRef.current, onSignedIn: () => onPreflightRef.current?.() });
+    void door.refresh();
+  }, [refusal, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -553,6 +601,7 @@ export function RunRail({
           disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier}
           onClick={() => {
             autoOpened.current = false;
+            clickArm.current = { body: bodyRef.current };
             void launch.onLaunch();
           }}
         >
