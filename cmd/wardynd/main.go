@@ -306,6 +306,13 @@ func run() error {
 	// across control-plane restarts.
 	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
 	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
+	ratio, err := parseRequestRatio(*f.sandboxRequestRatio)
+	if err != nil {
+		return err
+	}
+	if err := runner.SetRequestRatio(ratio); err != nil {
+		return err
+	}
 	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err

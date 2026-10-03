@@ -461,8 +461,13 @@ awsSSOProxyInject: ""
 # set 2000/4096 here to keep the size chart installs had before 0.8.6. An operator policy
 # value overrides it; with no resources in the governance ceiling it is also the cap on
 # member-authored policies. proxyResources is each run's wardyn-proxy sidecar.
+# requestRatio (WARDYN_SANDBOX_REQUEST_RATIO, Kubernetes only) sets each agent pod's CPU and
+# memory requests to that fraction of its limits, in (0, 1]; "" keeps requests equal to limits
+# (Guaranteed). Below 1 the pod is Burstable: more runs fit a node, but a pod over its memory
+# request is evicted or OOM-killed first under node pressure. The proxy pod stays Guaranteed.
 runner:
   sandbox:
+    requestRatio: ""
     defaultResources:
       cpuMillis: 1000
       memoryMiB: 2048
