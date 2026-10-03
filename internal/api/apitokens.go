@@ -703,6 +703,7 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // the change has not reached the outstanding tokens.
 func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping, userTypes []types.UserType) (int, error) {
 	ctx := r.Context()
+	actorCtx := withRequestActor(r)
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
 		return 0, nil
 	}
@@ -737,7 +738,7 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 	revoked := 0
 	var failed error
 	for _, p := range principals {
-		n, rerr := s.revokeAPITokensFor(r, p)
+		n, rerr := s.revokeAPITokensFor(actorCtx, p)
 		revoked += n
 		if rerr != nil {
 			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted or re-typed principal",
