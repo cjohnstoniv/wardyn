@@ -868,6 +868,18 @@ approval and shows in the console, but enqueues nothing; it increments
 `wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
 per run per hour (per replica).
 
+**In the console.** Every PENDING row on `GET /api/v1/approvals` carries `escalation_tier` and
+`sla_due_at` when its route has tiers: `escalation_tier` is the highest tier whose `after` has passed
+(the first notice is tier 0 and shows nothing), `sla_due_at` is when the next tier is due. Both are read
+from the outbox at response time and never stored, so a decided approval carries neither, and a member
+sees them only on approvals of runs they own. The Approvals cards show them as an "Escalated · level n"
+chip and an "Escalates in" countdown. Settings has a read-only "Approval notifications" card (super
+admins) fed by `GET /api/v1/approval-notify/status` (security tier): per channel its `id`, `type`, the
+destination **host** only (parsed from the URL, never a path, query or userinfo), `last_success_at`, the
+last error class and time, and `failed_last_hour` (rows dead in the last hour). `GET /api/v1/setup/status`
+adds a non-blocking `approval_notify` row, present only when the setting is on: `warn` when any row went
+dead in the last hour, otherwise `ok`.
+
 **Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
 notification endpoint, and for a corporate proxy if one fronts them, through
 `networkPolicy.egress.extra`, exactly as for SIEM sinks. The delivery client uses the same transport as
@@ -1024,6 +1036,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the approval notification status — `GET /approval-notify/status`: each configured channel's id, type, destination host (never a URL), last delivery, last error class and dead rows in the last hour. It decides nothing, and the security tier is the one that decides approvals, so it is the one that must learn an announcement is not arriving | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |

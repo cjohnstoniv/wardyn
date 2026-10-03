@@ -323,6 +323,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if chk, ok := s.approvalNotifyCheck(ctx); ok {
+		checks = append(checks, chk)
+	}
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
 
 	// github_ref_ruleset: the only row that leaves the machine. Gated on the App

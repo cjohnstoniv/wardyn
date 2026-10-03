@@ -45,6 +45,8 @@
 // list of what it wraps and what it does not" was exact about neither.
 //
 //   - /api/v1/user-types     — the org's user types (0.8)
+//   - /api/v1/approval-notify — each approval notification channel's delivery health (0.8.6).
+//     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the

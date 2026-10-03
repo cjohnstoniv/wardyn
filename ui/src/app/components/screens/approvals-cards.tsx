@@ -32,6 +32,7 @@ import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
+import { APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { KIND_ICON, capabilityLabel, deriveTitle, deriveBanner, str } from "./approvals";
 
 export function PendingCard({
@@ -208,6 +209,15 @@ export function PendingCard({
           {deriveTitle(item.kind, scope)}
         </span>
         {cap && <Chip tone="warning">{cap}</Chip>}
+        {/* notify-e4 (packet M6 S2): where this request sits on its notification
+            schedule. The server sets both fields on PENDING rows only; tier 0
+            (the first notice) sends neither, so either, both or no chip. */}
+        {(item.escalation_tier ?? 0) >= 1 && (
+          <Chip tone="warning" title={APPROVAL_ESCALATION.ESCALATED_TITLE}>
+            {APPROVAL_ESCALATION.ESCALATED(item.escalation_tier!)}
+          </Chip>
+        )}
+        {item.sla_due_at && <Chip tone="neutral">{APPROVAL_ESCALATION.ESCALATES(relativeTime(item.sla_due_at))}</Chip>}
         <span className="ml-auto">
           <ApprovalStateBadge state={item.state} />
         </span>

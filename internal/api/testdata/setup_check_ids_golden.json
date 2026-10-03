@@ -10,6 +10,18 @@
     "runner",
     "scm_provider"
   ],
+  "with_approval_notify": [
+    "age_key",
+    "agent_image",
+    "approval_notify",
+    "claude_signin_image",
+    "env_builder",
+    "host_proxy",
+    "llm_provider",
+    "platform_shared",
+    "runner",
+    "scm_provider"
+  ],
   "with_github_app_secrets": [
     "age_key",
     "agent_image",

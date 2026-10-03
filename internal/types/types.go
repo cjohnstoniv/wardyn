@@ -348,6 +348,11 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// EscalationTier is the highest notification tier whose due time has passed, and SLADueAt is the
+	// next tier's due time. Both are projected from approval_notifications at response time on PENDING
+	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
+	EscalationTier int16      `json:"escalation_tier,omitempty"`
+	SLADueAt       *time.Time `json:"sla_due_at,omitempty"`
 }
 
 // ApprovalDecision is what a human (or the sweeper, for a stale-PENDING expiry) is deciding,

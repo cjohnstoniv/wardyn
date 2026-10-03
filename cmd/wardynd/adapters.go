@@ -373,6 +373,18 @@ func (s *approvalService) CountPendingApprovalsByRunCreator(ctx context.Context,
 
 var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
 
+// ApprovalEscalations / ApprovalNotifyChannelStats back the approvals list's escalation chips and
+// GET /approval-notify/status. Pure delegation, promoted from the embedded store.PG.
+func (s *approvalService) ApprovalEscalations(ctx context.Context, ids []uuid.UUID, now time.Time) (map[uuid.UUID]types.ApprovalEscalation, error) {
+	return s.st.ApprovalEscalations(ctx, ids, now)
+}
+
+func (s *approvalService) ApprovalNotifyChannelStats(ctx context.Context, now time.Time) ([]types.ApprovalNotifyChannelStat, error) {
+	return s.st.ApprovalNotifyChannelStats(ctx, now)
+}
+
+var _ store.ApprovalNotifyReader = (*approvalService)(nil)
+
 // Audit fanout
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts

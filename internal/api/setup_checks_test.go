@@ -741,7 +741,7 @@ var setupCheckBlockingStatus = map[string]string{
 var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_shared": true,
 	"kek_service": true, "kek_local": true,
-	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
+	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
 	"agent_image":        true,
