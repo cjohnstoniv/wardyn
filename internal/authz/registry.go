@@ -75,6 +75,10 @@ const (
 	// ReasonRecordingGoverned: Record Mode is refused for an admin whose runs are
 	// governed (WARDYN_GOVERN_ADMIN_RUNS) unless the deployment exempts recording.
 	ReasonRecordingGoverned Reason = "recording_governed"
+	// ReasonAuditExportPartitionFilter: a partition export (GET /audit/export?partition=) was asked
+	// to narrow the partition with another filter, so the digest in its footer would not cover the
+	// whole partition. Input shape, not a denial: not audited.
+	ReasonAuditExportPartitionFilter Reason = "audit_export_partition_filter"
 )
 
 // Refusal is one reason's registry row.
@@ -126,6 +130,7 @@ var refusals = map[Reason]Refusal{
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:        {Effect: EffectUnavailable, Audit: true},
 	ReasonRoleStampStale:              {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
+	ReasonAuditExportPartitionFilter:  {Effect: EffectBadRequest},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

@@ -190,6 +190,10 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // read and for an event that cannot be encoded. A buffering reverse proxy in
 // front can hide the abort (docs/OPERATIONS.md).
 func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("partition") {
+		s.exportAuditPartition(w, r)
+		return
+	}
 	pager, ok := s.cfg.Store.(store.Pager)
 	if !ok {
 		writeErrorReason(w, http.StatusNotImplemented, reasonAuditExportStoreUnavailable, "audit export requires a paging store backend")
@@ -208,20 +212,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	wrote := false // a byte has reached the response: the 200 is committed
 	offset := 0
-	// fail ends an export that cannot be finished: a 503 while nothing has been
-	// written, otherwise an aborted response. It always logs first (the abort
-	// carries no message of its own) and never returns.
-	fail := func(what string, err error) {
-		slog.ErrorContext(r.Context(), "wardyn: audit export failed",
-			slog.String("what", what), slog.Int("offset", offset), slog.Bool("after_first_byte", wrote),
-			slog.String("request_id", middleware.GetReqID(r.Context())), slog.String("actor", principalFromRequest(r)),
-			slog.Any("err", err))
-		if !wrote {
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditExportReadFailed, "the audit store could not be read; nothing was exported")
-			return
-		}
-		panic(http.ErrAbortHandler)
-	}
+	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
 	for {
 		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
 			store.Page{Limit: auditExportPageSize, Offset: offset})
@@ -256,6 +247,21 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 			wrote = true
 		}
 	}
+}
+
+// failAuditExport ends an export that cannot be finished: a 503 while nothing has been written,
+// otherwise an aborted response. It always logs first (the abort carries no message of its own) and
+// never returns.
+func (s *Server) failAuditExport(w http.ResponseWriter, r *http.Request, what string, offset int, wrote bool, err error) {
+	slog.ErrorContext(r.Context(), "wardyn: audit export failed",
+		slog.String("what", what), slog.Int("offset", offset), slog.Bool("after_first_byte", wrote),
+		slog.String("request_id", middleware.GetReqID(r.Context())), slog.String("actor", principalFromRequest(r)),
+		slog.Any("err", err))
+	if !wrote {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditExportReadFailed, "the audit store could not be read; nothing was exported")
+		return
+	}
+	panic(http.ErrAbortHandler)
 }
 
 // handleVerifyAuditChain runs the audit hash-chain sweep (migration 0047) and

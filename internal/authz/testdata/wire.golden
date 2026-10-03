@@ -8,6 +8,7 @@ effect unprocessable
 effect conflict
 effect unavailable
 effect unauthenticated
+effect bad_request
 obligationkind drop
 reason admin_surface
 reason security_admin_surface
@@ -41,3 +42,4 @@ reason mask_state_unavailable
 reason role_stamp_stale
 reason user_view_preview
 reason recording_governed
+reason audit_export_partition_filter
