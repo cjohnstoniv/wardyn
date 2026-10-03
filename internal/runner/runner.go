@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -151,6 +152,7 @@ type ProxyConfig struct {
 	LLMUpstreams         map[string]string // public vendor host -> operator model gateway base URL
 	LLMUnavailableDetail string            // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool              // a run nobody is driving: a held push is refused instead
+	Attribution          *policyref.Ref    // the policy named in a policy-decided refusal; nil when none
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

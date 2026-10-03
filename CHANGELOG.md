@@ -26,6 +26,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
   client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
   in `docs/OPERATIONS.md`.
+- **Move the proxy image pin in the same step as wardynd, image first.** From 0.8.6 wardynd writes
+  `attribution` into the proxy's config for every run launched under a governance profile (contact or not)
+  and for every run when `policy_help` is set. A 0.8.5 proxy refuses that key at startup and the run fails
+  to launch, so the proxy image must be the 0.8.6 image before wardynd is upgraded on any deployment that
+  assigns a governance profile. If you pin `WARDYN_PROXY_IMAGE` or `k8s.proxyImage` by digest, move the
+  pin with wardynd.
 - **The audit log becomes a monthly-partitioned table, and every audit write goes through the database
   function `audit_append`** (`0111_audit_partitioned`, `0112_audit_chain_partitioned`). The conversion is
   one-way and needs stopped writers: a 0.8.5 binary's direct `INSERT` is refused afterwards, and 0.8.5 will not
@@ -78,6 +84,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
+- **A sandbox refused by its run's policy is told which policy and where to ask for a change.** The egress
+  proxy's `policy:denied`, `policy:default-deny`, `policy:method` and `approval:denied` refusals, and the
+  git, PAT and Azure DevOps broker refusals the policy decides, carry `X-Wardyn-Policy` and
+  `X-Wardyn-Policy-Request` headers and one body line ("This run is governed by the profile ... To request a
+  change: ..."). The line names the profile and the route, never the owner. Faults (`builtin:*`,
+  `policy:evaluator-error`, an uninspectable push) and every decision-log row are unchanged. See the proxy
+  image note under "Before you upgrade".
 
 ### Added
 

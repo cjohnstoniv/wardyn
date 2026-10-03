@@ -235,6 +235,9 @@ func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string
 		// Pack still on the wire: read it so git gets the answer rather than a reset connection.
 		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, adoGitDrainLimit))
 	}
+	if line := p.attributeRefusal(w); line != "" {
+		msg += " " + line
+	}
 	writeADOGitRefusal(w, push, msg)
 	return false
 }
