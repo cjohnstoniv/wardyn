@@ -227,24 +227,27 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	return !enforced && !restricted, nil
 }
 
-// ownerProfile is the run's captured profile, refusing when it no longer exists:
-// its walls cannot be known. A run that captured none (an unassigned or
-// super-admin owner) passes.
-func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*types.GovernanceProfile, *ownerRefusal) {
+// ownerProfile is the run's captured profile, composed from its chain as it stands now, refusing
+// when it no longer exists (its walls cannot be known), when it cannot be read (a base included:
+// never a partial chain) and when a composition nothing satisfies leaves it with no valid policy. A
+// run that captured none (an unassigned or super-admin owner) passes.
+func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*ResolvedProfile, *ownerRefusal) {
 	if run.GovernanceProfileID == nil {
 		return nil, nil
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	p, err := s.resolveProfileByID(ctx, *run.GovernanceProfileID)
+	if u, ok := isOverlayUnsatisfiable(err); ok {
+		return nil, &ownerRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable, msg: u.Error()}
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerProfileGone,
+			msg: "the governance profile this run was created under no longer exists; start a new run"}
+	}
 	if err != nil {
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerProfileUnreadable,
 			msg: "resolve the owner's governance profile: " + err.Error()}
 	}
-	i := slices.IndexFunc(profiles, func(p types.GovernanceProfile) bool { return p.ID == *run.GovernanceProfileID })
-	if i < 0 {
-		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerProfileGone,
-			msg: "the governance profile this run was created under no longer exists; start a new run"}
-	}
-	return &profiles[i], nil
+	return p, nil
 }
 
 // modelCredentialRefusal re-checks every api_key injection the revived proxy

@@ -36,13 +36,21 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 	if err != nil || len(runs) == 0 {
 		return err
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	profiles, err := s.resolveAllProfiles(ctx)
 	if err != nil {
 		return err
 	}
+	// The EFFECTIVE limits: a child is tightened to what its base carries today. A profile that
+	// cannot be composed (a loop, a chain past three, a composition nothing satisfies) has no
+	// current limits to tighten to, as for a deleted one; its runs keep the limits they captured.
 	current := make(map[uuid.UUID]types.RunLimits, len(profiles))
 	for _, p := range profiles {
-		current[p.ID] = p.Limits.RunLimits
+		if p.Err != nil {
+			slog.WarnContext(ctx, "wardynd: a governance profile cannot be composed, so its runs' limits are not re-clamped",
+				slog.String("profile_id", p.Row.ID.String()), slog.Any("err", p.Err))
+			continue
+		}
+		current[p.Row.ID] = p.Resolved.Limits.RunLimits
 	}
 	now := s.cfg.Now()
 	for _, run := range runs {
