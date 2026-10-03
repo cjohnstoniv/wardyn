@@ -205,7 +205,7 @@ lifetime. After a restart a live run's stream carries only what happens next,
 and a run that had already ended answers `ended` alone. The repository clone
 happens inside the sandbox after `ready`, so it is not a separate event.
 
-## Reading an exec run's output
+## Reading a run's output
 
 `GET /api/v1/runs/{id}/output?tail=<bytes>` returns the end of a
 non-interactive run's combined stdout/stderr — at most `WARDYN_RUN_OUTPUT_TAIL_BYTES` (64 KiB by default), kept in

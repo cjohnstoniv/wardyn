@@ -693,7 +693,7 @@ type Server struct {
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
 	creates   inflightCreates
 	runEvents runEventHub // each run's lifecycle event ring (run_events.go)
-	// execOutputs holds each task_mode=exec run's output tail (run_output.go).
+	// execOutputs holds each non-interactive run's output tail (run_output.go).
 	execOutputs execOutputTails
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the

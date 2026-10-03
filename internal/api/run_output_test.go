@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -357,9 +356,13 @@ func TestDispatch_HandsNonInteractiveRunsAnOutputWriter(t *testing.T) {
 				return
 			}
 			writeExecOutput(t, out, "from the runner\n")
-			got, truncated, kept, _ := srv.readExecOutput(run.ID, defaultRunOutputTailBytes, true)
-			if !kept || !bytes.Equal(got, []byte("from the runner\n")) || truncated {
-				t.Fatalf("tail after a runner write: kept %v %q truncated %v", kept, got, truncated)
+			w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/output", adminToken, "")
+			var got runOutputResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+				t.Fatalf("GET /runs/{id}/output = %d %q (%v), want 200 with the runner's bytes", w.Code, w.Body, err)
+			}
+			if got.Output != "from the runner\n" || got.Truncated {
+				t.Fatalf("route served %q truncated %v, want the runner's bytes", got.Output, got.Truncated)
 			}
 		})
 	}
