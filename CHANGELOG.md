@@ -55,7 +55,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- **API tokens can expire.** Migration `0108_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
+- **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
   every existing token keeps no expiry. `POST /api/v1/me/tokens` takes an optional `ttl_seconds`, a negative
   value is a `400 api_token_ttl_invalid`, and the response and both token lists carry `expires_at`. An
   expired token gets the same `401` as a revoked one. `WARDYN_API_TOKEN_MAX_TTL` (default: no cap) caps every

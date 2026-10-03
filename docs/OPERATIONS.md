@@ -5237,7 +5237,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0111` converts `audit_events` (`0001`'s table) to a partitioned table: it adds `recorded_at`, drops the
 identity and the primary key, renames the table and re-creates its triggers, and `0112` is the
 `CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
-`0108` adds `api_tokens.expires_at` (`0045`'s table).
+`0114` adds `api_tokens.expires_at` (`0045`'s table).
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
