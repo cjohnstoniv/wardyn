@@ -36,6 +36,15 @@ const (
 	// the caller could otherwise make it, but their own session state (a
 	// deleted user-view type) conflicts with it.
 	EffectConflict Effect = "conflict"
+	// EffectUnavailable is a refusal answered 503: the caller is authorized
+	// and the request well-formed, but this server cannot prove a safety
+	// property the answer depends on (a run's masking corpus), so it refuses
+	// instead of passing bytes through.
+	EffectUnavailable Effect = "unavailable"
+	// EffectUnauthenticated is a refusal answered 401: the credential itself is
+	// no longer acceptable (its role stamp is too old), and signing in again is
+	// the remedy.
+	EffectUnauthenticated Effect = "unauthenticated"
 )
 
 // Status is the HTTP status a refusal with this effect answers with.
@@ -49,6 +58,10 @@ func (e Effect) Status() int {
 		return 422
 	case EffectConflict:
 		return 409
+	case EffectUnavailable:
+		return 503
+	case EffectUnauthenticated:
+		return 401
 	default:
 		return 403 // an unknown effect refuses
 	}

@@ -203,6 +203,11 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 	if err := ensureAuditTriggers(ctx, db); err != nil {
 		return err
 	}
+	// Months ahead, at every boot and before the listener: an insert into a month with no
+	// partition fails and sits in the audit spool until one exists.
+	if err := ensureAuditPartitions(ctx, db); err != nil {
+		return err
+	}
 	// The hardening restore is the deferred call registered above; it runs after this returns.
 	return auditChainCanary(ctx, db)
 }
@@ -257,11 +262,12 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 		WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1), '')`).Scan(&head); err != nil {
 		return auditCanaryTransient(ctx, "read the chain head for the canary", err)
 	}
+	// Through audit_append, the only way a row enters the log since 0111, so the canary on the
+	// serving pool proves the path real writes take (EXECUTE on the function included).
 	var rowHash, prevHash string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO audit_events (id, actor_type, actor, action, target, outcome)
-		VALUES (gen_random_uuid(), 'system', 'wardynd', 'audit.chain.canary', 'audit_events', 'success')
-		RETURNING COALESCE(row_hash, ''), COALESCE(prev_hash, '')`).Scan(&rowHash, &prevHash); err != nil {
+		SELECT COALESCE(row_hash, ''), COALESCE(prev_hash, '')
+		  FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'wardynd', 'audit.chain.canary', 'audit_events', 'success', '', NULL)`).Scan(&rowHash, &prevHash); err != nil {
 		return fmt.Errorf("db: the audit chain canary could not append a row, so every audit write this process makes "+
 			"will fail the same way — the chain trigger is catalogued and enabled but not working: %w", err)
 	}
@@ -274,6 +280,20 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 		return fmt.Errorf("db: the audit chain canary linked to %q but the chain head is %q: the %s trigger's head read "+
 			"is resolving somewhere other than the table it is attached to, so the chain would never link; "+
 			"refusing to start", prevHash, head, auditChainTrigger)
+	}
+	return nil
+}
+
+// AuditPartitionMonthsAhead is how many months past the current one audit_ensure_partitions keeps
+// created. A constant, not a setting: the function itself refuses anything outside 1..24, and the
+// boot and the daily sweeper both pass this.
+const AuditPartitionMonthsAhead = 12
+
+// ensureAuditPartitions runs audit_ensure_partitions on the migration connection. It continues from
+// the highest existing upper bound, so a deployment that sat offline for months catches up in one call.
+func ensureAuditPartitions(ctx context.Context, db migrationExecutor) error {
+	if _, err := db.Exec(ctx, `SELECT audit_ensure_partitions($1)`, AuditPartitionMonthsAhead); err != nil {
+		return fmt.Errorf("db: create the next %d months of audit_events partitions: %w", AuditPartitionMonthsAhead, err)
 	}
 	return nil
 }
@@ -378,6 +398,41 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 		}
 		slog.WarnContext(ctx, "db: re-applied the ENABLE ALWAYS hardening a migration reverted on an audit_events trigger",
 			slog.String("trigger", name))
+	}
+	restorePartitionAlwaysTriggers(ctx, db, want)
+}
+
+// restorePartitionAlwaysTriggers carries an operator's ENABLE ALWAYS on a parent trigger down to the
+// copies Postgres does NOT clone. ALTER TABLE ... ENABLE ALWAYS TRIGGER on the partitioned parent
+// recurses to the row-level clones, but a statement-level trigger (the TRUNCATE guard) exists once
+// per partition under the same name and is not reached from the parent; a partition created or
+// re-armed since would otherwise fire it only for ordinary writes. Narrow like its caller: only a
+// name the operator had hardened, only a non-clone copy that is not 'A'.
+func restorePartitionAlwaysTriggers(ctx context.Context, db migrationExecutor, want []string) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil || !exists {
+		return
+	}
+	var rels, names []string
+	if err := db.QueryRow(ctx, auditTreeCTE+`
+		SELECT COALESCE(array_agg(t.tgrelid::regclass::text ORDER BY t.tgrelid::regclass::text, t.tgname), ARRAY[]::text[]),
+		       COALESCE(array_agg(t.tgname::text            ORDER BY t.tgrelid::regclass::text, t.tgname), ARRAY[]::text[])
+		FROM pg_trigger t JOIN audit_tree ON audit_tree.oid = t.tgrelid
+		WHERE t.tgrelid <> 'audit_events'::regclass AND NOT t.tgisinternal AND t.tgparentid = 0
+		  AND t.tgenabled <> 'A' AND t.tgname = ANY($1)`, want).Scan(&rels, &names); err != nil {
+		slog.ErrorContext(ctx, "db: cannot read the partition-level audit triggers to re-apply ENABLE ALWAYS to; re-check pg_trigger.tgenabled on every audit_events partition",
+			slog.Any("error", err), slog.Any("hardened_before", want))
+		return
+	}
+	for i := range rels {
+		if i >= len(names) {
+			break
+		}
+		stmt := `ALTER TABLE ` + rels[i] + ` ENABLE ALWAYS TRIGGER ` + pgx.Identifier{names[i]}.Sanitize()
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			slog.ErrorContext(ctx, "db: a partition's audit trigger lost its ENABLE ALWAYS hardening and it could NOT be re-applied; re-apply it by hand",
+				slog.String("statement", stmt), slog.Any("error", err))
+		}
 	}
 }
 

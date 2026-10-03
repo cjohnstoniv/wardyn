@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -29,14 +30,6 @@ var (
 	errSignInHelpURLMalformed = errors.New("sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in")
 )
 
-// unsafeHelpRune is what neither field may carry: C0/C1 controls (line breaks
-// included), and the invisible Unicode that can make text read differently
-// from what it is — format characters (bidi overrides, zero-width spaces) and
-// the line/paragraph separators.
-func unsafeHelpRune(r rune) bool {
-	return r < 0x20 || (r >= 0x7f && r <= 0x9f) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
-}
-
 // validateSignInHelp is the one check both doors run: the write (via
 // validateSiteConfig) and the anonymous read (signInHelpPublic). Not
 // shellSafeSiteString, for either field: neither is ever interpolated into a
@@ -46,13 +39,13 @@ func validateSignInHelp(text, link string) error {
 	if utf8.RuneCountInString(text) > signInHelpTextMax {
 		return errSignInHelpTextTooLong
 	}
-	if strings.ContainsFunc(text, unsafeHelpRune) {
+	if strings.ContainsFunc(text, policyref.UnsafeRune) {
 		return errSignInHelpTextControl
 	}
 	if link == "" {
 		return nil
 	}
-	if len(link) > signInHelpURLMax || strings.ContainsFunc(link, func(r rune) bool { return unsafeHelpRune(r) || unicode.IsSpace(r) }) {
+	if len(link) > signInHelpURLMax || strings.ContainsFunc(link, func(r rune) bool { return policyref.UnsafeRune(r) || unicode.IsSpace(r) }) {
 		return errSignInHelpURLMalformed
 	}
 	u, err := url.Parse(link)

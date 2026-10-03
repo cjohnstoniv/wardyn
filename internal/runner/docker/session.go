@@ -39,7 +39,7 @@ import (
 var attachShell = []string{"/bin/sh", "-c",
 	`[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; ` +
 		`command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null; ` +
-		`if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; ` +
+		`if command -v tmux >/dev/null 2>&1; then ` + runner.TmuxAttachSh + `; ` +
 		`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
 
 // Attach opens a new interactive exec inside the running sandbox ref and

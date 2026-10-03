@@ -466,8 +466,8 @@ func hostSupportsAppArmor(info system.Info) bool {
 // memory/CPU cap (MemorySwap pinned so swap can't double it), the same runner.ProxyLimits envelope
 // the k8s substrate applies.
 func proxyResources() container.Resources {
-	cpuMillis, memMiB := runner.ProxyLimits()
-	memBytes := memMiB * 1024 * 1024
+	sz := runner.EffectiveResources(runner.Resources{})
+	cpuMillis, memBytes := sz.ProxyCPUMillis, sz.ProxyMemoryMiB*1024*1024
 	pids := proxyPidsLimit
 	return container.Resources{
 		NanoCPUs:   cpuMillis * 1_000_000,
@@ -489,14 +489,8 @@ func proxyResources() container.Resources {
 // DiskMiB is handled separately via StorageOpt (applyDiskQuota): a HostConfig field, not a cgroup
 // Resources field, and backend-gated.
 func resourcesFromSpec(res runner.Resources) container.Resources {
-	cpuMillis := res.CPUMillis
-	if cpuMillis <= 0 {
-		cpuMillis = runner.EffectiveLimits().CPUMillis
-	}
-	memMiB := res.MemoryMiB
-	if memMiB <= 0 {
-		memMiB = runner.EffectiveLimits().MemoryMiB
-	}
+	sz := runner.EffectiveResources(res)
+	cpuMillis, memMiB := sz.AgentCPULimitMillis, sz.AgentMemoryLimitMiB
 	pids := res.PidsLimit
 	if pids <= 0 {
 		pids = runner.DefaultPidsLimit

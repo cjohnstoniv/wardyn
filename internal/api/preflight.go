@@ -71,6 +71,14 @@ type preflightResponse struct {
 	GitCredential *SCMAccess `json:"git_credential,omitempty"`
 }
 
+// preflightBurst and preflightLimiterMaxPeople size the per-person preflight
+// limiter: a burst of five, and a map cap for a deployment's people rather
+// than the directory limiter's admins.
+const (
+	preflightBurst            = 5
+	preflightLimiterMaxPeople = 16384
+)
+
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
 // resolves the run policy through the EXACT same resolveRunPolicy chokepoint (so
 // an XOR violation, an unknown-secret 422, or an invalid inline spec surface as
@@ -120,6 +128,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// written under this request carries dry_run (audit.DryRunRecorder).
 	r = r.WithContext(audit.WithDryRun(r.Context()))
 	ctx := r.Context()
+	// First, before the decode and every gate: a limited call costs no work and
+	// writes no row. A person only; the admin token is one shared actor name,
+	// so limiting it would pool every CI job into one bucket.
+	if s.preflightLimiter != nil {
+		if t, who := actorFromRequest(r); t == types.ActorHuman && !s.preflightLimiter.allow(who, s.cfg.Now()) {
+			writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
+			return
+		}
+	}
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
@@ -285,7 +302,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// SAME refusal launch would. Review has no run row to freeze the choice
 	// onto; it keeps it only for the model-access row below and for the model
 	// credential the autonomy gate grades with.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, false)
 	if !ok {
 		return
 	}
@@ -322,6 +339,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// reason and Retry-After, so a busy host shows before the click. false:
 	// Review writes no audit row.
 	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", false)) {
+		return
+	}
+	// The deployment run cap, launch's pre-mint refusal: the same 422 run_quota,
+	// so a full deployment shows before the click. Review writes no audit row.
+	if s.refuseRunCapFull(w, r) {
 		return
 	}
 

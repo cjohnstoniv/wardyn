@@ -1714,7 +1714,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
 // callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
-func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, string, []string, bool)) *writoidc.Authenticator {
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, writoidc.LoginFacts)) *writoidc.Authenticator {
 	t.Helper()
 	rt := &rewriteTokenRT{
 		base:          http.DefaultTransport,
@@ -1754,9 +1754,9 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	var gotGroups []string
 	var gotTruncated bool
 	calls := 0
-	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, f writoidc.LoginFacts) {
 		calls++
-		gotCtx, gotSub, gotRole, gotUserType, gotGroups, gotTruncated = ctx, sub, role, userType, groups, truncated
+		gotCtx, gotSub, gotRole, gotUserType, gotGroups, gotTruncated = ctx, f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated
 	})
 
 	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
@@ -1827,7 +1827,7 @@ func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
 		ClientSecret: "secret",
 		RedirectURL:  "http://localhost/auth/callback",
 		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
-		OnLogin:      func(context.Context, string, string, string, []string, bool) { calls++ },
+		OnLogin:      func(context.Context, writoidc.LoginFacts) { calls++ },
 	}, testHMACKey)
 	if err != nil {
 		t.Fatalf("writoidc.New: %v", err)

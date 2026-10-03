@@ -22,7 +22,10 @@ package db
 // The cancellation is driven deterministically rather than by timing: the
 // executor below cancels the run at the moment migrateOn asks whether the file
 // AFTER the last trigger-defining migration is applied, which is the instant the
-// hardening has just been reverted and nothing has yet restored it.
+// hardening has just been reverted and nothing has yet restored it. When the
+// last trigger-defining migration is also the last migration (0112 was, when this was written),
+// there is no such file, and the cancel fires on the first statement of the
+// post-loop trigger check instead: the same instant.
 
 import (
 	"context"
@@ -38,17 +41,29 @@ import (
 // migrateOn's applied-check for one named file.
 type cancelAtMigration struct {
 	migrationExecutor
-	at     string
+	at     string // the file to cancel before; "" cancels on the first statement after `last`
+	last   string // the last trigger-defining file, used only when at is ""
 	cancel context.CancelFunc
 	fired  bool
+	seen   bool
 }
 
 func (c *cancelAtMigration) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if !c.fired && strings.Contains(sql, "FROM schema_migrations WHERE filename") && len(args) == 1 {
-		if name, ok := args[0].(string); ok && name == c.at {
-			c.fired = true
-			c.cancel()
+	isCheck := strings.Contains(sql, "FROM schema_migrations WHERE filename") && len(args) == 1
+	if !c.fired && isCheck {
+		if name, ok := args[0].(string); ok {
+			if c.at != "" && name == c.at {
+				c.fired = true
+				c.cancel()
+			}
+			if c.at == "" && name == c.last {
+				c.seen = true
+			}
 		}
+	}
+	if !c.fired && c.at == "" && c.seen && !isCheck {
+		c.fired = true
+		c.cancel()
 	}
 	return c.migrationExecutor.QueryRow(ctx, sql, args...)
 }
@@ -73,8 +88,7 @@ func migrationAfter(t *testing.T, name string) string {
 			return names[i+1]
 		}
 	}
-	t.Fatalf("no migration sorts after %s; the probe cannot pick a cancellation point", name)
-	return ""
+	return "" // name is the last migration: the caller cancels after the loop instead
 }
 
 func TestPG_MigrateKeepsAnAlwaysTriggerWhenTheBootContextIsCancelled(t *testing.T) {
@@ -98,7 +112,7 @@ func TestPG_MigrateKeepsAnAlwaysTriggerWhenTheBootContextIsCancelled(t *testing.
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ex := &cancelAtMigration{migrationExecutor: pool, at: cancelAt, cancel: cancel}
+	ex := &cancelAtMigration{migrationExecutor: pool, at: cancelAt, last: chain[len(chain)-1], cancel: cancel}
 
 	err := migrateOn(runCtx, ex, false)
 	if err == nil {

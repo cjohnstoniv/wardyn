@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
@@ -30,5 +31,30 @@ func TestHostCapacityBootDefaultIsOff(t *testing.T) {
 	resetFlags(t)
 	if got, want := parseBootFlags().hostCapacity.limits(), (hostcapacity.Limits{MinAvailableMiB: 8192, MaxLoad1: 100}); got != want {
 		t.Fatalf("env limits = %+v, want %+v", got, want)
+	}
+}
+
+// TestPreflightRateBoot: the default is 20 a minute, an env value reaches the
+// flag, and a negative one refuses to boot naming the variable.
+func TestPreflightRateBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_PREFLIGHT_RATE_PER_MIN")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+
+	resetFlags(t)
+	if got := *parseBootFlags().preflightRatePerMin; got != 20 {
+		t.Fatalf("default = %d, want 20", got)
+	}
+	t.Setenv("WARDYN_PREFLIGHT_RATE_PER_MIN", "0")
+	resetFlags(t)
+	if got := *parseBootFlags().preflightRatePerMin; got != 0 {
+		t.Fatalf("env 0 = %d, want 0 (off)", got)
+	}
+
+	neg := -1
+	err := validateBootPosture(&bootFlags{preflightRatePerMin: &neg}, tlsPosture{})
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_PREFLIGHT_RATE_PER_MIN") {
+		t.Fatalf("negative rate error = %v, want one naming WARDYN_PREFLIGHT_RATE_PER_MIN", err)
 	}
 }

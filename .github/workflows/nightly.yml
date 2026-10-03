@@ -610,6 +610,16 @@ jobs:
               GO_BUILD_TAGS=docker,k8s
               RELEASE_BUILD=true
             stage: "true"
+          # The same recipe with the Go Cryptographic Module pinned to the
+          # snapshot CMVP certificate #5247 covers. release.yml's `images` row
+          # carries the identical build-args (test-repo-guards.sh guard 16).
+          - name: wardynd-fips
+            dockerfile: deploy/compose/Dockerfile.wardynd
+            build-args: |
+              GO_BUILD_TAGS=docker,k8s
+              RELEASE_BUILD=true
+              GOFIPS140=v1.0.0-c2097c7c
+            stage: "true"
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
@@ -655,6 +665,20 @@ jobs:
           labels: org.opencontainers.image.revision=${{ github.sha }}
           tags: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}:run-${{ github.run_id }}
           # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
+      # The staged digest, not the recipe: an image tagged -fips must hold a binary
+      # built against the pinned module snapshot. The Dockerfile checks the same
+      # line at build time (which also covers a scheduled run that pushes
+      # nothing); this reads it back out of what was pushed. Gated on the exit code.
+      - name: Assert the staged digest carries the pinned GOFIPS140 snapshot
+        if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true' && contains(matrix.build-args, 'GOFIPS140=')
+        env:
+          BUILD_ARGS: ${{ matrix.build-args }}
+          IMAGE_REF: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          pin="$(sed -n 's/^GOFIPS140=//p' <<<"$BUILD_ARGS")"
+          test -n "$pin"
+          ./scripts/check-fips-image.sh "$IMAGE_REF" "$pin"
       - name: Attest the staged digest's build provenance
         if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

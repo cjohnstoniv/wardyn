@@ -198,7 +198,10 @@ func TestCodeIsSingleUse(t *testing.T) {
 func TestRefreshIgnoresTheRequestedSubset(t *testing.T) {
 	s := entrafake.New()
 	defer s.Close()
-	all := s.ConsentedScopes()
+	// Drop the fixture's `.default` entry: a `.default` request is expanded to
+	// the permissions under its resource and never echoed, so it is not a scope
+	// a token carries (TestDefaultRequestIsExpandedNeverEchoed).
+	all := s.ConsentedScopes()[1:]
 	full := append([]string{"openid", "offline_access"}, all...)
 
 	first := redeemCode(t, s, "verifier-dddddddddddddddddddddddddddddddddddddddd", full...)

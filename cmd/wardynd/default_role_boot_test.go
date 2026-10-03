@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 
@@ -62,6 +63,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	adminToken := ""
+	var roleStampTTL time.Duration
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	basePath := ""
 	return &bootFlags{
@@ -93,6 +95,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 		sshListen:                &sshListen,
 		uiListen:                 &uiListen,
 		controlURL:               &controlURL,
+		roleStampTTL:             &roleStampTTL,
 	}
 }
 

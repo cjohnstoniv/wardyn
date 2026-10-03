@@ -297,7 +297,7 @@ func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *type
 ) []string {
 	profileMax := 0
 	var limits types.GovernanceLimits
-	if ceiling.Profile != nil && !s.isOperator(r.Context()) {
+	if ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
 		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
 		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
 	}

@@ -37,6 +37,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -88,6 +89,11 @@ var declaredNonAuditTx = map[string]string{
 		"so it writes no chain-linked row and its isolation level decides nothing. The LOCK it takes is " +
 		"session-level and deliberately outlives the commit; the caller's guarded work runs afterwards, on its " +
 		"own connection and its own transactions, which are classified on their own",
+	"internal/maskmanifest/maskmanifest.go:Manifests.load": "a READ ONLY REPEATABLE READ snapshot of one run's masking " +
+		"manifest row and its value rows, read together so the revision it records is the one its values belong to. " +
+		"It carries no INSERT, UPDATE or DELETE on any table, audit_events included, so it writes no chain-linked " +
+		"row and its isolation level decides nothing. The transactions of this package that write (Manifests.insert, " +
+		"Manifests.FenceSubject) pin READ COMMITTED and are classified by the census itself",
 	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations to restore " +
 		"a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot commit a superseded " +
 		"function body. The replay set contains no DML at all — no INSERT, UPDATE or DELETE, on audit_events " +
@@ -102,6 +108,10 @@ var declaredNonAuditTx = map[string]string{
 // and a census that re-derived its subject from the package under scrutiny would
 // move with it.
 const auditChainTriggerName = "audit_events_chain"
+
+// updateStatementRE matches an UPDATE statement's head (upper-cased input): UPDATE, an optional ONLY, a
+// possibly schema-qualified table, an optional alias, then SET.
+var updateStatementRE = regexp.MustCompile(`\bUPDATE\s+(ONLY\s+)?[\w."@]+(\s+(AS\s+)?\w+)?\s+SET\b`)
 
 // assertReplaySetIsPureDDL re-derives replayTriggerMigrations' set the way
 // db.triggerMigrationFiles does — by CONTENT, not by a list — and fails if any
@@ -129,13 +139,21 @@ func assertReplaySetIsPureDDL(t *testing.T) {
 		}
 		found++
 		upper := strings.ToUpper(string(body))
-		for _, dml := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM"} {
+		for _, dml := range []string{"INSERT INTO", "DELETE FROM"} {
 			if strings.Contains(upper, dml) {
 				t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains %q. "+
 					"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
 					"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
 					"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, dml)
 			}
+		}
+		// An UPDATE STATEMENT (UPDATE <table> SET ...), not the word: the append-only trigger the replay
+		// re-creates is declared BEFORE UPDATE OR DELETE, an event list that is DDL.
+		if loc := updateStatementRE.FindStringIndex(upper); loc != nil {
+			t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains the UPDATE statement %q. "+
+				"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
+				"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
+				"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, upper[loc[0]:loc[1]])
 		}
 	}
 	if found == 0 {

@@ -199,6 +199,9 @@ COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 
 # agent-run launcher.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
+# tmux config for the persistent attach session: no status bar (clean terminal,
+# no xterm.js line-drawing artifacts), truecolor, tmux-owned mouse wheel, large scrollback.
+COPY deploy/images/common/tmux.conf /etc/tmux.conf
 COPY deploy/images/common/agent-run-lib.sh /usr/local/bin/agent-run-lib.sh
 COPY deploy/images/codex-cli/agent-run /usr/local/bin/agent-run
 # Interactive attach shell sources this: waits for the workspace clone to finish +

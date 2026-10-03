@@ -473,7 +473,9 @@ func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
 
 // sweepRunPauses is one pass of the pause over every live run: pause the ones
 // nobody is at, and resume a waiting one whose requests have all closed. Every
-// write is a conditional UPDATE, so each replica can run it on its own tick.
+// write is a conditional UPDATE. With a SweeperLease only the elected leader
+// sweeps, its context ends when the lease is lost, and its epoch fences each
+// pause (pauseRun).
 func (s *Server) sweepRunPauses(ctx context.Context) error {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok || s.cfg.Runner == nil {
@@ -482,6 +484,11 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	if _, ok := s.cfg.Runner.(runner.Freezer); !ok {
 		return nil
 	}
+	ctx, end, ok := s.beginLeaderSweep(ctx)
+	if !ok {
+		return nil
+	}
+	defer end()
 	cands, now, err := pauser.ListPauseCandidates(ctx)
 	if err != nil {
 		return err
@@ -604,7 +611,18 @@ func (s *Server) runCPUQuiet(ctx context.Context, run types.AgentRun) bool {
 // compare on the presence clock means a keystroke, or the request closing,
 // between the sweep's read and the mark wins: the mark fails and the agent is
 // thawed again.
+//
+// Under a SweeperLease a stale leader can run this beside the current one (a
+// failover releases the lock under the old leader), so a failed mark is not
+// proof that nobody holds the pause: the other leader's mark may be what won
+// the compare, and thawing then undoes it while the run reads as paused. The
+// compensation therefore re-reads the run and leaves a paused run frozen. The
+// epoch fences the two steps that start a pause: a leader that has been
+// superseded neither freezes nor marks.
 func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun, reason types.PauseReason, quiet time.Duration) {
+	if !s.leaseCurrent(ctx) {
+		return
+	}
 	f := s.cfg.Runner.(runner.Freezer)
 	if err := f.FreezeSandbox(ctx, run.SandboxRef); err != nil {
 		if !errors.Is(err, runner.ErrFreezeUnsupported) {
@@ -613,7 +631,10 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 		}
 		return
 	}
-	applied, err := pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+	applied, err := false, error(nil)
+	if s.leaseCurrent(ctx) {
+		applied, err = pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+	}
 	if err == nil && applied {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
 			run.ID.String(), "success", mustJSON(map[string]any{
@@ -622,6 +643,13 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 		// A paused run holds no Azure DevOps token; its resume creates one.
 		// After the mark, so a resolve racing it sees the pause and creates none.
 		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
+		return
+	}
+	// The compensation outlives a lease lost mid-pass: a freeze must not be
+	// left behind because the sweep's context ended between freeze and thaw.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
+	defer cancel()
+	if cur, rerr := s.cfg.Store.GetRun(ctx, run.ID); rerr == nil && cur.PausedAt != nil {
 		return
 	}
 	if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {
