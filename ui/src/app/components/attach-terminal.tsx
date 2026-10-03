@@ -50,6 +50,7 @@ import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "luc
 import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
+import { LinkConfirmDialog } from "./attach-link-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
 import { CopyNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
 import type { CopyGate, CopyOffer } from "./attach-terminal-clipboard";
@@ -194,6 +195,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
   const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
   const copyGateRef = React.useRef<CopyGate | null>(null);
+  // A clicked terminal link awaiting the confirm dialog.
+  const [linkTarget, setLinkTarget] = React.useState<URL | null>(null);
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -325,6 +328,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    setLinkTarget,
   });
 
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
@@ -606,6 +610,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         holderPrincipal={holderPrincipal}
         onOpenChange={(o) => !o && setConfirmTakeover(false)}
         onConfirm={() => void doTakeover()}
+        onCloseFocus={() => termRef.current?.focus()}
+      />
+      <LinkConfirmDialog
+        url={linkTarget}
+        onClose={() => setLinkTarget(null)}
         onCloseFocus={() => termRef.current?.focus()}
       />
     </div>

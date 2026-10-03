@@ -43,3 +43,13 @@ export const TERMINAL = {
   CLOSED_BODY: (maxAttempts: number) =>
     `Wardyn stopped retrying after ${maxAttempts} attempts. This ends the terminal session only — the run itself is unaffected. Reconnect to watch it again.`,
 } as const;
+
+// M11 S6 (term-t13): the confirm dialog for a link the sandbox printed. Every
+// click outside the compiled-in allowlist (attach-terminal-links.ts) asks first.
+export const TERMINAL_LINK = {
+  TITLE: "Open this link?",
+  BODY: "The sandbox printed this link. Check the address before you open it. It opens in a new tab.",
+  USERINFO: (host: string) => `This address has a name before the host. The site it opens is ${host}.`,
+  CANCEL: "Cancel",
+  OPEN: "Open link",
+} as const;

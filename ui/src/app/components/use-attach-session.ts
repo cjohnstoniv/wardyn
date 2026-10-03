@@ -14,7 +14,9 @@ import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { decideKey } from "./attach-terminal-keys";
+import { terminalLinkHandlers } from "./attach-terminal-links";
 import { createCopyGate, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
@@ -103,6 +105,8 @@ export interface UseAttachSessionArgs {
   setCopyOffer: React.Dispatch<React.SetStateAction<CopyOffer | null>>;
   setCopyNotice: React.Dispatch<React.SetStateAction<string | null>>;
   copyGateRef: React.MutableRefObject<CopyGate | null>;
+  /** A clicked link that needs the confirm dialog (attach-terminal-links.ts). */
+  setLinkTarget: React.Dispatch<React.SetStateAction<URL | null>>;
 }
 
 export function useAttachSession(args: UseAttachSessionArgs) {
@@ -134,6 +138,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    setLinkTarget,
   } = args;
 
   // Read at each (re)connect, not keyed on: /me landing late must not rebuild
@@ -160,6 +165,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     if (!mount) return;
 
     // xterm setup
+    const links = terminalLinkHandlers(setLinkTarget);
     const term = new Terminal({
       cursorBlink: true,
       scrollback: 50000,
@@ -167,6 +173,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       allowProposedApi: true,
       // Option+drag keeps xterm's native selection on macOS while tmux owns the mouse.
       macOptionClickForcesSelection: true,
+      // OSC 8 links share the detected-link policy.
+      linkHandler: links.osc8,
       fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
       fontSize: 13,
       theme: {
@@ -199,6 +207,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // Unicode 11 widths match tmux and glibc (emoji take two cells); the default table is Unicode 6.
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
+    term.loadAddon(new WebLinksAddon(links.detected));
     term.open(mount);
     termRef.current = term;
     fitAddonRef.current = fitAddon;
