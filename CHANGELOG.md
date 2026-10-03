@@ -121,6 +121,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tail drops and zeroes it on its next touch. It is wired into the person erasure by a later change;
   `DELETE /people/{principal}/credentials` does not call it.
 
+### Added
+
+- **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
+  `0110_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
+  memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
+  with its manifest and the same digest in a footer, in a readable form or a raw archive form you can re-hash
+  with no Wardyn code ("Verifying an exported audit partition by hand", `docs/OPERATIONS.md`); only a security
+  operator is served, and `?partition=` with any other filter is refused (`audit_export_partition_filter`).
+  `GET /audit/chain/verify` now starts from the newest attested retention drop, reports a removed newest tail
+  (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
+  removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
+  `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
+
 ### Security
 
 - **A run's secrets are masked from a sealed manifest, and a registry miss fails closed (migration

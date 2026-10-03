@@ -5,8 +5,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // lockAuditChainSQL serializes appends to the audit_events hash chain. Shared
@@ -42,6 +45,9 @@ type AuditChainStatus struct {
 	// HeadHash is the row_hash of the newest chained row: the value to compare
 	// against what a SIEM recorded off the sink stream.
 	HeadHash string `json:"head_hash,omitempty"`
+	// AnchorSeq is the last seq of the newest attested retention drop the sweep started from: the first
+	// retained row must chain to that drop's recorded tail. 0 when no partition was ever dropped.
+	AnchorSeq int64 `json:"anchor_seq,omitempty"`
 	// BrokenSeq/Reason are set only when OK is false.
 	BrokenSeq int64  `json:"broken_seq,omitempty"`
 	Reason    string `json:"reason,omitempty"`
@@ -83,11 +89,15 @@ type auditChainLink struct {
 //  1. every row must re-hash to its stored row_hash — catches an EDITED row;
 //  2. every row's prev_hash must equal the previous row's row_hash, and only
 //     the first chained row may have none — catches a DELETED or REORDERED
-//     row, which rule 1 alone cannot see;
+//     row, which rule 1 alone cannot see. After an attested retention drop
+//     the first retained row must instead chain to the drop's recorded tail
+//     hash (the anchor): the only removal the chain accepts;
 //  3. hashless rows are a prefix: legacy only while no chained row has been
-//     seen yet, a break otherwise. Without this rule an actor who dropped or
-//     disabled migration 0047's trigger (or inserted in replica mode) could
-//     append rows the chain neither covers nor reports, while OK stayed true.
+//     seen yet, a break otherwise (and never legacy after a drop, which
+//     removed the prefix they could sit in). Without this rule an actor who
+//     dropped or disabled migration 0047's trigger (or inserted in replica
+//     mode) could append rows the chain neither covers nor reports, while OK
+//     stayed true.
 //
 // Rule 3's blind spot: a seq GAP below the first chained row can still hold a
 // hashless forgery indistinguishable from a legacy row; only an off-box copy
@@ -98,17 +108,30 @@ type auditChainLink struct {
 type auditChainWalk struct {
 	st   AuditChainStatus
 	prev string
+	// anchored: the walk starts after an attested drop, and prev began as that drop's tail hash.
+	anchored bool
 }
 
 func newAuditChainWalk() *auditChainWalk {
 	return &auditChainWalk{st: AuditChainStatus{OK: true}}
 }
 
+// newAnchoredAuditChainWalk starts the walk after an attested retention drop whose last row hashed to
+// tail: the first retained row must carry that hash as its prev_hash.
+func newAnchoredAuditChainWalk(tail string) *auditChainWalk {
+	// A drop whose tail was hashless (a legacy range) leaves nothing to chain to: the walk starts as
+	// the unanchored one does.
+	return &auditChainWalk{st: AuditChainStatus{OK: true}, prev: tail, anchored: tail != ""}
+}
+
+// removedWithoutDrop is the reason every unattested removal reports, so an operator can search for it.
+const removedWithoutDrop = "rows removed without an attested retention drop"
+
 func (w *auditChainWalk) step(l auditChainLink) bool {
 	if l.unchained {
 		// Rule 3. Before the first chained row this is the legacy prefix; after
 		// it, the row was written with the chain trigger off.
-		if w.st.Checked == 0 {
+		if w.st.Checked == 0 && !w.anchored {
 			w.st.Legacy++
 			return true
 		}
@@ -125,9 +148,11 @@ func (w *auditChainWalk) step(l auditChainLink) bool {
 	case l.row != l.want:
 		w.fail(l.seq, "row_hash does not match the row's contents (the row was edited after it was written)")
 	case w.prev == "" && !l.prevIsNull:
-		w.fail(l.seq, "the first chained row carries a prev_hash (the row it chained to was deleted)")
+		w.fail(l.seq, removedWithoutDrop+": the first chained row carries a prev_hash (the row it chained to was deleted)")
+	case w.prev != "" && l.prev != w.prev && w.st.Checked == 1 && w.anchored:
+		w.fail(l.seq, removedWithoutDrop+": the first retained row does not chain to the newest retention drop's recorded tail")
 	case w.prev != "" && l.prev != w.prev:
-		w.fail(l.seq, "prev_hash does not match the preceding row (a row was deleted or reordered)")
+		w.fail(l.seq, removedWithoutDrop+": prev_hash does not match the preceding row (a row was deleted or reordered)")
 	}
 	w.prev = l.row
 	return w.st.OK
@@ -154,7 +179,43 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // IS commit order, and a row can never appear below a cursor the walk
 // already passed. Walk state is carried across pages by one auditChainWalk,
 // so a chain longer than a page is one continuous chain.
+//
+// Everything runs in ONE repeatable-read snapshot, so the chain, the newest
+// attested retention drop, the high-water mark and the partition manifest
+// are the same instant: an append between two reads cannot read as a
+// removed tail. The walk starts from the newest `drop` anchor (the first
+// retained row must chain to its recorded tail) and still inspects every
+// retained row. The chain alone cannot see a removed NEWEST tail, so after
+// it the newest row must also match audit_partition_meta's high-water mark,
+// and every partition the expected manifest names must be present unless an
+// anchor accounts for it.
 func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return AuditChainStatus{}, fmt.Errorf("store: begin audit chain sweep: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
+
+	// An audit_events that was never partitioned (a schema from before 0108) has no anchors or
+	// high-water mark to check. Once it is partitioned, a missing bookkeeping table is an error, not a
+	// reason to skip the checks.
+	var partitioned bool
+	if err := tx.QueryRow(ctx, `SELECT relkind = 'p' FROM pg_class WHERE oid = 'audit_events'::regclass`).Scan(&partitioned); err != nil {
+		return AuditChainStatus{}, fmt.Errorf("store: read audit_events kind: %w", err)
+	}
+	var anchorTail string
+	var anchorSeq int64
+	if partitioned {
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(tail_row_hash, ''), COALESCE(seq_hi, 0)
+			  FROM audit_chain_anchors WHERE kind = 'drop' ORDER BY id DESC LIMIT 1`).
+			Scan(&anchorTail, &anchorSeq); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return AuditChainStatus{}, fmt.Errorf("store: read audit chain anchors: %w", err)
+		}
+	}
+	w := newAnchoredAuditChainWalk(anchorTail)
+	w.st.AnchorSeq = anchorSeq
+
 	// Every row, hashless ones included, is read in seq order — rule 3 is a
 	// statement about where the hashless rows SIT, so the walk must see them
 	// in place.
@@ -171,12 +232,12 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 		ORDER BY seq
 		LIMIT $2`
 
-	w := newAuditChainWalk()
 	// Below every possible seq: the identity starts at 1, but nothing here needs
 	// to depend on that.
 	after := int64(math.MinInt64)
+	lastSeq := int64(0) // the newest row of any kind
 	for {
-		rows, err := s.Pool.Query(ctx, q, after, AuditChainPageSize)
+		rows, err := tx.Query(ctx, q, after, AuditChainPageSize)
 		if err != nil {
 			return AuditChainStatus{}, fmt.Errorf("store: read audit chain: %w", err)
 		}
@@ -188,7 +249,7 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 				return AuditChainStatus{}, fmt.Errorf("store: scan audit chain row: %w", err)
 			}
 			n++
-			after = l.seq
+			after, lastSeq = l.seq, l.seq
 			if !w.step(l) {
 				broke = true
 				break
@@ -201,8 +262,11 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 		if err := rows.Err(); err != nil && w.st.OK {
 			return AuditChainStatus{}, fmt.Errorf("store: iterate audit chain: %w", err)
 		}
-		if broke || int32(n) < AuditChainPageSize {
+		if broke {
 			return w.st, nil
+		}
+		if int32(n) < AuditChainPageSize {
+			break
 		}
 		// Between pages the caller's context is live, so a client going away
 		// (or an operator giving up) actually stops the sweep.
@@ -210,4 +274,55 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 			return AuditChainStatus{}, fmt.Errorf("store: audit chain sweep cancelled: %w", err)
 		}
 	}
+	if partitioned {
+		if err := verifyAuditPartitionState(ctx, tx, w, lastSeq); err != nil {
+			return AuditChainStatus{}, err
+		}
+	}
+	return w.st, nil
+}
+
+// verifyAuditPartitionState is what the chain cannot say about itself, checked once the walk is clean.
+func verifyAuditPartitionState(ctx context.Context, tx pgx.Tx, w *auditChainWalk, lastSeq int64) error {
+	var hwSeq int64
+	var hwHash string
+	if err := tx.QueryRow(ctx, `SELECT hw_seq, COALESCE(hw_row_hash, '') FROM audit_partition_meta`).
+		Scan(&hwSeq, &hwHash); err != nil {
+		return fmt.Errorf("store: read audit high-water mark: %w", err)
+	}
+	if lastSeq != hwSeq || w.st.HeadHash != hwHash {
+		w.fail(hwSeq, fmt.Sprintf("the newest retained row (seq %d) is not the newest row ever appended (seq %d): "+
+			"the log was truncated at its tail", lastSeq, hwSeq))
+		return nil
+	}
+
+	// A partition the manifest expects must be present unless a drop anchor names it; a range a split
+	// anchor names must be present unless a LATER drop anchor accounts for it.
+	var missing string
+	if err := tx.QueryRow(ctx, `
+		WITH present AS (
+		    SELECT c.relname::text AS name
+		      FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+		     WHERE i.inhparent = 'audit_events'::regclass)
+		SELECT name FROM (
+		    SELECT e->>'name' AS name, e->>'lo' AS ord
+		      FROM audit_partition_meta m, jsonb_array_elements(m.manifest) e
+		     WHERE NOT EXISTS (SELECT 1 FROM audit_chain_anchors a
+		                        WHERE a.kind = 'drop' AND a.partition_name = e->>'name')
+		    UNION ALL
+		    SELECT a.partition_name, ''
+		      FROM audit_chain_anchors a
+		     WHERE a.kind = 'split'
+		       AND NOT EXISTS (SELECT 1 FROM audit_chain_anchors d
+		                        WHERE d.kind = 'drop' AND d.id > a.id AND d.partition_name = a.partition_name)
+		) expected
+		WHERE name NOT IN (SELECT name FROM present)
+		ORDER BY ord, name LIMIT 1`).Scan(&missing); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("store: read audit partition manifest: %w", err)
+	}
+	w.fail(0, fmt.Sprintf("partition %s is in the expected manifest but is missing, and no attested retention drop accounts for it", missing))
+	return nil
 }

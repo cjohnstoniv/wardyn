@@ -620,7 +620,7 @@ as an exact `seq` and a reason.
 **What it does not give you.** Tamper-**evidence**, not tamper-proofness. Someone
 who can rewrite one row can usually rewrite every row after it and re-chain the
 lot; a re-chained tail verifies perfectly clean, and truncating the newest rows
-leaves a shorter, valid chain. The defence against both is **off-box**: every
+leaves a shorter, valid chain (the high-water mark below catches it, unless it is rewritten too). The defence against both is **off-box**: every
 event **whose Postgres write succeeded** carries its `prev_hash`/`row_hash` onto
 the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
 cannot later disown — that comparison, not the sweep, is the control. The
@@ -664,6 +664,48 @@ append-only, so every later sweep reports that same `broken_seq` forever — no
 repair, no "acknowledge" cursor. `ok: false` is a one-way latch: treat the first
 occurrence as the incident and preserve the row range, because the alert will not
 clear.
+
+**After the audit log was partitioned (0.8.6): what verify checks beyond the chain.** The sweep runs in one
+repeatable-read snapshot and still re-hashes every retained row. It starts from the newest attested retention drop
+(a `kind = 'drop'` row in `audit_chain_anchors`): the first retained row's `prev_hash` must equal the tail hash
+that drop recorded, and the result reports that drop's last `seq` as `anchor_seq`. A removal with no anchor still
+breaks the chain, and its `reason` now says `rows removed without an attested retention drop`. Two checks cover
+what a chain cannot say about itself. The newest row must be the one `audit_partition_meta` recorded as the
+high-water mark, so rows removed from the **newest** end (which leave a shorter, valid chain) read as `the log was
+truncated at its tail`. And every partition in the expected manifest must still exist unless a drop anchor names
+it; a range a `split` anchor names must exist or be accounted for by a later drop. Someone who can rewrite the
+table can rewrite the high-water mark and the anchors too: the head hash on your SIEM remains the control that
+catches that.
+
+**Verifying an exported audit partition by hand.** A partition that is fully behind the high-water mark is
+*closed*: nothing can be appended to it, so its digest is fixed. Export it in the raw archive form, fold it
+yourself, and compare with the database and the footer:
+
+```bash
+wardyn audit export-partition audit_events_p202610 --raw -o p.ndjson   # security_admin; or GET /audit/export?partition=audit_events_p202610&form=raw
+# manifest header: a JSON array of strings, jsonb's own text form (", " between elements);
+# the ranges are empty strings for an empty partition
+header=$(jq -r 'select(.type=="manifest")
+  | (if .row_count == 0 then "" else null end) as $e
+  | [.partition] + ([.seq_lo, .seq_hi, .recorded_lo_us, .recorded_hi_us] | map($e // tostring)) + [(.row_count | tostring)]
+  | "[" + (map(@json) | join(", ")) + "]"' p.ndjson)
+d=$(printf %s "$header" | sha256sum | cut -d' ' -f1)                       # d_0
+while read -r h; do d=$(printf %s "$d$h" | sha256sum | cut -d' ' -f1); done \
+  < <(jq -r 'select(.type=="row") | (.row_hash // .fold_hash)' p.ndjson)   # d_i = sha256(d_(i-1) || row_hash_i)
+echo "fold:   $d"
+jq -r 'select(.type=="footer") | "footer: " + .digest' p.ndjson
+psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
+```
+
+All three must match, and the export must end with its `footer` line (a transfer that stops short is aborted, not
+ended cleanly). The fold is over lowercase hex text, in `seq` order: `d_0 = sha256(header)` and
+`d_i = sha256(d_(i-1) || row_hash_i)`, which holds in constant memory however large the partition is. A row from
+before the chain began has no `row_hash`; the archive carries the hash it folds as `fold_hash`. To check each row,
+recompute `row_hash` from the archive's own columns as the formula above gives it: `time_us` is the `time` in
+microseconds since the epoch, and `data` is the jsonb text exactly as stored (not re-encoded), embedded in the
+array as a JSON value. Only a security operator may export a partition; anyone else gets an empty export, and
+`?partition=` with any other filter is refused (`audit_export_partition_filter`). The readable form
+(`form=readable`, the default) gives the same rows in the audit feed's own event shape.
 
 **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`,
 and are never a failure. There is no backfill, on purpose: hashes computed after
@@ -2883,6 +2925,7 @@ admin walking the member path, not an incident.
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -5379,7 +5422,8 @@ BEGIN
 END $$;
 GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
-  audit_ensure_partitions(integer) TO wardyn_app;
+  audit_ensure_partitions(integer),
+  audit_partition_digest(text) TO wardyn_app;
 
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an
