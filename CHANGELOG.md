@@ -14,6 +14,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Policies you already copied from it are unchanged. But the image's default `WARDYN_DEFAULT_POLICY` points at that file, so a
   deployment that uses the shipped file as its default policy now stops idle runs on upgrade. To keep the old behaviour, point
   `WARDYN_DEFAULT_POLICY` at a policy with `auto_stop_after_sec` set to `0`.
+  The shipped file is also the ceiling member runs are clamped to, so while it is in use a member's `auto_stop_after_sec` of `0`,
+  a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions
+  use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
+  that makes no egress calls and has no attach is also stopped after an hour.
 - **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
   refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
   the database server first. Take a dump before this upgrade: the audit conversion that follows in this
