@@ -94,9 +94,10 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 		t.Cleanup(func() { slog.SetDefault(prev) })
 		listen, ui, ssh, tmpl, strip, base := ":8080", ":8081", "", "", "", ""
 		redirect, control, internal, org, tok := "https://wardyn.example.com/auth/callback", "https://wardynd:8443", "", "", ""
-		allow, member := false, false
+		allow, member, tail := false, false, 65536
 		f := &bootFlags{
-			basePath: &base, oidcIssuer: &issuer, oidcInternalIss: &internal, oidcRedirectURL: &redirect, controlURL: &control,
+			runOutputTailBytes: &tail,
+			basePath:           &base, oidcIssuer: &issuer, oidcInternalIss: &internal, oidcRedirectURL: &redirect, controlURL: &control,
 			listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
 			allowPlaintextListen: &allow, orgURL: &org, orgEnrolToken: &tok, memberMode: &member,
 		}

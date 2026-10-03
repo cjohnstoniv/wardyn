@@ -601,7 +601,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
-	spec.ExecOutput = s.openExecOutput(run.ID, p.TaskMode, p.Interactive)
+	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
 	if err != nil {

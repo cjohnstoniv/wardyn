@@ -26,7 +26,9 @@ func TestValidateBootPosture(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sshListen, originTemplate, enrolToken, allowPlaintext := "", "", "", false
 			oidcIssuer, oidcInternal, oidcRedirect, controlURL, uiAdvertise := "", "", "", "https://wardynd:8443", ""
+			tail := 65536
 			f := &bootFlags{
+				runOutputTailBytes:   &tail,
 				basePath:             &tc.basePath,
 				oidcIssuer:           &oidcIssuer,
 				oidcInternalIss:      &oidcInternal,
@@ -54,5 +56,20 @@ func TestValidateBootPosture(t *testing.T) {
 				t.Fatalf("error %v does not mention %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestValidateRunOutputTailBytes: WARDYN_RUN_OUTPUT_TAIL_BYTES outside 1024 to
+// 1048576 is refused at boot, naming the variable.
+func TestValidateRunOutputTailBytes(t *testing.T) {
+	for _, n := range []int{1024, 65536, 1 << 20} {
+		if err := validateRunOutputTailBytes(n); err != nil {
+			t.Fatalf("%d refused: %v", n, err)
+		}
+	}
+	for _, n := range []int{512, 0, 2097152} {
+		if err := validateRunOutputTailBytes(n); err == nil || !strings.Contains(err.Error(), "WARDYN_RUN_OUTPUT_TAIL_BYTES") {
+			t.Fatalf("%d: error %v does not name the variable", n, err)
+		}
 	}
 }

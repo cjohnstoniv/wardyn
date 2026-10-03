@@ -412,8 +412,21 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen); err != nil {
 		return err
 	}
+	if err := validateRunOutputTailBytes(*f.runOutputTailBytes); err != nil {
+		return err
+	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateRunOutputTailBytes refuses a WARDYN_RUN_OUTPUT_TAIL_BYTES outside
+// 1 KiB to 1 MiB: smaller keeps too little to be useful, larger lets one run
+// hold a megabyte-scale buffer for every run in the TTL window.
+func validateRunOutputTailBytes(n int) error {
+	if n < 1024 || n > 1<<20 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_TAIL_BYTES is %d; it must be between 1024 and 1048576", n)
 	}
 	return nil
 }
