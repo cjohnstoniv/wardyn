@@ -68,7 +68,10 @@ const LLM_MISSING: SetupItem = {
   detail: "no model provider serves it on this deployment",
 };
 
-async function preflighted(items: SetupItem[]) {
+async function preflighted(items: SetupItem[], classes: Array<"CC1" | "CC2" | "CC3"> = ["CC1"]) {
+  getSetupStatusMock.mockResolvedValue(
+    baseStatus({ runner: { driver: "docker", confinement_classes: classes } }),
+  );
   preflightRunMock.mockResolvedValue({
     setup_items: items,
     enforced_confinement_class: "CC2",
@@ -99,6 +102,13 @@ describe("NewRunScreen — preflight's setup rows", () => {
     expect(screen.getByText(/Sandbox barrier: Wall — no Wall \(gVisor\) runtime/)).toBeInTheDocument();
     expect(screen.getByText(RAIL_SETUP.BACKEND_BLOCK, { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: NO_BARRIER.CTA })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
+  });
+
+  it("a host with no barrier at all keeps one sentence: the rail's own line, not a second backend block", async () => {
+    await preflighted([BACKEND("missing")], []);
+    expect(screen.getAllByRole("link", { name: NO_BARRIER.CTA })).toHaveLength(1);
+    expect(screen.queryByText(RAIL_SETUP.BACKEND_BLOCK, { exact: false })).toBeNull();
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
   });
 

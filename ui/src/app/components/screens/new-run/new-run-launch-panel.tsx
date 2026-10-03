@@ -205,8 +205,11 @@ export function NewRunLaunchPanel({
   // f-f4: preflight's `backend` row says this runner cannot enforce the run's
   // barrier; Launch would 422 on it, so the rail says so first. Only the
   // CURRENT body's verdict counts, and only `missing` — an `unverified` row
-  // (the capability probe failed) never blocks.
+  // (the capability probe failed) never blocks. Not when `noBarrier`: a host
+  // with no barrier at all has its own host-wide line in the rail, so that
+  // stays the single sentence.
   const backendMissing =
+    !noBarrier &&
     preflightIsCurrent &&
     !!preflightResult?.setup_items?.some((i) => i.kind === "backend" && i.status === "missing");
   const problem = backendMissing
