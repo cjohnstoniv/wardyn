@@ -107,6 +107,9 @@ type Proxy struct {
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
 	patGrants map[string]PATGrant
+	// brokeredPATGrantIDs is every git_pat grant id of the run while the PAT
+	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
+	brokeredPATGrantIDs []uuid.UUID
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
@@ -257,6 +260,8 @@ type Options struct {
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.
 	PATGrants map[string]PATGrant
+	// BrokeredPATGrantIDs backs isBrokeredPATGrant. See Config.BrokeredPATGrantIDs.
+	BrokeredPATGrantIDs []uuid.UUID
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
 	ADOGrants adoGrantsByHost
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
@@ -433,6 +438,7 @@ func newProxy(opts Options) *Proxy {
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
+		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
@@ -962,39 +968,4 @@ func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
 	}
 	// {"wardyn":"approval-pending","approval_id":...}
 	_, _ = fmt.Fprintf(w, `{"wardyn":"approval-pending","approval_id":%q}`, id)
-}
-
-// hopByHopHeaders are stripped before forwarding (RFC 7230 §6.1).
-var hopByHopHeaders = []string{
-	"Connection",
-	"Proxy-Connection",
-	"Keep-Alive",
-	"Proxy-Authenticate",
-	"Proxy-Authorization",
-	"Te",
-	"Trailer",
-	"Transfer-Encoding",
-	"Upgrade",
-}
-
-func removeHopByHop(h http.Header) {
-	// Headers named in Connection are also hop-by-hop.
-	for _, name := range h.Values("Connection") {
-		for _, tok := range strings.Split(name, ",") {
-			if t := strings.TrimSpace(tok); t != "" {
-				h.Del(t)
-			}
-		}
-	}
-	for _, hh := range hopByHopHeaders {
-		h.Del(hh)
-	}
-}
-
-func copyHeader(dst, src http.Header) {
-	for k, vs := range src {
-		for _, v := range vs {
-			dst.Add(k, v)
-		}
-	}
 }

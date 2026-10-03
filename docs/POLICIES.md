@@ -179,6 +179,21 @@ mint the PAT exactly as before, and the credential would be resident despite the
 broker. The sandbox sees only `WARDYN_GIT_PAT_BROKER_HOSTS`, a host list that
 carries no grant id and cannot mint anything.
 
+Withholding the ids is not enough on its own: a grant id can still reach the
+sandbox by another road, and the proxy's mint relay
+(`POST /wardyn/v1/credentials/mint`) answers any id the run's token may mint. So
+with the broker on, the proxy also **refuses a raw mint of every `git_pat` grant
+id of the run** (`403`, decision-log `rule_source` `brokered:mint`, no
+control-plane call). The set is every `git_pat` row of the run, not the per-host
+allowlist: a grant shadowed by another on the same host, a vetoed lane, a
+withheld brokered-forge grant and an Azure DevOps owner-only grant are all in it,
+though none of them is brokered. The control-plane mint endpoint is untouched;
+the broker's own mint reaches it directly. Wardynd writes the set into the
+proxy's config as `brokered_pat_grant_ids`, and a revive recomputes it from the
+run's grants, so a run started before this was added is covered too. The proxy
+image has to be upgraded together with wardynd: an older proxy refuses the key at
+start rather than ignore it.
+
 **What this does NOT do.** A PAT carries whatever scope the operator issued it
 with, and Wardyn cannot narrow it — there is no GitLab equivalent of a
 scoped installation token (Azure DevOps rows take no operator PAT; see [AZURE-DEVOPS.md](AZURE-DEVOPS.md)). So this makes the credential **non-resident**; it does
@@ -224,7 +239,8 @@ beside the brokered one. That gap is now closed, at write time and at dispatch:
   brokered forge before it opens the broker transaction
   (`brokeredForgeMintKind`, `internal/api/internal.go`). This is the seam that
   matters most for `git_pat`: the proxy's own mint refusal
-  (`isBrokeredGitGrant`) matches `github_token` grant ids only, so a caller that
+  (`isBrokeredGitGrant`) matches `github_token` grant ids only, and its `git_pat`
+  refusal (`isBrokeredPATGrant`) applies only while the PAT broker is on, so a caller that
   POSTs the mint route directly — rather than going through
   `wardyn-git-helper`, which every GitHub host on a brokered run already refuses
   — used to be answered with the PAT. Because that residual has no other belt,

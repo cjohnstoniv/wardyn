@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -273,6 +274,25 @@ func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
 		}
 	}
 	return false
+}
+
+// isBrokeredPATGrant reports whether a sandbox-supplied mint body names one of
+// THIS run's git_pat grants while the PAT broker is on: the guard that keeps a
+// stored PAT out of the sandbox through the raw mint relay. It decodes exactly
+// as isBrokeredGitGrant does and fails open on an undecodable body for the same
+// reason. handlePATBroker's own mint bypasses this (brokeredToken ->
+// forwardToControlPlane directly).
+func (p *Proxy) isBrokeredPATGrant(body []byte) bool {
+	if len(p.brokeredPATGrantIDs) == 0 {
+		return false
+	}
+	var req struct {
+		GrantID uuid.UUID `json:"grant_id"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil || req.GrantID == uuid.Nil {
+		return false
+	}
+	return slices.Contains(p.brokeredPATGrantIDs, req.GrantID)
 }
 
 // gitToken returns a cached (or freshly minted) installation token for grantID.

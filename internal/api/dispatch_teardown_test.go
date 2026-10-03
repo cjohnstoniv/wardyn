@@ -38,6 +38,14 @@ type dispatchTestStore struct {
 	run         types.AgentRun
 	state       types.RunState
 	failureHint string
+	grants      []types.CredentialGrant // what ListGrantsByRun returns
+	grantsErr   error                   // when set, ListGrantsByRun fails with it
+}
+
+func (s *dispatchTestStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.grants, s.grantsErr
 }
 
 func (s *dispatchTestStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
