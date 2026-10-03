@@ -81,6 +81,10 @@ type bootFlags struct {
 	uiDir     *string
 	basePath  *string
 	runnerSel *string
+	// governAdminRuns is WARDYN_GOVERN_ADMIN_RUNS (flag -govern-admin-runs):
+	// govern every run an SSO admin or an admin-role personal token launches.
+	// The admin token and local mode stay break-glass (api.Server.runUngoverned).
+	governAdminRuns *bool
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -383,6 +387,7 @@ func parseBootFlags() *bootFlags {
 		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
+		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		basePath:               flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
