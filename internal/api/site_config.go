@@ -588,6 +588,22 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	}
 }
 
+// validateSiteConfigBody runs PUT /site-config's shape checks on the normalized body, in order;
+// any error is the request's 400. It returns the model-provider block's advisories, which are
+// reported, never refused.
+func (s *Server) validateSiteConfigBody(cfg types.SiteConfig) ([]string, error) {
+	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
+		return nil, err
+	}
+	if err := validateSiteConfig(cfg); err != nil {
+		return nil, err
+	}
+	if err := s.validateADOTokenModes(cfg.WorkspaceProviders); err != nil {
+		return nil, err
+	}
+	return validateModelProviders(cfg.ModelProviders, s.providerWriteEnv(cfg.InternalHosts))
+}
+
 // handlePutSiteConfig validates and persists the operator-wide site config.
 // Every URL/host field is checked (validateSiteConfig) before the write; the
 // write REPLACES the whole document (no partial merge — the caller must
@@ -651,19 +667,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
-	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
-		return
-	}
-	if err := validateSiteConfig(cfg); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
-		return
-	}
-	if err := s.validateADOTokenModes(cfg.WorkspaceProviders); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
-		return
-	}
-	providerWarnings, err := validateModelProviders(cfg.ModelProviders, s.providerWriteEnv(cfg.InternalHosts))
+	providerWarnings, err := s.validateSiteConfigBody(cfg)
 	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return

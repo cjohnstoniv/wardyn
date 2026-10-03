@@ -426,17 +426,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// request with no org default stays unbounded.
 	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
 	applySandboxSize(ctx, run, &policy, ceiling)
-	// Persist the resolved cap for the run page's disk-used reading (RL-13:
-	// best-effort, like SetRunImage above it — a failed write must not block
-	// dispatch, it just leaves that run's cap unknown to the resources widget).
-	effectiveDiskMiB := 0
-	if policy.Resources != nil {
-		effectiveDiskMiB = policy.Resources.DiskMiB
-	}
-	if err := s.cfg.Store.SetRunDiskMiB(ctx, run.ID, effectiveDiskMiB); err != nil {
-		slog.WarnContext(ctx, "wardynd: persist run disk cap failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-	}
+	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources))
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts)

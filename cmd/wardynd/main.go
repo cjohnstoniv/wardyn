@@ -334,14 +334,7 @@ func run() error {
 		return err
 	}
 
-	// WARDYN_DEMO_VIDEO_BASE_URL: validated once at boot, fail closed on a
-	// malformed value.
-	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
-	if err != nil {
-		return err
-	}
-
-	governAdminRunsExempt, err := parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
+	demoVideoBaseURL, governAdminRunsExempt, err := parseServeKnobs(f)
 	if err != nil {
 		return err
 	}
@@ -800,4 +793,15 @@ func printGroundtruthToken(ctx context.Context, idp identity.Provider) error {
 	}
 	fmt.Println(ri.Token)
 	return nil
+}
+
+// parseServeKnobs validates the two free-text knobs api.Config carries parsed, once at boot,
+// failing closed on a malformed value: WARDYN_DEMO_VIDEO_BASE_URL and
+// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT.
+func parseServeKnobs(f *bootFlags) (demoVideoBaseURL string, governAdminRunsExempt []string, err error) {
+	if demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return "", nil, err
+	}
+	governAdminRunsExempt, err = parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
+	return demoVideoBaseURL, governAdminRunsExempt, err
 }
