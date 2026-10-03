@@ -104,12 +104,13 @@ func TestRunOutput_OwnerReadsCompletedExecRunWithRecordingsOff(t *testing.T) {
 	}
 	id := seed(types.AgentRun{})
 	writeExecOutput(t, srv.openExecOutput(types.AgentRun{ID: id}, false), "go test ./...\n", "ok  pkg 0.1s\n")
+	srv.finishRunOutput(t.Context(), id) // complete means a final capture
 
 	code, got, _ := getRunOutput(t, srv, id, "", outputOwnerCookie(t))
 	if code != http.StatusOK {
 		t.Fatalf("owner: status %d, want 200", code)
 	}
-	want := runOutputResponse{Output: "go test ./...\nok  pkg 0.1s\n", Truncated: false, Complete: true}
+	want := runOutputResponse{Output: "go test ./...\nok  pkg 0.1s\n", Truncated: false, Complete: true, Source: "stdout"}
 	if got != want {
 		t.Fatalf("owner: got %+v, want %+v", got, want)
 	}
@@ -182,6 +183,7 @@ func TestRunOutput_CapAndTail(t *testing.T) {
 	writeExecOutput(t, w, "END")
 	all := strings.Repeat("a", 3*defaultRunOutputTailBytes) + strings.Repeat("bcd\n", defaultRunOutputTailBytes/4) + "END"
 	wantAll := all[len(all)-defaultRunOutputTailBytes:]
+	srv.finishRunOutput(t.Context(), id)
 
 	cases := []struct {
 		query string
