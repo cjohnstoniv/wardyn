@@ -51,6 +51,8 @@ import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
+import { CopyNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
+import type { CopyGate, CopyOffer } from "./attach-terminal-clipboard";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
@@ -188,6 +190,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // #216 — mirrors the connect effect's `reconnectAttempts` var for render.
   const [reconnectAttempt, setReconnectAttempt] = React.useState(0);
   const [reconnectExhausted, setReconnectExhausted] = React.useState(false);
+  // The clipboard gate's verified copy offer and its quiet "blocked" notice.
+  const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
+  const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
+  const copyGateRef = React.useRef<CopyGate | null>(null);
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -316,6 +322,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setTakenOverBy,
     setReconnectAttempt,
     setReconnectExhausted,
+    setCopyOffer,
+    setCopyNotice,
+    copyGateRef,
   });
 
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
@@ -514,6 +523,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             aria-description={TERMINAL.ESCAPE_CHORD_HINT}
           />
         </div>
+        {copyOffer ? (
+          <CopyOfferToast key={copyOffer.id} offer={copyOffer} onDone={() => copyGateRef.current?.dismiss()} />
+        ) : null}
+        {copyNotice && <CopyNotice message={copyNotice} />}
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
           // describes is dropped SERVER-side; blocking clicks here would also
