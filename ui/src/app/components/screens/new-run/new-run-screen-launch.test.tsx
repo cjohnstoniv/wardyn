@@ -261,7 +261,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     await user.type(screen.getByLabelText("Title"), "Refund flow");
 
-    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
 
     // Nothing is touched between the two clicks: Review is a dry run of THIS
@@ -283,7 +283,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     await user.type(screen.getByLabelText("Title"), "Refund flow");
 
-    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -484,7 +484,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     // toolApprovals defaults to "auto" — never touched.
-    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     expect(await screen.findByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeInTheDocument();
   });
 
@@ -494,7 +494,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     await user.click(screen.getByRole("radio", { name: /^Hold in Wardyn/ }));
-    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await screen.findByTestId("preflight-result");
     expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
   });
@@ -504,7 +504,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     renderScreen();
     // Interactive is the default (initialWizardState) — left untouched.
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await screen.findByTestId("preflight-result");
     expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
   });

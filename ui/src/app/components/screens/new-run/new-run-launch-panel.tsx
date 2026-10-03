@@ -91,6 +91,9 @@ export interface NewRunLaunchPanelProps {
   preflightFresh: boolean;
   /** A fresh refusal for this body holds Launch (use-launch's preflightBlock). */
   preflightBlock: boolean;
+  /** A check is in flight / the current body's last check was a 429. */
+  preflightChecking: boolean;
+  preflightNotChecked: boolean;
   preflightError: string | null;
   preflightErrorSeq: number;
   preflightResult: PreflightResult | null;
@@ -149,6 +152,8 @@ export function NewRunLaunchPanel({
   preflightIsCurrent,
   preflightFresh,
   preflightBlock,
+  preflightChecking,
+  preflightNotChecked,
   preflightError,
   preflightErrorSeq,
   preflightResult,
@@ -260,8 +265,8 @@ export function NewRunLaunchPanel({
       }}
       preflight={
         preflightIsCurrent
-          ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult, onPreflight, refusal: preflightRefusal }
-          : { error: null, errorSeq: preflightErrorSeq, result: null, onPreflight, refusal: preflightRefusal }
+          ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult, onPreflight, refusal: preflightRefusal, checking: preflightChecking, notChecked: preflightNotChecked }
+          : { error: null, errorSeq: preflightErrorSeq, result: null, onPreflight, refusal: preflightRefusal, checking: preflightChecking, notChecked: false }
       }
       agentRow={agentRow}
       modelProvider={

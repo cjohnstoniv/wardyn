@@ -86,7 +86,7 @@ async function preflighted(items: SetupItem[], classes: Array<"CC1" | "CC2" | "C
     </MemoryRouter>,
   );
   await user.type(await screen.findByLabelText("Title"), "Refund flow");
-  await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+  await user.click(screen.getByRole("button", { name: /^Check again$/ }));
   await screen.findByTestId("preflight-result");
 }
 

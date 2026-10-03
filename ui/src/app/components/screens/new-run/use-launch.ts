@@ -81,6 +81,8 @@ export interface UseLaunchResult {
    *  a 4xx (not model_credential, not a 429) or a missing backend / llm_access
    *  row. 5xx, network errors and 429 never block. Disables Launch. */
   preflightBlock: boolean;
+  /** The current body's last check was answered 429: nothing was graded. */
+  preflightNotChecked: boolean;
   preflight: () => Promise<void>;
   /** The request Launch would send right now (null while the policy document
    *  is unparseable) — the identity a click-armed relaunch is held to. */
@@ -220,6 +222,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   // body is never rendered in the first place.
   const preflightIsCurrent = preflightedBody !== null && preflightedBody === currentBody;
   const preflightFresh = preflightIsCurrent && !!graded && Date.now() - graded.at < PREFLIGHT_FRESH_MS;
+  const preflightNotChecked = preflightIsCurrent && graded?.status === 429;
   React.useEffect(() => {
     if (!graded) return;
     const t = setTimeout(() => setAgeTick((n) => n + 1), Math.max(0, graded.at + PREFLIGHT_FRESH_MS - Date.now()) + 1);
@@ -342,6 +345,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     preflightIsCurrent,
     preflightFresh,
     preflightBlock,
+    preflightNotChecked,
     preflight,
     currentBody,
     preflightRefusal,

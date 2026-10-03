@@ -188,8 +188,9 @@ credential lands, with no click:
 - Where several providers serve the agent and none is the default, the
   rail asks which.
 - Where no provider serves the agent it reads "Resolved at launch." and an
-  invitation to press **Preflight**, which dry-runs the exact body Launch
-  would send.
+  invitation to press **Check again**. Preflight runs on its own as the run
+  is edited; the button dry-runs the exact body Launch would send, and Launch
+  is blocked by a refusal for the current body graded under 60s ago.
 - With no model provider connected at all the rail shows the no-provider
   warning instead.
 - A run that makes no model call (a shell command) shows no Credentials

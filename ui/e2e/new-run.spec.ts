@@ -279,7 +279,7 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e preflight parity");
 
-    await page.getByRole("button", { name: /^Preflight$/ }).click();
+    await page.getByRole("button", { name: /^Check again$/ }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
 
     // Nothing is touched between the two clicks, so Review answered for exactly
@@ -633,7 +633,7 @@ test.describe("New run rail — credentials and recording are read, not asserted
 
     await openNewRun(page);
     await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT, { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Preflight" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
     await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH, { exact: true })).toBeVisible();
     await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
@@ -641,7 +641,7 @@ test.describe("New run rail — credentials and recording are read, not asserted
 
   // U-5 (W6 blind lens): a stock install before any provider is added. One
   // section said this run's first model call fails AND that its credential is
-  // resolved at launch AND to press Preflight to see where. Nothing resolves at
+  // resolved at launch AND to press Check again to see where. Nothing resolves at
   // launch when nothing is connected.
   test("with no model provider connected the rail makes no residency promise at all", async ({ page }) => {
     // The warning reads the server's llm_ready (hasLlmPath, lib/readiness.ts).
@@ -784,7 +784,7 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     // prevent: reading bound_by[0] alone would drop confinement_cc1 here.
     await mockPreflightAutonomy(page, ["secrets_powerful", "confinement_cc1"]);
     await openNewRun(page);
-    await page.getByRole("button", { name: "Preflight" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
 
     await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
@@ -797,7 +797,7 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     page,
   }) => {
     await openNewRun(page);
-    await page.getByRole("button", { name: "Preflight" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
     await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
     await expect(page.getByText(AUTONOMY_RAIL.NO_PROFILE, { exact: true })).toBeVisible();

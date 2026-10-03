@@ -440,6 +440,7 @@ export function NewRunScreen() {
     preflightIsCurrent,
     preflightFresh,
     preflightBlock,
+    preflightNotChecked,
     preflight,
     currentBody,
     preflightRefusal,
@@ -837,6 +838,8 @@ export function NewRunScreen() {
           preflightIsCurrent={preflightIsCurrent}
           preflightFresh={preflightFresh}
           preflightBlock={preflightBlock}
+          preflightChecking={preflighting}
+          preflightNotChecked={preflightNotChecked}
           preflightError={preflightError}
           preflightErrorSeq={preflightErrorSeq}
           preflightResult={preflightResult}
