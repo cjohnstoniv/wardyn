@@ -228,7 +228,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Ahead of the autonomy gate because that gate grades THIS resolution: the
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, true)
 	if !ok {
 		return
 	}

@@ -5,6 +5,7 @@ package api
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -244,8 +245,13 @@ func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Reque
 // provider serves this agent (no model credential at all), and for a run that
 // makes no model call. Neither is a choice, and callers must not treat a zero
 // provider.ID as one.
+//
+// renew is create's alone: it lets the Bedrock check renew an expired AWS
+// sign-in whose refresh token is live (withCreateRenewal), so no run is
+// created that dispatch could not boot. Review passes false: a dry check never
+// spends a one-use refresh token.
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
-	spec types.RunPolicySpec, wsRefs []types.Workspace,
+	spec types.RunPolicySpec, wsRefs []types.Workspace, renew bool,
 ) (runProviderChoice, bool) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
@@ -301,15 +307,26 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	case choice.chosen:
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
 		// the provider, never anyone else's (runIdentitySubject is the namespace
-		// dispatch reads for this run). No renewal: a dry check never spends a
-		// one-use refresh token; dispatch renews.
-		_, d, err := s.providerLiveness(ctx, choice.provider, req.Agent, runIdentitySubject(ctx, principalFromRequest(r)), false)
+		// dispatch reads for this run). Only create renews, and only a Bedrock
+		// sign-in: the subscription arm keeps its status read at both doors.
+		refresh := renew && choice.provider.Kind.IsBedrock()
+		lctx := ctx
+		if refresh {
+			lctx = withCreateRenewal(ctx)
+		}
+		_, d, err := s.providerLiveness(lctx, choice.provider, req.Agent, runIdentitySubject(ctx, principalFromRequest(r)), refresh)
 		if err != nil {
 			// Deliberately bare (#656 slice 3): the sentence alone — a
 			// transient store failure is no door (multi-provider §5.8), and
-			// `provider` is what keys one.
+			// `provider` is what keys one. A renewal that could not be saved
+			// brings its own sentence (providerUnavailable).
 			slog.ErrorContext(ctx, "api: read model provider credential", slog.String("provider", choice.provider.ID), slog.Any("err", err))
-			writeError(w, http.StatusServiceUnavailable, providerReadFailed(choice.provider))
+			msg := providerReadFailed(choice.provider)
+			var pu providerUnavailable
+			if errors.As(err, &pu) {
+				msg = pu.msg
+			}
+			writeError(w, http.StatusServiceUnavailable, msg)
 			return runProviderChoice{}, false
 		}
 		if d.msg != "" {

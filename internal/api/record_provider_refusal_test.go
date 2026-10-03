@@ -194,7 +194,7 @@ func TestRecordDoorAnswersTheProviderRefusalAsCreateDoes(t *testing.T) {
 		ref.cfg.Store = siteErrStore{ref.cfg.Store.(*integStore)}
 		w := httptest.NewRecorder()
 		if _, ok := ref.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
-			createRunRequest{Agent: "claude-code", Task: "t"}, types.RunPolicySpec{}, nil); ok {
+			createRunRequest{Agent: "claude-code", Task: "t"}, types.RunPolicySpec{}, nil, true); ok {
 			t.Fatal("an unreadable provider block admitted the run")
 		}
 		if code != http.StatusServiceUnavailable || rbody != w.Body.String() || w.Code != code {
