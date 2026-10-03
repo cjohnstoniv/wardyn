@@ -368,6 +368,31 @@ func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
+// ErasePersonResult is what POST /api/v1/people/{principal}/erasure answers once
+// every scope asked for is erased.
+type ErasePersonResult struct {
+	// Person is the principal the name resolved to.
+	Person string `json:"person"`
+	// Scopes are the scopes erased, in the order they ran.
+	Scopes []string `json:"scopes"`
+	// Outcome is each scope's result: "done".
+	Outcome map[string]string `json:"outcome"`
+	// Detail is each scope's counts.
+	Detail map[string]any `json:"detail"`
+}
+
+// ErasePerson erases one person's retained records by scope (credentials,
+// audit_personal_fields, run_tasks, run_outputs, recordings, mask_copies) in one
+// audited act. principal is the person's subject (or an email the deployment
+// knows them by) and is percent-encoded here. A scope that fails part way is a
+// 500 whose reason is erasure_incomplete: retry with the same scopes. Security
+// tier. POST /api/v1/people/{principal}/erasure.
+func (c *Client) ErasePerson(ctx context.Context, principal string, scopes []string) (ErasePersonResult, error) {
+	var out ErasePersonResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/people/"+url.PathEscape(principal)+"/erasure", map[string]any{"scopes": scopes}, &out)
+	return out, err
+}
+
 // RunFileStat is one changed file in a RunFiles listing.
 type RunFileStat struct {
 	Path string `json:"path"`

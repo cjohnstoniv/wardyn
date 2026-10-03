@@ -94,6 +94,7 @@ func routeFamilies() map[string][]string {
 		"sessions":    {"RevokeSessions"},
 		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"devices":     {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
+		"people":      {"ErasePerson"},
 	}
 }
 

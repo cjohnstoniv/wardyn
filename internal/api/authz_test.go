@@ -366,6 +366,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/people":                    {class: classSecurity},
 	"POST /api/v1/people/{principal}/tokens": {class: classSecurity},
 	"GET /api/v1/people/{principal}/tokens":  {class: classSecurity},
+	// 0.8.6: the person erasure (ar-l1.4). Security tier, like the credential erase
+	// it generalises: it removes reach and returns no record's content.
+	"POST /api/v1/people/{principal}/erasure": {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},
@@ -1421,9 +1424,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see. #1428 added
 	// the Azure DevOps organisation check beside the provider rows (= 48 SUPER).
-	// #1449 added the refusal read beside it (= 49 SUPER).
-	if sec != 43 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 43 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
+	// #1449 added the refusal read beside it (= 49 SUPER). 0.8.6's person
+	// erasure joined the security tier beside the credential erase (= 44 SEC).
+	if sec != 44 || super != 49 {
+		t.Errorf("tier split = %d security / %d admin, want 44 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 

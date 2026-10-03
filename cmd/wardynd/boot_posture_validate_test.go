@@ -27,8 +27,9 @@ func TestValidateBootPosture(t *testing.T) {
 			sshListen, originTemplate, enrolToken, allowPlaintext := "", "", "", false
 			oidcIssuer, oidcInternal, oidcRedirect, controlURL, uiAdvertise := "", "", "", "https://wardynd:8443", ""
 			tail, retention := 65536, 30
-			rate := 20
+			rate, seal := 20, "off"
 			f := &bootFlags{
+				auditSeal:            &seal,
 				runOutputTailBytes:   &tail,
 				runOutputRetention:   &retention,
 				preflightRatePerMin:  &rate,

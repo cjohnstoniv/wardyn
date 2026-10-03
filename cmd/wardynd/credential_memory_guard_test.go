@@ -215,6 +215,8 @@ var decryptSites = map[string]string{
 	"internal/secretstore/subjectkey/subjectkey.go|Manager.fill|KEK.Unwrap":         "a use opens a per-subject key, bound to its owner, purpose, version and domain; it is the key that seals a person's rows, never a stored credential value",
 	"internal/secretstore/subjectkey/rewrap.go|Rewrap|KEK.Unwrap":                   "-rewrap and -rotate-age-key move a per-subject key's wrap onto the current KEK; no sealed value is opened",
 	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open":           "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",
+	"internal/audit/seal.go|Sealer.Unseal|kek.Open":                                 "a read opens a sealed audit field under its subject's key, bound to the event, action, path, subject and key version; the value is a person's own text from one audit row, never a stored credential",
+	"internal/audit/seal.go|Sealer.Reseal|kek.Open":                                 "the spool drain opens a pending audit field under the platform pending key, to seal it under its subject's own key before the store sees the row; never a stored credential",
 	"internal/maskmanifest/maskmanifest.go|Manifests.load|kek.Open":                 "a load opens a run's sealed masking-manifest values, bound to the run, the value's ordinal and the key version, under the run owner's per-subject key, to put them in the masking registry; each is a rendering the run already holds, never read through Store.Get",
 }
 

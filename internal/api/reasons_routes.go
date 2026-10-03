@@ -702,6 +702,18 @@ const (
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
 )
 
+// POST /people/{principal}/erasure (person_erasure.go).
+const (
+	// scopes is not a non-empty list of known scope names.
+	reasonErasureScopeUnknown = "erasure_scope_unknown"
+	// The person named is the caller, and a scope other than credentials was asked for.
+	reasonErasureSelfRefused = "erasure_self_refused"
+	// The principal names the operator namespace, which is no person's.
+	reasonErasureOperatorNamespace = "erasure_operator_namespace"
+	// A scope failed part way: the body names what is done and what is left.
+	reasonErasureIncomplete = "erasure_incomplete"
+)
+
 // GET /permissions/explain (capabilities_explain.go).
 const reasonExplainPrincipalInvalid = "explain_principal_invalid"
 

@@ -214,6 +214,7 @@ func rootCmd() *cobra.Command {
 		presetCmd(client),
 		governanceCmd(client),
 		sessionCmd(client),
+		personCmd(client),
 		deviceCmd(client),
 		supportBundleCmd(client),
 	)

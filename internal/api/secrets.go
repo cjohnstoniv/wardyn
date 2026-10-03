@@ -43,12 +43,13 @@ const secretsMaxPerOwner = 100
 // harnessCredSecretName in harnesscred.go carry that rationale), so there is no
 // list to keep in sync.
 var reservedSecretNames = map[string]bool{
-	"wardyn-signing-key":    true,
-	"wardyn-session-key":    true,
-	"wardyn-ssh-host-key":   true,
-	"wardyn-ui-session-key": true,
-	"wardyn-run-config-key": true,
-	"wardyn-internal-ca":    true,
+	"wardyn-signing-key":       true,
+	"wardyn-session-key":       true,
+	"wardyn-ssh-host-key":      true,
+	"wardyn-ui-session-key":    true,
+	"wardyn-run-config-key":    true,
+	"wardyn-audit-pending-key": true,
+	"wardyn-internal-ca":       true,
 	// The hybrid device credential (cmd/wardynd's bootHybrid): overwriting it
 	// would swap which organisation identity this laptop pushes its audit as.
 	"wardyn-org-device-credential": true,

@@ -133,6 +133,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
   removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
   `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
+- **Personal audit fields can be sealed, and a person's records erased by scope.** `WARDYN_AUDIT_SEAL=fields`
+  (default `off`) stores the personal fields of an audit row (the table in "Sealed fields",
+  `docs/AUDIT-ACTIONS.md`) as ciphertext under the person's own key, in the store, the spool and every audit
+  sink, so a SIEM receives ciphertext for them; audit reads and the readable export open them. A key that cannot
+  be had never drops the row or writes it in the clear: it waits in the spool under the new platform key
+  `wardyn-audit-pending-key` and the drain re-seals it. Rows written before it is turned on stay plaintext.
+  `POST /people/{principal}/erasure` (`wardyn person erase`) erases one person's `credentials`,
+  `audit_personal_fields`, `run_tasks`, `run_outputs`, `recordings` (opt-in) and `mask_copies` by explicit
+  scope in one audited `person.erasure` act, reports complete only when every scope asked for is, names the
+  scopes left after a partial failure, and refuses a security admin erasing themself for any scope but
+  `credentials`. `DELETE /people/{principal}/credentials` still erases credentials only.
 
 ### Security
 
