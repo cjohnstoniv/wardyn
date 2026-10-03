@@ -49,6 +49,10 @@ const (
 	// the view looks through was deleted. Not audited on its own — the cause
 	// row is ReasonUserViewTypeDeleted, which the launch response answered.
 	ReasonAdminView Reason = "admin_view"
+	// ReasonUserViewPreview: with WARDYN_GOVERN_ADMIN_RUNS on, an admin whose
+	// User view looks through a type other than their own sent a write; the
+	// view is a read-only preview. 409, audited with the viewed and stamped types.
+	ReasonUserViewPreview Reason = "user_view_preview"
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
@@ -105,6 +109,7 @@ var refusals = map[Reason]Refusal{
 	ReasonUserTypeUnknown:             {Effect: EffectDeny, Audit: true},
 	ReasonUserViewTypeDeleted:         {Effect: EffectDeny, Audit: true},
 	ReasonAdminView:                   {Effect: EffectConflict},
+	ReasonUserViewPreview:             {Effect: EffectConflict, Audit: true},
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
 }

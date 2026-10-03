@@ -285,6 +285,11 @@
     "sentence": "userTypeUnknownMsg"
   },
   {
+    "reason": "user_view_preview",
+    "target": "r.URL.Path",
+    "sentence": "userViewPreviewRefusal(viewed, stamped)"
+  },
+  {
     "reason": "user_view_type_deleted",
     "target": "r.URL.Path",
     "sentence": "userViewTypeDeleted(typeID)"
