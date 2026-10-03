@@ -174,6 +174,13 @@ export function parseStatusDetail(
   return reason?.trim() ? { ...parsed, reason: reason.trim() } : parsed;
 }
 
+// stripCriWrapper drops the CRI `rpc error: code = ... desc =` wrapper and keeps
+// the desc text, which is the only part that says what to fix. A message
+// without the wrapper comes back unchanged.
+export function stripCriWrapper(message: string): string {
+  return message.replace(/rpc error: code = \w+ desc = /g, "");
+}
+
 // statusDetailSentence is what a person reads. "" when there is nothing to say,
 // so every caller can render it unconditionally.
 export function statusDetailSentence(raw: string | null | undefined, reason?: string | null): string {
@@ -187,7 +194,7 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
     // the one answer that must not come back.
     return isTerminalStatusReason(d.reason) ? STARTING_RAW_PREFIX + d.reason : "";
   }
-  const withMessage = (lead: string) => (d.message ? `${lead} ${d.message}` : lead);
+  const withMessage = (lead: string) => (d.message ? `${lead} ${stripCriWrapper(d.message)}` : lead);
   switch (d.reason) {
     case "ContainerCreating":
     case "PodInitializing":

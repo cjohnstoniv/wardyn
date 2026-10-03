@@ -31,7 +31,7 @@ func (r *createFailRunner) CreateSandbox(context.Context, runner.SandboxSpec) (r
 // the run goes FAILED with an empty hint and the reason lives only in an audit row.
 func TestDispatch_PreAgentFailure_StampsFailureHint(t *testing.T) {
 	rn := &createFailRunner{fakeRunner: &fakeRunner{}, err: errors.New("no such image: agent-claude-code:0.6.0")}
-	srv, st, _, run := dispatchTeardownFixture(t, rn, types.RunPending)
+	srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
 
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
@@ -47,5 +47,10 @@ func TestDispatch_PreAgentFailure_StampsFailureHint(t *testing.T) {
 	}
 	if !strings.Contains(hint, "no such image") {
 		t.Errorf("the failure hint must carry the real reason, got %q", hint)
+	}
+	// The console grades the ending by this stamped reason, never by the message.
+	ev := findAudit(audit.events, run.ID, "run.create", "failure")
+	if ev == nil || !strings.Contains(string(ev.Data), `"reason":"sandbox_create"`) {
+		t.Errorf("run.create/failure must carry reason sandbox_create, got %v", ev)
 	}
 }
