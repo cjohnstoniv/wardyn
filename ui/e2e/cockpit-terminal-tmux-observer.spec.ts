@@ -54,6 +54,8 @@ const settle = async (page: Page) => {
 };
 
 test("a second tab never clamps the writer's window, and a promotion sizes it to the promoted tab", async ({ page, context }) => {
+  // Two tabs, a promotion and three shell round trips: past the default 30s.
+  test.setTimeout(120_000);
   const { id: runId } = await findRunningFixture(page);
   await stubInteractiveRun(context, runId);
   await gotoConsole(page);
