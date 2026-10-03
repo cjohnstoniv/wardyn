@@ -153,3 +153,77 @@ func rowsLike(t *testing.T, pool *pgxpool.Pool, pattern string) int {
 	}
 	return n
 }
+
+// TestPG_ProviderPurgeAzureFoundry is rule 8 for the azure_foundry kind, through both write doors: an endpoint
+// change and a route change remove every person's -entra blob, and a deployment change keeps them.
+func TestPG_ProviderPurgeAzureFoundry(t *testing.T) {
+	setAzureGate(t, true)
+	doors := []struct {
+		name string
+		put  func(t *testing.T, srv *Server, block *types.ModelProviders)
+	}{
+		{"PUT /model-providers", func(t *testing.T, srv *Server, block *types.ModelProviders) {
+			raw, _ := json.Marshal(block)
+			if w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, string(raw)); w.Code != http.StatusOK {
+				t.Fatalf("PUT /model-providers = %d; body=%s", w.Code, w.Body.String())
+			}
+		}},
+		{"PUT /site-config", func(t *testing.T, srv *Server, block *types.ModelProviders) {
+			raw, _ := json.Marshal(types.SiteConfig{ModelProviders: block})
+			if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, string(raw)); w.Code != http.StatusOK {
+				t.Fatalf("PUT /site-config = %d; body=%s", w.Code, w.Body.String())
+			}
+		}},
+	}
+	cases := []struct {
+		name  string
+		edit  func(*types.ModelProvider)
+		purge bool
+	}{
+		{"an endpoint change", func(p *types.ModelProvider) { p.Azure.Endpoint = "https://other.services.ai.azure.com" }, true},
+		{"a route change", func(p *types.ModelProvider) {
+			p.Azure.Route = types.AzureRouteOpenAIV1
+			p.Harnesses = []types.ProviderHarness{{Harness: "codex-cli", Model: "gpt-5-codex"}}
+		}, true},
+		{"a deployment change", func(p *types.ModelProvider) {
+			p.Harnesses[0].Model, p.Harnesses[0].FastModel = "another-deployment", "another-fast"
+		}, false},
+	}
+	for _, d := range doors {
+		for _, tc := range cases {
+			t.Run(d.name+"/"+tc.name, func(t *testing.T) {
+				srv, _, pool, sec := newProviderPurgePGHarness(t)
+				srv.cfg.ADOLoginFacts = func() (string, string, bool) { return "client-id", "tenant-id", true }
+				srv.cfg.HostResolver = publicResolver
+				raw, _ := json.Marshal(providerBlock(azureProvider(), keyProvider("anthropic", "claude-code")))
+				if w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, string(raw)); w.Code != http.StatusOK {
+					t.Fatalf("seed PUT /model-providers = %d; body=%s", w.Code, w.Body.String())
+				}
+				sc, err := srv.cfg.Store.GetSiteConfig(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				azureUID, keyUID := sc.ModelProviders.Providers[0].UID, sc.ModelProviders.Providers[1].UID
+				for _, owner := range []string{"alice", "bob"} {
+					mustPut(t, sec, owner, providerSecretName(azureUID, providerEntraPart))
+					mustPut(t, sec, owner, providerSecretName(keyUID, providerKeyPart))
+				}
+
+				next := providerBlock(azureProvider(), keyProvider("anthropic", "claude-code"))
+				tc.edit(&next.Providers[0])
+				d.put(t, srv, next)
+
+				want := 2
+				if tc.purge {
+					want = 0
+				}
+				if got := rowsLike(t, pool, providerSecretName(azureUID, providerEntraPart)); got != want {
+					t.Errorf("-entra blobs after the write = %d, want %d", got, want)
+				}
+				if got := rowsLike(t, pool, providerSecretName(keyUID, providerKeyPart)); got != 2 {
+					t.Errorf("the other provider's credentials after the write = %d, want both kept", got)
+				}
+			})
+		}
+	}
+}

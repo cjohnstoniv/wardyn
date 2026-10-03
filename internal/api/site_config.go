@@ -743,7 +743,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
-	if err := validateModelProviders(cfg.ModelProviders, s.cfg.AllowTestEndpoints); err != nil {
+	providerWarnings, err := validateModelProviders(cfg.ModelProviders, s.providerWriteEnv(cfg.InternalHosts))
+	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
@@ -933,6 +934,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		SourcesNoLongerAdmitted:      narrowed,
 		SSHLaneWidePastPath:          sshWideRows,
 		BrandingLogoPending:          logoPending,
+		ModelProviderWarnings:        providerWarnings,
 	})
 }
 
@@ -988,6 +990,9 @@ type siteConfigPutResponse struct {
 	// logo. Reported, not refused — see site_config_branding.go — and the next
 	// apply after the card is saved attaches it.
 	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+	// ModelProviderWarnings: the model-provider block's advisories (an azure_foundry endpoint on an
+	// uncovered private address); reported, never refused.
+	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
 }
 
 // siteConfigAppliesFromNextDispatch is the ONE value AppliesFrom takes today:

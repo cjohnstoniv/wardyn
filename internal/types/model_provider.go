@@ -38,8 +38,7 @@ const (
 	// ModelProviderCustomEndpoint: admin's own endpoint, reached with each person's own token/PAT.
 	ModelProviderCustomEndpoint ModelProviderKind = "custom_endpoint"
 	// ModelProviderAzureFoundry: each person's own Entra sign-in, captured for one Azure resource audience.
-	// Declared here so the sign-in capture, purge and inventory can name it; it is deliberately NOT in
-	// ClosedModelProviderKinds, so no write door can store a row of this kind yet.
+	// Writable only while validateModelProviders' activation flag (azureFoundryGateReady) is true.
 	ModelProviderAzureFoundry ModelProviderKind = "azure_foundry"
 )
 
@@ -55,6 +54,7 @@ var ClosedModelProviderKinds = map[ModelProviderKind]bool{
 	ModelProviderAnthropicSubscription: true, ModelProviderBedrockSSO: true,
 	ModelProviderAnthropicAPIKey: true, ModelProviderOpenAIAPIKey: true,
 	ModelProviderBedrockBearer: true, ModelProviderCustomEndpoint: true,
+	ModelProviderAzureFoundry: true,
 }
 
 // ClosedModelProviderKindList is ClosedModelProviderKinds in stable order, for a rejected write's error.
@@ -129,7 +129,10 @@ type ProviderHarness struct {
 	// Model: model id this harness uses on this provider; admin-set, no member override. Required
 	// (an inference profile) on a Bedrock kind.
 	Model string `json:"model,omitempty"`
-	Path  string `json:"path,omitempty"` // where a custom endpoint serves this harness's API dialect, under BaseURL; may not change the host
+	// FastModel is the deployment the Messages harness uses for its small-model alias; azure_foundry only,
+	// on that harness only. Unset means Model.
+	FastModel string `json:"fast_model,omitempty"`
+	Path      string `json:"path,omitempty"` // where a custom endpoint serves this harness's API dialect, under BaseURL; may not change the host
 	// AuthHeader and AuthFormat override the provider's Auth for this harness alone (custom_endpoint only).
 	AuthHeader string `json:"auth_header,omitempty"`
 	AuthFormat string `json:"auth_format,omitempty"`
