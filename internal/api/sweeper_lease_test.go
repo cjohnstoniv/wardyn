@@ -203,7 +203,7 @@ func TestSweepRunSecrets_RunsOnAFollower(t *testing.T) {
 	cfg.SweeperLease = &fakeLease{lead: false, current: func(int64) bool { return false }}
 	srv := New(cfg)
 
-	if n := srv.SweepRunSecrets(context.Background()); n != 1 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 1 {
 		t.Fatalf("evicted = %d, want 1: a follower must still drop its own cache", n)
 	}
 	if snap := reg.Snapshot(cold.ID); len(snap) != 0 {

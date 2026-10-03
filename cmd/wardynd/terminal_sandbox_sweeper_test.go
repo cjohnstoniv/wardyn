@@ -77,7 +77,7 @@ func TestRunTerminalSandboxSweeper_SweepsEveryRunAcrossTicksOnePageAtATime(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runTerminalSandboxSweeper(ctx, fake, nil, time.Millisecond)
+		runTerminalSandboxSweeper(ctx, fake, nil, time.Millisecond, nil)
 		close(done)
 	}()
 
@@ -119,7 +119,7 @@ func TestRunTerminalSandboxSweeper_SkipsTheTickWhenTheLockIsHeldElsewhere(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runTerminalSandboxSweeper(ctx, fake, alwaysDeniedLock, time.Millisecond)
+		runTerminalSandboxSweeper(ctx, fake, alwaysDeniedLock, time.Millisecond, nil)
 		close(done)
 	}()
 
@@ -162,7 +162,7 @@ func (f *fakeBackgrounder) GoBackground(fn func()) {
 func TestStartTerminalSandboxSweeper_ShutdownWaitsForTheTickerToExit(t *testing.T) {
 	fake := &fakeBackgrounder{}
 	ctx, cancel := context.WithCancel(context.Background())
-	startTerminalSandboxSweeper(ctx, fake, nil, time.Millisecond)
+	startTerminalSandboxSweeper(ctx, fake, nil, time.Millisecond, nil)
 
 	waited := make(chan struct{})
 	go func() {
@@ -271,7 +271,7 @@ func TestTerminalSandboxSweepLockedTick_ReleasesExactlyOnceOnANormalTick(t *test
 	lock := &countingLock{}
 	fake := &fakeTerminalSandboxPager{totalRuns: 5}
 
-	terminalSandboxSweepLockedTick(context.Background(), fake, lock.lock, 0)
+	terminalSandboxSweepLockedTick(context.Background(), fake, lock.lock, 0, nil)
 
 	taken, released := lock.counts()
 	if taken != 1 || released != 1 {
@@ -299,7 +299,7 @@ func TestTerminalSandboxSweepLockedTick_ReleasesEvenWhenThePagerPanics(t *testin
 
 	func() {
 		defer func() { _ = recover() }()
-		terminalSandboxSweepLockedTick(context.Background(), panicPager{}, lock.lock, 0)
+		terminalSandboxSweepLockedTick(context.Background(), panicPager{}, lock.lock, 0, nil)
 	}()
 
 	taken, released := lock.counts()
@@ -330,7 +330,7 @@ func TestTerminalSandboxSweepLockedTick_ReturnsAndReleasesWhenTheDeadlineIsExcee
 	lock := &countingLock{}
 	done := make(chan struct{})
 	go func() {
-		terminalSandboxSweepLockedTick(context.Background(), slowPager{}, lock.lock, 0)
+		terminalSandboxSweepLockedTick(context.Background(), slowPager{}, lock.lock, 0, nil)
 		close(done)
 	}()
 
