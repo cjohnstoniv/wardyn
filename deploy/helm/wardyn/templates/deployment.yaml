@@ -378,6 +378,16 @@ spec:
             - name: WARDYN_AZURE_KEK_SIGNING_KEY
               value: {{ $azkek.signingKey | quote }}
             {{- end }}
+            {{- if $azkek.keyPlatform }}
+            # A second Key Vault key pair, reached as secretStore.azure.clientIdPlatform,
+            # wraps and signs wardynd's own signing, session and SSH host keys
+            # (docs/operations/secrets-and-keys.md "Key service: Azure Key Vault");
+            # kek.azurekv.key then wraps only the credentials.
+            - name: WARDYN_AZURE_KEK_KEY_PLATFORM
+              value: {{ $azkek.keyPlatform | quote }}
+            - name: WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM
+              value: {{ $azkek.signingKeyPlatform | quote }}
+            {{- end }}
             {{- end }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/operations/secrets-and-keys.md "Store mode:
@@ -403,6 +413,10 @@ spec:
             {{- with .azure.clientId }}
             - name: WARDYN_AZURE_CLIENT_ID
               value: {{ . | quote }}
+            {{- end }}
+            {{- if $azkek.keyPlatform }}
+            - name: WARDYN_AZURE_CLIENT_ID_PLATFORM
+              value: {{ .azure.clientIdPlatform | quote }}
             {{- end }}
             {{- with .azure.authorityHost }}
             - name: WARDYN_AZURE_AUTHORITY_HOST

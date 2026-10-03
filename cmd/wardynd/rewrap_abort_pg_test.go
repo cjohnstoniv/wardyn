@@ -315,6 +315,11 @@ func TestRewrapRetirePlatformKey_Refusals(t *testing.T) {
 	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM") {
 		t.Fatalf("-rewrap-retire-platform-key with no key named = %v; want a refusal", err)
 	}
+	// A Key Vault platform key is a key to retire: the run goes on to its checks.
+	*f.azure.kekKeyPlatform = "https://kv.vault.azure.net/keys/wardyn-boot"
+	if err := rewrapMode(f); err == nil || strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM or") || !strings.Contains(err.Error(), "WARDYN_AZURE_KEK_KEY_PLATFORM") {
+		t.Fatalf("-rewrap-retire-platform-key with a Key Vault platform key = %v; want it on to the platform key's own checks", err)
+	}
 }
 
 // Retiring builds the platform key read-only; a plain -rewrap builds it writing.

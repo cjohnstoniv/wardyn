@@ -74,10 +74,10 @@ func rewrapMode(f *bootFlags) error {
 	if retire && *f.rewrapAdoptBootKeys {
 		return fmt.Errorf("refusing to rewrap: -rewrap-adopt-boot-keys adopts boot keys onto the platform key and -rewrap-retire-platform-key moves them off it; run one at a time")
 	}
-	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" {
-		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM, the key to retire")
+	if retire && strings.TrimSpace(*f.vault.transitKeyPlatform) == "" && !azurePlatformNamed(f.azure) {
+		return fmt.Errorf("refusing to rewrap: -rewrap-retire-platform-key needs WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM, the key to retire")
 	}
-	platformSvc, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, retire)
+	platformSvc, err := buildPlatformKEK(ctx, f.vault, f.azure, *f.trustedCAFile, retire)
 	if err != nil {
 		return err
 	}
@@ -153,10 +153,10 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s\n", what, retireStep(res.KeyService, res.KeyVersion))
 	}
 	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
-		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM and restart every replica\n", d.PlatformKEK.ID())
+		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM (or WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM) and restart every replica\n", d.PlatformKEK.ID())
 	}
 	if res.PlatformKeyVersion != "" {
-		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s version %s; raising that Transit key's min_decryption_version to %s now retires the older versions\n", res.PlatformKeyService, res.PlatformKeyVersion, res.PlatformKeyVersion)
+		fmt.Fprintf(os.Stdout, "every boot key is wrapped under %s\n", retireStep(res.PlatformKeyService, res.PlatformKeyVersion))
 	}
 	return nil
 }

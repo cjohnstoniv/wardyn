@@ -508,8 +508,9 @@ Vault protect the data key, and neither ever leaves the vault:
 - The database alone decrypts nothing; neither does the database plus
   anything on the Wardyn host, once no row is sealed under the age key
   and `WARDYN_AGE_KEY` is unset.
-- Wardyn's boot keys are wrapped the same way, under the same keys, so
-  **do not restart wardynd during a Key Vault outage**.
+- Wardyn's boot keys are wrapped the same way, under the same keys unless
+  you set a platform pair (see "A second key pair and a second identity"
+  below). Either way, **do not restart wardynd during a Key Vault outage**.
 - Public-cloud Key Vault only: a Managed HSM or sovereign-cloud vault is
   refused at boot, by name.
 
@@ -601,6 +602,68 @@ refuses to start with both named.
 
 A row still wrapped under a disabled wrapping version is refused, naming
 the row, until that version is enabled again.
+
+**A second key pair and a second identity (the platform split).** By
+default one pair and one Entra identity protect Wardyn's boot keys (signing,
+session and SSH host keys) and the credentials alike. `sign` on the signing
+key plants a boot key, so the identity that serves credentials is
+credential-equivalent twice over. To separate them, create a second pair
+with the same types and `key_ops` as above, and a second Entra identity (an
+app registration or a user-assigned managed identity). Then set:
+
+| Setting | Chart |
+|---|---|
+| `WARDYN_AZURE_KEK_KEY_PLATFORM` | `kek.azurekv.keyPlatform` |
+| `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM` | `kek.azurekv.signingKeyPlatform` |
+| `WARDYN_AZURE_CLIENT_ID_PLATFORM` | `secretStore.azure.clientIdPlatform` |
+
+- wardynd wraps and signs the boot keys under the platform pair, reached as
+  the platform identity, and every credential under `WARDYN_AZURE_KEK_KEY`
+  and `WARDYN_AZURE_KEK_SIGNING_KEY` as `WARDYN_AZURE_CLIENT_ID`. A leaked
+  Entra access token for the credential identity then wraps, signs and
+  unwraps no boot key.
+- **Scope the role assignments, which Wardyn cannot check.** Give the
+  platform identity the role above at the scope of the two platform keys
+  alone, and give the credential identity none on them. A dedicated vault for
+  the platform pair is the stronger choice, though not a boot rule: a role
+  assigned at the vault scope reaches every key in it.
+- **Under workload identity the second identity needs its own federated
+  credential**, trusting the same issuer, the same service account subject
+  (`system:serviceaccount:<namespace>:<name>`) and audience
+  `api://AzureADTokenExchange` as the first. The pod's one projected token is
+  exchanged for each identity's Entra token in turn.
+- Boot refuses in these cases:
+  - the platform keys are set without `WARDYN_AZURE_CLIENT_ID_PLATFORM`;
+  - only one key of the pair is set;
+  - `WARDYN_KEK` is not `azurekv`;
+  - `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is also named;
+  - the wrapping key, the signing key or the client id equals the credential one.
+
+  Keys compare by lowercase vault host and key name, so a spelling that
+  differs only by case is the same key. Client ids compare
+  case-insensitively. The chart's render-time check is a first line, and
+  wardynd's is the authority. With the pair set, a boot key under any other
+  key is refused at boot.
+- **What the split does not do.** Both client ids exchange the same
+  projected service-account token, so it does not defend against a leaked
+  service-account token or a compromised wardynd process
+  (`threatmodel/THREAT-MODEL.md` residual 49).
+- On an install coming from 0.7.x or earlier, boot this version once with the
+  platform settings unset first, so the pre-envelope rows convert. Then run
+  `wardynd -rewrap -rewrap-adopt-boot-keys` with the same settings, once, to
+  move the boot keys onto the platform pair (see "Adopting boot keys"); it
+  touches no credential row. Expected output:
+  `every boot key is wrapped under azurekv-key:<vault-host>/<platform-key>/<platform-signing-key> at versions <wv>/<sv> (wrapping/signing); …`.
+  A later `-rewrap` needs no flag, and refuses a boot key found under any other
+  key. Rotating either platform key follows the steps above, run against the
+  platform key; disable every older version once `-rewrap` reports 0 rows.
+- **Retiring the pair.** Do not just unset it: the boot keys are still under
+  it. Run `wardynd -rewrap -rewrap-retire-platform-key` with the settings you
+  boot with today, the three platform settings included. It reads the boot
+  keys under the platform pair and writes them under the key a write uses
+  today (the credential pair with `WARDYN_KEK=azurekv`, the local key with
+  `WARDYN_KEK=local`). A second run moves nothing. Then unset the three
+  platform settings and restart every replica.
 
 **When Key Vault is unavailable.** Throttling (429), a 5xx or an
 unreachable vault is *transient* (the sink answers 503). A 401, a 403, a
